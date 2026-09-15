@@ -2,6 +2,7 @@ import type {
   CurrencyCode,
   Money,
   OrderId,
+  OrderPurpose,
   OrderState,
   PanelId,
   PriceQuote,
@@ -42,6 +43,15 @@ export interface OrderRecord {
   readonly id: OrderId;
   readonly customerId: UserId;
   readonly state: OrderState;
+  /**
+   * What this order is FOR, and the column settlement dispatches on.
+   *
+   * `NEW_SERVICE` for the original purchase, which provisions. The other three act on
+   * a service that already exists and provision nothing — `services.order_id` has said
+   * since 4D that a renewal is a new order against the same service, and before this
+   * column existed settlement had no way to tell the two apart.
+   */
+  readonly purpose: OrderPurpose;
   readonly line: OrderLine;
   readonly totals: OrderTotalsRecord;
   /**
@@ -88,6 +98,13 @@ export interface OrderSearch {
 export interface OrderDraft {
   readonly id: OrderId;
   readonly customerId: UserId;
+  /**
+   * Optional, and absent means `NEW_SERVICE`.
+   *
+   * The column defaults to it, so the ordinary purchase path needs no edit and the
+   * release running beside this one during a rolling update writes what it always did.
+   */
+  readonly purpose?: OrderPurpose;
   readonly line: OrderLine;
   readonly totals: OrderTotalsRecord;
   readonly expiresAt: Date;

@@ -1,5 +1,6 @@
 import {
   COMMERCE_ERROR_CODES,
+  orderPurposeNeedsService,
   ORDER_MACHINE,
   PAYMENT_PAGE_DEFAULT,
   PAYMENT_PAGE_MAX,
@@ -24,6 +25,7 @@ import {
   type UserId,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
+import type { CommercialActionRepository } from '../../commercial/application/ports.js';
 import type { ProvisioningService } from '../../provisioning/application/provisioning.service.js';
 import {
   recordMutationDenial,
@@ -100,6 +102,15 @@ export interface PaymentServiceDeps {
    * "settled" from a row it does not own.
    */
   readonly provisioning: ProvisioningService;
+  /**
+   * Reads the invoice line a commercial order carries, so settlement can tell which
+   * service it acts on.
+   *
+   * A NARROW port — the read alone — for the reason `PanelDirectory` is narrow: this
+   * module has no business writing a commercial action, and depending on the whole
+   * repository would put the write within reach of the one path that must never take it.
+   */
+  readonly commercialActions: Pick<CommercialActionRepository, 'findByOrderId'>;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly audit: AuditWriter;
@@ -837,21 +848,67 @@ export class PaymentService {
     });
 
     /*
-     * The service the customer just bought, recorded in THIS transaction.
+     * What the customer just bought, recorded in THIS transaction — and WHICH of the two
+     * it was, read off the order rather than guessed.
      *
      * Here rather than in a handler on `OrderSettled`, and that placement is the
-     * exactly-once rule rather than a convenience. An order settles once, atomically,
-     * so a service row written inside the same transaction makes "one settled order
-     * produces at most one logical service" a consequence of `ORDER_MACHINE` plus
-     * `services_tenant_order_key`. A handler would make it depend on the handler being
-     * idempotent, which is a strictly weaker position for no benefit — and on a replay
-     * that missed the outbox, no position at all.
+     * exactly-once rule rather than a convenience. An order settles once, atomically, so
+     * a row written inside the same transaction makes "one settled order produces at
+     * most one effect" a consequence of `ORDER_MACHINE` plus a unique index. A handler
+     * would make it depend on the handler being idempotent, which is strictly weaker for
+     * no benefit — and on a replay that missed the outbox, no position at all.
      *
-     * Nothing here contacts a provider. Two rows are written — a service in
-     * `PENDING_PROVISION` and an operation in `PLANNED` — and the `provisioner` role
-     * picks the work up afterwards, outside every transaction.
+     * ## The branch, and why it exists
+     *
+     * This call used to be unconditional, and that was the defect Phase 4F opened by
+     * naming: a renewal is a NEW order against the SAME service, so routed through
+     * `planForSettledOrder` it would have created a SECOND provider account the customer
+     * did not buy and would be billed for once while occupying twice.
+     * `services_tenant_order_key` does not catch it — the index is unique on
+     * `(tenant_id, order_id)` and a renewal has its own order id.
+     *
+     * The discriminator is `orders.purpose`, a column, rather than "does a service
+     * already exist for this customer" — inference would make the settlement path depend
+     * on the order things happen to be read in, and a column makes it a decision
+     * somebody made. `orderPurposeNeedsService` is the contract's own predicate, derived
+     * by exclusion, so a purpose added without a thought lands on the side that does NOT
+     * provision.
+     *
+     * Nothing on either branch contacts a provider. Rows are written and the
+     * `provisioner` role picks the work up afterwards, outside every transaction.
      */
-    await this.deps.provisioning.planForSettledOrder(scope, actor, settled, now, tx);
+    if (orderPurposeNeedsService(settled.purpose)) {
+      const action = await this.deps.commercialActions.findByOrderId(scope, settled.id, tx);
+      if (action === null) {
+        /*
+         * A commercial order with no invoice line.
+         *
+         * Unreachable — both rows are written in the same transaction by
+         * `CommercialActionService.draft`, and `service_commercial_actions_order_key`
+         * makes there be exactly one. Throwing rolls the settlement back, which is the
+         * only honest outcome: the money has moved in this transaction and there is
+         * nothing to say what it bought.
+         */
+        throw new Error(
+          `order ${settled.id} is ${settled.purpose} and carries no commercial action`,
+        );
+      }
+      await this.deps.provisioning.planCommercialAction(
+        scope,
+        actor,
+        settled,
+        {
+          serviceId: action.serviceId,
+          kind: action.kind,
+          purchasedTrafficBytes: action.purchasedTrafficBytes,
+          purchasedDurationDays: action.purchasedDurationDays,
+        },
+        now,
+        tx,
+      );
+    } else {
+      await this.deps.provisioning.planForSettledOrder(scope, actor, settled, now, tx);
+    }
 
     if (remember !== undefined) {
       await rememberOnce(

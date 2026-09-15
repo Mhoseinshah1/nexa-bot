@@ -1,5 +1,7 @@
 import {
   COMMERCE_ERROR_CODES,
+  extendedAllowance,
+  extendedExpiry,
   errors,
   SUBSCRIPTION_REF_BYTES,
   providerUsernameFor,
@@ -9,6 +11,7 @@ import {
   type Clock,
   type IdGenerator,
   type OperationId,
+  type OperationTarget,
   type OperationType,
   type ServiceState,
   type TenantContext,
@@ -602,6 +605,158 @@ export class ProvisioningService {
       );
       return operation;
     });
+  }
+
+  /**
+   * Plans the operation a settled COMMERCIAL order bought.
+   *
+   * Called from inside the settling transaction, exactly where `planForSettledOrder` is
+   * called for a purchase, and it is the other half of the dispatch that phase 4F
+   * added: `confirmAndSettle` used to reach the provisioning path unconditionally, so a
+   * renewal would have settled and then created a second provider account the customer
+   * did not buy.
+   *
+   * ## The target is computed HERE, once
+   *
+   * Against the service as it stands in this transaction — the money has just moved and
+   * nothing else can be reading it — and then stored on the operation row and never
+   * recomputed. That is the whole basis on which `RENEW`, `ADD_TRAFFIC` and `ADD_TIME`
+   * are in `IDEMPOTENT_MUTATIONS`: a target derived when the worker runs would differ
+   * between an attempt and its replay, and thirty days would become sixty.
+   *
+   * `extendedExpiry` and `extendedAllowance` are the contract's, not this file's. Both
+   * carry the reasoning for their arithmetic — `max(current, now) + days` so renewing
+   * early is never a punishment and renewing late never sells an elapsed period, and a
+   * strictly additive allowance because the legacy answer is a five-valued per-panel
+   * enum whose live value nobody could read (`OQ-4F-01`).
+   *
+   * ## No provider call, no network
+   *
+   * Two rows are written and the `provisioner` role picks the work up afterwards,
+   * outside every transaction. The same shape a purchase has, for the same reason.
+   */
+  async planCommercialAction(
+    scope: TenantContext,
+    actor: ActorContext,
+    order: OrderRecord,
+    action: {
+      readonly serviceId: string;
+      readonly kind: 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME';
+      readonly purchasedTrafficBytes: bigint;
+      readonly purchasedDurationDays: number;
+    },
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<OperationRecord> {
+    const service = await this.deps.services.findById(scope, action.serviceId, tx);
+    if (service === null) {
+      /*
+       * Unreachable: `service_commercial_actions_service_fk` requires the service to
+       * exist and the row was written in the transaction that created this order. A
+       * refusal rather than a default, because planning against a service that is not
+       * there would mean planning against nothing while the customer's money has moved.
+       */
+      throw new Error(`order ${order.id} names service ${action.serviceId}, which is not there`);
+    }
+
+    /*
+     * Re-checked at SETTLEMENT, because the window between confirmation and payment is
+     * real: a customer can confirm a renewal and pay for it minutes later, and the
+     * service can be terminated in between.
+     *
+     * The refusal is loud rather than silent. Money has already moved in this
+     * transaction, so a plan that quietly did nothing would leave a paid order with no
+     * operation behind it and nothing to tell an operator why. Throwing rolls the
+     * settlement back, which is the same choice `settlementRefusal` makes for the same
+     * reason: "money moved but the order did not" must be unrepresentable.
+     */
+    if (!OPERATION_LEGAL_FROM[action.kind].includes(service.state)) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
+        'That service is not in a state this action can be taken from.',
+        { state: service.state },
+      );
+    }
+
+    /*
+     * What the panel should end up holding, from what was bought plus what the service
+     * holds now.
+     *
+     * `null` where the purchase bought nothing of that kind, which is the same meaning
+     * the column, the provider plan and the adapter's omitted key all carry — so the
+     * three agree without anybody translating between them.
+     */
+    const target: OperationTarget = {
+      expiresAt:
+        action.purchasedDurationDays > 0
+          ? extendedExpiry(service.expiresAt, now, action.purchasedDurationDays)
+          : null,
+      trafficLimitBytes:
+        action.purchasedTrafficBytes > 0n || action.kind === 'RENEW'
+          ? extendedAllowance(service.trafficLimitBytes, action.purchasedTrafficBytes)
+          : null,
+    };
+
+    if (target.expiresAt === null && target.trafficLimitBytes === null) {
+      /*
+       * A purchase that asks the panel for nothing.
+       *
+       * Reachable only for a renewal of an unlimited-in-both-directions service, which
+       * `quoteRenewal`'s shape check already refuses — and refused again here, because
+       * `provisioning_operations_target_present_check` would reject the row anyway and
+       * a named conflict is better than an integrity violation reported as a 500.
+       */
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
+        'That purchase would not change anything about this service.',
+      );
+    }
+
+    const operation = await this.deps.operations.plan(
+      scope,
+      {
+        id: this.deps.ids.uuid(),
+        /*
+         * Derived from the ORDER, which is what makes a replayed settlement plan the
+         * same operation rather than a second one. The order id is the only thing that
+         * is the same for both attempts and different for a genuine second purchase.
+         */
+        operationId: this.deps.operationId(`${service.id}:${action.kind}:${order.id}`),
+        serviceId: service.id,
+        orderId: order.id,
+        panelId: service.panelId,
+        type: action.kind,
+        target,
+      },
+      now,
+      tx,
+    );
+
+    await this.deps.audit.record(
+      scope,
+      actor,
+      {
+        action: `service.plan_${action.kind.toLowerCase()}`,
+        entityType: 'Service',
+        entityId: service.id,
+        before: {
+          state: service.state,
+          expiresAt: service.expiresAt?.toISOString() ?? null,
+          trafficLimitBytes: service.trafficLimitBytes.toString(),
+        },
+        after: {
+          orderId: order.id,
+          customerId: order.customerId,
+          operationId: operation.operationId,
+          targetExpiresAt: target.expiresAt?.toISOString() ?? null,
+          targetTrafficLimitBytes: target.trafficLimitBytes?.toString() ?? null,
+        },
+        result: 'SUCCESS',
+      },
+      tx,
+    );
+
+    return operation;
   }
 
   /** Whether a service is in a state where re-sending its configuration means anything. */
