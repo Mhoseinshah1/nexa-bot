@@ -55,6 +55,34 @@ It is an accident and not a guarantee. `RECONCILE` already requires none, and th
 type added with an empty capability list would have exactly the two refusals this phase
 adds standing between it and a create on somebody's panel. Which is why they are two.
 
+## Service expiry
+
+| #      | Rule                                                        | Mutation                                                       | Named test                                                                                                | Result   |
+| ------ | ----------------------------------------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | -------- |
+| F4E-13 | Something expires a service whose window has closed         | `await this.expireDue(scope, now);` → `void now;`              | `provisioning-delivery.test.ts` › expires a service whose window has closed, without contacting the panel | KILLED   |
+| F4E-14 | `expires_at IS NULL` is an unlimited plan and never expires | BOTH copies of `isNotNull(services.expiresAt)` → `TRUE`        | `provisioning-delivery.test.ts` › leaves an unlimited service alone for ever                              | SURVIVED |
+| F4E-15 | The audit says which state the service was in               | the per-statement `state: from` dropped from the mapped record | `provisioning-delivery.test.ts` › records the state the service was actually in, not the one it moved to  | KILLED   |
+| F4E-16 | Expiry runs behind the tenant kill switch                   | covered by F4E-13's removal, from the other direction          | `provisioning-delivery.test.ts` › expires nothing for a tenant that has stopped accepting work            | n/a      |
+
+### F4E-14, which found something about this code rather than about a test
+
+`isNotNull(services.expiresAt)` was mutated to `TRUE` in the sub-select, then in the
+UPDATE, then in BOTH at once. The unlimited service survived every time.
+
+That is not a missing test. It is that the predicate is **redundant**: `expires_at <=
+now` is already NULL — not true — for an unlimited plan, so SQL's three-valued logic
+excludes the row with no help from `isNotNull` at all. The test is doing its job; the
+line it appeared to be testing is not the line that does the work.
+
+It is kept, with a comment that now says exactly this, because it is the one place the
+intent is written down and the predicate that really carries it is easy to rewrite
+without noticing: `COALESCE(expires_at, <anything>) <= now` would expire every
+unlimited service on the next tick, and nothing else in the query would object. The
+test would catch THAT, which is the mutation worth having a test for.
+
+The measurement: both sites changed at once, `1 passed | 26 skipped`, restore verified
+byte-identical against a copy taken beforehand, `git status` clean.
+
 ## F4E-02, the survival
 
 Disabling the fake's CSRF gate does not fail a test **on its own**, and that is

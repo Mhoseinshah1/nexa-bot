@@ -75,7 +75,7 @@ const RECORDS = [
  * have to be a map, and a map is a place for a record to be added with no entry
  * and checked against nothing — which is this script's own failure mode.
  */
-const EXPECTED = 882;
+const EXPECTED = 886;
 /**
  * A table whose last column is one of these is making citations.
  *

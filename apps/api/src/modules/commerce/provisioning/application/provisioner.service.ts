@@ -119,6 +119,22 @@ export const LEASE_SWEEP_LIMIT = 20;
 export const RECONCILE_PLAN_LIMIT = 5;
 
 /**
+ * How many services one tick may expire.
+ *
+ * Larger than the two above because expiry costs no provider call and no claim: it is
+ * one conditional UPDATE, and the only reason to bound it at all is so that a tenant
+ * whose plans all lapse on the same midnight does not turn one tick into one
+ * statement over a hundred thousand rows holding locks the rest of the loop needs.
+ *
+ * Here rather than in `packages/contracts` alongside `USAGE_SYNC_PLAN_LIMIT`, and the
+ * difference is not arbitrary: that one bounds a sweep whose CADENCE is an operator
+ * setting, so its bound belongs beside the schema that checks the setting. This sweep
+ * has no setting — a service expires when its own `expires_at` says so — so its bound
+ * is an implementation detail of the loop, like `LEASE_SWEEP_LIMIT` above.
+ */
+export const SERVICE_EXPIRY_SWEEP_LIMIT = 200;
+
+/**
  * How many times one service may go round create → unknown → reconcile → absent.
  *
  * The cycle is legitimate ONCE: a create whose answer was lost, a panel that proves it
@@ -264,6 +280,15 @@ export class ProvisionerService {
      * a sync planned after it.
      */
     await this.planUsageSyncs(scope, now);
+    /*
+     * And the services whose window has closed, which needs no panel at all.
+     *
+     * After the sweeps that plan work and before the claim, so a service that expires
+     * in this tick is `EXPIRED` before anything else in the tick reads it — which is
+     * what stops a usage sync being planned for a service that has just stopped being
+     * one, and spending an outbound request on a figure that cannot move again.
+     */
+    await this.expireDue(scope, now);
 
     const leaseUntil = new Date(now.getTime() + this.deps.leaseMs);
     /*
@@ -1197,6 +1222,76 @@ export class ProvisionerService {
       outcome: 'SUCCEEDED',
       failureKind: null,
     };
+  }
+
+  /**
+   * Moves services whose window has closed to `EXPIRED`. No provider is contacted.
+   *
+   * ## Why this is a Nexa-side transition and not an operation
+   *
+   * The panel already stopped serving the account: `expiryTime` was written into the
+   * client at creation and 3X-UI enforces it, as Marzban enforces `expire`. Nothing
+   * needs to be asked and nothing needs to be told. What was missing was Nexa AGREEING
+   * — `services.expires_at` was written by the create and by the adopt path,
+   * `services_expiry_idx` existed, and no code read either, so a service whose window
+   * had closed stayed `ACTIVE` here for ever while the panel refused it. Two
+   * authorities disagreeing is the shape `SERVICE_MACHINE`'s own comment about the
+   * provider being "not the authority, and not ignored either" exists to prevent.
+   *
+   * So this is not a `SYNC_USAGE`-style operation with a claim, a lease and an
+   * attempt counter. There is no external call to fail, nothing to be uncertain about,
+   * and no budget to spend. It is one conditional UPDATE.
+   *
+   * ## What it must not do
+   *
+   * **It must not expire a service the panel might still be serving.** Only rows whose
+   * own `expires_at` has passed, and `expires_at` is NULL for an unlimited plan — which
+   * `provisionCall` writes as the panel's own unlimited rather than as an epoch.
+   *
+   * **It must not move a service that is not ACTIVE or SUSPENDED.** `SERVICE_MACHINE`
+   * has `EXPIRE` from exactly those two. A `PENDING_PROVISION` service has no account
+   * to have expired, and `TERMINATED` is terminal — a terminated service that could
+   * come back would make "terminate" a word an operator could not rely on.
+   *
+   * **It must not run for a tenant that has stopped accepting work.** `runOnce` checks
+   * that first, and this is a durable write inside `uow.run`, which is also where
+   * ADR-0028's quiesce gate lives.
+   */
+  private async expireDue(scope: TenantContext, now: Date): Promise<void> {
+    const actor = this.actor();
+    await this.deps.uow.run(scope, async (tx) => {
+      const expired = await this.deps.services.expireDue(
+        scope,
+        now,
+        SERVICE_EXPIRY_SWEEP_LIMIT,
+        tx,
+      );
+      for (const service of expired) {
+        /*
+         * An AUDIT record and no operational event.
+         *
+         * `docs/conventions.md` keeps the two apart: an audit row is a mutation with a
+         * before and an after, which this is, and an operational event is a condition
+         * an operator has to act on, which this is not. A service reaching the end of
+         * the window somebody bought is the product working. Recording it as an
+         * operator condition would fill the operations log with the ordinary passage
+         * of time, which is how `/admin/logs` became an activity feed.
+         */
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action: 'service.expire',
+            entityType: 'Service',
+            entityId: service.id,
+            before: { state: service.state, expiresAt: service.expiresAt?.toISOString() ?? null },
+            after: { state: 'EXPIRED' },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+      }
+    });
   }
 
   /**

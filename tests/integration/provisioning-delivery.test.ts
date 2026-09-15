@@ -1171,4 +1171,112 @@ describe('a provisioned service announces itself', () => {
     const stillActive = await services.findByOrderId(tenantA, orderId);
     expect(stillActive?.state, 'and the service is untouched').toBe('ACTIVE');
   });
+
+  // =========================================================================
+  // Expiry — a Nexa-side transition, with no panel contacted
+  // =========================================================================
+
+  it('expires a service whose window has closed, without contacting the panel', async () => {
+    const orderId = await paidOrder('expire-ok');
+    await ctx.container.provisionerLoop.tick();
+    const active = await services.findByOrderId(tenantA, orderId);
+    expect(active?.state).toBe('ACTIVE');
+    expect(active?.expiresAt, 'the create wrote a window').not.toBeNull();
+
+    const requestsBefore = panel.requests.length;
+    await ctx.container.database.db.execute(
+      sql`UPDATE services SET expires_at = now() - interval '1 minute'`,
+    );
+    await ctx.container.provisionerLoop.tick();
+
+    const expired = await services.findByOrderId(tenantA, orderId);
+    expect(expired?.state).toBe('EXPIRED');
+    /*
+     * No panel was contacted, and that is the point rather than an optimisation.
+     * 3X-UI enforces the `expiryTime` written into the client at creation, so the
+     * account has ALREADY stopped working; what was missing was Nexa agreeing. A
+     * provider call here would spend a tenant's outbound budget to be told something
+     * this installation already knew.
+     */
+    expect(panel.requests.length, 'expiry needs no panel').toBe(requestsBefore);
+  });
+
+  it('leaves an unlimited service alone for ever', async () => {
+    // `expires_at IS NULL` is an unlimited plan. A sweep that treated NULL as "long
+    // past" would expire every unlimited service on its first tick — and the adapter
+    // writes the panel's own unlimited rather than an epoch, so there is no zero here
+    // to be mistaken for a date in 1970 either.
+    const orderId = await paidOrder('expire-unlimited');
+    await ctx.container.provisionerLoop.tick();
+    await ctx.container.database.db.execute(sql`UPDATE services SET expires_at = NULL`);
+
+    await ctx.container.provisionerLoop.tick();
+    await ctx.container.provisionerLoop.tick();
+
+    const service = await services.findByOrderId(tenantA, orderId);
+    expect(service?.state).toBe('ACTIVE');
+  });
+
+  it('does not expire a service whose window is still open', async () => {
+    const orderId = await paidOrder('expire-future');
+    await ctx.container.provisionerLoop.tick();
+    await ctx.container.database.db.execute(
+      sql`UPDATE services SET expires_at = now() + interval '30 days'`,
+    );
+
+    await ctx.container.provisionerLoop.tick();
+
+    const service = await services.findByOrderId(tenantA, orderId);
+    expect(service?.state).toBe('ACTIVE');
+  });
+
+  it('records the state the service was actually in, not the one it moved to', async () => {
+    /*
+     * The reason `expireDue` runs one statement per source state. `RETURNING` hands
+     * back the NEW row, so a single UPDATE over {ACTIVE, SUSPENDED} would report
+     * EXPIRED as the `before` of every audit record — a record of nothing.
+     *
+     * SUSPENDED is set here by hand because nothing suspends a service yet: the
+     * provider mutations are gated behind the destructive real-panel acceptance. The
+     * row shape is real even though no code writes it today, and this is what stops
+     * the audit going wrong on the release that does.
+     */
+    const orderId = await paidOrder('expire-suspended');
+    await ctx.container.provisionerLoop.tick();
+    const service = await services.findByOrderId(tenantA, orderId);
+    await ctx.container.database.db.execute(
+      sql`UPDATE services SET state = 'SUSPENDED', expires_at = now() - interval '1 minute'`,
+    );
+
+    await ctx.container.provisionerLoop.tick();
+
+    const expired = await services.findByOrderId(tenantA, orderId);
+    expect(expired?.state).toBe('EXPIRED');
+
+    const records = await ctx.container.database.db.execute(
+      sql`SELECT before, after FROM audit_logs
+          WHERE action = 'service.expire' AND entity_id = ${service?.id ?? ''}`,
+    );
+    expect(records.rows).toHaveLength(1);
+    expect((records.rows[0] as { before: { state: string } }).before.state).toBe('SUSPENDED');
+    expect((records.rows[0] as { after: { state: string } }).after.state).toBe('EXPIRED');
+  });
+
+  it('expires nothing for a tenant that has stopped accepting work', async () => {
+    // Expiry is a durable write, so it is inside `uow.run` and behind the same tenant
+    // gate every other write in the tick is. A stopped tenant accepts none of them.
+    const orderId = await paidOrder('expire-stopped');
+    await ctx.container.provisionerLoop.tick();
+    await ctx.container.database.db.execute(
+      sql`UPDATE services SET expires_at = now() - interval '1 minute'`,
+    );
+    await ctx.container.database.db.execute(
+      sql`UPDATE tenants SET status = 'STOPPED' WHERE id = ${tenantA.tenantId}`,
+    );
+
+    await ctx.container.provisionerLoop.tick();
+
+    const service = await services.findByOrderId(tenantA, orderId);
+    expect(service?.state, 'a stopped tenant gets no writes').toBe('ACTIVE');
+  });
 });

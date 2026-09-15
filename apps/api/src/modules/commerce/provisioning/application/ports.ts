@@ -304,6 +304,31 @@ export interface ServiceRepository {
     usage: { readonly usedBytes: bigint; readonly syncedAt: Date },
     tx: TransactionScope,
   ): Promise<boolean>;
+
+  /**
+   * Moves services whose window has closed to `EXPIRED`, and returns them AS THEY WERE.
+   *
+   * One conditional UPDATE with `RETURNING`, rather than a select followed by writes.
+   * Between a read and a separate write a service can be suspended, terminated or
+   * renewed, and the write would then move a row the read had no right to — the same
+   * race `transition` avoids by naming its `from`. Here the `from` is a SET, because
+   * `SERVICE_MACHINE` has `EXPIRE` from both `ACTIVE` and `SUSPENDED`.
+   *
+   * The returned records carry the state each row was in BEFORE the move, which is
+   * what an audit record's `before` needs and what a `RETURNING *` after an UPDATE
+   * cannot give — so the caller is handed the old state explicitly rather than being
+   * left to assume every expired service was ACTIVE.
+   *
+   * `expires_at IS NULL` is an unlimited plan and is never due. `provisionCall` writes
+   * the panel's own unlimited rather than an epoch, so there is no zero to mistake for
+   * a date in 1970.
+   */
+  expireDue(
+    scope: TenantContext,
+    now: Date,
+    limit: number,
+    tx: TransactionScope,
+  ): Promise<readonly ServiceRecord[]>;
 }
 
 /**
