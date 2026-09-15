@@ -307,6 +307,43 @@ export interface ServiceRepository {
   ): Promise<boolean>;
 
   /**
+   * Writes what a commercial operation bought, conditionally on the state it was
+   * planned from.
+   *
+   * A THIRD axis beside `transition` and `recordDelivery`, and separate for the reason
+   * they are separate from one another: a renewal must not be able to move a service
+   * the way a provider outcome can, and one setter that could write a state and an
+   * allowance together is how it eventually would.
+   *
+   * `from` and `to` may be the SAME state, and usually are — renewing an `ACTIVE`
+   * service buys it more time and leaves it active. `SERVICE_MACHINE` has no
+   * `ACTIVE -> ACTIVE` edge and must not grow one; that is why this is not `transition`
+   * with a null outcome. The one case where they differ is the machine's own
+   * `EXPIRED -> ACTIVE on RENEW`, which is the edge Phase 4F finally gives a caller.
+   *
+   * A `null` field is one the operation did not buy, and it is left exactly as it is —
+   * the same meaning it has on the operation row and in the provider call, so the three
+   * agree without anybody translating between them.
+   *
+   * Returns false when the service moved under the call, which is a normal outcome: a
+   * service terminated while the panel was being asked keeps what that termination
+   * wrote. The OPERATION still succeeded, because the panel really did apply the
+   * change, and saying otherwise would be a lie about an external effect.
+   */
+  recordAllowance(
+    scope: TenantContext,
+    id: string,
+    from: ServiceState,
+    to: ServiceState,
+    allowance: {
+      readonly expiresAt: Date | null;
+      readonly trafficLimitBytes: bigint | null;
+    },
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean>;
+
+  /**
    * Moves services whose window has closed to `EXPIRED`, and returns them AS THEY WERE.
    *
    * One conditional UPDATE with `RETURNING`, rather than a select followed by writes.

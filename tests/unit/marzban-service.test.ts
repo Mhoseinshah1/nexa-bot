@@ -1,8 +1,11 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
+  canAddTime,
+  canAddVolume,
   canDeleteUser,
   canDisableUser,
   canEnableUser,
+  canRenewUser,
   providerDescriptor,
   type CreateProviderUserInput,
   type ProviderServiceTarget,
@@ -345,14 +348,172 @@ describe('the Marzban adapter — what it may be asked to do', () => {
     expect(canDeleteUser(adapter)).toBe(true);
   });
 
+  it('is callable for all three commercial operations too', () => {
+    /*
+     * Three predicates over ONE method, and each asks its own capability. A descriptor
+     * edit that dropped `ADD_VOLUME` would leave `canRenewUser` true and this false,
+     * which is the distinction the three exist to preserve: a panel may extend a window
+     * and refuse to raise a limit.
+     */
+    expect(canRenewUser(adapter)).toBe(true);
+    expect(canAddVolume(adapter)).toBe(true);
+    expect(canAddTime(adapter)).toBe(true);
+  });
+
   it('declares each capability it implements, and nothing it does not', () => {
     const declared = providerDescriptor('marzban')?.capabilities ?? [];
-    for (const capability of ['DISABLE_USER', 'ENABLE_USER', 'DELETE_USER']) {
+    for (const capability of [
+      'DISABLE_USER',
+      'ENABLE_USER',
+      'DELETE_USER',
+      'RENEW_USER',
+      'ADD_VOLUME',
+      'ADD_TIME',
+    ]) {
       expect(declared).toContain(capability);
     }
     // Still absent, because no code performs them.
-    for (const capability of ['RENEW_USER', 'ADD_VOLUME', 'ADD_TIME', 'RESET_USAGE']) {
+    for (const capability of ['RESET_USAGE', 'ROTATE_SUBSCRIPTION_LINK', 'LIMIT_DEVICES']) {
       expect(declared).not.toContain(capability);
     }
+  });
+});
+
+describe('the Marzban adapter — applying an allowance', () => {
+  const DAY = 86_400_000;
+  const future = (days: number): Date => new Date(Date.now() + days * DAY);
+
+  it('sends an absolute expiry in SECONDS, and reports what the panel then holds', async () => {
+    await adapter.createUser(target(), http(), createInput('alw-1'));
+    const expiresAt = future(30);
+    const outcome = await adapter.applyAllowance(target(), http(), ref('alw-1'), {
+      expiresAt,
+      trafficLimitBytes: null,
+    });
+    expect(outcome).toMatchObject({ ok: true, found: true });
+    /*
+     * Seconds, not milliseconds. The panel would take a millisecond value without
+     * complaint and store a date in the year 58,000, so the unit is asserted against
+     * the fake's own record rather than against the adapter's arithmetic.
+     */
+    expect(panel.users.get('alw-1')?.expire).toBe(Math.floor(expiresAt.getTime() / 1000));
+  });
+
+  it('leaves a field the plan did not buy exactly as it was', async () => {
+    await adapter.createUser(
+      target(),
+      http(),
+      createInput('alw-2', { volumeBytes: 5_000n, expiresAt: future(10) }),
+    );
+    const before = panel.users.get('alw-2');
+    await adapter.applyAllowance(target(), http(), ref('alw-2'), {
+      expiresAt: null,
+      trafficLimitBytes: 9_000n,
+    });
+    const after = panel.users.get('alw-2');
+    expect(after?.dataLimit).toBe(9_000);
+    // An omitted key is no change, never a reset — the property that lets one operation
+    // carry exactly the field it bought.
+    expect(after?.expire).toBe(before?.expire);
+  });
+
+  it('replays to the same two numbers', async () => {
+    await adapter.createUser(target(), http(), createInput('alw-3'));
+    const plan = { expiresAt: future(45), trafficLimitBytes: 7_000n };
+    await adapter.applyAllowance(target(), http(), ref('alw-3'), plan);
+    const once = { ...panel.users.get('alw-3') };
+    await adapter.applyAllowance(target(), http(), ref('alw-3'), plan);
+    const twice = panel.users.get('alw-3');
+    expect(twice?.expire).toBe(once.expire);
+    expect(twice?.dataLimit).toBe(once.dataLimit);
+  });
+
+  it('keeps consumption when the allowance is raised', async () => {
+    panel.seed({ username: 'alw-4', status: 'limited', dataLimit: 1_000, usedTraffic: 1_000 });
+    await adapter.applyAllowance(target(), http(), ref('alw-4'), {
+      expiresAt: null,
+      trafficLimitBytes: 3_000n,
+    });
+    const after = panel.users.get('alw-4');
+    expect(after?.dataLimit).toBe(3_000);
+    /*
+     * The counter is untouched, which is why nothing here calls
+     * `POST /api/user/{name}/reset`: replayed after the customer had consumed more, a
+     * reset would destroy real evidence of consumption.
+     */
+    expect(after?.usedTraffic).toBe(1_000);
+  });
+
+  it('does not re-enable an account somebody switched off', async () => {
+    panel.seed({ username: 'alw-5', status: 'disabled', dataLimit: 1_000 });
+    await adapter.applyAllowance(target(), http(), ref('alw-5'), {
+      expiresAt: future(30),
+      trafficLimitBytes: 9_000n,
+    });
+    /*
+     * Measured on the real panel and mirrored by the fake: neither field re-enables a
+     * `disabled` account. A commercial action on a SUSPENDED service tops up an
+     * allowance and leaves it suspended, so nothing afterwards may report it ACTIVE.
+     */
+    expect(panel.users.get('alw-5')?.status).toBe('disabled');
+  });
+
+  it('takes zero as unlimited, the sentinel this codebase already uses', async () => {
+    await adapter.createUser(target(), http(), createInput('alw-6', { volumeBytes: 5_000n }));
+    await adapter.applyAllowance(target(), http(), ref('alw-6'), {
+      expiresAt: null,
+      trafficLimitBytes: 0n,
+    });
+    // The panel stores 0 as SQL NULL, so unlimited is an absent value and never an
+    // allowance of nothing.
+    expect(panel.users.get('alw-6')?.dataLimit).toBeNull();
+  });
+
+  it('reports an absent account as absent, and creates nothing', async () => {
+    const outcome = await adapter.applyAllowance(target(), http(), ref('alw-missing'), {
+      expiresAt: future(1),
+      trafficLimitBytes: 1n,
+    });
+    expect(outcome).toMatchObject({ ok: true, found: false });
+    expect(panel.users.has('alw-missing')).toBe(false);
+  });
+
+  it('refuses a plan that asks for nothing, without calling the panel', async () => {
+    await adapter.createUser(target(), http(), createInput('alw-7'));
+    const before = panel.requests.length;
+    const outcome = await adapter.applyAllowance(target(), http(), ref('alw-7'), {
+      expiresAt: null,
+      trafficLimitBytes: null,
+    });
+    expect(outcome.ok).toBe(false);
+    /*
+     * Not one request, not even the token exchange. An empty PUT would answer 200 and
+     * be recorded as a commercial action that succeeded, so the refusal is before the
+     * socket rather than after it.
+     */
+    expect(panel.requests.length).toBe(before);
+  });
+
+  it('reads the response rather than assuming the request succeeded', async () => {
+    await adapter.createUser(target(), http(), createInput('alw-8'));
+    /*
+     * A 200 the adapter cannot read is a refusal, not a success.
+     *
+     * `modify-html` is what a misconfigured reverse proxy in front of a panel actually
+     * returns: the right status code and a login page. An adapter that inferred the
+     * outcome from the status would report a renewal that never happened.
+     *
+     * The other half of the same rule — a 200 whose record carries the OLD numbers — is
+     * `appliedPlan`, and the fake cannot produce it because the fake applies the
+     * allowance faithfully. That half is proved by mutation: F4F-06 reverts the check
+     * and watches the acceptance's replay case fail against the real panel.
+     */
+    panel.behaviour = 'modify-html';
+    const outcome = await adapter.applyAllowance(target(), http(), ref('alw-8'), {
+      expiresAt: future(5),
+      trafficLimitBytes: null,
+    });
+    panel.behaviour = 'normal';
+    expect(outcome).toMatchObject({ ok: false, failure: 'MALFORMED_RESPONSE' });
   });
 });

@@ -327,6 +327,16 @@ describe('the provider registry', () => {
         'DISABLE_USER',
         'ENABLE_USER',
         'DELETE_USER',
+        /*
+         * The three commercial ones, added by the commit that wrote the executor's
+         * dispatch branches — so "can execute" means end to end, not "the adapter has a
+         * method". `applyAllowance` and the real-panel acceptance both landed first, and
+         * neither was enough on its own: an adapter that can perform an operation the
+         * executor will not route to is an operation a customer is still refused.
+         */
+        'RENEW_USER',
+        'ADD_VOLUME',
+        'ADD_TIME',
       ],
       // `LIMIT_DEVICES` for Sanaei only, and the asymmetry is the whole point of this
       // map being per provider. `SanaeiAdapter.createUser` writes `limitIp` from the
@@ -449,14 +459,20 @@ describe('the operation dispatch cannot fail open', () => {
     }
   });
 
-  it('names exactly the six types 4E performs, and no more', () => {
-    // Pinned as a literal on purpose. RENEW, ADD_TRAFFIC and ADD_TIME are commerce and
-    // belong to 4F; ROTATE_SUBSCRIPTION has neither an adapter method nor a product
-    // decision. Adding one to the constant without writing its branch fails here rather
-    // than on somebody's panel.
+  it('names exactly the nine types this release performs, and no more', () => {
+    // Pinned as a literal on purpose. `ROTATE_SUBSCRIPTION` has neither an adapter
+    // method nor a product decision behind it and stays out. Adding a type to the
+    // constant without writing its branch fails here rather than on somebody's panel.
+    //
+    // The three commercial types joined in 4F, in the commit that wrote their dispatch
+    // branches — not in the one that wrote `applyAllowance`, and not in the one that
+    // planned their operations.
     expect([...PERFORMABLE_OPERATION_TYPES].sort()).toEqual([
+      'ADD_TIME',
+      'ADD_TRAFFIC',
       'PROVISION',
       'RECONCILE',
+      'RENEW',
       'RESUME',
       'SUSPEND',
       'SYNC_USAGE',

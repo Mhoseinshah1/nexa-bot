@@ -333,3 +333,195 @@ describe('A7 — nothing this adapter returns carries a credential', () => {
     expect(await observe('b')).not.toBeNull();
   });
 });
+
+describe('A8 — the commercial half: a target the panel actually ends up holding', () => {
+  /*
+   * Fresh accounts, because A is deleted by A5 and B is the control for A6 and A7.
+   * C is the one the allowance moves on; D is the sibling that must not move.
+   *
+   * Every case below drives `applyAllowance` — the SHIPPED method — and then reads the
+   * panel back through the observer, which shares no code with it. That separation is
+   * the whole reason this file exists: the adapter checks the response it got, and if
+   * it checked it wrongly, only an independent reader disagrees.
+   */
+  const DAY = 86_400_000;
+  let c0: ObservedUser | null = null;
+
+  it('creates C and D with a finite window and a finite allowance', async () => {
+    for (const suffix of ['c', 'd']) {
+      created.add(nameFor(suffix));
+      const outcome = await adapter.createUser(
+        target(),
+        http(),
+        createInput(suffix, {
+          volumeBytes: 1_000_000_000n,
+          expiresAt: new Date(Date.now() + 7 * DAY),
+        }),
+      );
+      expect(outcome.ok, `creating ${suffix}`).toBe(true);
+    }
+    c0 = await observe('c');
+    expect(c0?.dataLimit).toBe(1_000_000_000);
+    expect(c0?.expire).not.toBeNull();
+  });
+
+  it('applies a renewal as an absolute target, and leaves D untouched', async () => {
+    const d0 = await observe('d');
+    const expiresAt = new Date(Date.now() + 37 * DAY);
+    const outcome = await adapter.applyAllowance(target(), http(), ref('c'), {
+      expiresAt,
+      trafficLimitBytes: 4_000_000_000n,
+    });
+    expect(outcome).toMatchObject({ ok: true, found: true });
+
+    const c1 = await observe('c');
+    expect(c1?.dataLimit).toBe(4_000_000_000);
+    expect(c1?.expire).toBe(Math.floor(expiresAt.getTime() / 1000));
+
+    // The sibling on the same panel, read again: both of its fields as they were.
+    const d1 = await observe('d');
+    expect(d1?.dataLimit).toBe(d0?.dataLimit);
+    expect(d1?.expire).toBe(d0?.expire);
+  });
+
+  it('replays that renewal to the same two numbers', async () => {
+    /*
+     * The claim `IDEMPOTENT_MUTATIONS` rests on, measured on the shipped adapter rather
+     * than on the fake. The same plan sent twice must leave the account where the first
+     * one left it — if it were an increment instead of a target, the second call would
+     * be a customer receiving two renewals for one payment.
+     */
+    const before = await observe('c');
+    const expiresAt = new Date((before?.expire ?? 0) * 1000);
+    const outcome = await adapter.applyAllowance(target(), http(), ref('c'), {
+      expiresAt,
+      trafficLimitBytes: 4_000_000_000n,
+    });
+    expect(outcome).toMatchObject({ ok: true, found: true });
+    const after = await observe('c');
+    expect(after?.dataLimit).toBe(before?.dataLimit);
+    expect(after?.expire).toBe(before?.expire);
+  });
+
+  it('adds traffic without touching the window, and keeps what has been consumed', async () => {
+    const before = await observe('c');
+    const outcome = await adapter.applyAllowance(target(), http(), ref('c'), {
+      expiresAt: null,
+      trafficLimitBytes: 9_000_000_000n,
+    });
+    expect(outcome).toMatchObject({ ok: true, found: true });
+    const after = await observe('c');
+    expect(after?.dataLimit).toBe(9_000_000_000);
+    // The omitted key is no change, not a reset — the property that lets one operation
+    // carry exactly the field it bought.
+    expect(after?.expire).toBe(before?.expire);
+    expect(after?.usedTraffic).toBe(before?.usedTraffic);
+  });
+
+  it('adds time without touching the allowance', async () => {
+    const before = await observe('c');
+    const expiresAt = new Date(((before?.expire ?? 0) + 30 * 86_400) * 1000);
+    const outcome = await adapter.applyAllowance(target(), http(), ref('c'), {
+      expiresAt,
+      trafficLimitBytes: null,
+    });
+    expect(outcome).toMatchObject({ ok: true, found: true });
+    const after = await observe('c');
+    expect(after?.expire).toBe(Math.floor(expiresAt.getTime() / 1000));
+    expect(after?.dataLimit).toBe(before?.dataLimit);
+  });
+
+  it('replays an add-time to the same instant', async () => {
+    const before = await observe('c');
+    const expiresAt = new Date((before?.expire ?? 0) * 1000);
+    await adapter.applyAllowance(target(), http(), ref('c'), {
+      expiresAt,
+      trafficLimitBytes: null,
+    });
+    const after = await observe('c');
+    expect(after?.expire).toBe(before?.expire);
+    expect(after?.dataLimit).toBe(before?.dataLimit);
+  });
+
+  it('takes zero as unlimited, the same sentinel a create uses', async () => {
+    const outcome = await adapter.applyAllowance(target(), http(), ref('c'), {
+      expiresAt: null,
+      trafficLimitBytes: 0n,
+    });
+    expect(outcome).toMatchObject({ ok: true, found: true });
+    // The panel stores `data_limit: 0` as SQL NULL and reads it back as null, so
+    // "unlimited" is an absent value here and never an allowance of nothing.
+    expect((await observe('c'))?.dataLimit).toBeNull();
+  });
+
+  it('reports an account the panel does not have as absent, and creates nothing', async () => {
+    const outcome = await adapter.applyAllowance(target(), http(), ref('never-created'), {
+      expiresAt: new Date(Date.now() + DAY),
+      trafficLimitBytes: 1n,
+    });
+    expect(outcome).toMatchObject({ ok: true, found: false });
+    expect(await observe('never-created')).toBeNull();
+  });
+
+  it('cannot be redirected onto another account by a username shaped like a path', async () => {
+    /*
+     * The A6 property, for the commercial call. The username reaching the adapter comes
+     * off the stored service row and nothing a customer sends can choose it — this is
+     * the second line, proving that even a hostile one cannot escape its own path
+     * segment and rewrite D's allowance.
+     */
+    const d0 = await observe('d');
+    const hostile: ProviderUserRef = { ...ref('c'), username: `../${nameFor('d')}` };
+    const outcome = await adapter.applyAllowance(target(), http(), hostile, {
+      expiresAt: new Date(Date.now() + 999 * DAY),
+      trafficLimitBytes: 123n,
+    });
+    expect(outcome.ok === true ? outcome.found : true).toBe(false);
+    const d1 = await observe('d');
+    expect(d1?.dataLimit).toBe(d0?.dataLimit);
+    expect(d1?.expire).toBe(d0?.expire);
+  });
+
+  it('refuses a plan that asks for nothing rather than reporting a renewal', async () => {
+    /*
+     * Unreachable from the executor — `provisioning_operations_target_present_check`
+     * refuses such a row — and refused here anyway, because an empty PUT would answer
+     * 200 and be recorded as a commercial action that succeeded.
+     */
+    const before = await observe('c');
+    const outcome = await adapter.applyAllowance(target(), http(), ref('c'), {
+      expiresAt: null,
+      trafficLimitBytes: null,
+    });
+    expect(outcome.ok).toBe(false);
+    const after = await observe('c');
+    expect(after?.dataLimit).toBe(before?.dataLimit);
+    expect(after?.expire).toBe(before?.expire);
+  });
+
+  it('never carries a credential in any allowance outcome, success or failure', async () => {
+    const credentials = panel.credentials;
+    if (credentials.shape !== 'USERNAME_PASSWORD') throw new Error('unexpected shape');
+    const plan = { expiresAt: new Date(Date.now() + DAY), trafficLimitBytes: 1_000n };
+    const outcomes: unknown[] = [
+      await adapter.applyAllowance(target(), http(), ref('c'), plan),
+      await adapter.applyAllowance(target(), http(), ref('never-created'), plan),
+      await adapter.applyAllowance(
+        {
+          ...target(),
+          credentials: { ...credentials, password: `${credentials.password}-wrong` },
+        },
+        http(),
+        ref('c'),
+        plan,
+      ),
+    ];
+    const serialized = JSON.stringify(outcomes, (_key, value: unknown) =>
+      typeof value === 'bigint' ? value.toString() : value,
+    );
+    expect(serialized).not.toContain(credentials.password);
+    expect(serialized).not.toContain(credentials.username);
+    expect(serialized.toLowerCase()).not.toContain('bearer ');
+    expect(serialized.toLowerCase()).not.toContain('authorization');
+  });
+});

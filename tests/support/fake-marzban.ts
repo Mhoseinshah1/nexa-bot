@@ -243,9 +243,47 @@ export async function startFakeMarzban(options: FakeMarzbanOptions = {}): Promis
            * so that an adapter sending more than a status has somewhere to be caught.
            */
           const expire = numberOrNull(payload['expire']);
-          if (expire !== null) existing.expire = expire === 0 ? null : expire;
           const limit = numberOrNull(payload['data_limit']);
-          if (limit !== null) existing.dataLimit = zeroToNull(limit);
+          /*
+           * `data_limit` FIRST, then `expire`, because `crud.update_user` applies them
+           * in that order and each re-derives the status from what it just wrote. A
+           * renewal sending both relies on it: the limit branch is what brings a
+           * traffic-exhausted account back to `active`, and the expire branch then sees
+           * an active account rather than a `limited` one.
+           */
+          if (limit !== null) {
+            existing.dataLimit = zeroToNull(limit);
+            /*
+             * The status the panel derives, measured rather than guessed —
+             * `scripts/marzban-allowance-check.sh` rows 4, 6 and 7 against v0.8.4.
+             *
+             * `expired` and `disabled` are EXCLUDED, so neither field re-enables an
+             * account an operator or Nexa switched off. That is the property a
+             * commercial action on a SUSPENDED service depends on: the allowance is
+             * topped up and the account stays suspended, so nothing may afterwards
+             * report the service as ACTIVE.
+             */
+            if (existing.status !== 'expired' && existing.status !== 'disabled') {
+              existing.status =
+                existing.dataLimit === null || existing.usedTraffic < existing.dataLimit
+                  ? 'active'
+                  : 'limited';
+            }
+          }
+          if (expire !== null) {
+            existing.expire = expire === 0 ? null : expire;
+            /*
+             * Only from `active` or `expired`. A `limited` account given nothing but
+             * more time stays `limited` — row 5, and the reason a renewal has to send
+             * both fields or the customer pays and stays cut off.
+             */
+            if (existing.status === 'active' || existing.status === 'expired') {
+              existing.status =
+                existing.expire === null || existing.expire > Math.floor(Date.now() / 1000)
+                  ? 'active'
+                  : 'expired';
+            }
+          }
           return void json(200, present(existing));
         }
 

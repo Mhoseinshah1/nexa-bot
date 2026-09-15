@@ -3,6 +3,7 @@ import {
   operationFailureOutcome,
   providerUsernameFor,
   UNLIMITED_DURATION_DAYS,
+  type CanApplyAllowance,
   type CanDeleteUser,
   type CanDisableUser,
   type CanEnableUser,
@@ -11,6 +12,7 @@ import {
   type ProviderAdapter,
   type ProviderFailureKind,
   type ProviderServiceTarget,
+  type ProviderAllowancePlan,
   type ProviderUserRef,
   type ServiceState,
 } from '@nexa/contracts';
@@ -181,9 +183,9 @@ export function exhausted(attempts: number): boolean {
  * member has a branch, and adding a member without writing that branch fails a test
  * instead of producing a silent create on somebody's panel.
  *
- * `RENEW`, `ADD_TRAFFIC` and `ADD_TIME` are commerce — each needs a new paid order
- * against an existing service — and are Phase 4F. `ROTATE_SUBSCRIPTION` has neither an
- * adapter method nor a product decision behind it.
+ * `RENEW`, `ADD_TRAFFIC` and `ADD_TIME` joined in Phase 4F, once there was an order
+ * behind each of them and a panel that could apply one. `ROTATE_SUBSCRIPTION` has
+ * neither an adapter method nor a product decision behind it, and stays out.
  *
  * `SUSPEND`, `RESUME` and `TERMINATE` joined the list once Marzban could perform them.
  * Membership here is NOT a claim that every panel can: `decideOperability` checks each
@@ -199,6 +201,9 @@ export const PERFORMABLE_OPERATION_TYPES = [
   'SUSPEND',
   'RESUME',
   'TERMINATE',
+  'RENEW',
+  'ADD_TRAFFIC',
+  'ADD_TIME',
 ] as const satisfies readonly OperationType[];
 
 export function isPerformableOperation(type: OperationType): boolean {
@@ -249,12 +254,37 @@ export const OPERATION_LEGAL_FROM: Readonly<Record<OperationType, readonly Servi
    * terminate is refused here rather than turned into a second DELETE against a panel.
    */
   TERMINATE: ['PENDING_PROVISION', 'UNRECONCILED', 'ACTIVE', 'SUSPENDED', 'EXPIRED'],
+  /*
+   * `RENEW` from the two states a renewal means something in, and from nowhere else.
+   *
+   * `EXPIRED` is `SERVICE_MACHINE`'s own `EXPIRED -> ACTIVE on RENEW` — the edge frozen
+   * since Phase 0 that this phase finally gives a caller. `ACTIVE` is not an edge at
+   * all: renewing a live service buys it more time and leaves it exactly where it is,
+   * which is why `recordAllowance` exists beside `transition` rather than inside it.
+   *
+   * `SUSPENDED` is deliberately ABSENT, and that is a measurement rather than a
+   * preference. The pinned Marzban leaves a `disabled` account disabled through both an
+   * expiry and a data limit (`scripts/marzban-allowance-check.sh`, row 6), so a renewal
+   * there would take the customer's money and change nothing they could see. A
+   * suspended service is resumed first.
+   */
+  RENEW: ['ACTIVE', 'EXPIRED'],
+  /*
+   * The two quantity purchases, from `ACTIVE` alone.
+   *
+   * Not from `EXPIRED`, and the two reasons are different. Extra traffic on a service
+   * whose window has closed buys an allowance nothing can spend — the legacy system
+   * says the same thing about its own extra-volume flow, that the purchase is bounded
+   * by the existing expiry and does not extend it (`TBR-009`). And extra TIME on an
+   * expired service would be a renewal in all but name, needing the machine's
+   * `EXPIRED -> ACTIVE` edge under a different event; the honest way to bring an expired
+   * service back is `RENEW`, which is the edge that exists.
+   */
+  ADD_TRAFFIC: ['ACTIVE'],
+  ADD_TIME: ['ACTIVE'],
   // Not performable in this release. Empty rather than absent, so that a type reaching
   // here is refused by the state check as well as by `isPerformableOperation` — two
   // independent refusals, because this is the edit that must not fail open.
-  RENEW: [],
-  ADD_TRAFFIC: [],
-  ADD_TIME: [],
   ROTATE_SUBSCRIPTION: [],
 };
 
@@ -356,6 +386,34 @@ export async function resumeCall(
   ref: ProviderUserRef,
 ): ReturnType<CanEnableUser['resumeUser']> {
   return adapter.resumeUser(target, http, ref);
+}
+
+/**
+ * The commercial call: make this account's allowance read as the plan says.
+ *
+ * ONE function for three operation types, which is the opposite of the three above and
+ * the same asymmetry `ProviderAdapter.applyAllowance` carries, for the same reason: the
+ * three differ in what they BOUGHT, not in what they ask the panel to do. The
+ * difference is already expressed — in the target, computed once when the order
+ * settled, which this function only passes along.
+ *
+ * It cannot switch on the operation type and must not grow a branch that does. The
+ * plan is the whole of the instruction, and a function that re-derived any part of it
+ * from the type would be a second place where a renewal's arithmetic lives.
+ *
+ * The adapter arrives already narrowed, so the method is present by type. The three
+ * predicates that produce that type — `canRenewUser`, `canAddVolume`, `canAddTime` —
+ * each require their own declared capability, so the caller cannot reach here with an
+ * adapter that does not advertise the specific operation being performed.
+ */
+export async function allowanceCall(
+  adapter: CanApplyAllowance,
+  target: ProviderServiceTarget,
+  http: Parameters<CanApplyAllowance['applyAllowance']>[1],
+  ref: ProviderUserRef,
+  plan: ProviderAllowancePlan,
+): ReturnType<CanApplyAllowance['applyAllowance']> {
+  return adapter.applyAllowance(target, http, ref, plan);
 }
 
 export async function terminateCall(

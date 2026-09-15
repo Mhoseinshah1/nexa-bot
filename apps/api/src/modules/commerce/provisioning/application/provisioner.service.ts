@@ -1,9 +1,14 @@
 import {
+  canAddTime,
+  canAddVolume,
   canDeleteUser,
   canDisableUser,
+  canRenewUser,
   canEnableUser,
   isIdempotentMutation,
   isMutatingOperation,
+  nextState,
+  SERVICE_MACHINE,
   PROVIDER_FAILURE_RETRYABLE,
   USAGE_SYNC_PLAN_LIMIT,
   systemJobActor,
@@ -15,6 +20,7 @@ import {
   type OperationalEventRecorder,
   type OperationId,
   type OperationState,
+  type OperationTarget,
   type ProviderAdapter,
   type ProviderFailureKind,
   type ProviderRemovalOutcome,
@@ -49,6 +55,7 @@ import {
   OPERATION_LEGAL_FROM,
   provisionCall,
   resumeCall,
+  allowanceCall,
   suspendCall,
   terminateCall,
   usageSyncCall,
@@ -636,6 +643,61 @@ export class ProvisionerService {
           operation,
           service,
           await terminateCall(adapter, target, http, ref),
+        );
+      }
+      /*
+       * The three commercial branches, each narrowing the adapter through its OWN
+       * predicate.
+       *
+       * One `allowanceCall` behind three guards, and the guards are not
+       * interchangeable: `canAddVolume` asks for `ADD_VOLUME` and `canAddTime` for
+       * `ADD_TIME`, so a panel that declares one and not the other performs one and not
+       * the other. Collapsing them into a single check would let a descriptor that
+       * advertised a renewal be used to sell extra traffic.
+       *
+       * `operation.target` is asserted rather than defaulted. The database refuses a
+       * commercial operation with neither field — `provisioning_operations_target_present_check`
+       * — so a null here means the constraint is gone, and the safe answer is a refusal
+       * rather than a PUT that asks the panel for nothing and is recorded as a renewal
+       * that succeeded.
+       */
+      case 'RENEW': {
+        if (!canRenewUser(adapter) || operation.target === null) {
+          await this.refuse(scope, operation, service, 'CAPABILITY_UNSUPPORTED', now);
+          return { kind: 'REFUSED', operationId: operation.id, reason: 'CAPABILITY_UNSUPPORTED' };
+        }
+        return this.finishAllowance(
+          scope,
+          operation,
+          service,
+          operation.target,
+          await allowanceCall(adapter, target, http, ref, operation.target),
+        );
+      }
+      case 'ADD_TRAFFIC': {
+        if (!canAddVolume(adapter) || operation.target === null) {
+          await this.refuse(scope, operation, service, 'CAPABILITY_UNSUPPORTED', now);
+          return { kind: 'REFUSED', operationId: operation.id, reason: 'CAPABILITY_UNSUPPORTED' };
+        }
+        return this.finishAllowance(
+          scope,
+          operation,
+          service,
+          operation.target,
+          await allowanceCall(adapter, target, http, ref, operation.target),
+        );
+      }
+      case 'ADD_TIME': {
+        if (!canAddTime(adapter) || operation.target === null) {
+          await this.refuse(scope, operation, service, 'CAPABILITY_UNSUPPORTED', now);
+          return { kind: 'REFUSED', operationId: operation.id, reason: 'CAPABILITY_UNSUPPORTED' };
+        }
+        return this.finishAllowance(
+          scope,
+          operation,
+          service,
+          operation.target,
+          await allowanceCall(adapter, target, http, ref, operation.target),
         );
       }
       case 'PROVISION':
@@ -1448,6 +1510,209 @@ export class ProvisionerService {
         aggregateId: serviceId,
         payload: { customerId: service.customerId, from, to },
       });
+    });
+
+    return {
+      kind: 'ATTEMPTED',
+      operationId: operation.id,
+      serviceId,
+      outcome: 'SUCCEEDED',
+      failureKind: null,
+    };
+  }
+
+  /**
+   * Records what a RENEW, an ADD_TRAFFIC or an ADD_TIME did.
+   *
+   * One method for the three, because they differ in what they BOUGHT and not in what
+   * they leave behind: the target says which fields moved, and the service picks up
+   * exactly those.
+   *
+   * ## The service state
+   *
+   * `EXPIRED -> ACTIVE` is the only move any of them makes, and only a `RENEW` from an
+   * `EXPIRED` service makes it — `SERVICE_MACHINE`'s own frozen edge, given a caller at
+   * last. Everything else keeps the state it had: renewing an `ACTIVE` service buys it
+   * more time and leaves it active, and `SERVICE_MACHINE` has no `ACTIVE -> ACTIVE`
+   * edge to take.
+   *
+   * `SUSPENDED` never appears here at all. `OPERATION_LEGAL_FROM` excludes it for all
+   * three, because the pinned Marzban leaves a `disabled` account disabled through both
+   * an expiry and a data limit — so a renewal there would take a customer's money and
+   * change nothing they could see.
+   *
+   * ## Why a failure leaves the service exactly where it was
+   *
+   * These three are in `IDEMPOTENT_MUTATIONS`, so `outcomeFor` answers `FAILED` even
+   * for a TIMEOUT and the next attempt is the SAME call with the SAME stored target.
+   * That is the whole reason the target is written once when the order settles: a
+   * replay reproduces it, and a service that had its allowance raised by an attempt
+   * whose answer was lost gets the same two numbers again rather than a second
+   * increment.
+   *
+   * Nothing here writes an operational event, for the reason `finishStateChange` gives
+   * at length: `provisioning.stalled` is about a paid service that could not be
+   * CREATED, and nothing in this release plans a commercial action unattended — a
+   * customer asked for it, in a surface, moments ago.
+   */
+  private async finishAllowance(
+    scope: TenantContext,
+    operation: OperationRecord,
+    service: ServiceRecord,
+    target: OperationTarget,
+    changed: ProviderStateChangeOutcome,
+  ): Promise<ExecutionResult> {
+    const now = this.deps.clock.now();
+    const serviceId = service.id;
+    const from = service.state;
+
+    if (!changed.ok) {
+      const outcome = outcomeFor(changed.failure, operation.type);
+      await this.recordManagementFailure(
+        scope,
+        operation,
+        outcome,
+        changed.failure,
+        failureNote(changed.failure, changed.status),
+        now,
+      );
+      return {
+        kind: 'ATTEMPTED',
+        operationId: operation.id,
+        serviceId,
+        outcome,
+        failureKind: changed.failure,
+      };
+    }
+
+    if (!changed.found) {
+      /*
+       * The panel answered, authenticated, that it does not hold this account.
+       *
+       * The service keeps its old allowance, and it must: writing the target anyway
+       * would tell a customer they had thirty more days on an account that does not
+       * exist. The divergence is recorded on the operation, where an operator reads it.
+       */
+      await this.recordManagementFailure(
+        scope,
+        operation,
+        'FAILED',
+        null,
+        'the panel does not have this service’s account',
+        now,
+      );
+      return {
+        kind: 'ATTEMPTED',
+        operationId: operation.id,
+        serviceId,
+        outcome: 'FAILED',
+        failureKind: null,
+      };
+    }
+
+    /*
+     * `EXPIRED -> ACTIVE` for a renewal that revived one; otherwise stay put.
+     *
+     * Read off the machine rather than written as a literal, so an edge removed from
+     * `SERVICE_MACHINE` fails here instead of silently activating a service the machine
+     * no longer says may be activated.
+     */
+    const to =
+      operation.type === 'RENEW' && from === 'EXPIRED'
+        ? (nextState(SERVICE_MACHINE, 'EXPIRED', 'RENEW') ?? from)
+        : from;
+
+    const actor = this.actor();
+    await this.deps.uow.run(scope, async (tx) => {
+      await this.deps.operations.transition(
+        scope,
+        operation.id,
+        'IN_FLIGHT',
+        'SUCCEEDED',
+        {},
+        now,
+        tx,
+      );
+      /*
+       * Conditional on the state the operation was planned from.
+       *
+       * A service terminated or expired while this call was on the wire keeps what that
+       * transition wrote, and this returns false. The OPERATION still succeeded — the
+       * panel really did apply the change — and saying otherwise would be a lie about
+       * an external effect.
+       */
+      const applied = await this.deps.services.recordAllowance(
+        scope,
+        serviceId,
+        from,
+        to,
+        target,
+        now,
+        tx,
+      );
+      if (!applied) return;
+
+      /*
+       * The usage the panel reported while it was answering, when it reported any.
+       *
+       * Marzban returns the whole user record from a modify, so a renewal refreshes the
+       * consumption figure for free. Written only when the service is ACTIVE, which is
+       * what `recordUsage` requires — and after `recordAllowance`, so a service the
+       * renewal has just revived is already ACTIVE by the time this runs.
+       */
+      if (changed.usage !== null && to === 'ACTIVE') {
+        await this.deps.services.recordUsage(
+          scope,
+          serviceId,
+          { usedBytes: changed.usage.usedBytes, syncedAt: now },
+          tx,
+        );
+      }
+
+      await this.deps.audit.record(
+        scope,
+        actor,
+        {
+          action: `service.${operation.type.toLowerCase()}`,
+          entityType: 'Service',
+          entityId: serviceId,
+          before: {
+            state: from,
+            expiresAt: service.expiresAt?.toISOString() ?? null,
+            trafficLimitBytes: service.trafficLimitBytes.toString(),
+          },
+          after: {
+            state: to,
+            /*
+             * What was actually written, which is the old value where the target left a
+             * field alone. An audit row saying `null` for a window this operation did
+             * not buy would read as "the window was cleared".
+             */
+            expiresAt: (target.expiresAt ?? service.expiresAt)?.toISOString() ?? null,
+            trafficLimitBytes: (target.trafficLimitBytes ?? service.trafficLimitBytes).toString(),
+            orderId: operation.orderId,
+          },
+          result: 'SUCCESS',
+        },
+        tx,
+      );
+
+      /*
+       * The event follows the STATE change, and there is only one that can happen here.
+       *
+       * A renewal that revived an expired service is a fact other parts of the system
+       * care about; a renewal that added thirty days to a live one changes no state and
+       * has no `ServiceStateChanged` to announce. Writing one with `from === to` would
+       * put a transition into the outbox that `SERVICE_MACHINE` does not have.
+       */
+      if (to !== from) {
+        await this.deps.outbox.write(tx, actor, {
+          eventType: 'ServiceStateChanged',
+          aggregateType: 'Service',
+          aggregateId: serviceId,
+          payload: { customerId: service.customerId, from, to },
+        });
+      }
     });
 
     return {

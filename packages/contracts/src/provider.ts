@@ -1146,9 +1146,21 @@ const MARZBAN: ProviderDescriptor = {
    * promise made before the evidence exists is the kind this array's history is
    * made of.
    *
-   * The other nine are absent because this release cannot perform them — renewing,
-   * adding volume, rotating a link — and each returns in the commit that implements
-   * it, per that same rule.
+   * `RENEW_USER`, `ADD_VOLUME` and `ADD_TIME` joined them in Phase 4F, and under the
+   * same rule again: `applyAllowance` was written, then
+   * `tests/acceptance/real-panel-marzban.test.ts` A8 drove the shipped adapter against
+   * a real v0.8.4 and an independent observer watched one account's expiry and
+   * allowance become exactly what was asked for while its sibling's stayed where they
+   * were, watched the same plan replayed leave both numbers alone, watched an omitted
+   * field mean no change rather than a reset, and watched a username shaped like a path
+   * fail to reach the sibling. Three capabilities rather than one because they are
+   * three promises — a panel may extend a window and refuse to raise a limit — even
+   * though one method performs all three, which is what the pinned panel's single
+   * modify route makes true.
+   *
+   * The other six are absent because this release cannot perform them — rotating a
+   * link, resetting usage, limiting devices — and each returns in the commit that
+   * implements it, per that same rule.
    */
   capabilities: [
     'HEALTH_CHECK',
@@ -1158,6 +1170,9 @@ const MARZBAN: ProviderDescriptor = {
     'DISABLE_USER',
     'ENABLE_USER',
     'DELETE_USER',
+    'RENEW_USER',
+    'ADD_VOLUME',
+    'ADD_TIME',
   ],
   // A token exchange, then a status read.
   maxRequestsPerProbe: 2,

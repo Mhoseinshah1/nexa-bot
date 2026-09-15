@@ -557,6 +557,47 @@ export class DrizzleServiceRepository implements ServiceRepository {
     return rows.length === 1;
   }
 
+  /**
+   * The allowance a commercial operation bought, on a service still in the state it was
+   * planned from.
+   *
+   * One UPDATE, naming `from`, so a service suspended, expired or terminated while the
+   * provider call was on the wire keeps whatever that transition wrote and this returns
+   * false. The caller treats that as a successful operation whose service moved, which
+   * it is.
+   *
+   * A null field is skipped rather than written as null: null on the operation row
+   * means "this operation did not buy that", and writing it would clear a window the
+   * customer still has. `traffic_limit_bytes` is NOT NULL in any case, so a null there
+   * could not be written at all — the skip is what makes the two fields behave the
+   * same way rather than one of them throwing.
+   */
+  async recordAllowance(
+    scope: TenantContext,
+    id: string,
+    from: ServiceState,
+    to: ServiceState,
+    allowance: {
+      readonly expiresAt: Date | null;
+      readonly trafficLimitBytes: bigint | null;
+    },
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const patch: Record<string, unknown> = { state: to, updatedAt: now };
+    if (allowance.expiresAt !== null) patch['expiresAt'] = allowance.expiresAt;
+    if (allowance.trafficLimitBytes !== null) {
+      patch['trafficLimitBytes'] = allowance.trafficLimitBytes;
+    }
+    const rows = await this.exec(tx)
+      .update(services)
+      .set(patch)
+      .where(and(eq(services.tenantId, tenantId), eq(services.id, id), eq(services.state, from)))
+      .returning({ id: services.id });
+    return rows.length === 1;
+  }
+
   async expireDue(
     scope: TenantContext,
     now: Date,
