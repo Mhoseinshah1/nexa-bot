@@ -366,6 +366,81 @@ describe('a provisioned service announces itself', () => {
     expect(ops, 'one operation for one service').toHaveLength(1);
   });
 
+  it('does not announce to a customer an operator has blocked', async () => {
+    reply = (_request, response) => {
+      response.writeHead(403, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: false, error_code: 403, description: 'Forbidden' }));
+    };
+    const orderId = await paidOrder('deliver-blocked');
+    await ctx.container.provisionerLoop.tick();
+    expect(sent).toHaveLength(1);
+
+    await ctx.container.customers.block(tenantA, owner, {
+      idempotencyKey: 'block-deliv',
+      customerId: customerA,
+      reason: 'fixture',
+    });
+    await makeDeliveryDue();
+    sent = [];
+
+    /*
+     * Excluded AT THE QUERY, not skipped in the sweep.
+     *
+     * A service the sweep picked up and then declined would either burn an attempt
+     * against the ceiling — punishing a customer for a moderation decision that may be
+     * reversed — or be skipped without one, which returns the same row every tick for
+     * ever and crowds out deliveries that could be made.
+     */
+    const blocked = await ctx.container.delivery.deliverDue(tenantA, 10);
+    expect(blocked.claimed, 'a blocked customer has nothing due').toBe(0);
+    expect(sent, 'and nothing was sent').toHaveLength(0);
+
+    const during = await services.findByOrderId(tenantA, orderId);
+    expect(during?.deliveryAttempts, 'no attempt was spent on the block').toBe(1);
+
+    // And unblocking resumes it, with nothing to remember.
+    await ctx.container.customers.unblock(tenantA, owner, {
+      idempotencyKey: 'unblock-deliv',
+      customerId: customerA,
+      reason: null,
+    });
+    reply = (_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: true, result: { message_id: 14 } }));
+    };
+    await makeDeliveryDue();
+    const resumed = await ctx.container.delivery.deliverDue(tenantA, 10);
+    expect(resumed.delivered).toBe(1);
+    expect(sent).toHaveLength(1);
+  });
+
+  it('announces nothing for a tenant that has stopped accepting work', async () => {
+    reply = (_request, response) => {
+      response.writeHead(403, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: false, error_code: 403, description: 'Forbidden' }));
+    };
+    await paidOrder('deliver-stopped');
+    await ctx.container.provisionerLoop.tick();
+    expect(sent).toHaveLength(1);
+
+    await ctx.container.database.db.execute(
+      sql`UPDATE tenants SET status = 'STOPPED' WHERE id = ${tenantA.tenantId}`,
+    );
+    await makeDeliveryDue();
+    sent = [];
+
+    /*
+     * The kill switch every write path reads, and this one also SENDS.
+     *
+     * An operator who stopped a tenant expects its customers to stop hearing from it.
+     * The panels module was the one write path that skipped this check, which let a
+     * stopped tenant go on being given panels and a background monitor.
+     */
+    const sweep = await ctx.container.delivery.deliverDue(tenantA, 10);
+    expect(sweep.claimed, 'nothing is even claimed').toBe(0);
+    expect(sent, 'and nothing reaches Telegram').toHaveLength(0);
+  });
+
   it('keeps the committed service when the reply dies on the wire', async () => {
     reply = (request, _response) => {
       /*
