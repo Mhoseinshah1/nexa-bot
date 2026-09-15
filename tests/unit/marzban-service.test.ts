@@ -405,7 +405,13 @@ describe('the Marzban adapter — applying an allowance', () => {
       http(),
       createInput('alw-2', { volumeBytes: 5_000n, expiresAt: future(10) }),
     );
-    const before = panel.users.get('alw-2');
+    /*
+     * A COPY. `panel.users.get` hands back the live record, so `before` and `after`
+     * would otherwise be the same object and the comparison below could not fail —
+     * measured by F4F-11, which reverted the omitted-key rule and watched this case
+     * stay green.
+     */
+    const before = { ...panel.users.get('alw-2') };
     await adapter.applyAllowance(target(), http(), ref('alw-2'), {
       expiresAt: null,
       trafficLimitBytes: 9_000n,
@@ -521,7 +527,8 @@ describe('the Marzban adapter — applying an allowance', () => {
       http(),
       createInput('alw-9', { volumeBytes: 5_000n, expiresAt: future(3) }),
     );
-    const before = panel.users.get('alw-9');
+    // A copy, for the reason the omitted-key case above gives.
+    const before = { ...panel.users.get('alw-9') };
     /*
      * The half of the response check a faithful panel cannot exercise.
      *
