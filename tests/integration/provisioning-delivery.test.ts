@@ -563,11 +563,23 @@ describe('a provisioned service announces itself', () => {
      * operation straight back. So the paid order sat in PENDING_PROVISION for ever.
      */
     const claimed = await ctx.container.uow.run(tenantA, async (tx) =>
-      operations.claimDue(tenantA, 'worker-that-died', ctx.container.clock.now(), new Date(Date.now() + 60_000), tx),
+      operations.claimDue(
+        tenantA,
+        'worker-that-died',
+        ctx.container.clock.now(),
+        new Date(Date.now() + 60_000),
+        tx,
+      ),
     );
     expect(claimed, 'there is a planned create to claim').not.toBeNull();
     await ctx.container.uow.run(tenantA, async (tx) =>
-      operations.markCallStarted(tenantA, claimed?.id ?? '', 'worker-that-died', ctx.container.clock.now(), tx),
+      operations.markCallStarted(
+        tenantA,
+        claimed?.id ?? '',
+        'worker-that-died',
+        ctx.container.clock.now(),
+        tx,
+      ),
     );
     await ctx.container.database.db.execute(
       sql`UPDATE provisioning_operations SET lease_until = now() - interval '1 hour'`,

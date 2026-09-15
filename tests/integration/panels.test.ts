@@ -1028,7 +1028,7 @@ describe('panels', () => {
       credentials: { password: PASSWORD },
       idempotencyKey,
     };
-    const first = await ctx.container.panels.create(tenantA, adminActorFor(owner), {
+    await ctx.container.panels.create(tenantA, adminActorFor(owner), {
       ...base,
       activation: { subscriptionDomain: 'sub-a.example.test', inboundId: 1 },
     });

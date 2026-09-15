@@ -218,7 +218,11 @@ export class ProvisionerService {
      * transaction and that one, and the one that must not be skipped is the one
      * immediately before a provider is dialled with the operator's credentials.
      */
-    if (!(await this.deps.uow.run(scope, async (tx) => this.deps.scopeActivity.scopeIsActive(scope, tx)))) {
+    if (
+      !(await this.deps.uow.run(scope, async (tx) =>
+        this.deps.scopeActivity.scopeIsActive(scope, tx),
+      ))
+    ) {
       return { kind: 'IDLE' };
     }
 
