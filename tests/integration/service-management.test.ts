@@ -928,9 +928,18 @@ describe('a customer manages the service they bought', () => {
     expect((await operationOf(service.id, 'ADD_TIME'))?.state).toBe('SUCCEEDED');
     const after = await services.findById(tenantA, service.id);
     expect(after?.trafficLimitBytes).toBe(before?.trafficLimitBytes);
-    expect(after?.expiresAt?.getTime()).toBe(
-      (before?.expiresAt?.getTime() ?? 0) + 15 * 86_400_000,
-    );
+    expect(after?.expiresAt?.getTime()).toBe((before?.expiresAt?.getTime() ?? 0) + 15 * 86_400_000);
+    /*
+     * And on the PANEL, which is the half Nexa's own row cannot speak for.
+     *
+     * The stored allowance is written from the operation's target, and an `ADD_TIME`
+     * target carries `null` there — so Nexa's number is unchanged whatever the adapter
+     * sent. F4F-17 measured exactly that gap: an adapter that always sent `data_limit`,
+     * using the unlimited sentinel for the field the customer did not buy, wiped the
+     * cap on the panel and this case stayed green. The mirror of the extra-traffic case
+     * above, which asserts the window on the panel for the same reason.
+     */
+    expect(panel.users.get(service.username)?.dataLimit).toBe(Number(before?.trafficLimitBytes));
   });
 
   it('settles a renewal without creating a second service', async () => {
@@ -1044,7 +1053,10 @@ describe('a customer manages the service they bought', () => {
     const offered = await ctx.container.commercialActions.availableFor(
       tenantA,
       systemActor('a'),
-      (await services.findById(tenantA, service.id)) ?? (() => { throw new Error('no service'); })(),
+      (await services.findById(tenantA, service.id)) ??
+        (() => {
+          throw new Error('no service');
+        })(),
     );
     expect(offered).not.toContain('ADD_TRAFFIC');
     expect(offered).not.toContain('ADD_TIME');
