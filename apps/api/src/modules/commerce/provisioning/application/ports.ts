@@ -53,6 +53,8 @@ export interface ServiceRecord {
   readonly deliveryAttempts: number;
   readonly deliveredAt: Date | null;
   readonly deliveryNextAttemptAt: Date | null;
+  /** Set while a send has been handed to Telegram and no outcome has been recorded. */
+  readonly deliverySendStartedAt: Date | null;
   readonly provisionedAt: Date | null;
   readonly terminatedAt: Date | null;
   readonly createdAt: Date;
@@ -218,6 +220,36 @@ export interface ServiceRepository {
    * between claim and send exhaust a service's three attempts without a single message
    * ever being submitted to Telegram.
    */
+  /**
+   * Records that a send is about to leave, before it leaves. Answers whether it did.
+   *
+   * `markCallStarted` for the announcement half, with the same obligation on the
+   * caller: its own transaction, committed before the send, so a crash cannot roll back
+   * the one fact that says a message may already be out. A `false` means somebody else
+   * moved the row first and this caller must send nothing.
+   */
+  markSendStarted(
+    scope: TenantContext,
+    id: string,
+    from: ServiceDeliveryState,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean>;
+
+  /**
+   * Resolves sends whose sender died, so the automatic lane never repeats one.
+   *
+   * A stamped row past its lease becomes `UNCONFIRMED` if it was `PENDING`, and simply
+   * loses the stamp otherwise. No attempt is spent: an attempt means an outcome somebody
+   * observed, and the point of this row is that nobody did.
+   */
+  reapStrandedSends(
+    scope: TenantContext,
+    now: Date,
+    limit: number,
+    tx: TransactionScope,
+  ): Promise<number>;
+
   claimDeliveryDue(
     scope: TenantContext,
     now: Date,
@@ -247,16 +279,37 @@ export interface CustomerContact {
  * the delivery sweep `CustomerRepository` would also hand a background worker
  * `setStatus`, and therefore the ability to block or unblock a customer.
  *
- * `null` means REFUSE, never "fall back to some bot". The only durable customer-to-bot
+ * `NONE` means REFUSE, never "fall back to some bot". The only durable customer-to-bot
  * link is `customers.first_bot_instance_id`, which is nullable; a customer whose row has
  * none cannot be announced to automatically, and guessing is the failure mode above.
+ *
+ * ## Why `BLOCKED` is its own answer and not simply another refusal
+ *
+ * The delivery claim excludes blocked customers in its own query, so under no
+ * concurrency this case never arises. It arises in the window between the claim and this
+ * read: an operator blocking a customer right then would otherwise have the sweep
+ * announce to them anyway, because a freshly read row's status was never consulted.
+ *
+ * Folding it into `NONE` would fix the send and break the record. `NONE` is recorded as
+ * `FAILED` — a customer with no bot link never gains one by waiting — whereas a block is
+ * temporary by design, and the query already treats it that way: an unblocked customer's
+ * service is due again. Marking it `FAILED` on the race would take the automatic
+ * announcement away from a customer whose block was lifted an hour later, which is the
+ * opposite of what blocking one means.
  */
+export type CustomerContactLookup =
+  | { readonly kind: 'CONTACT'; readonly contact: CustomerContact }
+  /** The customer exists and an operator has blocked them. Not now; possibly later. */
+  | { readonly kind: 'BLOCKED' }
+  /** No customer, or no durable bot link. Nothing to wait for. */
+  | { readonly kind: 'NONE' };
+
 export interface CustomerContactReader {
   contactFor(
     scope: TenantContext,
     customerId: UserId,
     tx?: unknown,
-  ): Promise<CustomerContact | null>;
+  ): Promise<CustomerContactLookup>;
 }
 
 /**
@@ -376,8 +429,20 @@ export interface OperationRepository {
    * `TransactionScope` rather than opening none at all so that the write passes
    * `DrizzleUnitOfWork.run` — ADR-0028's quiesce gate lives there, and a restore must
    * not find the provisioner still writing to the database it is replacing.
+   *
+   * Takes the WORKER and answers whether it stamped. The lease can expire in the window
+   * between the claim and this call, and a released-then-reclaimed operation stamped by
+   * the worker that stalled is two workers calling one panel for one paid order. So the
+   * implementation asserts the whole claim, and a caller that is told `false` must make
+   * no provider call.
    */
-  markCallStarted(scope: TenantContext, id: string, at: Date, tx: TransactionScope): Promise<void>;
+  markCallStarted(
+    scope: TenantContext,
+    id: string,
+    worker: string,
+    at: Date,
+    tx: TransactionScope,
+  ): Promise<boolean>;
 
   /**
    * Moves an operation between two states, and reports whether the row moved.
@@ -457,6 +522,37 @@ export interface OperationRepository {
     scope: TenantContext,
     now: Date,
     limit: number,
+    tx: TransactionScope,
+  ): Promise<number>;
+
+  /**
+   * Takes operations a crash stranded mid-call off `IN_FLIGHT`, for good.
+   *
+   * The complement of `releaseExpiredLeases`, which refuses exactly these rows. A
+   * mutating one becomes `UNKNOWN` — the state whose only exit is a read, which is the
+   * queue `listUnknown` serves — and a non-mutating one becomes `FAILED`, because a read
+   * that never answered changed nothing. Without it a process that died between the
+   * stamp and the answer left a paid order waiting for ever.
+   */
+  reapStrandedCalls(
+    scope: TenantContext,
+    now: Date,
+    limit: number,
+    tx: TransactionScope,
+  ): Promise<readonly OperationRecord[]>;
+
+  /**
+   * Closes a service's outstanding `UNKNOWN` operations once a read has answered.
+   *
+   * The `RECONCILE_SUCCEEDED` and `RECONCILE_FAILED` edges `OPERATION_MACHINE` declares,
+   * finally used. `UNKNOWN` is otherwise a state nothing leaves, and an unresolved one
+   * outlives its own reconcile to jam the queue in front of the next service waiting.
+   */
+  resolveUnknownForService(
+    scope: TenantContext,
+    serviceId: string,
+    to: Extract<OperationState, 'SUCCEEDED' | 'FAILED'>,
+    now: Date,
     tx: TransactionScope,
   ): Promise<number>;
 

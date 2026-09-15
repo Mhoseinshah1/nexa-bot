@@ -11,6 +11,7 @@ import {
   type ProductId,
   type UserId,
 } from '@nexa/contracts';
+import { providerDescriptor } from '@nexa/contracts';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
 import { DrizzleOperationRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-operation.repository';
@@ -545,6 +546,229 @@ describe('a provisioned service announces itself', () => {
      * mid-create a duplicate.
      */
     expect(ops[0]?.callStartedAt, 'the executor stamped the call before making it').not.toBeNull();
+  });
+
+  it('recovers a provider call whose worker died, instead of waiting for ever', async () => {
+    const orderId = await paidOrder('stranded');
+    const service0 = await services.findByOrderId(tenantA, orderId);
+    const serviceId = service0?.id ?? '';
+
+    /*
+     * The state a crash mid-create leaves behind: IN_FLIGHT, stamped, lease gone.
+     *
+     * `releaseExpiredLeases` refuses exactly this row on purpose — releasing it would
+     * repeat a mutation that may have landed — and its comment said such a row waits for
+     * "a person or the reconciler". Neither had a path to it: the reconciler scans
+     * UNKNOWN, `retireExhausted` scans PLANNED, and `retryProvisioning` hands the open
+     * operation straight back. So the paid order sat in PENDING_PROVISION for ever.
+     */
+    const claimed = await ctx.container.uow.run(tenantA, async (tx) =>
+      operations.claimDue(tenantA, 'worker-that-died', ctx.container.clock.now(), new Date(Date.now() + 60_000), tx),
+    );
+    expect(claimed, 'there is a planned create to claim').not.toBeNull();
+    await ctx.container.uow.run(tenantA, async (tx) =>
+      operations.markCallStarted(tenantA, claimed?.id ?? '', 'worker-that-died', ctx.container.clock.now(), tx),
+    );
+    await ctx.container.database.db.execute(
+      sql`UPDATE provisioning_operations SET lease_until = now() - interval '1 hour'`,
+    );
+
+    await ctx.container.provisionerLoop.tick();
+
+    const stranded = await operations.findById(tenantA, claimed?.id ?? '');
+    expect(
+      stranded?.state,
+      'the stranded create leaves IN_FLIGHT instead of sitting there for ever',
+    ).not.toBe('IN_FLIGHT');
+
+    /*
+     * ONE tick does the whole recovery, and the test says so rather than asserting a
+     * sequence it does not see.
+     *
+     * The reap moves the create to UNKNOWN and the service to UNRECONCILED; the same
+     * tick plans the reconcile, claims it, and asks the panel — which never received a
+     * create here, because this fixture stamped the call without making one — so the
+     * verdict is ABSENT, the unknown is resolved to FAILED, and the service returns to
+     * PENDING_PROVISION where a fresh create is legal.
+     *
+     * `reapStrandedCalls` producing UNKNOWN specifically is proved at the repository
+     * level in `provisioning.test.ts`, where no later step can move it.
+     */
+    const planned = await operations.listForService(tenantA, serviceId, 10);
+    expect(
+      planned.some((operation) => operation.type === 'RECONCILE'),
+      'the same tick plans the reconcile that resolves it',
+    ).toBe(true);
+    const service = await services.findById(tenantA, serviceId);
+    /*
+     * ACTIVE, because the tick drains: the reconcile proved the panel had no account,
+     * the service returned to PENDING_PROVISION where a create is legal, and the same
+     * tick made it. That is the outcome a customer who paid should get, and asserting
+     * the intermediate PENDING_PROVISION instead would be asserting a state this system
+     * passes through rather than the one it lands in.
+     */
+    expect(service?.state, 'the stranded order is recovered, not merely unstuck').toBe('ACTIVE');
+    expect(addClientCalls(), 'and exactly ONE account exists on the panel').toBe(1);
+    expect(
+      planned.every((operation) => operation.state !== 'IN_FLIGHT'),
+      'nothing is left holding a claim',
+    ).toBe(true);
+  });
+
+  it('keeps reconciling a service whose SECOND create also loses track', async () => {
+    /*
+     * The queue jamming itself with its own history.
+     *
+     * `listUnknown` is oldest-first and filtered on the service being UNRECONCILED —
+     * true again the moment a second create loses track. It therefore handed back the
+     * FIRST, already-reconciled operation; `planReconciles` derived that row's reconcile
+     * id, found the terminal reconcile that had already run, and planned nothing. The
+     * service stayed UNRECONCILED with no open work for ever, and the cycle ceiling was
+     * never reached because the cycle died in round two.
+     *
+     * Fixed by USING the `UNKNOWN -> SUCCEEDED/FAILED` edges `OPERATION_MACHINE` has
+     * always declared and nothing called.
+     */
+    panel.setBehaviour('add-client-lost-reply');
+    const orderId = await paidOrder('twice-lost');
+
+    await ctx.container.provisionerLoop.tick();
+    const serviceId = (await services.findByOrderId(tenantA, orderId))?.id ?? '';
+
+    const afterFirst = await operations.listForService(tenantA, serviceId, 20);
+    expect(
+      afterFirst.every((operation) => operation.state !== 'UNKNOWN'),
+      'the reconcile that ran closed the unknown it answered',
+    ).toBe(true);
+
+    await makeOperationDue();
+    await ctx.container.provisionerLoop.tick();
+    await makeOperationDue();
+    await ctx.container.provisionerLoop.tick();
+
+    const service = await services.findById(tenantA, serviceId);
+    const ops = await operations.listForService(tenantA, serviceId, 50);
+    const open = ops.filter(
+      (operation) => operation.state === 'PLANNED' || operation.state === 'IN_FLIGHT',
+    );
+    expect(
+      service?.state === 'UNRECONCILED' ? open.length : 1,
+      'a service left UNRECONCILED always has open work to resolve it',
+    ).toBeGreaterThan(0);
+    expect(
+      ops.filter((operation) => operation.state === 'UNKNOWN').length,
+      'no unknown outlives the reconcile that answered it',
+    ).toBe(0);
+  });
+
+  it('refuses to sell a device limit the panel cannot apply', async () => {
+    /*
+     * A product freezes `deviceLimit` for whichever panel it names, and nothing checked
+     * that the panel could apply it. `MarzbanAdapter.createUser` builds its body from
+     * `username`, `expire`, `data_limit` and `data_limit_reset_strategy` and never reads
+     * the field — so a customer buying a two-device plan on a Marzban panel received an
+     * unrestricted account and the operation was recorded SUCCEEDED. The number the
+     * customer paid for vanished between the order snapshot and the panel with nothing
+     * anywhere saying so.
+     *
+     * Driven here through the CAPABILITY rather than through Marzban, because a fake
+     * Marzban would prove what the fake does. The panel under test is a real 3X-UI that
+     * really does apply `limitIp`; taking `LIMIT_DEVICES` off the descriptor makes it
+     * stand for any adapter that cannot, which is the condition the production rule
+     * actually tests.
+     */
+    const descriptor = providerDescriptor('sanaei');
+    const original = descriptor?.capabilities;
+    Object.defineProperty(descriptor, 'capabilities', {
+      value: (original ?? []).filter((capability) => capability !== 'LIMIT_DEVICES'),
+      configurable: true,
+    });
+    try {
+      const orderId = await paidOrder('device-limit');
+      await ctx.container.provisionerLoop.tick();
+
+      const service = await services.findByOrderId(tenantA, orderId);
+      expect(
+        service?.state,
+        'nothing is created, because what would be created is not what was sold',
+      ).toBe('PENDING_PROVISION');
+      expect(addClientCalls(), 'and the panel was never dialled').toBe(0);
+
+      const ops = await operations.listForService(tenantA, service?.id ?? '', 10);
+      expect(
+        ops[0]?.state,
+        'CAPABILITY_UNSUPPORTED is permanent: no retry teaches an adapter a field',
+      ).toBe('FAILED');
+    } finally {
+      Object.defineProperty(descriptor, 'capabilities', {
+        value: original,
+        configurable: true,
+      });
+    }
+  });
+
+  it('stops dialling a panel that answered with a wrong password', async () => {
+    /*
+     * Two different questions, and the provisioner used to ask only one.
+     *
+     * `failureOutcome` says whether the request certainly did not take effect — a fact
+     * about the wire that decides FAILED versus UNKNOWN. It does NOT say whether trying
+     * again could help, which is what `PROVIDER_FAILURE_RETRYABLE` answers, and which
+     * marks AUTHENTICATION_FAILED false with the reason written beside it: each attempt
+     * counts against the panel's own login limiter.
+     *
+     * Re-planning every definitive failure meant a mistyped panel password produced five
+     * unattended wrong logins on a 30/60/120-second backoff, which is how an operator
+     * gets locked out of their own panel by their own bot.
+     */
+    await ctx.container.panels.setCredentials(tenantA, owner, panelId, {
+      credentials: { password: 'not-the-panel-password' },
+      idempotencyKey: 'wrong-password',
+    });
+    const orderId = await paidOrder('bad-password');
+
+    await ctx.container.provisionerLoop.tick();
+
+    const serviceId = (await services.findByOrderId(tenantA, orderId))?.id ?? '';
+    const ops = await operations.listForService(tenantA, serviceId, 10);
+    const create = ops.find((operation) => operation.type === 'PROVISION');
+    expect(
+      create?.state,
+      'a non-retryable failure is terminal at once, not after four more logins',
+    ).toBe('FAILED');
+    expect(create?.attempts, 'and it spent exactly the one attempt it was given').toBe(1);
+  });
+
+  it('does not announce twice when the sender dies between the send and the record', async () => {
+    const orderId = await paidOrder('stranded-send');
+    await ctx.container.provisionerLoop.tick();
+    const serviceId = (await services.findByOrderId(tenantA, orderId))?.id ?? '';
+    const sentFirst = sent.length;
+
+    /*
+     * A sweep killed after Telegram accepted the message and before the outcome was
+     * written. The row stays PENDING behind nothing but a lease, and when that lease
+     * expires the AUTOMATIC lane announced again — breaking the rule
+     * `deliveryStateAfter` states in as many words, on an ordinary container restart.
+     */
+    await ctx.container.database.db.execute(
+      sql`UPDATE services
+             SET delivery_state = 'PENDING',
+                 delivered_at = NULL,
+                 delivery_send_started_at = now() - interval '1 hour',
+                 delivery_next_attempt_at = now() - interval '1 hour'
+           WHERE id = ${serviceId}`,
+    );
+
+    await ctx.container.provisionerLoop.tick();
+
+    const service = await services.findById(tenantA, serviceId);
+    expect(
+      service?.deliveryState,
+      'an unaccounted send leaves the automatic lane as UNCONFIRMED',
+    ).toBe('UNCONFIRMED');
+    expect(sent.length, 'and the customer is not told a second time').toBe(sentFirst);
+    expect(service?.state, 'the service itself is untouched by any of this').toBe('ACTIVE');
   });
 
   it('creates one account when a create is cut off after the panel stored it', async () => {

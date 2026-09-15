@@ -1,5 +1,5 @@
 import { and, asc, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
-import { OPERATION_MAX_ATTEMPTS } from '@nexa/contracts';
+import { isMutatingOperation, OPERATION_MAX_ATTEMPTS, OPERATION_TYPES } from '@nexa/contracts';
 import type {
   OperationId,
   OperationState,
@@ -19,6 +19,19 @@ import type { OperationDraft, OperationRecord, OperationRepository } from '../ap
 
 /** Local alias so the predicate below reads as the rule rather than as a constant. */
 const MAX_ATTEMPTS = OPERATION_MAX_ATTEMPTS;
+
+/**
+ * The operation types that change nothing on the provider, DERIVED from the contract.
+ *
+ * Listed by asking `isMutatingOperation` rather than by writing the two names out,
+ * because a hand-written copy is a second definition that the next operation type
+ * silently falsifies — and the direction it fails in is the expensive one: a new
+ * mutating type omitted from a hardcoded list would be treated as a read, and a read
+ * whose answer was lost is resolved by retrying it.
+ */
+const NON_MUTATING_TYPES: readonly OperationType[] = OPERATION_TYPES.filter(
+  (type) => !isMutatingOperation(type),
+);
 
 type Row = typeof provisioningOperations.$inferSelect;
 
@@ -305,24 +318,51 @@ export class DrizzleOperationRepository implements OperationRepository {
    * It used to take no transaction at all and write on the pool. That put it outside
    * `DrizzleUnitOfWork.run`, and therefore outside ADR-0028's quiesce gate — so a
    * restore found the provisioner still stamping rows in the database it was replacing.
+   *
+   * ## Why it is fenced on the LEASE and not just on the id
+   *
+   * It matched on the id and a null stamp alone, and that is not enough, because the
+   * window between the claim and this statement is exactly the window a lease can
+   * expire in. A worker that stalled past its lease — a long GC pause, a frozen
+   * container, a slow database — is released by another replica's
+   * `releaseExpiredLeases` (legal: nothing was stamped yet) and the operation is
+   * claimed by a second worker. The stalled worker then wakes and stamps, because the
+   * row still has no `call_started_at` and its id has not changed; the second worker's
+   * own stamp then finds one and quietly does nothing. BOTH then call the provider.
+   *
+   * Two concurrent creates for one paid order is the single thing this phase exists to
+   * prevent, so the stamp now asserts the whole claim: still `IN_FLIGHT`, still THIS
+   * worker's, and the lease still in the future. It RETURNS whether it stamped, and the
+   * executor makes no provider call when it did not — a refusal costs a tick, where
+   * proceeding costs a customer a duplicate account.
+   *
+   * An expired-but-unreclaimed lease is refused too, deliberately. The row is about to
+   * be released by the next sweep, so aborting hands it back cleanly; calling anyway
+   * would race that sweep for the same outcome.
    */
   async markCallStarted(
     scope: TenantContext,
     id: string,
+    worker: string,
     at: Date,
     tx: TransactionScope,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
-    await this.exec(tx)
+    const rows = await this.exec(tx)
       .update(provisioningOperations)
       .set({ callStartedAt: at, updatedAt: at })
       .where(
         and(
           eq(provisioningOperations.tenantId, tenantId),
           eq(provisioningOperations.id, id),
+          eq(provisioningOperations.state, 'IN_FLIGHT'),
+          eq(provisioningOperations.claimedBy, worker),
+          sql`${provisioningOperations.leaseUntil} > ${at}`,
           isNull(provisioningOperations.callStartedAt),
         ),
-      );
+      )
+      .returning({ id: provisioningOperations.id });
+    return rows.length > 0;
   }
 
   async transition(
@@ -531,6 +571,137 @@ export class DrizzleOperationRepository implements OperationRepository {
           eq(provisioningOperations.state, 'IN_FLIGHT'),
           isNull(provisioningOperations.callStartedAt),
           sql`${provisioningOperations.id} IN ${expired}`,
+        ),
+      )
+      .returning({ id: provisioningOperations.id });
+    return rows.length;
+  }
+
+  /**
+   * The operations a crash stranded MID-CALL, moved off `IN_FLIGHT` for good.
+   *
+   * The other half of `releaseExpiredLeases`, and the half that was missing. That sweep
+   * deliberately refuses a row whose `call_started_at` is set, because handing it to
+   * another worker would repeat a mutation that may have taken effect. Its comment then
+   * said such a row is "left `IN_FLIGHT` for ever until a person or the reconciler deals
+   * with it" — and neither had a path to it. The reconciler scans `UNKNOWN`;
+   * `retireExhausted` scans `PLANNED`; `retryProvisioning` finds the open operation and
+   * hands it back unchanged. So a process that died between stamping and answering left
+   * a paid order in `PENDING_PROVISION` for ever, with no operator condition anywhere.
+   *
+   * This is the transition that ends it, and it is `UNKNOWN` rather than `PLANNED`
+   * precisely because the call may have landed: `UNKNOWN` is the state whose only exit
+   * is a READ, which is what `listUnknown` and `planReconciles` already implement. The
+   * stranded row therefore joins the queue that was built for exactly this question.
+   *
+   * A NON-mutating operation goes to `FAILED` instead, for the reason `failureOutcome`
+   * gives: a read that did not answer changed nothing, so there is nothing to reconcile
+   * and a fresh one is simply planned. The split is derived from the contract, never
+   * restated here.
+   *
+   * Conditional and bounded like every other sweep in this file, so two replicas racing
+   * it produce one winner per row and a long backlog does not become one long
+   * transaction.
+   */
+  async reapStrandedCalls(
+    scope: TenantContext,
+    now: Date,
+    limit: number,
+    tx: TransactionScope,
+  ): Promise<readonly OperationRecord[]> {
+    const tenantId = requireTenantId(scope);
+    const stranded = this.exec(tx)
+      .select({ id: provisioningOperations.id })
+      .from(provisioningOperations)
+      .where(
+        and(
+          eq(provisioningOperations.tenantId, tenantId),
+          eq(provisioningOperations.state, 'IN_FLIGHT'),
+          lte(provisioningOperations.leaseUntil, now),
+          sql`${provisioningOperations.callStartedAt} IS NOT NULL`,
+        ),
+      )
+      .limit(limit);
+
+    /*
+     * One branch, used twice, because the two columns are bound by a CHECK.
+     *
+     * `provisioning_operations_completed_check` says terminal states carry a completion
+     * time and live ones do not. `FAILED` is terminal and `UNKNOWN` is not, so stamping
+     * `completed_at` on every reaped row made the whole statement fail — which is the
+     * database refusing to store the contradiction rather than the code noticing it.
+     */
+    const isRead = inArray(provisioningOperations.type, NON_MUTATING_TYPES);
+    const rows = await this.exec(tx)
+      .update(provisioningOperations)
+      .set({
+        state: sql`CASE WHEN ${isRead} THEN 'FAILED' ELSE 'UNKNOWN' END`,
+        claimedBy: null,
+        leaseUntil: null,
+        failureMessage: 'the worker holding this operation died after the provider call began',
+        /*
+         * Cast explicitly, because a raw `sql` template has no column to borrow a type
+         * from. Drizzle types a plain `completedAt: now` from the schema; inside a CASE
+         * it is just a parameter, and with `NULL` in the other branch PostgreSQL has
+         * nothing to infer from and refuses to plan the statement at all.
+         */
+        completedAt: sql`CASE WHEN ${isRead} THEN ${now.toISOString()}::timestamptz ELSE NULL END`,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(provisioningOperations.tenantId, tenantId),
+          eq(provisioningOperations.state, 'IN_FLIGHT'),
+          lte(provisioningOperations.leaseUntil, now),
+          sql`${provisioningOperations.callStartedAt} IS NOT NULL`,
+          sql`${provisioningOperations.id} IN ${stranded}`,
+        ),
+      )
+      .returning();
+    return rows.map(toRecord);
+  }
+
+  /**
+   * Resolves a service's outstanding `UNKNOWN` operations, once a read has answered.
+   *
+   * `OPERATION_MACHINE` has carried `UNKNOWN -> SUCCEEDED on RECONCILE_SUCCEEDED` and
+   * `UNKNOWN -> FAILED on RECONCILE_FAILED` since the machine was written, both guarded
+   * by `providerStateRead`, and until now NOTHING used either edge. That was the defect:
+   * `UNKNOWN` had no exit, so a reconcile resolved the SERVICE and left the operation
+   * that lost track sitting in the queue for ever.
+   *
+   * What that costs is not cosmetic. `listUnknown` is ordered oldest-first and filtered
+   * on the service being `UNRECONCILED` — which is true again the moment a SECOND create
+   * loses track. The sweep then returns the FIRST, already-reconciled operation;
+   * `planReconciles` derives its reconcile id from that row, finds the terminal reconcile
+   * that already ran, and plans nothing. The service stays `UNRECONCILED` with no open
+   * work, for ever, and `SERVICE_PROVISION_CYCLE_LIMIT` is never reached because the
+   * cycle stops dead in round two.
+   *
+   * Every outstanding unknown for the service, not just the one this reconcile was
+   * derived from, because the fact a read established is about the SERVICE. On ABSENT
+   * that is exact: the panel does not have the account, so no create took effect and
+   * each is `FAILED`. On ADOPT the read cannot attribute WHICH create made the account,
+   * and `SUCCEEDED` for all of them is the honest reading of "the thing they were each
+   * trying to achieve is true" — the alternative, leaving the others `UNKNOWN`, is the
+   * bug above.
+   */
+  async resolveUnknownForService(
+    scope: TenantContext,
+    serviceId: string,
+    to: Extract<OperationState, 'SUCCEEDED' | 'FAILED'>,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(provisioningOperations)
+      .set({ state: to, completedAt: now, updatedAt: now })
+      .where(
+        and(
+          eq(provisioningOperations.tenantId, tenantId),
+          eq(provisioningOperations.serviceId, serviceId),
+          eq(provisioningOperations.state, 'UNKNOWN'),
         ),
       )
       .returning({ id: provisioningOperations.id });

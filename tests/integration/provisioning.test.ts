@@ -123,8 +123,10 @@ describe('provisioning invariants', () => {
     ctx.container.uow.run(tenantA, async (tx) =>
       operations.releaseExpiredLeases(tenantA, at, limit, tx),
     );
-  const startCall = (id: string, at: Date) =>
-    ctx.container.uow.run(tenantA, async (tx) => operations.markCallStarted(tenantA, id, at, tx));
+  const startCall = (id: string, worker: string, at: Date) =>
+    ctx.container.uow.run(tenantA, async (tx) =>
+      operations.markCallStarted(tenantA, id, worker, at, tx),
+    );
 
   /** An order that has been confirmed and is waiting for money. */
   async function awaitingPayment(key: string): Promise<OrderRecord> {
@@ -417,23 +419,117 @@ describe('provisioning invariants', () => {
     const released = await release(now, 10);
     expect(released, 'an abandoned claim with no call started is reclaimable').toBe(1);
 
-    const reclaimed = await claim('worker-2', now, new Date(now.getTime() - 1_000));
+    /*
+     * A LIVE lease this time, because the stamp now asserts one.
+     *
+     * `markCallStarted` refuses a worker whose lease has already lapsed — that window is
+     * how two workers came to hold one operation — so proving the release guard needs a
+     * claim that is genuinely this worker's at the moment it stamps, and an expiry that
+     * arrives afterwards.
+     */
+    const live = new Date(now.getTime() + 60_000);
+    const reclaimed = await claim('worker-2', now, live);
     expect(reclaimed).not.toBeNull();
-    await startCall(reclaimed?.id ?? '', now);
+    const stamped = await startCall(reclaimed?.id ?? '', 'worker-2', now);
+    expect(stamped, 'the worker holding a live lease may stamp its call').toBe(true);
 
     /*
      * The guard `OPERATION_MACHINE` names, as a WHERE clause.
      *
      * A row whose call was started may have taken effect on the panel. Handing it to a
      * third worker would repeat that mutation, which is the duplicate account this
-     * column exists to prevent — so the sweep leaves it IN_FLIGHT for a human.
+     * column exists to prevent — so the lease sweep will not take it.
+     *
+     * It is not abandoned either: `reapStrandedCalls` moves exactly these rows to
+     * `UNKNOWN`, where a READ resolves them. This assertion is about the RELEASE sweep
+     * specifically, which must never be the thing that recovers them.
      */
-    const afterCall = await release(now, 10);
+    const expired = new Date(live.getTime() + 1_000);
+    const afterCall = await release(expired, 10);
     expect(afterCall, 'a started call is never released by the sweep').toBe(0);
 
     const still = await operations.findById(tenantA, reclaimed?.id ?? '');
     expect(still?.state).toBe('IN_FLIGHT');
     expect(still?.callStartedAt).not.toBeNull();
+  });
+
+  it('moves a stranded provider call to UNKNOWN, where a read can resolve it', async () => {
+    const order = await awaitingPayment('stranded-repo');
+    await settle('stranded-repo', order);
+    const now = ctx.container.clock.now();
+
+    const claimed = await claim('worker-1', now, new Date(now.getTime() + 1_000));
+    expect(claimed).not.toBeNull();
+    expect(await startCall(claimed?.id ?? '', 'worker-1', now), 'the call is stamped').toBe(true);
+
+    /*
+     * The row `releaseExpiredLeases` refuses, and nothing used to recover.
+     *
+     * Its comment said such a row waits for "a person or the reconciler", and neither
+     * had a path: the reconciler scans UNKNOWN, `retireExhausted` scans PLANNED, and
+     * `retryProvisioning` hands the open operation straight back. The paid order sat in
+     * PENDING_PROVISION for ever with no operator condition anywhere.
+     *
+     * UNKNOWN and not PLANNED, because the call may have landed. That is the whole
+     * difference, and it is why this is a separate sweep rather than a relaxation of the
+     * release guard.
+     */
+    const expired = new Date(now.getTime() + 2_000);
+    const reaped = await ctx.container.uow.run(tenantA, async (tx) =>
+      operations.reapStrandedCalls(tenantA, expired, 10, tx),
+    );
+    expect(reaped, 'exactly the stranded row').toHaveLength(1);
+    expect(reaped[0]?.state, 'a mutating call whose answer was lost is UNKNOWN').toBe('UNKNOWN');
+    expect(reaped[0]?.claimedBy, 'and it holds no claim any more').toBeNull();
+
+    const row = await operations.findById(tenantA, claimed?.id ?? '');
+    expect(row?.state).toBe('UNKNOWN');
+    expect(
+      row?.completedAt,
+      'UNKNOWN is not terminal, so it carries no completion time',
+    ).toBeNull();
+
+    const again = await ctx.container.uow.run(tenantA, async (tx) =>
+      operations.reapStrandedCalls(tenantA, expired, 10, tx),
+    );
+    expect(again, 'the sweep is idempotent: a reaped row is no longer IN_FLIGHT').toHaveLength(0);
+  });
+
+  it('refuses the call stamp to a worker whose lease expired while it stalled', async () => {
+    const order = await awaitingPayment('fence');
+    await settle('fence', order);
+    const now = ctx.container.clock.now();
+
+    /*
+     * The interleaving that produced two creates for one paid order.
+     *
+     * Worker 1 claims and then stalls. Its lease lapses; the sweep releases the row
+     * legitimately, because nothing was stamped; worker 2 claims it. Worker 1 finally
+     * wakes and goes to stamp. It must be REFUSED — and before this it was not, because
+     * the statement matched on the row id and a null stamp alone, so the stalled worker
+     * stamped the new worker's claim and both called the panel.
+     */
+    const claimed = await claim('worker-1', now, new Date(now.getTime() + 1_000));
+    expect(claimed).not.toBeNull();
+
+    const afterExpiry = new Date(now.getTime() + 2_000);
+    expect(await release(afterExpiry, 10), 'an unstamped expired lease is released').toBe(1);
+    const second = await claim('worker-2', afterExpiry, new Date(afterExpiry.getTime() + 60_000));
+    expect(second?.claimedBy, 'the second worker holds it now').toBe('worker-2');
+
+    expect(
+      await startCall(claimed?.id ?? '', 'worker-1', afterExpiry),
+      'the stalled worker is refused and makes no provider call',
+    ).toBe(false);
+    expect(
+      await startCall(second?.id ?? '', 'worker-2', afterExpiry),
+      'the worker that actually holds the claim may stamp',
+    ).toBe(true);
+
+    const row = await operations.findById(tenantA, claimed?.id ?? '');
+    expect(row?.claimedBy, "the stalled worker did not overwrite the holder's claim").toBe(
+      'worker-2',
+    );
   });
 
   it('refuses to plan a retry for a service whose outcome is unknown', async () => {

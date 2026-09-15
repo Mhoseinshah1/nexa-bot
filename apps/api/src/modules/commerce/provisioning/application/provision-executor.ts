@@ -39,7 +39,17 @@ export type ExecutionRefusal =
   /** An operator stopped this tenant. Unattended work must not outlive that decision. */
   | 'TENANT_STOPPED'
   /** The operation names a service that does not exist. Abandoned, not retried. */
-  | 'SERVICE_ABSENT';
+  | 'SERVICE_ABSENT'
+  /**
+   * The lease was gone by the time this worker went to stamp the call.
+   *
+   * Not a fault and not a panel problem: this process stalled long enough for its claim
+   * to expire, and the row is now either another worker's or about to be released by the
+   * next sweep. The remedy is to do nothing at all — no provider call, no transition, no
+   * attempt spent — because anything else would be this worker racing the one that
+   * legitimately holds the operation.
+   */
+  | 'LEASE_LOST';
 
 export type ExecutionResult =
   | { readonly kind: 'IDLE' }

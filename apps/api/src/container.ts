@@ -1098,14 +1098,43 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * only durable record of which bot a customer actually wrote to, and `CustomerMessage`
    * forbids substituting another one: for a tenant running a public bot beside a
    * reseller bot, a message from the wrong account leaks the relationship between them.
+   *
+   * ## What this is NOT, stated because the sentence above invites the wrong reading
+   *
+   * `first_bot_instance_id` is the bot the customer FIRST contacted, not the bot they
+   * bought through. For a tenant with one bot those are the same and the announcement is
+   * correct. For a tenant with two, a customer who first wrote to the public bot and
+   * later ordered through the reseller bot is announced to from the public one — the
+   * very leak the paragraph above says must not happen.
+   *
+   * It is not fixed here because there is nothing to fix it WITH: `orders` carries no
+   * bot instance, so this release genuinely does not record which bot a purchase came
+   * through, and inventing an answer is worse than using the only recorded one. Carried
+   * as `OQ-PROV-02` in `docs/open-questions.md` with the column that would close it.
    */
   const deliveryService = new DeliveryService({
     services: serviceRepository,
     contacts: {
       contactFor: async (scope, customerId, tx) => {
         const customer = await customerRepository.findById(scope, customerId, tx);
-        if (customer === null || customer.firstBotInstanceId === null) return null;
-        return { chatId: customer.telegramUserId, botInstanceId: customer.firstBotInstanceId };
+        if (customer === null || customer.firstBotInstanceId === null) return { kind: 'NONE' };
+        /*
+         * The status of the row just read, not the one the claim matched.
+         *
+         * `claimDeliveryDue` joins `customers` and requires `ACTIVE`, which settles the
+         * ordinary case. It cannot settle the race: an operator blocking a customer
+         * between that claim and this read left the sweep holding a leased row whose
+         * customer is now blocked, and the announcement went out anyway because nothing
+         * looked again. Checked here because here is the last read before the send.
+         */
+        if (customer.status !== 'ACTIVE') return { kind: 'BLOCKED' };
+        return {
+          kind: 'CONTACT',
+          contact: {
+            chatId: customer.telegramUserId,
+            botInstanceId: customer.firstBotInstanceId,
+          },
+        };
       },
     },
     messenger: customerMessenger,

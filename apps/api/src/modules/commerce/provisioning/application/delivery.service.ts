@@ -96,6 +96,8 @@ export interface DeliverySweepReport {
   readonly unconfirmed: number;
   /** Nothing to send, or nobody to send to. Recorded as `FAILED`. */
   readonly undeliverable: number;
+  /** Claimed, then found to belong to a customer an operator blocked in the meantime. */
+  readonly blocked: number;
   /** The send threw. The lease stands and the row comes back later. */
   readonly errored: number;
   /**
@@ -214,6 +216,35 @@ export class DeliveryService {
     }
 
     const from = service.deliveryState;
+    /*
+     * The stamp that makes a dead sender recoverable, committed BEFORE the send.
+     *
+     * `markCallStarted` for the announcement half, and it exists for the same reason:
+     * without it a process killed between handing the message to Telegram and recording
+     * the outcome left the row `PENDING` behind nothing but a lease, so the automatic
+     * lane announced again when that lease expired. `deliveryStateAfter` says in as many
+     * words that an unknown send is never retried automatically; an ordinary container
+     * restart broke that rule, which is exactly the shape of defect this codebase treats
+     * as worse than one nobody claimed to have handled.
+     *
+     * Its own transaction, because a crash must NOT roll it back — the crash is the case
+     * it records.
+     *
+     * A `false` means the row moved between reading it and here: another sweep, or the
+     * customer's own re-request, is already sending. Refused rather than sent, because
+     * two senders is the duplicate this whole file is arranged around.
+     */
+    const started = await this.deps.uow.run(scope, async (tx) =>
+      this.deps.services.markSendStarted(scope, service.id, from, this.deps.clock.now(), tx),
+    );
+    if (!started) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.SERVICE_NOT_DELIVERABLE,
+        'That service is already being sent.',
+        { reason: 'SEND_IN_PROGRESS' },
+      );
+    }
+
     const outcome = await this.deps.messenger.send(scope, {
       chatId,
       botInstanceId,
@@ -283,11 +314,36 @@ export class DeliveryService {
       return EMPTY_SWEEP;
     }
     const now = this.deps.clock.now();
-    const claimed = await this.deps.services.claimDeliveryDue(
-      scope,
-      now,
-      new Date(now.getTime() + DELIVERY_LEASE_MS),
-      limit,
+    /*
+     * Sends whose sender died, resolved BEFORE anything is claimed.
+     *
+     * A stamped row past its lease may already have reached the customer, so it leaves
+     * the automatic lane as `UNCONFIRMED` rather than being announced a second time.
+     * First in the tick, so the claim below cannot race it — and the claim refuses a
+     * stamped row anyway, which is the same rule enforced twice on purpose.
+     */
+    await this.deps.uow.run(scope, async (tx) =>
+      this.deps.services.reapStrandedSends(scope, now, limit, tx),
+    );
+    /*
+     * The claim is a durable WRITE, so it goes through `uow.run`.
+     *
+     * It sets `delivery_next_attempt_at` to the lease, and it ran on the pool — outside
+     * `DrizzleUnitOfWork.run`, and therefore outside ADR-0028's quiesce gate. A restore
+     * that committed its quiesce just after the `scopeIsActive` transaction above found
+     * the delivery sweep still leasing rows in the database it was replacing, and the
+     * send-time check could not undo a write that had already committed. The
+     * provisioning claim was moved inside the gate for exactly this reason; this was the
+     * one claim left outside it.
+     */
+    const claimed = await this.deps.uow.run(scope, async (tx) =>
+      this.deps.services.claimDeliveryDue(
+        scope,
+        now,
+        new Date(now.getTime() + DELIVERY_LEASE_MS),
+        limit,
+        tx,
+      ),
     );
 
     let delivered = 0;
@@ -295,6 +351,7 @@ export class DeliveryService {
     let failed = 0;
     let unconfirmed = 0;
     let undeliverable = 0;
+    let blocked = 0;
     let errored = 0;
     let lost = 0;
 
@@ -313,16 +370,35 @@ export class DeliveryService {
          * `redeliver` is allowed from every delivery state, so the customer asking for
          * their configuration still gets it and an operator can see the row.
          */
-        const contact =
+        const lookup =
           service.subscriptionUrl === null
-            ? null
+            ? ({ kind: 'NONE' } as const)
             : await this.deps.contacts.contactFor(scope, service.customerId);
-        if (contact === null) {
+        if (lookup.kind === 'BLOCKED') {
+          /*
+           * Blocked between the claim and this read. LEFT ALONE, deliberately.
+           *
+           * Nothing is recorded, so the row keeps its `PENDING` state and its attempt
+           * count, and the lease it already holds is what stops this sweep spinning on
+           * it. When the lease expires the claim decides again — still blocked and the
+           * query skips it; unblocked and the customer gets the announcement they paid
+           * for. Recording `FAILED` here would take the automatic announcement away
+           * permanently on the strength of a block that may last an hour.
+           */
+          blocked += 1;
+          continue;
+        }
+        if (lookup.kind === 'NONE') {
           await this.abandon(scope, service);
           undeliverable += 1;
           continue;
         }
-        const record = await this.deliver(scope, service, contact.chatId, contact.botInstanceId);
+        const record = await this.deliver(
+          scope,
+          service,
+          lookup.contact.chatId,
+          lookup.contact.botInstanceId,
+        );
         if (!record.recorded) {
           // Sent, and the outcome could not be written because somebody else had
           // already moved the row. Counted as its own thing rather than folded into
@@ -353,6 +429,7 @@ export class DeliveryService {
       failed,
       unconfirmed,
       undeliverable,
+      blocked,
       errored,
       lost,
     };
@@ -369,7 +446,28 @@ export class DeliveryService {
     return this.deps.uow.run(scope, async (tx) => this.deps.scopeActivity.scopeIsActive(scope, tx));
   }
 
-  /** Records a claimed service that cannot be announced at all. Never a send. */
+  /**
+   * Records a claimed service that cannot be announced at all. Never a send.
+   *
+   * ## Why there is no `scopeIsActive` read in this transaction
+   *
+   * Every other write path in `commerce` reads `ScopeActivityReader` inside the
+   * transaction it writes in, and this one deliberately does not. Written down because
+   * the next reader will notice the absence and the obvious "fix" causes a defect.
+   *
+   * The tenant gate is asked twice on the way here — once by `deliverDue` before it
+   * claims, once by `deliver` before it sends — and both are BEFORE the irreversible
+   * act. What happens after it cannot be gated: the message has either gone or been
+   * refused, and this transaction only writes down which. Refusing the record because an
+   * operator stopped the tenant in the meantime would leave the row `PENDING` behind an
+   * expiring lease, and the fact would be re-derived by sending the customer a SECOND
+   * message once the tenant started again. A gate that produces a duplicate announcement
+   * is not a gate.
+   *
+   * So the rule here is the narrower one the surrounding code already follows: the tenant
+   * kill switch stops new outbound work, and it never discards the record of work
+   * already done.
+   */
   private async abandon(scope: TenantContext, service: ServiceRecord): Promise<void> {
     const now = this.deps.clock.now();
     await this.deps.uow.run(scope, async (tx) => {
@@ -415,6 +513,7 @@ const EMPTY_SWEEP: DeliverySweepReport = {
   failed: 0,
   unconfirmed: 0,
   undeliverable: 0,
+  blocked: 0,
   errored: 0,
   lost: 0,
 };

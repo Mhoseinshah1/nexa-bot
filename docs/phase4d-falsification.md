@@ -38,6 +38,14 @@ claim to completeness was removed rather than restated.
 | F4D-19 | A hold-off refunds the attempt the claim counted                     | `attempts: GREATEST(attempts - 1, 0)` removed from `holdOff`                               | `provisioning-delivery.test.ts` › holds off a stopped tenant without spending an attempt on it             | KILLED |
 | F4D-20 | The create → reconcile → absent cycle is bounded                     | `if (cycles >= SERVICE_PROVISION_CYCLE_LIMIT) {` → `if (false as boolean) {`               | `provisioning-delivery.test.ts` › bounds the create-reconcile-absent cycle instead of dialling for ever    | KILLED |
 | F4D-21 | A reconcile is planned for an unresolved unknown outcome             | `await this.planReconciles(scope, now);` removed                                           | `provisioning-delivery.test.ts` › creates one account when a create is cut off after the panel stored it   | KILLED |
+| F4D-22 | A non-retryable provider failure is not re-planned                   | `PROVIDER_FAILURE_RETRYABLE[failure] &&` removed from `persistFailure`                     | `provisioning-delivery.test.ts` › stops dialling a panel that answered with a wrong password               | KILLED |
+| F4D-23 | The call stamp asserts the CLAIM, not just the row id                | `eq(provisioningOperations.claimedBy, worker),` removed from `markCallStarted`             | `provisioning.test.ts` › refuses the call stamp to a worker whose lease expired while it stalled           | KILLED |
+| F4D-24 | A crash mid-call is recovered rather than left `IN_FLIGHT`           | `await this.reapStrandedCalls(scope, now);` → `void LEASE_SWEEP_LIMIT;`                    | `provisioning-delivery.test.ts` › recovers a provider call whose worker died, instead of waiting for ever  | KILLED |
+| F4D-25 | A reconcile closes the unknown it answered                           | `resolveUnknownForService(` → `Promise.resolve(`                                           | `provisioning-delivery.test.ts` › keeps reconciling a service whose SECOND create also loses track         | KILLED |
+| F4D-26 | A stamped, unresolved send is never CLAIMED by the automatic lane     | `isNull(services.deliverySendStartedAt)` removed from `claimDeliveryDue`'s sub-select      | `provisioning-delivery.test.ts` › does not announce twice when the sender dies between the send and the record | SURVIVED |
+| F4D-27 | Readiness requires the process that fulfils the orders                | `provisioner` removed from `NEXA_READY_SERVICES`                                           | `botctl.test.sh` › readiness requires a service these fixtures do not model                                | KILLED |
+| F4D-28 | A create's activation is part of its idempotency hash                | `activation: command.activation,` removed from the create `requestHash`                    | `panels.test.ts` › refuses to replay a create whose activation differs                                     | KILLED |
+| F4D-29 | A device limit the panel cannot apply is refused, not dropped        | the `bought.deviceLimit !== null` branch → `if (false as boolean && …)`                    | `provisioning-delivery.test.ts` › refuses to sell a device limit the panel cannot apply                    | KILLED |
 
 ## F4D-03 survived its first attempt, and the harness was why
 
@@ -142,3 +150,28 @@ ceiling never applies, and a panel that failed every create while answering ever
 "absent" would have been dialled for ever at the tenant's budget. The test was written to
 assert a three-tick sequence and instead recorded one tick doing the whole loop — which
 is what made the absence of a ceiling visible.
+
+## F4D-26 survived, and it is defence in depth rather than a missing test
+
+Removing `delivery_send_started_at IS NULL` from `claimDeliveryDue` changes nothing
+the stranded-send test can see, because `deliverDue` runs `reapStrandedSends` FIRST:
+by the time the claim executes there is no stamped row left to claim. That ordering is
+deliberate and it is the primary guard.
+
+The predicate is not therefore dead. The case it covers is a send stamped by
+`redeliver` — the customer-initiated path, which takes no lease, so its row is
+immediately `ready` — landing in the window between this tick's reap and this tick's
+claim. There the sweep would otherwise claim a row whose message is still in flight and
+send the customer a second one.
+
+It is recorded SURVIVED rather than given a test, because the test that would kill it
+has to interleave a customer's re-request with a sweep at one specific statement
+boundary, and a test that merely stamps a row first does not reproduce it — the reap
+takes that row before the claim is reached, which is the very thing that makes the
+mutation survive. Writing one anyway would produce a case that passes for a reason it
+does not state, which `docs/phase4b-falsification.md` records as the failure mode worth
+more than the coverage.
+
+So this is the F4D-04 shape: a guard the suite cannot distinguish from its own absence,
+kept deliberately, written down so the next reader deleting "the redundant predicate"
+knows the tests will not object.

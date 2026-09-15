@@ -48,6 +48,7 @@ function toRecord(row: Row): ServiceRecord {
     deliveryAttempts: row.deliveryAttempts,
     deliveredAt: row.deliveredAt,
     deliveryNextAttemptAt: row.deliveryNextAttemptAt,
+    deliverySendStartedAt: row.deliverySendStartedAt,
     provisionedAt: row.provisionedAt,
     terminatedAt: row.terminatedAt,
     createdAt: row.createdAt,
@@ -250,6 +251,14 @@ export class DrizzleServiceRepository implements ServiceRepository {
         deliveryAttempts: sql`${services.deliveryAttempts} + 1`,
         deliveredAt: stamps.deliveredAt,
         deliveryNextAttemptAt: stamps.nextAttemptAt,
+        /*
+         * The send is resolved, so the "a send is in flight" stamp goes.
+         *
+         * Cleared by the SAME statement that records the outcome, so the two can never
+         * disagree: a row with a stamp is a send nobody has accounted for, and that is
+         * the only thing `reapStrandedSends` is allowed to act on.
+         */
+        deliverySendStartedAt: null,
         updatedAt: now,
       })
       .where(
@@ -257,6 +266,97 @@ export class DrizzleServiceRepository implements ServiceRepository {
       )
       .returning({ id: services.id });
     return rows.length > 0;
+  }
+
+  /**
+   * Records that a send is about to be handed to Telegram, in the caller's transaction.
+   *
+   * `markCallStarted` for the announcement half, and the caller's obligation is the
+   * same: this must commit BEFORE the send and in a transaction that holds nothing
+   * else, because a crash rolling it back is exactly the case it records.
+   *
+   * Conditional on the delivery state the caller read AND on there being no stamp
+   * already, so two sweeps or a sweep racing a customer's own re-request produce one
+   * sender: the loser is told `false` and sends nothing.
+   */
+  async markSendStarted(
+    scope: TenantContext,
+    id: string,
+    from: ServiceDeliveryState,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(services)
+      .set({ deliverySendStartedAt: now, updatedAt: now })
+      .where(
+        and(
+          eq(services.tenantId, tenantId),
+          eq(services.id, id),
+          eq(services.deliveryState, from),
+          isNull(services.deliverySendStartedAt),
+        ),
+      )
+      .returning({ id: services.id });
+    return rows.length > 0;
+  }
+
+  /**
+   * Resolves sends that were handed to Telegram by a process that then died.
+   *
+   * A stamped row whose lease has run out is a message that MAY have arrived, and the
+   * rule `deliveryStateAfter` states — an unknown send is never retried automatically —
+   * is the whole reason this exists. Before it, such a row stayed `PENDING` behind
+   * nothing but a lease, so the next sweep announced again and an ordinary container
+   * restart could send a customer their configuration twice.
+   *
+   * `PENDING` becomes `UNCONFIRMED`: the state that holds the fact where an operator can
+   * see it, out of the automatic lane, still reachable by the customer asking. Any other
+   * state simply loses the stamp — a re-request that died mid-send left one on a row
+   * whose state was already settled, and clearing it is all that is owed, because the
+   * automatic lane never looks at those states anyway.
+   *
+   * No attempt is spent either way. An attempt means an outcome somebody observed, and
+   * nobody observed this one.
+   */
+  async reapStrandedSends(
+    scope: TenantContext,
+    now: Date,
+    limit: number,
+    tx: TransactionScope,
+  ): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    const stranded = this.exec(tx)
+      .select({ id: services.id })
+      .from(services)
+      .where(
+        and(
+          eq(services.tenantId, tenantId),
+          sql`${services.deliverySendStartedAt} IS NOT NULL`,
+          or(isNull(services.deliveryNextAttemptAt), lte(services.deliveryNextAttemptAt, now)),
+        ),
+      )
+      .limit(limit);
+
+    const rows = await this.exec(tx)
+      .update(services)
+      .set({
+        deliveryState: sql`CASE WHEN ${services.deliveryState} = 'PENDING' THEN 'UNCONFIRMED' ELSE ${services.deliveryState} END`,
+        deliveryNextAttemptAt: null,
+        deliverySendStartedAt: null,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(services.tenantId, tenantId),
+          sql`${services.deliverySendStartedAt} IS NOT NULL`,
+          or(isNull(services.deliveryNextAttemptAt), lte(services.deliveryNextAttemptAt, now)),
+          sql`${services.id} IN ${stranded}`,
+        ),
+      )
+      .returning({ id: services.id });
+    return rows.length;
   }
 
   /**
@@ -323,6 +423,15 @@ export class DrizzleServiceRepository implements ServiceRepository {
           eq(services.deliveryState, 'PENDING'),
           eq(services.state, 'ACTIVE'),
           eq(customers.status, 'ACTIVE'),
+          /*
+           * A send nobody has accounted for is NOT due, whatever its lease says.
+           *
+           * `reapStrandedSends` is what resolves such a row, to `UNCONFIRMED`, and this
+           * predicate is what stops the claim racing it: without it an expired lease
+           * would make a row whose message may already have reached Telegram due again,
+           * which is the duplicate announcement the stamp exists to prevent.
+           */
+          isNull(services.deliverySendStartedAt),
           ready,
         ),
       )

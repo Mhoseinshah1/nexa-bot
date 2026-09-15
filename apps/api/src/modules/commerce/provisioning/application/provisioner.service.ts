@@ -1,4 +1,6 @@
 import {
+  isMutatingOperation,
+  PROVIDER_FAILURE_RETRYABLE,
   systemJobActor,
   type ActorContext,
   type Clock,
@@ -204,11 +206,36 @@ export class ProvisionerService {
     const now = this.deps.clock.now();
 
     /*
+     * The tenant kill switch FIRST, before any write in this tick.
+     *
+     * It used to be consulted after `retireExhausted`, `planReconciles`, the lease
+     * release and the claim — so a tenant an operator had stopped went on acquiring
+     * reconcile rows, terminal transitions and operational events, and the hold-off
+     * below refunded only the claim's attempt. CLAUDE.md names panels as the module
+     * that skipped this check; doing it late is the same defect wearing a check.
+     *
+     * The per-operation check further down STAYS. A stop can commit between this
+     * transaction and that one, and the one that must not be skipped is the one
+     * immediately before a provider is dialled with the operator's credentials.
+     */
+    if (!(await this.deps.uow.run(scope, async (tx) => this.deps.scopeActivity.scopeIsActive(scope, tx)))) {
+      return { kind: 'IDLE' };
+    }
+
+    /*
      * Abandoned leases first, so a crashed worker's work is reclaimable before this one
      * looks for its own. Bounded, and it only touches rows where NO provider call was
      * started — the guard `OPERATION_MACHINE` names, enforced as a WHERE clause.
      */
     await this.retireExhausted(scope, now);
+    /*
+     * Then the rows a crash stranded mid-call, which that guard deliberately refuses.
+     *
+     * BEFORE `planReconciles`, so a stranded create becomes `UNKNOWN` and is given its
+     * reconcile in the SAME tick rather than waiting for the next one. That ordering is
+     * the whole reason this is a separate step rather than part of the release sweep.
+     */
+    await this.reapStrandedCalls(scope, now);
     await this.planReconciles(scope, now);
 
     const leaseUntil = new Date(now.getTime() + this.deps.leaseMs);
@@ -410,9 +437,31 @@ export class ProvisionerService {
      * the crash rolled it back, which is precisely the case it records — so it gets one
      * of its own, which is also what puts it inside ADR-0028's quiesce gate.
      */
-    await this.deps.uow.run(scope, async (tx) => {
-      await this.deps.operations.markCallStarted(scope, operation.id, this.deps.clock.now(), tx);
-    });
+    const stamped = await this.deps.uow.run(scope, async (tx) =>
+      this.deps.operations.markCallStarted(
+        scope,
+        operation.id,
+        this.deps.workerId,
+        this.deps.clock.now(),
+        tx,
+      ),
+    );
+    if (!stamped) {
+      /*
+       * The claim is no longer this worker's, so no provider is contacted.
+       *
+       * The stamp asserts the whole claim — still `IN_FLIGHT`, still ours, lease still
+       * in the future — and a `false` means this process stalled past its own lease.
+       * Another replica may have released and reclaimed the operation in that window,
+       * and calling anyway would be the second create for one paid order that this
+       * phase exists to prevent.
+       *
+       * Nothing is written. The row belongs to whoever holds it now, or to the next
+       * lease sweep; either way this worker has no standing to record an outcome for
+       * it, and the attempt the claim counted is the honest cost of having stalled.
+       */
+      return { kind: 'REFUSED', operationId: operation.id, reason: 'LEASE_LOST' };
+    }
 
     if (operation.type === 'RECONCILE') {
       return this.finishReconcile(scope, operation, service, adapter, target, http, ref);
@@ -439,6 +488,34 @@ export class ProvisionerService {
        */
       await this.refuse(scope, operation, service, 'ACTIVATION_INCOMPLETE', now);
       return { kind: 'REFUSED', operationId: operation.id, reason: 'ACTIVATION_INCOMPLETE' };
+    }
+
+    /*
+     * A device limit the panel cannot enforce is refused, not quietly dropped.
+     *
+     * A product freezes `deviceLimit` for whichever panel it names, and nothing checked
+     * that the panel could apply it. `MarzbanAdapter.createUser` builds its body from
+     * `username`, `expire`, `data_limit` and `data_limit_reset_strategy` and never reads
+     * the field at all — so a customer buying a two-device plan on a Marzban panel got
+     * an account with no device limit, and the operation was recorded SUCCEEDED. The
+     * value a customer paid for disappeared between the order snapshot and the panel,
+     * with nothing anywhere saying so.
+     *
+     * Refusing costs the operator a configuration fix before that order completes.
+     * Proceeding costs them a customer who was sold something they did not receive, and
+     * a service this installation believes is correct. `CAPABILITY_UNSUPPORTED` is
+     * PERMANENT (`refusalIsPermanent`), which is right: no number of retries teaches an
+     * adapter a field, and the operator's remedy is a panel that supports it or a
+     * product that does not promise it.
+     *
+     * Checked here rather than at product creation because here is where the ORDER's
+     * frozen snapshot and the resolved adapter are both in hand. A product-time check is
+     * worth adding too and is not a substitute: a product may be re-pointed at another
+     * panel, and the snapshot outlives the product.
+     */
+    if (bought.deviceLimit !== null && !adapter.supports('LIMIT_DEVICES')) {
+      await this.refuse(scope, operation, service, 'CAPABILITY_UNSUPPORTED', now);
+      return { kind: 'REFUSED', operationId: operation.id, reason: 'CAPABILITY_UNSUPPORTED' };
     }
 
     /*
@@ -590,6 +667,70 @@ export class ProvisionerService {
   }
 
   /**
+   * Resolves the operations a crash stranded after the provider call began.
+   *
+   * `releaseExpiredLeases` refuses these rows on purpose — releasing one would repeat a
+   * mutation that may have taken effect — and its comment said they waited for "a person
+   * or the reconciler". Neither had a path: the reconciler scans `UNKNOWN`,
+   * `retireExhausted` scans `PLANNED`, and `retryProvisioning` returns the open
+   * operation unchanged. So an installation that lost a worker mid-create left the
+   * customer's paid order in `PENDING_PROVISION` for ever, silently.
+   *
+   * `UNKNOWN` is where such an operation belongs, and the service follows it to
+   * `UNRECONCILED` — the same pair `persistFailure` writes when a create times out,
+   * because it is the same fact: this installation does not know whether an account
+   * exists, and the only way to find out is to look.
+   *
+   * ONE transaction for the operation, the service and the operator's condition, for
+   * the reason `retireExhausted` now gives: a commit boundary between a terminal state
+   * and the event that reports it is a way to strand an order in silence.
+   */
+  private async reapStrandedCalls(scope: TenantContext, now: Date): Promise<void> {
+    await this.deps.uow.run(scope, async (tx) => {
+      const stranded = await this.deps.operations.reapStrandedCalls(
+        scope,
+        now,
+        LEASE_SWEEP_LIMIT,
+        tx,
+      );
+      for (const operation of stranded) {
+        if (!isMutatingOperation(operation.type)) continue;
+        /*
+         * The service moves only from `PENDING_PROVISION`.
+         *
+         * A conditional UPDATE naming its `from`, so a service that has since been
+         * adopted, terminated or provisioned by another replica is left exactly where it
+         * is. There is no `setState` here for the same reason ADR-0028 gives.
+         */
+        await this.deps.services.transition(
+          scope,
+          operation.serviceId,
+          'PENDING_PROVISION',
+          'UNRECONCILED',
+          null,
+          now,
+          tx,
+        );
+        await this.deps.opsLog.record(
+          scope,
+          {
+            code: PROVISIONING_STALLED_CODE,
+            severity: 'ERROR',
+            message: 'A provider call was cut off and this installation does not know its outcome.',
+            context: {
+              serviceId: operation.serviceId,
+              panelId: operation.panelId,
+              reason: 'CALL_STRANDED',
+            },
+            dedupeKey: provisioningConditionKey(operation.serviceId),
+          },
+          tx,
+        );
+      }
+    });
+  }
+
+  /**
    * Fails operations whose attempts are spent, and tells an operator about each.
    *
    * Every path that spends the LAST attempt moves the row to a terminal state itself —
@@ -604,11 +745,19 @@ export class ProvisionerService {
    * work to do.
    */
   private async retireExhausted(scope: TenantContext, now: Date): Promise<void> {
-    const retired = await this.deps.uow.run(scope, async (tx) =>
-      this.deps.operations.retireExhausted(scope, now, LEASE_SWEEP_LIMIT, tx),
-    );
-    if (retired.length === 0) return;
+    /*
+     * ONE transaction for the retirement AND its report.
+     *
+     * They were two, and the gap between them was a way to lose a paid order in
+     * silence. The first commit makes the rows terminal, which is exactly what stops
+     * the next tick selecting them — this sweep looks for `PLANNED` at the ceiling. So
+     * a process that exited between the two commits left an order stalled for ever with
+     * the one operational event that would have found it never written. The condition
+     * and the state it describes are the same fact, so they commit together or not
+     * at all.
+     */
     await this.deps.uow.run(scope, async (tx) => {
+      const retired = await this.deps.operations.retireExhausted(scope, now, LEASE_SWEEP_LIMIT, tx);
       for (const operation of retired) {
         await this.deps.opsLog.record(
           scope,
@@ -691,6 +840,34 @@ export class ProvisionerService {
         'IN_FLIGHT',
         'SUCCEEDED',
         {},
+        now,
+        tx,
+      );
+      /*
+       * The unknowns this read just answered, closed in the same transaction.
+       *
+       * `UNKNOWN` had no exit. `OPERATION_MACHINE` has declared `RECONCILE_SUCCEEDED`
+       * and `RECONCILE_FAILED` out of it since it was written, both guarded by
+       * `providerStateRead`, and nothing used either — so a reconcile resolved the
+       * SERVICE and left the operation that lost track sitting in the queue.
+       *
+       * That is not tidiness. `listUnknown` is oldest-first and filtered on the service
+       * being `UNRECONCILED`, which becomes true again the moment a SECOND create loses
+       * track. The sweep then hands back the FIRST, already-reconciled operation;
+       * `planReconciles` derives its reconcile id from that row, finds the terminal
+       * reconcile that already ran, and plans nothing. The service sits `UNRECONCILED`
+       * with no open work for ever, and `SERVICE_PROVISION_CYCLE_LIMIT` is never
+       * reached because the cycle dies in round two — a paid order lost to a queue that
+       * had been jammed by its own history.
+       *
+       * ABSENT means no create took effect, so each is `FAILED`. ADOPT means one of
+       * them did and a read cannot say which, so each is `SUCCEEDED`: the state they
+       * were trying to reach is the state the panel is in.
+       */
+      await this.deps.operations.resolveUnknownForService(
+        scope,
+        serviceId,
+        verdict.kind === 'ADOPT' ? 'SUCCEEDED' : 'FAILED',
         now,
         tx,
       );
@@ -902,8 +1079,33 @@ export class ProvisionerService {
      * A `FAILED` with attempts left goes back to PLANNED with a backoff; one without
      * becomes terminal. An `UNKNOWN` does neither — it waits for a READ, and the
      * service moves to `UNRECONCILED` so nothing can issue a second create.
+     *
+     * ## Two different questions, and this needs BOTH answers
+     *
+     * `outcome` comes from `failureOutcome`, which answers "did the request certainly
+     * not take effect". That is a fact about the wire and it is what decides `FAILED`
+     * versus `UNKNOWN`. It is NOT the question "would trying again plausibly help",
+     * which `PROVIDER_FAILURE_RETRYABLE` answers and which this used to ignore.
+     *
+     * Conflating them re-planned every definitive failure until the ceiling, including
+     * the two the contract marks non-retryable with the reason written beside them:
+     * `AUTHENTICATION_FAILED` and `AUTHENTICATION_REQUIRES_INTERACTION` — "retrying
+     * cannot conjure a second factor, and each attempt counts against the panel's own
+     * login limiter". So a mistyped panel password made the provisioner log in wrongly
+     * five times on a 30/60/120-second backoff, unattended, and a 3X-UI panel that locks
+     * an account after repeated failures would have locked the operator out of their own
+     * panel while trying to fulfil an order.
+     *
+     * The monitor lane has always consulted this table. Provisioning was the one lane
+     * that did not, which is why the wrong behaviour looked normal.
+     *
+     * A non-retryable failure therefore becomes terminal `FAILED` immediately, with the
+     * operator condition `persistFailure` already records. That is the same end state a
+     * spent attempt count produces, reached without spending four more attempts on a
+     * password that will not change by itself.
      */
-    const retryable = outcome === 'FAILED' && !exhausted(operation.attempts);
+    const retryable =
+      outcome === 'FAILED' && PROVIDER_FAILURE_RETRYABLE[failure] && !exhausted(operation.attempts);
     const serviceId = service.id;
     const actor = this.actor();
     await this.deps.uow.run(scope, async (tx) => {

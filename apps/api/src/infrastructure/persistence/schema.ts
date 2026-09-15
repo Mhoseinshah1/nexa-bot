@@ -2646,6 +2646,22 @@ export const services = pgTable(
     deliveredAt: timestamptz('delivered_at'),
     /** When the delivery sweep may next try. Null means it may try now. */
     deliveryNextAttemptAt: timestamptz('delivery_next_attempt_at'),
+    /**
+     * When a send was handed to Telegram and no outcome has been recorded yet.
+     *
+     * `provisioning_operations.call_started_at` for the announcement half, and it exists
+     * for the same reason: it is the one fact that distinguishes "this process died
+     * before sending" from "this process died after sending", and only the second must
+     * never be repeated automatically.
+     *
+     * Without it a sweep that was killed between the send and `recordDelivery` left the
+     * row `PENDING` behind nothing but a lease — so when the lease expired the automatic
+     * lane announced again, which is precisely the duplicate the `UNCONFIRMED` state was
+     * introduced to prevent. An ordinary container restart was enough.
+     *
+     * Cleared by every recorded outcome, so a set value always means an unresolved send.
+     */
+    deliverySendStartedAt: timestamptz('delivery_send_started_at'),
     provisionedAt: timestamptz('provisioned_at'),
     terminatedAt: timestamptz('terminated_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
