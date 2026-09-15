@@ -301,6 +301,17 @@ rest arrive with their operations.
   does not derive it from its own address — `requiredActivationFields:
 ['subscriptionDomain']` already records this. Phase 4D must read that field and
   refuse when it is absent rather than guess a URL.
+
+  **Resolved during implementation, and it was a blocker rather than a question.**
+  `panels.activation` was readable and writable by nobody, so every 3X-UI panel answered
+  `ACTIVATION_INCOMPLETE` for ever and no service could be provisioned onto one in any
+  installation. `createPanelRequestSchema` and `updatePanelRequestSchema` now carry an
+  optional `activation`, parsed against `PANEL_ACTIVATION_SCHEMAS[providerType]` by the
+  panel service. The Web Admin form does NOT yet offer the field — the panel editor's
+  per-provider inputs belong to the Web Admin phase — so an operator sets it through the
+  API today. That is a surface gap, not a reachability one, and it is recorded here
+  rather than left for somebody to discover from a stalled order.
+
 - Marzban's inbound/proxy selection: which inbounds a created user is attached to is a
   per-panel operator decision. Evidence is needed before a default is chosen; recorded
   rather than guessed.
