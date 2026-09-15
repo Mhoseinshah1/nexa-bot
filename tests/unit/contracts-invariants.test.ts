@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   CALLBACK_REF_LENGTH,
+  canDeleteUser,
+  canDisableUser,
+  canEnableUser,
   ERROR_KINDS,
   ERROR_KIND_HTTP_STATUS,
   errors,
@@ -8,6 +11,7 @@ import {
   EVENT_PAYLOAD_SCHEMAS,
   EVENT_TYPES,
   isEventType,
+  isServiceAdapter,
   isLedgerReason,
   isRegisteredMetric,
   LEDGER_REASONS,
@@ -19,6 +23,7 @@ import {
   STATE_MACHINES,
   TELEGRAM_CALLBACK_DATA_MAX_BYTES,
   validateStateMachine,
+  type ProviderAdapter,
   type StateMachineDefinition,
 } from '@nexa/contracts';
 
@@ -251,5 +256,72 @@ describe('a Marzban panel must name the inbounds its accounts are created on', (
     const marzban = providerDescriptor('marzban');
     expect(marzban?.requiredActivationFields).toContain('inboundTags');
     expect(marzban?.requiredActivationFields).toContain('proxyProtocols');
+  });
+});
+
+describe('an adapter may be called for a management operation only when it can do it', () => {
+  /*
+   * `canDisableUser` and its two siblings ask two questions and require both answers.
+   * These cases exist because each half alone fails in a different, specific way:
+   *
+   *   method without capability -> the executor performs an operation the providers
+   *     endpoint says the panel cannot do, so a customer is offered a button the
+   *     product denies having, and an operator's capability list is a lie.
+   *   capability without method -> the executor calls `undefined` inside a claimed
+   *     operation. A TypeError is the one failure shape provider outcomes exist to keep
+   *     out of this layer: it is not a `ProviderFailureKind`, so nothing classifies it
+   *     and a mutating operation cannot decide whether it took effect.
+   */
+  const stub = (
+    capabilities: readonly string[],
+    methods: Partial<Record<'suspendUser' | 'resumeUser' | 'terminateUser', () => unknown>>,
+  ): ProviderAdapter =>
+    ({
+      descriptor: { capabilities } as unknown,
+      supports: (capability: string) => capabilities.includes(capability),
+      probe: () => Promise.reject(new Error('not used')),
+      createUser: () => Promise.reject(new Error('not used')),
+      lookupUser: () => Promise.reject(new Error('not used')),
+      readUsage: () => Promise.reject(new Error('not used')),
+      ...methods,
+    }) as unknown as ProviderAdapter;
+
+  const noop = (): unknown => undefined;
+
+  it('says yes only when the method and the capability are both there', () => {
+    expect(canDisableUser(stub(['DISABLE_USER'], { suspendUser: noop }))).toBe(true);
+    expect(canEnableUser(stub(['ENABLE_USER'], { resumeUser: noop }))).toBe(true);
+    expect(canDeleteUser(stub(['DELETE_USER'], { terminateUser: noop }))).toBe(true);
+  });
+
+  it('says no to a method whose capability is not declared', () => {
+    expect(canDisableUser(stub([], { suspendUser: noop }))).toBe(false);
+    expect(canEnableUser(stub([], { resumeUser: noop }))).toBe(false);
+    expect(canDeleteUser(stub([], { terminateUser: noop }))).toBe(false);
+  });
+
+  it('says no to a declared capability with no method behind it', () => {
+    expect(canDisableUser(stub(['DISABLE_USER'], {}))).toBe(false);
+    expect(canEnableUser(stub(['ENABLE_USER'], {}))).toBe(false);
+    expect(canDeleteUser(stub(['DELETE_USER'], {}))).toBe(false);
+  });
+
+  it('does not let one capability answer for another', () => {
+    /*
+     * Three separate entries in PROVIDER_CAPABILITIES, so a panel that disables but
+     * cannot delete must read as exactly that. A bundled guard would advertise both.
+     */
+    const disableOnly = stub(['DISABLE_USER'], { suspendUser: noop, terminateUser: noop });
+    expect(canDisableUser(disableOnly)).toBe(true);
+    expect(canDeleteUser(disableOnly)).toBe(false);
+    expect(canEnableUser(disableOnly)).toBe(false);
+  });
+
+  it('still recognises the service half from the three methods that are not optional', () => {
+    /*
+     * `isServiceAdapter` must NOT start requiring the management three: an adapter that
+     * creates and reads users is a complete service adapter, and Sanaei is one.
+     */
+    expect(isServiceAdapter(stub(['CREATE_USER'], {}))).toBe(true);
   });
 });
