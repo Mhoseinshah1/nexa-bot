@@ -531,7 +531,7 @@ describe('a customer manages the service they bought', () => {
     const service = await activeService('suspend-absent');
     await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`u:${service.id}`));
     // Removed behind Nexa's back, as an operator poking the panel directly would.
-    panel.users.delete(service.username);
+    panel.forget(service.username);
 
     await ctx.container.provisionerLoop.tick();
 
@@ -551,7 +551,7 @@ describe('a customer manages the service they bought', () => {
      */
     const service = await activeService('terminate-absent');
     await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`k:${service.id}`));
-    panel.users.delete(service.username);
+    panel.forget(service.username);
 
     await ctx.container.provisionerLoop.tick();
 

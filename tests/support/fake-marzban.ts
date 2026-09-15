@@ -82,6 +82,16 @@ export interface FakeMarzban {
   readonly users: ReadonlyMap<string, FakeMarzbanUser>;
   /** Put a user there without going through the adapter. */
   seed(user: Partial<FakeMarzbanUser> & { username: string }): FakeMarzbanUser;
+  /**
+   * Take a user away without going through the adapter.
+   *
+   * What an operator poking the panel directly does, which is the one way a service
+   * Nexa believes is ACTIVE ends up with no account behind it. `users` is exposed as a
+   * ReadonlyMap on purpose — a test reaching in to `delete` would be a test quietly
+   * granting itself write access to the subject — so the fake offers the operation by
+   * name and says what it stands for.
+   */
+  forget(username: string): void;
   /** The subscription body a client would receive, as the real panel builds it. */
   subscriptionFor(username: string): string;
   reset(): void;
@@ -323,6 +333,9 @@ export async function startFakeMarzban(options: FakeMarzbanOptions = {}): Promis
       };
       users.set(seeded.username, seeded);
       return seeded;
+    },
+    forget(name) {
+      users.delete(name);
     },
     subscriptionFor(name) {
       const user = users.get(name);
