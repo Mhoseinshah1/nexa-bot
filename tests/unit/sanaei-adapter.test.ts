@@ -848,12 +848,22 @@ describe('the Sanaei provider registration', () => {
       'CREATE_USER',
       'READ_USAGE',
       'DELIVER_SUBSCRIPTION_LINK',
+      // `LIMIT_DEVICES` is not a method: `createUser` writes `limitIp` from the
+      // order's frozen `deviceLimit`, and 3X-UI's `limitIp` is its device limit
+      // (`0` is its unlimited, which is why the adapter translates `null` to it).
+      // It sat on the unimplemented list below while that code was running, so the
+      // descriptor understated the adapter — and nothing consulted the capability,
+      // which is why it looked harmless. Something does now: the provisioner refuses
+      // a device-limited order on a panel that cannot apply one, so a panel that
+      // CAN must say so or every such order is refused.
+      'LIMIT_DEVICES',
     ]);
     for (const implemented of [
       'HEALTH_CHECK',
       'CREATE_USER',
       'READ_USAGE',
       'DELIVER_SUBSCRIPTION_LINK',
+      'LIMIT_DEVICES',
     ] as const) {
       expect(adapter.supports(implemented), implemented).toBe(true);
     }
@@ -871,7 +881,6 @@ describe('the Sanaei provider registration', () => {
       'ROTATE_SUBSCRIPTION_LINK',
       'DELIVER_RAW_CONFIGS',
       'DELIVER_CONFIG_FILE',
-      'LIMIT_DEVICES',
       'INACTIVE_ACCOUNT_INBOUND',
     ] as const) {
       expect(adapter.supports(unimplemented), unimplemented).toBe(false);

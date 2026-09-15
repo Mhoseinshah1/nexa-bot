@@ -943,8 +943,22 @@ const SANAEI: ProviderDescriptor = {
   key: 'sanaei',
   canonicalName: 'Sanaei (3X-UI)',
   credentialShape: 'TOKEN_OR_USERNAME_PASSWORD',
-  /* The same four, and the same rule: each is executed by code in `sanaei.adapter.ts`. */
-  capabilities: ['HEALTH_CHECK', 'CREATE_USER', 'READ_USAGE', 'DELIVER_SUBSCRIPTION_LINK'],
+  /*
+   * The same rule as Marzban's list: each is executed by code in `sanaei.adapter.ts`.
+   *
+   * `LIMIT_DEVICES` is here because `createUser` has always written `limitIp` from the
+   * order's frozen `deviceLimit` — the capability was simply never declared. That made
+   * the descriptor understate the adapter, which is the less dangerous direction of the
+   * two but still a lie a surface reads: anything asking "can this panel limit devices"
+   * was told no about a panel that does.
+   */
+  capabilities: [
+    'HEALTH_CHECK',
+    'CREATE_USER',
+    'READ_USAGE',
+    'DELIVER_SUBSCRIPTION_LINK',
+    'LIMIT_DEVICES',
+  ],
   // The SESSION path, which is the longest: CSRF token, two-factor pre-check,
   // login, status read. The bearer path is one request; the floor takes the
   // worst case, because a panel configured with a password takes that path and

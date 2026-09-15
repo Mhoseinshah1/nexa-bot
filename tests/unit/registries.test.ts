@@ -296,7 +296,18 @@ describe('the provider registry', () => {
     // declaration somebody made in a descriptor.
     const EXECUTABLE_NOW: Record<ProviderType, readonly ProviderCapability[]> = {
       marzban: ['HEALTH_CHECK', 'CREATE_USER', 'READ_USAGE', 'DELIVER_SUBSCRIPTION_LINK'],
-      sanaei: ['HEALTH_CHECK', 'CREATE_USER', 'READ_USAGE', 'DELIVER_SUBSCRIPTION_LINK'],
+      // `LIMIT_DEVICES` for Sanaei only, and the asymmetry is the whole point of this
+      // map being per provider. `SanaeiAdapter.createUser` writes `limitIp` from the
+      // order's frozen `deviceLimit`; `MarzbanAdapter.createUser` does not read the
+      // field. Until this line the descriptors said the same thing about both, and the
+      // provisioner sold Marzban customers a device limit that never reached the panel.
+      sanaei: [
+        'HEALTH_CHECK',
+        'CREATE_USER',
+        'READ_USAGE',
+        'DELIVER_SUBSCRIPTION_LINK',
+        'LIMIT_DEVICES',
+      ],
     };
 
     for (const type of IMPLEMENTED_PROVIDER_TYPES) {
