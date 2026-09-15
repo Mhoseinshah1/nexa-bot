@@ -622,6 +622,52 @@ describe('a customer manages the service they bought', () => {
     expect(panel.users.get(service.username)?.status).toBe('disabled');
   });
 
+  it('does not answer an outage with a sentence about the customer\u2019s panel', async () => {
+    /*
+     * The refusal mapping is a CLOSED list, and this is the half of that decision no
+     * reader can check by reading it.
+     *
+     * A catch-all would answer a database failure with `bot.service.capability_unsupported`
+     * \u2014 "this is not available for your service" \u2014 which is a false statement about
+     * the customer's panel, made to hide an outage, and indistinguishable in every log
+     * this installation keeps from the three codes that really are refusals. The request
+     * would also be reported as handled, so nothing would retry it and nothing would
+     * record that anything had gone wrong.
+     *
+     * Injected where a real failure happens, at the write: a trigger that refuses the
+     * INSERT the request makes. It is not a `CommerceError`, so no code in the list
+     * matches, and the turn must fail rather than reply. Dropped in `finally`, because a
+     * trigger left behind would fail every later test in this file with the same error
+     * this one asserts.
+     */
+    const service = await activeService('outage-is-not-a-refusal');
+    await ctx.container.database.db.execute(
+      sql`CREATE FUNCTION nexa_test_refuse_operation() RETURNS trigger AS $$
+            BEGIN RAISE EXCEPTION 'injected storage failure'; END;
+          $$ LANGUAGE plpgsql`,
+    );
+    await ctx.container.database.db.execute(
+      sql`CREATE TRIGGER nexa_test_refuse_operation
+            BEFORE INSERT ON provisioning_operations
+            FOR EACH ROW EXECUTE FUNCTION nexa_test_refuse_operation()`,
+    );
+    const said = messages().length;
+
+    try {
+      await expect(
+        runtime().handle(tenantA, systemActor('bot'), tapUpdate(`u:${service.id}`)),
+      ).rejects.toThrow();
+    } finally {
+      await ctx.container.database.db.execute(
+        sql`DROP TRIGGER nexa_test_refuse_operation ON provisioning_operations`,
+      );
+      await ctx.container.database.db.execute(sql`DROP FUNCTION nexa_test_refuse_operation()`);
+    }
+
+    expect(messages().length, 'the customer was told nothing').toBe(said);
+    expect(await operationOf(service.id, 'SUSPEND'), 'and nothing was planned').toBeUndefined();
+  });
+
   it('records WHO asked for a service to be ended, as its own decision', async () => {
     /*
      * `plan` records no actor — an operation row says what is to be done and which
