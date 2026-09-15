@@ -1125,21 +1125,13 @@ describe('a provisioned service announces itself', () => {
     expect(sync?.attempts).toBe(1);
   });
 
-  it('refuses an operation type this release cannot perform, before contacting a panel', async () => {
-    /*
-     * The audit calls the dispatch the most dangerous edit in this phase, and this is
-     * the property it names: an operation whose type has no implementation is refused
-     * before any provider is contacted, not defaulted to the one call the executor used
-     * to make. `provisionCall` calls `createUser` unconditionally.
-     *
-     * Planned by hand because no code plans a TERMINATE — which is the point: the row
-     * this simulates is one a later release plans and a rolled-back one claims.
-     */
-    const orderId = await paidOrder('usage-unperformable');
-    await ctx.container.provisionerLoop.tick();
-    const service = await services.findByOrderId(tenantA, orderId);
-    const before = addClientCalls();
-
+  /** Plans one operation by hand, for the types no code plans. */
+  async function planByHand(
+    serviceId: string,
+    orderId: OrderId,
+    type: 'ROTATE_SUBSCRIPTION' | 'TERMINATE' | 'SUSPEND',
+    label: string,
+  ): Promise<void> {
     await ctx.container.uow.run(tenantA, async (tx) =>
       operations.plan(
         tenantA,
@@ -1149,27 +1141,82 @@ describe('a provisioned service announces itself', () => {
           // sixteen lowercase hex characters. A uuid is refused by the database, which
           // is the schema saying the same thing the application does: an operation id
           // is retry-stable, not random.
-          operationId: operationIdFor('provider', 'unperformable-terminate'),
-          serviceId: service?.id ?? '',
+          operationId: operationIdFor('provider', label),
+          serviceId,
           orderId,
           panelId: panelId as PanelId,
-          type: 'TERMINATE',
+          type,
         },
         ctx.container.clock.now(),
         tx,
       ),
     );
+  }
+
+  it('refuses an operation type this release cannot perform, before contacting a panel', async () => {
+    /*
+     * The audit calls the dispatch the most dangerous edit in this phase, and this is
+     * the property it names: an operation whose type has no implementation is refused
+     * before any provider is contacted, not defaulted to the one call the executor used
+     * to make. `provisionCall` calls `createUser` unconditionally.
+     *
+     * `ROTATE_SUBSCRIPTION`, and it used to be `TERMINATE`. That swap is the test
+     * following the code rather than being weakened by it: TERMINATE became performable
+     * in this phase, so the row it simulates is no longer an unperformable one. The
+     * case it used to make is now made by the one below, against a panel that cannot do
+     * it — and the property here needs a type that genuinely has no branch.
+     *
+     * Planned by hand because no code plans a ROTATE_SUBSCRIPTION, which is the point:
+     * the row this simulates is one a later release plans and a rolled-back one claims.
+     */
+    const orderId = await paidOrder('usage-unperformable');
+    await ctx.container.provisionerLoop.tick();
+    const service = await services.findByOrderId(tenantA, orderId);
+    const before = addClientCalls();
+
+    await planByHand(service?.id ?? '', orderId, 'ROTATE_SUBSCRIPTION', 'unperformable-rotate');
     await ctx.container.provisionerLoop.tick();
 
     expect(addClientCalls(), 'no panel was contacted').toBe(before);
-    const terminate = (await operations.listForService(tenantA, service?.id ?? '', 20)).find(
-      (operation) => operation.type === 'TERMINATE',
+    const rotate = (await operations.listForService(tenantA, service?.id ?? '', 20)).find(
+      (operation) => operation.type === 'ROTATE_SUBSCRIPTION',
     );
     // ABANDONED, not FAILED: no number of retries teaches this release an operation
     // type, and a FAILED row would be claimed again on every tick.
-    expect(terminate?.state).toBe('ABANDONED');
+    expect(rotate?.state).toBe('ABANDONED');
     const stillActive = await services.findByOrderId(tenantA, orderId);
     expect(stillActive?.state, 'and the service is untouched').toBe('ACTIVE');
+  });
+
+  it('refuses a performable operation on a panel that cannot do it, before contacting it', async () => {
+    /*
+     * The other half, and the one the 3X-UI deferral rests on. `TERMINATE` has a branch
+     * in the executor now, so `isPerformableOperation` lets it through — and the panel
+     * is a 3X-UI, whose descriptor declares no `DELETE_USER`. `decideOperability` reads
+     * `OPERATION_REQUIRED_CAPABILITIES` against that descriptor and refuses.
+     *
+     * Terminal FAILED rather than ABANDONED, and the difference is exact:
+     * `refusalIsPermanent` says CAPABILITY_UNSUPPORTED cannot be fixed without a new
+     * release, so the row stops instead of being claimed on every tick. The panel is
+     * not contacted either way, which is the assertion that matters — a customer's
+     * account on a panel this release cannot manage is not touched by an operation it
+     * cannot carry out.
+     */
+    const orderId = await paidOrder('sanaei-terminate');
+    await ctx.container.provisionerLoop.tick();
+    const service = await services.findByOrderId(tenantA, orderId);
+    const before = panel.requests.length;
+
+    await planByHand(service?.id ?? '', orderId, 'TERMINATE', 'sanaei-terminate-refused');
+    await ctx.container.provisionerLoop.tick();
+
+    expect(panel.requests.length, 'the panel was not contacted at all').toBe(before);
+    const terminate = (await operations.listForService(tenantA, service?.id ?? '', 20)).find(
+      (operation) => operation.type === 'TERMINATE',
+    );
+    expect(terminate?.state).toBe('FAILED');
+    expect(terminate?.failureMessage).toBe('CAPABILITY_UNSUPPORTED');
+    expect((await services.findByOrderId(tenantA, orderId))?.state).toBe('ACTIVE');
   });
 
   // =========================================================================

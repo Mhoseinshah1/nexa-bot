@@ -26,6 +26,7 @@ import type { OrderService } from '../../modules/commerce/orders/application/ord
 import type { PaymentService } from '../../modules/commerce/payments/application/payment.service.js';
 import type { WalletService } from '../../modules/commerce/wallet/application/wallet.service.js';
 import { ProvisioningService } from '../../modules/commerce/provisioning/application/provisioning.service.js';
+import type { CustomerServiceOperation } from '../../modules/commerce/provisioning/application/provisioning.service.js';
 import type { DeliveryService } from '../../modules/commerce/provisioning/application/delivery.service.js';
 import type { ServiceRecord } from '../../modules/commerce/provisioning/application/ports.js';
 
@@ -53,6 +54,10 @@ export const BOT_INTENTS = [
   'SERVICES',
   'SERVICE',
   'SERVICE_RESEND',
+  'SERVICE_SUSPEND',
+  'SERVICE_RESUME',
+  'SERVICE_TERMINATE_ASK',
+  'SERVICE_TERMINATE',
   'UNSUPPORTED',
 ] as const;
 export type BotIntent = (typeof BOT_INTENTS)[number];
@@ -115,6 +120,25 @@ export const GATEWAY_PAY_CALLBACK_PREFIX = 'g:';
  */
 export const SERVICE_CALLBACK_PREFIX = 's:';
 export const SERVICE_RESEND_CALLBACK_PREFIX = 'r:';
+
+/**
+ * The three management actions, and the two halves of ending a service.
+ *
+ * Four prefixes for three operations, because TERMINATE is TWO taps: `t:` opens the
+ * confirmation and `k:` is the only callback in this surface that plans one. Nothing
+ * about which operation to perform is parsed out of the payload — the type is decided
+ * by WHICH prefix matched, and each is a fixed two-character string. A modified client
+ * can change the id after the colon and nothing else, and an id that is not theirs is
+ * refused against the row.
+ *
+ * The letters are arbitrary, as `p:` for an order and `c:` for a confirmation already
+ * are; what matters is that no prefix is a prefix of another, which `intentOf` relies
+ * on and a unit test pins.
+ */
+export const SERVICE_SUSPEND_CALLBACK_PREFIX = 'u:';
+export const SERVICE_RESUME_CALLBACK_PREFIX = 'e:';
+export const SERVICE_TERMINATE_ASK_CALLBACK_PREFIX = 't:';
+export const SERVICE_TERMINATE_CALLBACK_PREFIX = 'k:';
 
 /**
  * How many services one `/services` answer shows.
@@ -194,6 +218,41 @@ export function intentOf(update: unknown): BotCommand {
       return callbackCommand(
         'SERVICE_RESEND',
         data.slice(SERVICE_RESEND_CALLBACK_PREFIX.length),
+        id,
+      );
+    }
+    if (data.startsWith(SERVICE_SUSPEND_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'SERVICE_SUSPEND',
+        data.slice(SERVICE_SUSPEND_CALLBACK_PREFIX.length),
+        id,
+      );
+    }
+    if (data.startsWith(SERVICE_RESUME_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'SERVICE_RESUME',
+        data.slice(SERVICE_RESUME_CALLBACK_PREFIX.length),
+        id,
+      );
+    }
+    /*
+     * The ASK prefix is tested before the TERMINATE prefix, and they are different
+     * letters so the order cannot matter today. It is fixed anyway for the reason the
+     * resend/service pair states: if one ever became a prefix of the other, every tap
+     * would route to whichever branch came first — and here that would be the
+     * difference between showing a customer a question and deleting their account.
+     */
+    if (data.startsWith(SERVICE_TERMINATE_ASK_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'SERVICE_TERMINATE_ASK',
+        data.slice(SERVICE_TERMINATE_ASK_CALLBACK_PREFIX.length),
+        id,
+      );
+    }
+    if (data.startsWith(SERVICE_TERMINATE_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'SERVICE_TERMINATE',
+        data.slice(SERVICE_TERMINATE_CALLBACK_PREFIX.length),
         id,
       );
     }
@@ -566,6 +625,24 @@ export class BotRuntime {
     if (command.intent === 'SERVICE_RESEND' && command.targetId !== null) {
       return this.serviceResend(scope, customer, command.targetId, input);
     }
+    if (command.intent === 'SERVICE_SUSPEND' && command.targetId !== null) {
+      return this.serviceAction(scope, customer, command.targetId, 'SUSPEND', input.idempotencyKey);
+    }
+    if (command.intent === 'SERVICE_RESUME' && command.targetId !== null) {
+      return this.serviceAction(scope, customer, command.targetId, 'RESUME', input.idempotencyKey);
+    }
+    if (command.intent === 'SERVICE_TERMINATE_ASK' && command.targetId !== null) {
+      return this.serviceTerminateAsk(scope, customer, command.targetId);
+    }
+    if (command.intent === 'SERVICE_TERMINATE' && command.targetId !== null) {
+      return this.serviceAction(
+        scope,
+        customer,
+        command.targetId,
+        'TERMINATE',
+        input.idempotencyKey,
+      );
+    }
     return { key: replyFor(command.intent, arrival), values: {}, buttons: [], orderId: null };
   }
 
@@ -656,6 +733,48 @@ export class BotRuntime {
         ]
       : [];
 
+    /*
+     * The management buttons, offered only where tapping one would do something.
+     *
+     * `customerActionsFor` answers with both conditions applied: the service must be in
+     * a state the operation is legal from, and the PANEL must declare the capability.
+     * A 3X-UI-backed service gets an empty list, because this release cannot disable,
+     * re-enable or delete a client there — and a product that draws a button it cannot
+     * honour is the legacy defect this codebase keeps naming.
+     *
+     * Not drawing the button is not the control. `requestFromCustomer` re-checks
+     * ownership, the state and the capability when the tap arrives, so a customer
+     * scrolling back to an older message is refused rather than served.
+     */
+    for (const action of await this.deps.services.customerActionsFor(scope, service)) {
+      if (action === 'SUSPEND') {
+        buttons.push({
+          label: { kind: 'TEMPLATE', key: 'bot.service.suspend_button' },
+          data: `${SERVICE_SUSPEND_CALLBACK_PREFIX}${service.id}`,
+        });
+      }
+      if (action === 'RESUME') {
+        buttons.push({
+          label: { kind: 'TEMPLATE', key: 'bot.service.resume_button' },
+          data: `${SERVICE_RESUME_CALLBACK_PREFIX}${service.id}`,
+        });
+      }
+      if (action === 'TERMINATE') {
+        /*
+         * The terminate button opens a QUESTION and carries the ask prefix.
+         *
+         * `SERVICE_TERMINATE_CALLBACK_PREFIX` is never written here, and that is the
+         * confirmation step made structural rather than remembered: the only place the
+         * destructive callback is produced is the confirmation screen below, so there
+         * is no message anywhere in this product whose single tap ends a service.
+         */
+        buttons.push({
+          label: { kind: 'TEMPLATE', key: 'bot.service.terminate_button' },
+          data: `${SERVICE_TERMINATE_ASK_CALLBACK_PREFIX}${service.id}`,
+        });
+      }
+    }
+
     return {
       key: 'bot.service.detail',
       values: {
@@ -726,6 +845,91 @@ export class BotRuntime {
        */
       return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
     }
+  }
+
+  /**
+   * The one screen between a customer and the deletion of their provider account.
+   *
+   * It plans nothing, writes nothing and contacts nothing. Its only job is to say what
+   * is about to happen, name the service in words the customer recognises, and offer
+   * the ONE button that carries the destructive prefix.
+   *
+   * The ability is re-checked here rather than trusted from whichever message was
+   * tapped: a customer whose service has since expired, or whose panel an operator
+   * disabled, is told it cannot be done instead of being shown a question whose answer
+   * would be refused.
+   */
+  private async serviceTerminateAsk(
+    scope: TenantContext,
+    customer: CustomerRecord,
+    serviceId: string,
+  ): Promise<PendingReply> {
+    const service = await this.ownedService(scope, customer, serviceId);
+    if (service === null) {
+      return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
+    }
+    const title = await this.deps.purchaseTitle(scope, service.orderId);
+    if (title === null) {
+      return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
+    }
+    const actions = await this.deps.services.customerActionsFor(scope, service);
+    if (!actions.includes('TERMINATE')) {
+      return { key: 'bot.service.capability_unsupported', values: {}, buttons: [], orderId: null };
+    }
+    return {
+      key: 'bot.service.terminate_confirm',
+      values: { productTitle: title },
+      buttons: [
+        {
+          label: { kind: 'TEMPLATE', key: 'bot.service.terminate_confirm_button' },
+          data: `${SERVICE_TERMINATE_CALLBACK_PREFIX}${service.id}`,
+        },
+      ],
+      orderId: null,
+    };
+  }
+
+  /**
+   * A customer asking for one of the three management actions on their own service.
+   *
+   * The TYPE is a literal chosen by which callback prefix matched, never parsed out of
+   * the payload. That is the property worth stating: nothing a client sends can turn a
+   * tap on "pause" into a terminate, because the only thing that crosses the boundary
+   * is a service id.
+   *
+   * What this does is PLAN an operation. The provisioner claims it on its next tick and
+   * calls the panel; this surface never touches a provider, which is why the reply says
+   * the request was recorded rather than that it is done. Saying "your service is
+   * paused" here would be a claim about somebody else's machine, made before anything
+   * was asked of it.
+   *
+   * Every refusal `requestFromCustomer` can produce is answered, and the mapping is
+   * deliberate rather than a catch-all: `SERVICE_NOT_FOUND` is the same answer an id
+   * that is not theirs gets, and everything else — a state the action is not legal
+   * from, a panel that cannot perform it, a tenant that has stopped — is
+   * `bot.service.capability_unsupported`, which says the action is not available for
+   * this service. That sentence is true for all three and none of them is a customer's
+   * to fix; distinguishing them would tell a customer about an operator's panel.
+   */
+  private async serviceAction(
+    scope: TenantContext,
+    customer: CustomerRecord,
+    serviceId: string,
+    type: CustomerServiceOperation,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    try {
+      await this.deps.services.requestFromCustomer(scope, customer.id, serviceId, type, {
+        idempotencyKey,
+      });
+    } catch (error) {
+      const code = (error as { code?: unknown } | null)?.code;
+      if (code === COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND) {
+        return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
+      }
+      return { key: 'bot.service.capability_unsupported', values: {}, buttons: [], orderId: null };
+    }
+    return { key: 'bot.service.action_requested', values: {}, buttons: [], orderId: null };
   }
 
   /** One of the customer's own services, or null. Never anybody else's, never a throw. */

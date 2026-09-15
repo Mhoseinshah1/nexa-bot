@@ -452,6 +452,37 @@ export class ProvisioningService {
   }
 
   /**
+   * Which of the three management actions this service can actually take, right now.
+   *
+   * Asked by the surface so that a button is drawn only when tapping it would do
+   * something. Two independent conditions, and both are real:
+   *
+   * - `OPERATION_LEGAL_FROM` — a resume means nothing for a service that is not
+   *   suspended, and the executor would ABANDON the operation.
+   * - the panel's own capability, through `operability`, which reads
+   *   `OPERATION_REQUIRED_CAPABILITIES` against the descriptor. A 3X-UI-backed service
+   *   yields an empty list, because this release cannot disable, re-enable or delete a
+   *   client on that provider and must not offer to.
+   *
+   * NOT a security control, and the distinction matters: `requestFromCustomer` checks
+   * ownership, the state and the capability again when the tap arrives, so a customer
+   * holding an older message is refused rather than served. Not drawing the button is
+   * what keeps the product honest; refusing the request is what keeps it correct.
+   */
+  async customerActionsFor(
+    scope: TenantContext,
+    service: ServiceRecord,
+  ): Promise<readonly CustomerServiceOperation[]> {
+    const available: CustomerServiceOperation[] = [];
+    for (const type of CUSTOMER_SERVICE_OPERATIONS) {
+      if (!OPERATION_LEGAL_FROM[type].includes(service.state)) continue;
+      const operable = await this.deps.panels.operability(scope, service.panelId, type);
+      if (operable.ok) available.push(type);
+    }
+    return available;
+  }
+
+  /**
    * Plans one management operation a CUSTOMER asked for, against their own service.
    *
    * ## Authorisation is ownership, and nothing else
