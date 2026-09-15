@@ -1,6 +1,7 @@
 import {
   COMMERCE_ERROR_CODES,
   errors,
+  SUBSCRIPTION_REF_BYTES,
   providerUsernameFor,
   UNLIMITED_TRAFFIC_BYTES,
   type ActorContext,
@@ -22,6 +23,7 @@ import type {
   ServiceCursor,
   ServicePage,
   ServiceRecord,
+  ServiceSecretSource,
   ServiceRepository,
   ServiceSearch,
   OperationRepository,
@@ -49,6 +51,8 @@ export interface ProvisioningServiceDeps {
   readonly operationId: (idempotencyKey: string) => OperationId;
   /** The tenant kill switch, read inside every write transaction. */
   readonly scopeActivity: ScopeActivityReader;
+  /** Unguessable values for the two identities that are capabilities, not ids. */
+  readonly secrets: ServiceSecretSource;
 }
 
 export interface ServiceListQuery {
@@ -117,6 +121,17 @@ export class ProvisioningService {
         panelId: order.line.panelId,
         productId: order.line.productId,
         providerUsername: providerUsernameFor(serviceId),
+        /*
+         * Random, and written here — before anything leaves the process.
+         *
+         * Committed in the settling transaction, so a create whose answer is lost can
+         * still be reconciled against them; random, so learning the service id or
+         * reading a name off a panel's client list yields neither. They used to be an
+         * unkeyed hash of the service id, which made both a one-line computation from a
+         * value the audit log, the operations log and the outbox all carry.
+         */
+        subscriptionRef: this.deps.secrets.hex(SUBSCRIPTION_REF_BYTES),
+        providerClientId: this.deps.secrets.clientId(),
         /*
          * From the ORDER's snapshot, never from the product.
          *

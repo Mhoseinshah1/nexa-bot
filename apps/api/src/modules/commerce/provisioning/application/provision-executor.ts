@@ -2,9 +2,7 @@ import {
   failureOutcome,
   isMutatingOperation,
   OPERATION_MAX_ATTEMPTS,
-  providerClientIdFor,
   providerUsernameFor,
-  subscriptionRefFor,
   UNLIMITED_DURATION_DAYS,
   type Clock,
   type Hasher,
@@ -81,31 +79,33 @@ export function backoffMs(attempts: number): number {
 }
 
 /**
- * The three derived identities for one service, computed together.
+ * The three identities one service has on a panel, assembled together.
  *
- * Together because they must agree: a create that used one subscription reference and
- * a reconcile that computed another would adopt an account and hand the customer a
- * link to a different one. One function, one service id, three outputs.
+ * Together because they must agree: a create that used one subscription reference and a
+ * reconcile that used another would adopt an account and hand the customer a link to a
+ * different one.
+ *
+ * Only the USERNAME is derived, and only it should be. It appears in an operator's
+ * client list and its recoverability is what lets a reconcile ask the panel for a
+ * service by name after a lost write. The other two are CAPABILITIES — anybody holding
+ * the subscription reference can fetch the customer's configuration unauthenticated,
+ * and the client id is what that configuration authenticates with — so they are random,
+ * and stored in the settling transaction before any provider call. That gives the same
+ * recoverability without making them computable from an id that travels through the
+ * audit log, the operations log and the outbox.
  */
-export function providerRefFor(serviceId: string, hash: Hasher): ProviderUserRef {
+export function providerRefFor(service: {
+  readonly id: string;
+  readonly subscriptionRef: string;
+  readonly providerClientId: string;
+}): ProviderUserRef {
   return {
-    username: providerUsernameFor(serviceId),
-    subscriptionRef: subscriptionRefFor(serviceId, hash),
-    clientId: providerClientIdFor(serviceId, hash),
+    username: providerUsernameFor(service.id),
+    subscriptionRef: service.subscriptionRef,
+    clientId: service.providerClientId,
   };
 }
 
-/**
- * When a service bought today expires.
- *
- * Computed ONCE, here, from the clock port — and passed to the adapter rather than
- * derived inside it. An adapter that called a clock would compute a different expiry on
- * every retry of the same operation, so a create and the reconcile that adopted it
- * would disagree about when the customer's service ends.
- *
- * `UNLIMITED_DURATION_DAYS` is zero and means no expiry, which is null here and zero on
- * both panels' wire formats.
- */
 export function expiryFor(now: Date, durationDays: number): Date | null {
   if (durationDays === UNLIMITED_DURATION_DAYS || durationDays <= 0) return null;
   return new Date(now.getTime() + durationDays * 86_400_000);

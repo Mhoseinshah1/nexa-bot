@@ -2576,6 +2576,37 @@ export const services = pgTable(
     state: text('state').notNull().default('PENDING_PROVISION'),
     /** Derived from this row's own id. Unique per panel, which is what adoption needs. */
     providerUsername: text('provider_username').notNull(),
+    /**
+     * The `subId` the panel serves this customer's configuration under. A CAPABILITY.
+     *
+     * Random, 128 bits, chosen HERE and written in the settling transaction — not
+     * derived from the service id like the username beside it. The two are different
+     * kinds of thing and the distinction is the whole reason this column exists: the
+     * username appears in an operator's client list and is meant to be recoverable,
+     * while anybody holding this value can fetch the customer's configuration from
+     * `https://<subscription domain>/sub/<this>` with no authentication at all.
+     *
+     * It was derived, through an unkeyed SHA-256 of the service id — and the service id
+     * travels in `operational_events.context`, in `audit_logs.entity_id` and in
+     * `outbox_messages.aggregate_id`, none of which are places for a credential. Worse,
+     * `providerUsernameFor` is a reversible encoding rather than a hash, so reading a
+     * name off a panel screen recovered the id and therefore the link. The docblocks
+     * claimed the opposite in both directions.
+     *
+     * Stored rather than derived loses nothing: it is written BEFORE any provider call,
+     * so a create whose answer was lost can still be reconciled against it — which is
+     * the only property the derivation was there to provide.
+     */
+    subscriptionRef: text('subscription_ref').notNull(),
+    /**
+     * The client UUID a panel that keys clients by one assigns this service. A
+     * CREDENTIAL.
+     *
+     * 3X-UI's VLESS client id, which the customer's configuration authenticates with.
+     * Random and stored for exactly the reasons above; formatted as a v4 UUID because
+     * that is what the panels validate.
+     */
+    providerClientId: uuid('provider_client_id').notNull(),
     /** The provider's own identifier, once a provider has told us one. */
     providerUserId: text('provider_user_id'),
     /**
@@ -2635,6 +2666,14 @@ export const services = pgTable(
      * figures meaningless.
      */
     uniqueIndex('services_panel_provider_username_key').on(table.panelId, table.providerUsername),
+    /**
+     * And the subscription reference, for the same reason one step further along.
+     *
+     * 128 random bits will not collide, and an index is what makes that a guarantee
+     * rather than an expectation: two services sharing a `subId` would serve one
+     * customer the other's configuration, which is the worst outcome this table has.
+     */
+    uniqueIndex('services_panel_subscription_ref_key').on(table.panelId, table.subscriptionRef),
     index('services_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
     index('services_tenant_state_idx').on(table.tenantId, table.state),
     index('services_customer_created_idx').on(table.customerId, table.createdAt, table.id),
@@ -2647,6 +2686,8 @@ export const services = pgTable(
       .where(sql`state = 'UNRECONCILED'`),
     check('services_state_check', enumCheck('state', SERVICE_STATES)),
     check('services_traffic_check', sql`traffic_limit_bytes >= 0 AND traffic_used_bytes >= 0`),
+    /** The format the panels accept, pinned so a bad generator fails at the write. */
+    check('services_subscription_ref_check', sql`subscription_ref ~ '^[0-9a-f]{32}$'`),
     /** A provisioned service has a time; one that never was does not. */
     check(
       'services_provisioned_at_check',

@@ -124,6 +124,7 @@ import { PaymentService } from './modules/commerce/payments/application/payment.
 import { OrderService } from './modules/commerce/orders/application/order.service.js';
 import { DrizzleOrderRepository } from './modules/commerce/orders/infrastructure/drizzle-order.repository.js';
 import { DrizzleServiceRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service.repository.js';
+import { serviceSecrets } from './infrastructure/crypto/service-secrets.js';
 import { DrizzleOperationRepository } from './modules/commerce/provisioning/infrastructure/drizzle-operation.repository.js';
 import { ProvisioningService } from './modules/commerce/provisioning/application/provisioning.service.js';
 import { decideOperability } from './modules/commerce/provisioning/application/panel-operability.js';
@@ -828,6 +829,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     operationId: (key) => operationIdFor('provider', key),
     // The same tenant kill switch every other write path reads.
     scopeActivity: tenants,
+    // From the system CSPRNG, never from the id generator: see the binding's own note.
+    secrets: serviceSecrets,
   });
 
   const paymentService = new PaymentService({

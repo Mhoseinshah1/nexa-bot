@@ -190,6 +190,50 @@ describe('provisioning invariants', () => {
     expect(planned[0]?.callStartedAt).toBeNull();
   });
 
+  it('gives a service a subscription reference nothing can compute from its id', async () => {
+    const order = await awaitingPayment('secret');
+    await settle('secret', order);
+    const service = await services.findByOrderId(tenantA, order.id);
+    const serviceId = service?.id ?? '';
+
+    expect(service?.subscriptionRef, 'the format the panels accept').toMatch(/^[0-9a-f]{32}$/);
+    expect(service?.providerClientId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+
+    /*
+     * The exact derivation this column replaced, recomputed here.
+     *
+     * `subscriptionRefFor` was `sha256('nexa:subscription:' + serviceId).slice(0, 32)`
+     * with the same unkeyed hasher that mints operation ids, and `providerUsernameFor`
+     * is a reversible ENCODING of the service id rather than a hash — so a name read
+     * off a panel's client list recovered the id, and the id travels in
+     * `operational_events.context`, `audit_logs.entity_id` and
+     * `outbox_messages.aggregate_id`. Anybody who could read an audit log could compute
+     * the link that serves a customer's configuration unauthenticated.
+     *
+     * Asserting the stored value is DIFFERENT from that computation is what makes a
+     * reintroduction fail here rather than in somebody's logs.
+     */
+    const oldDerivation = sha256Hex(`nexa:subscription:${serviceId.toLowerCase()}`).slice(0, 32);
+    expect(service?.subscriptionRef, 'and not the old unkeyed hash of the id').not.toBe(
+      oldDerivation,
+    );
+    expect(service?.providerClientId).not.toContain(
+      sha256Hex(`nexa:client:${serviceId.toLowerCase()}`).slice(0, 8),
+    );
+
+    // The username stays derived, because being askable-for by name is its whole job.
+    expect(service?.providerUsername).toBe(providerUsernameFor(serviceId));
+
+    // Two services on one panel never share a reference — an index, not a hope.
+    const second = await awaitingPayment('secret-2');
+    await settle('secret-2', second);
+    const other = await services.findByOrderId(tenantA, second.id);
+    expect(other?.subscriptionRef).not.toBe(service?.subscriptionRef);
+    expect(other?.providerClientId).not.toBe(service?.providerClientId);
+  });
+
   it('refuses a second service for the same order, at the database', async () => {
     const order = await awaitingPayment('dup');
     await settle('dup', order);
@@ -214,6 +258,8 @@ describe('provisioning invariants', () => {
           panelId: panelA as PanelId,
           productId: first?.productId ?? ('' as ProductId),
           providerUsername: 'nx00000000000000000000000000000001',
+          subscriptionRef: '00000000000000000000000000000001',
+          providerClientId: '00000000-0000-4000-8000-000000000001',
           trafficLimitBytes: 0n,
         },
         ctx.container.clock.now(),

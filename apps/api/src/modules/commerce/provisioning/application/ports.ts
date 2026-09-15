@@ -38,6 +38,10 @@ export interface ServiceRecord {
   readonly productId: ProductId;
   readonly state: ServiceState;
   readonly providerUsername: string;
+  /** The panel's `subId` for this service. A bearer capability; never derived. */
+  readonly subscriptionRef: string;
+  /** The client UUID the customer's configuration authenticates with. A credential. */
+  readonly providerClientId: string;
   readonly providerUserId: string | null;
   readonly subscriptionUrl: string | null;
   readonly expiresAt: Date | null;
@@ -70,7 +74,32 @@ export interface ServiceDraft {
   readonly panelId: PanelId;
   readonly productId: ProductId;
   readonly providerUsername: string;
+  /**
+   * Both chosen by the caller, in the settling transaction, BEFORE any provider call.
+   *
+   * Written that early for the reason the derivation used to give: a create whose
+   * answer was lost must still be reconcilable, and a value committed before the call
+   * survives losing the answer just as well as a value that can be recomputed — without
+   * being recomputable by anybody who learns the service id.
+   */
+  readonly subscriptionRef: string;
+  readonly providerClientId: string;
   readonly trafficLimitBytes: bigint;
+}
+
+/**
+ * Unguessable values for the two service identities that are capabilities.
+ *
+ * A NARROW port, and separate from `IdGenerator` on purpose. `IdGenerator.uuid()` is
+ * UUIDv7 — time-ordered and partly predictable, which is exactly right for a primary key
+ * and exactly wrong for a credential. A single port offering both is a port whose next
+ * caller picks the wrong one.
+ */
+export interface ServiceSecretSource {
+  /** Lowercase hex, `bytes` long. The panels' `subId` format is 16 bytes of it. */
+  hex(bytes: number): string;
+  /** A random v4 UUID, which is what a panel that keys clients by one validates. */
+  clientId(): string;
 }
 
 export interface ServiceCursor {

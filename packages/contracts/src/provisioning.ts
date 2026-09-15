@@ -344,74 +344,27 @@ export const DELIVERY_AUTO_RETRY_STATES: readonly ServiceDeliveryState[] = ['PEN
 export const DELIVERY_MAX_ATTEMPTS = 3;
 
 /**
- * The opaque reference a subscription URL is built from.
+ * How long a subscription reference is, and what it is made of.
  *
- * Needed because some panels do not tell you one. 3X-UI's client carries a `subId`
- * that Nexa chooses, and `getClientTraffics` — the only read that establishes a
- * client exists — does not return it. So after an unknown outcome, a reconcile that
- * ADOPTS an existing account has to be able to rebuild the customer's link from what
- * it already knows, and the only thing it already knows is the service id.
+ * Thirty-two lowercase hex characters — sixteen RANDOM bytes, and the randomness is the
+ * point. `subscriptionRefFor` and `providerClientIdFor` used to live here, deriving both
+ * from the service id through the same unkeyed `Hasher` that mints operation ids, and
+ * claiming in their own docblocks that neither was derivable from the username.
  *
- * Derived rather than stored, for exactly the reason `providerUsernameFor` is: a
- * stored value is a value a lost write can lose, and the whole point of this path is
- * that it runs after a write may have been lost.
+ * Both claims were false. `providerUsernameFor` is a reversible ENCODING of the service
+ * id rather than a hash, so a name read off a panel's client list recovered the id; and
+ * the id itself travels in `operational_events.context`, in `audit_logs.entity_id` and
+ * in `outbox_messages.aggregate_id`. Anybody who could read an audit log could compute
+ * the link that serves a customer's configuration with no authentication, and the VLESS
+ * client id that configuration authenticates with.
  *
- * NOT the username, and not derivable from it. The username is sent to the panel and
- * appears in an operator's client list; this is a bearer capability for one
- * customer's configuration. Deriving one from the other would mean anybody who read
- * a username off a panel screen could construct the link.
+ * The recoverability the derivation existed for is kept by STORING both values, written
+ * in the settling transaction before any provider call — see `services.subscription_ref`.
+ * A value committed before the call survives a lost answer exactly as well as one that
+ * can be recomputed, and cannot be recomputed by anybody else.
  *
- * Takes the same `Hasher` port `operationIdFrom` does, for the same reason: this
- * package depends on nothing, so the algorithm is named in the type and bound once
- * by the composition root.
+ * `providerUsernameFor` stays derived. It is an identifier, not a capability, and being
+ * askable-for by name after a lost write is the whole reason it exists.
  */
 export const SUBSCRIPTION_REF_LENGTH = 32;
-
-export function subscriptionRefFor(serviceId: string, hash: (input: string) => string): string {
-  const compact = serviceId.replace(/-/g, '').toLowerCase();
-  if (!/^[0-9a-f]{32}$/.test(compact)) {
-    throw new Error('a subscription reference is derived from a UUID service id');
-  }
-  const digest = hash(`nexa:subscription:${serviceId.toLowerCase()}`);
-  if (!/^[0-9a-f]{64}$/.test(digest)) {
-    throw new Error('a subscription reference hasher must return 64 lowercase hex characters');
-  }
-  return digest.slice(0, SUBSCRIPTION_REF_LENGTH);
-}
-
-/**
- * The UUID a panel that keys clients by one assigns to this service.
- *
- * 3X-UI's VLESS client id is this value, and the customer's configuration
- * authenticates with it — so it is a credential, and it must be derivable after a lost
- * write for the same reason the other two identities must be.
- *
- * Its own namespace, so that the username an operator can read off a client list does
- * not yield the credential. Formatted as a version-4 UUID because that is what the
- * panels validate; the bits are a hash rather than randomness, which is what makes a
- * retry converge — and the version and variant nibbles are set so the value is a
- * well-formed UUID rather than a hex string with dashes in it.
- */
-export function providerClientIdFor(serviceId: string, hash: (input: string) => string): string {
-  const compact = serviceId.replace(/-/g, '').toLowerCase();
-  if (!/^[0-9a-f]{32}$/.test(compact)) {
-    throw new Error('a provider client id is derived from a UUID service id');
-  }
-  const digest = hash(`nexa:client:${serviceId.toLowerCase()}`);
-  if (!/^[0-9a-f]{64}$/.test(digest)) {
-    throw new Error('a provider client id hasher must return 64 lowercase hex characters');
-  }
-  const hex = digest.slice(0, 32).split('');
-  // Version 4 and RFC 4122 variant, so the shape is valid wherever it is parsed.
-  hex[12] = '4';
-  const variant = '89ab'[parseInt(hex[16] ?? '0', 16) % 4] ?? '8';
-  hex[16] = variant;
-  const value = hex.join('');
-  return [
-    value.slice(0, 8),
-    value.slice(8, 12),
-    value.slice(12, 16),
-    value.slice(16, 20),
-    value.slice(20, 32),
-  ].join('-');
-}
+export const SUBSCRIPTION_REF_BYTES = 16;

@@ -395,7 +395,7 @@ export class ProvisionerService {
     }
 
     const target = { baseUrl: operable.baseUrl, credentials, activation: operable.activation };
-    const ref = providerRefFor(service.id, this.deps.hash);
+    const ref = providerRefFor(service);
     const http = this.deps.http.forBase(operable.baseUrl);
 
     /*

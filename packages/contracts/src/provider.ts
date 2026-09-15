@@ -336,14 +336,15 @@ export interface ProviderUserRef {
    */
   readonly username: string;
   /**
-   * What a subscription URL is built from. `subscriptionRefFor`.
+   * What a subscription URL is built from. Random, and stored on the service row:
+   * a capability, never derived from anything a log carries.
    *
    * Separate from the username because the username is visible in an operator's client
    * list and this is a bearer capability for one customer's configuration.
    */
   readonly subscriptionRef: string;
   /**
-   * The UUID a panel that keys clients by one uses. `providerClientIdFor`.
+   * The UUID a panel that keys clients by one uses. Random, and stored beside it.
    *
    * 3X-UI's VLESS client id is this value, and it is what the customer's configuration
    * authenticates with. Derived from its own namespace so that reading any one of these
