@@ -1,6 +1,7 @@
 import {
   isMutatingOperation,
   PROVIDER_FAILURE_RETRYABLE,
+  USAGE_SYNC_PLAN_LIMIT,
   systemJobActor,
   type ActorContext,
   type Clock,
@@ -17,6 +18,7 @@ import {
   type UnitOfWork,
 } from '@nexa/contracts';
 import type { AuditWriter } from '@nexa/contracts';
+import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { SafeHttpClient } from '../../../../infrastructure/net/safe-http.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
@@ -36,7 +38,10 @@ import {
   failureNote,
   outcomeFor,
   providerRefFor,
+  isPerformableOperation,
+  OPERATION_LEGAL_FROM,
   provisionCall,
+  usageSyncCall,
   reconcileCall,
   serviceEventFor,
   type ExecutionRefusal,
@@ -161,6 +166,16 @@ export interface ProvisionerDeps {
   readonly scopeActivity: ScopeActivityReader;
   readonly workerId: string;
   readonly leaseMs: number;
+  /**
+   * Where `provisioning.usage_sync_minutes` is read from.
+   *
+   * The resolver rather than a number, for the reason `OrderService` takes it: the
+   * cadence is a PER-TENANT setting and a worker serves several tenants, so a value
+   * read once at construction would apply one tenant's answer to all of them. Read on
+   * every tick, which is also what makes the key's declared RUNTIME mutability true —
+   * a change takes effect without a restart.
+   */
+  readonly settings: SettingsResolver;
 }
 
 /**
@@ -241,6 +256,14 @@ export class ProvisionerService {
      */
     await this.reapStrandedCalls(scope, now);
     await this.planReconciles(scope, now);
+    /*
+     * AFTER the reconciles, so a tick whose budget is tight spends it on a paid order
+     * that has not been delivered before it spends it refreshing a figure. `claimDue`
+     * is oldest-first across all types, so this is about which rows EXIST, not about
+     * which is claimed — but a reconcile planned in the same tick is already older than
+     * a sync planned after it.
+     */
+    await this.planUsageSyncs(scope, now);
 
     const leaseUntil = new Date(now.getTime() + this.deps.leaseMs);
     /*
@@ -288,29 +311,71 @@ export class ProvisionerService {
     }
 
     /*
-     * The service must still be in the state this operation was planned for.
+     * An operation this release cannot perform is refused HERE, before anything else.
      *
-     * A `PROVISION` is only legal from `PENDING_PROVISION` and a `RECONCILE` only from
-     * `UNRECONCILED` — `SERVICE_MACHINE`'s edges, checked before anything is spent
-     * rather than discovered afterwards by a conditional UPDATE that quietly did
-     * nothing. Without this the executor would dial a panel for a service that is
-     * already ACTIVE, and the collision on the derived username comes back as a
-     * `PROVIDER_ERROR`, which classifies UNKNOWN on a mutating call, which moves a
-     * working service to `UNRECONCILED`.
+     * The Phase 4E audit calls the type dispatch "the single most dangerous edit in
+     * this phase", and names the property to preserve: an operation whose type has no
+     * implementation is refused before any provider is contacted, not defaulted to the
+     * one call the function used to make. `provisionCall` calls `createUser`
+     * unconditionally and its own docblock records that a future type routed through it
+     * "would silently create a user on somebody's panel".
      *
-     * ABANDONED rather than failed or retried: nothing about a stale operation improves
-     * by trying it again, and `OPERATION_MACHINE` provides that state for exactly the
-     * situation nothing else can resolve.
+     * So the check is a membership test against `PERFORMABLE_OPERATION_TYPES` and it
+     * runs before the state check, the tenant check, the panel read, the credential
+     * decryption and the budget — because every one of those is work, and none of it is
+     * owed to an operation nobody can carry out.
+     *
+     * ABANDONED rather than FAILED. `FAILED` is retried, and no number of retries
+     * teaches this release an operation type; `OPERATION_MACHINE` provides ABANDONED
+     * for exactly the situation nothing else can resolve. A row planned by a version
+     * that could perform it and claimed by one that cannot is a rollback, and the
+     * honest answer to a rollback is to stop, not to loop.
      */
-    const legalFrom = operation.type === 'RECONCILE' ? 'UNRECONCILED' : 'PENDING_PROVISION';
-    if (service.state !== legalFrom) {
+    if (!isPerformableOperation(operation.type)) {
       await this.deps.uow.run(scope, async (tx) => {
         await this.deps.operations.transition(
           scope,
           operation.id,
           'IN_FLIGHT',
           'ABANDONED',
-          { failureMessage: `the service is ${service.state}, not ${legalFrom}` },
+          { failureMessage: `this release does not perform ${operation.type} operations` },
+          now,
+          tx,
+        );
+      });
+      return { kind: 'REFUSED', operationId: operation.id, reason: 'CAPABILITY_UNSUPPORTED' };
+    }
+
+    /*
+     * The service must still be in a state this operation is legal from.
+     *
+     * `SERVICE_MACHINE`'s edges, checked before anything is spent rather than discovered
+     * afterwards by a conditional UPDATE that quietly did nothing. Without this the
+     * executor would dial a panel for a service that is already ACTIVE, and the
+     * collision on the derived username comes back as a `PROVIDER_ERROR`, which
+     * classifies UNKNOWN on a mutating call, which moves a working service to
+     * `UNRECONCILED`.
+     *
+     * A TABLE, `OPERATION_LEGAL_FROM`, rather than the ternary this used to be. The
+     * ternary read "RECONCILE from UNRECONCILED, everything else from
+     * PENDING_PROVISION", which answers confidently for a type nobody has thought
+     * about: `SYNC_USAGE` would have been declared legal only from the one state where
+     * there is no account to read.
+     *
+     * ABANDONED rather than failed or retried: nothing about a stale operation improves
+     * by trying it again.
+     */
+    const legalFrom = OPERATION_LEGAL_FROM[operation.type];
+    if (!legalFrom.includes(service.state)) {
+      await this.deps.uow.run(scope, async (tx) => {
+        await this.deps.operations.transition(
+          scope,
+          operation.id,
+          'IN_FLIGHT',
+          'ABANDONED',
+          {
+            failureMessage: `the service is ${service.state}, not ${legalFrom.join(' or ')}`,
+          },
           now,
           tx,
         );
@@ -467,8 +532,22 @@ export class ProvisionerService {
       return { kind: 'REFUSED', operationId: operation.id, reason: 'LEASE_LOST' };
     }
 
-    if (operation.type === 'RECONCILE') {
-      return this.finishReconcile(scope, operation, service, adapter, target, http, ref);
+    /*
+     * The dispatch. Exhaustive over what this release performs, and nothing else.
+     *
+     * `isPerformableOperation` above already refused every other member of
+     * `OPERATION_TYPES`, so the switch below has no reachable default — and it is
+     * written as a switch on the type rather than as two ifs and a fall-through,
+     * because a fall-through is how `provisionCall` came to be the thing an unhandled
+     * type does.
+     */
+    switch (operation.type) {
+      case 'RECONCILE':
+        return this.finishReconcile(scope, operation, service, adapter, target, http, ref);
+      case 'SYNC_USAGE':
+        return this.finishUsageSync(scope, operation, service, adapter, target, http, ref);
+      case 'PROVISION':
+        break;
     }
 
     /*
@@ -1014,6 +1093,163 @@ export class ProvisionerService {
       outcome: 'SUCCEEDED',
       failureKind: null,
     };
+  }
+
+  /**
+   * One service's usage, read back from its panel and written to the row.
+   *
+   * The narrowest operation this executor performs, and deliberately so: it is a READ,
+   * `isMutatingOperation` says so, and `failureOutcome` therefore never produces
+   * `UNKNOWN` for it. A sync that did not answer changed nothing by definition, so
+   * there is nothing to reconcile and nothing that needs asking about — it is simply
+   * `FAILED`, retried by the ordinary attempt machinery, and the figure on the row
+   * stays the last one somebody actually read.
+   *
+   * ## Three things it must not do
+   *
+   * **It must not move the service.** `SERVICE_MACHINE` has no edge for a usage read
+   * and this writes none. A panel that has lost the account answers `PROVIDER_ERROR`
+   * through `readUsage`, which is a real divergence an operator has to see — but
+   * "the panel does not have it" arriving on a READ is not the same evidence as a
+   * reconcile's `providerUserProvablyAbsent`, which is a lookup made for exactly that
+   * question from a service that is `UNRECONCILED`. Turning a failed usage read into a
+   * state change would let a rate limit or a rewritten body move a working service.
+   *
+   * **It must not invent a figure.** `recordUsage` is only called on `ok`, and only
+   * with what the panel returned. A sync that failed leaves `usage_synced_at` alone, so
+   * the row keeps saying how stale it is rather than claiming a refresh that did not
+   * happen — and the planner below, which orders by exactly that column, keeps the
+   * service at the front of the queue instead of resetting its place.
+   *
+   * **It must not overwrite a service that moved underneath it.** `recordUsage` is a
+   * conditional UPDATE naming `ACTIVE`, so a service suspended, expired or terminated
+   * during the provider call keeps whatever that transition wrote. There is no
+   * `setUsage`.
+   */
+  private async finishUsageSync(
+    scope: TenantContext,
+    operation: OperationRecord,
+    service: ServiceRecord,
+    adapter: ProviderAdapter,
+    target: Parameters<ProviderAdapter['readUsage']>[0],
+    http: Parameters<ProviderAdapter['readUsage']>[1],
+    ref: Parameters<ProviderAdapter['readUsage']>[2],
+  ): Promise<ExecutionResult> {
+    const read = await usageSyncCall(adapter, target, http, ref);
+    const now = this.deps.clock.now();
+    const serviceId = service.id;
+
+    if (!read.ok) {
+      /*
+       * `FAILED`, never `UNKNOWN`. `failureOutcome(kind, false)` would say the same;
+       * it is passed explicitly here so that a future change to `isMutatingOperation`
+       * cannot silently make a read reconcilable.
+       */
+      await this.persistFailure(
+        scope,
+        operation,
+        service,
+        'FAILED',
+        read.failure,
+        read.status,
+        now,
+      );
+      return {
+        kind: 'ATTEMPTED',
+        operationId: operation.id,
+        serviceId,
+        outcome: 'FAILED',
+        failureKind: read.failure,
+      };
+    }
+
+    await this.deps.uow.run(scope, async (tx) => {
+      await this.deps.operations.transition(
+        scope,
+        operation.id,
+        'IN_FLIGHT',
+        'SUCCEEDED',
+        {},
+        now,
+        tx,
+      );
+      await this.deps.services.recordUsage(
+        scope,
+        serviceId,
+        { usedBytes: read.usage.usedBytes, syncedAt: now },
+        tx,
+      );
+    });
+
+    /*
+     * No audit record and no operational event.
+     *
+     * An audit row is a MUTATION record with a before and an after, and this changed
+     * nothing an operator decided; `docs/conventions.md` keeps the two apart precisely
+     * so an audit trail does not become the activity feed `/admin/logs` was. The
+     * operation row itself carries who ran it, when, and what it found, and the
+     * service row carries the figure — which is the whole of what happened.
+     */
+    return {
+      kind: 'ATTEMPTED',
+      operationId: operation.id,
+      serviceId,
+      outcome: 'SUCCEEDED',
+      failureKind: null,
+    };
+  }
+
+  /**
+   * Plans a usage sync for the services whose figure has gone stale.
+   *
+   * Bounded by `USAGE_SYNC_PLAN_LIMIT` and ordered by how stale the figure is, for the
+   * reason the panel monitor's discovery is bounded and ordered: a tenant with ten
+   * thousand services must not turn one tick into ten thousand rows, and the next tick
+   * has to pick up where this one stopped rather than starting again at the top.
+   *
+   * The operation id is DERIVED from the service and the window it belongs to, not
+   * random. `plan` is `ON CONFLICT DO NOTHING` on `(tenant_id, operation_id)`, so two
+   * replicas planning in the same window produce one row — two replicas is the normal
+   * case on every rolling update — and a tick that runs twice inside one window does
+   * not queue a second read of the same figure.
+   */
+  private async planUsageSyncs(scope: TenantContext, now: Date): Promise<void> {
+    await this.deps.uow.run(scope, async (tx) => {
+      const minutes = await this.deps.settings.valueOf<number>(
+        scope,
+        'provisioning.usage_sync_minutes',
+        tx,
+      );
+      const staleBefore = new Date(now.getTime() - minutes * 60_000);
+      /*
+       * The window an operation id belongs to, as a whole number of cadences since the
+       * epoch. Two ticks inside one window derive the SAME id and therefore plan once;
+       * the next window derives a different one, so a sync that failed and was retired
+       * is planned again rather than being suppressed for ever by its own history.
+       */
+      const window = Math.floor(now.getTime() / (minutes * 60_000));
+      const stale = await this.deps.services.listUsageSyncDue(
+        scope,
+        staleBefore,
+        USAGE_SYNC_PLAN_LIMIT,
+        tx,
+      );
+      for (const candidate of stale) {
+        await this.deps.operations.plan(
+          scope,
+          {
+            id: this.deps.ids.uuid(),
+            operationId: this.deps.operationId(`${candidate.id}:SYNC_USAGE:${String(window)}`),
+            serviceId: candidate.id,
+            orderId: candidate.orderId,
+            panelId: candidate.panelId,
+            type: 'SYNC_USAGE',
+          },
+          now,
+          tx,
+        );
+      }
+    });
   }
 
   /** A refusal: nothing was contacted, so nothing about a provider is recorded. */

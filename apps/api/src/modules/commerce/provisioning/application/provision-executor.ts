@@ -5,10 +5,12 @@ import {
   providerUsernameFor,
   UNLIMITED_DURATION_DAYS,
   type OperationState,
+  type OperationType,
   type ProviderAdapter,
   type ProviderFailureKind,
   type ProviderServiceTarget,
   type ProviderUserRef,
+  type ServiceState,
 } from '@nexa/contracts';
 import type { PanelOperabilityRefusal } from './ports.js';
 
@@ -159,6 +161,64 @@ export function exhausted(attempts: number): boolean {
 }
 
 /**
+ * The operation types this release can actually perform.
+ *
+ * The audit for this phase calls the dispatch "the single most dangerous edit", and
+ * this constant is the mechanism that makes it safe: an operation whose type is not
+ * here is refused BEFORE a panel is contacted, with a reason an operator can act on,
+ * rather than falling through to whichever call the executor happens to make last.
+ *
+ * It is a list rather than a `default:` in a switch because a list is checkable. The
+ * executor asserts against it early, `tests/unit/registries.test.ts` asserts that every
+ * member has a branch, and adding a member without writing that branch fails a test
+ * instead of producing a silent create on somebody's panel.
+ *
+ * `RENEW`, `ADD_TRAFFIC` and `ADD_TIME` are commerce — each needs a new paid order
+ * against an existing service — and are Phase 4F. `SUSPEND`, `RESUME` and `TERMINATE`
+ * need adapter methods no provider declares yet. `ROTATE_SUBSCRIPTION` has neither.
+ */
+export const PERFORMABLE_OPERATION_TYPES = [
+  'PROVISION',
+  'RECONCILE',
+  'SYNC_USAGE',
+] as const satisfies readonly OperationType[];
+
+export function isPerformableOperation(type: OperationType): boolean {
+  return (PERFORMABLE_OPERATION_TYPES as readonly string[]).includes(type);
+}
+
+/**
+ * The service states a given operation type may legally be attempted from.
+ *
+ * `SERVICE_MACHINE`'s edges, read BEFORE anything is spent rather than discovered
+ * afterwards by a conditional UPDATE that quietly did nothing. It used to be one
+ * ternary — RECONCILE from `UNRECONCILED`, everything else from `PENDING_PROVISION` —
+ * which is a shape that answers confidently for a type nobody has thought about: a
+ * `SYNC_USAGE` would have been declared legal only from `PENDING_PROVISION`, which is
+ * the one state where there is no account to read.
+ *
+ * `SYNC_USAGE` takes `ACTIVE` alone. A suspended service is not consuming and an
+ * expired one has stopped; refreshing either would spend a tenant's outbound budget to
+ * re-read a figure that cannot have moved, and the operator-facing question about those
+ * two is their state, not their traffic.
+ */
+export const OPERATION_LEGAL_FROM: Readonly<Record<OperationType, readonly ServiceState[]>> = {
+  PROVISION: ['PENDING_PROVISION'],
+  RECONCILE: ['UNRECONCILED'],
+  SYNC_USAGE: ['ACTIVE'],
+  // Not performable in this release. Empty rather than absent, so that a type reaching
+  // here is refused by the state check as well as by `isPerformableOperation` — two
+  // independent refusals, because this is the edit that must not fail open.
+  RENEW: [],
+  ADD_TRAFFIC: [],
+  ADD_TIME: [],
+  SUSPEND: [],
+  RESUME: [],
+  TERMINATE: [],
+  ROTATE_SUBSCRIPTION: [],
+};
+
+/**
  * The provider call for one operation, and nothing else.
  *
  * Deliberately separated from everything that touches the database so that the rule
@@ -201,6 +261,28 @@ export async function provisionCall(
     expiresAt: input.expiresAt,
     deviceLimit: input.deviceLimit,
   });
+}
+
+/**
+ * One service's usage, read back from its panel. A READ, and only a read.
+ *
+ * Its own function beside `provisionCall` for the reason that one's docblock gives:
+ * neither switches on the operation type, so a type routed through the wrong one cannot
+ * quietly do the other one's work. This calls `readUsage` and nothing else, and it
+ * cannot be handed a transaction.
+ *
+ * `readUsage` reports an account the panel does not have as `PROVIDER_ERROR` rather than
+ * as zero usage, which is what this caller needs: a service Nexa believes is ACTIVE
+ * whose account has been deleted on the panel is a real divergence an operator has to
+ * see, and zero bytes used is what a brand new account looks like.
+ */
+export async function usageSyncCall(
+  adapter: ProviderAdapter,
+  target: ProviderServiceTarget,
+  http: Parameters<ProviderAdapter['readUsage']>[1],
+  ref: ProviderUserRef,
+): ReturnType<ProviderAdapter['readUsage']> {
+  return adapter.readUsage(target, http, ref);
 }
 
 /**

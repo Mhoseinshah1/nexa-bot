@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   money,
+  providerUsernameFor,
   type ActorContext,
   type BotInstanceId,
   type CorrelationId,
@@ -12,6 +13,7 @@ import {
   type UserId,
 } from '@nexa/contracts';
 import { providerDescriptor } from '@nexa/contracts';
+import { operationIdFor } from '../../apps/api/src/infrastructure/crypto/operation-id';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
 import { DrizzleOperationRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-operation.repository';
@@ -231,6 +233,26 @@ describe('a provisioned service announces itself', () => {
       sql`UPDATE services SET delivery_next_attempt_at = now() - interval '1 hour'`,
     );
   }
+
+  /**
+   * Ages a service so its usage figure is stale, without waiting out the cadence.
+   *
+   * `created_at` as well as `usage_synced_at`, because `listUsageSyncDue` measures
+   * staleness as `COALESCE(usage_synced_at, created_at)` — a service whose create
+   * returned no usage, which every Sanaei service is, is measured from when it was
+   * made. Moving only one of the two columns would leave the test unable to tell a
+   * sweep that read the panel from one that never found the row.
+   */
+  async function makeUsageStale(): Promise<void> {
+    await ctx.container.database.db.execute(
+      sql`UPDATE services SET created_at = now() - interval '30 days',
+                              usage_synced_at = NULL`,
+    );
+  }
+
+  /** How many times the panel was asked for a client's traffic. */
+  const trafficCalls = (): number =>
+    panel.requests.filter((request) => request.path.includes('panel/api/clients/traffic/')).length;
 
   it('sends the subscription in the SAME tick that provisions it', async () => {
     const orderId = await paidOrder('deliver-ok');
@@ -1001,5 +1023,152 @@ describe('a provisioned service announces itself', () => {
     const sweep = await ctx.container.delivery.deliverDue(tenantA, 10);
     expect(sweep.claimed).toBe(0);
     expect(sent).toHaveLength(3);
+  });
+
+  // =========================================================================
+  // SYNC_USAGE — the figure a customer is told, refreshed from the panel
+  // =========================================================================
+
+  it('refreshes a stale usage figure from the panel, and writes what the panel said', async () => {
+    const orderId = await paidOrder('usage-ok');
+    await ctx.container.provisionerLoop.tick();
+    const provisioned = await services.findByOrderId(tenantA, orderId);
+    expect(provisioned?.state).toBe('ACTIVE');
+    // 3X-UI answers `obj: null` to a create, so there is no figure yet. That is the
+    // ordinary case and the reason this sweep exists.
+    expect(provisioned?.usageSyncedAt, 'a create leaves no usage figure').toBeNull();
+
+    // The customer uses their service. Only the PANEL knows this.
+    const username = providerUsernameFor(provisioned?.id ?? '');
+    panel.useTraffic(username, { up: 1_000_000, down: 24_000_000 });
+
+    await makeUsageStale();
+    const before = trafficCalls();
+    await ctx.container.provisionerLoop.tick();
+
+    expect(trafficCalls(), 'the panel was asked').toBe(before + 1);
+    const synced = await services.findByOrderId(tenantA, orderId);
+    expect(synced?.trafficUsedBytes, 'up + down, as the panel reports them').toBe(25_000_000n);
+    expect(synced?.usageSyncedAt, 'and when it was asked').not.toBeNull();
+    expect(synced?.state, 'a read moves no service').toBe('ACTIVE');
+
+    const all = await operations.listForService(tenantA, synced?.id ?? '', 10);
+    expect(all.map((o) => o.type).sort()).toEqual(['PROVISION', 'SYNC_USAGE']);
+    expect(all.find((o) => o.type === 'SYNC_USAGE')?.state).toBe('SUCCEEDED');
+  });
+
+  it('does not sync a service whose figure is still fresh', async () => {
+    // The cadence is the whole point of the setting. A service provisioned moments ago
+    // is not stale, and a sweep that read it anyway would spend a tenant's outbound
+    // budget re-reading an account the call before it had just created.
+    await paidOrder('usage-fresh');
+    await ctx.container.provisionerLoop.tick();
+    const before = trafficCalls();
+
+    await ctx.container.provisionerLoop.tick();
+    await ctx.container.provisionerLoop.tick();
+
+    expect(trafficCalls(), 'no panel read for a fresh figure').toBe(before);
+  });
+
+  it('plans ONE sync per cadence window however many ticks run', async () => {
+    // The operation id is derived from the service and the window, and `plan` is
+    // ON CONFLICT DO NOTHING — which is what makes two replicas on a rolling update
+    // produce one row between them rather than two reads of the same figure.
+    const orderId = await paidOrder('usage-once');
+    await ctx.container.provisionerLoop.tick();
+    const service = await services.findByOrderId(tenantA, orderId);
+    await makeUsageStale();
+
+    await ctx.container.provisionerLoop.tick();
+    // The first tick performed the sync; age it again so the PLANNER would queue
+    // another if the derived id did not stop it.
+    await makeUsageStale();
+    await ctx.container.provisionerLoop.tick();
+
+    const syncs = (await operations.listForService(tenantA, service?.id ?? '', 20)).filter(
+      (operation) => operation.type === 'SYNC_USAGE',
+    );
+    expect(syncs, 'one sync for one cadence window').toHaveLength(1);
+  });
+
+  it('a sync that the panel refuses is FAILED, never UNKNOWN, and moves no service', async () => {
+    // The rule `finishUsageSync` rests on: `isMutatingOperation('SYNC_USAGE')` is false,
+    // so `failureOutcome` gives FAILED. An UNKNOWN would send the service to
+    // UNRECONCILED — a working, paid service moved by a read that timed out.
+    const orderId = await paidOrder('usage-refused');
+    await ctx.container.provisionerLoop.tick();
+    const service = await services.findByOrderId(tenantA, orderId);
+
+    await makeUsageStale();
+    panel.setBehaviour('traffic-500');
+    await ctx.container.provisionerLoop.tick();
+
+    const after = await services.findByOrderId(tenantA, orderId);
+    expect(after?.state, 'a failed read moves nothing').toBe('ACTIVE');
+    expect(after?.usageSyncedAt, 'and claims no refresh it did not make').toBeNull();
+    const sync = (await operations.listForService(tenantA, service?.id ?? '', 20)).find(
+      (operation) => operation.type === 'SYNC_USAGE',
+    );
+    /*
+     * Back to PLANNED for another attempt, with the failure recorded — NOT `UNKNOWN`.
+     *
+     * The distinction is the claim. `UNKNOWN` means "a mutation may have taken effect
+     * and this installation must ask", and it is what sends a service to
+     * `UNRECONCILED`. A read that did not answer changed nothing by definition, so it
+     * is retried by the ordinary attempt machinery and the service stays where it is.
+     * Terminal `FAILED` arrives only at `OPERATION_MAX_ATTEMPTS`, which one tick is not.
+     */
+    expect(sync?.state).toBe('PLANNED');
+    expect(sync?.state).not.toBe('UNKNOWN');
+    expect(sync?.failureKind).toBe('PROVIDER_ERROR');
+    expect(sync?.attempts).toBe(1);
+  });
+
+  it('refuses an operation type this release cannot perform, before contacting a panel', async () => {
+    /*
+     * The audit calls the dispatch the most dangerous edit in this phase, and this is
+     * the property it names: an operation whose type has no implementation is refused
+     * before any provider is contacted, not defaulted to the one call the executor used
+     * to make. `provisionCall` calls `createUser` unconditionally.
+     *
+     * Planned by hand because no code plans a TERMINATE — which is the point: the row
+     * this simulates is one a later release plans and a rolled-back one claims.
+     */
+    const orderId = await paidOrder('usage-unperformable');
+    await ctx.container.provisionerLoop.tick();
+    const service = await services.findByOrderId(tenantA, orderId);
+    const before = addClientCalls();
+
+    await ctx.container.uow.run(tenantA, async (tx) =>
+      operations.plan(
+        tenantA,
+        {
+          id: ctx.container.ids.uuid(),
+          // Derived, because `provisioning_operations_operation_id_check` requires
+          // sixteen lowercase hex characters. A uuid is refused by the database, which
+          // is the schema saying the same thing the application does: an operation id
+          // is retry-stable, not random.
+          operationId: operationIdFor('provider', 'unperformable-terminate'),
+          serviceId: service?.id ?? '',
+          orderId,
+          panelId: panelId as PanelId,
+          type: 'TERMINATE',
+        },
+        ctx.container.clock.now(),
+        tx,
+      ),
+    );
+    await ctx.container.provisionerLoop.tick();
+
+    expect(addClientCalls(), 'no panel was contacted').toBe(before);
+    const terminate = (await operations.listForService(tenantA, service?.id ?? '', 20)).find(
+      (operation) => operation.type === 'TERMINATE',
+    );
+    // ABANDONED, not FAILED: no number of retries teaches this release an operation
+    // type, and a FAILED row would be claimed again on every tick.
+    expect(terminate?.state).toBe('ABANDONED');
+    const stillActive = await services.findByOrderId(tenantA, orderId);
+    expect(stillActive?.state, 'and the service is untouched').toBe('ACTIVE');
   });
 });

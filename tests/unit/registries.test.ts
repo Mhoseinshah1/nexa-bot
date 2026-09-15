@@ -1,11 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import {
+  failureOutcome,
+  isMutatingOperation,
   isServiceAdapter,
+  OPERATION_REQUIRED_CAPABILITIES,
+  OPERATION_TYPES,
   PROVIDER_CAPABILITIES,
   PROVIDER_TYPES,
+  SERVICE_STATES,
   type ProviderCapability,
   type ProviderType,
 } from '@nexa/contracts';
+import {
+  isPerformableOperation,
+  OPERATION_LEGAL_FROM,
+  PERFORMABLE_OPERATION_TYPES,
+} from '../../apps/api/src/modules/commerce/provisioning/application/provision-executor';
 import {
   IMPLEMENTED_PROVIDER_TYPES,
   providerAdapter,
@@ -358,5 +368,78 @@ describe('the provider registry', () => {
         expect(isServiceAdapter(adapter), `${type} is a service adapter`).toBe(true);
       }
     }
+  });
+});
+
+// ===========================================================================
+// The operation dispatch, which the Phase 4E audit calls the most dangerous
+// edit in the phase
+// ===========================================================================
+describe('the operation dispatch cannot fail open', () => {
+  /**
+   * The property: an operation type this release cannot perform is refused before a
+   * panel is contacted, not defaulted to the one call the executor used to make.
+   *
+   * `provisionCall` calls `createUser` unconditionally and its own docblock records
+   * that a future type routed through it "would silently create a user on somebody's
+   * panel". `PERFORMABLE_OPERATION_TYPES` is the list the executor checks against, and
+   * these tests are what stop it drifting away from what the executor can actually do.
+   */
+  it('every performable type is a real operation type', () => {
+    for (const type of PERFORMABLE_OPERATION_TYPES) {
+      expect(OPERATION_TYPES).toContain(type);
+    }
+  });
+
+  it('every performable type declares the states it is legal from', () => {
+    // A performable type with an empty `OPERATION_LEGAL_FROM` would be refused by the
+    // state check on every service that exists — a type that can never run, which is
+    // the shape a half-finished addition takes.
+    for (const type of PERFORMABLE_OPERATION_TYPES) {
+      expect(OPERATION_LEGAL_FROM[type].length, `${type} is legal from nothing`).toBeGreaterThan(0);
+    }
+  });
+
+  it('every type this release cannot perform is legal from NOTHING', () => {
+    // The second, independent refusal. `isPerformableOperation` is the first; if a
+    // future edit removes that check, a type with an empty legal-from list is still
+    // ABANDONED by the state check rather than reaching `provisionCall`.
+    for (const type of OPERATION_TYPES) {
+      if (isPerformableOperation(type)) continue;
+      expect(OPERATION_LEGAL_FROM[type], `${type} must be legal from nothing`).toEqual([]);
+    }
+  });
+
+  it('names exactly the three types 4E performs, and no more', () => {
+    // Pinned as a literal on purpose. RENEW, ADD_TRAFFIC and ADD_TIME are commerce and
+    // belong to 4F; SUSPEND, RESUME and TERMINATE need adapter methods no provider
+    // declares; ROTATE_SUBSCRIPTION has neither. Adding one to the constant without
+    // writing its branch fails here rather than on somebody's panel.
+    expect([...PERFORMABLE_OPERATION_TYPES].sort()).toEqual([
+      'PROVISION',
+      'RECONCILE',
+      'SYNC_USAGE',
+    ]);
+  });
+
+  it('every legal-from state is a real service state', () => {
+    for (const type of OPERATION_TYPES) {
+      for (const state of OPERATION_LEGAL_FROM[type]) {
+        expect(SERVICE_STATES, `${type} names ${state}`).toContain(state);
+      }
+    }
+  });
+
+  it('SYNC_USAGE is a read, so a failed one is never reconcilable', () => {
+    // The rule `finishUsageSync` relies on: `failureOutcome` gives a non-mutating
+    // operation `FAILED`, never `UNKNOWN`, so a usage read that did not answer leaves
+    // nothing to reconcile and cannot move a working service to UNRECONCILED.
+    expect(isMutatingOperation('SYNC_USAGE')).toBe(false);
+    expect(failureOutcome('TIMEOUT', isMutatingOperation('SYNC_USAGE'))).toBe('FAILED');
+    expect(failureOutcome('PROVIDER_ERROR', isMutatingOperation('SYNC_USAGE'))).toBe('FAILED');
+  });
+
+  it('SYNC_USAGE requires READ_USAGE, which is what a usage figure must come from', () => {
+    expect(OPERATION_REQUIRED_CAPABILITIES['SYNC_USAGE']).toEqual(['READ_USAGE']);
   });
 });

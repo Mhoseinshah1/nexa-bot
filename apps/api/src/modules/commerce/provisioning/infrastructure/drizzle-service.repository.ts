@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, isNotNull, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
 import type {
   OrderId,
   PanelId,
@@ -455,5 +455,105 @@ export class DrizzleServiceRepository implements ServiceRepository {
       )
       .returning();
     return rows.map(toRecord);
+  }
+
+  async listUsageSyncDue(
+    scope: TenantContext,
+    staleBefore: Date,
+    limit: number,
+    tx?: unknown,
+  ): Promise<readonly ServiceRecord[]> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select()
+      .from(services)
+      .where(
+        and(
+          eq(services.tenantId, tenantId),
+          /*
+           * ACTIVE only, and the predicate is here rather than in the caller.
+           *
+           * The same rule the panel monitor enforces in its discovery query AND again
+           * in the probe core, for the reason CLAUDE.md gives: a background lane that
+           * decides in a process what it should be dialling is a lane that will one day
+           * dial something an operator turned off. `OPERATION_LEGAL_FROM` says the same
+           * thing at the executor, and neither is a substitute for the other — a
+           * service can leave ACTIVE between this query and that check.
+           */
+          eq(services.state, 'ACTIVE'),
+          /*
+           * Only an account that exists can be read.
+           *
+           * `provider_user_id` is written by the create and by the adopt path. A row
+           * without one has nothing on a panel to ask about, and asking would spend a
+           * request to be told so.
+           */
+          isNotNull(services.providerUserId),
+          /*
+           * A service that has never been synced is measured from when it was CREATED.
+           *
+           * `usage_synced_at` is NULL for a service whose create returned no usage, and
+           * that is the ordinary case rather than an edge one: 3X-UI's `clients/add`
+           * answers `obj: null`, so every Sanaei service starts this way.
+           *
+           * Treating NULL as "infinitely stale" was the first version and it is wrong
+           * in a way worth writing down: it makes every newly provisioned service due
+           * on the very next tick, so the executor spends a provider call re-reading an
+           * account created seconds earlier by the call before it. `COALESCE` starts
+           * the clock at creation instead, which gives the answer an operator would
+           * expect from a cadence — the first refresh is one cadence after the service
+           * exists — and leaves no row uncovered, because `created_at` is NOT NULL.
+           */
+          lte(sql`COALESCE(${services.usageSyncedAt}, ${services.createdAt})`, staleBefore),
+        ),
+      )
+      /*
+       * Stalest first, NULLs before everything.
+       *
+       * This ordering is what makes `USAGE_SYNC_PLAN_LIMIT` safe: the next tick resumes
+       * where this one stopped, so no service at the back of a large tenant's queue
+       * waits for ever. `id` breaks the tie so the order is total and two replicas
+       * reading concurrently see the same page.
+       */
+      .orderBy(
+        sql`COALESCE(${services.usageSyncedAt}, ${services.createdAt}) ASC`,
+        asc(services.id),
+      )
+      .limit(limit);
+    return rows.map(toRecord);
+  }
+
+  async recordUsage(
+    scope: TenantContext,
+    id: string,
+    usage: { readonly usedBytes: bigint; readonly syncedAt: Date },
+    tx: TransactionScope,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(services)
+      .set({
+        trafficUsedBytes: usage.usedBytes,
+        usageSyncedAt: usage.syncedAt,
+        updatedAt: usage.syncedAt,
+      })
+      .where(
+        and(
+          eq(services.tenantId, tenantId),
+          eq(services.id, id),
+          /*
+           * Conditional on ACTIVE, which is what makes this safe to run after a
+           * provider call that took time.
+           *
+           * A service suspended, expired or terminated while the read was in flight
+           * keeps whatever that transition wrote. There is no `setUsage`, for the
+           * reason ADR-0028 gives about `setState`: one convenience setter removes the
+           * guarantee from every caller at once.
+           */
+          eq(services.state, 'ACTIVE'),
+        ),
+      )
+      .returning({ id: services.id });
+    return rows.length === 1;
   }
 }

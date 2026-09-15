@@ -158,7 +158,16 @@ export type Behaviour =
    * the remedy is a read rather than a guess. Here the read finds nothing and a fresh
    * create becomes legal.
    */
-  | 'add-client-500';
+  | 'add-client-500'
+  /**
+   * `clients/traffic/:email` answers 500.
+   *
+   * A READ that failed. Distinct from `add-client-500` because the outcome taxonomy
+   * treats them differently: `failureOutcome` gives a non-mutating operation `FAILED`
+   * and never `UNKNOWN`, so a usage sync that hits this must leave its service exactly
+   * where it was. A fake with no way to fail a read cannot test that.
+   */
+  | 'traffic-500';
 
 export interface Fake3xUi {
   readonly baseUrl: string;
@@ -176,6 +185,16 @@ export interface Fake3xUi {
    * the weaker check and be refused by a real panel.
    */
   readonly mintedCsrfTokens: readonly string[];
+  /**
+   * Moves a client's traffic counters, as a panel does when somebody uses the service.
+   *
+   * There is no route that does this — 3X-UI's own counters are moved by xray, not by
+   * the API — so a test that wants a usage figure to CHANGE has no other way to say so.
+   * Without it the only figure a usage sync could ever read back is the zero a freshly
+   * created client has, and a test asserting zero cannot tell a sweep that read the
+   * panel from one that wrote nothing at all.
+   */
+  useTraffic(email: string, bytes: { readonly up: number; readonly down: number }): void;
   /**
    * Changes what the panel does, without changing its address.
    *
@@ -607,6 +626,7 @@ export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake
       // what makes a fresh create legal after a create whose reply was lost.
       if (route.startsWith('panel/api/clients/traffic/')) {
         if (apiRefused()) return;
+        if (behaviour === 'traffic-500') return void json(500, { error: 'internal' });
         const email = decodeURIComponent(route.slice('panel/api/clients/traffic/'.length));
         const client = clients.get(email);
         if (client === undefined) return void json(200, envelope(true, null));
@@ -740,6 +760,11 @@ export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake
     mintedCsrfTokens: minted,
     setBehaviour(next: Behaviour): void {
       behaviour = next;
+    },
+    useTraffic(email: string, bytes: { readonly up: number; readonly down: number }): void {
+      const client = clients.get(email);
+      if (client === undefined) throw new Error(`the fake panel has no client ${email}`);
+      clients.set(email, { ...client, up: client.up + bytes.up, down: client.down + bytes.down });
     },
     reset(): void {
       requests.length = 0;

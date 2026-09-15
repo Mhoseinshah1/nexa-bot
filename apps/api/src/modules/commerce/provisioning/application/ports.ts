@@ -257,6 +257,53 @@ export interface ServiceRepository {
     limit: number,
     tx?: unknown,
   ): Promise<readonly ServiceRecord[]>;
+
+  /**
+   * The services whose usage figure has gone stale. Bounded, stalest first.
+   *
+   * A READ, not a claim — unlike `claimDeliveryDue`, which leases what it selects. The
+   * exclusivity a second replica needs is already provided one layer up: `plan` is
+   * `ON CONFLICT DO NOTHING` on the DERIVED operation id, so two replicas listing the
+   * same services in the same window produce one operation row between them. Leasing
+   * here as well would be a second mechanism for the same guarantee, and the failure
+   * mode of a lease nobody releases is a service that is never synced again.
+   *
+   * `ACTIVE` only, and only where a provider account exists. A service still being
+   * provisioned has nothing to read, and a suspended or expired one is not consuming —
+   * spending a tenant's outbound budget to re-read a figure that cannot have moved is
+   * exactly the kind of unattended traffic the budget bounds.
+   *
+   * Stalest first, with a figure that has NEVER been refreshed counting as the stalest
+   * of all. That ordering is what makes the bound safe: the next tick resumes where
+   * this one stopped rather than starting again at the top, so no service at the back
+   * of a large tenant's queue waits for ever.
+   */
+  listUsageSyncDue(
+    scope: TenantContext,
+    staleBefore: Date,
+    limit: number,
+    tx?: unknown,
+  ): Promise<readonly ServiceRecord[]>;
+
+  /**
+   * Writes what a panel said this service has used, and when it was asked.
+   *
+   * Conditional on the service still being `ACTIVE`, for the reason every other write
+   * in this module is conditional: a service suspended, expired or terminated during
+   * the provider call must keep what that transition wrote, and a `setUsage` would
+   * quietly overwrite it with a figure read before the change. Reports whether the row
+   * actually moved.
+   *
+   * Separate from `transition` because usage is a separate axis, the same way delivery
+   * is: a usage read must not be able to move a service between states, and giving the
+   * two one setter is how it eventually would.
+   */
+  recordUsage(
+    scope: TenantContext,
+    id: string,
+    usage: { readonly usedBytes: bigint; readonly syncedAt: Date },
+    tx: TransactionScope,
+  ): Promise<boolean>;
 }
 
 /**

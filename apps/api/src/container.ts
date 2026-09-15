@@ -1186,6 +1186,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     opsLog,
     outbox,
     scopeActivity: tenants,
+    settings: settingsResolver,
     workerId: `${role}:${ids.uuid()}`,
     leaseMs: OPERATION_LEASE_SECONDS_MIN * 1000,
   });
