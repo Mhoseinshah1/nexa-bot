@@ -34,6 +34,7 @@ import { PanelMonitorService } from './modules/platform/panels/application/panel
 import type { ProbeCoreDeps } from './modules/platform/panels/application/probe-core.js';
 import {
   IMPLEMENTED_PROVIDER_TYPES,
+  SERVICE_PROVIDER_TYPES,
   providerAdapter,
   providerServiceAdapter,
 } from './modules/platform/providers/infrastructure/adapter-registry.js';
@@ -811,8 +812,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
                 },
           credentials: view?.credentials ?? null,
           type,
+          // The SERVICE list, not the connection one. `panel-operability.ts` documents
+          // this field as "code exists that can create a user", and a provider can
+          // legitimately have a connection adapter and no service half.
           serviceAdapterExists:
-            view !== null && IMPLEMENTED_PROVIDER_TYPES.includes(view.panel.providerType),
+            view !== null && SERVICE_PROVIDER_TYPES.includes(view.panel.providerType),
         });
       },
     },
@@ -1137,7 +1141,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     panels: panelRepository,
     credentials: panelCredentials,
     adapters: providerServiceAdapter,
-    implementedProviderTypes: IMPLEMENTED_PROVIDER_TYPES,
+    implementedProviderTypes: SERVICE_PROVIDER_TYPES,
     http: panelHttp,
     urlPolicy,
     probeBudget: probeCore.probeBudget,

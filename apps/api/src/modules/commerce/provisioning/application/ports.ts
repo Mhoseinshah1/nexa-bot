@@ -315,19 +315,24 @@ export interface OperationRepository {
     worker: string,
     now: Date,
     leaseUntil: Date,
-    tx?: unknown,
+    tx: TransactionScope,
   ): Promise<OperationRecord | null>;
 
   /**
-   * Stamps `call_started_at` and COMMITS ON ITS OWN, before the provider is called.
+   * Stamps `call_started_at` in a transaction OF ITS OWN, before the provider is called.
    *
    * The one fact that distinguishes "a worker died before calling" from "a worker died
    * during a call", and therefore the one fact that decides whether a lease expiry may
-   * safely release this row. It takes no transaction argument deliberately: committing
-   * it inside the caller's transaction would mean a crash rolled it back, which is
-   * precisely the case it exists to record.
+   * safely release this row.
+   *
+   * Its own transaction is the requirement, and it is the caller's job to give it one:
+   * committing this inside a transaction that also holds the RESULT would mean a crash
+   * rolled it back, which is precisely the case it exists to record. It takes a
+   * `TransactionScope` rather than opening none at all so that the write passes
+   * `DrizzleUnitOfWork.run` — ADR-0028's quiesce gate lives there, and a restore must
+   * not find the provisioner still writing to the database it is replacing.
    */
-  markCallStarted(scope: TenantContext, id: string, at: Date): Promise<void>;
+  markCallStarted(scope: TenantContext, id: string, at: Date, tx: TransactionScope): Promise<void>;
 
   /**
    * Moves an operation between two states, and reports whether the row moved.
@@ -360,7 +365,12 @@ export interface OperationRepository {
    * `IN_FLIGHT`: handing it to another worker would repeat a mutation that may have
    * taken effect, and leaving it is what a human can then reconcile.
    */
-  releaseExpiredLeases(scope: TenantContext, now: Date, limit: number): Promise<number>;
+  releaseExpiredLeases(
+    scope: TenantContext,
+    now: Date,
+    limit: number,
+    tx: TransactionScope,
+  ): Promise<number>;
 
   /** Operations whose outcome is unknown, oldest first. The reconciliation queue. */
   listUnknown(

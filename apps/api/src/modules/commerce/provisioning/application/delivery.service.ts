@@ -43,12 +43,30 @@ export function deliveryBackoffMs(attempts: number): number {
  *
  * A definite `REFUSED` stays `PENDING` until the attempts run out, because a refusal
  * changed nothing and the situation is identical to never having tried.
+ *
+ * ## Why `from` is an argument
+ *
+ * **Only `PENDING` — the automatic lane — may be moved by a failure.** A failed send
+ * from any other state leaves the state exactly as it was, and that rule has two
+ * distinct jobs.
+ *
+ * It stops a customer's own re-request from ERASING what already happened: without it
+ * a customer whose service was `DELIVERED` asking again, and being refused because
+ * they have since blocked the bot, moved the row back to `PENDING` and NULLed
+ * `delivered_at` — destroying the record that they were told, and re-arming the sweep
+ * on a service the paragraph above says must never be automatically re-announced.
+ *
+ * And it stops a re-request from putting `UNCONFIRMED` or `FAILED` back into the
+ * sweep, which would reach round the front of the one decision this file exists to
+ * make.
  */
-export function deliveryStateFor(
+export function deliveryStateAfter(
+  from: ServiceDeliveryState,
   outcome: 'DELIVERED' | 'REFUSED' | 'UNKNOWN',
   attemptsAfter: number,
 ): ServiceDeliveryState {
   if (outcome === 'DELIVERED') return 'DELIVERED';
+  if (from !== 'PENDING') return from;
   if (outcome === 'UNKNOWN') return 'UNCONFIRMED';
   return attemptsAfter >= DELIVERY_MAX_ATTEMPTS ? 'FAILED' : 'PENDING';
 }
@@ -82,6 +100,24 @@ export interface DeliverySweepReport {
   readonly undeliverable: number;
   /** The send threw. The lease stands and the row comes back later. */
   readonly errored: number;
+  /**
+   * Sent, and the outcome could not be recorded because the row had moved.
+   *
+   * Its own count rather than part of `delivered`, because the two are different facts
+   * and only this one can produce a second message to the same customer.
+   */
+  readonly lost: number;
+}
+
+/**
+ * What one send did, and whether the row took it.
+ *
+ * Two fields rather than one, because "the customer was told" and "the database says
+ * so" can differ, and a caller that saw only the state could not tell.
+ */
+export interface DeliveryRecord {
+  readonly state: ServiceDeliveryState;
+  readonly recorded: boolean;
 }
 
 export interface DeliveryServiceDeps {
@@ -140,7 +176,7 @@ export class DeliveryService {
     service: ServiceRecord,
     chatId: string,
     botInstanceId: BotInstanceId,
-  ): Promise<ServiceDeliveryState> {
+  ): Promise<DeliveryRecord> {
     if (service.subscriptionUrl === null) {
       /*
        * Nothing to send.
@@ -181,27 +217,44 @@ export class DeliveryService {
 
     const now = this.deps.clock.now();
     const attemptsAfter = service.deliveryAttempts + 1;
-    const to = deliveryStateFor(outcome, attemptsAfter);
+    const to = deliveryStateAfter(from, outcome, attemptsAfter);
 
-    await this.deps.uow.run(scope, async (tx) => {
-      await this.deps.services.recordDelivery(
+    const recorded = await this.deps.uow.run(scope, async (tx) =>
+      this.deps.services.recordDelivery(
         scope,
         service.id,
         from,
         to,
         {
-          // `services_delivered_at_check` binds the two: a DELIVERED with no time, or a
-          // time on anything else, is refused by the database.
-          deliveredAt: to === 'DELIVERED' ? now : null,
+          /*
+           * `services_delivered_at_check` binds the two: a DELIVERED with no time, or a
+           * time on anything else, is refused by the database.
+           *
+           * A row that was ALREADY `DELIVERED` and stayed that way keeps its original
+           * stamp rather than being re-dated by a re-request that failed — the customer
+           * was told when they were told, and a failed second send is not a delivery.
+           */
+          deliveredAt:
+            to !== 'DELIVERED' ? null : outcome === 'DELIVERED' ? now : service.deliveredAt,
           nextAttemptAt:
             to === 'PENDING' ? new Date(now.getTime() + deliveryBackoffMs(attemptsAfter)) : null,
         },
         now,
         tx,
-      );
-    });
+      ),
+    );
 
-    return to;
+    /*
+     * The conditional UPDATE's answer, RETURNED rather than discarded.
+     *
+     * `false` means the delivery state moved between reading this service and recording
+     * the outcome — a customer's own re-request landing while the sweep held the lease.
+     * The message has already gone out, so there is nothing to undo; what must not
+     * happen is the sweep counting a delivery it did not persist. The caller reports it
+     * separately, and a `false` here is the one case where the next sweep may send the
+     * customer a second message.
+     */
+    return { state: to, recorded };
   }
 
   /**
@@ -237,6 +290,7 @@ export class DeliveryService {
     let unconfirmed = 0;
     let undeliverable = 0;
     let errored = 0;
+    let lost = 0;
 
     for (const service of claimed) {
       try {
@@ -262,10 +316,15 @@ export class DeliveryService {
           undeliverable += 1;
           continue;
         }
-        const state = await this.deliver(scope, service, contact.chatId, contact.botInstanceId);
-        if (state === 'DELIVERED') delivered += 1;
-        else if (state === 'PENDING') pending += 1;
-        else if (state === 'FAILED') failed += 1;
+        const record = await this.deliver(scope, service, contact.chatId, contact.botInstanceId);
+        if (!record.recorded) {
+          // Sent, and the outcome could not be written because somebody else had
+          // already moved the row. Counted as its own thing rather than folded into
+          // `delivered`, which would report a delivery this sweep did not persist.
+          lost += 1;
+        } else if (record.state === 'DELIVERED') delivered += 1;
+        else if (record.state === 'PENDING') pending += 1;
+        else if (record.state === 'FAILED') failed += 1;
         else unconfirmed += 1;
       } catch {
         /*
@@ -289,6 +348,7 @@ export class DeliveryService {
       unconfirmed,
       undeliverable,
       errored,
+      lost,
     };
   }
 
@@ -333,7 +393,7 @@ export class DeliveryService {
     customerId: UserId,
     chatId: string,
     botInstanceId: BotInstanceId,
-  ): Promise<ServiceDeliveryState> {
+  ): Promise<DeliveryRecord> {
     if (service.customerId !== customerId) {
       throw errors.notFound(COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND, 'Unknown service.');
     }
@@ -350,6 +410,7 @@ const EMPTY_SWEEP: DeliverySweepReport = {
   unconfirmed: 0,
   undeliverable: 0,
   errored: 0,
+  lost: 0,
 };
 
 /** Kept so a reader can see the actor shape a sweep uses without opening the loop. */

@@ -189,7 +189,7 @@ export class DrizzleOperationRepository implements OperationRepository {
     worker: string,
     now: Date,
     leaseUntil: Date,
-    tx?: unknown,
+    tx: TransactionScope,
   ): Promise<OperationRecord | null> {
     const tenantId = requireTenantId(scope);
     const due = this.exec(tx)
@@ -206,7 +206,19 @@ export class DrizzleOperationRepository implements OperationRepository {
           ),
         ),
       )
-      .orderBy(asc(provisioningOperations.nextAttemptAt), asc(provisioningOperations.createdAt))
+      /*
+       * NULLS FIRST, explicitly, because PostgreSQL's ASC default is NULLS LAST.
+       *
+       * `plan` never sets `next_attempt_at`, so a freshly planned operation — a
+       * customer who has just paid and is waiting — carries NULL. Under the default it
+       * sorted BEHIND every backed-off retry that had come due, which is the exact
+       * inversion the leading column exists to prevent: a backlog of failing operations
+       * delayed every new order by a tick per ten of them.
+       */
+      .orderBy(
+        sql`${provisioningOperations.nextAttemptAt} ASC NULLS FIRST`,
+        asc(provisioningOperations.createdAt),
+      )
       .limit(1);
 
     const rows = await this.exec(tx)
@@ -231,18 +243,27 @@ export class DrizzleOperationRepository implements OperationRepository {
   }
 
   /**
-   * Stamps `call_started_at`, on its own connection and its own transaction.
+   * Stamps `call_started_at`, in a transaction of its own.
    *
-   * Takes no transaction argument DELIBERATELY. Committing this inside the caller's
-   * transaction would mean a crash rolled it back, which is precisely the case it
-   * exists to record: this column is the one fact that distinguishes "a worker died
-   * before calling the provider" from "a worker died during the call", and therefore
-   * the one fact that decides whether a lease expiry may safely hand the row to
-   * somebody else.
+   * The transaction must be the caller's OWN and must hold nothing else. Committing
+   * this alongside the RESULT would mean a crash rolled it back, which is precisely
+   * the case it exists to record: this column is the one fact that distinguishes "a
+   * worker died before calling the provider" from "a worker died during the call", and
+   * therefore the one fact that decides whether a lease expiry may safely hand the row
+   * to somebody else.
+   *
+   * It used to take no transaction at all and write on the pool. That put it outside
+   * `DrizzleUnitOfWork.run`, and therefore outside ADR-0028's quiesce gate — so a
+   * restore found the provisioner still stamping rows in the database it was replacing.
    */
-  async markCallStarted(scope: TenantContext, id: string, at: Date): Promise<void> {
+  async markCallStarted(
+    scope: TenantContext,
+    id: string,
+    at: Date,
+    tx: TransactionScope,
+  ): Promise<void> {
     const tenantId = requireTenantId(scope);
-    await this.db
+    await this.exec(tx)
       .update(provisioningOperations)
       .set({ callStartedAt: at, updatedAt: at })
       .where(
@@ -288,9 +309,25 @@ export class DrizzleOperationRepository implements OperationRepository {
          * PLANNED from a row that somehow carried one would be refused by the check.
          */
         completedAt: terminal ? (result.completedAt ?? now) : null,
-        // A row that is no longer in flight holds no claim. Both together, because
-        // `provisioning_operations_claim_check` requires it.
-        ...(to === 'IN_FLIGHT' ? {} : { claimedBy: null, leaseUntil: null }),
+        /*
+         * A row that is no longer in flight holds no claim, and has no call in
+         * progress. The first two together because
+         * `provisioning_operations_claim_check` requires it; the third because
+         * `call_started_at` is the fact that decides whether a lease expiry may
+         * release this row, and a stale one disables that decision for ever.
+         *
+         * Without this, a first attempt that reached the wire and came back retryable
+         * left `call_started_at` set. The row went back to PLANNED, was claimed again,
+         * and if THAT process died before calling anything the lease sweep refused to
+         * release it — `releaseExpiredLeases` requires `call_started_at IS NULL` — so
+         * the operation stayed IN_FLIGHT for ever with no operational event and a
+         * service stuck in PENDING_PROVISION. It is the one failure in this module
+         * that had no operator signal at all.
+         *
+         * `markCallStarted` only writes when the column is null, so clearing it here
+         * is what lets the next attempt stamp its own.
+         */
+        ...(to === 'IN_FLIGHT' ? {} : { claimedBy: null, leaseUntil: null, callStartedAt: null }),
         updatedAt: now,
       })
       .where(
@@ -319,9 +356,14 @@ export class DrizzleOperationRepository implements OperationRepository {
    * Tenant-scoped like everything else, and NOT global: a sweep that crossed tenants
    * would be the one query in this file that could return another tenant's row.
    */
-  async releaseExpiredLeases(scope: TenantContext, now: Date, limit: number): Promise<number> {
+  async releaseExpiredLeases(
+    scope: TenantContext,
+    now: Date,
+    limit: number,
+    tx: TransactionScope,
+  ): Promise<number> {
     const tenantId = requireTenantId(scope);
-    const expired = this.db
+    const expired = this.exec(tx)
       .select({ id: provisioningOperations.id })
       .from(provisioningOperations)
       .where(
@@ -334,7 +376,7 @@ export class DrizzleOperationRepository implements OperationRepository {
       )
       .limit(limit);
 
-    const rows = await this.db
+    const rows = await this.exec(tx)
       .update(provisioningOperations)
       .set({ state: 'PLANNED', claimedBy: null, leaseUntil: null, updatedAt: now })
       .where(

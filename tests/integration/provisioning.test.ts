@@ -106,6 +106,26 @@ describe('provisioning invariants', () => {
     );
   });
 
+  /*
+   * The three operation writes that must pass through the unit of work.
+   *
+   * `claimDue`, `releaseExpiredLeases` and `markCallStarted` used to write on the pool.
+   * That put them outside ADR-0028's quiesce gate, which lives in
+   * `DrizzleUnitOfWork.run`, so a restore found the provisioner still mutating the
+   * database it was replacing. They take a transaction now, and these wrappers keep the
+   * cases below reading the way they did.
+   */
+  const claim = (worker: string, at: Date, lease: Date) =>
+    ctx.container.uow.run(tenantA, async (tx) =>
+      operations.claimDue(tenantA, worker, at, lease, tx),
+    );
+  const release = (at: Date, limit: number) =>
+    ctx.container.uow.run(tenantA, async (tx) =>
+      operations.releaseExpiredLeases(tenantA, at, limit, tx),
+    );
+  const startCall = (id: string, at: Date) =>
+    ctx.container.uow.run(tenantA, async (tx) => operations.markCallStarted(tenantA, id, at, tx));
+
   /** An order that has been confirmed and is waiting for money. */
   async function awaitingPayment(key: string): Promise<OrderRecord> {
     const created = await products.create(tenantA, {
@@ -267,12 +287,18 @@ describe('provisioning invariants', () => {
      * Driven twice IN SEQUENCE rather than with `Promise.allSettled`.
      *
      * `docs/phase4b-falsification.md` records M05 surviving against an allSettled
-     * "race" that did not interleave. Two sequential claims prove the same thing more
-     * strongly: the conditional UPDATE's predicate no longer holds for the second
-     * caller, whatever the timing.
+     * "race" that did not interleave, so this drives the two claims in a definite
+     * order instead of hoping for one.
+     *
+     * It is WEAKER than the rule, and deliberately kept beside the case that is not.
+     * A sequential pair is satisfied by the sub-select alone — the second caller's scan
+     * simply finds nothing — so removing the outer `state = 'PLANNED'` predicate passes
+     * here. `docs/phase4d-falsification.md` records that survival as F4D-05. What this
+     * case proves is the ordinary two-worker outcome; the case below proves the
+     * predicate, by making the interleaving.
      */
-    const first = await operations.claimDue(tenantA, 'worker-1', now, lease);
-    const second = await operations.claimDue(tenantA, 'worker-2', now, lease);
+    const first = await claim('worker-1', now, lease);
+    const second = await claim('worker-2', now, lease);
 
     expect(first, 'the first worker gets the operation').not.toBeNull();
     expect(second, 'the second finds nothing claimable').toBeNull();
@@ -320,7 +346,7 @@ describe('provisioning invariants', () => {
       );
 
       // Started, not awaited: it reaches the row lock and stops there.
-      const blocked = operations.claimDue(tenantA, 'worker-2', now, lease);
+      const blocked = claim('worker-2', now, lease);
       // Long enough for the claim to be queued on the lock rather than still parsing.
       await new Promise((resolve) => setTimeout(resolve, 250));
       await holder.query('COMMIT');
@@ -338,26 +364,16 @@ describe('provisioning invariants', () => {
     const order = await awaitingPayment('lease');
     await settle('lease', order);
     const now = ctx.container.clock.now();
-    const claimed = await operations.claimDue(
-      tenantA,
-      'worker-1',
-      now,
-      new Date(now.getTime() - 1_000),
-    );
+    const claimed = await claim('worker-1', now, new Date(now.getTime() - 1_000));
     expect(claimed).not.toBeNull();
 
     // No call started yet: an expired lease is safe to return to the pool.
-    const released = await operations.releaseExpiredLeases(tenantA, now, 10);
+    const released = await release(now, 10);
     expect(released, 'an abandoned claim with no call started is reclaimable').toBe(1);
 
-    const reclaimed = await operations.claimDue(
-      tenantA,
-      'worker-2',
-      now,
-      new Date(now.getTime() - 1_000),
-    );
+    const reclaimed = await claim('worker-2', now, new Date(now.getTime() - 1_000));
     expect(reclaimed).not.toBeNull();
-    await operations.markCallStarted(tenantA, reclaimed?.id ?? '', now);
+    await startCall(reclaimed?.id ?? '', now);
 
     /*
      * The guard `OPERATION_MACHINE` names, as a WHERE clause.
@@ -366,7 +382,7 @@ describe('provisioning invariants', () => {
      * third worker would repeat that mutation, which is the duplicate account this
      * column exists to prevent — so the sweep leaves it IN_FLIGHT for a human.
      */
-    const afterCall = await operations.releaseExpiredLeases(tenantA, now, 10);
+    const afterCall = await release(now, 10);
     expect(afterCall, 'a started call is never released by the sweep').toBe(0);
 
     const still = await operations.findById(tenantA, reclaimed?.id ?? '');

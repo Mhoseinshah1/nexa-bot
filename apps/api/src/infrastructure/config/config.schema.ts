@@ -515,7 +515,16 @@ export const configSchema = z
      * switch for "how often does this process wake" is a setting that cannot mean what
      * it says.
      */
-    PROVISIONER_ENABLED: z.coerce.boolean().default(true),
+    /*
+     * `booleanish`, not `z.coerce.boolean()`, and the difference is the whole switch.
+     *
+     * `Boolean('false')` is `true`, so with coercion the ONLY value that disabled this
+     * was the empty string — an operator pausing provisioning during a panel migration
+     * got a provisioner that went on dialling panels and creating real accounts, while
+     * `deploy/compose.yml` documented `PROVISIONER_ENABLED=false` as supported. Every
+     * other flag in this file already uses the helper; this was the one that did not.
+     */
+    PROVISIONER_ENABLED: booleanish.default(true),
     /**
      * How often the provisioner looks for due work.
      *

@@ -344,8 +344,14 @@ describe('a provisioned service announces itself', () => {
      *
      * Sequential rather than `Promise.allSettled`, for the reason
      * `docs/phase4b-falsification.md` records: an allSettled pair that does not
-     * interleave proves nothing, and two sequential sweeps prove the stronger thing —
-     * the claim's predicate no longer holds for the second caller whatever the timing.
+     * interleave proves nothing.
+     *
+     * What this proves is that the second sweep finds nothing to do — which is the
+     * ordinary two-replica outcome, and is WEAKER than the claim's own predicate. Here
+     * the first sweep DELIVERED the service, so the second is stopped by the delivery
+     * state rather than by the lease; `docs/phase4d-falsification.md` records that as
+     * F4D-07. The lease and the predicate are proven in `provisioning.test.ts`, where
+     * the row is still PENDING and the interleaving is made.
      */
     const first = await ctx.container.delivery.deliverDue(tenantA, 10);
     const second = await ctx.container.delivery.deliverDue(tenantA, 10);

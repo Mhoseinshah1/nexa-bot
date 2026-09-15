@@ -179,15 +179,24 @@ export class ProvisionerService {
      * looks for its own. Bounded, and it only touches rows where NO provider call was
      * started — the guard `OPERATION_MACHINE` names, enforced as a WHERE clause.
      */
-    await this.deps.operations.releaseExpiredLeases(scope, now, LEASE_SWEEP_LIMIT);
-
     const leaseUntil = new Date(now.getTime() + this.deps.leaseMs);
-    const operation = await this.deps.operations.claimDue(
-      scope,
-      this.deps.workerId,
-      now,
-      leaseUntil,
-    );
+    /*
+     * Both writes inside `uow.run`, which is where ADR-0028's quiesce gate lives.
+     *
+     * They used to run on the pool. That put the first two durable writes of every
+     * tick OUTSIDE the gate, so a restore holding the installation found the
+     * provisioner still releasing leases and claiming operations in the database it
+     * was replacing — and the tick then threw at the first gated write, leaving the
+     * row IN_FLIGHT with an attempt spent. Five restores would have retired a paid
+     * order without a single provider call.
+     *
+     * One transaction for both, because the release is what makes the claim's
+     * candidate set correct and a reader between them would see neither state.
+     */
+    const operation = await this.deps.uow.run(scope, async (tx) => {
+      await this.deps.operations.releaseExpiredLeases(scope, now, LEASE_SWEEP_LIMIT, tx);
+      return this.deps.operations.claimDue(scope, this.deps.workerId, now, leaseUntil, tx);
+    });
     if (operation === null) return { kind: 'IDLE' };
 
     const service = await this.deps.services.findById(scope, operation.serviceId);
@@ -328,15 +337,19 @@ export class ProvisionerService {
     const http = this.deps.http.forBase(operable.baseUrl);
 
     /*
-     * The stamp that makes a crash recoverable, committed ON ITS OWN before the call.
+     * The stamp that makes a crash recoverable, in a transaction of its OWN before
+     * the call.
      *
      * If this process dies during the provider call, the row says a call was started
      * and the lease sweep must NOT hand it to another worker — repeating a mutation
      * that may have taken effect is the duplicate account this design exists to
      * prevent. Committing it inside a transaction that also held the result would mean
-     * the crash rolled it back, which is precisely the case it records.
+     * the crash rolled it back, which is precisely the case it records — so it gets one
+     * of its own, which is also what puts it inside ADR-0028's quiesce gate.
      */
-    await this.deps.operations.markCallStarted(scope, operation.id, this.deps.clock.now());
+    await this.deps.uow.run(scope, async (tx) => {
+      await this.deps.operations.markCallStarted(scope, operation.id, this.deps.clock.now(), tx);
+    });
 
     if (operation.type === 'RECONCILE') {
       return this.finishReconcile(scope, operation, service, adapter, target, http, ref);
