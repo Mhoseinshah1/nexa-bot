@@ -208,7 +208,15 @@ describe('a provisioned service announces itself', () => {
 
   /** How many times the panel was asked to create a client. The provider-call count. */
   const addClientCalls = (): number =>
-    panel.requests.filter((request) => request.path.includes('addClient')).length;
+    /*
+     * The v3.7.0 create route, `POST panel/api/clients/add`.
+     *
+     * It matched `addClient` — the v2.x path — and after that path was corrected this
+     * helper would have counted ZERO for every create while several assertions here
+     * expect one. A counter that silently reads zero is worse than a broken one,
+     * because `toBe(0)` passes.
+     */
+    panel.requests.filter((request) => request.path.includes('panel/api/clients/add')).length;
 
   /** Makes a backed-off operation due again without waiting out its retry interval. */
   async function makeOperationDue(): Promise<void> {
