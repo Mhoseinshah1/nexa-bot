@@ -3,6 +3,7 @@ import {
   extendedAllowance,
   extendedExpiry,
   errors,
+  MAX_TRAFFIC_BYTES,
   SUBSCRIPTION_REF_BYTES,
   providerUsernameFor,
   UNLIMITED_TRAFFIC_BYTES,
@@ -679,6 +680,56 @@ export class ProvisioningService {
     }
 
     /*
+     * And the PANEL, re-read here for the same window and the same reason.
+     *
+     * `CommercialActionService` checks operability when the quote is drawn and again
+     * when the order is confirmed, and neither is the one that counts: a panel can be
+     * disabled, archived, have its credentials rotated or lose the capability between
+     * the confirmation and the payment, and this is the transaction the money moves in.
+     *
+     * Without it the debit commits, the operation is planned, and the provisioner
+     * refuses it as `CAPABILITY_UNSUPPORTED` — which is PERMANENT — leaving a paid
+     * order that can never be applied and an operator with no way to make it apply. The
+     * refusal here rolls the settlement back instead, which is the same choice the
+     * lifecycle check above makes: "money moved but the order did not" must be
+     * unrepresentable.
+     */
+    const operable = await this.deps.panels.operability(scope, service.panelId, action.kind, tx);
+    if (!operable.ok) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.PANEL_NOT_OPERABLE,
+        'The panel this service lives on cannot perform that action.',
+        { reason: operable.reason ?? 'UNKNOWN' },
+      );
+    }
+
+    /*
+     * ONE outstanding commercial action per service, refused by NAME here and by
+     * `provisioning_operations_open_commercial_key` underneath.
+     *
+     * The target below is ABSOLUTE and is computed from the two columns this service
+     * row carries RIGHT NOW. A second purchase that settles before the first reaches
+     * the panel reads the same two numbers and plans the same target: two five-gigabyte
+     * packages against a ten-gigabyte service each plan fifteen, the customer is charged
+     * twice, and the account ends where one purchase would have left it.
+     *
+     * Serialising EXECUTION does not fix it and already happens — `claimDue` refuses to
+     * run two operations for one service at once. The rows were wrong before either ran.
+     *
+     * TRANSIENT, and said so: the customer's next step is to wait a moment, which is
+     * why `SERVICE_ACTION_IN_PROGRESS` is its own code rather than folded into the
+     * lifecycle refusal above.
+     */
+    const outstanding = await this.deps.operations.findOpenCommercial(scope, service.id, tx);
+    if (outstanding !== null) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_IN_PROGRESS,
+        'This service already has an action waiting to be applied.',
+        { operationId: outstanding.operationId },
+      );
+    }
+
+    /*
      * What the panel should end up holding, from what was bought plus what the service
      * holds now.
      *
@@ -696,6 +747,30 @@ export class ProvisioningService {
           ? extendedAllowance(service.trafficLimitBytes, action.purchasedTrafficBytes)
           : null,
     };
+
+    /*
+     * An allowance that cannot survive the wire.
+     *
+     * `MAX_TRAFFIC_BYTES` bounds what a single PRODUCT or add-on may specify, and
+     * nothing bounded the CUMULATIVE figure — so enough legitimate purchases push a
+     * target past `Number.MAX_SAFE_INTEGER`. The adapter serialises `data_limit` through
+     * `Number`, which rounds it, and `appliedPlan` verifies the panel's answer through
+     * the same lossy conversion and therefore accepts the rounded value. Nexa would then
+     * store the exact bigint and diverge from the panel silently, which is the one
+     * failure mode this phase's whole response-verification exists to prevent.
+     *
+     * Refused at the same bound a product may specify — 1 PiB, far past any real plan
+     * and comfortably inside 2^53, so every value that gets past here converts exactly.
+     * A refusal rather than a clamp: a clamp would sell a customer an allowance and give
+     * them a smaller one.
+     */
+    if (target.trafficLimitBytes !== null && target.trafficLimitBytes > MAX_TRAFFIC_BYTES) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
+        'That purchase would take this service past the largest allowance this system can hold.',
+        { state: service.state },
+      );
+    }
 
     if (target.expiresAt === null && target.trafficLimitBytes === null) {
       /*

@@ -4,6 +4,7 @@ import {
   isMutatingOperation,
   OPERATION_MAX_ATTEMPTS,
   OPERATION_TYPES,
+  TARGETED_OPERATION_TYPES,
 } from '@nexa/contracts';
 import type {
   OperationId,
@@ -245,6 +246,34 @@ export class DrizzleOperationRepository implements OperationRepository {
           eq(provisioningOperations.tenantId, tenantId),
           eq(provisioningOperations.serviceId, serviceId),
           eq(provisioningOperations.type, type),
+          inArray(provisioningOperations.state, ['PLANNED', 'IN_FLIGHT']),
+        ),
+      )
+      .limit(1);
+    const row = rows[0];
+    return row === undefined ? null : toRecord(row);
+  }
+
+  async findOpenCommercial(
+    scope: TenantContext,
+    serviceId: string,
+    tx?: unknown,
+  ): Promise<OperationRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select()
+      .from(provisioningOperations)
+      .where(
+        and(
+          eq(provisioningOperations.tenantId, tenantId),
+          eq(provisioningOperations.serviceId, serviceId),
+          /*
+           * The SAME three types and the SAME two states as
+           * `provisioning_operations_open_commercial_key`, which is the rule this read
+           * reports rather than enforces. `TARGETED_OPERATION_TYPES` is the contract's
+           * own list, so the query and the index cannot drift apart silently.
+           */
+          inArray(provisioningOperations.type, [...TARGETED_OPERATION_TYPES]),
           inArray(provisioningOperations.state, ['PLANNED', 'IN_FLIGHT']),
         ),
       )

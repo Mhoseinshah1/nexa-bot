@@ -742,6 +742,17 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.service.action_in_progress',
+    description:
+      'The one TRANSIENT commercial refusal: this service already has a renewal or a ' +
+      'top-up the panel has not applied yet, so the next purchase waits. Its own key ' +
+      'because the customer\u2019s next step is to try again in a moment, and every other ' +
+      'refusal in this group means a thing that will not become possible by waiting. ' +
+      'A shared sentence would send somebody whose renewal is seconds away to support.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.service.addon_choice',
     description:
       'The heading above the configured packages a customer may buy. The amounts and ' +
@@ -753,9 +764,12 @@ export const TEMPLATES = [
   {
     key: 'bot.service.addon_option',
     description:
-      'One package button: what it adds and what it costs. Rendered from the row the ' +
-      'operator configured, so an amount a customer sees is an amount the server will ' +
-      'charge for.',
+      'One package button: what it is called and what it costs. The AMOUNT is not here ' +
+      'and is on `bot.service.action_quote`, the screen the customer answers — exactly ' +
+      'where a product catalogue puts it, because a Telegram button label is one line ' +
+      'and the figure that matters is the one beside the confirm button. Rendered from ' +
+      'the row the operator configured, so a price a customer sees is the price the ' +
+      'server will charge.',
     format: 'PLAIN_TEXT',
     placeholders: [
       {
@@ -801,6 +815,36 @@ export const TEMPLATES = [
         type: 'MONEY',
         description: 'What it costs, with its currency.',
         required: true,
+        repeatable: false,
+      },
+      /*
+       * WHAT the customer is buying, beside what it costs.
+       *
+       * Optional because a renewal of an unlimited-in-one-direction plan has nothing to
+       * say in that field, and zero here means "this purchase buys none of this" rather
+       * than the UNLIMITED that the same zero means on a PRODUCT. The renderer owns that
+       * distinction, which is why both are typed rather than pre-formatted numbers.
+       *
+       * They are here because a title is free text an operator wrote. «بسته ویژه» encodes
+       * no allowance at all, and a screen that showed only that and a price let a
+       * customer reach the payment buttons without ever being told how many bytes or
+       * days they were buying. The frozen order line already carries both figures; not
+       * rendering them was the omission.
+       */
+      {
+        token: 'trafficBytes',
+        type: 'BYTES',
+        description:
+          'Traffic this purchase adds, or 0 when it adds none. The renderer owns the ' +
+          'unit, exactly as on `bot.order.summary`.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'durationDays',
+        type: 'DURATION_DAYS',
+        description: 'Days this purchase adds, or 0 when it adds none.',
+        required: false,
         repeatable: false,
       },
     ],

@@ -3183,6 +3183,35 @@ export const provisioningOperations = pgTable(
     uniqueIndex('provisioning_operations_open_provision_key')
       .on(table.tenantId, table.serviceId)
       .where(sql`type = 'PROVISION' AND state IN ('PLANNED', 'IN_FLIGHT')`),
+    /**
+     * ONE open COMMERCIAL action per service, for the reason the PROVISION index above
+     * exists and a different failure than the one it prevents.
+     *
+     * A commercial target is ABSOLUTE and is computed once, in the transaction that
+     * settles the order, from the service as it stood when the money moved. Two
+     * purchases that settle before the first reaches the panel therefore read the same
+     * allowance and plan the same number: two five-gigabyte packages against a
+     * ten-gigabyte service each plan FIFTEEN, both are charged, and the account ends
+     * where one purchase would have left it.
+     *
+     * `claimDue` already refuses to run two operations for one service at once, and
+     * that is not this: serialising EXECUTION does not help when both rows were
+     * computed from the same reading. The refusal has to be at PLAN time, which is why
+     * it is an index rather than a check in a service — two API replicas settling two
+     * orders in the same instant is exactly the case a read-then-write loses.
+     *
+     * All three types together rather than one index each: a renewal's target is
+     * computed from the same two columns an add-on's is, so a renewal in flight
+     * interferes with a top-up exactly as another top-up would.
+     *
+     * The two NON-TERMINAL states only, as above. A `FAILED` action has written nothing
+     * to the service, so the next purchase reads an unchanged row and is safe.
+     */
+    uniqueIndex('provisioning_operations_open_commercial_key')
+      .on(table.tenantId, table.serviceId)
+      .where(
+        sql`type IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME') AND state IN ('PLANNED', 'IN_FLIGHT')`,
+      ),
     index('provisioning_operations_unknown_idx')
       .on(table.tenantId, table.createdAt)
       .where(sql`state = 'UNKNOWN'`),

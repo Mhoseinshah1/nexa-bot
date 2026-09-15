@@ -177,6 +177,7 @@ export class DrizzleServiceAddonRepository implements ServiceAddonRepository {
   async listOfferable(
     scope: TenantContext,
     kind: ServiceAddonKind,
+    currency: CurrencyCode,
     limit: number,
     tx?: unknown,
   ): Promise<{ readonly items: readonly ServiceAddonRecord[]; readonly hasMore: boolean }> {
@@ -190,6 +191,9 @@ export class DrizzleServiceAddonRepository implements ServiceAddonRepository {
           eq(serviceAddons.kind, kind),
           eq(serviceAddons.status, 'ACTIVE'),
           isNotNull(serviceAddons.priceAmount),
+          // The tenant's own selling unit. A row priced in what this store no longer
+          // sells is one `quoteAddon` would refuse, so it is not offered either.
+          eq(serviceAddons.priceCurrency, currency),
         ),
       )
       .orderBy(asc(serviceAddons.sortOrder), asc(serviceAddons.createdAt), asc(serviceAddons.id))

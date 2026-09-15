@@ -5,6 +5,7 @@ import {
   errors,
   COMMERCIAL_ORDER_PURPOSES,
   isAddonPurchasable,
+  isNexaError,
   isPurchasable,
   nextState,
   serviceAddonIdSchema,
@@ -68,6 +69,23 @@ const COMMERCIAL_NAMESPACE = 'TELEGRAM' as const;
 
 /** How many add-ons of one kind a customer is offered at once. */
 export const ADDON_OFFER_LIMIT = 10;
+
+/**
+ * The refusals that mean "not offerable", as opposed to "this installation is broken".
+ *
+ * Exactly the codes `renewableProduct` and `assertSalesCurrency` raise. Anything else
+ * — a dead repository, an unreadable settings row, a bug — is an OUTAGE, and an outage
+ * that renders as a missing button is an outage nobody is told about. `availableFor`
+ * used to catch everything, which made those two indistinguishable on a 200.
+ */
+const OFFER_REFUSALS: readonly string[] = [
+  COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
+  COMMERCE_ERROR_CODES.PRODUCT_CURRENCY_UNSUPPORTED,
+];
+
+function isOfferRefusal(error: unknown): boolean {
+  return isNexaError(error) && OFFER_REFUSALS.includes(error.code);
+}
 
 export type CommercialKind = Exclude<OrderPurpose, 'NEW_SERVICE'>;
 
@@ -170,6 +188,7 @@ export class CommercialActionService {
     const addons = await this.deps.addons.listOfferable(
       scope,
       kind === 'ADD_TRAFFIC' ? 'ADD_TRAFFIC' : 'ADD_TIME',
+      await this.salesCurrency(scope),
       ADDON_OFFER_LIMIT,
     );
     if (addons.items.length === 0) {
@@ -213,16 +232,29 @@ export class CommercialActionService {
          * Caught rather than re-implemented: `renewableProduct` is the one place those
          * three conditions live, and a second copy here is a second thing to keep in
          * step. A refusal means "not offerable", which is exactly what this asks.
+         *
+         * Only a BUSINESS refusal, by code. A bare `catch` here treated a dead product
+         * repository or an unreadable settings row exactly like a withdrawn plan: the
+         * button quietly vanished, the request answered 200, and an outage was
+         * indistinguishable from a configuration choice. Everything else rethrows and
+         * reaches the runtime's error path, which is what the panel and add-on branches
+         * beside it already do by not catching at all.
          */
         try {
           await this.renewableProduct(scope, service);
-        } catch {
+        } catch (error: unknown) {
+          if (!isOfferRefusal(error)) throw error;
           continue;
         }
         available.push(kind);
         continue;
       }
-      const offered = await this.deps.addons.listOfferable(scope, kind, 1);
+      const offered = await this.deps.addons.listOfferable(
+        scope,
+        kind,
+        await this.salesCurrency(scope),
+        1,
+      );
       if (offered.items.length > 0) available.push(kind);
     }
     return available;
@@ -836,6 +868,11 @@ export class CommercialActionService {
     }
     await this.assertSalesCurrency(scope, product.price, tx);
     return product;
+  }
+
+  /** The unit this installation sells in, read where it is needed rather than cached. */
+  private async salesCurrency(scope: TenantContext, tx?: unknown): Promise<SalesCurrencyCode> {
+    return this.deps.settings.valueOf<SalesCurrencyCode>(scope, 'sales.currency', tx);
   }
 
   /** Priced in the currency the tenant sells in, or refused. `ProductService`'s rule. */

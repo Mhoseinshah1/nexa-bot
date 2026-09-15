@@ -130,9 +130,12 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // `templates.ts` records that the operational log carries the distinction.
   'bot.service.action_unavailable': 'این امکان در حال حاضر برای این سرویس در دسترس نیست.',
   'bot.service.action_not_allowed': 'وضعیت این سرویس اجازه‌ی این کار را نمی‌دهد.',
+  'bot.service.action_in_progress':
+    'یک درخواست قبلی برای این سرویس هنوز اعمال نشده است. چند لحظه بعد دوباره تلاش کنید.',
   'bot.service.addon_choice': 'یکی از بسته‌های زیر را انتخاب کنید:',
   'bot.service.addon_option': '{title} — {price}',
-  'bot.service.action_quote': '{productTitle}\nمبلغ: {total}',
+  'bot.service.action_quote':
+    '{productTitle}\nحجم افزوده: {trafficBytes}\nمدت افزوده: {durationDays}\nمبلغ: {total}',
   'bot.service.action_confirm_button': 'تأیید و پرداخت',
   'bot.service.suspend_button': 'توقف موقت سرویس',
   'bot.service.resume_button': 'فعال‌سازی دوباره سرویس',

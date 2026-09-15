@@ -587,14 +587,35 @@ const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
    * reasoning `PRODUCT_NOT_FOR_AUDIENCE` follows above. The operational log and the
    * audit row carry the distinction an operator needs.
    *
-   * `PANEL_NOT_OPERABLE` is deliberately absent and stays with 4E's
-   * `bot.service.capability_unsupported`, which already answers it for the management
-   * actions and says the same thing.
+   * `PANEL_NOT_OPERABLE` used to be absent here, with a comment saying it "stays with
+   * 4E's `bot.service.capability_unsupported`". That was FALSE, and the falsehood is
+   * worth recording because it is the shape this map exists to prevent: 4E answers the
+   * code inside `serviceAction`, which the commercial handlers never pass through. They
+   * go to `refusal`, an unmapped code reaches its `throw`, and the customer who tapped
+   * a renewal button drawn before the operator disabled the panel got no reply at all —
+   * the exact "unknown code, no answer" failure the `WALLET_INSUFFICIENT_FUNDS` note
+   * above spells out. It is the SAME sentence 4E uses, reached the ordinary way.
+   *
+   * `SERVICE_ACTION_IN_PROGRESS` is the one TRANSIENT refusal in this group and gets
+   * its own sentence for that reason: every other answer here means "not for you" or
+   * "not offered", and this one means "try again in a moment". Telling a customer whose
+   * renewal is seconds from being applied that the action is unavailable would send
+   * them to support over a wait.
    */
   [COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED]: 'bot.service.action_not_allowed',
   [COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE]: 'bot.service.action_unavailable',
   [COMMERCE_ERROR_CODES.ADDON_NOT_FOUND]: 'bot.service.action_unavailable',
   [COMMERCE_ERROR_CODES.ADDON_NOT_PURCHASABLE]: 'bot.service.action_unavailable',
+  [COMMERCE_ERROR_CODES.PANEL_NOT_OPERABLE]: 'bot.service.capability_unsupported',
+  [COMMERCE_ERROR_CODES.SERVICE_ACTION_IN_PROGRESS]: 'bot.service.action_in_progress',
+  /*
+   * A renewal priced in a unit this store has stopped selling.
+   *
+   * Reachable from a callback drawn before `sales.currency` moved: `availableFor` and
+   * `offer` both filter on it now, and neither un-draws a message already in the chat.
+   * The configuration sentence, because that is what it is.
+   */
+  [COMMERCE_ERROR_CODES.PRODUCT_CURRENCY_UNSUPPORTED]: 'bot.service.action_unavailable',
 };
 
 function refusal(error: unknown): PendingReply {
@@ -1147,6 +1168,16 @@ export class BotRuntime {
           // for a renewal, the package's for a quantity purchase.
           productTitle: order.line.title,
           total: order.totals.total,
+          /*
+           * WHAT is being bought, beside what it costs, and from the same frozen line.
+           *
+           * A title is free text an operator wrote: «بسته ویژه» encodes no allowance at
+           * all. This screen is the one the customer answers, so it is where the figures
+           * have to be — exactly as `bot.order.summary` carries them for a product, and
+           * for the same reason a product's catalogue button does not.
+           */
+          trafficBytes: order.line.specification.trafficBytes,
+          durationDays: order.line.specification.durationDays,
         },
         buttons: [
           {

@@ -525,6 +525,27 @@ export interface OperationRepository {
     tx?: unknown,
   ): Promise<OperationRecord | null>;
 
+  /**
+   * Any open `RENEW`, `ADD_TRAFFIC` or `ADD_TIME` for this service.
+   *
+   * Its own method rather than three `findOpen` calls, because the question is not
+   * "is this kind in flight" but "has anything already been computed from the two
+   * columns I am about to read". A commercial target is ABSOLUTE and is derived once
+   * from the service row, so a second purchase settling against the same reading plans
+   * the same number: two five-gigabyte packages against a ten-gigabyte service each
+   * plan fifteen, both are charged, and the panel ends where one would have left it.
+   *
+   * The DURABLE guarantee is `provisioning_operations_open_commercial_key`, not this
+   * read — two replicas settling two orders in the same instant both see nothing here.
+   * This exists so the refusal has a NAME and a customer is told "not yet" rather than
+   * meeting a unique-violation reported as a 500.
+   */
+  findOpenCommercial(
+    scope: TenantContext,
+    serviceId: string,
+    tx?: unknown,
+  ): Promise<OperationRecord | null>;
+
   listForService(
     scope: TenantContext,
     serviceId: string,

@@ -1179,6 +1179,281 @@ describe('a customer manages the service they bought', () => {
     expect((rows.rows[0] as { n: number }).n).toBe(0);
   });
 
+  it('refuses a second purchase while the first has not reached the panel', async () => {
+    /*
+     * The defect the Codex review of PR #28 found, and the most expensive one in the
+     * phase: a commercial target is ABSOLUTE and is computed from the service row as it
+     * stands when the money moves. Two purchases settling before the first reaches the
+     * panel therefore read the SAME allowance and plan the SAME number — two ten-gigabyte
+     * packages against a ten-gigabyte service each plan twenty, both are charged, and the
+     * account ends at twenty.
+     *
+     * `claimDue` serialising EXECUTION does not help: the rows were wrong before either
+     * ran. So the refusal is at PLAN time, and it is TRANSIENT — the customer waits a
+     * tick, not for ever.
+     */
+    const service = await activeService('serialise');
+    const before = await services.findById(tenantA, service.id);
+    const addon = await offeredAddon('ADD_TRAFFIC', { trafficBytes: 10_000_000_000n }, 'serialise');
+    await fund('serialise');
+
+    await buy(service.id, 'ADD_TRAFFIC', addon, 'serialise-one');
+
+    // The first is PLANNED and has not run. A second purchase now would read the same
+    // two numbers the first did.
+    expect((await operationOf(service.id, 'ADD_TRAFFIC'))?.state).toBe('PLANNED');
+    const balanceAfterOne = await ctx.container.wallet.balance(tenantA, owner, customerA);
+
+    await expect(buy(service.id, 'ADD_TRAFFIC', addon, 'serialise-two')).rejects.toMatchObject({
+      code: 'commerce.service_action_in_progress',
+    });
+
+    // Refused inside the settling transaction, so nothing moved.
+    const balanceAfterTwo = await ctx.container.wallet.balance(tenantA, owner, customerA);
+    expect(balanceAfterTwo.amountMinor).toBe(balanceAfterOne.amountMinor);
+    const planned = (await operations.listForService(tenantA, service.id, 50)).filter(
+      (operation) => operation.type === 'ADD_TRAFFIC',
+    );
+    expect(planned).toHaveLength(1);
+
+    // And once it HAS reached the panel, the next purchase is fine and adds to what the
+    // first one left rather than to what it started from.
+    await ctx.container.provisionerLoop.tick();
+    const afterOne = await services.findById(tenantA, service.id);
+    expect(afterOne?.trafficLimitBytes).toBe((before?.trafficLimitBytes ?? 0n) + 10_000_000_000n);
+
+    await buy(service.id, 'ADD_TRAFFIC', addon, 'serialise-three');
+    await ctx.container.provisionerLoop.tick();
+    const afterTwo = await services.findById(tenantA, service.id);
+    expect(afterTwo?.trafficLimitBytes).toBe((before?.trafficLimitBytes ?? 0n) + 20_000_000_000n);
+  });
+
+  it('refuses at settlement when the panel stopped being able to do it', async () => {
+    /*
+     * The window between confirming a quote and paying for it is real for the PANEL too,
+     * not only for the service: an operator can disable it, archive it or rotate its
+     * credentials in between. Without this the debit commits, the operation is planned,
+     * and the provisioner refuses it as CAPABILITY_UNSUPPORTED — which is PERMANENT —
+     * leaving a paid order nothing can ever apply.
+     */
+    const service = await activeService('panel-gone');
+    await fund('panel-gone');
+    const { order } = await ctx.container.commercialActions.draft(
+      tenantA,
+      systemActor('p'),
+      customerA,
+      { serviceId: service.id, kind: 'RENEW', idempotencyKey: 'act-panel-gone-quote' },
+    );
+    await ctx.container.commercialActions.confirm(tenantA, systemActor('p'), customerA, {
+      orderId: order.id,
+      idempotencyKey: 'act-panel-gone-confirm',
+    });
+
+    const balanceBefore = await ctx.container.wallet.balance(tenantA, owner, customerA);
+    await ctx.container.database.db.execute(
+      sql`UPDATE panels SET status = 'DISABLED'
+           WHERE id = (SELECT panel_id FROM services WHERE id = ${service.id})`,
+    );
+
+    await expect(
+      ctx.container.payments.settleFromWallet(tenantA, systemActor('p'), customerA, {
+        idempotencyKey: 'act-panel-gone-pay',
+        orderId: order.id,
+      }),
+    ).rejects.toMatchObject({ code: 'commerce.panel_not_operable' });
+
+    const balanceAfter = await ctx.container.wallet.balance(tenantA, owner, customerA);
+    expect(balanceAfter.amountMinor).toBe(balanceBefore.amountMinor);
+    expect(await operationOf(service.id, 'RENEW')).toBeUndefined();
+  });
+
+  it('does not expire a service out from under an action it has already been paid for', async () => {
+    /*
+     * `runOnce` expires BEFORE it claims, in the same tick, and `ADD_TIME` is legal only
+     * from ACTIVE. So a window closing between the settlement and the next claim made the
+     * provisioner refuse — terminally — an operation whose whole purpose was to move that
+     * window. The customer had paid for exactly the thing the sweep then made impossible.
+     */
+    const service = await activeService('expire-race');
+    const addon = await offeredAddon('ADD_TIME', { durationDays: 30 }, 'expire-race');
+    await fund('expire-race');
+    await buy(service.id, 'ADD_TIME', addon, 'expire-race');
+
+    // The window closes while the operation is still PLANNED.
+    await ctx.container.database.db.execute(
+      sql`UPDATE services SET expires_at = now() - interval '1 minute' WHERE id = ${service.id}`,
+    );
+
+    await ctx.container.provisionerLoop.tick();
+
+    // Not expired out from under it, and the thing that was bought was applied.
+    expect((await operationOf(service.id, 'ADD_TIME'))?.state).toBe('SUCCEEDED');
+    const after = await services.findById(tenantA, service.id);
+    expect(after?.state).toBe('ACTIVE');
+    expect(after?.expiresAt?.getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it('refuses an allowance larger than this system can put on a wire', async () => {
+    /*
+     * Each package is inside `MAX_TRAFFIC_BYTES`; the CUMULATIVE figure was not bounded
+     * at all. Past `Number.MAX_SAFE_INTEGER` the adapter's `Number(...)` rounds the value
+     * on the way out AND `appliedPlan` re-rounds it on the way back, so the panel's answer
+     * verifies and Nexa stores an exact bigint the panel does not hold.
+     */
+    const service = await activeService('too-big');
+    await ctx.container.database.db.execute(
+      sql`UPDATE services SET traffic_limit_bytes = 1099511627776000 WHERE id = ${service.id}`,
+    );
+    const addon = await offeredAddon('ADD_TRAFFIC', { trafficBytes: 10_000_000_000n }, 'too-big');
+    await fund('too-big');
+
+    await expect(buy(service.id, 'ADD_TRAFFIC', addon, 'too-big')).rejects.toMatchObject({
+      code: 'commerce.service_action_not_allowed',
+    });
+    expect(await operationOf(service.id, 'ADD_TRAFFIC')).toBeUndefined();
+  });
+
+  it('stops offering a package the store no longer has the currency for', async () => {
+    /*
+     * The other half of the stale-currency case below: `quoteAddon` refuses the tap, and
+     * before this the button was still DRAWN — so the customer saw a package, in an
+     * obsolete unit, whose every tap was a refusal. `offer` and `availableFor` apply the
+     * same condition the purchase does.
+     */
+    const service = await activeService('offer-currency');
+    await offeredAddon('ADD_TRAFFIC', { trafficBytes: 1_000_000_000n }, 'offer-currency');
+    const record =
+      (await services.findById(tenantA, service.id)) ??
+      (() => {
+        throw new Error('no service');
+      })();
+
+    expect(
+      await ctx.container.commercialActions.availableFor(tenantA, systemActor('o'), record),
+    ).toContain('ADD_TRAFFIC');
+
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO setting_values (id, tenant_id, setting_key, value, version, updated_at)
+      VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, 'sales.currency',
+              ${JSON.stringify('IRR')}::jsonb, 1, now())`);
+
+    expect(
+      await ctx.container.commercialActions.availableFor(tenantA, systemActor('o2'), record),
+    ).not.toContain('ADD_TRAFFIC');
+    await expect(
+      ctx.container.commercialActions.offer(
+        tenantA,
+        systemActor('o3'),
+        customerA,
+        service.id,
+        'ADD_TRAFFIC',
+      ),
+    ).rejects.toMatchObject({ code: 'commerce.service_action_unavailable' });
+  });
+
+  it('will not let a renewal order produce a second service, whatever settles it', async () => {
+    /*
+     * The rollback guard, exercised the only way it can be: by doing what the PREVIOUS
+     * release's settlement path does. That code ends in an unconditional
+     * `planForSettledOrder`, which creates a service from the order line — and a renewal
+     * has its own order id, so `services_tenant_order_key` does not catch it.
+     *
+     * `botctl rollback` never restores the database, so the trigger in migration 0050 is
+     * still there when the old binary comes back. It aborts the settling transaction,
+     * which means no second account AND no debit: the order simply stays payable.
+     */
+    const service = await activeService('rollback-guard');
+    await fund('rollback-guard');
+    const { order } = await ctx.container.commercialActions.draft(
+      tenantA,
+      systemActor('r'),
+      customerA,
+      { serviceId: service.id, kind: 'RENEW', idempotencyKey: 'act-rollback-quote' },
+    );
+
+    await expect(
+      ctx.container.database.db.execute(sql`
+        INSERT INTO services (id, tenant_id, customer_id, order_id, product_id, panel_id,
+                              state, provider_username, subscription_ref, provider_client_id,
+                              traffic_limit_bytes, traffic_used_bytes, delivery_state,
+                              delivery_attempts, created_at, updated_at)
+        SELECT ${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${customerA}, ${order.id},
+               product_id, panel_id, 'PENDING_PROVISION', 'nx_rollback', 'ref_rollback',
+               gen_random_uuid(), 0, 0, delivery_state, 0, now(), now()
+          FROM services WHERE id = ${service.id}`),
+    ).rejects.toSatisfy((error: unknown) => {
+      /*
+       * Drizzle wraps the driver error, so the trigger's own sentence is on the CAUSE
+       * and the wrapper's message is only the SQL text. Asserted on the cause rather
+       * than loosened to "it threw": every other way this insert can fail — a NOT NULL,
+       * a foreign key, a unique index — would satisfy a bare rejection and would not be
+       * this rule.
+       */
+      const cause = (error as { cause?: { message?: unknown } }).cause;
+      return /cannot produce a service/.test(String(cause?.message ?? ''));
+    });
+  });
+
+  it('will not let an older worker kill a paid action it does not understand', async () => {
+    /*
+     * The mixed-version window, exercised the only way it can be: by doing what the
+     * PREVIOUS release's provisioner does. Its `claimDue` has no type filter, so it can
+     * claim a `RENEW` this release planned; its executor finds the type outside
+     * `PERFORMABLE_OPERATION_TYPES` and transitions it `IN_FLIGHT -> ABANDONED`, which is
+     * TERMINAL. A paid action, dead, unrecoverable by the new worker that follows it.
+     *
+     * The distinguishing fact is the attempt count: this release abandons a commercial
+     * operation only at the ceiling (`retireExhausted`), and the old release's refusal
+     * happens on the FIRST claim. The trigger refuses exactly that, the old worker's
+     * transaction aborts, and the row stays claimable.
+     */
+    const service = await activeService('old-worker');
+    await fund('old-worker');
+    await buy(service.id, 'RENEW', null, 'old-worker');
+
+    // What the old binary does: claim, then abandon because it cannot perform the type.
+    await ctx.container.database.db.execute(
+      sql`UPDATE provisioning_operations SET state = 'IN_FLIGHT', attempts = 1
+           WHERE service_id = ${service.id} AND type = 'RENEW'`,
+    );
+    await expect(
+      ctx.container.database.db.execute(
+        sql`UPDATE provisioning_operations
+               SET state = 'ABANDONED', completed_at = now(),
+                   failure_message = 'this release does not perform RENEW operations'
+             WHERE service_id = ${service.id} AND type = 'RENEW'`,
+      ),
+    ).rejects.toSatisfy((error: unknown) => {
+      const cause = (error as { cause?: { message?: unknown } }).cause;
+      return /may not be abandoned/.test(String(cause?.message ?? ''));
+    });
+
+    // Still claimable, and the operation the customer paid for still applies.
+    expect((await operationOf(service.id, 'RENEW'))?.state).toBe('IN_FLIGHT');
+    await ctx.container.database.db.execute(
+      sql`UPDATE provisioning_operations SET state = 'PLANNED', attempts = 0, claimed_by = NULL
+           WHERE service_id = ${service.id} AND type = 'RENEW'`,
+    );
+    await ctx.container.provisionerLoop.tick();
+    expect((await operationOf(service.id, 'RENEW'))?.state).toBe('SUCCEEDED');
+
+    // And an abandon AT the ceiling — what this release itself does — is untouched.
+    const spent = await activeService('old-worker-ceiling');
+    await fund('old-worker-ceiling');
+    await buy(spent.id, 'RENEW', null, 'old-worker-ceiling');
+    await ctx.container.database.db.execute(
+      sql`UPDATE provisioning_operations SET state = 'IN_FLIGHT', attempts = 5
+           WHERE service_id = ${spent.id} AND type = 'RENEW'`,
+    );
+    await ctx.container.database.db.execute(
+      // `provisioning_operations_completed_check` pins `completed_at` to the terminal
+      // states, so an abandon has to stamp it — as `retireExhausted` does.
+      sql`UPDATE provisioning_operations SET state = 'ABANDONED', completed_at = now()
+           WHERE service_id = ${spent.id} AND type = 'RENEW'`,
+    );
+    expect((await operationOf(spent.id, 'RENEW'))?.state).toBe('ABANDONED');
+  });
+
   it('refuses a package of the wrong kind on the extra-traffic path', async () => {
     /*
      * The ONE thing a client can influence here: the add-on id. A callback naming an

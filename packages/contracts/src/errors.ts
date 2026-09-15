@@ -665,6 +665,23 @@ export const COMMERCE_ERROR_CODES = {
   ADDON_NOT_FOUND: 'commerce.addon_not_found',
   /** The add-on exists and is withdrawn. Not the same as absent. */
   ADDON_NOT_PURCHASABLE: 'commerce.addon_not_purchasable',
+
+  /**
+   * This service already has a commercial action the panel has not applied yet.
+   *
+   * A TRANSIENT refusal, and the only one in this group — everything else here says
+   * "not for you" or "not offered", and this says "not yet".
+   *
+   * It exists because a commercial target is ABSOLUTE and computed once, from the
+   * service as it stood when the money moved. Two purchases settling before the first
+   * reaches the panel both read the same allowance, so both plan the same number: two
+   * five-gigabyte packages against a ten-gigabyte service each plan fifteen, the
+   * customer is charged twice and the account ends at fifteen. Serialising is what makes
+   * "an absolute target is safe to replay" also true across DIFFERENT purchases, and it
+   * is enforced by `provisioning_operations_open_commercial_key` rather than by this
+   * check alone.
+   */
+  SERVICE_ACTION_IN_PROGRESS: 'commerce.service_action_in_progress',
 } as const;
 
 /*

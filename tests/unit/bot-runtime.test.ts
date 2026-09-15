@@ -425,6 +425,14 @@ describe('profile metadata, normalised before it is ever stored', () => {
      *   `bot.service.action_not_allowed`
      *                                  the SERVICE's state refuses it — distinct,
      *                                  because that one IS the customer's to act on.
+     *   `bot.service.action_in_progress`
+     *                                  the one TRANSIENT refusal: an earlier renewal or
+     *                                  top-up for this service has not reached the panel
+     *                                  yet, so the next one waits. Its own sentence
+     *                                  because "try again in a moment" is the only
+     *                                  answer in this group that is true by waiting, and
+     *                                  telling somebody that would send them to support
+     *                                  over ten seconds.
      *
      * None of them instructs a customer to do something that can only answer
      * `bot.unknown_command` either — `/services` is a real command in `intentOf`, and
@@ -446,6 +454,7 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.unconfigured',
       'bot.payment.wallet_button',
       'bot.service.action_confirm_button',
+      'bot.service.action_in_progress',
       'bot.service.action_not_allowed',
       'bot.service.action_quote',
       'bot.service.action_requested',

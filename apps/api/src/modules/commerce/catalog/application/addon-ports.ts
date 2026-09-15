@@ -1,4 +1,5 @@
 import type {
+  CurrencyCode,
   Money,
   ServiceAddonId,
   ServiceAddonKind,
@@ -135,9 +136,24 @@ export interface ServiceAddonRepository {
    * explicit that an absent price means unsellable, and a surface that received one
    * would have to decide what to render beside it.
    */
+  /**
+   * The packages of one kind a customer could actually be sold, right now.
+   *
+   * `currency` is REQUIRED rather than optional, and it is the tenant's `sales.currency`
+   * read where this is called. An add-on is refused at create unless it is priced in
+   * that currency, and the setting can move afterwards while the row keeps the currency
+   * it was stored with — deliberately, because reinterpreting a stored amount under a
+   * new unit is the factor of ten the setting exists to prevent.
+   *
+   * So a store that has moved to Rial still has Toman-priced rows, and listing them
+   * draws buttons whose tap `quoteAddon` refuses. Filtering HERE is what makes the
+   * offer and the purchase agree; `quoteAddon`'s own check stays, because a callback
+   * outlives the message it was drawn on.
+   */
   listOfferable(
     scope: TenantContext,
     kind: ServiceAddonKind,
+    currency: CurrencyCode,
     limit: number,
     tx?: unknown,
   ): Promise<{ readonly items: readonly ServiceAddonRecord[]; readonly hasMore: boolean }>;
