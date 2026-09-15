@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import { OPERATION_MAX_ATTEMPTS } from '@nexa/contracts';
 import type {
   OperationId,
@@ -88,6 +88,22 @@ export class DrizzleOperationRepository implements OperationRepository {
         panelId: draft.panelId,
         type: draft.type,
         state: 'PLANNED',
+        /*
+         * Due NOW, stamped rather than left null.
+         *
+         * "Not yet attempted" used to be an ABSENCE, and an absence has no position in
+         * an ordering: PostgreSQL's `ASC` is NULLS LAST, so a customer who had just
+         * paid sorted behind every backed-off retry that had come due. Writing the time
+         * makes the claim a plain FIFO over one comparable column, lets
+         * `provisioning_operations_due_idx` serve the ordering exactly, and makes the
+         * operations view able to say when a row became due without a special case.
+         *
+         * The `IS NULL` arm of the due predicate and the explicit `NULLS FIRST` in the
+         * ordering both stay. Nothing writes a null here any more, and neither of them
+         * costs anything — but an ordering that is only correct because of what happens
+         * to be in the column is the kind of claim that rots quietly.
+         */
+        nextAttemptAt: now,
         createdAt: now,
         updatedAt: now,
       })
@@ -96,7 +112,18 @@ export class DrizzleOperationRepository implements OperationRepository {
     const inserted = rows[0];
     if (inserted !== undefined) return toRecord(inserted);
 
-    const existing = await this.findByOperationId(scope, draft.operationId, tx);
+    const existing =
+      (await this.findByOperationId(scope, draft.operationId, tx)) ??
+      /*
+       * The OTHER unique index this insert can lose on.
+       *
+       * `provisioning_operations_open_provision_key` admits one open PROVISION per
+       * service, so a second retry carrying a different idempotency key conflicts here
+       * rather than on the derived id — and the read-back above finds nothing. Returning
+       * the operation that won is the same answer for the same reason: the caller cannot
+       * tell whether it or somebody else planned the attempt, and does not need to.
+       */
+      (await this.findOpen(scope, draft.serviceId, draft.type, tx));
     if (existing === null) {
       /*
        * The insert conflicted and the row is not there.
@@ -138,6 +165,29 @@ export class DrizzleOperationRepository implements OperationRepository {
         and(
           eq(provisioningOperations.tenantId, tenantId),
           eq(provisioningOperations.operationId, operationId),
+        ),
+      )
+      .limit(1);
+    const row = rows[0];
+    return row === undefined ? null : toRecord(row);
+  }
+
+  async findOpen(
+    scope: TenantContext,
+    serviceId: string,
+    type: OperationType,
+    tx?: unknown,
+  ): Promise<OperationRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select()
+      .from(provisioningOperations)
+      .where(
+        and(
+          eq(provisioningOperations.tenantId, tenantId),
+          eq(provisioningOperations.serviceId, serviceId),
+          eq(provisioningOperations.type, type),
+          inArray(provisioningOperations.state, ['PLANNED', 'IN_FLIGHT']),
         ),
       )
       .limit(1);

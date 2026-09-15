@@ -294,6 +294,22 @@ export interface OperationRepository {
     tx?: unknown,
   ): Promise<OperationRecord | null>;
 
+  /**
+   * The one operation of this type that is still open for a service, if any.
+   *
+   * "Open" is `PLANNED` or `IN_FLIGHT` — the two states
+   * `provisioning_operations_open_provision_key` admits at most one of. Reading it is
+   * what lets a second retry RETURN the attempt already under way instead of planning
+   * a rival one, which is the difference between an idempotent button and a service
+   * stranded in `UNRECONCILED` by a double-click.
+   */
+  findOpen(
+    scope: TenantContext,
+    serviceId: string,
+    type: OperationType,
+    tx?: unknown,
+  ): Promise<OperationRecord | null>;
+
   listForService(
     scope: TenantContext,
     serviceId: string,

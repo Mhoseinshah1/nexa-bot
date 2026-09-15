@@ -2783,6 +2783,25 @@ export const provisioningOperations = pgTable(
       .on(table.leaseUntil)
       .where(sql`state = 'IN_FLIGHT'`),
     index('provisioning_operations_service_idx').on(table.serviceId, table.createdAt, table.id),
+    /**
+     * ONE open PROVISION per service, enforced by the database rather than by a check.
+     *
+     * "One at a time is a partial unique index, not a process" — the rule CLAUDE.md
+     * states about backups, applied to the operation that spends a customer's money on
+     * somebody else's panel. Two open creates for one service means two provider calls;
+     * the derived username makes the second collide rather than duplicate the account,
+     * but a collision is a `PROVIDER_ERROR`, which classifies UNKNOWN on a mutating
+     * call, which strands the service in `UNRECONCILED`. So a double-click on the
+     * operator's retry button corrupted a service it was meant to rescue.
+     *
+     * Only the two NON-TERMINAL states, so the ordinary sequence still works: a create
+     * that FAILED may be retried, and the re-plan after a provably-absent reconcile is
+     * legal because the operation it follows is `UNKNOWN`. `SUCCEEDED` is excluded for
+     * the same reason — a renewal is a different operation type.
+     */
+    uniqueIndex('provisioning_operations_open_provision_key')
+      .on(table.tenantId, table.serviceId)
+      .where(sql`type = 'PROVISION' AND state IN ('PLANNED', 'IN_FLIGHT')`),
     index('provisioning_operations_unknown_idx')
       .on(table.tenantId, table.createdAt)
       .where(sql`state = 'UNKNOWN'`),

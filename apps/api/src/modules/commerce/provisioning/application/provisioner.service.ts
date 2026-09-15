@@ -225,6 +225,37 @@ export class ProvisionerService {
     }
 
     /*
+     * The service must still be in the state this operation was planned for.
+     *
+     * A `PROVISION` is only legal from `PENDING_PROVISION` and a `RECONCILE` only from
+     * `UNRECONCILED` — `SERVICE_MACHINE`'s edges, checked before anything is spent
+     * rather than discovered afterwards by a conditional UPDATE that quietly did
+     * nothing. Without this the executor would dial a panel for a service that is
+     * already ACTIVE, and the collision on the derived username comes back as a
+     * `PROVIDER_ERROR`, which classifies UNKNOWN on a mutating call, which moves a
+     * working service to `UNRECONCILED`.
+     *
+     * ABANDONED rather than failed or retried: nothing about a stale operation improves
+     * by trying it again, and `OPERATION_MACHINE` provides that state for exactly the
+     * situation nothing else can resolve.
+     */
+    const legalFrom = operation.type === 'RECONCILE' ? 'UNRECONCILED' : 'PENDING_PROVISION';
+    if (service.state !== legalFrom) {
+      await this.deps.uow.run(scope, async (tx) => {
+        await this.deps.operations.transition(
+          scope,
+          operation.id,
+          'IN_FLIGHT',
+          'ABANDONED',
+          { failureMessage: `the service is ${service.state}, not ${legalFrom}` },
+          now,
+          tx,
+        );
+      });
+      return { kind: 'REFUSED', operationId: operation.id, reason: 'SERVICE_ABSENT' };
+    }
+
+    /*
      * The tenant must still be accepting work, checked INSIDE a transaction.
      *
      * CLAUDE.md names panels as the one module that skipped this, which let a tenant an
@@ -486,6 +517,17 @@ export class ProvisionerService {
     const verdict = await reconcileCall(adapter, target, http, ref);
     const now = this.deps.clock.now();
     const serviceId = service.id;
+    /*
+     * What the order froze, read for the same reason the create path reads it.
+     *
+     * The adopt path below used the panel's own expiry verbatim, and a 3X-UI client
+     * whose `expiryTime` is 0 — or a Marzban user with no `expire` — reports NONE. That
+     * is the panel's "unlimited", and adopting it meant a service somebody paid thirty
+     * days for became one that never expires and never appears in `services_expiry_idx`.
+     * The panel is the authority for what the account does; the ORDER is the authority
+     * for what was sold, and this column is the second.
+     */
+    const bought = await this.deps.purchases.specificationFor(scope, service.orderId);
 
     if (verdict.kind === 'UNDECIDED') {
       await this.persistFailure(
@@ -532,7 +574,11 @@ export class ProvisionerService {
           {
             providerUserId: verdict.providerUserId,
             subscriptionUrl: verdict.subscriptionUrl,
-            expiresAt: verdict.expiresAt,
+            // The panel's figure when it has one; otherwise what the order sold,
+            // counted from the moment of adoption — the same generosity the create
+            // path shows a customer whose provisioning a panel outage delayed.
+            expiresAt:
+              verdict.expiresAt ?? (bought === null ? null : expiryFor(now, bought.durationDays)),
             trafficUsedBytes: verdict.usedBytes,
             usageSyncedAt: verdict.usedBytes === null ? null : now,
           },

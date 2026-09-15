@@ -826,6 +826,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
     operationId: (key) => operationIdFor('provider', key),
+    // The same tenant kill switch every other write path reads.
+    scopeActivity: tenants,
   });
 
   const paymentService = new PaymentService({

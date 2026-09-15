@@ -15,6 +15,7 @@ import {
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
+import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { OrderRecord } from '../../orders/application/ports.js';
 import type {
   OperationRecord,
@@ -46,6 +47,8 @@ export interface ProvisioningServiceDeps {
   readonly ids: IdGenerator;
   /** Derives an operation id from a retry-stable key. Bound in the container. */
   readonly operationId: (idempotencyKey: string) => OperationId;
+  /** The tenant kill switch, read inside every write transaction. */
+  readonly scopeActivity: ScopeActivityReader;
 }
 
 export interface ServiceListQuery {
@@ -226,6 +229,7 @@ export class ProvisioningService {
     scope: TenantContext,
     actor: ActorContext,
     serviceId: string,
+    input: { readonly idempotencyKey: string },
   ): Promise<OperationRecord> {
     await this.deps.guard.check(scope, actor, SERVICE_EDIT_PERMISSION);
     const service = await this.deps.services.findById(scope, serviceId);
@@ -258,20 +262,53 @@ export class ProvisioningService {
     const now = this.deps.clock.now();
     return this.deps.uow.run(scope, async (tx) => {
       /*
-       * Planned under an id DERIVED from how many operations this service already has.
+       * The tenant must still be accepting work, checked INSIDE the transaction.
        *
-       * Derived, so two operators double-clicking the button agree on one id and the
-       * second `plan` loses on `provisioning_operations_tenant_operation_key` rather
-       * than planning a second create. A generated uuid here would be the duplicate
-       * account this module exists to prevent, arriving through a button.
+       * Every sibling write path does this and this one did not — the exact omission
+       * CLAUDE.md records against the panels module, where a tenant an operator had
+       * stopped went on being given new panels. The executor would refuse the operation
+       * later with `TENANT_STOPPED`, so the cost here is rows rather than provider
+       * calls; a write path that leaves rows for a stopped tenant is still a write path
+       * that ignored the switch.
        */
-      const already = await this.deps.operations.listForService(scope, serviceId, 100, tx);
+      if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
+        throw errors.conflict(
+          COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+          'That tenant has stopped accepting work.',
+        );
+      }
+
+      /*
+       * An attempt already under way is RETURNED, not rivalled.
+       *
+       * `provisioning_operations_open_provision_key` admits one open PROVISION per
+       * service, and this reads it first so the ordinary double-click gets the
+       * operation that exists rather than a conflict. The index is the guarantee; this
+       * is what makes the guarantee pleasant.
+       */
+      const open = await this.deps.operations.findOpen(scope, serviceId, 'PROVISION', tx);
+      if (open !== null) return open;
+
+      /*
+       * Planned under an id DERIVED from the caller's idempotency key.
+       *
+       * It used to be derived from how many operations this service already had, which
+       * held only for SIMULTANEOUS clicks: two clicks a moment apart read lengths n and
+       * n+1, derived two different ids, and planned two creates for one service. The
+       * derived username made the second collide on the panel rather than duplicate the
+       * account — and a collision is a `PROVIDER_ERROR`, which classifies UNKNOWN on a
+       * mutating call, which strands the service in `UNRECONCILED`. The button meant to
+       * rescue a service corrupted it.
+       *
+       * Every state-changing command takes an idempotency key; this one is no
+       * exception, and the key is what two clicks of one button share.
+       */
       const operation = await this.deps.operations.plan(
         scope,
         {
           id: this.deps.ids.uuid(),
           operationId: this.deps.operationId(
-            `${serviceId}:PROVISION:retry:${String(already.length)}`,
+            `${serviceId}:PROVISION:retry:${input.idempotencyKey}`,
           ),
           serviceId,
           orderId: service.orderId,

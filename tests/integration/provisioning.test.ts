@@ -416,7 +416,9 @@ describe('provisioning invariants', () => {
      * the button that would skip it is refused by name.
      */
     await expect(
-      ctx.container.provisioning.retryProvisioning(tenantA, owner, serviceId),
+      ctx.container.provisioning.retryProvisioning(tenantA, owner, serviceId, {
+        idempotencyKey: 'retry-unreconciled',
+      }),
     ).rejects.toMatchObject({ code: 'commerce.service_unreconciled' });
 
     const all = await operations.listForService(tenantA, serviceId, 10);
@@ -433,7 +435,9 @@ describe('provisioning invariants', () => {
     );
 
     await expect(
-      ctx.container.provisioning.retryProvisioning(tenantA, owner, service?.id ?? ''),
+      ctx.container.provisioning.retryProvisioning(tenantA, owner, service?.id ?? '', {
+        idempotencyKey: 'retry-disabled',
+      }),
     ).rejects.toMatchObject({
       code: 'commerce.panel_not_operable',
       details: { reason: 'PANEL_DISABLED' },
@@ -457,7 +461,9 @@ describe('provisioning invariants', () => {
      * healthy anyway.
      */
     await expect(
-      ctx.container.provisioning.retryProvisioning(tenantA, owner, service?.id ?? ''),
+      ctx.container.provisioning.retryProvisioning(tenantA, owner, service?.id ?? '', {
+        idempotencyKey: 'retry-unset',
+      }),
     ).rejects.toMatchObject({
       code: 'commerce.panel_not_operable',
       details: { reason: 'ACTIVATION_INCOMPLETE' },
