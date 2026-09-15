@@ -782,4 +782,377 @@ describe('a customer manages the service they bought', () => {
     expect(panel.users.has(service.username), 'every call reached the panel').toBe(false);
     expect((await services.findById(tenantA, service.id))?.state).toBe('TERMINATED');
   });
+
+  // =========================================================================
+  // Phase 4F — buying something for a service that already exists
+  // =========================================================================
+
+  /** A configured, purchasable package of one kind. */
+  async function offeredAddon(
+    kind: 'ADD_TRAFFIC' | 'ADD_TIME',
+    amount: { trafficBytes?: bigint; durationDays?: number },
+    key: string,
+  ): Promise<string> {
+    const created = await ctx.container.serviceAddons.create(tenantA, owner, {
+      idempotencyKey: `${key}-addon`,
+      draft: {
+        kind,
+        title: kind === 'ADD_TRAFFIC' ? 'بسته ۱۰ گیگ' : 'بسته ۱۵ روز',
+        sortOrder: 10,
+        specification: {
+          kind,
+          trafficBytes: amount.trafficBytes ?? null,
+          durationDays: amount.durationDays ?? null,
+        },
+        price: money(50_000n, 'IRT'),
+      },
+    });
+    await ctx.container.serviceAddons.activate(tenantA, owner, {
+      idempotencyKey: `${key}-addon-on`,
+      addonId: created.id,
+    });
+    return created.id;
+  }
+
+  /** Money in the customer's wallet, so a commercial order can settle. */
+  async function fund(key: string, customerId: UserId = customerA): Promise<void> {
+    await ctx.container.wallet.adjust(tenantA, owner, customerId, {
+      idempotencyKey: `act-${key}-fund`,
+      direction: 'CREDIT',
+      amountMinor: 5_000_000n,
+      currency: 'IRT',
+      note: 'fixture',
+    });
+  }
+
+  /** Quote, confirm, pay — the three taps a customer actually makes. */
+  async function buy(
+    serviceId: string,
+    kind: 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME',
+    addonId: string | null,
+    key: string,
+    customerId: UserId = customerA,
+  ): Promise<OrderId> {
+    const { order } = await ctx.container.commercialActions.draft(
+      tenantA,
+      systemActor(key),
+      customerId,
+      {
+        serviceId,
+        kind,
+        ...(addonId === null ? {} : { addonId }),
+        /*
+         * `act-` on every key. The fixture's own purchase already spent
+         * `<key>-draft`, `<key>-confirm` and `<key>-pay` in the SAME customer
+         * namespace, and reusing one with a different payload is a refusal by design —
+         * `IDEMPOTENCY_PAYLOAD_MISMATCH` calls it a bug rather than a retry, which is
+         * exactly right and exactly what this helper would otherwise be doing.
+         */
+        idempotencyKey: `act-${key}-quote`,
+      },
+    );
+    await ctx.container.commercialActions.confirm(tenantA, systemActor(key), customerId, {
+      orderId: order.id,
+      idempotencyKey: `act-${key}-confirm`,
+    });
+    await ctx.container.payments.settleFromWallet(tenantA, systemActor(key), customerId, {
+      idempotencyKey: `act-${key}-pay`,
+      orderId: order.id,
+    });
+    return order.id;
+  }
+
+  it('renews a service: charged once, applied once, and the panel ends up holding it', async () => {
+    const service = await activeService('renew-happy');
+    const before = await services.findById(tenantA, service.id);
+    await fund('renew-happy');
+
+    await buy(service.id, 'RENEW', null, 'renew-happy');
+
+    /*
+     * The settling transaction plans the operation and contacts NOTHING. The panel's
+     * own record is still what the create left, which is what "no provider call inside
+     * a transaction" looks like from outside.
+     */
+    const planned = await operationOf(service.id, 'RENEW');
+    expect(planned?.state).toBe('PLANNED');
+    expect(planned?.target?.expiresAt).not.toBeNull();
+    expect(planned?.target?.trafficLimitBytes).not.toBeNull();
+
+    await ctx.container.provisionerLoop.tick();
+
+    const done = await operationOf(service.id, 'RENEW');
+    expect(done?.state).toBe('SUCCEEDED');
+
+    const after = await services.findById(tenantA, service.id);
+    // Strictly additive, and the two numbers the panel holds are the two Nexa stored.
+    expect(after?.trafficLimitBytes).toBe((before?.trafficLimitBytes ?? 0n) * 2n);
+    expect(after?.expiresAt?.getTime()).toBeGreaterThan(before?.expiresAt?.getTime() ?? 0);
+    const onPanel = panel.users.get(service.username);
+    expect(onPanel?.dataLimit).toBe(Number(after?.trafficLimitBytes));
+    expect(onPanel?.expire).toBe(Math.floor((after?.expiresAt?.getTime() ?? 0) / 1000));
+
+    // ONE debit for the renewal, on top of the original purchase's.
+    const balance = await ctx.container.wallet.balance(tenantA, owner, customerA);
+    expect(balance.amountMinor).toBe(5_000_000n + 1_000_000n - 250_000n - 250_000n);
+  });
+
+  it('adds traffic without touching the window, and keeps what has been consumed', async () => {
+    const service = await activeService('traffic-happy');
+    const before = await services.findById(tenantA, service.id);
+    const addon = await offeredAddon('ADD_TRAFFIC', { trafficBytes: 10_000_000_000n }, 'traffic');
+    await fund('traffic-happy');
+
+    await buy(service.id, 'ADD_TRAFFIC', addon, 'traffic-happy');
+    await ctx.container.provisionerLoop.tick();
+
+    expect((await operationOf(service.id, 'ADD_TRAFFIC'))?.state).toBe('SUCCEEDED');
+    const after = await services.findById(tenantA, service.id);
+    expect(after?.trafficLimitBytes).toBe((before?.trafficLimitBytes ?? 0n) + 10_000_000_000n);
+    // The window is the operation's null field, so nothing wrote it.
+    expect(after?.expiresAt?.getTime()).toBe(before?.expiresAt?.getTime());
+    expect(panel.users.get(service.username)?.expire).toBe(
+      Math.floor((before?.expiresAt?.getTime() ?? 0) / 1000),
+    );
+  });
+
+  it('adds time without touching the allowance', async () => {
+    const service = await activeService('time-happy');
+    const before = await services.findById(tenantA, service.id);
+    const addon = await offeredAddon('ADD_TIME', { durationDays: 15 }, 'time');
+    await fund('time-happy');
+
+    await buy(service.id, 'ADD_TIME', addon, 'time-happy');
+    await ctx.container.provisionerLoop.tick();
+
+    expect((await operationOf(service.id, 'ADD_TIME'))?.state).toBe('SUCCEEDED');
+    const after = await services.findById(tenantA, service.id);
+    expect(after?.trafficLimitBytes).toBe(before?.trafficLimitBytes);
+    expect(after?.expiresAt?.getTime()).toBe(
+      (before?.expiresAt?.getTime() ?? 0) + 15 * 86_400_000,
+    );
+  });
+
+  it('settles a renewal without creating a second service', async () => {
+    /*
+     * The defect the whole phase opened by naming. `confirmAndSettle` used to end in an
+     * unconditional `planForSettledOrder`, so a renewal — a NEW order against the SAME
+     * service — would have provisioned a second provider account the customer did not
+     * buy. `services_tenant_order_key` does not catch it: a renewal has its own order id.
+     */
+    const service = await activeService('no-second');
+    await fund('no-second');
+    const orderId = await buy(service.id, 'RENEW', null, 'no-second');
+
+    expect(await services.findByOrderId(tenantA, orderId)).toBeNull();
+    const all = await ctx.container.database.db.execute(
+      sql`SELECT count(*)::int AS n FROM services WHERE tenant_id = ${tenantA.tenantId}`,
+    );
+    expect((all.rows[0] as { n: number }).n).toBe(1);
+    // And no PROVISION was planned for it either.
+    const provisions = (await operations.listForService(tenantA, service.id, 50)).filter(
+      (operation) => operation.type === 'PROVISION',
+    );
+    expect(provisions).toHaveLength(1);
+    expect(provisions[0]?.orderId).not.toBe(orderId);
+  });
+
+  it('applies a renewal once when the worker dies mid-call and the retry lands', async () => {
+    /*
+     * The claim `IDEMPOTENT_MUTATIONS` rests on, measured here against Nexa's own
+     * machinery rather than the wire. A renewal whose answer was lost is retried as the
+     * SAME call with the SAME stored target, so the account ends up where one renewal
+     * would leave it and not where two would.
+     */
+    const service = await activeService('renew-retry');
+    const before = await services.findById(tenantA, service.id);
+    await fund('renew-retry');
+    await buy(service.id, 'RENEW', null, 'renew-retry');
+
+    // A worker that claimed it, started the call and died.
+    await ctx.container.provisionerLoop.tick();
+    const applied = await services.findById(tenantA, service.id);
+    await ctx.container.database.db.execute(
+      sql`UPDATE provisioning_operations
+             SET state = 'IN_FLIGHT', attempts = 1, completed_at = NULL,
+                 claimed_by = 'a-worker-that-died',
+                 lease_until = now() - interval '5 minutes',
+                 call_started_at = now() - interval '6 minutes'
+           WHERE service_id = ${service.id} AND type = 'RENEW'`,
+    );
+    await ctx.container.provisionerLoop.tick();
+    await makeOperationDue();
+    await ctx.container.provisionerLoop.tick();
+
+    expect((await operationOf(service.id, 'RENEW'))?.state).toBe('SUCCEEDED');
+    const after = await services.findById(tenantA, service.id);
+    // ONE renewal's worth, not two. An increment would have doubled it again.
+    expect(after?.trafficLimitBytes).toBe(applied?.trafficLimitBytes);
+    expect(after?.expiresAt?.getTime()).toBe(applied?.expiresAt?.getTime());
+    expect(after?.trafficLimitBytes).toBe((before?.trafficLimitBytes ?? 0n) * 2n);
+  });
+
+  it('refuses a package of the wrong kind on the extra-traffic path', async () => {
+    /*
+     * The ONE thing a client can influence here: the add-on id. A callback naming an
+     * `ADD_TIME` row on the extra-traffic path would otherwise buy a quantity in the
+     * wrong unit at the wrong price.
+     */
+    const service = await activeService('wrong-kind');
+    const timeAddon = await offeredAddon('ADD_TIME', { durationDays: 15 }, 'wrong-kind');
+    await fund('wrong-kind');
+
+    await expect(
+      ctx.container.commercialActions.draft(tenantA, systemActor('wk'), customerA, {
+        serviceId: service.id,
+        kind: 'ADD_TRAFFIC',
+        addonId: timeAddon,
+        idempotencyKey: 'wrong-kind-quote',
+      }),
+    ).rejects.toMatchObject({ code: 'commerce.addon_not_purchasable' });
+  });
+
+  it('refuses another tenant’s customer, with the answer an absent service gets', async () => {
+    const service = await activeService('cross-tenant');
+    const stranger = await ctx.container.customers.resolveFromUpdate(
+      tenantA,
+      systemActor('stranger'),
+      {
+        idempotencyKey: 'resolve-stranger',
+        telegramUserId: '111222',
+        from: { id: 111222, first_name: 'دیگری' },
+        botInstanceId: BOT_A,
+      },
+    );
+    await expect(
+      ctx.container.commercialActions.draft(tenantA, systemActor('x'), stranger.customer.id, {
+        serviceId: service.id,
+        kind: 'RENEW',
+        idempotencyKey: 'cross-tenant-quote',
+      }),
+    ).rejects.toMatchObject({ code: 'commerce.service_not_found' });
+  });
+
+  it('makes an action with no configured package explicitly unavailable', async () => {
+    /*
+     * Never free, and never a guess. `catalog.ts` says an absent price means unsellable,
+     * and this is that rule reaching the customer: no package configured, so the button
+     * is not offered and the tap is refused.
+     */
+    const service = await activeService('nothing-offered');
+
+    const offered = await ctx.container.commercialActions.availableFor(
+      tenantA,
+      systemActor('a'),
+      (await services.findById(tenantA, service.id)) ?? (() => { throw new Error('no service'); })(),
+    );
+    expect(offered).not.toContain('ADD_TRAFFIC');
+    expect(offered).not.toContain('ADD_TIME');
+    // The renewal IS offered: its plan is still ACTIVE and priced.
+    expect(offered).toContain('RENEW');
+
+    /*
+     * With no package configured there is no id to send, and the request that arrives
+     * without one is refused as invalid rather than priced at zero. `offer` — the read
+     * the surface uses — answers `SERVICE_ACTION_UNAVAILABLE` for the same situation,
+     * which is why no button is drawn in the first place.
+     */
+    await expect(
+      ctx.container.commercialActions.draft(tenantA, systemActor('n'), customerA, {
+        serviceId: service.id,
+        kind: 'ADD_TRAFFIC',
+        idempotencyKey: 'nothing-offered-quote',
+      }),
+    ).rejects.toMatchObject({ code: 'commerce.request_invalid' });
+    await expect(
+      ctx.container.commercialActions.offer(
+        tenantA,
+        systemActor('n2'),
+        customerA,
+        service.id,
+        'ADD_TRAFFIC',
+      ),
+    ).rejects.toMatchObject({ code: 'commerce.service_action_unavailable' });
+  });
+
+  it('does not double-buy when the customer taps the quote button twice', async () => {
+    const service = await activeService('double-tap');
+    await fund('double-tap');
+
+    const first = await ctx.container.commercialActions.draft(
+      tenantA,
+      systemActor('d'),
+      customerA,
+      { serviceId: service.id, kind: 'RENEW', idempotencyKey: 'double-tap-quote' },
+    );
+    const second = await ctx.container.commercialActions.draft(
+      tenantA,
+      systemActor('d'),
+      customerA,
+      { serviceId: service.id, kind: 'RENEW', idempotencyKey: 'double-tap-quote' },
+    );
+    expect(second.order.id).toBe(first.order.id);
+    expect(second.action.id).toBe(first.action.id);
+
+    const rows = await ctx.container.database.db.execute(
+      sql`SELECT count(*)::int AS n FROM service_commercial_actions
+           WHERE tenant_id = ${tenantA.tenantId}`,
+    );
+    expect((rows.rows[0] as { n: number }).n).toBe(1);
+  });
+
+  it('leaves the invoice line unchanged, because evidence that can be edited is not evidence', async () => {
+    const service = await activeService('append-only');
+    await fund('append-only');
+    await buy(service.id, 'RENEW', null, 'append-only');
+
+    await expect(
+      ctx.container.database.db.execute(
+        sql`UPDATE service_commercial_actions SET amount = 1 WHERE tenant_id = ${tenantA.tenantId}`,
+      ),
+    ).rejects.toThrow();
+    await expect(
+      ctx.container.database.db.execute(
+        sql`DELETE FROM service_commercial_actions WHERE tenant_id = ${tenantA.tenantId}`,
+      ),
+    ).rejects.toThrow();
+  });
+
+  it('refuses a renewal of a terminated service at settlement, and the money does not move', async () => {
+    /*
+     * The window between confirming a quote and paying for it is real: a customer can
+     * confirm a renewal and pay minutes later, and the service can be terminated in
+     * between. The refusal is LOUD — the settlement rolls back — because a paid order
+     * with no operation behind it and nothing to say why is exactly what
+     * `settlementRefusal` already refuses for the same reason.
+     */
+    const service = await activeService('gone-by-settlement');
+    await fund('gone-by-settlement');
+    const { order } = await ctx.container.commercialActions.draft(
+      tenantA,
+      systemActor('g'),
+      customerA,
+      { serviceId: service.id, kind: 'RENEW', idempotencyKey: 'gone-quote' },
+    );
+    await ctx.container.commercialActions.confirm(tenantA, systemActor('g'), customerA, {
+      orderId: order.id,
+      idempotencyKey: 'gone-confirm',
+    });
+
+    const balanceBefore = await ctx.container.wallet.balance(tenantA, owner, customerA);
+    await ctx.container.database.db.execute(
+      sql`UPDATE services SET state = 'TERMINATED', terminated_at = now()
+           WHERE id = ${service.id}`,
+    );
+
+    await expect(
+      ctx.container.payments.settleFromWallet(tenantA, systemActor('g'), customerA, {
+        idempotencyKey: 'gone-pay',
+        orderId: order.id,
+      }),
+    ).rejects.toMatchObject({ code: 'commerce.service_action_not_allowed' });
+
+    const balanceAfter = await ctx.container.wallet.balance(tenantA, owner, customerA);
+    expect(balanceAfter.amountMinor).toBe(balanceBefore.amountMinor);
+  });
 });

@@ -1129,7 +1129,7 @@ describe('a provisioned service announces itself', () => {
   async function planByHand(
     serviceId: string,
     orderId: OrderId,
-    type: 'ROTATE_SUBSCRIPTION' | 'TERMINATE' | 'SUSPEND',
+    type: 'ROTATE_SUBSCRIPTION' | 'TERMINATE' | 'SUSPEND' | 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME',
     label: string,
   ): Promise<void> {
     await ctx.container.uow.run(tenantA, async (tx) =>
@@ -1146,6 +1146,21 @@ describe('a provisioned service announces itself', () => {
           orderId,
           panelId: panelId as PanelId,
           type,
+          /*
+           * A target for the three commercial types and none for the others.
+           *
+           * `provisioning_operations_target_present_check` refuses a commercial row
+           * with neither field and `..._target_check` refuses one on any other type, so
+           * this is not a convenience: it is the only shape the database will take.
+           */
+          ...(type === 'RENEW' || type === 'ADD_TRAFFIC' || type === 'ADD_TIME'
+            ? {
+                target: {
+                  expiresAt: new Date(ctx.container.clock.now().getTime() + 86_400_000),
+                  trafficLimitBytes: 1_000n,
+                },
+              }
+            : {}),
         },
         ctx.container.clock.now(),
         tx,
@@ -1216,6 +1231,48 @@ describe('a provisioned service announces itself', () => {
     );
     expect(terminate?.state).toBe('FAILED');
     expect(terminate?.failureMessage).toBe('CAPABILITY_UNSUPPORTED');
+    expect((await services.findByOrderId(tenantA, orderId))?.state).toBe('ACTIVE');
+  });
+
+  it('refuses each commercial operation on a 3X-UI panel, before contacting it', async () => {
+    /*
+     * The owner's Phase 4F scope decision, made mechanical.
+     *
+     * `RENEW`, `ADD_TRAFFIC` and `ADD_TIME` all have executor branches now, so
+     * `isPerformableOperation` lets each through — and the panel is a 3X-UI, whose
+     * descriptor declares none of `RENEW_USER`, `ADD_VOLUME` or `ADD_TIME`.
+     * `decideOperability` reads `OPERATION_REQUIRED_CAPABILITIES` against that
+     * descriptor and refuses before a socket is opened.
+     *
+     * All THREE, not one of them. They are three separate capabilities and three
+     * separate predicates, so a descriptor edit that added one would leave the other
+     * two refusing — and a test that checked only a renewal would pass while extra
+     * traffic was quietly sold on a panel that cannot apply it.
+     *
+     * Terminal FAILED rather than ABANDONED, for the reason the terminate case above
+     * gives: `refusalIsPermanent` says CAPABILITY_UNSUPPORTED cannot be fixed without a
+     * new release, so the row stops instead of being claimed on every tick.
+     */
+    const orderId = await paidOrder('sanaei-commercial');
+    await ctx.container.provisionerLoop.tick();
+    const service = await services.findByOrderId(tenantA, orderId);
+    const before = panel.requests.length;
+
+    for (const type of ['RENEW', 'ADD_TRAFFIC', 'ADD_TIME'] as const) {
+      await planByHand(service?.id ?? '', orderId, type, `sanaei-${type.toLowerCase()}`);
+    }
+    await ctx.container.provisionerLoop.tick();
+    await ctx.container.provisionerLoop.tick();
+    await ctx.container.provisionerLoop.tick();
+
+    expect(panel.requests.length, 'the panel was not contacted at all').toBe(before);
+    const planned = await operations.listForService(tenantA, service?.id ?? '', 20);
+    for (const type of ['RENEW', 'ADD_TRAFFIC', 'ADD_TIME'] as const) {
+      const operation = planned.find((one) => one.type === type);
+      expect(operation?.state, type).toBe('FAILED');
+      expect(operation?.failureMessage, type).toBe('CAPABILITY_UNSUPPORTED');
+    }
+    // And the customer's service is exactly as it was.
     expect((await services.findByOrderId(tenantA, orderId))?.state).toBe('ACTIVE');
   });
 
