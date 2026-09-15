@@ -260,7 +260,7 @@ template key, no string literals in surfaces.
 | Backoff                          | new `next_attempt_at` column                    | without it a failed op is a hot loop against a third party                                                                                          |
 | Delivery tracking                | new column on `services`, not a service state   | delivery failure must leave the service `ACTIVE` and be separately retryable                                                                        |
 | Capability declarations          | grow one at a time, in the implementing commit  | `provider.ts` records the rejection of the alternative                                                                                              |
-| Process role                     | the existing `worker`, not a fifth `main`       | the executor's calls are outbound HTTPS like the monitor's, but they are ORDER-driven and must not be delayed behind a slow panel sweep — see below |
+| Process role                     | a dedicated `provisioner`, a fifth `main`       | the executor's calls are outbound HTTPS like the monitor's, but they are ORDER-driven and must not be delayed behind a slow panel sweep — see below |
 
 ### The one genuinely open choice: which process runs the executor
 
@@ -273,7 +273,13 @@ config must not queue behind a sweep of every panel in the installation.
 
 Resolved: **a dedicated `provisioner` role**, a fifth `main`. It is the same image and
 the same module graph, selected by the container command, exactly as `monitor` and
-`recovery` already are. Recorded as an ADR.
+`recovery` already are.
+
+Recorded HERE and not in an ADR. The row above said the opposite of this paragraph for
+several commits — a decision table that contradicts the decision twelve lines below it is
+worse than no table, because a table is what a reader consults instead of the prose — and
+the sentence that followed it claimed an ADR that was never written. `docs/adr/` ends at 0029. The decision is small enough to live in this audit beside its reasoning; what it is
+not is a decision whose record points at a file that does not exist.
 
 ---
 

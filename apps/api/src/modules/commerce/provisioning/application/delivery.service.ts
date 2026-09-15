@@ -2,10 +2,8 @@ import {
   COMMERCE_ERROR_CODES,
   DELIVERY_MAX_ATTEMPTS,
   errors,
-  type ActorContext,
   type BotInstanceId,
   type Clock,
-  type IdGenerator,
   type ServiceDeliveryState,
   type TenantContext,
   type UnitOfWork,
@@ -136,7 +134,6 @@ export interface DeliveryServiceDeps {
   readonly scopeActivity: ScopeActivityReader;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly clock: Clock;
-  readonly ids: IdGenerator;
 }
 
 /**
@@ -197,8 +194,17 @@ export class DeliveryService {
        * The tenant has stopped accepting work.
        *
        * Refused BEFORE the send, not after: the record is the cheap half and the message
-       * is the half that cannot be taken back. `SCOPE_INACTIVE` is the same code every
-       * other stopped-tenant refusal uses, so a surface does not learn a second one.
+       * is the half that cannot be taken back.
+       *
+       * `SERVICE_NOT_DELIVERABLE` with a `reason`, which is NOT what the other
+       * stopped-tenant refusals look like — `order.service.ts`, `payment.service.ts`,
+       * wallet and catalog all throw `COMMERCE_REQUEST_INVALID` with no detail. The
+       * shape here is deliberate and the difference is worth stating: this refusal is
+       * about one SERVICE and a surface showing it has the service in front of the
+       * customer, so the reason distinguishes "the tenant has stopped" from "there is
+       * nothing to send yet", which are different sentences to show. Whichever surface
+       * wires `redeliver` maps both to a template key; neither reaches a customer as a
+       * code.
        */
       throw errors.conflict(
         COMMERCE_ERROR_CODES.SERVICE_NOT_DELIVERABLE,
@@ -412,6 +418,3 @@ const EMPTY_SWEEP: DeliverySweepReport = {
   errored: 0,
   lost: 0,
 };
-
-/** Kept so a reader can see the actor shape a sweep uses without opening the loop. */
-export type DeliveryActor = ActorContext;

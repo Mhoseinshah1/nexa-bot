@@ -34,6 +34,7 @@ import {
   failureNote,
   outcomeFor,
   providerRefFor,
+  provisionCall,
   reconcileCall,
   serviceEventFor,
   type ExecutionRefusal,
@@ -450,11 +451,9 @@ export class ProvisionerService {
      * compute a different expiry on every retry, so a create and the reconcile that
      * adopted it would disagree about when the service ends.
      */
-    const created = await adapter.createUser(target, http, {
-      username: ref.username,
-      subscriptionRef: ref.subscriptionRef,
-      clientId: ref.clientId,
-      serviceId: service.id as never,
+    const created = await provisionCall(adapter, target, http, {
+      serviceId: service.id,
+      ref,
       // Zero is the schema's unlimited and null is the adapter's. One translation, here.
       volumeBytes: service.trafficLimitBytes === 0n ? null : service.trafficLimitBytes,
       durationDays: bought.durationDays,

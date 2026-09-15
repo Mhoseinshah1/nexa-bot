@@ -4,16 +4,12 @@ import {
   OPERATION_MAX_ATTEMPTS,
   providerUsernameFor,
   UNLIMITED_DURATION_DAYS,
-  type Clock,
-  type Hasher,
   type OperationState,
   type ProviderAdapter,
   type ProviderFailureKind,
   type ProviderServiceTarget,
   type ProviderUserRef,
-  type UnitOfWork,
 } from '@nexa/contracts';
-import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { PanelOperabilityRefusal } from './ports.js';
 
 /**
@@ -111,15 +107,6 @@ export function expiryFor(now: Date, durationDays: number): Date | null {
   return new Date(now.getTime() + durationDays * 86_400_000);
 }
 
-export interface ProvisionExecutorDeps {
-  readonly uow: UnitOfWork<TransactionScope>;
-  readonly clock: Clock;
-  readonly hash: Hasher;
-  /** The worker's own identity, so a claim says who holds it. */
-  readonly workerId: string;
-  readonly leaseMs: number;
-}
-
 /**
  * Turns one provider outcome into the operation state it produces.
  *
@@ -168,11 +155,18 @@ export function exhausted(attempts: number): boolean {
  * this phase must not break is visible in the type: this function receives a target and
  * an adapter and returns a result, and it cannot be handed a transaction.
  *
- * `PROVISION` is the only type this release executes. `RECONCILE` is a READ and is
- * handled by `reconcileCall` below; every other member of `OPERATION_TYPES` arrives
- * with the phase that implements it, and reaching one here is a programming error
- * rather than a runtime condition — so it throws rather than returning a failure that
- * would be recorded as a provider's fault.
+ * `PROVISION` is the only type this release executes, and this function performs only
+ * that one — it does not switch on the operation type and must not grow a switch.
+ * `RECONCILE` is a READ and is handled by `reconcileCall` below; every other member of
+ * `OPERATION_TYPES` arrives with the phase that implements it, and the executor refuses
+ * an operation it cannot perform before it reaches here, at `decideOperability`, with a
+ * reason an operator can act on rather than an exception from inside a provider call.
+ *
+ * The docblock used to promise a throw for an unknown type. There is no such throw and
+ * never was: the body calls `createUser` unconditionally, so a future type routed
+ * through here would silently create a user on somebody's panel. It is written down
+ * rather than quietly fixed because the next author to add an operation type is the
+ * person that sentence would have misled.
  */
 export async function provisionCall(
   adapter: ProviderAdapter,

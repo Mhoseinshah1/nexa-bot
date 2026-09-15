@@ -28,7 +28,7 @@ import {
 } from './harness';
 
 /**
- * The eight provisioning invariants, against a real database.
+ * The provisioning invariants, against a real database.
  *
  * Every one of these is a way a customer ends up paying for one service and getting
  * none, or getting two. They are proven here rather than in a unit test because the

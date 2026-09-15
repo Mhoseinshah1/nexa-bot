@@ -33,7 +33,6 @@ import { PanelService } from './modules/platform/panels/application/panel.servic
 import { PanelMonitorService } from './modules/platform/panels/application/panel-monitor.service.js';
 import type { ProbeCoreDeps } from './modules/platform/panels/application/probe-core.js';
 import {
-  IMPLEMENTED_PROVIDER_TYPES,
   SERVICE_PROVIDER_TYPES,
   providerAdapter,
   providerServiceAdapter,
@@ -1114,7 +1113,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     scopeActivity: tenants,
     uow,
     clock,
-    ids,
   });
 
   /**

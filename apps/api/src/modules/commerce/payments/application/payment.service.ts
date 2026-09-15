@@ -163,10 +163,16 @@ function adminIdOf(actor: ActorContext): string | null {
  *
  * ## What this does NOT do
  *
- * It moves an order to `PAID` and stops. Nothing here provisions, activates, creates a
- * server or touches a panel, and no message it sends may say otherwise — the phase that
- * does those things is a later one, and a product that claims an effect that did not
- * happen is the defect class this codebase is organised around.
+ * **It touches no panel and contacts no provider.** Settling an order moves it to
+ * `PAID` and, in the same transaction, RECORDS that a service is owed — a row in
+ * `PENDING_PROVISION` and an operation in `PLANNED`, written by
+ * `ProvisioningService.planForSettledOrder`. Not one byte leaves this process on this
+ * path; the `provisioner` role picks the work up afterwards, outside every transaction.
+ *
+ * So no message this sends may tell a customer their service is ready. It is not, and
+ * a product that claims an effect that did not happen is the defect class this codebase
+ * is organised around. The announcement is the delivery sweep's, after a provider has
+ * actually answered.
  */
 export class PaymentService {
   constructor(private readonly deps: PaymentServiceDeps) {}
@@ -843,9 +849,7 @@ export class PaymentService {
      *
      * Nothing here contacts a provider. Two rows are written — a service in
      * `PENDING_PROVISION` and an operation in `PLANNED` — and the `provisioner` role
-     * picks the work up afterwards, outside every transaction. The comment above this
-     * class that said nothing provisions is now false about the phase and remains true
-     * about this method: it still touches no panel.
+     * picks the work up afterwards, outside every transaction.
      */
     await this.deps.provisioning.planForSettledOrder(scope, actor, settled, now, tx);
 

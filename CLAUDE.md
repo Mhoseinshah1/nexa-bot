@@ -159,7 +159,8 @@ apps/api             src/modules/<context>/{domain,application,infrastructure}
                      src/surfaces/{telegram,web}   src/infrastructure/  (adapters)
                      entrypoints: main.ts (api), main.worker.ts (worker),
                                   main.monitor.ts (panel health monitor),
-                                  main.recovery.ts (the destructive restore lane)
+                                  main.recovery.ts (the destructive restore lane),
+                                  main.provisioner.ts (creates services on panels)
 apps/web             React admin shell; may import @nexa/contracts and @nexa/i18n only
 ```
 

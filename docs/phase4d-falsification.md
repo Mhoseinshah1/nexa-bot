@@ -1,10 +1,19 @@
 # Phase 4D falsification — provisioning
 
-Every rule this phase introduces, mutated, with what the mutation actually did. Two of
-the five SURVIVED their first attempt, and both survivals were findings rather than
-noise: one about the harness, one about the test. They are recorded here with what was
-done about them, because a falsification record that lists only kills is a record of
-the mutations somebody chose to publish.
+The rules this phase introduces, mutated, with what the mutation actually did.
+
+**Five SURVIVED their first attempt**, and every survival was a finding rather than
+noise: two about a harness or a test that was weaker than the rule it named, and three
+about rules the suite could not distinguish from their own absence. They are recorded
+here with what was done about them, because a falsification record that lists only kills
+is a record of the mutations somebody chose to publish.
+
+It does NOT claim to cover every rule in the phase. A self-review found five load-bearing
+rules with no test at all — `markCallStarted`, the `UNKNOWN` outcome reaching
+`UNRECONCILED`, the delivery sweep's `ACTIVE` predicate, the provisioner's stopped-tenant
+gate and the delivery attempt ceiling — each proven missing by a mutation that passed.
+They are F4D-14 through F4D-18 below, and finding them is the reason this file's earlier
+claim to completeness was removed rather than restated.
 
 | #      | Rule                                                                 | Mutation                                                                                   | Named test                                                                                                 | Result |
 | ------ | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- | ------ |
@@ -21,6 +30,14 @@ the mutations somebody chose to publish.
 | F4D-11 | A blocked customer's service is not due, at the query                | `eq(customers.status, 'ACTIVE')` removed from `claimDeliveryDue`                           | `provisioning-delivery.test.ts` › does not announce to a customer an operator has blocked                  | KILLED |
 | F4D-12 | A stopped tenant's rows are not even claimed                         | `return EMPTY_SWEEP;` → `void EMPTY_SWEEP;`                                                | `provisioning-delivery.test.ts` › announces nothing for a tenant that has stopped accepting work           | KILLED |
 | F4D-13 | The send itself refuses a stopped tenant                             | `deliver`'s `scopeIsActive` guard → `if (false as boolean)`                                | `provisioning-delivery.test.ts` › announces nothing for a tenant that has stopped accepting work           | KILLED |
+| F4D-14 | The executor stamps `call_started_at` before making the call         | `markCallStarted(...)` → `void operation.id;`                                              | `provisioning-delivery.test.ts` › stamps that a provider call started, before making it                    | KILLED |
+| F4D-15 | An UNKNOWN provider outcome moves the service to `UNRECONCILED`      | `serviceEventFor` UNKNOWN → `null` instead of `PROVISION_LOST_TRACK`                       | `provisioning-delivery.test.ts` › creates one account when a create is cut off after the panel stored it   | KILLED |
+| F4D-16 | The delivery sweep takes ACTIVE services only                        | `eq(services.state, 'ACTIVE')` removed from `claimDeliveryDue`                             | `provisioning-delivery.test.ts` › creates one account when a create is cut off after the panel stored it   | KILLED |
+| F4D-17 | Delivery gives up after `DELIVERY_MAX_ATTEMPTS`                      | the ceiling branch → `return 'PENDING';` (never give up)                                   | `provisioning-delivery.test.ts` › gives up announcing after the attempts are spent, and says so            | KILLED |
+| F4D-18 | The provisioner refuses a stopped tenant                             | `if (!active) {` → `if (false as boolean) {`                                               | `provisioning-delivery.test.ts` › holds off a stopped tenant without spending an attempt on it             | KILLED |
+| F4D-19 | A hold-off refunds the attempt the claim counted                     | `attempts: GREATEST(attempts - 1, 0)` removed from `holdOff`                               | `provisioning-delivery.test.ts` › holds off a stopped tenant without spending an attempt on it             | KILLED |
+| F4D-20 | The create → reconcile → absent cycle is bounded                     | `if (cycles >= SERVICE_PROVISION_CYCLE_LIMIT) {` → `if (false as boolean) {`               | `provisioning-delivery.test.ts` › bounds the create-reconcile-absent cycle instead of dialling for ever    | KILLED |
+| F4D-21 | A reconcile is planned for an unresolved unknown outcome             | `await this.planReconciles(scope, now);` removed                                           | `provisioning-delivery.test.ts` › creates one account when a create is cut off after the panel stored it   | KILLED |
 
 ## F4D-03 survived its first attempt, and the harness was why
 
@@ -91,3 +108,37 @@ catches a change nobody made rather than that the rule is load-bearing.
 `provisioning-delivery.test.ts` › leaves the service ACTIVE when Telegram refuses the
 message asserts it anyway, because the next refactor that gives the sweep a service
 transition is the one this catches.
+
+## The five that survived because the rule had no test at all
+
+F4D-14 through F4D-18 were not written when this phase was first proposed as finished.
+They exist because a self-review ran a mutation against each of five rules and watched
+the whole suite stay green:
+
+- **`markCallStarted`** — every crash mid-create becomes a second paid-for account. The
+  lease-sweep guard HAD a test, but that test wrote `call_started_at` itself, so nothing
+  distinguished "the executor stamps it" from "the executor does not".
+- **`UNKNOWN` → `UNRECONCILED`** — a timeout leaves the service `PENDING_PROVISION`, so
+  `retryProvisioning`, which refuses only `UNRECONCILED`, happily plans a second create.
+- **the sweep's `ACTIVE` predicate** — a `PENDING_PROVISION` service is immediately due,
+  is claimed, has no subscription URL and is recorded `FAILED`; `FAILED` is not swept, so
+  the customer is never told even after provisioning succeeds.
+- **the stopped-tenant gate** — a tenant an operator has stopped goes on having its
+  panels dialled with its operator's credentials.
+- **the delivery ceiling** — "always PENDING" passes: the ceiling, and the argument for
+  why it is lower than `OPERATION_MAX_ATTEMPTS`, described behaviour nothing checked.
+
+The common cause is one gap: **no test in the phase made the provider fail.** The fake
+3X-UI was only ever driven down its success path, and every one of these rules is
+reachable only through a failure. Two failure behaviours and a `setBehaviour` were added
+to the fixture, and four of the five now die to a case that exercises a real one.
+
+## What writing F4D-20's test found
+
+The cycle it bounds did not exist until this branch wired the reconcile, so the defect
+arrived with the fix. Each round of create → unknown → reconcile → absent derives a NEW
+operation id from the round before, so nothing collides, the per-operation attempt
+ceiling never applies, and a panel that failed every create while answering every lookup
+"absent" would have been dialled for ever at the tenant's budget. The test was written to
+assert a three-tick sequence and instead recorded one tick doing the whole loop — which
+is what made the absence of a ceiling visible.
