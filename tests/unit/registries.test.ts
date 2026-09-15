@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   failureOutcome,
+  isIdempotentMutation,
   isMutatingOperation,
   isServiceAdapter,
+  operationFailureOutcome,
   OPERATION_REQUIRED_CAPABILITIES,
   OPERATION_TYPES,
   PROVIDER_CAPABILITIES,
   PROVIDER_TYPES,
+  SERVICE_MACHINE,
   SERVICE_STATES,
   type ProviderCapability,
   type ProviderType,
@@ -446,16 +449,78 @@ describe('the operation dispatch cannot fail open', () => {
     }
   });
 
-  it('names exactly the three types 4E performs, and no more', () => {
+  it('names exactly the six types 4E performs, and no more', () => {
     // Pinned as a literal on purpose. RENEW, ADD_TRAFFIC and ADD_TIME are commerce and
-    // belong to 4F; SUSPEND, RESUME and TERMINATE need adapter methods no provider
-    // declares; ROTATE_SUBSCRIPTION has neither. Adding one to the constant without
-    // writing its branch fails here rather than on somebody's panel.
+    // belong to 4F; ROTATE_SUBSCRIPTION has neither an adapter method nor a product
+    // decision. Adding one to the constant without writing its branch fails here rather
+    // than on somebody's panel.
     expect([...PERFORMABLE_OPERATION_TYPES].sort()).toEqual([
       'PROVISION',
       'RECONCILE',
+      'RESUME',
+      'SUSPEND',
       'SYNC_USAGE',
+      'TERMINATE',
     ]);
+  });
+
+  it('gives each management type exactly the SERVICE_MACHINE edges it may take', () => {
+    /*
+     * Transcribed from the machine and asserted AGAINST it, which is different from
+     * deriving one from the other: the derivation would track a future edge silently,
+     * and the whole point is that a new state the provisioner is willing to suspend
+     * from should be somebody's decision.
+     *
+     * So this checks the transcription is a SUBSET of what the machine allows — a
+     * legal-from state with no edge would be an operation that can never move its
+     * service, which is an operation that reports success and changes nothing.
+     */
+    const edges = (event: string): readonly string[] =>
+      SERVICE_MACHINE.transitions
+        .filter((transition) => transition.on === event)
+        .map((transition) => transition.from);
+
+    expect([...OPERATION_LEGAL_FROM['SUSPEND']].sort()).toEqual([...edges('SUSPEND')].sort());
+    expect([...OPERATION_LEGAL_FROM['RESUME']].sort()).toEqual([...edges('RESUME')].sort());
+    expect([...OPERATION_LEGAL_FROM['TERMINATE']].sort()).toEqual([...edges('TERMINATE')].sort());
+  });
+
+  it('never lets a terminated service be terminated again', () => {
+    // A second TERMINATE would be a second DELETE against somebody's panel for a
+    // service this installation already ended. `TERMINATED` is terminal in
+    // SERVICE_MACHINE and must stay absent here.
+    expect(OPERATION_LEGAL_FROM['TERMINATE']).not.toContain('TERMINATED');
+  });
+
+  it('classifies the three management types as idempotent mutations, and PROVISION not', () => {
+    /*
+     * The distinction measured against a real panel: a repeated disable is 200, a
+     * repeated enable is 200, a repeated delete is 404 — all three outcomes the
+     * operation asked for. A repeated create is a second account.
+     *
+     * The consequence is the row below: an uncertain suspend is FAILED, so it is
+     * retried as the same suspend; an uncertain create is UNKNOWN, so it waits for a
+     * read. Getting this backwards for PROVISION costs a customer a duplicate account;
+     * getting it backwards for SUSPEND strands the operation for ever, because
+     * `RECONCILE` reads whether an account EXISTS and never what state it is in.
+     */
+    for (const type of ['SUSPEND', 'RESUME', 'TERMINATE'] as const) {
+      expect(isMutatingOperation(type), `${type} mutates`).toBe(true);
+      expect(isIdempotentMutation(type), `${type} is idempotent`).toBe(true);
+      expect(operationFailureOutcome('TIMEOUT', type)).toBe('FAILED');
+      expect(operationFailureOutcome('PROVIDER_ERROR', type)).toBe('FAILED');
+    }
+    expect(isIdempotentMutation('PROVISION')).toBe(false);
+    expect(operationFailureOutcome('TIMEOUT', 'PROVISION')).toBe('UNKNOWN');
+    expect(operationFailureOutcome('PROVIDER_ERROR', 'PROVISION')).toBe('UNKNOWN');
+    // And a kind that proves nothing happened is still FAILED for a create.
+    expect(operationFailureOutcome('UNREACHABLE', 'PROVISION')).toBe('FAILED');
+  });
+
+  it('requires the capability each management operation actually needs', () => {
+    expect(OPERATION_REQUIRED_CAPABILITIES['SUSPEND']).toEqual(['DISABLE_USER']);
+    expect(OPERATION_REQUIRED_CAPABILITIES['RESUME']).toEqual(['ENABLE_USER']);
+    expect(OPERATION_REQUIRED_CAPABILITIES['TERMINATE']).toEqual(['DELETE_USER']);
   });
 
   it('every legal-from state is a real service state', () => {

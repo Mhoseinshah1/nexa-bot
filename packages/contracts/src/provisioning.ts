@@ -258,6 +258,78 @@ export function isMutatingOperation(type: OperationType): boolean {
 }
 
 /**
+ * The mutations whose provider-side effect is IDEMPOTENT — replaying one changes
+ * nothing the first one did not already do.
+ *
+ * A different question from `isMutatingOperation`, and the one that decides whether an
+ * uncertain outcome may simply be tried again.
+ *
+ * `PROVISION` is the reason `failureOutcome` exists: a create whose answer was lost may
+ * have taken effect, and repeating it costs the customer a second account and the
+ * operator a second bill. So it becomes `UNKNOWN`, and `UNKNOWN` is resolved by a READ
+ * — `RECONCILE` asks the panel whether the account is there.
+ *
+ * These three are not like that, and the difference was MEASURED against a real panel
+ * rather than reasoned about (`docs/real-panel-acceptance.md`):
+ *
+ *   - a repeated disable answers 200 and leaves the account disabled;
+ *   - a repeated enable answers 200 and leaves it active;
+ *   - a repeated delete answers 404, which is the outcome the operation asked for.
+ *
+ * So an uncertain suspend is retried as the same suspend. That is not merely more
+ * convenient than `UNKNOWN` — it is the only thing that WORKS, because `UNKNOWN` is
+ * resolved by `RECONCILE`, `RECONCILE` calls `lookupUser`, and `lookupUser` answers
+ * whether an account EXISTS and not what state it is in. An uncertain suspend routed to
+ * reconciliation would sit in `UNKNOWN` for ever with nothing able to decide it, which
+ * is the dead end `UNRECONCILED` had in Phase 4D and that 4D-R1 was written to remove.
+ *
+ * The obvious hazard — a suspend replayed against a service somebody resumed in between
+ * — cannot arise from inside this system, and the reason is structural rather than
+ * lucky. `OPERATION_LEGAL_FROM.RESUME` is `['SUSPENDED']`, and a service whose suspend
+ * did not complete is still `ACTIVE`, so there is nothing to resume. An operator who
+ * re-enables the account on the panel directly is outside what this installation models,
+ * and is outside what any classification here could protect.
+ *
+ * Adding a type to this list is a claim about a wire contract. It needs the same
+ * evidence the three above have: a panel, run twice.
+ */
+export const IDEMPOTENT_MUTATIONS = [
+  'SUSPEND',
+  'RESUME',
+  'TERMINATE',
+] as const satisfies readonly OperationType[];
+
+export function isIdempotentMutation(type: OperationType): boolean {
+  return (IDEMPOTENT_MUTATIONS as readonly string[]).includes(type);
+}
+
+/**
+ * The operation state one provider failure produces, for one operation type.
+ *
+ * The single place the two axes above are combined, so no caller has to remember to ask
+ * both. `failureOutcome` answers "did the request certainly not take effect" and stays
+ * exactly as it was — this does not re-derive it and must not.
+ *
+ *   a READ                  -> FAILED. There is nothing to be uncertain about.
+ *   an IDEMPOTENT mutation  -> FAILED. Uncertain, and retrying it is the resolution.
+ *   anything else           -> `failureOutcome`, which yields UNKNOWN unless the
+ *                              failure kind proves nothing happened.
+ *
+ * `FAILED` is not "give up": `PROVIDER_FAILURE_RETRYABLE` still decides whether the
+ * operation is planned again with a backoff or becomes terminal, and the attempt
+ * ceiling still applies. What `FAILED` says here is that the next attempt may be the
+ * same mutation, which for these three is true and for a create is not.
+ */
+export function operationFailureOutcome(
+  kind: ProviderFailureKind,
+  type: OperationType,
+): OperationState {
+  if (!isMutatingOperation(type)) return 'FAILED';
+  if (isIdempotentMutation(type)) return 'FAILED';
+  return failureOutcome(kind, true);
+}
+
+/**
  * How long a worker's claim on an operation is good for.
  *
  * A bound, not a policy: the configured lease is an operator setting. The floor is

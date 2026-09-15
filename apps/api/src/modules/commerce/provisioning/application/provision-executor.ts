@@ -1,9 +1,11 @@
 import {
-  failureOutcome,
-  isMutatingOperation,
   OPERATION_MAX_ATTEMPTS,
+  operationFailureOutcome,
   providerUsernameFor,
   UNLIMITED_DURATION_DAYS,
+  type CanDeleteUser,
+  type CanDisableUser,
+  type CanEnableUser,
   type OperationState,
   type OperationType,
   type ProviderAdapter,
@@ -122,17 +124,23 @@ export function expiryFor(now: Date, durationDays: number): Date | null {
 /**
  * Turns one provider outcome into the operation state it produces.
  *
- * Delegates to `failureOutcome`, which is pure, total and already written. This phase
- * must not re-derive that table: the division it encodes is not transient-versus-
- * permanent but "did the request certainly not take effect", and a second copy would be
- * a second place for `TIMEOUT` to be optimistically reclassified as retryable — which
- * costs a customer a duplicate account.
+ * Delegates to `operationFailureOutcome`, which is pure, total and already written.
+ * This phase must not re-derive that table: the division it encodes is not
+ * transient-versus-permanent but "did the request certainly not take effect", and a
+ * second copy would be a second place for `TIMEOUT` to be optimistically reclassified
+ * as retryable — which costs a customer a duplicate account.
+ *
+ * It used to call `failureOutcome(failure, isMutatingOperation(type))` directly. The
+ * contract now combines both axes in one function, because a third axis joined them:
+ * whether the mutation is IDEMPOTENT, which decides whether an uncertain outcome may be
+ * retried as itself instead of waiting for a read. Asking one function rather than two
+ * is what stops a caller answering one and forgetting the other.
  */
 export function outcomeFor(
   failure: ProviderFailureKind,
-  operationType: Parameters<typeof isMutatingOperation>[0],
+  operationType: OperationType,
 ): OperationState {
-  return failureOutcome(failure, isMutatingOperation(operationType));
+  return operationFailureOutcome(failure, operationType);
 }
 
 /**
@@ -174,13 +182,23 @@ export function exhausted(attempts: number): boolean {
  * instead of producing a silent create on somebody's panel.
  *
  * `RENEW`, `ADD_TRAFFIC` and `ADD_TIME` are commerce — each needs a new paid order
- * against an existing service — and are Phase 4F. `SUSPEND`, `RESUME` and `TERMINATE`
- * need adapter methods no provider declares yet. `ROTATE_SUBSCRIPTION` has neither.
+ * against an existing service — and are Phase 4F. `ROTATE_SUBSCRIPTION` has neither an
+ * adapter method nor a product decision behind it.
+ *
+ * `SUSPEND`, `RESUME` and `TERMINATE` joined the list once Marzban could perform them.
+ * Membership here is NOT a claim that every panel can: `decideOperability` checks each
+ * type's required capability against the panel's own descriptor, so the same operation
+ * against a 3X-UI-backed service is refused with `CAPABILITY_UNSUPPORTED` before
+ * anything is dialled. This list says "the executor has a branch for it"; the
+ * descriptor says "this panel can do it"; both have to be true.
  */
 export const PERFORMABLE_OPERATION_TYPES = [
   'PROVISION',
   'RECONCILE',
   'SYNC_USAGE',
+  'SUSPEND',
+  'RESUME',
+  'TERMINATE',
 ] as const satisfies readonly OperationType[];
 
 export function isPerformableOperation(type: OperationType): boolean {
@@ -206,15 +224,37 @@ export const OPERATION_LEGAL_FROM: Readonly<Record<OperationType, readonly Servi
   PROVISION: ['PENDING_PROVISION'],
   RECONCILE: ['UNRECONCILED'],
   SYNC_USAGE: ['ACTIVE'],
+  /*
+   * Transcribed from `SERVICE_MACHINE`, one edge at a time, and deliberately not
+   * computed from it.
+   *
+   * A derivation would track the machine automatically, which sounds like the safer
+   * option and is the opposite: a future edge added for one reason — say
+   * `EXPIRED -> ACTIVE on RENEW` gaining a sibling — would silently become a state the
+   * provisioner is willing to suspend from, with no commit and no review anywhere near
+   * the executor. Writing them out means adding a state here is a decision somebody
+   * made.
+   *
+   * `SUSPEND` from `ACTIVE` and `RESUME` from `SUSPENDED` are each one edge, and each
+   * is the only edge that reaches its target on that event.
+   */
+  SUSPEND: ['ACTIVE'],
+  RESUME: ['SUSPENDED'],
+  /*
+   * `TERMINATE` from every state that is not already terminal, because
+   * `SERVICE_MACHINE` has an edge to `TERMINATED` from each of them. That is the point
+   * of terminate: a service an operator or a customer has decided to end must be
+   * endable whatever went wrong on the way, including one stuck in `UNRECONCILED`
+   * after a lost create. `TERMINATED` itself is absent — it is terminal, and a second
+   * terminate is refused here rather than turned into a second DELETE against a panel.
+   */
+  TERMINATE: ['PENDING_PROVISION', 'UNRECONCILED', 'ACTIVE', 'SUSPENDED', 'EXPIRED'],
   // Not performable in this release. Empty rather than absent, so that a type reaching
   // here is refused by the state check as well as by `isPerformableOperation` — two
   // independent refusals, because this is the edit that must not fail open.
   RENEW: [],
   ADD_TRAFFIC: [],
   ADD_TIME: [],
-  SUSPEND: [],
-  RESUME: [],
-  TERMINATE: [],
   ROTATE_SUBSCRIPTION: [],
 };
 
@@ -284,6 +324,60 @@ export async function usageSyncCall(
 ): ReturnType<ProviderAdapter['readUsage']> {
   return adapter.readUsage(target, http, ref);
 }
+
+/**
+ * The three management calls, each its own function beside `provisionCall`.
+ *
+ * Three, not one with a parameter, for the reason `provisionCall`'s docblock gives
+ * about itself: a function that switches on the operation type is a function a
+ * mis-routed type can make do the wrong thing, and the wrong thing here is deleting a
+ * customer's account instead of pausing it. Each of these calls exactly one adapter
+ * method and cannot be handed a transaction.
+ *
+ * The adapter arrives ALREADY NARROWED — `CanDisableUser`, `CanEnableUser`,
+ * `CanDeleteUser` — so the method is present by type rather than by a check inside.
+ * `canDisableUser` and its siblings are the only way to produce those types, and each
+ * requires the declared capability as well as the method, so a caller cannot reach
+ * these functions with an adapter that does not advertise the operation.
+ */
+export async function suspendCall(
+  adapter: CanDisableUser,
+  target: ProviderServiceTarget,
+  http: Parameters<CanDisableUser['suspendUser']>[1],
+  ref: ProviderUserRef,
+): ReturnType<CanDisableUser['suspendUser']> {
+  return adapter.suspendUser(target, http, ref);
+}
+
+export async function resumeCall(
+  adapter: CanEnableUser,
+  target: ProviderServiceTarget,
+  http: Parameters<CanEnableUser['resumeUser']>[1],
+  ref: ProviderUserRef,
+): ReturnType<CanEnableUser['resumeUser']> {
+  return adapter.resumeUser(target, http, ref);
+}
+
+export async function terminateCall(
+  adapter: CanDeleteUser,
+  target: ProviderServiceTarget,
+  http: Parameters<CanDeleteUser['terminateUser']>[1],
+  ref: ProviderUserRef,
+): ReturnType<CanDeleteUser['terminateUser']> {
+  return adapter.terminateUser(target, http, ref);
+}
+
+/**
+ * Which service state each management operation moves a service INTO, on success.
+ *
+ * A table rather than a branch, and only for the two that have exactly one target.
+ * `TERMINATE` is absent because its target is `TERMINATED` from any of five states, so
+ * the `from` is the service's own current state and is read at the call site.
+ */
+export const MANAGEMENT_TARGET_STATE: Readonly<Record<'SUSPEND' | 'RESUME', ServiceState>> = {
+  SUSPEND: 'SUSPENDED',
+  RESUME: 'ACTIVE',
+};
 
 /**
  * What a reconcile established, translated into the service transition it justifies.
