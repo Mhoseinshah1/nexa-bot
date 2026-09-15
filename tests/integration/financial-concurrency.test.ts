@@ -166,6 +166,25 @@ describe('financial concurrency', () => {
     const held = new Promise<void>((resolve) => {
       release = resolve;
     });
+    /*
+     * The holder ANNOUNCES that its write has landed, and the racer waits for it.
+     *
+     * Starting the racer straight after creating the holder's promise is a hope, not a
+     * fact: `uow.run` is not awaited, so at that moment the holder may not have opened
+     * its transaction, let alone taken the row lock. Under load — the full suite, a busy
+     * CI runner — the racer can win that start, acquire the lock first, and complete
+     * before the holder has written anything, which turns a case about contention into a
+     * case about nothing and fails on the wrong assertion.
+     *
+     * It is the lesson `docs/phase4d-falsification.md` records as F4D-05 in another
+     * module: the interleaving is MADE, not hoped for. The sleep below keeps its
+     * separate job — giving the racer time to reach the lock and BLOCK on it — which is
+     * a wait for a state nothing in-process can observe.
+     */
+    let holding: () => void = () => undefined;
+    const locked = new Promise<void>((resolve) => {
+      holding = resolve;
+    });
     let first: 'ok' | 'failed' = 'failed';
     const holder = ctx.container.uow.run(tenantA, async (tx) => {
       await wallet.append(
@@ -183,11 +202,14 @@ describe('financial concurrency', () => {
         tx,
       );
       first = 'ok';
+      holding();
       await held;
     });
 
-    // Started while the holder's transaction is open. Its own balance read happens
-    // inside its transaction, which begins before the holder commits.
+    // Started only once the holder's write has landed, so its transaction is provably
+    // open and holding the row. Its own balance read happens inside its own
+    // transaction, which begins before the holder commits.
+    await locked;
     const racing = debit(80_000n, 'race-debit-0002').then(
       () => 'settled' as const,
       (error: unknown) => error,
@@ -241,6 +263,25 @@ describe('financial concurrency', () => {
     const held = new Promise<void>((resolve) => {
       release = resolve;
     });
+    /*
+     * The holder ANNOUNCES that its write has landed, and the racer waits for it.
+     *
+     * Starting the racer straight after creating the holder's promise is a hope, not a
+     * fact: `uow.run` is not awaited, so at that moment the holder may not have opened
+     * its transaction, let alone taken the row lock. Under load — the full suite, a busy
+     * CI runner — the racer can win that start, acquire the lock first, and complete
+     * before the holder has written anything, which turns a case about contention into a
+     * case about nothing and fails on the wrong assertion.
+     *
+     * It is the lesson `docs/phase4d-falsification.md` records as F4D-05 in another
+     * module: the interleaving is MADE, not hoped for. The sleep below keeps its
+     * separate job — giving the racer time to reach the lock and BLOCK on it — which is
+     * a wait for a state nothing in-process can observe.
+     */
+    let holding: () => void = () => undefined;
+    const locked = new Promise<void>((resolve) => {
+      holding = resolve;
+    });
     const holder = ctx.container.uow.run(tenantA, async (tx) => {
       await wallet.append(
         tenantA,
@@ -256,9 +297,11 @@ describe('financial concurrency', () => {
         },
         tx,
       );
+      holding();
       await held;
     });
 
+    await locked;
     const racing = ctx.container.payments
       .settleFromWallet(tenantA, systemActor('race-pay'), customerA, {
         idempotencyKey: 'race-settle-0001',
@@ -379,6 +422,25 @@ describe('financial concurrency', () => {
     const held = new Promise<void>((resolve) => {
       release = resolve;
     });
+    /*
+     * The holder ANNOUNCES that its write has landed, and the racer waits for it.
+     *
+     * Starting the racer straight after creating the holder's promise is a hope, not a
+     * fact: `uow.run` is not awaited, so at that moment the holder may not have opened
+     * its transaction, let alone taken the row lock. Under load — the full suite, a busy
+     * CI runner — the racer can win that start, acquire the lock first, and complete
+     * before the holder has written anything, which turns a case about contention into a
+     * case about nothing and fails on the wrong assertion.
+     *
+     * It is the lesson `docs/phase4d-falsification.md` records as F4D-05 in another
+     * module: the interleaving is MADE, not hoped for. The sleep below keeps its
+     * separate job — giving the racer time to reach the lock and BLOCK on it — which is
+     * a wait for a state nothing in-process can observe.
+     */
+    let holding: () => void = () => undefined;
+    const locked = new Promise<void>((resolve) => {
+      holding = resolve;
+    });
     const holder = ctx.container.uow.run(tenantA, async (tx) => {
       // The customer row, so the racer blocks exactly where a real settlement would.
       expect(await wallet.lockCustomer(tenantA, customerA, tx)).toBe(true);
@@ -393,9 +455,11 @@ describe('financial concurrency', () => {
         tx,
       );
       expect(moved).toBe(true);
+      holding();
       await held;
     });
 
+    await locked;
     const racing = ctx.container.payments
       .settleFromWallet(tenantA, systemActor('race-double'), customerA, {
         idempotencyKey: 'race-double-settle-0001',
@@ -444,6 +508,25 @@ describe('financial concurrency', () => {
     const held = new Promise<void>((resolve) => {
       release = resolve;
     });
+    /*
+     * The holder ANNOUNCES that its write has landed, and the racer waits for it.
+     *
+     * Starting the racer straight after creating the holder's promise is a hope, not a
+     * fact: `uow.run` is not awaited, so at that moment the holder may not have opened
+     * its transaction, let alone taken the row lock. Under load — the full suite, a busy
+     * CI runner — the racer can win that start, acquire the lock first, and complete
+     * before the holder has written anything, which turns a case about contention into a
+     * case about nothing and fails on the wrong assertion.
+     *
+     * It is the lesson `docs/phase4d-falsification.md` records as F4D-05 in another
+     * module: the interleaving is MADE, not hoped for. The sleep below keeps its
+     * separate job — giving the racer time to reach the lock and BLOCK on it — which is
+     * a wait for a state nothing in-process can observe.
+     */
+    let holding: () => void = () => undefined;
+    const locked = new Promise<void>((resolve) => {
+      holding = resolve;
+    });
     const holder = ctx.container.uow.run(tenantA, async (tx) => {
       const moved = await orders.transition(
         tenantA,
@@ -455,9 +538,11 @@ describe('financial concurrency', () => {
         tx,
       );
       expect(moved).toBe(true);
+      holding();
       await held;
     });
 
+    await locked;
     const racing = ctx.container.payments
       .confirmManualTransfer(tenantA, reviewer, pending.id, {
         idempotencyKey: 'race-stale-confirm-0001',

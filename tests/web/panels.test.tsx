@@ -307,6 +307,7 @@ describe('the panel detail', () => {
           password: { configured: true, lastReplacedAt: '2026-01-01T00:00:00.000Z' },
           apiToken: { configured: false, lastReplacedAt: null },
         },
+        activation: null,
       }),
     );
     const { container } = renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
@@ -553,6 +554,7 @@ describe('the panel detail', () => {
           password: { configured: false, lastReplacedAt: null },
           apiToken: { configured: false, lastReplacedAt: null },
         },
+        activation: null,
       }),
     );
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
@@ -585,6 +587,7 @@ describe('the panel detail', () => {
           password: { configured: false, lastReplacedAt: null },
           apiToken: { configured: true, lastReplacedAt: '2026-01-01T00:00:00.000Z' },
         },
+        activation: null,
       }),
     );
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
@@ -937,6 +940,7 @@ describe('the panel detail', () => {
           password: { configured: true, lastReplacedAt: '2026-01-01T00:00:00.000Z' },
           apiToken: { configured: true, lastReplacedAt: '2026-01-01T00:00:00.000Z' },
         },
+        activation: null,
       }),
     );
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);

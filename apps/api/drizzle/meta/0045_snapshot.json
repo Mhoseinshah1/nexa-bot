@@ -1,5 +1,5 @@
 {
-  "id": "3d070ecf-db85-4e2c-ab81-98903fd10900",
+  "id": "7109d809-420e-4681-8978-2ddb01abefb4",
   "prevId": "05f154cc-51a2-4de6-beba-6b2f256563ac",
   "version": "7",
   "dialect": "postgresql",
@@ -6104,13 +6104,15 @@
           "name": "subscription_ref",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": true,
+          "default": "md5(gen_random_uuid()::text)"
         },
         "provider_client_id": {
           "name": "provider_client_id",
           "type": "uuid",
           "primaryKey": false,
-          "notNull": true
+          "notNull": true,
+          "default": "gen_random_uuid()"
         },
         "provider_user_id": {
           "name": "provider_user_id",

@@ -2596,8 +2596,17 @@ export const services = pgTable(
      * Stored rather than derived loses nothing: it is written BEFORE any provider call,
      * so a create whose answer was lost can still be reconciled against it — which is
      * the only property the derivation was there to provide.
+     *
+     * The DEFAULT is the rollback window, not a convenience. `NOT NULL` with no default
+     * would narrow what the release before this one can write, which
+     * `migration-compatibility.test.ts` forbids by name — so a release rolled back onto
+     * this schema keeps inserting, and any row it writes gets a distinct random value
+     * rather than a null or a shared sentinel. `ServiceDraft` requires both fields, so
+     * nothing in THIS release ever relies on the default.
      */
-    subscriptionRef: text('subscription_ref').notNull(),
+    subscriptionRef: text('subscription_ref')
+      .notNull()
+      .default(sql`md5(gen_random_uuid()::text)`),
     /**
      * The client UUID a panel that keys clients by one assigns this service. A
      * CREDENTIAL.
@@ -2606,7 +2615,9 @@ export const services = pgTable(
      * Random and stored for exactly the reasons above; formatted as a v4 UUID because
      * that is what the panels validate.
      */
-    providerClientId: uuid('provider_client_id').notNull(),
+    providerClientId: uuid('provider_client_id')
+      .notNull()
+      .default(sql`gen_random_uuid()`),
     /** The provider's own identifier, once a provider has told us one. */
     providerUserId: text('provider_user_id'),
     /**
