@@ -263,3 +263,68 @@ failure column carries which, so the two different jobs read differently.
   by omission.
 - A panel that answers the status route correctly but is unwell in ways that
   route does not report will read as healthy; richer health is a later phase.
+
+## The service half, read at the same commit
+
+Phase 4D added creating a client and reading its traffic. It did **not** repeat the
+verification step this document exists to record, and both routes it added were wrong —
+they were the v2.x paths. The correction and its evidence are here so the next reader
+checks this table rather than the adapter.
+
+Read from `v3.7.0`, which `git rev-parse` confirms is the pinned commit above.
+
+| Operation     | Route                                  | Registered in                       |
+| ------------- | -------------------------------------- | ----------------------------------- |
+| Create client | `POST panel/api/clients/add`           | `internal/web/controller/client.go` |
+| Read traffic  | `GET panel/api/clients/traffic/:email` | `internal/web/controller/client.go` |
+| Update client | `POST panel/api/clients/update/:email` | `internal/web/controller/client.go` |
+| Delete client | `POST panel/api/clients/del/:email`    | `internal/web/controller/client.go` |
+
+`internal/web/controller/inbound.go` registers **no** client routes. A grep of the whole
+tree at that tag finds `addClient` only as a UI translation string and
+`getClientTraffics` nowhere; the one back-compat alias in the tree is an unrelated
+`outbound-subs` route.
+
+**The create body** is `service.ClientCreatePayload`, bound with `ShouldBindJSON`:
+
+```json
+{
+  "client": {
+    "id": "…",
+    "email": "…",
+    "subId": "…",
+    "limitIp": 0,
+    "totalGB": 0,
+    "expiryTime": 0,
+    "enable": true,
+    "tgId": 0,
+    "flow": "",
+    "reset": 0
+  },
+  "inboundIds": [1]
+}
+```
+
+One client as a nested object, not a `clients` array; `inboundIds` beside it, not an
+`id` field; JSON, not a form carrying an embedded JSON string. The adapter previously
+sent the form-and-string envelope under a comment asserting that nested JSON was "the
+shape the panel does not accept", which is the opposite of what `create` does.
+
+**Field meanings that are easy to get wrong**, all still true:
+
+- `totalGB` is **bytes**, despite the name. `model.Client.TotalGB` is an `int64` that
+  flows straight to `xray.ClientTraffic.Total`.
+- `expiryTime` is epoch **milliseconds**; `0` is 3X-UI's own "no expiry".
+- `tgId` is an `int64`. Zero means no Telegram id — not the empty string.
+- `limitIp` is the device limit, which is why the descriptor declares `LIMIT_DEVICES`.
+
+**Absence is a positive answer.** `InboundService.GetClientTrafficByEmail` returns
+`(nil, nil)` for an unknown email, which the controller renders as a successful envelope
+with `obj: null`. That is what makes `lookupUser` able to report `found: false` and what
+makes a fresh create legal after a reconcile.
+
+**What guards this table.** `tests/unit/provider-wire-routes.test.ts` asserts the
+adapter's path constants against it. That does not prove the table matches upstream —
+nothing offline can — but it makes this the one place a route is verified and stops an
+adapter disagreeing with it silently. The other half is `docs/vps-acceptance.md`, which
+has never been run; first contact with a real panel is what catches the next one.

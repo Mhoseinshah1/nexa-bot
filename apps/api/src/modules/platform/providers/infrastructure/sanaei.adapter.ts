@@ -86,7 +86,7 @@ import {
  * a differently-configured host the same mistake would send credentials to
  * whatever else is mounted at the root.
  */
-const STATUS_PATH = 'panel/api/server/status';
+export const STATUS_PATH = 'panel/api/server/status';
 const CSRF_PATH = 'csrf-token';
 const TWO_FACTOR_PATH = 'getTwoFactorEnable';
 const LOGIN_PATH = 'login';
@@ -113,8 +113,8 @@ const LOGIN_PATH = 'login';
  * this release issued against a real panel would have been a 404 — the phase that
  * shipped them could take a customer's money and call a route that is not there.
  */
-const ADD_CLIENT_PATH = 'panel/api/clients/add';
-const CLIENT_TRAFFICS_PATH = 'panel/api/clients/traffic';
+export const ADD_CLIENT_PATH = 'panel/api/clients/add';
+export const CLIENT_TRAFFICS_PATH = 'panel/api/clients/traffic';
 
 /**
  * v3.7.0's `checkAPIAuth` answers an unauthenticated `/panel/api` request 401

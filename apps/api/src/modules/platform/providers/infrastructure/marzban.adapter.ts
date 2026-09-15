@@ -48,10 +48,10 @@ import {
  */
 
 /** Marzban's token endpoint. Form-encoded, as an OAuth2 password grant. */
-const TOKEN_PATH = 'api/admin/token';
-const SYSTEM_PATH = 'api/system';
+export const TOKEN_PATH = 'api/admin/token';
+export const SYSTEM_PATH = 'api/system';
 /** Creating a user, and reading one back. Marzban keys users by the name we chose. */
-const USER_PATH = 'api/user';
+export const USER_PATH = 'api/user';
 
 const DESCRIPTOR: ProviderDescriptor = providerDescriptor('marzban') ?? {
   // Unreachable: `marzban` is in `PROVIDER_TYPES`, and a unit test proves every
