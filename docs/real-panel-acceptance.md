@@ -84,6 +84,10 @@ export NEXA_ACCEPTANCE_PANEL_USERNAME=... NEXA_ACCEPTANCE_PANEL_PASSWORD=...
 export NEXA_ACCEPTANCE_PANEL_INBOUND_ID=1 NEXA_ACCEPTANCE_PANEL_INBOUND_PORT=20443
 export NEXA_ACCEPTANCE_SUB_URL=http://127.0.0.2:2096/
 pnpm test:acceptance
+
+# and, for the tunnel check below
+export NEXA_ACCEPTANCE_XRAY_BIN="$ACC/bin/xray-linux-amd64"
+scripts/real-panel-tunnel-check.sh <sub-id> [expected-uuid]
 ```
 
 Without `NEXA_ACCEPTANCE_PANEL_URL` the suite **fails with an explanation**
@@ -108,6 +112,52 @@ Twenty-five cases, grouped as the eight things an operator needs true.
 | A6    | A replay does not give the customer two accounts, a different identity cannot take a name already in use, and two concurrent creates leave exactly one account.                                                                                    |
 | A7    | No credential reaches an outcome, an error or a thrown stack — on success, on a rejected login, and against an unreachable panel.                                                                                                                  |
 | A8    | Two services never collide on one panel; a lookup addressed at a different panel is a FAILURE and never `found: false`; the panel's `webBasePath` is honoured.                                                                                     |
+
+## Does the link actually carry traffic?
+
+A4 proves the served config names the right UUID and the right port. That is not
+the question the customer is asking. A config can name both and still not
+connect — a `flow` the inbound refuses, a `limitIp` it does not support, an
+inbound the panel accepted and Xray will not serve. Each produces a service that
+looks provisioned and does not work, which is the shape of most of the legacy
+failures in `docs/research/`.
+
+`scripts/real-panel-tunnel-check.sh` connects. Given a `subId` Nexa provisioned,
+it fetches the subscription the customer would fetch, builds an xray-core client
+from the `vless://` URI in it **and nothing else**, stands up an origin that
+exists only for that run carrying a random payload, and moves bytes through.
+
+Measured against an account created by the shipped adapter
+(`acc-863ca278-27`, `accsub863ca27827`):
+
+```
+ok    the origin answers directly
+ok    the subscription serves a vless link
+ok    the link carries the UUID Nexa provisioned
+ok    the tunnel carried the payload for this run, end to end
+```
+
+Separately and by hand, six megabytes were pulled through the same tunnel in
+three requests, to rule out a result that only holds for a few hundred bytes.
+
+### Why a script and not an acceptance case
+
+It was written as `tests/acceptance/real-panel-usable.test.ts` first, and that
+file did not work. An xray client **spawned from inside the vitest worker**
+failed every request with `proxy/http: failed to read response ... unexpected
+EOF`, while the same generated config file, run from a shell, moved bytes fine.
+It was bisected far enough to rule out:
+
+- the account — a UUID known to work from a shell failed the same way;
+- the origin — a separate-process origin on a fixed port failed the same way,
+  and the in-process origin answered a direct control fetch during the same run;
+- the upstream address, the inbound port, and the panel's deferred xray reload
+  (asking for `restartXrayService` explicitly changed nothing);
+- a stale listener holding the client's proxy port.
+
+The cause is not known. Shipping that file would have been shipping a red suite;
+claiming it passed would have been worse. So the proof lives in a script that
+runs, and this section says exactly why.
 
 ## What a real panel corrected
 
@@ -169,6 +219,16 @@ and still says so.
 
 ## What this does NOT cover
 
+- **Usage counters after real traffic.** Nexa reads what the panel reports, and
+  A3 proves it reads it faithfully. Whether the panel's figure MOVES after real
+  traffic is not established here: six megabytes went through the tunnel and
+  `up`/`down` stayed at 0 for the client **and for the inbound**, across more
+  than a minute and a job whose cadence is `@every 5s`. `stats` and
+  `policy.levels.0.statsUser*` are enabled in the panel's generated config and
+  its gRPC API port is open, so this is a property of the disposable panel that
+  was not run down. It is recorded rather than glossed because "usage reads
+  correctly" and "usage counts correctly" are different claims and only the
+  first is made.
 - **One release.** v3.7.0 at `f727d04f6522bb94a8fb52e8352fdcafb51c11e1`, and
   nothing about any other.
 - **Bearer mode against a real panel.** The acceptance runs username/password,

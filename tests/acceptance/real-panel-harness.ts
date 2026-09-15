@@ -259,3 +259,34 @@ export async function subscriptionPayload(
   });
   return { status: response.status, body: await response.text() };
 }
+
+/**
+ * Asks the panel to reload xray-core now, as an operator would.
+ *
+ * 3X-UI does not reload on a client add: `ClientService` marks the process as
+ * needing a restart and `cadenceXrayRestart = "@every 30s"` in
+ * `internal/web/web.go` does it later. Measured on a disposable panel, an
+ * account created through the adapter was still not authenticating ninety
+ * seconds after the create, and was authenticating fine some minutes later.
+ *
+ * That window is real and a customer meets it, but it is not what the tunnel
+ * test is asking about, and waiting it out makes a two-minute test that says
+ * nothing extra. So the acceptance asks — `POST panel/api/server/restartXrayService`,
+ * a route an operator has in the panel's own UI. Nothing is faked: the panel
+ * really restarts, and what is then measured is the real tunnel.
+ */
+export async function reloadXray(panel: RealPanel): Promise<void> {
+  const session = await panelAdminSession(panel);
+  if (!session.ok) throw new Error(`operator session failed: ${session.reason}`);
+  const base = panel.baseUrl.endsWith('/') ? panel.baseUrl : `${panel.baseUrl}/`;
+  const response = await fetch(new URL('panel/api/server/restartXrayService', base), {
+    method: 'POST',
+    redirect: 'error',
+    headers: {
+      cookie: session.cookie,
+      'x-csrf-token': session.csrf,
+      'x-requested-with': 'XMLHttpRequest',
+    },
+  });
+  if (!response.ok) throw new Error(`restartXrayService answered ${response.status}`);
+}
