@@ -112,6 +112,8 @@ import { CustomerService } from './modules/commerce/customers/application/custom
 import { DrizzleCustomerRepository } from './modules/commerce/customers/infrastructure/drizzle-customer.repository.js';
 import { TelegramCustomerMessenger } from './modules/commerce/messaging/infrastructure/telegram-customer-messenger.js';
 import { ProductService } from './modules/commerce/catalog/application/product.service.js';
+import { ServiceAddonService } from './modules/commerce/catalog/application/addon.service.js';
+import { DrizzleServiceAddonRepository } from './modules/commerce/catalog/infrastructure/drizzle-addon.repository.js';
 import {
   DrizzlePanelDirectory,
   DrizzleProductRepository,
@@ -254,6 +256,7 @@ export interface Container {
    */
   readonly customers: CustomerService;
   readonly products: ProductService;
+  readonly serviceAddons: ServiceAddonService;
   readonly wallet: WalletService;
   readonly payments: PaymentService;
   readonly orders: OrderService;
@@ -684,6 +687,33 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
      */
     panels: new DrizzlePanelDirectory(database.db),
     /* `sales.currency`. A product is priced in what the tenant sells in, or refused. */
+    settings: settingsResolver,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    uow,
+    idempotency,
+    clock,
+    ids,
+  });
+
+  /**
+   * Service add-ons, under the SAME `catalog.*` permissions as products.
+   *
+   * The same kind of thing — a priced offer an operator curates — so the same pair.
+   * Its own permissions would have meant a contracts change, a migration backfilling
+   * grants into every existing role, and an operator who can edit the catalogue
+   * discovering they cannot edit half of it.
+   *
+   * No `panels` dependency, and that is not an omission: an add-on names no panel. What
+   * decides whether a customer may buy one is the SERVICE's panel and its declared
+   * capability, asked by `decideOperability` where the operation is planned.
+   */
+  const serviceAddonService = new ServiceAddonService({
+    repository: new DrizzleServiceAddonRepository(database.db),
+    /* `sales.currency`. An add-on is priced in what the tenant sells in, or refused. */
     settings: settingsResolver,
     guard,
     audit,
@@ -1648,6 +1678,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     recordPing,
     customers: customerService,
     products: productService,
+    serviceAddons: serviceAddonService,
     wallet: walletService,
     payments: paymentService,
     provisioning: provisioningService,
