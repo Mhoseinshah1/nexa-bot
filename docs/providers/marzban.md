@@ -64,6 +64,29 @@ own. A suspended service stays suspended until Nexa resumes it.
 an absent value rather than a zero — which is why `usageFromUser` maps `0` and `null`
 to the same "no limit" and never to "an allowance of nothing".
 
+**`expire` and `data_limit` on a modify are ABSOLUTE, and an omitted key is no change.**
+`crud.update_user` assigns `dbuser.expire = (modify.expire or None)` and
+`dbuser.data_limit = (modify.data_limit or None)`; a key that is absent or `null` is
+skipped entirely. So the same PUT sent twice leaves the same values, which is what makes
+`RENEW`, `ADD_TRAFFIC` and `ADD_TIME` idempotent when they are expressed as a TARGET
+rather than as an increment. `scripts/marzban-allowance-check.sh` is the measurement.
+
+**Raising `data_limit` re-activates a `limited` user and KEEPS `used_traffic`.** The same
+function sets the status to `active` when the new limit is above what has been consumed,
+and to `limited` when it is not — and it never touches the counter. Clearing consumption
+is a different route, `POST /api/user/{username}/reset`, which Nexa does not call
+anywhere: replayed after a customer has used more, it would erase real usage.
+
+**Nothing in a modify re-enables a `disabled` user.** Both status branches in
+`crud.update_user` exclude `disabled` — the `data_limit` branch by
+`status not in (expired, disabled)`, the `expire` branch by `status in (active, expired)`.
+A suspended account given more time and more traffic is still suspended, measured.
+
+**Extending `expire` alone does not revive a `limited` user**, because `limited` is in
+neither of those two sets. A renewal that buys both a period and an allowance must send
+both fields in one call, and then the `data_limit` branch — which runs first — is what
+brings the account back.
+
 **`subscription_url` is minted fresh on every response and is not stable.** The token
 embeds `ceil(time.time())` at render time (`app/utils/jwt.py: create_subscription_token`),
 so two reads of the same unchanged user return two different URLs. Older tokens keep
