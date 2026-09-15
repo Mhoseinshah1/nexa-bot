@@ -504,16 +504,43 @@ describe('the Marzban adapter — applying an allowance', () => {
      * outcome from the status would report a renewal that never happened.
      *
      * The other half of the same rule — a 200 whose record carries the OLD numbers — is
-     * `appliedPlan`, and the fake cannot produce it because the fake applies the
-     * allowance faithfully. That half is proved by mutation: F4F-06 reverts the check
-     * and watches the acceptance's replay case fail against the real panel.
+     * `appliedPlan`, and it is the case below rather than this one.
      */
     panel.behaviour = 'modify-html';
     const outcome = await adapter.applyAllowance(target(), http(), ref('alw-8'), {
       expiresAt: future(5),
       trafficLimitBytes: null,
     });
-    panel.behaviour = 'normal';
+    panel.behaviour = 'healthy';
     expect(outcome).toMatchObject({ ok: false, failure: 'MALFORMED_RESPONSE' });
+  });
+
+  it('refuses a 200 whose record did not move, rather than reporting a renewal', async () => {
+    await adapter.createUser(
+      target(),
+      http(),
+      createInput('alw-9', { volumeBytes: 5_000n, expiresAt: future(3) }),
+    );
+    const before = panel.users.get('alw-9');
+    /*
+     * The half of the response check a faithful panel cannot exercise.
+     *
+     * v0.8.4 applies what it is sent, so the only way to produce a 200 that did NOT do
+     * the work is to ask the fake for one. It is not a hypothetical shape: a proxy, a
+     * fork, or a future Marzban that silently ignores a field it no longer honours all
+     * answer exactly this way — and inferring success from the status code would record
+     * a renewal that never happened, advance the service's stored allowance, and leave
+     * the customer cut off on a panel that still holds yesterday's numbers.
+     */
+    panel.behaviour = 'modify-ignores-allowance';
+    const outcome = await adapter.applyAllowance(target(), http(), ref('alw-9'), {
+      expiresAt: future(33),
+      trafficLimitBytes: 90_000n,
+    });
+    panel.behaviour = 'healthy';
+    expect(outcome).toMatchObject({ ok: false, failure: 'MALFORMED_RESPONSE' });
+    // And the adapter reported no usage it could not stand behind.
+    expect(panel.users.get('alw-9')?.expire).toBe(before?.expire);
+    expect(panel.users.get('alw-9')?.dataLimit).toBe(before?.dataLimit);
   });
 });

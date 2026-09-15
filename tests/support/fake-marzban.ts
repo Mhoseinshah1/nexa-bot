@@ -41,6 +41,20 @@ export type MarzbanBehaviour =
    * the failure that guard exists for.
    */
   | 'modify-ignores-status'
+  /**
+   * A 200 from a modify whose record still carries the OLD `expire` and `data_limit`.
+   *
+   * The allowance twin of `modify-ignores-status`, and here for the same reason: v0.8.4
+   * applies what it is sent, so nothing else in this suite can produce a 200 that did
+   * not do the work. Without it `appliedPlan` — the check that reads the panel's own
+   * returned record rather than trusting the status code — has no test at all, which
+   * `docs/phase4f-falsification.md` measured directly: reverting it left every case
+   * green.
+   *
+   * The failure it stands for is a renewal reported as SUCCEEDED, the service's stored
+   * allowance advanced, and a customer whose account on the panel expired yesterday.
+   */
+  | 'modify-ignores-allowance'
   /** The delete route answers 200 with a body that is not JSON. Must still succeed. */
   | 'delete-nonjson-2xx';
 
@@ -235,6 +249,8 @@ export async function startFakeMarzban(options: FakeMarzbanOptions = {}): Promis
             response.writeHead(200, { 'content-type': 'text/html' });
             return void response.end('<html><body>login</body></html>');
           }
+          // A 200 that changed nothing. The record returned is the record as it was.
+          if (behaviour === 'modify-ignores-allowance') return void json(200, present(existing));
           if (typeof status === 'string' && behaviour !== 'modify-ignores-status') {
             existing.status = status;
           }
