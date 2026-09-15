@@ -1,12 +1,21 @@
 import {
   providerDescriptor,
-  type ProviderConnectionAdapter,
+  type ProviderAdapter,
   type ProviderCapability,
   type ProviderDescriptor,
   type ProviderHttpClient,
   type ProviderHttpResult,
+  type ProviderFailureResult,
+  type ProviderLookupOutcome,
   type ProviderProbeOutcome,
+  type ProviderServiceTarget,
   type ProviderTarget,
+  type ProviderUsage,
+  type ProviderUsageOutcome,
+  type ProviderUserOutcome,
+  type ProviderUserRef,
+  type CreateProviderUserInput,
+  type SanaeiActivation,
 } from '@nexa/contracts';
 
 /**
@@ -81,6 +90,16 @@ const STATUS_PATH = 'panel/api/server/status';
 const CSRF_PATH = 'csrf-token';
 const TWO_FACTOR_PATH = 'getTwoFactorEnable';
 const LOGIN_PATH = 'login';
+/**
+ * Adding a client to an inbound, and reading one client's traffic.
+ *
+ * v3.7.0 keys clients BY INBOUND — there is no global client table — which is why
+ * `SanaeiActivation` carries an `inboundId` and why guessing one was refused. The
+ * traffic read is keyed by `email`, which is 3X-UI's name for the per-client label
+ * this adapter sets to the derived provider username.
+ */
+const ADD_CLIENT_PATH = 'panel/api/inbounds/addClient';
+const CLIENT_TRAFFICS_PATH = 'panel/api/inbounds/getClientTraffics';
 
 /**
  * v3.7.0's `checkAPIAuth` answers an unauthenticated `/panel/api` request 401
@@ -147,7 +166,7 @@ function safeVersion(value: unknown): string | null {
 }
 
 /** A transport failure keeps the kind the client already normalized. */
-function fromTransport(result: Extract<ProviderHttpResult, { ok: false }>): ProviderProbeOutcome {
+function fromTransport(result: Extract<ProviderHttpResult, { ok: false }>): ProviderFailureResult {
   return { ok: false, failure: result.failure, status: result.status };
 }
 
@@ -201,11 +220,11 @@ function fromTransport(result: Extract<ProviderHttpResult, { ok: false }>): Prov
  * let a misconfigured or hostile panel choose how long Nexa stops looking at
  * it, and would have to be clamped to something like the cadence anyway.
  */
-function rateLimited(status: number): ProviderProbeOutcome | null {
+function rateLimited(status: number): ProviderFailureResult | null {
   return status === 429 ? { ok: false, failure: 'RATE_LIMITED', status } : null;
 }
 
-function fromApiStatus(status: number): ProviderProbeOutcome {
+function fromApiStatus(status: number): ProviderFailureResult {
   if (status === 401 || status === 403) {
     return { ok: false, failure: 'AUTHENTICATION_FAILED', status };
   }
@@ -304,7 +323,120 @@ function sessionCookieFrom(setCookie: readonly string[]): SessionCookieRead {
   return { found: false };
 }
 
-export class SanaeiAdapter implements ProviderConnectionAdapter {
+/**
+ * One client, as `addClient` wants it.
+ *
+ * `totalGB` is BYTES despite its name — v3.7.0's `model.Client.TotalGB` is an int64 of
+ * bytes and the name is upstream's, not ours. Renaming it here would be a lie about the
+ * wire; documenting it is the honest option, and getting it wrong by a factor of a
+ * billion is the kind of defect that only shows up when a customer runs out of traffic
+ * in four seconds.
+ *
+ * `expiryTime` is epoch MILLISECONDS. Zero means no expiry in 3X-UI's own encoding, and
+ * `UNLIMITED_DURATION_DAYS` is zero for the same reason, so the unlimited case needs no
+ * special branch.
+ *
+ * `flow` is empty deliberately. A non-empty flow (`xtls-rprx-vision`) is only valid on
+ * some inbound configurations, and setting one the inbound does not support produces a
+ * client the panel accepts and Xray refuses to serve — a service that looks provisioned
+ * and does not work. Empty is what every inbound accepts.
+ */
+function clientSettings(input: {
+  readonly clientId: string;
+  readonly email: string;
+  readonly subId: string;
+  readonly totalBytes: bigint;
+  readonly expiryEpochMs: number;
+  readonly deviceLimit: number | null;
+}): string {
+  return JSON.stringify({
+    clients: [
+      {
+        id: input.clientId,
+        flow: '',
+        email: input.email,
+        limitIp: input.deviceLimit ?? 0,
+        totalGB: Number(input.totalBytes),
+        expiryTime: input.expiryEpochMs,
+        enable: true,
+        tgId: '',
+        subId: input.subId,
+        reset: 0,
+      },
+    ],
+  });
+}
+
+/**
+ * The subscription URL for one client.
+ *
+ * Built from the operator's configured domain, never from the panel's own address:
+ * 3X-UI serves subscriptions from a separate listener, frequently on another hostname
+ * and port, so a link built from the panel address points a customer at the admin login.
+ * `subscriptionDomain` is validated as a host-and-optional-port by
+ * `sanaeiActivationSchema`, so nothing here can turn it into a different origin.
+ */
+function subscriptionUrl(subscriptionDomain: string, subId: string): string {
+  return `https://${subscriptionDomain}/sub/${subId}`;
+}
+
+/**
+ * One client's usage, from `getClientTraffics`.
+ *
+ * Returns null when the payload is not a client record, which the caller reads as a
+ * compatibility failure rather than as an absent client — the two are different
+ * answers and collapsing them is how a timeout becomes a duplicate account.
+ *
+ * `up + down` because 3X-UI counts the directions separately and the customer's
+ * allowance is spent by both. `total` and `expiryTime` of zero are 3X-UI's unlimited,
+ * and become null here rather than zero: `ProviderUsage.totalBytes` is `bigint | null`
+ * precisely so "no limit" and "a limit of nothing" stay apart.
+ */
+function usageFromClient(obj: unknown): ProviderUsage | null {
+  if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) return null;
+  const record = obj as Record<string, unknown>;
+  const up = record['up'];
+  const down = record['down'];
+  const total = record['total'];
+  const expiry = record['expiryTime'];
+  if (typeof up !== 'number' || typeof down !== 'number') return null;
+  if (!Number.isFinite(up) || !Number.isFinite(down) || up < 0 || down < 0) return null;
+  const totalBytes =
+    typeof total === 'number' && Number.isFinite(total) && total > 0
+      ? BigInt(Math.trunc(total))
+      : null;
+  const expiresAt =
+    typeof expiry === 'number' && Number.isFinite(expiry) && expiry > 0
+      ? new Date(Math.trunc(expiry))
+      : null;
+  return {
+    usedBytes: BigInt(Math.trunc(up)) + BigInt(Math.trunc(down)),
+    totalBytes,
+    expiresAt,
+    // v3.7.0's client traffic record carries no last-connection timestamp. Null rather
+    // than a guess: `bot.service.detail` renders an "as of", and inventing one is how
+    // the legacy reports came to disagree with each other.
+    lastConnectionAt: null,
+  };
+}
+
+/**
+ * What `authenticate` produced: the headers every later request carries, or why not.
+ *
+ * `viaLogin` is not decoration. It says the operator's password was accepted moments
+ * ago, and therefore that nothing after this point may be reported as an
+ * authentication failure — a rule the probe already had and the service calls need
+ * for the same reason.
+ */
+type SanaeiAuth =
+  | {
+      readonly ok: true;
+      readonly headers: Record<string, string>;
+      readonly viaLogin: boolean;
+    }
+  | ProviderFailureResult;
+
+export class SanaeiAdapter implements ProviderAdapter {
   readonly descriptor = DESCRIPTOR;
 
   supports(capability: ProviderCapability): boolean {
@@ -312,11 +444,42 @@ export class SanaeiAdapter implements ProviderConnectionAdapter {
   }
 
   async probe(target: ProviderTarget, http: ProviderHttpClient): Promise<ProviderProbeOutcome> {
+    const auth = await this.authenticate(target, http);
+    if (!auth.ok) return auth;
+    const status = await http.send({ method: 'GET', path: STATUS_PATH, headers: auth.headers });
+    return this.readStatus(status, auth.viaLogin);
+  }
+
+  /**
+   * ONE authentication implementation, for the probe and for every service call.
+   *
+   * Extracted rather than copied, and the reason is the same one `probe-core.ts`
+   * records for the probe itself: the session flow below asks a panel whether it
+   * requires a second factor BEFORE sending a password, and counts on v3.7.0 binding
+   * its CSRF token to the session that minted it. A second copy of that sequence is a
+   * copy that will not be updated when one of those facts changes — and the copy that
+   * silently keeps the old behaviour is the unattended one, dialling panels on a timer
+   * with an operator's credentials.
+   *
+   * `viaLogin` travels with the headers because it changes how a LATER failure must be
+   * read: after a successful login nothing may report an authentication failure, since
+   * that would send an operator to replace a password that just worked.
+   */
+  private async authenticate(
+    target: ProviderTarget,
+    http: ProviderHttpClient,
+  ): Promise<SanaeiAuth> {
     switch (target.credentials.shape) {
       case 'OPAQUE_TOKEN':
-        return this.probeWithToken(http, target.credentials.token);
+        // Mode A. No CSRF, because an authenticated API call bypasses it, and no
+        // request at all: a bearer token needs no exchange.
+        return {
+          ok: true,
+          headers: { ...XHR_HEADER, authorization: `Bearer ${target.credentials.token}` },
+          viaLogin: false,
+        };
       case 'USERNAME_PASSWORD':
-        return this.probeWithSession(
+        return this.authenticateWithSession(
           http,
           target.credentials.username,
           target.credentials.password,
@@ -329,25 +492,12 @@ export class SanaeiAdapter implements ProviderConnectionAdapter {
     }
   }
 
-  /** Mode A. One request; no CSRF, because an authenticated API call bypasses it. */
-  private async probeWithToken(
-    http: ProviderHttpClient,
-    token: string,
-  ): Promise<ProviderProbeOutcome> {
-    const status = await http.send({
-      method: 'GET',
-      path: STATUS_PATH,
-      headers: { ...XHR_HEADER, authorization: `Bearer ${token}` },
-    });
-    return this.readStatus(status);
-  }
-
-  /** Mode B. csrf-token, then the 2FA question, then login, then the status read. */
-  private async probeWithSession(
+  /** Mode B. csrf-token, then the 2FA question, then login. Three requests. */
+  private async authenticateWithSession(
     http: ProviderHttpClient,
     username: string,
     password: string,
-  ): Promise<ProviderProbeOutcome> {
+  ): Promise<SanaeiAuth> {
     const csrf = await http.send({ method: 'GET', path: CSRF_PATH, headers: XHR_HEADER });
     if (!csrf.ok) return fromTransport(csrf);
     if (csrf.status < 200 || csrf.status >= 300) {
@@ -385,7 +535,10 @@ export class SanaeiAdapter implements ProviderConnectionAdapter {
      * will not send — NOT a reason to keep sending the value the panel just
      * replaced.
      */
-    const adoptSession = (read: SessionCookieRead, status: number): ProviderProbeOutcome | null => {
+    const adoptSession = (
+      read: SessionCookieRead,
+      status: number,
+    ): ProviderFailureResult | null => {
       if (!read.found) return null;
       if (read.value === null) return { ok: false, failure: 'MALFORMED_RESPONSE', status };
       session = read.value;
@@ -485,12 +638,196 @@ export class SanaeiAdapter implements ProviderConnectionAdapter {
     const rotatedByLogin = adoptSession(sessionCookieFrom(login.setCookie), login.status);
     if (rotatedByLogin !== null) return rotatedByLogin;
 
-    const status = await http.send({
-      method: 'GET',
-      path: STATUS_PATH,
+    /*
+     * The session is established. The CSRF token is deliberately NOT carried forward:
+     * v3.7.0's middleware exempts `/panel/api/*` from the CSRF check, and sending a
+     * token minted for the login form on an API call is a header that means nothing
+     * to the panel and one more thing to get wrong when it rotates.
+     */
+    return {
+      ok: true,
       headers: { ...XHR_HEADER, cookie: `${SESSION_COOKIE}=${session}` },
+      viaLogin: true,
+    };
+  }
+
+  /**
+   * Create one client on the configured inbound.
+   *
+   * The sequence is authenticate, then ONE mutating request. Nothing reads the panel
+   * first to see whether the client is already there: a check-then-create is two
+   * requests with a race between them, and the thing that makes a duplicate
+   * impossible here is not a check but `services_panel_provider_username_key` plus the
+   * fact that a create is only ever issued from `PENDING_PROVISION`.
+   *
+   * A `success: false` envelope is reported as `PROVIDER_ERROR` and NOT parsed for a
+   * reason. v3.7.0 answers a duplicate email with a message, and the message is a
+   * localisable string that upstream is free to reword — so branching on it would be
+   * an adapter whose correctness depends on somebody else's copy. `PROVIDER_ERROR` on
+   * a mutating operation classifies as `UNKNOWN` through `failureOutcome`, which sends
+   * the operation to reconciliation, and reconciliation ASKS the panel. The duplicate
+   * is then adopted rather than guessed at, which is the answer that was wanted.
+   */
+  async createUser(
+    target: ProviderServiceTarget,
+    http: ProviderHttpClient,
+    input: CreateProviderUserInput,
+  ): Promise<ProviderUserOutcome> {
+    const activation = target.activation as SanaeiActivation;
+    const auth = await this.authenticate(target, http);
+    if (!auth.ok) return auth;
+
+    const expiryEpochMs =
+      input.durationDays === null || input.durationDays <= 0
+        ? 0
+        : input.expiresAt === null
+          ? 0
+          : input.expiresAt.getTime();
+
+    const added = await http.send({
+      method: 'POST',
+      path: ADD_CLIENT_PATH,
+      headers: auth.headers,
+      // Form, because v3.7.0's handler binds `id` and `settings` from a form and
+      // `settings` is itself a JSON STRING rather than a nested object. Sending JSON
+      // with a nested object is the shape the panel does not accept.
+      body: {
+        kind: 'form',
+        value: {
+          id: String(activation.inboundId),
+          settings: clientSettings({
+            clientId: input.clientId,
+            email: input.username,
+            subId: input.subscriptionRef,
+            totalBytes: input.volumeBytes ?? 0n,
+            expiryEpochMs,
+            deviceLimit: input.deviceLimit,
+          }),
+        },
+      },
     });
-    return this.readStatus(status, true);
+    if (!added.ok) return fromTransport(added);
+    const limited = rateLimited(added.status);
+    if (limited !== null) return limited;
+    if (added.status < 200 || added.status >= 300) {
+      return auth.viaLogin
+        ? { ok: false, failure: 'PROVIDER_ERROR', status: added.status }
+        : fromApiStatus(added.status);
+    }
+    const body = parseEnvelope(added.bodyText);
+    if (body === null) return { ok: false, failure: 'MALFORMED_RESPONSE', status: added.status };
+    if (!body.success) return { ok: false, failure: 'PROVIDER_ERROR', status: added.status };
+
+    return {
+      ok: true,
+      // 3X-UI's own identifier for the client is the UUID Nexa chose and sent, so this
+      // is not a value read back from the panel — it is the one that was written.
+      providerUserId: input.clientId,
+      delivery: {
+        kind: 'SUBSCRIPTION_LINK',
+        url: subscriptionUrl(activation.subscriptionDomain, input.subscriptionRef),
+      },
+      // `addClient` answers with `obj: null`, so there is nothing to report. Null
+      // rather than a zero-usage record invented here: a figure with no read behind it
+      // is exactly the kind the legacy reports are made of.
+      usage: null,
+    };
+  }
+
+  /**
+   * Whether this panel holds a client with that name, and what it looks like.
+   *
+   * The reconciliation primitive, and the one place `found: false` may be produced.
+   * v3.7.0 answers an unknown email with a perfectly successful envelope carrying
+   * `obj: null` — so absence is a POSITIVE answer from the panel, which is exactly what
+   * makes a fresh create legal after it. Every other shape is a failure: a request that
+   * did not arrive, a 500, an unparseable body and a payload that is not a client record
+   * all leave this installation not knowing, and not knowing must never read as absent.
+   */
+  async lookupUser(
+    target: ProviderServiceTarget,
+    http: ProviderHttpClient,
+    ref: ProviderUserRef,
+  ): Promise<ProviderLookupOutcome> {
+    const activation = target.activation as SanaeiActivation;
+    const auth = await this.authenticate(target, http);
+    if (!auth.ok) return auth;
+
+    const read = await http.send({
+      method: 'GET',
+      path: `${CLIENT_TRAFFICS_PATH}/${encodeURIComponent(ref.username)}`,
+      headers: auth.headers,
+    });
+    if (!read.ok) return fromTransport(read);
+    const limited = rateLimited(read.status);
+    if (limited !== null) return limited;
+    if (read.status < 200 || read.status >= 300) {
+      return auth.viaLogin
+        ? { ok: false, failure: 'PROVIDER_ERROR', status: read.status }
+        : fromApiStatus(read.status);
+    }
+    const body = parseEnvelope(read.bodyText);
+    if (body === null) return { ok: false, failure: 'MALFORMED_RESPONSE', status: read.status };
+    if (!body.success) {
+      /*
+       * A successful HTTP call whose envelope says the operation did not succeed.
+       *
+       * NOT absence. v3.7.0 reports an unknown email as `success: true` with a null
+       * `obj`; a false `success` means the panel refused to answer the question, and a
+       * refusal to answer is not an answer of "no".
+       */
+      return { ok: false, failure: 'PROVIDER_ERROR', status: read.status };
+    }
+    if (body.obj === null || body.obj === undefined) return { ok: true, found: false };
+
+    const usage = usageFromClient(body.obj);
+    if (usage === null) {
+      return { ok: false, failure: 'MALFORMED_RESPONSE', status: read.status };
+    }
+    return {
+      ok: true,
+      found: true,
+      /*
+       * Deliberately null.
+       *
+       * `getClientTraffics` returns the traffic record, whose `id` is the row id of the
+       * traffic counter and NOT the client UUID the config is built from. Returning it
+       * as `providerUserId` would write a number into a column that elsewhere holds a
+       * UUID, and the first thing to read it would be a later operation addressing the
+       * wrong thing. The username is the identifier this adapter reconciles by.
+       */
+      providerUserId: null,
+      delivery: {
+        kind: 'SUBSCRIPTION_LINK',
+        url: subscriptionUrl(activation.subscriptionDomain, ref.subscriptionRef),
+      },
+      usage,
+    };
+  }
+
+  /** One client's traffic. A read, so a failure is never `UNKNOWN`. */
+  async readUsage(
+    target: ProviderServiceTarget,
+    http: ProviderHttpClient,
+    ref: ProviderUserRef,
+  ): Promise<ProviderUsageOutcome> {
+    const found = await this.lookupUser(target, http, ref);
+    if (!found.ok) return found;
+    if (!found.found) {
+      /*
+       * The panel does not have this client.
+       *
+       * Reported as a provider error rather than as zero usage, because a service Nexa
+       * believes is ACTIVE whose account has been deleted on the panel is a real
+       * divergence an operator has to see — and zero bytes used is what a brand new
+       * account looks like.
+       */
+      return { ok: false, failure: 'PROVIDER_ERROR', status: null };
+    }
+    if (found.usage === null) {
+      return { ok: false, failure: 'MALFORMED_RESPONSE', status: null };
+    }
+    return { ok: true, usage: found.usage };
   }
 
   /**

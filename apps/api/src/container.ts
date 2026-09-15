@@ -1,5 +1,5 @@
 import { fileURLToPath } from 'node:url';
-import { MAX_REQUESTS_PER_PROBE } from '@nexa/contracts';
+import { MAX_REQUESTS_PER_PROBE, OPERATION_LEASE_SECONDS_MIN } from '@nexa/contracts';
 import type {
   AuditWriter,
   Clock,
@@ -32,7 +32,11 @@ import { DrizzlePanelCredentialStore } from './modules/platform/panels/infrastru
 import { PanelService } from './modules/platform/panels/application/panel.service.js';
 import { PanelMonitorService } from './modules/platform/panels/application/panel-monitor.service.js';
 import type { ProbeCoreDeps } from './modules/platform/panels/application/probe-core.js';
-import { providerAdapter } from './modules/platform/providers/infrastructure/adapter-registry.js';
+import {
+  SERVICE_PROVIDER_TYPES,
+  providerAdapter,
+  providerServiceAdapter,
+} from './modules/platform/providers/infrastructure/adapter-registry.js';
 import { SystemClock } from './infrastructure/clock.js';
 import { Uuidv7IdGenerator } from './infrastructure/ids.js';
 import { AesGcmSecretCipher } from './infrastructure/crypto/secret-cipher.js';
@@ -59,7 +63,7 @@ import { DrizzleIdempotencyStore } from './modules/platform/idempotency/infrastr
 import { PermissionGuard } from './modules/platform/access/application/permission-guard.js';
 import { AdminPermissionResolver } from './modules/platform/access/infrastructure/admin-permission-resolver.js';
 import { ScryptPasswordHasher, scryptParamsFor } from './infrastructure/crypto/password-hasher.js';
-import { operationIdFor } from './infrastructure/crypto/operation-id.js';
+import { operationIdFor, sha256Hex } from './infrastructure/crypto/operation-id.js';
 import { DrizzleAdminRepository } from './modules/platform/identity/infrastructure/drizzle-admin.repository.js';
 import { DrizzleRoleRepository } from './modules/platform/identity/infrastructure/drizzle-role.repository.js';
 import { DrizzleSessionRepository } from './modules/platform/identity/infrastructure/drizzle-session.repository.js';
@@ -118,6 +122,14 @@ import { DrizzlePaymentRepository } from './modules/commerce/payments/infrastruc
 import { PaymentService } from './modules/commerce/payments/application/payment.service.js';
 import { OrderService } from './modules/commerce/orders/application/order.service.js';
 import { DrizzleOrderRepository } from './modules/commerce/orders/infrastructure/drizzle-order.repository.js';
+import { DrizzleServiceRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service.repository.js';
+import { serviceSecrets } from './infrastructure/crypto/service-secrets.js';
+import { DrizzleOperationRepository } from './modules/commerce/provisioning/infrastructure/drizzle-operation.repository.js';
+import { ProvisioningService } from './modules/commerce/provisioning/application/provisioning.service.js';
+import { decideOperability } from './modules/commerce/provisioning/application/panel-operability.js';
+import { ProvisionerService } from './modules/commerce/provisioning/application/provisioner.service.js';
+import { ProvisionerLoop } from './modules/commerce/provisioning/application/provisioner-loop.js';
+import { DeliveryService } from './modules/commerce/provisioning/application/delivery.service.js';
 import { BotRuntime } from './surfaces/telegram/bot-runtime.js';
 import { I18nTemplateCatalogue } from './modules/control/templates/infrastructure/i18n-template-catalogue.js';
 import { TemplateManagementService } from './modules/control/templates/application/template-management.service.js';
@@ -157,7 +169,17 @@ import type { NotificationTransport } from './modules/control/notifications/appl
  * its own shutdown — which is the one place that reasoning must be simple,
  * because it is the place that renames the production database. ADR-0028.
  */
-export type ProcessRole = 'api' | 'worker' | 'monitor' | 'recovery';
+/**
+ * Which `main` this process is running.
+ *
+ * `provisioner` is the fifth, and it exists for the same reason `monitor` does not
+ * live inside `worker`: its calls are outbound HTTPS to somebody else's machine with a
+ * timeout measured in seconds. It is separate from `monitor` for the mirror of that
+ * argument — the monitor's own comment says a monitor stuck on a hanging panel would
+ * delay notification delivery, and a customer waiting for the configuration they paid
+ * for must not queue behind a sweep of every panel in the installation.
+ */
+export type ProcessRole = 'api' | 'worker' | 'monitor' | 'recovery' | 'provisioner';
 
 export interface Container {
   readonly config: AppConfig;
@@ -247,6 +269,21 @@ export interface Container {
    * outbound calls on the event loop that answers the Telegram webhook.
    */
   readonly panelMonitor: PanelMonitorService;
+  /** Plans the service a settled order is owed. Held by payments, exposed for surfaces. */
+  readonly provisioning: ProvisioningService;
+  /** The lane that creates services on panels. Driven by the `provisioner` role. */
+  readonly provisioner: ProvisionerService;
+  /**
+   * Telling a customer their service is ready.
+   *
+   * Exposed beside the provisioner and NOT folded into it: the two are deliberately
+   * separate objects so that a failed Telegram message cannot reach a provisioning
+   * transaction. The sweep is driven by `provisionerLoop`; a customer asking for their
+   * configuration again reaches `redeliver` from a surface.
+   */
+  readonly delivery: DeliveryService;
+  /** The timer that drives it, and the readiness signal that timer earns. */
+  readonly provisionerLoop: ProvisionerLoop;
   readonly settingsService: SettingsService;
   readonly settingsResolver: SettingsResolver;
   readonly featureFlags: FeatureFlagsService;
@@ -729,9 +766,76 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * The same `operationId` binding the wallet uses, so a reference derived from one
    * idempotency key is the same value in every process.
    */
+  /**
+   * Services and the operations that create them.
+   *
+   * Constructed BEFORE payments, because payments holds it: the service a settled
+   * order is owed is written in the settling transaction, which is what makes
+   * exactly-once a unique index rather than a worker's discipline.
+   *
+   * The executor that acts on what this plans is built further down, after the panel
+   * stack it needs exists.
+   */
+  /*
+   * Constructed here rather than beside the rest of the panel stack, because this is
+   * where it is first needed: the provisioning service asks whether a panel can be
+   * operated before it plans a retry, and that question must be answerable without
+   * decrypting anything.
+   */
+  const panelRepository = new DrizzlePanelRepository(database.db);
+  const serviceRepository = new DrizzleServiceRepository(database.db);
+  const operationRepository = new DrizzleOperationRepository(database.db);
+  const provisioningService = new ProvisioningService({
+    services: serviceRepository,
+    operations: operationRepository,
+    /*
+     * A narrow closure, not the panel repository.
+     *
+     * It answers from the panel's own fields and a credential SUMMARY — three
+     * timestamps, no values — so a surface asking "can this be retried" cannot
+     * materialise a password to find out. `decideOperability` is the single place that
+     * decision is made, here and in the executor alike.
+     */
+    panels: {
+      operability: async (scope, panelId, type, tx) => {
+        const view = await panelRepository.find(scope, panelId, tx as never);
+        return decideOperability({
+          panel:
+            view === null
+              ? null
+              : {
+                  status: view.panel.status,
+                  providerType: view.panel.providerType,
+                  baseUrl: view.panel.baseUrl,
+                  archivedAt: view.panel.archivedAt,
+                  activation: view.panel.activation,
+                },
+          credentials: view?.credentials ?? null,
+          type,
+          // The SERVICE list, not the connection one. `panel-operability.ts` documents
+          // this field as "code exists that can create a user", and a provider can
+          // legitimately have a connection adapter and no service half.
+          serviceAdapterExists:
+            view !== null && SERVICE_PROVIDER_TYPES.includes(view.panel.providerType),
+        });
+      },
+    },
+    uow,
+    guard,
+    audit,
+    clock,
+    ids,
+    operationId: (key) => operationIdFor('provider', key),
+    // The same tenant kill switch every other write path reads.
+    scopeActivity: tenants,
+    // From the system CSPRNG, never from the id generator: see the binding's own note.
+    secrets: serviceSecrets,
+  });
+
   const paymentService = new PaymentService({
     repository: new DrizzlePaymentRepository(database.db),
     orders: orderRepository,
+    provisioning: provisioningService,
     wallet: walletRepository,
     customers: customerRepository,
     guard,
@@ -763,7 +867,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   // environment.
   const urlPolicy = panelUrlPolicy(config);
 
-  const panelRepository = new DrizzlePanelRepository(database.db);
   const panelCredentials = new DrizzlePanelCredentialStore(database.db, cipher);
 
   const panelHttp = new SafeHttpClient({
@@ -952,6 +1055,168 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // For the mutation-time session-revocation check.
     sessions,
   );
+
+  /**
+   * The customer-facing messenger, built ONCE and shared.
+   *
+   * Two instances would be two copies of the send-failure condition logic reading the
+   * same rows, which is harmless, and two different renderer configurations, which is
+   * not: a tenant's template override has to land in every message a customer reads,
+   * including the one a background sweep sends about a service they have paid for.
+   *
+   * Built here rather than inline in `botRuntime` because the provisioner role needs it
+   * too and does not construct a bot runtime.
+   */
+  const customerMessenger = new TelegramCustomerMessenger(
+    // The tenant's own renderer, so an override lands in exactly the messages a
+    // customer reads. It validates values against the key's declaration on the way
+    // out, which is what stops a literal `{token}` reaching a customer.
+    templateResolver,
+    // The token of the bot the customer WROTE to, never the tenant's active bot.
+    // `botInstances` owns that lookup; `tenants` would be the wrong object and the
+    // wrong question.
+    botInstances,
+    opsLog,
+    // Whether this bot's send-failure condition is still open, read from the
+    // row. It decides whether a successful send writes a recovery, so it must
+    // not be a field this process set on itself: a replica that restarted, or
+    // a second replica, could not then close a condition it did not open.
+    new DrizzleOperationalConditionReader(database.db),
+    config.TELEGRAM_API_BASE_URL,
+    config.NOTIFICATION_SEND_TIMEOUT_MS,
+  );
+
+  /**
+   * Telling a customer their service is ready, and nothing else.
+   *
+   * `contacts` is a NARROW closure over the customer repository for the reason
+   * `purchases` is one over the order repository: handing the delivery sweep
+   * `CustomerRepository` would hand a background worker `setStatus`, and therefore the
+   * ability to block a customer.
+   *
+   * It refuses rather than guesses when `firstBotInstanceId` is null. That column is the
+   * only durable record of which bot a customer actually wrote to, and `CustomerMessage`
+   * forbids substituting another one: for a tenant running a public bot beside a
+   * reseller bot, a message from the wrong account leaks the relationship between them.
+   *
+   * ## What this is NOT, stated because the sentence above invites the wrong reading
+   *
+   * `first_bot_instance_id` is the bot the customer FIRST contacted, not the bot they
+   * bought through. For a tenant with one bot those are the same and the announcement is
+   * correct. For a tenant with two, a customer who first wrote to the public bot and
+   * later ordered through the reseller bot is announced to from the public one — the
+   * very leak the paragraph above says must not happen.
+   *
+   * It is not fixed here because there is nothing to fix it WITH: `orders` carries no
+   * bot instance, so this release genuinely does not record which bot a purchase came
+   * through, and inventing an answer is worse than using the only recorded one. Carried
+   * as `OQ-PROV-02` in `docs/open-questions.md` with the column that would close it.
+   */
+  const deliveryService = new DeliveryService({
+    services: serviceRepository,
+    contacts: {
+      contactFor: async (scope, customerId, tx) => {
+        const customer = await customerRepository.findById(scope, customerId, tx);
+        if (customer === null || customer.firstBotInstanceId === null) return { kind: 'NONE' };
+        /*
+         * The status of the row just read, not the one the claim matched.
+         *
+         * `claimDeliveryDue` joins `customers` and requires `ACTIVE`, which settles the
+         * ordinary case. It cannot settle the race: an operator blocking a customer
+         * between that claim and this read left the sweep holding a leased row whose
+         * customer is now blocked, and the announcement went out anyway because nothing
+         * looked again. Checked here because here is the last read before the send.
+         */
+        if (customer.status !== 'ACTIVE') return { kind: 'BLOCKED' };
+        return {
+          kind: 'CONTACT',
+          contact: {
+            chatId: customer.telegramUserId,
+            botInstanceId: customer.firstBotInstanceId,
+          },
+        };
+      },
+    },
+    messenger: customerMessenger,
+    // The same tenant kill switch every other write path reads.
+    scopeActivity: tenants,
+    uow,
+    clock,
+  });
+
+  /**
+   * The lane that actually creates services on panels.
+   *
+   * Built HERE and not beside `ProvisioningService`, because it needs the panel stack:
+   * the repository, the credential store, the SafeHttpClient bound to the
+   * installation's URL policy, and the SAME tenant probe budget the monitor spends
+   * from. That shared bucket is the point — a second one would raise a tenant's total
+   * outbound rate, which is the bound's whole purpose.
+   *
+   * `purchases` is a narrow closure over the order repository rather than the
+   * repository itself. The executor needs two numbers from a frozen snapshot; handing
+   * it `OrderRepository` would also hand a background worker `transition`, and
+   * therefore the ability to settle an order.
+   *
+   * `workerId` names the process instance in a claim, so an operator reading a stuck
+   * `IN_FLIGHT` row can tell which replica holds it.
+   */
+  const provisioner = new ProvisionerService({
+    operations: operationRepository,
+    services: serviceRepository,
+    purchases: {
+      specificationFor: async (scope, orderId, tx) => {
+        const order = await orderRepository.findById(scope, orderId, tx);
+        return order?.line.specification ?? null;
+      },
+    },
+    panels: panelRepository,
+    credentials: panelCredentials,
+    adapters: providerServiceAdapter,
+    implementedProviderTypes: SERVICE_PROVIDER_TYPES,
+    http: panelHttp,
+    urlPolicy,
+    probeBudget: probeCore.probeBudget,
+    uow,
+    clock,
+    ids,
+    hash: sha256Hex,
+    operationId: (key) => operationIdFor('provider', key),
+    audit,
+    opsLog,
+    outbox,
+    scopeActivity: tenants,
+    workerId: `${role}:${ids.uuid()}`,
+    leaseMs: OPERATION_LEASE_SECONDS_MIN * 1000,
+  });
+
+  const provisionerLoop = new ProvisionerLoop(provisioner, deliveryService, {
+    /*
+     * The installation's own tenant.
+     *
+     * One tenant per installation is the deployment model — `resolveInstallationTenant`
+     * establishes it at boot for the worker and the monitor alike — and the loop asks
+     * for it per tick rather than capturing it, so a process that started before
+     * provisioning was resolved does not hold a stale context for its lifetime.
+     */
+    scope: () => {
+      if (installationTenantId === null) {
+        /*
+         * No tenant yet.
+         *
+         * A fresh installation boots before `pnpm provision` runs, and the loop must
+         * not invent a tenant id to keep itself busy. Throwing is caught by the tick,
+         * which records no progress — so readiness stays false until the installation
+         * has a tenant, which is the truth.
+         */
+        throw new Error('this installation has no tenant yet; nothing can be provisioned');
+      }
+      return { tenantId: installationTenantId, botInstanceId: null };
+    },
+    tickMs: config.PROVISIONER_TICK_MS,
+    now: () => clock.now().getTime(),
+    logger,
+  });
 
   const notificationRepository = new DrizzleNotificationRepository(database.db, ids);
 
@@ -1384,6 +1649,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     products: productService,
     wallet: walletService,
     payments: paymentService,
+    provisioning: provisioningService,
+    provisioner,
+    provisionerLoop,
+    delivery: deliveryService,
     orders: orderService,
     botRuntime: new BotRuntime({
       customers: customerService,
@@ -1395,24 +1664,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       // mechanism that stops a redelivery becoming a second order.
       products: productService,
       orders: orderService,
-      messenger: new TelegramCustomerMessenger(
-        // The tenant's own renderer, so an override lands in exactly the messages a
-        // customer reads. It validates values against the key's declaration on the way
-        // out, which is what stops a literal `{token}` reaching a customer.
-        templateResolver,
-        // The token of the bot the customer WROTE to, never the tenant's active bot.
-        // `botInstances` owns that lookup; `tenants` would be the wrong object and the
-        // wrong question.
-        botInstances,
-        opsLog,
-        // Whether this bot's send-failure condition is still open, read from the
-        // row. It decides whether a successful send writes a recovery, so it must
-        // not be a field this process set on itself: a replica that restarted, or
-        // a second replica, could not then close a condition it did not open.
-        new DrizzleOperationalConditionReader(database.db),
-        config.TELEGRAM_API_BASE_URL,
-        config.NOTIFICATION_SEND_TIMEOUT_MS,
-      ),
+      // The SAME messenger the delivery sweep uses, for the reason above it.
+      messenger: customerMessenger,
     }),
     panels: new PanelService({
       repository: panelRepository,

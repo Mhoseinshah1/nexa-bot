@@ -160,7 +160,7 @@ assert_ok 'the readiness parser could not be extracted' test -s "$parser"
 library_ready_services="$(env -u NEXA_ROOT -u NEXA_STATE_DIR -u NEXA_LOCK_FILE \
   bash -c '. "$1" >/dev/null 2>&1; printf "%s" "$NEXA_READY_SERVICES"' _ "$NEXA_LIB")"
 assert_equals 'readiness requires a service these fixtures do not model' \
-  'api worker monitor recovery caddy' "$library_ready_services"
+  'api worker monitor recovery provisioner caddy' "$library_ready_services"
 
 # The three application roles. The edge has its own block at the end, where the
 # required list is the whole of the library's.
@@ -201,6 +201,15 @@ MONITOR_STARTING='{"Service":"monitor","State":"running","Health":"starting"}'
 MONITOR_UNHEALTHY='{"Service":"monitor","State":"running","Health":"unhealthy"}'
 MONITOR_EXITED='{"Service":"monitor","State":"exited","Health":"unhealthy"}'
 MONITOR_RESTARTING='{"Service":"monitor","State":"restarting"}'
+# The provisioner is required for the reason the monitor is, with money on it:
+# it is the only process that turns a SETTLED order into an account on a panel,
+# so an installation whose provisioner is dead takes payments, answers every
+# health check, and creates nothing.
+PROVISIONER_HEALTHY='{"Service":"provisioner","State":"running","Health":"healthy"}'
+PROVISIONER_STARTING='{"Service":"provisioner","State":"running","Health":"starting"}'
+PROVISIONER_UNHEALTHY='{"Service":"provisioner","State":"running","Health":"unhealthy"}'
+PROVISIONER_EXITED='{"Service":"provisioner","State":"exited","Health":"unhealthy"}'
+PROVISIONER_RESTARTING='{"Service":"provisioner","State":"restarting"}'
 
 parser_case 'a running one-off ahead of the healthy api hides it' \
   healthy "${RUN_STARTING}\n${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}"
@@ -304,6 +313,30 @@ parser_case '3C: the previously accepted api + worker shape is no longer ready' 
   '' "${RUN_HEALTHY}\n${WORKER_HEALTHY}"
 parser_case '3C: a monitor one-off reporting starting beside a healthy monitor is healthy' \
   healthy "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_STARTING}\n${MONITOR_HEALTHY}"
+
+# --- 4D: the provisioner is the fourth ---------------------------------------
+#
+# The process that creates the thing the customer paid for. It was added to the
+# production topology in this phase and NOT to the readiness list, so `botctl
+# update`, rollback validation and `botctl status` would all have reported a
+# release ready while it was absent, crash-looping or permanently unhealthy —
+# and paid orders would have accumulated in PENDING_PROVISION with the
+# deployment reported as a success. Each row isolates it: everything else is
+# healthy.
+PARSER_REQUIRED='api worker monitor provisioner'
+parser_case '4D: the rest healthy but the provisioner STOPPED is not ready, and fast-fails' \
+  exited "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}\n${PROVISIONER_EXITED}"
+parser_case '4D: the rest healthy but the provisioner crash-loops is not ready' \
+  restarting "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}\n${PROVISIONER_RESTARTING}"
+parser_case '4D: the rest healthy but the provisioner unhealthy is not ready' \
+  unhealthy "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}\n${PROVISIONER_UNHEALTHY}"
+parser_case '4D: the rest healthy but the provisioner still starting is not ready yet' \
+  starting "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}\n${PROVISIONER_STARTING}"
+parser_case '4D: the previously accepted three-role shape is no longer ready' \
+  '' "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}"
+parser_case '4D: all four healthy is ready' \
+  healthy "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}\n${PROVISIONER_HEALTHY}"
+PARSER_REQUIRED='api worker monitor'
 
 # The rollback direction, and it is the reason the required list is resolved
 # from the compose file rather than hardcoded. Host assets are

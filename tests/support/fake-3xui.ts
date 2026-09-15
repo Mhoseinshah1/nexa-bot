@@ -141,15 +141,59 @@ export type Behaviour =
   /** The LOGIN response rotates the session to a value larger than any real one. */
   | 'login-enormous-cookie'
   /** The 2FA question's response rotates the session the same way. */
-  | 'twofactor-enormous-cookie';
+  | 'twofactor-enormous-cookie'
+  /**
+   * `addClient` RECORDS the client and then dies without answering.
+   *
+   * The create whose answer was lost — the case `failureOutcome` classifies UNKNOWN on
+   * a mutating call and the reason `UNRECONCILED` exists. The account is really there,
+   * so a reconcile that ASKS the panel must find it.
+   */
+  | 'add-client-lost-reply'
+  /**
+   * `addClient` answers 500 and stores NOTHING.
+   *
+   * The other half of the same uncertainty: a 5xx may or may not have committed a
+   * write, so Nexa cannot tell these two apart from the outside — which is exactly why
+   * the remedy is a read rather than a guess. Here the read finds nothing and a fresh
+   * create becomes legal.
+   */
+  | 'add-client-500';
 
 export interface Fake3xUi {
   readonly baseUrl: string;
   readonly origin: string;
   /** Every request the fake saw, in order. */
   readonly requests: ReadonlyArray<RecordedRequest>;
+  /** Every client `addClient` accepted, keyed by the `email` it was given. */
+  readonly clients: ReadonlyMap<string, FakeClient>;
+  /**
+   * Changes what the panel does, without changing its address.
+   *
+   * A panel that fails a create and then recovers is ONE panel: the same row, the same
+   * credentials, the same base URL. Restarting the fake on a new port would give the
+   * test a second panel and prove nothing about a panel that came back.
+   */
+  setBehaviour(next: Behaviour): void;
   reset(): void;
   close(): Promise<void>;
+}
+
+/**
+ * One client, as v3.7.0 stores it inside an inbound's `settings`.
+ *
+ * Only the fields the adapter writes or reads back. `up` and `down` are the two
+ * directions 3X-UI counts separately, and both are zero for a client nobody has used
+ * yet — which is the state every freshly created one is in.
+ */
+export interface FakeClient {
+  readonly id: string;
+  readonly email: string;
+  readonly subId: string;
+  readonly totalGB: number;
+  readonly expiryTime: number;
+  readonly up: number;
+  readonly down: number;
 }
 
 export interface RecordedRequest {
@@ -185,11 +229,12 @@ const STATUS_OBJ = {
 export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake3xUi> {
   const basePath = options.basePath ?? '/';
   const tokens = options.tokens ?? {};
-  const behaviour = options.behaviour ?? 'healthy';
+  let behaviour = options.behaviour ?? 'healthy';
   const requests: RecordedRequest[] = [];
   // The session store. Keyed by the cookie value the fake issued, exactly as
   // v3.7.0 binds its CSRF token to the session rather than to the request.
   const sessions = new Map<string, { csrf: string; loggedIn: boolean }>();
+  const clients = new Map<string, FakeClient>();
   let issued = 0;
 
   const handler = (request: IncomingMessage, response: ServerResponse): void => {
@@ -404,6 +449,116 @@ export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake
         return;
       }
 
+      /*
+       * Whether an API request is authenticated, answered exactly as v3.7.0 does.
+       *
+       * `checkAPIAuth` runs before every `/panel/api` route, so the 401/404 split and
+       * the token-scope refusal below are not specific to `/server/status`. Written
+       * once here and used by all three, because a fake whose routes disagree about
+       * authentication proves the adapter matches the fake rather than the panel.
+       */
+      const apiRefused = (): boolean => {
+        const auth = headers['authorization'] ?? '';
+        const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : null;
+        const scope = bearer === null ? null : (tokens[bearer] ?? null);
+        const unauthenticated =
+          (bearer !== null && scope === null) || (bearer === null && session?.loggedIn !== true);
+        if (unauthenticated) {
+          if (headers['x-requested-with'] === 'XMLHttpRequest') {
+            response.writeHead(401, { 'content-type': 'application/json' });
+            response.end(JSON.stringify(envelope(false, null, 'unauthorized')));
+          } else {
+            response.writeHead(404, { 'content-type': 'text/html' });
+            response.end('<html><body>404 page not found</body></html>');
+          }
+          return true;
+        }
+        if (scope === 'denied') {
+          json(
+            403,
+            envelope(false, null, 'this API token is not permitted to access this endpoint'),
+          );
+          return true;
+        }
+        return false;
+      };
+
+      // --- panel/api/inbounds/addClient (v3.7.0 inbound.go) ------------------
+      //
+      // Binds `id` and `settings` from a FORM, and `settings` is itself a JSON string
+      // rather than a nested object — the shape the adapter has to send and the one a
+      // JSON body would not satisfy. Answers `obj: null` on success, which is why the
+      // adapter reports no usage from a create rather than inventing a zero.
+      if (route === 'panel/api/inbounds/addClient') {
+        if (request.method !== 'POST') return void json(404, envelope(false, null));
+        if (apiRefused()) return;
+        if (behaviour === 'add-client-500') {
+          return void json(500, { error: 'internal' });
+        }
+        const form = new URLSearchParams(body);
+        const settingsRaw = form.get('settings');
+        if (form.get('id') === null || settingsRaw === null) {
+          return void json(200, envelope(false, null, 'invalid parameter'));
+        }
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(settingsRaw);
+        } catch {
+          return void json(200, envelope(false, null, 'invalid settings'));
+        }
+        const first = (parsed as { clients?: unknown[] }).clients?.[0] as
+          Record<string, unknown> | undefined;
+        if (first === undefined) return void json(200, envelope(false, null, 'no client'));
+        const email = String(first['email'] ?? '');
+        if (clients.has(email)) {
+          // v3.7.0 refuses a duplicate email inside one inbound. Recorded so a test can
+          // prove a retry did not reach here twice with the same name.
+          return void json(200, envelope(false, null, 'duplicate email'));
+        }
+        clients.set(email, {
+          id: String(first['id'] ?? ''),
+          email,
+          subId: String(first['subId'] ?? ''),
+          totalGB: Number(first['totalGB'] ?? 0),
+          expiryTime: Number(first['expiryTime'] ?? 0),
+          up: 0,
+          down: 0,
+        });
+        if (behaviour === 'add-client-lost-reply') {
+          // Stored, and the answer never arrives. The client IS on the panel.
+          request.socket.destroy();
+          return;
+        }
+        return void json(200, envelope(true, null, 'Client added Successfully'));
+      }
+
+      // --- panel/api/inbounds/getClientTraffics/:email -----------------------
+      //
+      // An UNKNOWN email is a perfectly successful envelope carrying `obj: null`, not a
+      // 404. That is what makes absence a positive answer from the panel, and therefore
+      // what makes a fresh create legal after a create whose reply was lost.
+      if (route.startsWith('panel/api/inbounds/getClientTraffics/')) {
+        if (apiRefused()) return;
+        const email = decodeURIComponent(
+          route.slice('panel/api/inbounds/getClientTraffics/'.length),
+        );
+        const client = clients.get(email);
+        if (client === undefined) return void json(200, envelope(true, null));
+        return void json(
+          200,
+          envelope(true, {
+            id: 1,
+            inboundId: 1,
+            enable: true,
+            email: client.email,
+            up: client.up,
+            down: client.down,
+            expiryTime: client.expiryTime,
+            total: client.totalGB,
+          }),
+        );
+      }
+
       // --- panel/api/server/status ------------------------------------------
       if (route === 'panel/api/server/status') {
         const auth = headers['authorization'] ?? '';
@@ -515,9 +670,14 @@ export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake
     baseUrl: `${origin}${basePath}`,
     origin,
     requests,
+    clients,
+    setBehaviour(next: Behaviour): void {
+      behaviour = next;
+    },
     reset(): void {
       requests.length = 0;
       sessions.clear();
+      clients.clear();
     },
     async close(): Promise<void> {
       server.closeAllConnections();

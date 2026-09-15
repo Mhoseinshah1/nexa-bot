@@ -97,7 +97,13 @@ describe('worker health coverage', () => {
 
   it('finds every entrypoint, so the scan below cannot pass vacuously', () => {
     const found = [...entrypoints().keys()].sort();
-    expect(found).toEqual(['main.monitor.ts', 'main.recovery.ts', 'main.ts', 'main.worker.ts']);
+    expect(found).toEqual([
+      'main.monitor.ts',
+      'main.provisioner.ts',
+      'main.recovery.ts',
+      'main.ts',
+      'main.worker.ts',
+    ]);
   });
 
   it('has the role that starts each loop check that loop', () => {

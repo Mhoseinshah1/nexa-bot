@@ -1,0 +1,1 @@
+ALTER TABLE "services" ADD COLUMN "delivery_send_started_at" timestamp with time zone;

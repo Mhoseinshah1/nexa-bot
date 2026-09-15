@@ -973,6 +973,27 @@ export const panelSummarySchema = z.object({
     password: panelCredentialStateSchema,
     apiToken: panelCredentialStateSchema,
   }),
+  /**
+   * The stored provider configuration, returned IN FULL. Not a credential.
+   *
+   * `docs/conventions.md` requires a setting surface to return its current value:
+   * "the only way to read a price is to overwrite it" is the legacy defect it names,
+   * and this field decides where every customer's subscription link points. Writing it
+   * without being able to read it meant an operator could change
+   * `subscriptionDomain` to a host they chose and nothing in the system could say what
+   * it had been, what it became, or what it is now — the audit records the FIELD NAMES,
+   * on the stated ground that the panel read answers the rest, which was only true once
+   * this field existed.
+   *
+   * Null when unset, which is a real and common state: a panel is connectable and
+   * probeable before anybody has told it which inbound to sell from.
+   *
+   * It sits beside `credentials` and is shaped nothing like it, deliberately. A
+   * credential leaves as three timestamps and never a value; this leaves as the value,
+   * because a subscription domain and an inbound number are configuration an operator
+   * copies off the panel they already administer.
+   */
+  activation: z.record(z.string(), z.unknown()).nullable(),
   health: panelHealthSchema,
   createdAt: isoTimestamp,
   updatedAt: isoTimestamp,
@@ -1101,11 +1122,36 @@ export const panelCredentialsInputSchema = z
   );
 export type PanelCredentialsInput = z.infer<typeof panelCredentialsInputSchema>;
 
+/**
+ * The per-panel provider configuration a create or an edit carries.
+ *
+ * Deliberately UNVALIDATED here beyond "an object, or null". The real shape is per
+ * provider — `PANEL_ACTIVATION_SCHEMAS` — and this schema cannot know which provider
+ * the request names on an edit, where `providerType` is absent because changing it is
+ * forbidden. So the service parses it against the panel's own provider, and a second
+ * opinion about the shape is deliberately not expressed here.
+ *
+ * Three states, exactly as `panelCredentialsInputSchema` has: absent leaves whatever is
+ * stored, `null` clears it, an object replaces it. An operator renaming a panel must
+ * not silently erase the subscription domain by not mentioning it.
+ *
+ * NOT a credential, which is why it lives on `panels.edit` rather than behind
+ * `panels.credentials.rotate`: a subscription domain and an inbound number are
+ * configuration an operator reads off their own panel, and `panels.activation` is
+ * returned by every panel read.
+ */
+export const panelActivationInputSchema = z.union([
+  z.record(z.string().min(1).max(64), z.unknown()),
+  z.null(),
+]);
+export type PanelActivationInput = z.infer<typeof panelActivationInputSchema>;
+
 export const createPanelRequestSchema = z.object({
   name: panelNameSchema,
   providerType: z.enum(PROVIDER_TYPES),
   baseUrl: panelBaseUrlSchema,
   credentials: panelCredentialsInputSchema.optional(),
+  activation: panelActivationInputSchema.optional(),
   idempotencyKey: z.string().min(8).max(255),
 });
 export type CreatePanelRequest = z.infer<typeof createPanelRequestSchema>;
@@ -1126,6 +1172,16 @@ export type CreatePanelRequest = z.infer<typeof createPanelRequestSchema>;
 export const updatePanelRequestSchema = z.object({
   name: panelNameSchema.optional(),
   baseUrl: panelBaseUrlSchema.optional(),
+  /**
+   * Here and not on a route of its own.
+   *
+   * Activation is the same permission as a name — `panels.edit` — and the same kind of
+   * thing: configuration an operator copies off the panel they already administer.
+   * Credentials are a separate route because rotating one is a different, CRITICAL
+   * permission; that argument does not reach a subscription domain, and a third route
+   * would be a third place to forget the tenant check.
+   */
+  activation: panelActivationInputSchema.optional(),
   idempotencyKey: z.string().min(8).max(255),
 });
 export type UpdatePanelRequest = z.infer<typeof updatePanelRequestSchema>;

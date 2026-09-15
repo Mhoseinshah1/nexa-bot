@@ -204,6 +204,12 @@ export function panel(overrides: Record<string, unknown> = {}): Record<string, u
       password: { configured: true, lastReplacedAt: '2026-01-01T00:00:00.000Z' },
       apiToken: { configured: false, lastReplacedAt: null },
     },
+    /*
+     * Null is the honest default: a panel is connectable and probeable before anybody
+     * has said which inbound to sell from, and most of these cases are about that
+     * panel. A case that needs one overrides it.
+     */
+    activation: null,
     health: {
       state: 'HEALTHY',
       checkedAt: '2026-09-06T08:00:00.000Z',

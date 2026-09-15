@@ -660,6 +660,53 @@ successful upload's workspace.** Debris is reported on the row and in the
 operational log; a recovery that removed its own evidence would be one nobody
 could audit.
 
-## Phases 4–8
+## Phase 4 — the product
+
+`docs/architecture.md` holds the scope. What has landed:
+
+- **4A — customers.** The Telegram inbound runtime, `/start` and its replay, block and
+  unblock, and the Web Admin Users surface.
+- **4B — catalogue and orders.** Products, the customer-facing catalogue read model, and
+  an order that reaches `AWAITING_PAYMENT`.
+- **4C — money.** The wallet ledger with its derived balance, WALLET settlement and
+  MANUAL_TRANSFER confirmation, and the Web Admin Wallet and Payments surfaces.
+- **4D — provisioning.** A settled order becomes an account on a real panel, exactly
+  once; the customer is told in the same tick; and a create whose answer was lost is
+  reconciled against the panel rather than retried blindly. A fifth process role,
+  `provisioner`, runs that lane.
+
+### What 4D is careful about, in one paragraph each
+
+**Exactly once is a constraint, not a discipline.** The service row is written inside
+`PaymentService.confirmAndSettle`'s own transaction — the one place `SETTLE` is taken —
+so "one settled order produces at most one logical service" follows from `ORDER_MACHINE`
+plus `services_tenant_order_key`. Nothing contacts a provider on that path.
+
+**An unknown outcome is not a failure.** A timeout or a 5xx on a mutating call may have
+taken effect, so the service goes to `UNRECONCILED` and a `RECONCILE` operation asks the
+panel. Adoption is what the panel says it has; a fresh create is legal only after the
+panel has positively said it has nothing. The cycle is bounded on the service, because
+without a bound each round derives a new operation id and nothing ever collides.
+
+**Delivery is a separate axis from `ServiceState`.** A failed Telegram message leaves a
+paid-for account `ACTIVE` and is separately retryable; an `UNKNOWN` send is never retried
+automatically, because a second "your service is ready" is a customer wondering which one
+is true.
+
+**Two identities are capabilities, not ids.** The subscription reference fetches a
+customer's configuration unauthenticated and the client id is what it authenticates with,
+so both are random and stored rather than derived from the service id — which travels in
+the audit log, the operations log and the outbox. Only the provider username stays
+derived, because being askable-for by name after a lost write is its whole job.
+
+### Not in Phase 4 yet
+
+The Telegram **My Services** surface, the Web Admin **Services**, **Provider** and
+commercial sections, payment completion, and the deferred Telegram hardening recorded as
+OQ-TG-04. Nothing consumes a panel beyond provisioning: no renewal, no suspension, no
+termination, no usage synchronisation, and no lifecycle sweeper moving `ACTIVE` to
+`EXPIRED`.
+
+## Phases 5–8
 
 Not started. Scope in `docs/architecture.md`.

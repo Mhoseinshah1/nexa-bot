@@ -1,8 +1,10 @@
 import {
   isProviderType,
+  isServiceAdapter,
   NexaError,
   PANEL_ERROR_CODES,
   PROVIDER_TYPES,
+  type ProviderAdapter,
   type ProviderConnectionAdapter,
   type ProviderType,
 } from '@nexa/contracts';
@@ -36,9 +38,33 @@ const ADAPTERS: Partial<Record<ProviderType, () => ProviderConnectionAdapter>> =
   sanaei: () => new SanaeiAdapter(),
 };
 
-/** The provider types this release can actually operate, as opposed to name. */
+/** The provider types this release can CONNECT to, as opposed to name. */
 export const IMPLEMENTED_PROVIDER_TYPES: readonly ProviderType[] = PROVIDER_TYPES.filter(
   (type) => ADAPTERS[type] !== undefined,
+);
+
+/**
+ * The provider types this release can create a SERVICE on. A different question.
+ *
+ * Derived from `isServiceAdapter` rather than from the registry, because the registry
+ * answers "is there an adapter" and this answers "does that adapter have the service
+ * half" — the state Marzban and 3X-UI were both in for three releases, and the exact
+ * distinction `panel-operability.ts` documents `serviceAdapterExists` as making.
+ *
+ * `decideOperability` was given the CONNECTION list, so a provider with a connection
+ * adapter and no service half passed the operability check and then threw inside
+ * `providerServiceAdapter` — after the claim had already spent an attempt, inside a
+ * tick whose catch swallows it. A fail-open in the one place built to fail closed.
+ *
+ * Computed once at module load by constructing each adapter. That is cheap — the
+ * constructors hold no connections — and it means the list cannot disagree with the
+ * call site the way a hand-maintained second registry eventually would.
+ */
+export const SERVICE_PROVIDER_TYPES: readonly ProviderType[] = IMPLEMENTED_PROVIDER_TYPES.filter(
+  (type) => {
+    const factory = ADAPTERS[type];
+    return factory !== undefined && isServiceAdapter(factory());
+  },
 );
 
 /**
@@ -70,4 +96,33 @@ export function providerAdapter(providerType: string): ProviderConnectionAdapter
     });
   }
   return factory();
+}
+
+/**
+ * The adapter for a persisted provider type, narrowed to the SERVICE half.
+ *
+ * Separate from `providerAdapter` rather than replacing it, because the two questions
+ * are different and only one of them is about a customer's money. "Can this panel be
+ * probed" is answered by the connection half and is what the monitor and the
+ * operator's test button need; "can this panel create the thing somebody paid for" is
+ * this, and a provider may legitimately arrive answering yes to the first and no to
+ * the second — that is the state Marzban and 3X-UI were both in for three releases.
+ *
+ * Fails closed with the same code and the same reasoning as its sibling: the panel
+ * exists, this installation cannot act on it, and that is an operator's problem to
+ * solve rather than a caller's mistake. `isServiceAdapter` is a structural check
+ * rather than a second registry, so a provider cannot be listed here as operable and
+ * turn out at the call site to be missing a method.
+ */
+export function providerServiceAdapter(providerType: string): ProviderAdapter {
+  const adapter = providerAdapter(providerType);
+  if (!isServiceAdapter(adapter)) {
+    throw new NexaError({
+      kind: 'CONFIGURATION',
+      code: PANEL_ERROR_CODES.PROVIDER_TYPE_UNSUPPORTED,
+      message: `This release can connect to the "${providerType}" provider but cannot yet create services on it. The panel is unchanged; nothing was contacted.`,
+      details: { providerType },
+    });
+  }
+  return adapter;
 }

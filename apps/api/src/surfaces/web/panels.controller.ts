@@ -187,6 +187,16 @@ export class PanelsController {
         password: state(view.credentials.passwordSetAt),
         apiToken: state(view.credentials.apiTokenSetAt),
       },
+      /*
+       * The stored activation, as stored. Not a credential, and readable by design.
+       *
+       * The audit entries for a create or an edit record only which FIELDS were given,
+       * on the ground that "the panel read already answers that, under the same
+       * permission". This is the read that makes the ground true; without it the write
+       * was unauditable and the value unreadable, which is the write-only settings
+       * defect `docs/conventions.md` names.
+       */
+      activation: toActivation(view.panel.activation),
       health: this.toHealth(view),
       createdAt: view.panel.createdAt.toISOString(),
       updatedAt: view.panel.updatedAt.toISOString(),
@@ -254,6 +264,23 @@ export class PanelsController {
       actor: adminActor(admin, correlationId, request, session.id),
     };
   }
+}
+
+/**
+ * The stored activation as an object, or null.
+ *
+ * `PanelRecord.activation` is `unknown` because its shape is per provider and a
+ * repository cannot narrow it. Narrowing here is a projection decision rather than a
+ * second opinion about the schema: anything that is not a plain object — a legacy
+ * scalar, an array, a value a future release writes differently — is reported as
+ * "unset" rather than passed through, because a surface that renders whatever it finds
+ * is a surface a bad row can break.
+ */
+function toActivation(activation: unknown): Record<string, unknown> | null {
+  if (typeof activation !== 'object' || activation === null || Array.isArray(activation)) {
+    return null;
+  }
+  return activation as Record<string, unknown>;
 }
 
 function state(setAt: Date | null): { configured: boolean; lastReplacedAt: string | null } {

@@ -366,6 +366,47 @@ services:
       retries: 3
       start_period: 40s
 
+  provisioner:
+    <<: *app-common
+    command: ['node', 'dist/main.provisioner.js']
+    # The FIFTH process role, from the SAME image, and the one that turns a paid
+    # order into a service somebody can actually connect to.
+    #
+    # Not the api, for the reason the monitor is not: a provider create is an
+    # outbound HTTPS call with a timeout measured in seconds, and running it on
+    # the loop that answers the Telegram webhook makes a fleet of slow panels
+    # into slow Telegram replies — with the process holding decrypted panel
+    # credentials being the one exposed to the internet.
+    #
+    # Not the monitor either, and that is the mirror of the monitor's own
+    # argument. A monitor stuck on a hanging panel must not delay notification
+    # delivery, which is why it is not the worker; a customer waiting for the
+    # configuration they bought must not queue behind a sweep of every panel in
+    # the installation, which is why provisioning is not the monitor.
+    #
+    # The heartbeat proves the same three things the monitor's does — alive,
+    # database reachable, and the loop has made PROGRESS recently — and a tick
+    # that threw records none, so a provisioner whose every claim fails goes
+    # unhealthy rather than reporting success for ever. A deliberately disabled
+    # provisioner (PROVISIONER_ENABLED=false) stays healthy: a process doing
+    # nothing on purpose is not a broken one.
+    #
+    # The path and the derivation must agree with config.schema.ts, and it
+    # writes on the same WORKER_HEARTBEAT interval as the worker and the
+    # monitor, so it reads the same variable.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "const fs=require('fs');const p=process.env.PROVISIONER_HEARTBEAT_PATH||'/tmp/nexa-provisioner.heartbeat';const i=Number(process.env.WORKER_HEARTBEAT_INTERVAL_MS);const max=(Number.isFinite(i)&&i>0?i:10000)*3;try{const s=fs.readFileSync(p,'utf8').trim();const at=Number(s);process.exit(s!==''&&Number.isFinite(at)&&Date.now()-at<=max?0:1)}catch{process.exit(1)}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
   # The FOURTH process role, and the only one that can replace this
   # installation's database.
   #

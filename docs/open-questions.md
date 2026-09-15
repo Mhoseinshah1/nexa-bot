@@ -1323,3 +1323,70 @@ are all still there. What is missing is any way to see or move them.
 
 **Trigger to resolve:** the first installation that changes `sales.currency` with wallet
 entries already written, or the phase that gives a wallet more than one denomination.
+
+## OQ-PROV-01 — a connection reset after the request is sent reads as `UNREACHABLE`
+
+**Status: OPEN, contained, and deliberately not fixed in Phase 4D.**
+
+`SafeHttpClient` maps every non-timeout, non-TLS socket error to `UNREACHABLE`
+(`failureFromError`, `apps/api/src/infrastructure/net/safe-http.ts`), and
+`SAFE_TO_REPLAY_FAILURE_KINDS` lists `UNREACHABLE` on the stated ground that _"the
+request never reached an authenticated endpoint, so nothing happened."_
+
+That is false for a connection torn down **after** the request was fully written — a
+proxy timing out, a panel restarting mid-response, a load balancer dropping a
+connection. The panel may well have committed the write, and Nexa calls the failure
+safe to replay.
+
+**Why it is not a duplicate account.** The provider username is derived from the
+service id, so the replay addresses the SAME account. 3X-UI refuses a duplicate email
+and Marzban a 409; both are `PROVIDER_ERROR`, which `failureOutcome` classifies UNKNOWN
+on a mutating call, which sends the service to reconciliation, which adopts the account
+that is already there. The cost is one wasted provider call and one spent attempt, not
+a second thing a customer pays for.
+`tests/integration/provisioning-delivery.test.ts` › creates one account when a create
+is cut off after the panel stored it drives exactly this sequence and asserts the
+account count.
+
+**What a fix would be.** Node reports `'finish'` on the outgoing request once it has
+been flushed; a socket error after that point is not "unreachable" and should be
+reported as a kind that is not safe to replay. It is not done here because
+`SafeHttpClient` is shared by every probe and adapter in the installation and is
+covered by 42 fake-server scenarios that assert the current classification — changing
+it is its own change, with its own review, and CLAUDE.md records what happens when a
+fix is reviewed less hard than the bug.
+
+## OQ-PROV-02 — the announcement uses the bot the customer FIRST wrote to
+
+**Status: OPEN, contained, and deliberately not fixed in Phase 4D.**
+
+`CustomerContactReader` (wired in `apps/api/src/container.ts`) resolves a service's
+announcement destination as `customers.first_bot_instance_id`. `CustomerMessage`
+requires the bot relevant to the interaction, and its own docblock gives the reason:
+for a tenant running a public bot beside a reseller bot, a message from the wrong
+account leaks the relationship between them.
+
+Those two are not the same bot. `first_bot_instance_id` records the first contact
+ever; a customer who first wrote to the public bot and later ordered through the
+reseller bot is announced to from the public one.
+
+**Why it is not fixed here.** There is nothing to fix it with. `orders` carries no
+bot instance column — checked, not assumed — so this release does not record which
+bot a purchase came through, and no other table does either. Using the only recorded
+value is better than inventing one; the container comment now says this outright
+rather than implying `first_bot_instance_id` is correct.
+
+**Why it is contained today.** Reseller sub-bots are not implemented (CLAUDE.md: no
+resellers), and a tenant with exactly one bot instance — the shape every installation
+has until that phase — cannot hit it: first contact and purchase are necessarily the
+same bot.
+
+**What a fix would be.** `orders.bot_instance_id`, set where the Telegram order flow
+creates the draft (it holds the bot instance already), carried onto the service, and
+read by the delivery sweep in preference to the customer's first bot. That is an
+orders schema change plus a port change, which belongs with Phase 4E's service work
+rather than bolted onto the delivery wiring.
+
+**Found by** the Codex review of PR #25, which reported it as a P1. The severity is
+right about the rule and wrong about this release: the leak it describes needs a
+second bot instance to exist, and nothing creates one yet.

@@ -298,3 +298,73 @@ export function providerUsernameFor(serviceId: string): string {
   }
   return `${PROVIDER_USERNAME_PREFIX}${compact}`;
 }
+
+/**
+ * Whether the customer has actually been told about their service.
+ *
+ * A SEPARATE axis from `ServiceState`, and that separation is the whole point. A
+ * service whose provider user exists is `ACTIVE` whether or not Telegram accepted the
+ * message announcing it — folding the two together would mean a failed send made a
+ * real, paid-for, provider-side account look unprovisioned, and the obvious "fix" for
+ * that is to provision it again.
+ *
+ * Four values, because there are four genuinely different operator situations:
+ *
+ * - `PENDING` — not yet announced, or announced and DEFINITELY refused. Retryable, and
+ *   the only value a background sweep will act on.
+ * - `DELIVERED` — Telegram accepted it.
+ * - `UNCONFIRMED` — the send outcome was `UNKNOWN`: a timeout, a 5xx, a 429, or a 2xx
+ *   whose body would not parse. The customer MAY have it. Never retried automatically —
+ *   the customer messenger's own port already states the reason, that a retried "your
+ *   service is ready" is a customer wondering which one is true. Re-delivery from here
+ *   is a deliberate act by an operator or by the customer opening their service.
+ * - `FAILED` — definitely refused `DELIVERY_MAX_ATTEMPTS` times. Not retried
+ *   automatically either, because something is wrong that another attempt will not fix
+ *   — the customer has blocked the bot, or the bot's token is dead.
+ *
+ * `PENDING` covering "refused once" rather than a fifth value is deliberate: a definite
+ * refusal changed nothing, so the situation is identical to never having tried.
+ */
+export const SERVICE_DELIVERY_STATES = ['PENDING', 'DELIVERED', 'UNCONFIRMED', 'FAILED'] as const;
+export type ServiceDeliveryState = (typeof SERVICE_DELIVERY_STATES)[number];
+export const serviceDeliveryStateSchema = z.enum(SERVICE_DELIVERY_STATES);
+
+/** The states a background sweep may act on. Everything else needs a person. */
+export const DELIVERY_AUTO_RETRY_STATES: readonly ServiceDeliveryState[] = ['PENDING'];
+
+/**
+ * How many definite refusals before a delivery stops being retried on its own.
+ *
+ * Lower than `OPERATION_MAX_ATTEMPTS` on purpose. A provider create is worth persisting
+ * with because the customer has paid and nothing else can produce the thing they bought;
+ * a Telegram send that has been refused three times is being refused for a reason that
+ * a fourth attempt does not change, and the remaining attempts would be spent messaging
+ * somebody who has blocked the bot.
+ */
+export const DELIVERY_MAX_ATTEMPTS = 3;
+
+/**
+ * How long a subscription reference is, and what it is made of.
+ *
+ * Thirty-two lowercase hex characters — sixteen RANDOM bytes, and the randomness is the
+ * point. `subscriptionRefFor` and `providerClientIdFor` used to live here, deriving both
+ * from the service id through the same unkeyed `Hasher` that mints operation ids, and
+ * claiming in their own docblocks that neither was derivable from the username.
+ *
+ * Both claims were false. `providerUsernameFor` is a reversible ENCODING of the service
+ * id rather than a hash, so a name read off a panel's client list recovered the id; and
+ * the id itself travels in `operational_events.context`, in `audit_logs.entity_id` and
+ * in `outbox_messages.aggregate_id`. Anybody who could read an audit log could compute
+ * the link that serves a customer's configuration with no authentication, and the VLESS
+ * client id that configuration authenticates with.
+ *
+ * The recoverability the derivation existed for is kept by STORING both values, written
+ * in the settling transaction before any provider call — see `services.subscription_ref`.
+ * A value committed before the call survives a lost answer exactly as well as one that
+ * can be recomputed, and cannot be recomputed by anybody else.
+ *
+ * `providerUsernameFor` stays derived. It is an identifier, not a capability, and being
+ * askable-for by name after a lost write is the whole reason it exists.
+ */
+export const SUBSCRIPTION_REF_LENGTH = 32;
+export const SUBSCRIPTION_REF_BYTES = 16;

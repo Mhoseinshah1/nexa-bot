@@ -1,5 +1,6 @@
 import type {
   MonitorDeferralReason,
+  PanelActivation,
   PanelHealthState,
   PanelStatus,
   ProviderFailureKind,
@@ -37,6 +38,15 @@ export interface PanelRecord {
   readonly providerType: ProviderType;
   readonly baseUrl: string;
   readonly status: PanelStatus;
+  /**
+   * The per-panel provider configuration, exactly as stored, or null when unset.
+   *
+   * `unknown` on purpose. The shape is per provider — `PANEL_ACTIVATION_SCHEMAS` — so
+   * a repository cannot narrow it without knowing which provider this row is, and a
+   * narrowing done here would be a second opinion about a schema that already exists.
+   * Every reader parses it; `decideOperability` is the one that decides.
+   */
+  readonly activation: unknown;
   readonly archivedAt: Date | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
@@ -100,6 +110,8 @@ export interface CreatePanelInput {
   readonly name: string;
   readonly providerType: ProviderType;
   readonly baseUrl: string;
+  /** The per-panel provider configuration, when the create carried one. */
+  readonly activation?: PanelActivation;
   /**
    * From the `Clock` port, not the database's `now()`.
    *
@@ -116,6 +128,8 @@ export interface CreatePanelInput {
 export interface UpdatePanelInput {
   readonly name?: string;
   readonly baseUrl?: string;
+  /** Absent leaves it; `null` clears it; an object replaces it. */
+  readonly activation?: PanelActivation | null;
 }
 
 /**

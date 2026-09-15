@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import type { ServiceId } from './ids.js';
 
 /**
@@ -159,6 +160,78 @@ export function isProviderType(value: string): value is ProviderType {
 }
 
 /**
+ * The per-panel configuration a provider needs before it can build a config at all.
+ *
+ * `requiredActivationFields` below has named this since Phase 3 and nothing stored a
+ * value for it, so a 3X-UI panel could be connected, probed and shown as healthy while
+ * being unable to produce the one thing a customer buys. These schemas are that field
+ * list made real: declared per provider, validated at the boundary, and stored on the
+ * panel.
+ *
+ * Declared as SCHEMAS rather than an open `jsonb` blob for the same reason
+ * `settings.ts` has a registry: a key that is not declared does not exist, and an
+ * untyped bag on a panel row is how a provider ends up reading a field somebody
+ * invented in a support conversation.
+ *
+ * Neither of these has a default, and that is deliberate. Guessing which inbound a
+ * customer's account is created on is guessing which server they connect to; the
+ * research is explicit that the legacy system's inbound selection was never observable,
+ * so a default here would be a fabricated product decision. An unset panel refuses with
+ * `PANEL_NOT_OPERABLE` and names the field.
+ */
+export const MARZBAN_PROXY_PROTOCOLS = ['vless', 'vmess', 'trojan', 'shadowsocks'] as const;
+export type MarzbanProxyProtocol = (typeof MARZBAN_PROXY_PROTOCOLS)[number];
+
+export const marzbanActivationSchema = z.object({
+  /**
+   * Which proxy protocols a created user is given. At least one, because a Marzban
+   * user with no proxies is an account that cannot connect to anything.
+   */
+  proxyProtocols: z.array(z.enum(MARZBAN_PROXY_PROTOCOLS)).min(1).max(4),
+  /**
+   * Inbound tags per protocol. Absent means every inbound Marzban has for that
+   * protocol, which is Marzban's own default and not an invention of ours.
+   */
+  inboundTags: z.record(z.string().min(1).max(64), z.array(z.string().min(1).max(64))).optional(),
+});
+export type MarzbanActivation = z.infer<typeof marzbanActivationSchema>;
+
+export const sanaeiActivationSchema = z.object({
+  /**
+   * The host that serves `/sub/`.
+   *
+   * Separate from the panel's own address because 3X-UI does not derive it: the
+   * subscription service is a different listener, frequently on a different hostname
+   * and port, and a link built from the panel address points at the admin panel.
+   * Host and optional port only — a full URL here would let a panel row name a
+   * destination the URL policy never saw.
+   */
+  subscriptionDomain: z
+    .string()
+    .min(1)
+    .max(253)
+    .regex(
+      /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*(:\d{1,5})?$/,
+      'must be a host, optionally with a port',
+    ),
+  /** Which inbound a created client is added to. 3X-UI keys clients by inbound. */
+  inboundId: z.number().int().positive().max(1_000_000),
+});
+export type SanaeiActivation = z.infer<typeof sanaeiActivationSchema>;
+
+export const panelActivationSchema = z.union([marzbanActivationSchema, sanaeiActivationSchema]);
+export type PanelActivation = MarzbanActivation | SanaeiActivation;
+
+/** The schema a panel's activation must satisfy, by provider type. Exhaustive. */
+export const PANEL_ACTIVATION_SCHEMAS: Readonly<{
+  marzban: typeof marzbanActivationSchema;
+  sanaei: typeof sanaeiActivationSchema;
+}> = {
+  marzban: marzbanActivationSchema,
+  sanaei: sanaeiActivationSchema,
+};
+
+/**
  * Static description of a provider type. Display names come from the template
  * catalog; `key` is the stable identifier and is never a display string.
  */
@@ -246,16 +319,53 @@ export interface ProviderUsage {
   readonly lastConnectionAt: Date | null;
 }
 
-export interface CreateProviderUserInput {
+/**
+ * The three derived identities one service has on a panel.
+ *
+ * All three come from the service id through pure functions, and that is the property
+ * the whole unknown-outcome design rests on: after a create whose answer was lost,
+ * every one of them can be recomputed from a row Nexa already holds, so the account
+ * can be ASKED for by name instead of created again.
+ */
+export interface ProviderUserRef {
   /**
-   * Deterministic, derived from stable order identifiers, so that a retry after
-   * a timeout converges on one remote user instead of creating a second.
-   * It is opaque and carries no Telegram id.
+   * The name this installation gave the account. `providerUsernameFor`.
+   *
+   * Opaque, and carrying no customer text: a username built from a Telegram display
+   * name would put somebody's real name on a third party's panel.
    */
   readonly username: string;
+  /**
+   * What a subscription URL is built from. Random, and stored on the service row:
+   * a capability, never derived from anything a log carries.
+   *
+   * Separate from the username because the username is visible in an operator's client
+   * list and this is a bearer capability for one customer's configuration.
+   */
+  readonly subscriptionRef: string;
+  /**
+   * The UUID a panel that keys clients by one uses. Random, and stored beside it.
+   *
+   * 3X-UI's VLESS client id is this value, and it is what the customer's configuration
+   * authenticates with. Derived from its own namespace so that reading any one of these
+   * three off a panel screen does not yield the others.
+   */
+  readonly clientId: string;
+}
+
+export interface CreateProviderUserInput extends ProviderUserRef {
   readonly serviceId: ServiceId;
   readonly volumeBytes: bigint | null;
   readonly durationDays: number | null;
+  /**
+   * The absolute moment this service expires, or null for no limit.
+   *
+   * Computed ONCE by the caller from the `Clock` port and passed in, rather than
+   * derived here from `durationDays`. An adapter that called a clock would compute a
+   * different expiry on every retry of the same operation — so a create and the
+   * reconcile that adopts it would disagree about when the customer's service ends.
+   */
+  readonly expiresAt: Date | null;
   readonly deviceLimit: number | null;
 }
 
@@ -493,6 +603,19 @@ export function providerFailureDefiniteness(
  * timed itself would be measuring its own arithmetic as well as the network.
  * The service measures the call and composes the two.
  */
+/**
+ * The failure arm every provider result shares.
+ *
+ * One shape across probe, create, lookup and usage, so one classifier reads all of
+ * them and `failureOutcome` has exactly one input to interpret. A second, subtly
+ * different failure shape per operation is how a taxonomy stops being a taxonomy.
+ */
+export interface ProviderFailureResult {
+  readonly ok: false;
+  readonly failure: ProviderFailureKind;
+  readonly status: number | null;
+}
+
 export type ProviderProbeOutcome =
   | {
       readonly ok: true;
@@ -608,6 +731,19 @@ export interface ProviderTarget {
 }
 
 /**
+ * A target plus the per-panel configuration the SERVICE half needs.
+ *
+ * Two types rather than one optional field, because the difference is real: a health
+ * probe genuinely does not need to know which inbound a user would be created on, and
+ * a create genuinely cannot proceed without it. Splitting them means the service
+ * methods cannot be called without activation and `probe` cannot be made to load it —
+ * a type doing the work a runtime check would otherwise do badly.
+ */
+export interface ProviderServiceTarget extends ProviderTarget {
+  readonly activation: PanelActivation;
+}
+
+/**
  * The connection half of a provider — everything Phase 3 needs and nothing it
  * does not.
  *
@@ -628,10 +764,96 @@ export interface ProviderConnectionAdapter {
   probe(target: ProviderTarget, http: ProviderHttpClient): Promise<ProviderProbeOutcome>;
 }
 
-/** The full provider surface. Phase 4 territory; declared so the seam is visible. */
+/**
+ * What a create attempt produced.
+ *
+ * A RESULT, never a thrown error, for the same reason `probe` is: an unreachable
+ * host, a refused credential and an unparseable body are three different facts that
+ * three different pieces of code have to record differently, and an exception forces
+ * every caller to re-derive that taxonomy from a message.
+ *
+ * `providerUserId` is whatever the panel calls this account in its own terms, when it
+ * says: Marzban answers with its user record, 3X-UI's client carries the UUID the
+ * config is built from. Null is legitimate — some panels key only on the username we
+ * chose — and the username remains the identifier reconciliation asks for either way.
+ */
+export type ProviderUserOutcome =
+  | {
+      readonly ok: true;
+      readonly providerUserId: string | null;
+      readonly delivery: ServiceDelivery;
+      /** What the panel says the account's limits are NOW, if it said. */
+      readonly usage: ProviderUsage | null;
+    }
+  | { readonly ok: false; readonly failure: ProviderFailureKind; readonly status: number | null };
+
+/**
+ * What a lookup of one provider username established.
+ *
+ * Three outcomes, and the difference between the second and the third is the whole
+ * reason reconciliation is safe. `found: false` is a POSITIVE statement — the panel
+ * answered, and it does not have this account — and it is the only thing that makes a
+ * fresh create legal after an unknown outcome. `ok: false` is "this installation still
+ * does not know", which leaves the service exactly where it was.
+ *
+ * An adapter must never report `found: false` because a request failed. That collapse
+ * is precisely how a timeout becomes a duplicate account.
+ */
+export type ProviderLookupOutcome =
+  | { readonly ok: true; readonly found: false }
+  | {
+      readonly ok: true;
+      readonly found: true;
+      readonly providerUserId: string | null;
+      readonly delivery: ServiceDelivery;
+      readonly usage: ProviderUsage | null;
+    }
+  | { readonly ok: false; readonly failure: ProviderFailureKind; readonly status: number | null };
+
+export type ProviderUsageOutcome =
+  | { readonly ok: true; readonly usage: ProviderUsage }
+  | { readonly ok: false; readonly failure: ProviderFailureKind; readonly status: number | null };
+
+/**
+ * The full provider surface: the connection half plus the service operations.
+ *
+ * Every method takes the `target` and the `http` client per call, exactly as `probe`
+ * does, so an adapter holds no panel state between calls. That is not style — an
+ * adapter that remembered a target could be handed the wrong panel's credentials by
+ * outliving a request, and the type is what makes that impossible rather than a rule
+ * somebody has to remember.
+ *
+ * `lookupUser` is on this interface and requires no capability, matching
+ * `OPERATION_REQUIRED_CAPABILITIES.RECONCILE` being empty: reading a user is how both
+ * adapters already establish health, so a provider that can be probed can be
+ * reconciled.
+ */
 export interface ProviderAdapter extends ProviderConnectionAdapter {
-  createUser(input: CreateProviderUserInput): Promise<ServiceDelivery>;
-  readUsage(username: string): Promise<ProviderUsage>;
+  createUser(
+    target: ProviderServiceTarget,
+    http: ProviderHttpClient,
+    input: CreateProviderUserInput,
+  ): Promise<ProviderUserOutcome>;
+  lookupUser(
+    target: ProviderServiceTarget,
+    http: ProviderHttpClient,
+    ref: ProviderUserRef,
+  ): Promise<ProviderLookupOutcome>;
+  readUsage(
+    target: ProviderServiceTarget,
+    http: ProviderHttpClient,
+    ref: ProviderUserRef,
+  ): Promise<ProviderUsageOutcome>;
+}
+
+/** Whether this adapter implements the service half, not just the connection half. */
+export function isServiceAdapter(adapter: ProviderConnectionAdapter): adapter is ProviderAdapter {
+  const candidate = adapter as Partial<ProviderAdapter>;
+  return (
+    typeof candidate.createUser === 'function' &&
+    typeof candidate.lookupUser === 'function' &&
+    typeof candidate.readUsage === 'function'
+  );
 }
 
 export function supportsCapability(
@@ -664,10 +886,27 @@ const MARZBAN: ProviderDescriptor = {
   key: 'marzban',
   canonicalName: 'Marzban',
   credentialShape: 'USERNAME_PASSWORD',
-  capabilities: ['HEALTH_CHECK'],
+  /*
+   * Four, and each one is executed by code in `marzban.adapter.ts`.
+   *
+   * `DELIVER_SUBSCRIPTION_LINK` because `createUser` returns Marzban's own
+   * `subscription_url` made absolute. `READ_USAGE` because `readUsage` reads
+   * `used_traffic` back. The other twelve are absent because this release cannot
+   * perform them — renewing, disabling, adding volume — and each returns in the
+   * commit that implements it, per the rule this array's history established.
+   */
+  capabilities: ['HEALTH_CHECK', 'CREATE_USER', 'READ_USAGE', 'DELIVER_SUBSCRIPTION_LINK'],
   // A token exchange, then a status read.
   maxRequestsPerProbe: 2,
-  requiredActivationFields: [],
+  /*
+   * Which proxy protocols a created user gets.
+   *
+   * Empty until Phase 4D, on the reasoning that Marzban needs no configuration to be
+   * PROBED — which is true, and was the wrong question. Marzban requires at least one
+   * proxy protocol to create a user, and there is no safe default: choosing one is
+   * choosing what a customer's client speaks.
+   */
+  requiredActivationFields: ['proxyProtocols'],
 };
 
 /**
@@ -704,13 +943,28 @@ const SANAEI: ProviderDescriptor = {
   key: 'sanaei',
   canonicalName: 'Sanaei (3X-UI)',
   credentialShape: 'TOKEN_OR_USERNAME_PASSWORD',
-  capabilities: ['HEALTH_CHECK'],
+  /*
+   * The same rule as Marzban's list: each is executed by code in `sanaei.adapter.ts`.
+   *
+   * `LIMIT_DEVICES` is here because `createUser` has always written `limitIp` from the
+   * order's frozen `deviceLimit` — the capability was simply never declared. That made
+   * the descriptor understate the adapter, which is the less dangerous direction of the
+   * two but still a lie a surface reads: anything asking "can this panel limit devices"
+   * was told no about a panel that does.
+   */
+  capabilities: [
+    'HEALTH_CHECK',
+    'CREATE_USER',
+    'READ_USAGE',
+    'DELIVER_SUBSCRIPTION_LINK',
+    'LIMIT_DEVICES',
+  ],
   // The SESSION path, which is the longest: CSRF token, two-factor pre-check,
   // login, status read. The bearer path is one request; the floor takes the
   // worst case, because a panel configured with a password takes that path and
   // the cooldown is set once for the provider.
   maxRequestsPerProbe: 4,
-  requiredActivationFields: ['subscriptionDomain'],
+  requiredActivationFields: ['subscriptionDomain', 'inboundId'],
 };
 
 export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = [MARZBAN, SANAEI];

@@ -51,26 +51,66 @@ describe('the probe cooldown floor', () => {
   });
 
   /**
-   * Each declared count, with the path that justifies it.
+   * Each declared count, with the exact methods that justify it.
    *
-   * `sends` is the number of `http.send(` CALL SITES in the adapter, which is
-   * an upper bound rather than the answer: Sanaei has five because its bearer
-   * mode and its session mode each end in a status read, and those are
-   * alternatives rather than additions. Its longest path is four. Recording
-   * both numbers is the point — a reader comparing a declared 4 against a
-   * grep that says 5 would otherwise conclude one of them is wrong.
+   * `probePath` names the methods a probe can reach, and the test counts `http.send(`
+   * inside THOSE and nowhere else. It used to count every call site in the file, which
+   * was a usable proxy while an adapter contained only a probe and stopped being one
+   * the moment Phase 4D added `createUser`, `lookupUser` and `readUsage` to the same
+   * files. A whole-file count would now be satisfied by a probe that grew a request
+   * while a service method lost one — the precise substitution this guard exists to
+   * refuse.
+   *
+   * Scoping it also removed the discrepancy the previous comment had to explain away.
+   * Sanaei counted five call sites against a declared four, because its bearer mode and
+   * its session mode each ended in a status read and those are alternatives rather than
+   * additions. Extracting one `authenticate` left one status read, so the two numbers
+   * now agree and neither needs a footnote.
    */
-  const EXPECTED: Readonly<Record<string, { longestPath: number; sends: number; file: string }>> = {
+  const EXPECTED: Readonly<
+    Record<string, { longestPath: number; probePath: readonly string[]; file: string }>
+  > = {
     marzban: {
       longestPath: 2,
-      sends: 2,
+      // A token exchange, then a status read.
+      probePath: ['probe', 'authenticate'],
       file: 'apps/api/src/modules/platform/providers/infrastructure/marzban.adapter.ts',
     },
     sanaei: {
       longestPath: 4,
-      sends: 5,
+      // csrf-token, the 2FA question and the login all live in the session method;
+      // `authenticate` itself sends nothing in bearer mode, and `probe` reads status.
+      probePath: ['probe', 'authenticate', 'authenticateWithSession'],
       file: 'apps/api/src/modules/platform/providers/infrastructure/sanaei.adapter.ts',
     },
+  };
+
+  /**
+   * The body of one method of an adapter class, by brace matching from its signature.
+   *
+   * Crude on purpose. A TypeScript parser here would be a second toolchain in a test
+   * whose entire job is to be harder to fool than the thing it checks; brace matching
+   * over a file this repository controls is enough, and it FAILS LOUDLY when a method
+   * is renamed rather than silently counting zero — which is the failure mode that
+   * would make this guard useless.
+   */
+  const methodBody = (source: string, name: string): string => {
+    const signature = new RegExp(`\\n  (?:private )?(?:async )?${name}\\(`);
+    const found = signature.exec(source);
+    if (found === null) {
+      throw new Error(`method ${name} is not declared where this test expects it`);
+    }
+    const open = source.indexOf('{', found.index + found[0].length);
+    if (open === -1) throw new Error(`method ${name} has no body`);
+    let depth = 0;
+    for (let i = open; i < source.length; i += 1) {
+      if (source[i] === '{') depth += 1;
+      else if (source[i] === '}') {
+        depth -= 1;
+        if (depth === 0) return source.slice(open, i + 1);
+      }
+    }
+    throw new Error(`method ${name} is not closed`);
   };
 
   it('declares, for every provider, the length of its longest probe path', () => {
@@ -84,7 +124,7 @@ describe('the probe cooldown floor', () => {
     expect(Object.keys(EXPECTED).sort()).toEqual(PROVIDER_DESCRIPTORS.map((d) => d.key).sort());
   });
 
-  it('never declares more requests than the adapter has call sites', () => {
+  it('never declares more requests than the PROBE PATH has call sites', () => {
     // Read from the SOURCE, because the declared number is arithmetic only the
     // adapter's flow justifies, and an adapter that grows a request without
     // raising its count reopens the race with nothing to object. A count above
@@ -94,9 +134,36 @@ describe('the probe cooldown floor', () => {
       const expected = EXPECTED[descriptor.key];
       if (expected === undefined) continue;
       const source = readFileSync(join(__dirname, '../..', expected.file), 'utf8');
-      const sends = [...source.matchAll(/http\.send\(/g)].length;
-      expect(sends, `${descriptor.key}'s call-site count changed`).toBe(expected.sends);
+      const sends = expected.probePath.reduce(
+        (total, method) => total + [...methodBody(source, method).matchAll(/http\.send\(/g)].length,
+        0,
+      );
+      expect(sends, `${descriptor.key}'s probe-path call-site count changed`).toBe(
+        expected.longestPath,
+      );
       expect(descriptor.maxRequestsPerProbe).toBeLessThanOrEqual(sends);
+    }
+  });
+
+  it('counts the service half separately, and does not let it fund the probe budget', () => {
+    /*
+     * The guard on the guard.
+     *
+     * Every adapter now contains service methods that send requests, and those must
+     * NOT count toward the probe budget: they are not made by a probe, and a cooldown
+     * sized by them would be a number nothing on the probe path supports. This asserts
+     * the files genuinely do contain sends outside the probe path — so that if the
+     * scoping above were ever loosened back to a whole-file grep, the counts would
+     * disagree and this suite would say so rather than passing vacuously.
+     */
+    for (const descriptor of PROVIDER_DESCRIPTORS) {
+      const expected = EXPECTED[descriptor.key];
+      if (expected === undefined) continue;
+      const source = readFileSync(join(__dirname, '../..', expected.file), 'utf8');
+      const whole = [...source.matchAll(/http\.send\(/g)].length;
+      expect(whole, `${descriptor.key} has no service-half requests`).toBeGreaterThan(
+        expected.longestPath,
+      );
     }
   });
 });

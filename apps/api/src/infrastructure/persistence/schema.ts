@@ -58,6 +58,7 @@ import {
   PAYMENT_EVIDENCE_KINDS,
   LEDGER_DIRECTIONS,
   LEDGER_REASONS,
+  SERVICE_DELIVERY_STATES,
   SERVICE_STATES,
   OPERATION_STATES,
   OPERATION_TYPES,
@@ -1242,6 +1243,19 @@ export const panels = pgTable(
     providerType: text('provider_type').notNull(),
     baseUrl: text('base_url').notNull(),
     status: text('status').notNull().default('ACTIVE'),
+    /**
+     * The per-panel configuration this provider needs before it can build a config.
+     *
+     * `requiredActivationFields` on the descriptor has named this since Phase 3 and
+     * nothing stored a value, so a 3X-UI panel could be connected, probed and reported
+     * healthy while being unable to produce the one thing a customer buys.
+     *
+     * Validated against `PANEL_ACTIVATION_SCHEMAS[providerType]` at the application
+     * boundary, never here: the shape is per provider and a CHECK constraint cannot
+     * know which provider a row is. Null means unset, which is a real state a fresh
+     * panel is in and which `PANEL_NOT_OPERABLE` names rather than guesses past.
+     */
+    activation: jsonb('activation'),
     /** Set when the panel is archived, so the event has a time and not just a state. */
     archivedAt: timestamptz('archived_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
@@ -2562,6 +2576,48 @@ export const services = pgTable(
     state: text('state').notNull().default('PENDING_PROVISION'),
     /** Derived from this row's own id. Unique per panel, which is what adoption needs. */
     providerUsername: text('provider_username').notNull(),
+    /**
+     * The `subId` the panel serves this customer's configuration under. A CAPABILITY.
+     *
+     * Random, 128 bits, chosen HERE and written in the settling transaction — not
+     * derived from the service id like the username beside it. The two are different
+     * kinds of thing and the distinction is the whole reason this column exists: the
+     * username appears in an operator's client list and is meant to be recoverable,
+     * while anybody holding this value can fetch the customer's configuration from
+     * `https://<subscription domain>/sub/<this>` with no authentication at all.
+     *
+     * It was derived, through an unkeyed SHA-256 of the service id — and the service id
+     * travels in `operational_events.context`, in `audit_logs.entity_id` and in
+     * `outbox_messages.aggregate_id`, none of which are places for a credential. Worse,
+     * `providerUsernameFor` is a reversible encoding rather than a hash, so reading a
+     * name off a panel screen recovered the id and therefore the link. The docblocks
+     * claimed the opposite in both directions.
+     *
+     * Stored rather than derived loses nothing: it is written BEFORE any provider call,
+     * so a create whose answer was lost can still be reconciled against it — which is
+     * the only property the derivation was there to provide.
+     *
+     * The DEFAULT is the rollback window, not a convenience. `NOT NULL` with no default
+     * would narrow what the release before this one can write, which
+     * `migration-compatibility.test.ts` forbids by name — so a release rolled back onto
+     * this schema keeps inserting, and any row it writes gets a distinct random value
+     * rather than a null or a shared sentinel. `ServiceDraft` requires both fields, so
+     * nothing in THIS release ever relies on the default.
+     */
+    subscriptionRef: text('subscription_ref')
+      .notNull()
+      .default(sql`md5(gen_random_uuid()::text)`),
+    /**
+     * The client UUID a panel that keys clients by one assigns this service. A
+     * CREDENTIAL.
+     *
+     * 3X-UI's VLESS client id, which the customer's configuration authenticates with.
+     * Random and stored for exactly the reasons above; formatted as a v4 UUID because
+     * that is what the panels validate.
+     */
+    providerClientId: uuid('provider_client_id')
+      .notNull()
+      .default(sql`gen_random_uuid()`),
     /** The provider's own identifier, once a provider has told us one. */
     providerUserId: text('provider_user_id'),
     /**
@@ -2579,6 +2635,33 @@ export const services = pgTable(
       .notNull()
       .default(sql`0`),
     usageSyncedAt: timestamptz('usage_synced_at'),
+    /**
+     * Whether the customer has been told. A separate axis from `state`, deliberately.
+     *
+     * A failed Telegram send must leave a paid-for, provider-side account `ACTIVE`;
+     * anything else invites re-provisioning a service that already exists.
+     */
+    deliveryState: text('delivery_state').notNull().default('PENDING'),
+    deliveryAttempts: integer('delivery_attempts').notNull().default(0),
+    deliveredAt: timestamptz('delivered_at'),
+    /** When the delivery sweep may next try. Null means it may try now. */
+    deliveryNextAttemptAt: timestamptz('delivery_next_attempt_at'),
+    /**
+     * When a send was handed to Telegram and no outcome has been recorded yet.
+     *
+     * `provisioning_operations.call_started_at` for the announcement half, and it exists
+     * for the same reason: it is the one fact that distinguishes "this process died
+     * before sending" from "this process died after sending", and only the second must
+     * never be repeated automatically.
+     *
+     * Without it a sweep that was killed between the send and `recordDelivery` left the
+     * row `PENDING` behind nothing but a lease — so when the lease expired the automatic
+     * lane announced again, which is precisely the duplicate the `UNCONFIRMED` state was
+     * introduced to prevent. An ordinary container restart was enough.
+     *
+     * Cleared by every recorded outcome, so a set value always means an unresolved send.
+     */
+    deliverySendStartedAt: timestamptz('delivery_send_started_at'),
     provisionedAt: timestamptz('provisioned_at'),
     terminatedAt: timestamptz('terminated_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
@@ -2610,6 +2693,14 @@ export const services = pgTable(
      * figures meaningless.
      */
     uniqueIndex('services_panel_provider_username_key').on(table.panelId, table.providerUsername),
+    /**
+     * And the subscription reference, for the same reason one step further along.
+     *
+     * 128 random bits will not collide, and an index is what makes that a guarantee
+     * rather than an expectation: two services sharing a `subId` would serve one
+     * customer the other's configuration, which is the worst outcome this table has.
+     */
+    uniqueIndex('services_panel_subscription_ref_key').on(table.panelId, table.subscriptionRef),
     index('services_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
     index('services_tenant_state_idx').on(table.tenantId, table.state),
     index('services_customer_created_idx').on(table.customerId, table.createdAt, table.id),
@@ -2622,6 +2713,8 @@ export const services = pgTable(
       .where(sql`state = 'UNRECONCILED'`),
     check('services_state_check', enumCheck('state', SERVICE_STATES)),
     check('services_traffic_check', sql`traffic_limit_bytes >= 0 AND traffic_used_bytes >= 0`),
+    /** The format the panels accept, pinned so a bad generator fails at the write. */
+    check('services_subscription_ref_check', sql`subscription_ref ~ '^[0-9a-f]{32}$'`),
     /** A provisioned service has a time; one that never was does not. */
     check(
       'services_provisioned_at_check',
@@ -2636,6 +2729,34 @@ export const services = pgTable(
       'services_usage_synced_check',
       sql`traffic_used_bytes = 0 OR usage_synced_at IS NOT NULL`,
     ),
+    check('services_delivery_state_check', enumCheck('delivery_state', SERVICE_DELIVERY_STATES)),
+    check(
+      'services_delivery_attempts_check',
+      sql`delivery_attempts >= 0 AND delivery_attempts <= 100`,
+    ),
+    /** A delivery time and the state that claims one travel together, or neither is true. */
+    check(
+      'services_delivered_at_check',
+      sql`(delivery_state = 'DELIVERED') = (delivered_at IS NOT NULL)`,
+    ),
+    /**
+     * ONE service per order, as a constraint rather than as worker discipline.
+     *
+     * This is the exactly-once rule. The service row is written inside the SAME
+     * transaction that takes `SETTLE`, so an order settles once and this index says an
+     * order produces at most one service — two workers, a replayed command and a
+     * double-tapped button all lose here rather than each creating a provider account
+     * the customer pays for once and occupies twice.
+     *
+     * On `(tenant_id, order_id)` and NOT on `(tenant_id, customer_id, product_id)`,
+     * because a renewal is a NEW order against the SAME service: a customer may hold
+     * two services bought from one product, and must.
+     */
+    uniqueIndex('services_tenant_order_key').on(table.tenantId, table.orderId),
+    /** The delivery sweep: undelivered services whose backoff has elapsed. */
+    index('services_delivery_due_idx')
+      .on(table.deliveryNextAttemptAt)
+      .where(sql`delivery_state = 'PENDING'`),
     unique('services_tenant_id_key').on(table.tenantId, table.id),
   ],
 );
@@ -2669,6 +2790,16 @@ export const provisioningOperations = pgTable(
     type: text('type').notNull(),
     state: text('state').notNull().default('PLANNED'),
     attempts: integer('attempts').notNull().default(0),
+    /**
+     * The earliest a claim may take this row. Null means now.
+     *
+     * Backoff, and the reason it is a column rather than a sleep: the retry delay has to
+     * survive the process that decided it. Without this a `FAILED` attempt is re-claimed
+     * on the very next tick, which is a hot loop of authentication attempts against
+     * somebody else's panel — and 3X-UI blocks an IP-and-username pair after enough of
+     * them, so the loop ends by locking the installation out of its own provider.
+     */
+    nextAttemptAt: timestamptz('next_attempt_at'),
     /** Who holds the claim, and until when. Both null when unclaimed. */
     claimedBy: text('claimed_by'),
     leaseUntil: timestamptz('lease_until'),
@@ -2705,15 +2836,40 @@ export const provisioningOperations = pgTable(
       table.tenantId,
       table.operationId,
     ),
-    /** The worker's claim scan: due work, oldest first, nothing else read. */
+    /**
+     * The worker's claim scan: due work, oldest first, nothing else read.
+     *
+     * Leads with `next_attempt_at` because that is what the scan filters on; a row whose
+     * backoff has not elapsed is not due, and ordering by creation date alone would put
+     * the oldest permanently-failing operation at the front of every tick.
+     */
     index('provisioning_operations_due_idx')
-      .on(table.createdAt)
+      .on(table.nextAttemptAt, table.createdAt)
       .where(sql`state = 'PLANNED'`),
     /** Expired leases, for the release sweep. */
     index('provisioning_operations_lease_idx')
       .on(table.leaseUntil)
       .where(sql`state = 'IN_FLIGHT'`),
     index('provisioning_operations_service_idx').on(table.serviceId, table.createdAt, table.id),
+    /**
+     * ONE open PROVISION per service, enforced by the database rather than by a check.
+     *
+     * "One at a time is a partial unique index, not a process" — the rule CLAUDE.md
+     * states about backups, applied to the operation that spends a customer's money on
+     * somebody else's panel. Two open creates for one service means two provider calls;
+     * the derived username makes the second collide rather than duplicate the account,
+     * but a collision is a `PROVIDER_ERROR`, which classifies UNKNOWN on a mutating
+     * call, which strands the service in `UNRECONCILED`. So a double-click on the
+     * operator's retry button corrupted a service it was meant to rescue.
+     *
+     * Only the two NON-TERMINAL states, so the ordinary sequence still works: a create
+     * that FAILED may be retried, and the re-plan after a provably-absent reconcile is
+     * legal because the operation it follows is `UNKNOWN`. `SUCCEEDED` is excluded for
+     * the same reason — a renewal is a different operation type.
+     */
+    uniqueIndex('provisioning_operations_open_provision_key')
+      .on(table.tenantId, table.serviceId)
+      .where(sql`type = 'PROVISION' AND state IN ('PLANNED', 'IN_FLIGHT')`),
     index('provisioning_operations_unknown_idx')
       .on(table.tenantId, table.createdAt)
       .where(sql`state = 'UNKNOWN'`),

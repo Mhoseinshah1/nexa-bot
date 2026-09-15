@@ -24,6 +24,7 @@ import {
   type UserId,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
+import type { ProvisioningService } from '../../provisioning/application/provisioning.service.js';
 import {
   recordMutationDenial,
   runAuthorizedMutation,
@@ -90,6 +91,15 @@ export interface PaymentServiceDeps {
    * them.
    */
   readonly customers: CustomerRepository;
+  /**
+   * Plans the service a settled order is owed, in the settling transaction.
+   *
+   * A dependency of payments on provisioning, and not the other way round, because the
+   * settlement is the fact that causes the service — and because the alternative, a
+   * provisioning module that watched for settled orders, would have to re-derive
+   * "settled" from a row it does not own.
+   */
+  readonly provisioning: ProvisioningService;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly audit: AuditWriter;
@@ -153,10 +163,16 @@ function adminIdOf(actor: ActorContext): string | null {
  *
  * ## What this does NOT do
  *
- * It moves an order to `PAID` and stops. Nothing here provisions, activates, creates a
- * server or touches a panel, and no message it sends may say otherwise — the phase that
- * does those things is a later one, and a product that claims an effect that did not
- * happen is the defect class this codebase is organised around.
+ * **It touches no panel and contacts no provider.** Settling an order moves it to
+ * `PAID` and, in the same transaction, RECORDS that a service is owed — a row in
+ * `PENDING_PROVISION` and an operation in `PLANNED`, written by
+ * `ProvisioningService.planForSettledOrder`. Not one byte leaves this process on this
+ * path; the `provisioner` role picks the work up afterwards, outside every transaction.
+ *
+ * So no message this sends may tell a customer their service is ready. It is not, and
+ * a product that claims an effect that did not happen is the defect class this codebase
+ * is organised around. The announcement is the delivery sweep's, after a provider has
+ * actually answered.
  */
 export class PaymentService {
   constructor(private readonly deps: PaymentServiceDeps) {}
@@ -819,6 +835,23 @@ export class PaymentService {
         currency: settled.totals.currency,
       },
     });
+
+    /*
+     * The service the customer just bought, recorded in THIS transaction.
+     *
+     * Here rather than in a handler on `OrderSettled`, and that placement is the
+     * exactly-once rule rather than a convenience. An order settles once, atomically,
+     * so a service row written inside the same transaction makes "one settled order
+     * produces at most one logical service" a consequence of `ORDER_MACHINE` plus
+     * `services_tenant_order_key`. A handler would make it depend on the handler being
+     * idempotent, which is a strictly weaker position for no benefit — and on a replay
+     * that missed the outbox, no position at all.
+     *
+     * Nothing here contacts a provider. Two rows are written — a service in
+     * `PENDING_PROVISION` and an operation in `PLANNED` — and the `provisioner` role
+     * picks the work up afterwards, outside every transaction.
+     */
+    await this.deps.provisioning.planForSettledOrder(scope, actor, settled, now, tx);
 
     if (remember !== undefined) {
       await rememberOnce(

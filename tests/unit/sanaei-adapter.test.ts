@@ -835,28 +835,52 @@ describe('the Sanaei provider registration', () => {
     expect(providerAdapter('sanaei').descriptor.credentialShape).toBe('TOKEN_OR_USERNAME_PASSWORD');
   });
 
-  it('claims ONLY the capability Phase 3B implements', () => {
+  it('claims ONLY the capabilities that have code behind them', () => {
     // `supports()` answers from the descriptor and the providers endpoint
     // publishes it verbatim, so a capability listed here is a capability this
-    // release tells operators it has. Phase 3B implements authentication,
-    // connection testing and a read-only health probe — and nothing else for
-    // this provider.
+    // release tells operators it has. Phase 3B implemented authentication,
+    // connection testing and a read-only health probe; Phase 4D adds creating a
+    // client, reading its traffic and handing back a subscription link. Nothing
+    // else for this provider — and the list below is the guard that says so.
     const adapter = providerAdapter('sanaei');
-    expect([...adapter.descriptor.capabilities]).toEqual(['HEALTH_CHECK']);
-    expect(adapter.supports('HEALTH_CHECK')).toBe(true);
-    for (const unimplemented of [
+    expect([...adapter.descriptor.capabilities]).toEqual([
+      'HEALTH_CHECK',
       'CREATE_USER',
+      'READ_USAGE',
+      'DELIVER_SUBSCRIPTION_LINK',
+      // `LIMIT_DEVICES` is not a method: `createUser` writes `limitIp` from the
+      // order's frozen `deviceLimit`, and 3X-UI's `limitIp` is its device limit
+      // (`0` is its unlimited, which is why the adapter translates `null` to it).
+      // It sat on the unimplemented list below while that code was running, so the
+      // descriptor understated the adapter — and nothing consulted the capability,
+      // which is why it looked harmless. Something does now: the provisioner refuses
+      // a device-limited order on a panel that cannot apply one, so a panel that
+      // CAN must say so or every such order is refused.
+      'LIMIT_DEVICES',
+    ]);
+    for (const implemented of [
+      'HEALTH_CHECK',
+      'CREATE_USER',
+      'READ_USAGE',
+      'DELIVER_SUBSCRIPTION_LINK',
+      'LIMIT_DEVICES',
+    ] as const) {
+      expect(adapter.supports(implemented), implemented).toBe(true);
+    }
+    // Each of these returns in the commit that implements it. Listed by name rather
+    // than derived from the descriptor, because a test that computed the complement
+    // would pass no matter which side a capability moved to.
+    for (const unimplemented of [
       'RENEW_USER',
       'DELETE_USER',
       'DISABLE_USER',
       'ENABLE_USER',
-      'READ_USAGE',
       'RESET_USAGE',
       'ADD_VOLUME',
       'ADD_TIME',
-      'DELIVER_SUBSCRIPTION_LINK',
+      'ROTATE_SUBSCRIPTION_LINK',
       'DELIVER_RAW_CONFIGS',
-      'LIMIT_DEVICES',
+      'DELIVER_CONFIG_FILE',
       'INACTIVE_ACCOUNT_INBOUND',
     ] as const) {
       expect(adapter.supports(unimplemented), unimplemented).toBe(false);
