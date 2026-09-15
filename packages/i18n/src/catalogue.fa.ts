@@ -115,6 +115,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.detail':
     'سرویس: {productTitle}\nوضعیت: {state}\nمصرف: {usedTrafficBytes} از {totalTrafficBytes}\nانقضا: {expiresAt}\nآخرین به‌روزرسانی مصرف: {syncedAt}',
   'bot.service.subscription': 'لینک اشتراک شما:\n<code>{subscriptionUrl}</code>',
+  'bot.service.resend_button': 'ارسال دوباره لینک اشتراک',
   'bot.service.provisioning': 'سرویس شما در حال ساخته شدن است. نتیجه به شما اطلاع داده می‌شود.',
   // Deliberately does NOT invite a retry: `templates.ts` records that a retry after an
   // unknown outcome is how a duplicate account is created.

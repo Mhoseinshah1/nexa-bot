@@ -10,6 +10,7 @@ import type {
   BotInstanceId,
   CustomerArrival,
   Money,
+  OrderId,
   TemplateKey,
   TemplateValues,
   TenantContext,
@@ -24,6 +25,9 @@ import type { ProductService } from '../../modules/commerce/catalog/application/
 import type { OrderService } from '../../modules/commerce/orders/application/order.service.js';
 import type { PaymentService } from '../../modules/commerce/payments/application/payment.service.js';
 import type { WalletService } from '../../modules/commerce/wallet/application/wallet.service.js';
+import { ProvisioningService } from '../../modules/commerce/provisioning/application/provisioning.service.js';
+import type { DeliveryService } from '../../modules/commerce/provisioning/application/delivery.service.js';
+import type { ServiceRecord } from '../../modules/commerce/provisioning/application/ports.js';
 
 /**
  * What the customer asked for.
@@ -46,6 +50,9 @@ export const BOT_INTENTS = [
   'PAY_WALLET',
   'PAY_MANUAL',
   'PAY_GATEWAY',
+  'SERVICES',
+  'SERVICE',
+  'SERVICE_RESEND',
   'UNSUPPORTED',
 ] as const;
 export type BotIntent = (typeof BOT_INTENTS)[number];
@@ -96,6 +103,29 @@ export const MANUAL_PAY_CALLBACK_PREFIX = 'm:';
  * through to `bot.unknown_command` would tell them they typed something wrong.
  */
 export const GATEWAY_PAY_CALLBACK_PREFIX = 'g:';
+/**
+ * A tap on one of the customer's own services, and a request to send its link again.
+ *
+ * Both name a SERVICE id and nothing else, which is the same trust boundary the payment
+ * prefixes state: a callback is an intent and an identifier, never a quantity and never
+ * a subscription. The link a resend produces is read from the row, so a modified client
+ * has nothing to tamper with beyond the id — and an id that is not theirs fails at
+ * `getForCustomer`, against the row, with the same answer an id that does not exist
+ * gets.
+ */
+export const SERVICE_CALLBACK_PREFIX = 's:';
+export const SERVICE_RESEND_CALLBACK_PREFIX = 'r:';
+
+/**
+ * How many services one `/services` answer shows.
+ *
+ * A BOUND, not a page, and stated for the same reason `CATALOG_PAGE_SIZE` is: a customer
+ * with more than twenty services sees twenty and is told nothing about the rest. How a
+ * customer reaches a long list over Telegram is a product decision with no evidence
+ * behind it in `docs/research/`, and `docs/open-questions.md` carries it rather than
+ * this file guessing.
+ */
+export const SERVICES_PAGE_SIZE = 20;
 
 /**
  * How many products one `/catalog` answer shows.
@@ -152,6 +182,24 @@ export function intentOf(update: unknown): BotCommand {
     if (data.startsWith(GATEWAY_PAY_CALLBACK_PREFIX)) {
       return callbackCommand('PAY_GATEWAY', data.slice(GATEWAY_PAY_CALLBACK_PREFIX.length), id);
     }
+    /*
+     * The resend prefix is tested BEFORE the service prefix.
+     *
+     * `'r:'` and `'s:'` share no first character, so today the order is irrelevant — it
+     * is fixed anyway because the failure it prevents is silent: a prefix that is a
+     * prefix of another routes every tap to whichever branch comes first, and the
+     * customer gets the wrong screen with nothing anywhere saying so.
+     */
+    if (data.startsWith(SERVICE_RESEND_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'SERVICE_RESEND',
+        data.slice(SERVICE_RESEND_CALLBACK_PREFIX.length),
+        id,
+      );
+    }
+    if (data.startsWith(SERVICE_CALLBACK_PREFIX)) {
+      return callbackCommand('SERVICE', data.slice(SERVICE_CALLBACK_PREFIX.length), id);
+    }
     return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
   }
 
@@ -164,6 +212,9 @@ export function intentOf(update: unknown): BotCommand {
   if (command === '/start') return { intent: 'START', targetId: null, callbackQueryId: null };
   if (command === '/catalog') return { intent: 'CATALOG', targetId: null, callbackQueryId: null };
   if (command === '/wallet') return { intent: 'WALLET', targetId: null, callbackQueryId: null };
+  if (command === '/services') {
+    return { intent: 'SERVICES', targetId: null, callbackQueryId: null };
+  }
   return UNSUPPORTED;
 }
 
@@ -208,6 +259,22 @@ export interface BotRuntimeDeps {
   readonly orders: OrderService;
   readonly payments: PaymentService;
   readonly wallet: WalletService;
+  readonly services: ProvisioningService;
+  readonly delivery: DeliveryService;
+  /**
+   * The plan a service was SOLD as, from the order's frozen snapshot.
+   *
+   * A narrow port rather than `OrderService`, for the reason the provisioner's
+   * `PurchaseSnapshotReader` gives one: handing this surface the order service would
+   * also hand a customer-facing runtime the ability to confirm and cancel orders.
+   *
+   * From the ORDER and never from the product. `nexa_orders_snapshot_guard` froze the
+   * title at confirmation, so it is the only copy that still says what the customer
+   * agreed to — a product renamed since would otherwise rewrite what somebody was
+   * told they bought, which is the legacy defect where renaming a product rewrote
+   * past reports, applied to something the customer can read back.
+   */
+  readonly purchaseTitle: (scope: TenantContext, orderId: OrderId) => Promise<string | null>;
 }
 
 /**
@@ -462,7 +529,11 @@ export class BotRuntime {
     command: BotCommand,
     customer: CustomerRecord,
     arrival: CustomerArrival,
-    input: { readonly idempotencyKey: string },
+    input: {
+      readonly idempotencyKey: string;
+      readonly botInstanceId: BotInstanceId;
+      readonly update: unknown;
+    },
   ): Promise<PendingReply> {
     if (command.intent === 'CATALOG') return this.catalogue(scope, actor);
     if (command.intent === 'ORDER' && command.targetId !== null) {
@@ -488,7 +559,188 @@ export class BotRuntime {
     if (command.intent === 'PAY_GATEWAY') {
       return { key: 'bot.payment.unconfigured', values: {}, buttons: [], orderId: null };
     }
+    if (command.intent === 'SERVICES') return this.services(scope, customer);
+    if (command.intent === 'SERVICE' && command.targetId !== null) {
+      return this.serviceDetail(scope, customer, command.targetId);
+    }
+    if (command.intent === 'SERVICE_RESEND' && command.targetId !== null) {
+      return this.serviceResend(scope, customer, command.targetId, input);
+    }
     return { key: replyFor(command.intent, arrival), values: {}, buttons: [], orderId: null };
+  }
+
+  /**
+   * The customer's own services: a heading and one button each.
+   *
+   * The same shape as the catalogue and for the same reason — `bot.service.list_heading`
+   * declares no placeholders and a template is not a list renderer — so the services are
+   * BUTTONS whose `callback_data` is the id. The empty case is a different KEY rather
+   * than the heading with nothing under it, because an empty list reads as a failure
+   * and `bot.service.list_empty` says what it actually is.
+   *
+   * `listForCustomer` takes the customer id from the RESOLVED customer row, never from
+   * anything the update carried, so there is no id here for a modified client to change.
+   */
+  private async services(scope: TenantContext, customer: CustomerRecord): Promise<PendingReply> {
+    const page = await this.deps.services.listForCustomer(scope, customer.id, SERVICES_PAGE_SIZE);
+    if (page.items.length === 0) {
+      return { key: 'bot.service.list_empty', values: {}, buttons: [], orderId: null };
+    }
+    const buttons: CustomerButton[] = [];
+    for (const service of page.items) {
+      /*
+       * The label is the plan as it was SOLD, from the order's frozen snapshot.
+       *
+       * A service whose order snapshot cannot be read is skipped rather than labelled
+       * with its id or its state: a button a customer cannot identify is a button they
+       * cannot safely tap, and the id is not a name. Unreachable through any path in
+       * this release — the composite foreign key requires the order — and skipped
+       * rather than defaulted because every default available here is a claim about
+       * what somebody bought.
+       */
+      const title = await this.deps.purchaseTitle(scope, service.orderId);
+      if (title === null) continue;
+      buttons.push({
+        label: { kind: 'TEXT', text: title },
+        data: `${SERVICE_CALLBACK_PREFIX}${service.id}`,
+      });
+    }
+    if (buttons.length === 0) {
+      return { key: 'bot.service.list_empty', values: {}, buttons: [], orderId: null };
+    }
+    return { key: 'bot.service.list_heading', values: {}, buttons, orderId: null };
+  }
+
+  /**
+   * One service, as its owner sees it.
+   *
+   * `getForCustomer` compares ownership against the row rather than filtering the query,
+   * so an id that is not theirs and an id that does not exist both arrive here as
+   * `SERVICE_NOT_FOUND` — and both answer `bot.service.not_found`. Keeping them the same
+   * answer is what stops this being an oracle for guessing service ids.
+   *
+   * The usage figure is reported WITH the moment it was read. A figure with no `asOf` is
+   * a figure a customer reads as live, and `usage_synced_at` is null until the first
+   * `SYNC_USAGE` succeeds — so the template gets an absent `syncedAt` rather than a
+   * fabricated one, which is the whole reason that placeholder is not required.
+   */
+  private async serviceDetail(
+    scope: TenantContext,
+    customer: CustomerRecord,
+    serviceId: string,
+  ): Promise<PendingReply> {
+    const service = await this.ownedService(scope, customer, serviceId);
+    if (service === null) {
+      return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
+    }
+    const title = await this.deps.purchaseTitle(scope, service.orderId);
+    if (title === null) {
+      return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
+    }
+
+    /*
+     * The resend button is offered only when a resend would do something.
+     *
+     * `ProvisioningService.isDeliverable` is the authority — a live state AND a
+     * subscription URL — and drawing the button otherwise would offer a customer an
+     * action that answers with a refusal. Not drawing it is NOT the security control:
+     * `redeliver` checks ownership against the row and `deliver` refuses a service with
+     * no configuration, and both still run if somebody taps an older message.
+     */
+    const buttons: CustomerButton[] = ProvisioningService.isDeliverable(service)
+      ? [
+          {
+            label: { kind: 'TEMPLATE', key: 'bot.service.resend_button' },
+            data: `${SERVICE_RESEND_CALLBACK_PREFIX}${service.id}`,
+          },
+        ]
+      : [];
+
+    return {
+      key: 'bot.service.detail',
+      values: {
+        productTitle: title,
+        // Localised by the surface, per the placeholder's own description. The state is
+        // a closed vocabulary, so this is a lookup and not a string a tenant can edit.
+        state: service.state,
+        usedTrafficBytes: service.trafficUsedBytes,
+        totalTrafficBytes: service.trafficLimitBytes,
+        ...(service.expiresAt === null ? {} : { expiresAt: service.expiresAt }),
+        ...(service.usageSyncedAt === null ? {} : { syncedAt: service.usageSyncedAt }),
+      },
+      buttons,
+      orderId: null,
+    };
+  }
+
+  /**
+   * A customer asking for their configuration again.
+   *
+   * The remedy `UNCONFIRMED` and `FAILED` were designed around: an announcement whose
+   * outcome was never observed leaves a customer with nothing, and until now they had
+   * no way to recover it themselves. `DeliveryService.redeliver` is what sends it —
+   * through the SAME `markSendStarted` stamp and the same delivery accounting the
+   * automatic lane uses, so a customer-requested send and a swept one cannot race each
+   * other into two messages.
+   *
+   * This returns `key: null`, which `handle` reads as "nothing further to send". The
+   * delivery service has already sent the subscription; a second message here would be
+   * the runtime and the delivery lane both answering the same tap.
+   */
+  private async serviceResend(
+    scope: TenantContext,
+    customer: CustomerRecord,
+    serviceId: string,
+    input: { readonly botInstanceId: BotInstanceId; readonly update: unknown },
+  ): Promise<PendingReply> {
+    const service = await this.ownedService(scope, customer, serviceId);
+    if (service === null) {
+      return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
+    }
+    const chatId = privateChatIdOf(input.update);
+    if (chatId === null) {
+      /*
+       * A tap from somewhere that is not a private chat.
+       *
+       * Refused with the same answer as an unknown service rather than sent to the
+       * chat the service was FIRST delivered to: a subscription link is a bearer
+       * capability, and delivering it anywhere other than where it was asked for is
+       * how one lands in a group.
+       */
+      return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
+    }
+    try {
+      await this.deps.delivery.redeliver(scope, service, customer.id, chatId, input.botInstanceId);
+      return { key: null, values: {}, buttons: [], orderId: null };
+    } catch {
+      /*
+       * Every refusal `deliver` can produce, as one customer-facing answer.
+       *
+       * `SERVICE_NOT_DELIVERABLE` carries a `reason` — NO_SUBSCRIPTION, SCOPE_INACTIVE,
+       * SEND_IN_PROGRESS — and its own docblock says a surface maps them to a template
+       * key. They are mapped to ONE here because a customer can act on none of them
+       * and because the third is a race whose honest description is "try again in a
+       * moment", which is what a service that answers nothing already tells them.
+       * `bot.service.provisioning` is the closest true sentence for a service that has
+       * no link yet and it is NOT used, because it would be wrong for the other two.
+       */
+      return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
+    }
+  }
+
+  /** One of the customer's own services, or null. Never anybody else's, never a throw. */
+  private async ownedService(
+    scope: TenantContext,
+    customer: CustomerRecord,
+    serviceId: string,
+  ): Promise<ServiceRecord | null> {
+    try {
+      return await this.deps.services.getForCustomer(scope, customer.id, serviceId);
+    } catch {
+      // `SERVICE_NOT_FOUND` for an id that is not theirs and one that does not exist
+      // alike. Caught rather than propagated because a surface answers a customer.
+      return null;
+    }
   }
 
   /**

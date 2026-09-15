@@ -1279,4 +1279,260 @@ describe('a provisioned service announces itself', () => {
     const service = await services.findByOrderId(tenantA, orderId);
     expect(service?.state, 'a stopped tenant gets no writes').toBe('ACTIVE');
   });
+
+  // =========================================================================
+  // The customer's own services, over Telegram
+  // =========================================================================
+
+  /** An update as Telegram sends one, through the real runtime rather than the webhook. */
+  let updateSeq = 7000;
+  const customerUpdate = (
+    payload: Record<string, unknown>,
+  ): {
+    idempotencyKey: string;
+    botInstanceId: typeof BOT_A;
+    update: unknown;
+    telegramUserId: string;
+    from: unknown;
+  } => {
+    updateSeq += 1;
+    return {
+      idempotencyKey: `bot-update-${String(updateSeq)}`,
+      botInstanceId: BOT_A,
+      update: { update_id: updateSeq, ...payload },
+      telegramUserId: '910910',
+      from: { id: 910910, first_name: 'مریم' },
+    };
+  };
+
+  const textUpdate = (text: string) =>
+    customerUpdate({
+      message: {
+        message_id: updateSeq,
+        date: 0,
+        chat: { id: 5150, type: 'private' },
+        from: { id: 910910, is_bot: false, first_name: 'مریم' },
+        text,
+      },
+    });
+
+  const tapUpdate = (data: string, chatType = 'private') =>
+    customerUpdate({
+      callback_query: {
+        id: `cbq-${String(updateSeq)}`,
+        from: { id: 910910, is_bot: false, first_name: 'مریم' },
+        data,
+        // The message a button hangs off is the BOT's. A runtime reading `message.from`
+        // would resolve a customer row for the bot on every tap.
+        message: {
+          message_id: updateSeq,
+          date: 0,
+          chat: { id: 5150, type: chatType },
+          from: { id: 999999, is_bot: true, first_name: 'Nexa' },
+        },
+      },
+    });
+
+  const runtime = () => ctx.container.botRuntime;
+
+  /**
+   * Only the `sendMessage` calls.
+   *
+   * A tapped button also produces an `answerCallbackQuery` to stop the spinner, so
+   * `sent[sent.length - 1]` after a tap is the spinner and not the answer. Counting or
+   * reading the raw array is how an assertion about a message ends up looking at an
+   * acknowledgement with no text in it.
+   */
+  const messages = () => sent.filter((one) => one.url.includes('/sendMessage'));
+
+  it('/services lists the customer\u2019s own service, labelled as it was SOLD', async () => {
+    const orderId = await paidOrder('bot-services');
+    await ctx.container.provisionerLoop.tick();
+    const service = await services.findByOrderId(tenantA, orderId);
+
+    const result = await runtime().handle(tenantA, systemActor('bot'), textUpdate('/services'));
+
+    expect(result.intent).toBe('SERVICES');
+    expect(result.replyKey).toBe('bot.service.list_heading');
+    /*
+     * The label is the plan's frozen title, not the product's current one and not the
+     * service id. `nexa_orders_snapshot_guard` froze it at confirmation, which is the
+     * only copy that still says what the customer agreed to — the legacy defect where
+     * renaming a product rewrote past reports, applied to something a customer reads.
+     */
+    const listed = messages()[messages().length - 1];
+    expect(JSON.stringify(listed)).toContain('پلن پایه');
+    expect(JSON.stringify(listed)).toContain(`s:${service?.id ?? ''}`);
+  });
+
+  it('answers a customer with no services with a different key, not an empty list', async () => {
+    const result = await runtime().handle(tenantA, systemActor('bot'), textUpdate('/services'));
+    expect(result.replyKey).toBe('bot.service.list_empty');
+  });
+
+  it('shows one service, with the moment its usage was read', async () => {
+    const orderId = await paidOrder('bot-detail');
+    await ctx.container.provisionerLoop.tick();
+    const service = await services.findByOrderId(tenantA, orderId);
+
+    const result = await runtime().handle(
+      tenantA,
+      systemActor('bot'),
+      tapUpdate(`s:${service?.id ?? ''}`),
+    );
+
+    expect(result.intent).toBe('SERVICE');
+    expect(result.replyKey).toBe('bot.service.detail');
+    // `usage_synced_at` is null until a SYNC_USAGE succeeds, so the template gets an
+    // absent `syncedAt` rather than a fabricated one. A figure with no asOf is a figure
+    // a customer reads as live.
+    expect(service?.usageSyncedAt).toBeNull();
+    const shown = messages()[messages().length - 1];
+    expect(JSON.stringify(shown)).toContain('پلن پایه');
+  });
+
+  it('refuses another customer\u2019s service with the SAME answer as one that does not exist', async () => {
+    /*
+     * The property that stops this being an oracle. `getForCustomer` compares ownership
+     * against the row it read rather than filtering the query, so a foreign id and a
+     * nonexistent id are one outcome — and both must reach the customer as one message,
+     * or the difference between the two answers tells anybody holding a service id
+     * whether it exists.
+     *
+     * The OTHER customer taps, rather than the service being reassigned. Reassigning it
+     * was the first shape and the database refused it: `services_order_fk` is composite
+     * on `(tenant_id, order_id, customer_id)`, so a service cannot change hands without
+     * its order. That is the schema making the same point this test does, and the
+     * realistic version — somebody else pressing the button — is the one a customer can
+     * actually perform.
+     */
+    const orderId = await paidOrder('bot-foreign');
+    await ctx.container.provisionerLoop.tick();
+    const theirs = await services.findByOrderId(tenantA, orderId);
+
+    // From here on, so the ORIGINAL announcement to the real owner — which of course
+    // carries the subscription — is not mistaken for something a stranger was shown.
+    const before = messages().length;
+
+    const stranger = (data: string) => ({
+      ...tapUpdate(data),
+      telegramUserId: '920920',
+      from: { id: 920920, first_name: 'سارا' },
+    });
+
+    const foreign = await runtime().handle(
+      tenantA,
+      systemActor('bot'),
+      stranger(`s:${theirs?.id ?? ''}`),
+    );
+    const absent = await runtime().handle(
+      tenantA,
+      systemActor('bot'),
+      stranger(`s:${ctx.container.ids.uuid()}`),
+    );
+
+    expect(foreign.replyKey).toBe('bot.service.not_found');
+    expect(absent.replyKey).toBe(foreign.replyKey);
+    // And a stranger asking for a resend is refused by the same comparison, before
+    // `redeliver`'s own ownership check ever runs.
+    const resend = await runtime().handle(
+      tenantA,
+      systemActor('bot'),
+      stranger(`r:${theirs?.id ?? ''}`),
+    );
+    expect(resend.replyKey).toBe('bot.service.not_found');
+    expect(JSON.stringify(messages().slice(before))).not.toContain(theirs?.subscriptionRef ?? 'X');
+  });
+
+  it('sends the subscription again when the customer asks, through the delivery lane', async () => {
+    const orderId = await paidOrder('bot-resend');
+    await ctx.container.provisionerLoop.tick();
+    const service = await services.findByOrderId(tenantA, orderId);
+    expect(service?.deliveryState, 'the automatic announcement already ran').toBe('DELIVERED');
+    const before = messages().length;
+
+    const result = await runtime().handle(
+      tenantA,
+      systemActor('bot'),
+      tapUpdate(`r:${service?.id ?? ''}`),
+    );
+
+    /*
+     * `key: null`, and the message still arrives.
+     *
+     * `DeliveryService.redeliver` is what sends it — through the same `markSendStarted`
+     * stamp and the same delivery accounting the automatic sweep uses, so a
+     * customer-requested send and a swept one cannot race each other into two messages.
+     * A reply key here as well would be the runtime and the delivery lane both
+     * answering one tap.
+     */
+    expect(result.intent).toBe('SERVICE_RESEND');
+    expect(result.replyKey).toBeNull();
+    expect(messages().length, 'and the subscription really went out').toBeGreaterThan(before);
+    const resent = messages()[messages().length - 1];
+    expect(JSON.stringify(resent)).toContain(service?.subscriptionRef ?? 'MISSING');
+
+    const after = await services.findByOrderId(tenantA, orderId);
+    expect(after?.deliveryAttempts, 'the attempt is accounted for').toBeGreaterThan(
+      service?.deliveryAttempts ?? 0,
+    );
+  });
+
+  it('will not resend a subscription into a group chat', async () => {
+    /*
+     * A subscription link is a bearer capability. Delivering it anywhere other than the
+     * private chat it was asked from is how one lands in a group — and falling back to
+     * the chat it was FIRST delivered to would be the same mistake wearing a
+     * justification.
+     */
+    const orderId = await paidOrder('bot-resend-group');
+    await ctx.container.provisionerLoop.tick();
+    const service = await services.findByOrderId(tenantA, orderId);
+    const before = messages().length;
+
+    const result = await runtime().handle(
+      tenantA,
+      systemActor('bot'),
+      tapUpdate(`r:${service?.id ?? ''}`, 'supergroup'),
+    );
+
+    expect(result.replyKey).toBe('bot.service.not_found');
+    // NOT_ATTEMPTED because `privateChatIdOf` refuses a group, so `handle` has nowhere
+    // to send the refusal either. The customer sees nothing, which is right: the tap
+    // came from a chat this bot will not talk to about a subscription.
+    expect(result.sent, 'and nothing was sent anywhere').toBe('NOT_ATTEMPTED');
+    expect(messages().length).toBe(before);
+  });
+
+  it('answers a blocked customer with bot.blocked, whatever they tapped', async () => {
+    const orderId = await paidOrder('bot-blocked-services');
+    await ctx.container.provisionerLoop.tick();
+    const service = await services.findByOrderId(tenantA, orderId);
+    // Through the SERVICE, not an UPDATE. `customers_blocked_at_check` refuses a
+    // BLOCKED row with no `blocked_at`, which is the schema saying a block is an event
+    // with a time and not a flag — and a fixture that wrote the flag by hand would be
+    // testing a row shape no code path can produce.
+    await ctx.container.customers.block(tenantA, owner, {
+      idempotencyKey: 'block-for-bot-services',
+      customerId: customerA,
+      reason: 'fixture',
+    });
+    const before = messages().length;
+
+    const detail = await runtime().handle(
+      tenantA,
+      systemActor('bot'),
+      tapUpdate(`s:${service?.id ?? ''}`),
+    );
+    const resend = await runtime().handle(
+      tenantA,
+      systemActor('bot'),
+      tapUpdate(`r:${service?.id ?? ''}`),
+    );
+
+    expect(detail.replyKey).toBe('bot.blocked');
+    expect(resend.replyKey).toBe('bot.blocked');
+    // The blocked branch runs BEFORE `act`, so no subscription was read and none sent.
+    expect(JSON.stringify(messages().slice(before))).not.toContain(service?.subscriptionRef ?? 'X');
+  });
 });

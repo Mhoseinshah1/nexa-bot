@@ -307,6 +307,38 @@ describe('profile metadata, normalised before it is ever stored', () => {
      *
      * None of them instructs a customer to do something that can only answer
      * `bot.unknown_command`, and none claims an effect that did not happen.
+     *
+     * Four more joined in 4E, when a customer could finally see a service at all.
+     * Reviewed, one at a time:
+     *
+     *   `bot.service.list_heading`     introduces the customer's own services. It names
+     *                                  no count, because a count interpolated at render
+     *                                  goes stale the moment a service expires.
+     *   `bot.service.not_found`        ONE answer for a service that is not theirs and
+     *                                  one that does not exist, so the bot is not an
+     *                                  oracle for guessing ids. It also answers every
+     *                                  refusal `redeliver` can produce, and the reason
+     *                                  it does is written where it is returned.
+     *   `bot.service.list_empty`       the honest answer to owning nothing, and a
+     *                                  different KEY from the heading rather than the
+     *                                  heading with nothing under it.
+     *   `bot.service.detail`           usage and expiry WITH the moment they were read.
+     *                                  `syncedAt` is absent until a sync has succeeded,
+     *                                  which is why the placeholder is not required: a
+     *                                  figure with no asOf is one a customer reads as
+     *                                  live.
+     *   `bot.service.resend_button`    a button label, and its own key rather than
+     *                                  `bot.service.subscription`. That was the first
+     *                                  attempt and `validateTemplateValues` refused the
+     *                                  send: a label is rendered with no values and
+     *                                  that key requires a `subscriptionUrl`. The
+     *                                  button carries a service id and no link; the
+     *                                  link is sent by `DeliveryService.redeliver`,
+     *                                  read from the row.
+     *
+     * None of them instructs a customer to do something that can only answer
+     * `bot.unknown_command` either — `/services` is a real command in `intentOf`, and
+     * both callback prefixes are parsed.
      */
     expect([...sent].sort()).toEqual([
       'bot.blocked',
@@ -323,6 +355,11 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.manual_instructions',
       'bot.payment.unconfigured',
       'bot.payment.wallet_button',
+      'bot.service.detail',
+      'bot.service.list_empty',
+      'bot.service.list_heading',
+      'bot.service.not_found',
+      'bot.service.resend_button',
       'bot.start.welcome',
       'bot.start.welcome_back',
       'bot.unknown_command',

@@ -543,6 +543,18 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.service.resend_button',
+    description:
+      'The button that asks for a subscription link to be sent again. Its OWN key, ' +
+      'because a button label is rendered with no values and `bot.service.subscription` ' +
+      'requires a `subscriptionUrl` \u2014 using the message as the label made ' +
+      '`validateTemplateValues` refuse the whole send, which is the template layer ' +
+      'doing its job. It also has to be a different sentence: the label is a request ' +
+      'and the message is the answer.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.service.detail',
     description:
       'One service, as its owner sees it. Usage and expiry come from the last ' +
