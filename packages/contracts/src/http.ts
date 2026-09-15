@@ -973,6 +973,27 @@ export const panelSummarySchema = z.object({
     password: panelCredentialStateSchema,
     apiToken: panelCredentialStateSchema,
   }),
+  /**
+   * The stored provider configuration, returned IN FULL. Not a credential.
+   *
+   * `docs/conventions.md` requires a setting surface to return its current value:
+   * "the only way to read a price is to overwrite it" is the legacy defect it names,
+   * and this field decides where every customer's subscription link points. Writing it
+   * without being able to read it meant an operator could change
+   * `subscriptionDomain` to a host they chose and nothing in the system could say what
+   * it had been, what it became, or what it is now — the audit records the FIELD NAMES,
+   * on the stated ground that the panel read answers the rest, which was only true once
+   * this field existed.
+   *
+   * Null when unset, which is a real and common state: a panel is connectable and
+   * probeable before anybody has told it which inbound to sell from.
+   *
+   * It sits beside `credentials` and is shaped nothing like it, deliberately. A
+   * credential leaves as three timestamps and never a value; this leaves as the value,
+   * because a subscription domain and an inbound number are configuration an operator
+   * copies off the panel they already administer.
+   */
+  activation: z.record(z.string(), z.unknown()).nullable(),
   health: panelHealthSchema,
   createdAt: isoTimestamp,
   updatedAt: isoTimestamp,

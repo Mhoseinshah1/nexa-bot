@@ -357,6 +357,133 @@ describe('panel HTTP surface', () => {
    * The archive, both halves of it: a panel that leaves the list must still be
    * findable, and a panel that comes back must be able to.
    */
+  describe('provider activation', () => {
+    /*
+     * The field that decides where every customer's subscription link points.
+     *
+     * `panels.activation` was readable by the provisioner and writable by nobody, so
+     * every 3X-UI panel answered `ACTIVATION_INCOMPLETE` for ever and no service could
+     * be provisioned onto one. Then it was writable and unreadable, which is the
+     * write-only settings defect `docs/conventions.md` names — with the audit recording
+     * only WHICH fields were given, on the ground that the panel read answers the rest.
+     * These cases are what makes that ground true.
+     */
+    it('round-trips an activation through the write and the read', async () => {
+      const created = panelResponseSchema.parse(
+        (
+          await createPanel(ownerCookie, {
+            name: 'Activated',
+            providerType: 'sanaei',
+            activation: { subscriptionDomain: 'sub.example.test', inboundId: 3 },
+          })
+        ).json(),
+      );
+      expect(created.panel.activation).toEqual({
+        subscriptionDomain: 'sub.example.test',
+        inboundId: 3,
+      });
+
+      const read = panelResponseSchema.parse(
+        (await get(PANEL_ROUTES.detail(created.panel.id), ownerCookie)).json(),
+      );
+      expect(read.panel.activation, 'readable without overwriting it').toEqual({
+        subscriptionDomain: 'sub.example.test',
+        inboundId: 3,
+      });
+
+      // An edit replaces it, and the new value is readable too.
+      await post(PANEL_ROUTES.update(created.panel.id), ownerCookie, {
+        activation: { subscriptionDomain: 'other.example.test', inboundId: 9 },
+        idempotencyKey: idempotencyKey(),
+      });
+      const edited = panelResponseSchema.parse(
+        (await get(PANEL_ROUTES.detail(created.panel.id), ownerCookie)).json(),
+      );
+      expect(edited.panel.activation).toEqual({
+        subscriptionDomain: 'other.example.test',
+        inboundId: 9,
+      });
+
+      // Absent leaves it; null clears it. The same three states credentials have.
+      await post(PANEL_ROUTES.update(created.panel.id), ownerCookie, {
+        name: 'Renamed',
+        idempotencyKey: idempotencyKey(),
+      });
+      expect(
+        panelResponseSchema.parse(
+          (await get(PANEL_ROUTES.detail(created.panel.id), ownerCookie)).json(),
+        ).panel.activation,
+        'a rename does not erase the subscription domain',
+      ).toEqual({ subscriptionDomain: 'other.example.test', inboundId: 9 });
+
+      await post(PANEL_ROUTES.update(created.panel.id), ownerCookie, {
+        activation: null,
+        idempotencyKey: idempotencyKey(),
+      });
+      expect(
+        panelResponseSchema.parse(
+          (await get(PANEL_ROUTES.detail(created.panel.id), ownerCookie)).json(),
+        ).panel.activation,
+      ).toBeNull();
+    });
+
+    it('refuses an activation that is not this provider’s shape', async () => {
+      /*
+       * Parsed against `PANEL_ACTIVATION_SCHEMAS[providerType]`, never the union.
+       *
+       * Marzban's fields on a 3X-UI panel would otherwise be stored and only refused at
+       * the first provision — when a customer has already paid and is waiting.
+       */
+      const refused = await createPanel(ownerCookie, {
+        name: 'Wrong shape',
+        providerType: 'sanaei',
+        activation: { proxyProtocols: ['vless'] },
+      });
+      expect(refused.statusCode).toBe(400);
+      /*
+       * And it NAMES the fields, which is the difference between a refusal an operator
+       * can act on and one they have to guess at.
+       */
+      expect(refused.json()).toMatchObject({
+        error: {
+          code: 'panel.request_invalid',
+          details: {
+            issues: [{ path: 'subscriptionDomain' }, { path: 'inboundId' }] as unknown,
+          },
+        },
+      });
+
+      const badDomain = await createPanel(ownerCookie, {
+        name: 'Bad domain',
+        providerType: 'sanaei',
+        // A full URL, which would let a panel row name an origin the URL policy never saw.
+        activation: { subscriptionDomain: 'https://sub.example.test/x', inboundId: 1 },
+      });
+      expect(badDomain.statusCode).toBe(400);
+    });
+
+    it('never returns an activation to a caller who may not read the panel', async () => {
+      const created = panelResponseSchema.parse(
+        (
+          await createPanel(ownerCookie, {
+            name: 'Scoped',
+            providerType: 'sanaei',
+            activation: { subscriptionDomain: 'sub.example.test', inboundId: 1 },
+          })
+        ).json(),
+      );
+      /*
+       * `support` holds no `panels.view`, so the refusal happens before any projection.
+       *
+       * Asserted as an absence of the VALUE and not only as a 403, because the field
+       * this test is about is the one an operator would not notice leaking.
+       */
+      const denied = await get(PANEL_ROUTES.detail(created.panel.id), supportCookie);
+      expect(denied.statusCode).toBe(403);
+      expect(JSON.stringify(denied.json())).not.toContain('sub.example.test');
+    });
+  });
+
   describe('the archive', () => {
     const archive = (id: string) =>
       post(PANEL_ROUTES.status(id), ownerCookie, {
