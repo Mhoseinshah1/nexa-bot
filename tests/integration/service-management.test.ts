@@ -622,6 +622,65 @@ describe('a customer manages the service they bought', () => {
     expect(panel.users.get(service.username)?.status).toBe('disabled');
   });
 
+  it('retries a suspend whose worker died mid-call, instead of stranding it for ever', async () => {
+    /*
+     * The dead end this phase would have shipped, found by review.
+     *
+     * `reapStrandedCalls` moves an operation whose worker died after the provider call
+     * began to `UNKNOWN`, because a create that may have landed must be resolved by a
+     * READ. Every mutation this module had until now was such a create. The three added
+     * here are not, and for them `UNKNOWN` has no exit at all: the only path out is
+     * `listUnknown`, which requires the SERVICE to be `UNRECONCILED`, and a service is
+     * moved there from `PENDING_PROVISION` alone. A suspend strands its service `ACTIVE`,
+     * so the row matched nothing — never reconciled, never retired, never claimable, and
+     * still the open operation the customer's next tap is handed. The one thing they
+     * asked for becomes the one thing that can no longer happen.
+     *
+     * A read could not have rescued it either: `lookupUser` answers whether an account
+     * EXISTS, never whether it is disabled, so a reconcile has no question to ask. What
+     * resolves it is what the real panel proved — sending the same disable again is
+     * sending it once.
+     *
+     * Simulated exactly as a dead worker leaves the row: IN_FLIGHT, a lapsed lease, and
+     * `call_started_at` set, which is the stamp that makes the ordinary lease sweep
+     * refuse it.
+     */
+    const service = await activeService('stranded-suspend');
+    await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`u:${service.id}`));
+    await ctx.container.database.db.execute(
+      sql`UPDATE provisioning_operations
+             SET state = 'IN_FLIGHT',
+                 attempts = 1,
+                 claimed_by = 'a-worker-that-died',
+                 lease_until = now() - interval '5 minutes',
+                 call_started_at = now() - interval '6 minutes'
+           WHERE service_id = ${service.id} AND type = 'SUSPEND'`,
+    );
+
+    await ctx.container.provisionerLoop.tick();
+
+    const suspend = await operationOf(service.id, 'SUSPEND');
+    expect(suspend?.state, 'reaped to PLANNED and then performed in the same tick').toBe(
+      'SUCCEEDED',
+    );
+    expect(panel.users.get(service.username)?.status, 'the account really was paused').toBe(
+      'disabled',
+    );
+    expect((await services.findById(tenantA, service.id))?.state).toBe('SUSPENDED');
+
+    /*
+     * And the two things a stranded CREATE gets, which this must not: a service moved to
+     * `UNRECONCILED` announces that this installation does not know what exists, when it
+     * does, and an operator condition tells somebody to look into what the next tick
+     * simply did.
+     */
+    const stalled = await ctx.container.database.db.execute(
+      sql`SELECT count(*)::int AS open FROM operational_events
+           WHERE code = 'provisioning.stalled' AND resolved_at IS NULL`,
+    );
+    expect(stalled.rows[0]?.['open'], 'no operator was told to look into it').toBe(0);
+  });
+
   it('does not answer an outage with a sentence about the customer’s panel', async () => {
     /*
      * The refusal mapping is a CLOSED list, and this is the half of that decision no

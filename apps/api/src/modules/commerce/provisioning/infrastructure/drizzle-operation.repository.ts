@@ -1,5 +1,10 @@
 import { and, asc, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
-import { isMutatingOperation, OPERATION_MAX_ATTEMPTS, OPERATION_TYPES } from '@nexa/contracts';
+import {
+  isIdempotentMutation,
+  isMutatingOperation,
+  OPERATION_MAX_ATTEMPTS,
+  OPERATION_TYPES,
+} from '@nexa/contracts';
 import type {
   OperationId,
   OperationState,
@@ -31,6 +36,18 @@ const MAX_ATTEMPTS = OPERATION_MAX_ATTEMPTS;
  */
 const NON_MUTATING_TYPES: readonly OperationType[] = OPERATION_TYPES.filter(
   (type) => !isMutatingOperation(type),
+);
+
+/**
+ * The mutations a crash may simply be REPEATED, DERIVED from the contract the same way.
+ *
+ * `IDEMPOTENT_MUTATIONS` is not a judgement about these three operations; it is what
+ * `docs/providers/marzban.md` measured against the panel binary — a repeated disable or
+ * enable answers 200 with the same record, and a repeated delete answers 404, which
+ * means the account is gone. Sending one twice is sending it once.
+ */
+const REPLAYABLE_MUTATION_TYPES: readonly OperationType[] = OPERATION_TYPES.filter(
+  (type) => isMutatingOperation(type) && isIdempotentMutation(type),
 );
 
 type Row = typeof provisioningOperations.$inferSelect;
@@ -638,6 +655,29 @@ export class DrizzleOperationRepository implements OperationRepository {
    * and a fresh one is simply planned. The split is derived from the contract, never
    * restated here.
    *
+   * ## And an IDEMPOTENT mutation goes back to `PLANNED`
+   *
+   * `UNKNOWN` was right for every mutation this module had until this release, and it is
+   * a DEAD END for the three it has now. The exit from `UNKNOWN` is a read, and the read
+   * is `listUnknown` -> `planReconciles`, which only ever sees an operation whose SERVICE
+   * is `UNRECONCILED`. A service is moved there from `PENDING_PROVISION` alone, because
+   * "an account may or may not exist" is what a stranded CREATE means. A stranded suspend
+   * leaves its service `ACTIVE`, so it matched nothing, and the operation sat `UNKNOWN`
+   * for ever: never reconciled, never retired, never claimable, and still the open
+   * operation `findOpen` hands back to the customer's next tap. The one thing the
+   * customer asked for is the one thing that could no longer happen.
+   *
+   * A read could not have rescued it anyway. `lookupUser` answers whether an account
+   * exists, never whether it is disabled, so for a suspend there is no question a
+   * reconcile could ask. What resolves it is the property the real panel proved: sending
+   * the mutation again IS sending it once. So the row returns to the retry path, which
+   * is the same lane `recordManagementFailure` uses for a retryable failure in band, and
+   * `call_started_at` is cleared so the next attempt can stamp its own.
+   *
+   * Bounded by the same ceiling as everything else: `claimDue` refuses a row at
+   * `OPERATION_MAX_ATTEMPTS` and `retireExhausted` fails it with an operator condition,
+   * so a worker dying in a loop spends attempts rather than running for ever.
+   *
    * Conditional and bounded like every other sweep in this file, so two replicas racing
    * it produce one winner per row and a long backlog does not become one long
    * transaction.
@@ -671,12 +711,27 @@ export class DrizzleOperationRepository implements OperationRepository {
      * database refusing to store the contradiction rather than the code noticing it.
      */
     const isRead = inArray(provisioningOperations.type, NON_MUTATING_TYPES);
+    const isReplayable = inArray(provisioningOperations.type, REPLAYABLE_MUTATION_TYPES);
     const rows = await this.exec(tx)
       .update(provisioningOperations)
       .set({
-        state: sql`CASE WHEN ${isRead} THEN 'FAILED' ELSE 'UNKNOWN' END`,
+        state: sql`CASE
+          WHEN ${isRead} THEN 'FAILED'
+          WHEN ${isReplayable} THEN 'PLANNED'
+          ELSE 'UNKNOWN' END`,
         claimedBy: null,
         leaseUntil: null,
+        /*
+         * Cleared for the row going back to `PLANNED`, and for that row only.
+         *
+         * `transition` gives the reason at length: `markCallStarted` writes only into a
+         * null column, so a stale stamp would stop the next attempt recording its own
+         * and would disable the lease sweep's decision for ever. A terminal or `UNKNOWN`
+         * row keeps it, because there it is history an operator reads.
+         */
+        callStartedAt: sql`CASE
+          WHEN ${isReplayable} THEN NULL
+          ELSE ${provisioningOperations.callStartedAt} END`,
         failureMessage: 'the worker holding this operation died after the provider call began',
         /*
          * Cast explicitly, because a raw `sql` template has no column to borrow a type

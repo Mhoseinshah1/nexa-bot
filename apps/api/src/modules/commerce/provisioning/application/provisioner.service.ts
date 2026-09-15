@@ -2,6 +2,7 @@ import {
   canDeleteUser,
   canDisableUser,
   canEnableUser,
+  isIdempotentMutation,
   isMutatingOperation,
   PROVIDER_FAILURE_RETRYABLE,
   USAGE_SYNC_PLAN_LIMIT,
@@ -869,6 +870,20 @@ export class ProvisionerService {
       );
       for (const operation of stranded) {
         if (!isMutatingOperation(operation.type)) continue;
+        /*
+         * A replayable mutation is not a stall, so it gets neither of the two things
+         * below.
+         *
+         * The repository returned it to `PLANNED` rather than `UNKNOWN`, because sending
+         * a suspend, a resume or a terminate again is sending it once — the property
+         * `docs/providers/marzban.md` measured against the panel. Moving its service to
+         * `UNRECONCILED` would announce that this installation does not know what exists
+         * when it does, and would hand the service to a reconcile that has no question to
+         * ask; opening `PROVISIONING_STALLED_CODE` would tell an operator to look into
+         * something the next tick simply does. If the retries run out, `retireExhausted`
+         * raises the condition then, which is when it is true.
+         */
+        if (isIdempotentMutation(operation.type)) continue;
         /*
          * The service moves only from `PENDING_PROVISION`.
          *
