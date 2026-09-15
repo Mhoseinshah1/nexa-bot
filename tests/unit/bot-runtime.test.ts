@@ -35,6 +35,13 @@ import {
   SERVICE_SUSPEND_CALLBACK_PREFIX,
   SERVICE_TERMINATE_ASK_CALLBACK_PREFIX,
   SERVICE_TERMINATE_CALLBACK_PREFIX,
+  SERVICE_RENEW_CALLBACK_PREFIX,
+  SERVICE_ADD_TRAFFIC_CALLBACK_PREFIX,
+  SERVICE_ADD_TIME_CALLBACK_PREFIX,
+  SERVICE_BUY_TRAFFIC_CALLBACK_PREFIX,
+  SERVICE_BUY_TIME_CALLBACK_PREFIX,
+  SERVICE_ACTION_CONFIRM_CALLBACK_PREFIX,
+  encodeIdPair,
   WALLET_PAY_CALLBACK_PREFIX,
 } from '../../apps/api/src/surfaces/telegram/bot-runtime.js';
 import { telegramUserIdOf } from '../../apps/api/src/surfaces/telegram/webhook.controller.js';
@@ -659,10 +666,33 @@ describe('a callback prefix decides what happens, so no prefix may shadow anothe
     SERVICE_RESUME: SERVICE_RESUME_CALLBACK_PREFIX,
     SERVICE_TERMINATE_ASK: SERVICE_TERMINATE_ASK_CALLBACK_PREFIX,
     SERVICE_TERMINATE: SERVICE_TERMINATE_CALLBACK_PREFIX,
+    SERVICE_RENEW: SERVICE_RENEW_CALLBACK_PREFIX,
+    SERVICE_ADD_TRAFFIC: SERVICE_ADD_TRAFFIC_CALLBACK_PREFIX,
+    SERVICE_ADD_TIME: SERVICE_ADD_TIME_CALLBACK_PREFIX,
+    SERVICE_ACTION_CONFIRM: SERVICE_ACTION_CONFIRM_CALLBACK_PREFIX,
   };
 
+  /*
+   * The two that carry an id PAIR rather than one id.
+   *
+   * Separate because their payload is 43 base64url characters and not a uuid, so the
+   * routing case below has to build them differently — but the SHADOWING rule is over
+   * every prefix this runtime knows, so `ALL_PREFIXES` is the union and it is what the
+   * distinctness and never-terminate cases iterate.
+   *
+   * Phase 4F added six prefixes and this map named none of them for a while: the
+   * shadowing case, whose whole purpose is that a carelessly chosen prefix fails here
+   * rather than by ending a customer's service, was checking eleven of seventeen.
+   */
+  const PAIR_PREFIXES: Readonly<Record<string, string>> = {
+    SERVICE_BUY_TRAFFIC: SERVICE_BUY_TRAFFIC_CALLBACK_PREFIX,
+    SERVICE_BUY_TIME: SERVICE_BUY_TIME_CALLBACK_PREFIX,
+  };
+
+  const ALL_PREFIXES: Readonly<Record<string, string>> = { ...PREFIXES, ...PAIR_PREFIXES };
+
   it('gives every prefix a distinct string that no other prefix begins with', () => {
-    const values = Object.values(PREFIXES);
+    const values = Object.values(ALL_PREFIXES);
     expect(new Set(values).size, 'two intents share a prefix').toBe(values.length);
     for (const one of values) {
       for (const other of values) {
@@ -686,6 +716,41 @@ describe('a callback prefix decides what happens, so no prefix may shadow anothe
     }
   });
 
+  it('carries BOTH ids through the pair-carrying prefixes, and fits in 64 bytes', () => {
+    /*
+     * The service and the package are two different things and neither can be inferred
+     * from the other, so both have to survive the round trip intact — a pair read half
+     * way would buy a package for a service nobody named.
+     *
+     * The length is asserted because it is the reason the encoding is raw base64url at
+     * all: two uuids spell 73 characters and `callback_data` holds 64. Two for the
+     * prefix and 43 for the pair is 45, and a change that pushed it over would be
+     * rejected by Telegram at send time rather than here.
+     */
+    const service = '0191f4a0-2d3c-7c2b-9a41-6f2b0c7e51aa';
+    const addon = '0191f4a0-9e77-7d18-8c03-2b9d4e5a1f60';
+    for (const [intent, prefix] of Object.entries(PAIR_PREFIXES)) {
+      const data = `${prefix}${encodeIdPair(service, addon)}`;
+      expect(Buffer.byteLength(data, 'utf8'), `${prefix} payload`).toBeLessThanOrEqual(64);
+      const command = intentOf({ callback_query: { id: 'cbq', data } });
+      expect(command.intent, `${prefix} must route to ${intent}`).toBe(intent);
+      expect(command.targetId).toBe(service);
+      expect(command.secondaryId).toBe(addon);
+    }
+  });
+
+  it('answers a malformed pair rather than casting it at a column', () => {
+    // Not a 500 and not a half-read. The payload is whatever the client sent.
+    for (const prefix of Object.values(PAIR_PREFIXES)) {
+      for (const payload of ['', 'short', 'x'.repeat(43), '='.repeat(43)]) {
+        expect(
+          intentOf({ callback_query: { id: 'c', data: `${prefix}${payload}` } }).intent,
+          `${prefix}${payload}`,
+        ).toBe('UNSUPPORTED');
+      }
+    }
+  });
+
   it('never routes anything but the confirmation button to SERVICE_TERMINATE', () => {
     /*
      * The destructive intent, checked from the other direction: every OTHER prefix, and
@@ -693,7 +758,7 @@ describe('a callback prefix decides what happens, so no prefix may shadow anothe
      * SERVICE_TERMINATE. A future prefix chosen carelessly — `k` followed by something,
      * say — fails here rather than by ending a customer's service.
      */
-    for (const [intent, prefix] of Object.entries(PREFIXES)) {
+    for (const [intent, prefix] of Object.entries(ALL_PREFIXES)) {
       if (intent === 'SERVICE_TERMINATE') continue;
       expect(
         intentOf({
