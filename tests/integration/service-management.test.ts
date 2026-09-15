@@ -1137,6 +1137,48 @@ describe('a customer manages the service they bought', () => {
     expect(balanceAfterTwo.amountMinor).toBe(balanceAfterOne.amountMinor);
   });
 
+  it('refuses to quote a package priced in a currency this installation no longer sells', async () => {
+    /*
+     * An add-on is refused at CREATE unless it is priced in `sales.currency`, and that
+     * is not enough: the setting can move afterwards, and the row keeps the currency it
+     * was stored with — deliberately, because reinterpreting a stored amount under a new
+     * unit is the factor of ten the setting exists to prevent.
+     *
+     * So the quote checks again, where the money is about to be charged. Without it a
+     * customer is billed 50,000 of a unit this installation does not sell, and the only
+     * ways out are converting silently at a rate nobody quoted or charging the wrong
+     * number. F4F-32 removed the check and nothing failed.
+     */
+    const service = await activeService('stale-currency');
+    const addon = await offeredAddon(
+      'ADD_TRAFFIC',
+      { trafficBytes: 1_000_000_000n },
+      'stale-currency',
+    );
+    await fund('stale-currency');
+
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO setting_values (id, tenant_id, setting_key, value, version, updated_at)
+      VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, 'sales.currency',
+              ${JSON.stringify('IRR')}::jsonb, 1, now())`);
+
+    await expect(
+      ctx.container.commercialActions.draft(tenantA, systemActor('c'), customerA, {
+        serviceId: service.id,
+        kind: 'ADD_TRAFFIC',
+        addonId: addon,
+        idempotencyKey: 'stale-currency-quote',
+      }),
+    ).rejects.toMatchObject({ code: 'commerce.product_currency_unsupported' });
+
+    // Nothing was ordered and nothing was charged.
+    const rows = await ctx.container.database.db.execute(
+      sql`SELECT count(*)::int AS n FROM service_commercial_actions
+           WHERE tenant_id = ${tenantA.tenantId} AND service_id = ${service.id}`,
+    );
+    expect((rows.rows[0] as { n: number }).n).toBe(0);
+  });
+
   it('refuses a package of the wrong kind on the extra-traffic path', async () => {
     /*
      * The ONE thing a client can influence here: the add-on id. A callback naming an
