@@ -392,6 +392,98 @@ export class DrizzleOperationRepository implements OperationRepository {
   }
 
   /**
+   * Puts a claimed operation back and refunds the attempt the claim counted.
+   *
+   * `attempts - 1` in SQL rather than from a value the caller read, for the same
+   * reason `recordDelivery` advances its counter that way: two workers that both read
+   * `3` and both wrote `2` would leave an operation one attempt richer than it earned.
+   *
+   * `GREATEST(…, 0)` because `provisioning_operations_attempts_check` requires a
+   * non-negative count, and a hold-off on a row whose attempts somehow read zero must
+   * not be refused by the database — it would abort the transaction that was trying to
+   * put the row back, and leave it IN_FLIGHT holding a lease for nothing.
+   */
+  async holdOff(
+    scope: TenantContext,
+    id: string,
+    retryAt: Date,
+    note: string,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(provisioningOperations)
+      .set({
+        state: 'PLANNED',
+        attempts: sql`GREATEST(${provisioningOperations.attempts} - 1, 0)`,
+        nextAttemptAt: retryAt,
+        failureMessage: note,
+        claimedBy: null,
+        leaseUntil: null,
+        callStartedAt: null,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(provisioningOperations.tenantId, tenantId),
+          eq(provisioningOperations.id, id),
+          eq(provisioningOperations.state, 'IN_FLIGHT'),
+        ),
+      )
+      .returning({ id: provisioningOperations.id });
+    return rows.length > 0;
+  }
+
+  /**
+   * Fails `PLANNED` operations whose attempts are spent, and returns them.
+   *
+   * A conditional UPDATE with the ceiling written out, which is the only way a row
+   * that `claimDue` can no longer select ever reaches a terminal state. Bounded by the
+   * caller, and `RETURNING` the rows so the operational event can name the service.
+   */
+  async retireExhausted(
+    scope: TenantContext,
+    now: Date,
+    limit: number,
+    tx: TransactionScope,
+  ): Promise<readonly OperationRecord[]> {
+    const tenantId = requireTenantId(scope);
+    const spent = this.exec(tx)
+      .select({ id: provisioningOperations.id })
+      .from(provisioningOperations)
+      .where(
+        and(
+          eq(provisioningOperations.tenantId, tenantId),
+          eq(provisioningOperations.state, 'PLANNED'),
+          sql`${provisioningOperations.attempts} >= ${MAX_ATTEMPTS}`,
+        ),
+      )
+      .limit(limit);
+
+    const rows = await this.exec(tx)
+      .update(provisioningOperations)
+      .set({
+        state: 'FAILED',
+        completedAt: now,
+        claimedBy: null,
+        leaseUntil: null,
+        failureMessage: 'the attempts were spent and no worker reported an outcome',
+        nextAttemptAt: null,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(provisioningOperations.tenantId, tenantId),
+          eq(provisioningOperations.state, 'PLANNED'),
+          sql`${provisioningOperations.id} IN ${spent}`,
+        ),
+      )
+      .returning();
+    return rows.map(toRecord);
+  }
+
+  /**
    * Returns expired leases to `PLANNED`, but only where no provider call was started.
    *
    * `leaseExpiredAndCallNeverStarted`, the guard `OPERATION_MACHINE` names, written as

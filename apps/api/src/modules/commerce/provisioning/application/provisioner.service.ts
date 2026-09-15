@@ -179,6 +179,8 @@ export class ProvisionerService {
      * looks for its own. Bounded, and it only touches rows where NO provider call was
      * started — the guard `OPERATION_MACHINE` names, enforced as a WHERE clause.
      */
+    await this.retireExhausted(scope, now);
+
     const leaseUntil = new Date(now.getTime() + this.deps.leaseMs);
     /*
      * Both writes inside `uow.run`, which is where ADR-0028's quiesce gate lives.
@@ -476,13 +478,24 @@ export class ProvisionerService {
   }
 
   /**
-   * Puts an operation back without counting it as an attempt against the provider.
+   * Puts an operation back and REFUNDS the attempt the claim counted.
    *
    * For the two refusals that are about US rather than about the panel — a stopped
    * tenant and an exhausted outbound budget. Neither is a failure of anything and
    * neither is the operator's to fix, so no operational event is opened and no failure
-   * kind is recorded. The attempt the claim already counted is spent either way, which
-   * is the honest accounting: the row WAS claimed.
+   * kind is recorded.
+   *
+   * The refund is the part that matters, and it replaced the opposite rule. The
+   * comment here used to argue that the attempt was "spent either way, which is the
+   * honest accounting: the row WAS claimed". That is the wrong accounting: the counter
+   * bounds PROVIDER CALLS — which is why `claimDue` spends one in the same statement
+   * as the claim — and a hold-off contacted nothing.
+   *
+   * With it spent, and `claimDue` refusing a row at the ceiling, an operator stopping
+   * a tenant for twenty-five seconds retired every operation planned before the stop:
+   * five ticks at the default interval, each claiming and holding off, leaving the row
+   * PLANNED at the ceiling, unclaimable for ever, with no stalled event and no
+   * `completed_at`. Restarting the tenant did nothing, and nothing said so.
    */
   private async holdOff(
     scope: TenantContext,
@@ -492,15 +505,47 @@ export class ProvisionerService {
   ): Promise<void> {
     const now = this.deps.clock.now();
     await this.deps.uow.run(scope, async (tx) => {
-      await this.deps.operations.transition(
-        scope,
-        operation.id,
-        'IN_FLIGHT',
-        'PLANNED',
-        { failureMessage: note, nextAttemptAt: retryAt },
-        now,
-        tx,
-      );
+      await this.deps.operations.holdOff(scope, operation.id, retryAt, note, now, tx);
+    });
+  }
+
+  /**
+   * Fails operations whose attempts are spent, and tells an operator about each.
+   *
+   * Every path that spends the LAST attempt moves the row to a terminal state itself —
+   * except a crash. A worker that died holding the last attempt leaves the row
+   * `IN_FLIGHT`; the lease sweep returns it to `PLANNED`; and `claimDue` will never
+   * select it again, because its predicate refuses a row at the ceiling. Before this
+   * the row simply sat there: a paid order, uncompleted, with nothing that would ever
+   * look at it again and no operational event to find it by.
+   *
+   * Runs before the claim rather than after, so the tick that discovers a stalled row
+   * is the tick that reports it, and the report does not wait on there being other
+   * work to do.
+   */
+  private async retireExhausted(scope: TenantContext, now: Date): Promise<void> {
+    const retired = await this.deps.uow.run(scope, async (tx) =>
+      this.deps.operations.retireExhausted(scope, now, LEASE_SWEEP_LIMIT, tx),
+    );
+    if (retired.length === 0) return;
+    await this.deps.uow.run(scope, async (tx) => {
+      for (const operation of retired) {
+        await this.deps.opsLog.record(
+          scope,
+          {
+            code: PROVISIONING_STALLED_CODE,
+            severity: 'ERROR',
+            message: 'A paid service could not be created on its panel.',
+            context: {
+              serviceId: operation.serviceId,
+              panelId: operation.panelId,
+              reason: 'ATTEMPTS_SPENT',
+            },
+            dedupeKey: provisioningConditionKey(operation.serviceId),
+          },
+          tx,
+        );
+      }
     });
   }
 

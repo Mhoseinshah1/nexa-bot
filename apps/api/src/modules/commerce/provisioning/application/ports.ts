@@ -374,6 +374,49 @@ export interface OperationRepository {
   ): Promise<boolean>;
 
   /**
+   * Puts a claimed operation back and REFUNDS the attempt the claim counted.
+   *
+   * Separate from `transition` because of the refund, and the refund is the whole
+   * point. The attempt counter bounds PROVIDER CALLS — that is why `claimDue` counts
+   * one in the same statement as the claim — and a hold-off contacted nothing: the
+   * tenant was stopped, or the tenant's outbound budget had no capacity. Spending an
+   * attempt on it means an operator stopping a tenant for twenty-five seconds, at the
+   * default tick, retires a paid order that no panel ever heard about.
+   *
+   * Conditional on `IN_FLIGHT` like every other transition, so a hold-off cannot
+   * refund an attempt for a row somebody else has already moved.
+   */
+  holdOff(
+    scope: TenantContext,
+    id: string,
+    retryAt: Date,
+    note: string,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean>;
+
+  /**
+   * Fails `PLANNED` operations whose attempts are spent, and reports which.
+   *
+   * The counterpart to `claimDue`'s `attempts < OPERATION_MAX_ATTEMPTS` predicate.
+   * That predicate makes an exhausted row unclaimable, and every path that SPENDS the
+   * last attempt moves the row to a terminal state itself — except a crash. A worker
+   * that died holding the last attempt leaves the row `IN_FLIGHT`; the lease sweep
+   * returns it to `PLANNED`; and there it sits, at the ceiling, unclaimable and
+   * uncompleted, with no operational event and nothing that would ever look at it
+   * again. A paid order, invisible.
+   *
+   * Returns the rows so the caller can open the stalled condition for each: an
+   * operator needs to see this, and the recorder is the application's to call.
+   */
+  retireExhausted(
+    scope: TenantContext,
+    now: Date,
+    limit: number,
+    tx: TransactionScope,
+  ): Promise<readonly OperationRecord[]>;
+
+  /**
    * Returns expired leases to `PLANNED`, but ONLY where no provider call was started.
    *
    * The `leaseExpiredAndCallNeverStarted` guard `OPERATION_MACHINE` names, as a
