@@ -271,10 +271,13 @@ export class MarzbanAdapter implements ProviderAdapter {
    * keys — a fabricated `flow` or `id` would produce an account Marzban accepts and
    * Xray will not serve.
    *
-   * `inbounds` is sent ONLY when the operator named tags. Absent means "every inbound
-   * for those protocols", which is Marzban's own documented default and not a guess of
-   * ours; sending an empty object instead would mean "no inbounds", which is an account
-   * that cannot connect.
+   * `inbounds` is ALWAYS sent, and the activation schema makes it impossible not to
+   * have. This docblock used to say the opposite — that absent means "every inbound for
+   * those protocols, which is Marzban's own documented default" — and a real v0.8.4
+   * panel disagreed: `UserCreate.excluded_inbounds` excludes every inbound NOT listed,
+   * so absent excludes ALL of them. The create answers 200, returns a subscription URL,
+   * and the customer's subscription is zero bytes. `docs/providers/marzban.md` has the
+   * measurement.
    */
   async createUser(
     target: ProviderServiceTarget,
@@ -298,7 +301,7 @@ export class MarzbanAdapter implements ProviderAdapter {
       data_limit_reset_strategy: 'no_reset',
       status: 'active',
     };
-    if (activation.inboundTags !== undefined) payload['inbounds'] = activation.inboundTags;
+    payload['inbounds'] = activation.inboundTags;
 
     const created = await http.send({
       method: 'POST',

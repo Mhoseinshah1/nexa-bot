@@ -11,9 +11,11 @@ import {
   isLedgerReason,
   isRegisteredMetric,
   LEDGER_REASONS,
+  marzbanActivationSchema,
   metricDefinition,
   NexaError,
   PRICING_PRECEDENCE,
+  providerDescriptor,
   STATE_MACHINES,
   TELEGRAM_CALLBACK_DATA_MAX_BYTES,
   validateStateMachine,
@@ -185,5 +187,69 @@ describe('the notification list page size is parsed, not clamped', () => {
     const parsed = notificationListQuerySchema.safeParse({});
     expect(parsed.success).toBe(true);
     if (parsed.success) expect(parsed.data.limit).toBeUndefined();
+  });
+});
+
+describe('a Marzban panel must name the inbounds its accounts are created on', () => {
+  /*
+   * The regression this pins is not a validation nicety. `inboundTags` was OPTIONAL and
+   * documented as defaulting to "every inbound for those protocols, which is Marzban's
+   * own documented default". A real v0.8.4 panel disagreed: `UserCreate.excluded_inbounds`
+   * excludes every inbound NOT listed, so omitting the key excludes all of them. The
+   * create answers 200 with a subscription URL and the customer's subscription is zero
+   * bytes — a success by every status code the installation can see.
+   *
+   * `docs/providers/marzban.md` records the measurement. These five cases are what stop
+   * the field going back to optional, or to "some protocol has tags".
+   */
+  it('refuses an activation that names protocols and no inbounds at all', () => {
+    const parsed = marzbanActivationSchema.safeParse({ proxyProtocols: ['vless'] });
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues.some((issue) => issue.path[0] === 'inboundTags')).toBe(true);
+  });
+
+  it('refuses an activation whose tag list for a configured protocol is empty', () => {
+    expect(
+      marzbanActivationSchema.safeParse({ proxyProtocols: ['vless'], inboundTags: { vless: [] } })
+        .success,
+    ).toBe(false);
+  });
+
+  it('refuses tags for SOME protocol while another is left with none', () => {
+    /*
+     * The narrower path to the same zero-byte subscription: `vless` is configured and
+     * served, `vmess` is configured and silently excluded from every inbound. A record
+     * that is merely non-empty would pass.
+     */
+    const parsed = marzbanActivationSchema.safeParse({
+      proxyProtocols: ['vless', 'vmess'],
+      inboundTags: { vless: ['VLESS TCP'] },
+    });
+    expect(parsed.success).toBe(false);
+    expect(
+      parsed.error?.issues.some(
+        (issue) => issue.path[0] === 'inboundTags' && issue.path[1] === 'vmess',
+      ),
+    ).toBe(true);
+  });
+
+  it('accepts an activation that names a tag for every configured protocol', () => {
+    expect(
+      marzbanActivationSchema.safeParse({
+        proxyProtocols: ['vless', 'vmess'],
+        inboundTags: { vless: ['VLESS TCP'], vmess: ['VMess WS'] },
+      }).success,
+    ).toBe(true);
+  });
+
+  it('declares inboundTags as a field an operator must supply before the panel is usable', () => {
+    /*
+     * The descriptor is what `decideOperability` reads and what the Web Admin renders,
+     * so a required schema field that is not also declared here is a panel refused with
+     * no indication of which field is missing.
+     */
+    const marzban = providerDescriptor('marzban');
+    expect(marzban?.requiredActivationFields).toContain('inboundTags');
+    expect(marzban?.requiredActivationFields).toContain('proxyProtocols');
   });
 });

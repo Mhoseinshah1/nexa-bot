@@ -173,27 +173,73 @@ export function isProviderType(value: string): value is ProviderType {
  * untyped bag on a panel row is how a provider ends up reading a field somebody
  * invented in a support conversation.
  *
- * Neither of these has a default, and that is deliberate. Guessing which inbound a
+ * None of these has a default, and that is deliberate. Guessing which inbound a
  * customer's account is created on is guessing which server they connect to; the
  * research is explicit that the legacy system's inbound selection was never observable,
  * so a default here would be a fabricated product decision. An unset panel refuses with
  * `PANEL_NOT_OPERABLE` and names the field.
+ *
+ * Marzban's `inboundTags` was the exception until a real panel closed it, and the way
+ * it failed is worth keeping: an optional field documented as defaulting to "every
+ * inbound" actually defaulted to NONE, so the guess was not merely unprincipled — it
+ * was wrong, and it produced accounts a customer could not connect with while every
+ * status code said success.
  */
 export const MARZBAN_PROXY_PROTOCOLS = ['vless', 'vmess', 'trojan', 'shadowsocks'] as const;
 export type MarzbanProxyProtocol = (typeof MARZBAN_PROXY_PROTOCOLS)[number];
 
-export const marzbanActivationSchema = z.object({
-  /**
-   * Which proxy protocols a created user is given. At least one, because a Marzban
-   * user with no proxies is an account that cannot connect to anything.
-   */
-  proxyProtocols: z.array(z.enum(MARZBAN_PROXY_PROTOCOLS)).min(1).max(4),
-  /**
-   * Inbound tags per protocol. Absent means every inbound Marzban has for that
-   * protocol, which is Marzban's own default and not an invention of ours.
-   */
-  inboundTags: z.record(z.string().min(1).max(64), z.array(z.string().min(1).max(64))).optional(),
-});
+export const marzbanActivationSchema = z
+  .object({
+    /**
+     * Which proxy protocols a created user is given. At least one, because a Marzban
+     * user with no proxies is an account that cannot connect to anything.
+     */
+    proxyProtocols: z.array(z.enum(MARZBAN_PROXY_PROTOCOLS)).min(1).max(4),
+    /**
+     * Inbound tags per protocol, and REQUIRED — one entry per protocol, each naming at
+     * least one tag.
+     *
+     * This field was optional, documented as "absent means every inbound Marzban has
+     * for that protocol, which is Marzban's own default and not an invention of ours".
+     * That sentence was wrong, and a panel said so. `UserCreate.excluded_inbounds` in
+     * Marzban v0.8.4 computes the set of inbounds to EXCLUDE as every inbound for each
+     * requested protocol that is not listed here, so an absent key excludes all of
+     * them. The create still answers 200 and still returns a subscription URL; what the
+     * customer receives is a zero-byte subscription. Measured on the binary, in
+     * `docs/providers/marzban.md`.
+     *
+     * So there is no default and cannot be one, for the same reason `proxyProtocols`
+     * has none: choosing an inbound is choosing which server a customer connects to.
+     * A panel that does not name its tags is `PANEL_NOT_OPERABLE` and the operator is
+     * told which field is missing — which is the outcome this schema exists to produce,
+     * and is strictly better than a panel that provisions accounts serving nothing.
+     */
+    inboundTags: z.record(
+      z.string().min(1).max(64),
+      z.array(z.string().min(1).max(64)).min(1).max(32),
+    ),
+  })
+  .superRefine((value, ctx) => {
+    /*
+     * Every configured protocol must have tags, not just SOME protocol.
+     *
+     * A record keyed by `vless` alone satisfies the field while a panel configured for
+     * `vless` and `vmess` silently creates every vmess proxy with no inbound — the same
+     * zero-byte subscription as before, reached by a narrower path. The cross-field
+     * check is here rather than in the service because this is the shape's own rule and
+     * every caller validates through this schema.
+     */
+    for (const protocol of value.proxyProtocols) {
+      const tags = value.inboundTags[protocol];
+      if (tags === undefined || tags.length === 0) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['inboundTags', protocol],
+          message: `inboundTags must name at least one inbound for ${protocol}`,
+        });
+      }
+    }
+  });
 export type MarzbanActivation = z.infer<typeof marzbanActivationSchema>;
 
 export const sanaeiActivationSchema = z.object({
@@ -899,14 +945,19 @@ const MARZBAN: ProviderDescriptor = {
   // A token exchange, then a status read.
   maxRequestsPerProbe: 2,
   /*
-   * Which proxy protocols a created user gets.
+   * Which proxy protocols a created user gets, and which inbounds each one uses.
    *
    * Empty until Phase 4D, on the reasoning that Marzban needs no configuration to be
    * PROBED — which is true, and was the wrong question. Marzban requires at least one
    * proxy protocol to create a user, and there is no safe default: choosing one is
    * choosing what a customer's client speaks.
+   *
+   * `inboundTags` joined it once a real panel showed that omitting it does not mean
+   * "every inbound" but "no inbound" — a create that answers 200 and delivers a
+   * zero-byte subscription. Choosing an inbound is choosing which server a customer
+   * reaches, so it has no default either.
    */
-  requiredActivationFields: ['proxyProtocols'],
+  requiredActivationFields: ['proxyProtocols', 'inboundTags'],
 };
 
 /**
