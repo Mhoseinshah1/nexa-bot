@@ -20,9 +20,9 @@ finding rather than a gap — see F4E-02.
 
 | #      | Rule                                                            | Mutation                                                                     | Named test                                                                                                         | Result   |
 | ------ | --------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | -------- |
-| F4E-06 | `PERFORMABLE_OPERATION_TYPES` names only what has a branch      | `'TERMINATE'` appended to the constant                                       | `registries.test.ts` › names exactly the three types 4E performs, and no more                                      | KILLED   |
+| F4E-06 | `PERFORMABLE_OPERATION_TYPES` names only what has a branch      | `'TERMINATE'` appended to the constant                                       | `registries.test.ts` › names exactly the six types 4E performs, and no more                                        | KILLED   |
 | F4E-07 | The executor refuses an unperformable type before anything else | `if (!isPerformableOperation(operation.type)) {` → `if (false as boolean) {` | `provisioning-delivery.test.ts` › refuses an operation type this release cannot perform, before contacting a panel | SURVIVED |
-| F4E-08 | An unperformable type is legal from NO service state            | `TERMINATE: []` → `TERMINATE: ['ACTIVE']`                                    | `provisioning-delivery.test.ts` › refuses an operation type this release cannot perform, before contacting a panel | SURVIVED |
+| F4E-08 | An unperformable type is legal from NO service state            | `ROTATE_SUBSCRIPTION: []` → `ROTATE_SUBSCRIPTION: ['ACTIVE']`                | `provisioning-delivery.test.ts` › refuses an operation type this release cannot perform, before contacting a panel | SURVIVED |
 | F4E-09 | A usage sync writes what the panel said                         | `recordUsage(...)` call removed from `finishUsageSync`                       | `provisioning-delivery.test.ts` › refreshes a stale usage figure from the panel, and writes what the panel said    | KILLED   |
 | F4E-10 | A fresh figure is not re-read                                   | `COALESCE(usage_synced_at, created_at)` → `usage_synced_at IS NULL OR …`     | `provisioning-delivery.test.ts` › does not sync a service whose figure is still fresh                              | KILLED   |
 | F4E-11 | One sync per cadence window, however many ticks run             | the window removed from the derived operation id                             | `provisioning-delivery.test.ts` › plans ONE sync per cadence window however many ticks run                         | KILLED   |
@@ -33,8 +33,13 @@ finding rather than a gap — see F4E-02.
 Neither mutation fails a test **on its own**, and that is the design rather than a
 gap: they are two independent refusals of the same thing, so removing either leaves
 the other standing. What had to be measured is whether the PAIR is load-bearing, so
-both were applied together — the membership check disabled and `TERMINATE` declared
-legal from `ACTIVE` — and the test then FAILED:
+both were applied together — the membership check disabled and the unperformable type
+declared legal from `ACTIVE` — and the test then FAILED:
+
+Both rows were **re-run after the scope correction**, against
+`ROTATE_SUBSCRIPTION` rather than `TERMINATE`, because TERMINATE became performable
+in this phase and a mutation against it would no longer be testing what these rows
+claim. Individually SURVIVED, exactly as before; together:
 
 ```
 × refuses an operation type this release cannot perform, before contacting a panel
@@ -54,6 +59,10 @@ has, so that check covers all of them.
 It is an accident and not a guarantee. `RECONCILE` already requires none, and the next
 type added with an empty capability list would have exactly the two refusals this phase
 adds standing between it and a create on somebody's panel. Which is why they are two.
+
+`OPERATION_REQUIRED_CAPABILITIES['ROTATE_SUBSCRIPTION']` is
+`['ROTATE_SUBSCRIPTION_LINK']`, which no adapter declares, so the third refusal still
+covers the type these rows now use — and the reasoning above is unchanged by the swap.
 
 ## Service expiry
 
@@ -140,3 +149,76 @@ was running, which is the same failure wearing the same clothes.
 
 What the acceptance suite has instead is that it FAILS rather than skips when
 `NEXA_ACCEPTANCE_PANEL_URL` is absent, so it cannot be green without a panel.
+
+---
+
+# Service management — Marzban suspend, resume and terminate
+
+The scope correction (`docs/phase4e-audit.md`) narrowed this half of the phase to
+Marzban. These are the rules it introduced, and what happens when each is taken
+away.
+
+Two of them were **corrected against a real panel before they were falsified**,
+which is a different kind of evidence and is recorded as such in
+`docs/real-panel-acceptance.md`: falsification proves a rule has a test, not that
+the rule is right. F4E-21 is the clearest case — the rule it protects was WRONG
+when Phase 4D shipped it, and no mutation of a fake this repository wrote could
+have said so.
+
+| #       | Rule                                                              | Mutation                                                               | Named test                                                                                                       | Result |
+| ------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ------ |
+| F4E-21  | A Marzban create names the operator's inbound tags                | `payload['inbounds'] = activation.inboundTags;` → `= {}`               | `marzban-service.test.ts` › names the operator’s inbound tags, so the account is not excluded from every inbound | KILLED |
+| F4E-22b | Every configured protocol must have at least one tag              | the `superRefine`'s empty-tags condition → `false && (…)`              | `contracts-invariants.test.ts` › refuses tags for SOME protocol while another is left with none                  | KILLED |
+| F4E-23  | A suspend sends the status and nothing else                       | `value: { status }` → `value: { status, expire: 0 }`                   | `marzban-service.test.ts` › sends the status and NOTHING else, so a suspend cannot rewrite an allowance          | KILLED |
+| F4E-24  | A 200 must carry the status that was asked for                    | `if (record['status'] !== status)` → `if (false && …)`                 | `marzban-service.test.ts` › refuses a 200 whose record does not carry the status that was asked for              | KILLED |
+| F4E-25  | A 404 on a state change is ABSENT, never a wire failure           | `if (changed.status === 404) return …` → `if (false && …)`             | `marzban-service.test.ts` › reports an account the panel does not have as ABSENT, never as a failure             | KILLED |
+| F4E-26  | A replayed delete is a success that did no work                   | `if (removed.status === 404) return …` → `if (false && …)`             | `marzban-service.test.ts` › treats a replayed delete as a success that did no work                               | KILLED |
+| F4E-27  | A capability guard needs the method AND the declaration           | `canDisableUser` drops `&& adapter.supports('DISABLE_USER')`           | `contracts-invariants.test.ts` › says no to a method whose capability is not declared                            | KILLED |
+| F4E-28  | An idempotent mutation's uncertain failure is FAILED, not UNKNOWN | `if (isIdempotentMutation(type)) return 'FAILED';` → `if (false && …)` | `registries.test.ts` › classifies the three management types as idempotent mutations, and PROVISION not          | KILLED |
+| F4E-29  | TERMINATE is not legal from TERMINATED                            | `'TERMINATED'` appended to `OPERATION_LEGAL_FROM.TERMINATE`            | `registries.test.ts` › gives each management type exactly the SERVICE_MACHINE edges it may take                  | KILLED |
+| F4E-30  | SUSPEND is legal from ACTIVE alone                                | `SUSPEND: ['ACTIVE']` → `['ACTIVE', 'SUSPENDED']`                      | `registries.test.ts` › gives each management type exactly the SERVICE_MACHINE edges it may take                  | KILLED |
+| F4E-31  | A panel that has no such account does not move the service        | `if (!changed.found) {` → `if (false && …) {`                          | `service-management.test.ts` › never reports a suspend that suspended nothing                                    | KILLED |
+| F4E-32  | Ending a service takes two taps                                   | the detail screen's terminate button carries the DESTRUCTIVE prefix    | `service-management.test.ts` › offers pause and end on an active service, and the end button only ASKS           | KILLED |
+| F4E-33  | A button is drawn only where the panel can honour it              | `if (operable.ok) available.push(type);` → `available.push(type);`     | `provisioning-delivery.test.ts` › offers no management button for a service on a panel that cannot manage one    | KILLED |
+| F4E-34  | An operation of this type already open is returned, not rivalled  | `findOpen(...)` → `null as never`                                      | `service-management.test.ts` › plans ONE operation however many times the same tap arrives                       | KILLED |
+| F4E-35  | A customer's request checks the state the action is legal from    | `if (!legalFrom.includes(service.state))` → `if (false && …)`          | `service-management.test.ts` › offers nothing further once the service has ended                                 | KILLED |
+| F4E-36  | A suspend moves the service to SUSPENDED                          | `MANAGEMENT_TARGET_STATE.SUSPEND: 'SUSPENDED'` → `'ACTIVE'`            | `service-management.test.ts` › pauses the account on the panel and says the request was recorded, not done       | KILLED |
+
+## F4E-22, the mutation that survived and the one that did not
+
+The first attempt at F4E-22 made `inboundTags` optional again — the exact shape the
+field had before this phase — and **SURVIVED**. That is a true finding about where
+the rule actually lives, and the reason to record it rather than quietly replace it
+with the mutation that killed.
+
+`.optional()` is not what refuses a panel with no tags. The `superRefine` is: it
+iterates `proxyProtocols` and demands a non-empty tag list for each, so an activation
+with the key absent fails that check whether or not the field is optional. The two
+are not redundant — the optionality is what makes the type honest, and the refine is
+what makes the VALUE correct — but only one of them is load-bearing at runtime, and
+the falsification says which.
+
+So F4E-22b is the row, and F4E-22 is the note. Recording only the kill would have
+implied a cover the codebase does not have.
+
+## What is NOT falsified in this half, and why
+
+**The `canDisableUser` guards inside the executor's three dispatch branches.** They
+are unreachable as the code stands — `decideOperability` has already refused, reading
+the same capability from the same descriptor — so a mutation disabling one changes
+nothing any test can see. That is stated in the code beside them rather than papered
+over: they earn their place against a future edit that relaxes the operability check,
+and they turn what would be a TypeError into a refusal. A TypeError is not a
+`ProviderFailureKind`, so nothing would classify it and a mutating operation could not
+say whether it took effect.
+
+**The acceptance suites**, for the reason the 3X-UI half of this document already
+gives: `scripts/falsify.sh` refuses a project it does not know, deliberately, because
+an unknown project once matched no files and manufactured seven KILLED verdicts in one
+session. Adding `acceptance` to that list would make the harness report a kill whenever
+no panel was running.
+
+Every mutation above was applied by `scripts/falsify.sh`, which restores by
+`git checkout --` and FAILS if the tree is not byte-identical afterwards. The two
+mutations applied together for F4E-07/F4E-08 were restored by hand and verified with
+`cmp` against copies taken beforehand; `git status` was clean.
