@@ -1039,6 +1039,62 @@ describe('a customer manages the service they bought', () => {
     expect(after?.trafficLimitBytes).toBe((before?.trafficLimitBytes ?? 0n) * 2n);
   });
 
+  it('writes no allowance onto a service that moved while the call was in flight', async () => {
+    /*
+     * `recordAllowance` is a CONDITIONAL update naming the state the operation was
+     * planned from, and this is what that condition is for: a service terminated or
+     * expired while the PUT was on the wire keeps what that transition wrote.
+     *
+     * Reached directly rather than through the loop, because the window it guards is
+     * between the provider answering and the transaction committing, and nothing in a
+     * single-process test can land inside it. The rule is the `WHERE state = from`, and
+     * that is exactly what is measured: the same call, once with the state the service
+     * is in and once with the state it has left.
+     *
+     * F4F-26 reverted the condition and the whole suite stayed green, which is how this
+     * case came to exist. Without it, a renewal whose answer arrived after an operator
+     * terminated the service would quietly reactivate it and hand the customer thirty
+     * days on an account that no longer exists.
+     */
+    const service = await activeService('late-write');
+    const before = await services.findById(tenantA, service.id);
+    const target = {
+      expiresAt: new Date(Date.now() + 90 * 86_400_000),
+      trafficLimitBytes: 999_000_000_000n,
+    };
+
+    await ctx.container.database.db.execute(
+      sql`UPDATE services SET state = 'TERMINATED', terminated_at = now() WHERE id = ${service.id}`,
+    );
+
+    const applied = await ctx.container.uow.run(tenantA, async (tx) =>
+      services.recordAllowance(tenantA, service.id, 'ACTIVE', 'ACTIVE', target, new Date(), tx),
+    );
+
+    expect(applied, 'the row the operation was planned from is gone').toBe(false);
+    const after = await services.findById(tenantA, service.id);
+    expect(after?.state).toBe('TERMINATED');
+    expect(after?.expiresAt?.getTime()).toBe(before?.expiresAt?.getTime());
+    expect(after?.trafficLimitBytes).toBe(before?.trafficLimitBytes);
+
+    // And the same call against the state the row IS in does write.
+    const second = await ctx.container.uow.run(tenantA, async (tx) =>
+      services.recordAllowance(
+        tenantA,
+        service.id,
+        'TERMINATED',
+        'TERMINATED',
+        target,
+        new Date(),
+        tx,
+      ),
+    );
+    expect(second).toBe(true);
+    expect((await services.findById(tenantA, service.id))?.trafficLimitBytes).toBe(
+      target.trafficLimitBytes,
+    );
+  });
+
   it('refuses a package of the wrong kind on the extra-traffic path', async () => {
     /*
      * The ONE thing a client can influence here: the add-on id. A callback naming an
