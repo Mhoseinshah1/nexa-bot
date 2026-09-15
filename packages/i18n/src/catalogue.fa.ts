@@ -121,6 +121,13 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // unknown outcome is how a duplicate account is created.
   'bot.service.provision_delayed':
     'ساخت سرویس کامل نشد و موضوع به پشتیبانی اطلاع داده شد. لطفاً منتظر پیگیری بمانید.',
+  'bot.service.suspend_button': 'توقف موقت سرویس',
+  'bot.service.resume_button': 'فعال‌سازی دوباره سرویس',
+  'bot.service.terminate_button': 'حذف سرویس',
+  'bot.service.terminate_confirm':
+    'آیا از حذف «{productTitle}» مطمئن هستید؟ با تأیید، حساب شما روی سرور پاک می‌شود و این کار برگشت‌پذیر نیست.',
+  'bot.service.terminate_confirm_button': 'بله، سرویس حذف شود',
+  'bot.service.action_requested': 'درخواست شما ثبت شد و در حال اعمال روی سرور است.',
   'bot.service.capability_unsupported': 'این قابلیت برای سرویس شما در دسترس نیست.',
 
   'bot.discount.applied': 'کد تخفیف {code} اعمال شد. مبلغ تخفیف: {amount}',

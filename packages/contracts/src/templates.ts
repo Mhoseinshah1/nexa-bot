@@ -641,6 +641,76 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.service.suspend_button',
+    description:
+      'The button that asks for a service to be paused. Drawn only when the service ' +
+      'is ACTIVE and the panel behind it declares DISABLE_USER \u2014 but not drawing ' +
+      'it is never the control: `requestFromCustomer` checks ownership, the legal ' +
+      'from-state and the panel capability again, so a tap on a stale message is ' +
+      'refused rather than performed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.resume_button',
+    description:
+      'The button that asks for a paused service to start serving again. Drawn only ' +
+      'when the service is SUSPENDED and the panel declares ENABLE_USER.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.terminate_button',
+    description:
+      'The button that BEGINS ending a service. It does not end one: it asks for the ' +
+      'confirmation below. Its own key rather than a reuse of the confirm label ' +
+      'because the two must not read alike \u2014 one opens a question and the other ' +
+      'answers it, and a customer who cannot tell them apart will end a service by ' +
+      'tapping twice in the same place.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.terminate_confirm',
+    description:
+      'The confirmation question, naming the service about to be ended and saying ' +
+      'plainly that it cannot be undone. The only screen between a customer and the ' +
+      'deletion of their provider account, so it states the consequence rather than ' +
+      'asking "are you sure": the research records the legacy system destroying six ' +
+      'order classes on one unconfirmed press.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'productTitle',
+        type: 'STRING',
+        description:
+          'What the customer bought, from the order\u2019s frozen snapshot \u2014 ' +
+          'never the service id, which is not a name a customer can recognise.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.terminate_confirm_button',
+    description:
+      'The button that actually ends the service. The ONLY callback that plans a ' +
+      'TERMINATE; every other path through this surface stops at the question above.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.action_requested',
+    description:
+      'Acknowledges that a pause, resume or end was recorded and is being applied to ' +
+      'the panel. Deliberately does NOT say it is done: the provider call happens in ' +
+      'the provisioner, seconds later, and can fail. Claiming completion here would ' +
+      'be the fabricated success this codebase refuses \u2014 the same reason ' +
+      '`bot.service.provisioning` says a service is being made rather than made.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.service.capability_unsupported',
     description:
       'Shown when the customer asks for something the panel behind their service ' +
