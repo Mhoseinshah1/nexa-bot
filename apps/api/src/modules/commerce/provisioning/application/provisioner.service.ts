@@ -100,6 +100,16 @@ export function refusalIsPermanent(reason: ExecutionRefusal): boolean {
 /** How many abandoned leases one tick may return to the pool. */
 export const LEASE_SWEEP_LIMIT = 20;
 
+/**
+ * How many reconciles one tick may plan.
+ *
+ * Small, because planning is not the bottleneck: each planned reconcile still has to
+ * be claimed and executed one per tick, so a large batch would only queue work the
+ * same loop then drains at its own pace. Five is enough that an outage which lost a
+ * handful of answers is fully queued within seconds.
+ */
+export const RECONCILE_PLAN_LIMIT = 5;
+
 export interface ProvisionerDeps {
   readonly operations: OperationRepository;
   readonly services: ServiceRepository;
@@ -180,6 +190,7 @@ export class ProvisionerService {
      * started — the guard `OPERATION_MACHINE` names, enforced as a WHERE clause.
      */
     await this.retireExhausted(scope, now);
+    await this.planReconciles(scope, now);
 
     const leaseUntil = new Date(now.getTime() + this.deps.leaseMs);
     /*
@@ -506,6 +517,58 @@ export class ProvisionerService {
     const now = this.deps.clock.now();
     await this.deps.uow.run(scope, async (tx) => {
       await this.deps.operations.holdOff(scope, operation.id, retryAt, note, now, tx);
+    });
+  }
+
+  /**
+   * Plans a RECONCILE for every service still waiting on an unknown outcome.
+   *
+   * ## Why this exists at all
+   *
+   * `UNRECONCILED` had no exit. `SERVICE_MACHINE` leaves it only through
+   * `RECONCILED_ACTIVE` or `RECONCILED_ABSENT`, both produced by `finishReconcile`,
+   * which runs only for an operation of type `RECONCILE` — and nothing planned one.
+   * So a create whose answer was lost took the customer's money, probably left an
+   * account on the panel, and put the service somewhere no code path in the product
+   * could resolve. `retryProvisioning` refuses `UNRECONCILED` by design, which was the
+   * right refusal pointing at a remedy that did not exist.
+   *
+   * Both adapters are written on the assumption that it does. 3X-UI answers a
+   * duplicate email with a message, and Marzban a 409 — both `PROVIDER_ERROR`, which
+   * `failureOutcome` classifies UNKNOWN on a mutating call, "which sends the operation
+   * to reconciliation, and reconciliation ASKS the panel". This is the half that asks.
+   *
+   * ## Why it plans rather than acts
+   *
+   * A reconcile is a provider call, so it goes through the same claim, the same
+   * budget, the same lease and the same `call_started_at` stamp as a create. Planning
+   * it is a row; doing it is the executor's job on a later tick. Nothing here dials
+   * anything.
+   *
+   * The id is DERIVED from the unknown operation, so two replicas planning the same
+   * reconcile converge on one row with no lookup — the property the whole module rests
+   * on — and `provisioning_operations_tenant_operation_key` refuses the second.
+   */
+  private async planReconciles(scope: TenantContext, now: Date): Promise<void> {
+    await this.deps.uow.run(scope, async (tx) => {
+      const unresolved = await this.deps.operations.listUnknown(scope, RECONCILE_PLAN_LIMIT, tx);
+      for (const unknown of unresolved) {
+        await this.deps.operations.plan(
+          scope,
+          {
+            id: this.deps.ids.uuid(),
+            operationId: this.deps.operationId(
+              `${unknown.serviceId}:RECONCILE:${unknown.operationId}`,
+            ),
+            serviceId: unknown.serviceId,
+            orderId: unknown.orderId,
+            panelId: unknown.panelId,
+            type: 'RECONCILE',
+          },
+          now,
+          tx,
+        );
+      }
     });
   }
 

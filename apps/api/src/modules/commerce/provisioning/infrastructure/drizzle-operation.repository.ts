@@ -14,7 +14,7 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
-import { provisioningOperations } from '../../../../infrastructure/persistence/schema.js';
+import { provisioningOperations, services } from '../../../../infrastructure/persistence/schema.js';
 import type { OperationDraft, OperationRecord, OperationRepository } from '../application/ports.js';
 
 /** Local alias so the predicate below reads as the rule rather than as a constant. */
@@ -533,6 +533,23 @@ export class DrizzleOperationRepository implements OperationRepository {
     return rows.length;
   }
 
+  /**
+   * The operations whose outcome is unknown AND whose service is still waiting.
+   *
+   * Three conditions, and each removes a way this queue would starve or spin:
+   *
+   * - `state = 'UNKNOWN'` — the operation whose answer was lost;
+   * - the service is still `UNRECONCILED` — so a row whose reconcile already ran drops
+   *   out on its own, without anything having to rewrite the historical operation;
+   * - no open `RECONCILE` for that service — so a tick does not re-plan one that is
+   *   already planned or in flight.
+   *
+   * The last two are in the QUERY rather than checked afterwards. `UNKNOWN` is not a
+   * terminal state and nothing clears it, so the pile of resolved ones grows for ever;
+   * filtering them in the caller would let them fill the limit window and starve the
+   * service that is actually waiting — which is the one failure this queue exists to
+   * end.
+   */
   async listUnknown(
     scope: TenantContext,
     limit: number,
@@ -540,16 +557,30 @@ export class DrizzleOperationRepository implements OperationRepository {
   ): Promise<readonly OperationRecord[]> {
     const tenantId = requireTenantId(scope);
     const rows = await this.exec(tx)
-      .select()
+      .select({ operation: provisioningOperations })
       .from(provisioningOperations)
+      .innerJoin(
+        services,
+        and(
+          eq(services.tenantId, provisioningOperations.tenantId),
+          eq(services.id, provisioningOperations.serviceId),
+        ),
+      )
       .where(
         and(
           eq(provisioningOperations.tenantId, tenantId),
           eq(provisioningOperations.state, 'UNKNOWN'),
+          eq(services.state, 'UNRECONCILED'),
+          sql`NOT EXISTS (
+            SELECT 1 FROM ${provisioningOperations} AS open_reconcile
+             WHERE open_reconcile.tenant_id = ${provisioningOperations.tenantId}
+               AND open_reconcile.service_id = ${provisioningOperations.serviceId}
+               AND open_reconcile.type = 'RECONCILE'
+               AND open_reconcile.state IN ('PLANNED', 'IN_FLIGHT'))`,
         ),
       )
       .orderBy(asc(provisioningOperations.createdAt), asc(provisioningOperations.id))
       .limit(limit);
-    return rows.map(toRecord);
+    return rows.map((row) => toRecord(row.operation));
   }
 }
