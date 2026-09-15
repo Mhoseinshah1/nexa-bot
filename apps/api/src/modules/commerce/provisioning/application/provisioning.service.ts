@@ -9,11 +9,13 @@ import {
   type Clock,
   type IdGenerator,
   type OperationId,
+  type OperationType,
   type ServiceState,
   type TenantContext,
   type UnitOfWork,
   type UserId,
 } from '@nexa/contracts';
+import { OPERATION_LEGAL_FROM } from './provision-executor.js';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
@@ -86,6 +88,31 @@ export interface ServiceListQuery {
  * open across somebody else's network is a transaction whose duration somebody else
  * chooses.
  */
+/**
+ * The operations a CUSTOMER may ask for on their own service.
+ *
+ * Three, and the list is here rather than in `@nexa/contracts` because it is a product
+ * policy rather than a vocabulary: `OPERATION_TYPES` says what an operation can be, and
+ * this says which of them a person who is not an operator is allowed to initiate.
+ *
+ * `PROVISION`, `RECONCILE` and `SYNC_USAGE` are absent because they are the system's
+ * own work — a customer asking for a reconcile is asking to spend their tenant's
+ * outbound budget on a question they cannot read the answer to. `RENEW`, `ADD_TRAFFIC`
+ * and `ADD_TIME` are absent because they are purchases, and a purchase starts with an
+ * order.
+ *
+ * A type not in this list cannot be reached through the customer surface at all: the
+ * callback prefixes below are fixed strings and the type is chosen by which one
+ * matched, never parsed out of what arrived.
+ */
+export const CUSTOMER_SERVICE_OPERATIONS = [
+  'SUSPEND',
+  'RESUME',
+  'TERMINATE',
+] as const satisfies readonly OperationType[];
+
+export type CustomerServiceOperation = (typeof CUSTOMER_SERVICE_OPERATIONS)[number];
+
 export class ProvisioningService {
   constructor(private readonly deps: ProvisioningServiceDeps) {}
 
@@ -422,6 +449,159 @@ export class ProvisioningService {
       throw errors.notFound(COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND, 'Unknown service.');
     }
     return service;
+  }
+
+  /**
+   * Which of the three management actions this service can actually take, right now.
+   *
+   * Asked by the surface so that a button is drawn only when tapping it would do
+   * something. Two independent conditions, and both are real:
+   *
+   * - `OPERATION_LEGAL_FROM` — a resume means nothing for a service that is not
+   *   suspended, and the executor would ABANDON the operation.
+   * - the panel's own capability, through `operability`, which reads
+   *   `OPERATION_REQUIRED_CAPABILITIES` against the descriptor. A 3X-UI-backed service
+   *   yields an empty list, because this release cannot disable, re-enable or delete a
+   *   client on that provider and must not offer to.
+   *
+   * NOT a security control, and the distinction matters: `requestFromCustomer` checks
+   * ownership, the state and the capability again when the tap arrives, so a customer
+   * holding an older message is refused rather than served. Not drawing the button is
+   * what keeps the product honest; refusing the request is what keeps it correct.
+   */
+  async customerActionsFor(
+    scope: TenantContext,
+    service: ServiceRecord,
+  ): Promise<readonly CustomerServiceOperation[]> {
+    const available: CustomerServiceOperation[] = [];
+    for (const type of CUSTOMER_SERVICE_OPERATIONS) {
+      if (!OPERATION_LEGAL_FROM[type].includes(service.state)) continue;
+      const operable = await this.deps.panels.operability(scope, service.panelId, type);
+      if (operable.ok) available.push(type);
+    }
+    return available;
+  }
+
+  /**
+   * Plans one management operation a CUSTOMER asked for, against their own service.
+   *
+   * ## Authorisation is ownership, and nothing else
+   *
+   * Exactly as `getForCustomer`: a customer is not an admin and holds no permissions,
+   * so `customerId` is the authorisation and the caller must have established it from
+   * the Telegram update's own `from.id`. The service is fetched through
+   * `getForCustomer`, which compares against the ROW rather than filtering the query,
+   * so somebody else's id answers `SERVICE_NOT_FOUND` — the same answer an id that does
+   * not exist gets, because telling them apart lets a service id be enumerated.
+   *
+   * Nothing a client sends names a panel, a provider username or an operation target.
+   * The type comes from which button was pressed, the service from an id the customer
+   * owns, and the panel and the provider identity are read off that service's row.
+   *
+   * ## Four refusals, in this order, and each is the operator's or the customer's to fix
+   *
+   * 1. The service must be in a state the operation is legal from — `OPERATION_LEGAL_FROM`,
+   *    the same table the executor checks. Checked here so the customer is told now
+   *    rather than by an operation that is planned, claimed and then ABANDONED.
+   * 2. The panel must be able to perform it. `operability` reads
+   *    `OPERATION_REQUIRED_CAPABILITIES` against the panel's own descriptor, so a
+   *    3X-UI-backed service is refused with `CAPABILITY_UNSUPPORTED` before a row
+   *    exists. That refusal is the whole reason the capability list is a promise.
+   * 3. The tenant must still be accepting work, checked INSIDE the transaction, because
+   *    a surface checks on arrival and a stop can commit in between.
+   * 4. An operation of this type already open for this service is RETURNED rather than
+   *    rivalled, so the ordinary double-tap gets the one that exists.
+   *
+   * ## The idempotency key is the caller's, and it is what two taps share
+   *
+   * The operation id is derived from it. Deriving from a count of existing operations
+   * is what once let two clicks a moment apart plan two creates for one service; the
+   * key is the only thing that is the same for both taps of one button and different
+   * for a genuine second request.
+   */
+  async requestFromCustomer(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: UserId,
+    serviceId: string,
+    type: CustomerServiceOperation,
+    input: { readonly idempotencyKey: string },
+  ): Promise<OperationRecord> {
+    const service = await this.getForCustomer(scope, customerId, serviceId);
+    const legalFrom = OPERATION_LEGAL_FROM[type];
+    if (!legalFrom.includes(service.state)) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.ORDER_STATE_INVALID,
+        'That service is not in a state this action can be taken from.',
+        { state: service.state },
+      );
+    }
+    const operable = await this.deps.panels.operability(scope, service.panelId, type);
+    if (!operable.ok) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.PANEL_NOT_OPERABLE,
+        'The panel this service lives on cannot perform that action.',
+        { reason: operable.reason },
+      );
+    }
+
+    const now = this.deps.clock.now();
+    return this.deps.uow.run(scope, async (tx) => {
+      if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
+        throw errors.conflict(
+          COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+          'That tenant has stopped accepting work.',
+        );
+      }
+      const open = await this.deps.operations.findOpen(scope, serviceId, type, tx);
+      if (open !== null) return open;
+      const operation = await this.deps.operations.plan(
+        scope,
+        {
+          id: this.deps.ids.uuid(),
+          operationId: this.deps.operationId(`${serviceId}:${type}:${input.idempotencyKey}`),
+          serviceId,
+          orderId: service.orderId,
+          panelId: service.panelId,
+          type,
+        },
+        now,
+        tx,
+      );
+      /*
+       * WHO asked, and when.
+       *
+       * `plan` records no actor — an operation row says what is to be done and by which
+       * worker it was claimed, not who wanted it — so without this the only answer to
+       * "who asked for this service to be deleted" would be inferred from the fact that
+       * nobody else can. Inference is what `/admin/logs` offered, and the research
+       * records what that was worth.
+       *
+       * The actor is the SYSTEM_JOB the webhook runs as, because a customer is not an
+       * admin and has no `ActorContext` of their own; the customer id goes in the
+       * payload, where it is a fact about the request rather than a fabricated identity.
+       * That distinction is the reason `docs/conventions.md` forbids inventing actors.
+       *
+       * The executor writes a SECOND audit row when the panel actually applies the
+       * change, and the two are different facts: this one is a decision, that one is an
+       * effect, and a terminate that was asked for and never carried out must not look
+       * like one that was.
+       */
+      await this.deps.audit.record(
+        scope,
+        actor,
+        {
+          action: `service.request_${type.toLowerCase()}`,
+          entityType: 'Service',
+          entityId: serviceId,
+          before: { state: service.state },
+          after: { requestedBy: customerId, operationId: operation.operationId },
+          result: 'SUCCESS',
+        },
+        tx,
+      );
+      return operation;
+    });
   }
 
   /** Whether a service is in a state where re-sending its configuration means anything. */

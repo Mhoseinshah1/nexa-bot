@@ -129,6 +129,24 @@ looks like a restore and is not:
   two executor replicas all safe, and a convenience setter would quietly remove
   it from all three.
 
+One more, learned by running a real panel (`docs/real-panel-acceptance.md`):
+
+- A fake this repository wrote and an adapter this repository wrote can only
+  prove they **agree with each other**. Four defects reached `main` that way and
+  each shipped behind a green suite: three on the Sanaei create path (two wrong
+  routes and a dropped CSRF token), and one on Marzban's, where omitting
+  `inbounds` was documented as "every inbound" and actually means NONE — a 200,
+  a subscription URL, and a zero-byte subscription for the customer. So a
+  provider rule is verified against the real panel binary, and the fake is
+  corrected to match it in the same commit. `pnpm test:acceptance` needs a
+  disposable panel of each kind and **fails rather than skips** without one; it
+  is not in `pnpm verify` and CI does not run it.
+- A capability is declared **after** the acceptance proves it, never before.
+  `capabilities` is what the product promises an operator, and
+  `canDisableUser`/`canEnableUser`/`canDeleteUser` require the method AND the
+  declaration, so an implemented-but-unproven operation is refused rather than
+  offered.
+
 One more, learned in Phase 3C:
 
 - An operational-event CODE is part of the schema, not a string. `operational_events`

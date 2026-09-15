@@ -168,6 +168,12 @@ describe('panel HTTP surface', () => {
       'CREATE_USER',
       'READ_USAGE',
       'DELIVER_SUBSCRIPTION_LINK',
+      // The three that arrived only after `tests/acceptance/real-panel-marzban.test.ts`
+      // drove the shipped adapter against a real v0.8.4. Implement, prove, THEN
+      // advertise — and this endpoint is where advertising happens.
+      'DISABLE_USER',
+      'ENABLE_USER',
+      'DELETE_USER',
     ]);
   });
 
@@ -190,7 +196,15 @@ describe('panel HTTP surface', () => {
        * honour, which is the whole failure this catalogue test exists to catch.
        */
       const PUBLISHED: Record<string, readonly string[]> = {
-        marzban: ['HEALTH_CHECK', 'CREATE_USER', 'READ_USAGE', 'DELIVER_SUBSCRIPTION_LINK'],
+        marzban: [
+          'HEALTH_CHECK',
+          'CREATE_USER',
+          'READ_USAGE',
+          'DELIVER_SUBSCRIPTION_LINK',
+          'DISABLE_USER',
+          'ENABLE_USER',
+          'DELETE_USER',
+        ],
         sanaei: [
           'HEALTH_CHECK',
           'CREATE_USER',
@@ -207,9 +221,6 @@ describe('panel HTTP surface', () => {
         // capability moved to.
         for (const unimplemented of [
           'RENEW_USER',
-          'DELETE_USER',
-          'DISABLE_USER',
-          'ENABLE_USER',
           'RESET_USAGE',
           'ADD_VOLUME',
           'ADD_TIME',
@@ -221,6 +232,20 @@ describe('panel HTTP surface', () => {
           expect(provider.capabilities, `${provider.key}.${unimplemented}`).not.toContain(
             unimplemented,
           );
+        }
+        /*
+         * The management three, checked on the side that does NOT have them.
+         *
+         * They left the list above because Marzban implements them, and moving them out
+         * without naming them here would have turned a checked absence into an
+         * unchecked one for the provider the deferral is about. `docs/providers/sanaei-3xui.md`
+         * records why 3X-UI does not have them: nobody has established how v3.7.0
+         * disables, re-enables or deletes a client, so the product does not claim it.
+         */
+        if (provider.key === 'sanaei') {
+          for (const deferred of ['DISABLE_USER', 'ENABLE_USER', 'DELETE_USER']) {
+            expect(provider.capabilities, `sanaei.${deferred}`).not.toContain(deferred);
+          }
         }
         // `LIMIT_DEVICES` is checked on the side it is NOT implemented, by name, for
         // the same reason: a provider that starts publishing it without writing the
@@ -247,6 +272,9 @@ describe('panel HTTP surface', () => {
       'CREATE_USER',
       'READ_USAGE',
       'DELIVER_SUBSCRIPTION_LINK',
+      'DISABLE_USER',
+      'ENABLE_USER',
+      'DELETE_USER',
     ]);
     expect(body.panel.capabilities).not.toContain('RENEW_USER');
   });

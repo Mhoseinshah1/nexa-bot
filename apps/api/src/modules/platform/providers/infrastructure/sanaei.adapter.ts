@@ -670,14 +670,38 @@ export class SanaeiAdapter implements ProviderAdapter {
     if (rotatedByLogin !== null) return rotatedByLogin;
 
     /*
-     * The session is established. The CSRF token is deliberately NOT carried forward:
-     * v3.7.0's middleware exempts `/panel/api/*` from the CSRF check, and sending a
-     * token minted for the login form on an API call is a header that means nothing
-     * to the panel and one more thing to get wrong when it rotates.
+     * The session is established, and the CSRF token travels with it.
+     *
+     * This used to drop the token here, on the stated grounds that "v3.7.0's
+     * middleware exempts `/panel/api/*` from the CSRF check". That sentence was
+     * false, and it is the reason the mistake survived review a second time: it
+     * read as a verified wire fact. `internal/web/controller/api.go` mounts
+     * `api.Use(middleware.CSRFMiddleware())` on the whole `/panel/api` group,
+     * and `CSRFMiddleware` short-circuits on exactly one condition —
+     * `c.GetBool("api_authed")`, which `checkAPIAuth` sets for a BEARER caller
+     * and never for a session one. So a session-authenticated POST to
+     * `panel/api/clients/add` without the header is aborted 403 with no body,
+     * which is what a real v3.7.0 panel answered every provisioning create this
+     * installation made through username/password credentials.
+     *
+     * The token survives the login. `login` reaches `session.SetLoginUser`,
+     * which does `s.Set(...)` and `s.Save()` and never `s.Clear()`, so the
+     * `CSRF_TOKEN` minted by `csrf-token` is still the one `ValidateCSRFToken`
+     * compares against afterwards. A rotated COOKIE is adopted above; the token
+     * inside that session is unchanged.
+     *
+     * Sent unconditionally rather than only on unsafe methods. `isSafeMethod`
+     * short-circuits before validation, so the header is inert on a GET — and
+     * an unconditional header is one that a later mutating method cannot forget
+     * to ask for. That is the failure mode this comment is standing in front of.
      */
     return {
       ok: true,
-      headers: { ...XHR_HEADER, cookie: `${SESSION_COOKIE}=${session}` },
+      headers: {
+        ...XHR_HEADER,
+        'x-csrf-token': csrfToken,
+        cookie: `${SESSION_COOKIE}=${session}`,
+      },
       viaLogin: true,
     };
   }
@@ -692,12 +716,32 @@ export class SanaeiAdapter implements ProviderAdapter {
    * fact that a create is only ever issued from `PENDING_PROVISION`.
    *
    * A `success: false` envelope is reported as `PROVIDER_ERROR` and NOT parsed for a
-   * reason. v3.7.0 answers a duplicate email with a message, and the message is a
-   * localisable string that upstream is free to reword — so branching on it would be
-   * an adapter whose correctness depends on somebody else's copy. `PROVIDER_ERROR` on
-   * a mutating operation classifies as `UNKNOWN` through `failureOutcome`, which sends
-   * the operation to reconciliation, and reconciliation ASKS the panel. The duplicate
-   * is then adopted rather than guessed at, which is the answer that was wanted.
+   * reason. The message is a localisable string upstream is free to reword, so
+   * branching on it would be an adapter whose correctness depends on somebody else's
+   * copy. `PROVIDER_ERROR` on a mutating operation classifies as `UNKNOWN` through
+   * `failureOutcome`, which sends the operation to reconciliation, and reconciliation
+   * ASKS the panel — so the account is adopted rather than guessed at.
+   *
+   * ## What a repeat of the SAME create actually does, which is not what this said
+   *
+   * This used to state that "v3.7.0 answers a duplicate email with a message". It does
+   * not, for the case that matters. `ClientService.AddInboundClient` runs
+   * `checkEmailsExistForClients`, which EXEMPTS a client whose `subId` matches, then
+   * drops anything already on the inbound and returns `(false, nil)` when that leaves
+   * nothing — no error, so the controller answers SUCCESS. Upstream made that the
+   * behaviour on purpose (#5770, `TestAddInboundClient_SkipsClientsAlreadyOnInbound`)
+   * because retried and raced adds were duplicating one email inside one settings
+   * array.
+   *
+   * Nexa's three identities are derived per service, so a replayed create carries the
+   * same email AND the same subId: a replay is an idempotent no-op reported as
+   * success, and the operation completes instead of going round reconciliation. A
+   * DIFFERENT identity claiming a taken email is still refused, with
+   * `Duplicate email: <email>` under `success: false` — which is the shape above.
+   *
+   * Verified against a real v3.7.0 panel by `tests/acceptance/real-panel-sanaei.test.ts`,
+   * not against the fake, because the fake had been written to agree with the sentence
+   * this paragraph replaces.
    */
   async createUser(
     target: ProviderServiceTarget,

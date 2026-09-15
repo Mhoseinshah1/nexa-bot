@@ -173,27 +173,73 @@ export function isProviderType(value: string): value is ProviderType {
  * untyped bag on a panel row is how a provider ends up reading a field somebody
  * invented in a support conversation.
  *
- * Neither of these has a default, and that is deliberate. Guessing which inbound a
+ * None of these has a default, and that is deliberate. Guessing which inbound a
  * customer's account is created on is guessing which server they connect to; the
  * research is explicit that the legacy system's inbound selection was never observable,
  * so a default here would be a fabricated product decision. An unset panel refuses with
  * `PANEL_NOT_OPERABLE` and names the field.
+ *
+ * Marzban's `inboundTags` was the exception until a real panel closed it, and the way
+ * it failed is worth keeping: an optional field documented as defaulting to "every
+ * inbound" actually defaulted to NONE, so the guess was not merely unprincipled — it
+ * was wrong, and it produced accounts a customer could not connect with while every
+ * status code said success.
  */
 export const MARZBAN_PROXY_PROTOCOLS = ['vless', 'vmess', 'trojan', 'shadowsocks'] as const;
 export type MarzbanProxyProtocol = (typeof MARZBAN_PROXY_PROTOCOLS)[number];
 
-export const marzbanActivationSchema = z.object({
-  /**
-   * Which proxy protocols a created user is given. At least one, because a Marzban
-   * user with no proxies is an account that cannot connect to anything.
-   */
-  proxyProtocols: z.array(z.enum(MARZBAN_PROXY_PROTOCOLS)).min(1).max(4),
-  /**
-   * Inbound tags per protocol. Absent means every inbound Marzban has for that
-   * protocol, which is Marzban's own default and not an invention of ours.
-   */
-  inboundTags: z.record(z.string().min(1).max(64), z.array(z.string().min(1).max(64))).optional(),
-});
+export const marzbanActivationSchema = z
+  .object({
+    /**
+     * Which proxy protocols a created user is given. At least one, because a Marzban
+     * user with no proxies is an account that cannot connect to anything.
+     */
+    proxyProtocols: z.array(z.enum(MARZBAN_PROXY_PROTOCOLS)).min(1).max(4),
+    /**
+     * Inbound tags per protocol, and REQUIRED — one entry per protocol, each naming at
+     * least one tag.
+     *
+     * This field was optional, documented as "absent means every inbound Marzban has
+     * for that protocol, which is Marzban's own default and not an invention of ours".
+     * That sentence was wrong, and a panel said so. `UserCreate.excluded_inbounds` in
+     * Marzban v0.8.4 computes the set of inbounds to EXCLUDE as every inbound for each
+     * requested protocol that is not listed here, so an absent key excludes all of
+     * them. The create still answers 200 and still returns a subscription URL; what the
+     * customer receives is a zero-byte subscription. Measured on the binary, in
+     * `docs/providers/marzban.md`.
+     *
+     * So there is no default and cannot be one, for the same reason `proxyProtocols`
+     * has none: choosing an inbound is choosing which server a customer connects to.
+     * A panel that does not name its tags is `PANEL_NOT_OPERABLE` and the operator is
+     * told which field is missing — which is the outcome this schema exists to produce,
+     * and is strictly better than a panel that provisions accounts serving nothing.
+     */
+    inboundTags: z.record(
+      z.string().min(1).max(64),
+      z.array(z.string().min(1).max(64)).min(1).max(32),
+    ),
+  })
+  .superRefine((value, ctx) => {
+    /*
+     * Every configured protocol must have tags, not just SOME protocol.
+     *
+     * A record keyed by `vless` alone satisfies the field while a panel configured for
+     * `vless` and `vmess` silently creates every vmess proxy with no inbound — the same
+     * zero-byte subscription as before, reached by a narrower path. The cross-field
+     * check is here rather than in the service because this is the shape's own rule and
+     * every caller validates through this schema.
+     */
+    for (const protocol of value.proxyProtocols) {
+      const tags = value.inboundTags[protocol];
+      if (tags === undefined || tags.length === 0) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['inboundTags', protocol],
+          message: `inboundTags must name at least one inbound for ${protocol}`,
+        });
+      }
+    }
+  });
 export type MarzbanActivation = z.infer<typeof marzbanActivationSchema>;
 
 export const sanaeiActivationSchema = z.object({
@@ -654,7 +700,19 @@ export type ProviderProbeOutcome =
  * move it to one.
  */
 export interface ProviderHttpRequest {
-  readonly method: 'GET' | 'POST';
+  /*
+   * Four methods, and the list is a closed set rather than `string` for the same
+   * reason `path` is not a URL: what an adapter may do is decided here, once.
+   *
+   * `PUT` and `DELETE` arrived with the management operations — Marzban changes a
+   * user's state with `PUT /api/user/{username}` and removes one with `DELETE` —
+   * and nothing below the type changed to accept them: `SafeHttpClient` passes the
+   * method straight to `node:http`, which has always supported both. What the type
+   * still refuses is everything else, so an adapter cannot reach for `PATCH`,
+   * `CONNECT` or a method a proxy in front of a panel treats specially without this
+   * line, and this file, changing first.
+   */
+  readonly method: 'GET' | 'POST' | 'PUT' | 'DELETE';
   /** Resolved against the target's base URL. Absolute URLs are refused. */
   readonly path: string;
   readonly headers?: Readonly<Record<string, string>>;
@@ -815,6 +873,41 @@ export type ProviderUsageOutcome =
   | { readonly ok: false; readonly failure: ProviderFailureKind; readonly status: number | null };
 
 /**
+ * What an attempt to change one existing account's state established.
+ *
+ * `found` carries exactly the meaning it carries on `ProviderLookupOutcome`, and for
+ * the same reason: `found: false` is a POSITIVE statement — the panel answered, it is
+ * authenticated, and it does not have this account. It is never reported because a
+ * request failed. The two are different facts and an installation that collapses them
+ * suspends a service it never touched.
+ *
+ * A panel that does have the account and applied the change answers `found: true`, and
+ * carries whatever it said about the account's limits while it was answering. Marzban
+ * returns its whole user record from the modify call, so refreshing usage costs nothing;
+ * `null` is legitimate for a provider whose change route says less.
+ */
+export type ProviderStateChangeOutcome =
+  | { readonly ok: true; readonly found: true; readonly usage: ProviderUsage | null }
+  | { readonly ok: true; readonly found: false }
+  | { readonly ok: false; readonly failure: ProviderFailureKind; readonly status: number | null };
+
+/**
+ * What an attempt to delete one account established.
+ *
+ * `wasPresent: false` is a SUCCESS, and that is the point of having the field rather
+ * than a bare boolean: a replayed delete is the normal case after a lost answer, and
+ * the second one finds nothing. The goal — this account is not on this panel — holds
+ * either way, so the operation succeeds; the flag is what lets the operations record
+ * say which of the two happened instead of implying the second one did the work.
+ *
+ * It is NOT an excuse to report success from a request that failed. Only a panel that
+ * answered, authenticated, that it does not have the account may set it.
+ */
+export type ProviderRemovalOutcome =
+  | { readonly ok: true; readonly wasPresent: boolean }
+  | { readonly ok: false; readonly failure: ProviderFailureKind; readonly status: number | null };
+
+/**
  * The full provider surface: the connection half plus the service operations.
  *
  * Every method takes the `target` and the `http` client per call, exactly as `probe`
@@ -844,6 +937,73 @@ export interface ProviderAdapter extends ProviderConnectionAdapter {
     http: ProviderHttpClient,
     ref: ProviderUserRef,
   ): Promise<ProviderUsageOutcome>;
+
+  /*
+   * The three management operations, and they are OPTIONAL — one at a time.
+   *
+   * Optional because the alternative is worse in both directions. Required methods
+   * would force every adapter to grow three implementations the moment one provider
+   * has them, and an adapter that cannot really disable a user would have to answer
+   * something: a thrown error, a false success, or a refusal invented per adapter. The
+   * capability array already exists to say what a provider can do, and this makes the
+   * TYPE agree with it rather than compete with it.
+   *
+   * One at a time, not a bundle, because they are three capabilities in
+   * `PROVIDER_CAPABILITIES` and a provider may serve one and not the next. Bundling
+   * them would mean a panel that can disable an account but not delete one is either
+   * described as doing neither or advertised as doing both — the second being the
+   * failure mode this whole array was rewritten to stop.
+   *
+   * A method present without its capability declared, or a capability declared without
+   * its method, is a defect in the adapter and not a state a caller has to handle:
+   * `canDisableUser`, `canEnableUser` and `canDeleteUser` below require BOTH, so either
+   * half alone reads as "cannot", which is the fail-closed direction.
+   */
+  suspendUser?(
+    target: ProviderServiceTarget,
+    http: ProviderHttpClient,
+    ref: ProviderUserRef,
+  ): Promise<ProviderStateChangeOutcome>;
+  resumeUser?(
+    target: ProviderServiceTarget,
+    http: ProviderHttpClient,
+    ref: ProviderUserRef,
+  ): Promise<ProviderStateChangeOutcome>;
+  terminateUser?(
+    target: ProviderServiceTarget,
+    http: ProviderHttpClient,
+    ref: ProviderUserRef,
+  ): Promise<ProviderRemovalOutcome>;
+}
+
+/** An adapter narrowed to one it is safe to call `suspendUser` on. */
+export type CanDisableUser = ProviderAdapter & Pick<Required<ProviderAdapter>, 'suspendUser'>;
+/** An adapter narrowed to one it is safe to call `resumeUser` on. */
+export type CanEnableUser = ProviderAdapter & Pick<Required<ProviderAdapter>, 'resumeUser'>;
+/** An adapter narrowed to one it is safe to call `terminateUser` on. */
+export type CanDeleteUser = ProviderAdapter & Pick<Required<ProviderAdapter>, 'terminateUser'>;
+
+/*
+ * Each of these asks TWO questions and requires both answers, and the pairing is the
+ * whole mechanism.
+ *
+ * `typeof … === 'function'` alone would let an adapter be called for an operation its
+ * descriptor does not advertise, so the providers endpoint and the customer's buttons
+ * would disagree with what the executor actually does. `supports(…)` alone would let a
+ * descriptor edit make the executor call a method that is not there — a TypeError
+ * inside a claimed operation, which is the one failure shape this module's outcome
+ * types exist to keep out of provider code.
+ */
+export function canDisableUser(adapter: ProviderAdapter): adapter is CanDisableUser {
+  return typeof adapter.suspendUser === 'function' && adapter.supports('DISABLE_USER');
+}
+
+export function canEnableUser(adapter: ProviderAdapter): adapter is CanEnableUser {
+  return typeof adapter.resumeUser === 'function' && adapter.supports('ENABLE_USER');
+}
+
+export function canDeleteUser(adapter: ProviderAdapter): adapter is CanDeleteUser {
+  return typeof adapter.terminateUser === 'function' && adapter.supports('DELETE_USER');
 }
 
 /** Whether this adapter implements the service half, not just the connection half. */
@@ -887,26 +1047,52 @@ const MARZBAN: ProviderDescriptor = {
   canonicalName: 'Marzban',
   credentialShape: 'USERNAME_PASSWORD',
   /*
-   * Four, and each one is executed by code in `marzban.adapter.ts`.
+   * Seven, and each one is executed by code in `marzban.adapter.ts` that has been
+   * RUN against a panel.
    *
    * `DELIVER_SUBSCRIPTION_LINK` because `createUser` returns Marzban's own
    * `subscription_url` made absolute. `READ_USAGE` because `readUsage` reads
-   * `used_traffic` back. The other twelve are absent because this release cannot
-   * perform them — renewing, disabling, adding volume — and each returns in the
-   * commit that implements it, per the rule this array's history established.
+   * `used_traffic` back.
+   *
+   * `DISABLE_USER`, `ENABLE_USER` and `DELETE_USER` joined them only after
+   * `tests/acceptance/real-panel-marzban.test.ts` drove the shipped adapter against
+   * a real v0.8.4 and watched one account stop serving while its sibling kept
+   * serving, watched it start again, and watched one account be deleted while the
+   * sibling survived. That ordering — implement, prove, then advertise — is the
+   * owner's, and it is why the three were absent from the commit that wrote the
+   * methods: this array is what tells an operator what the product can do, and a
+   * promise made before the evidence exists is the kind this array's history is
+   * made of.
+   *
+   * The other nine are absent because this release cannot perform them — renewing,
+   * adding volume, rotating a link — and each returns in the commit that implements
+   * it, per that same rule.
    */
-  capabilities: ['HEALTH_CHECK', 'CREATE_USER', 'READ_USAGE', 'DELIVER_SUBSCRIPTION_LINK'],
+  capabilities: [
+    'HEALTH_CHECK',
+    'CREATE_USER',
+    'READ_USAGE',
+    'DELIVER_SUBSCRIPTION_LINK',
+    'DISABLE_USER',
+    'ENABLE_USER',
+    'DELETE_USER',
+  ],
   // A token exchange, then a status read.
   maxRequestsPerProbe: 2,
   /*
-   * Which proxy protocols a created user gets.
+   * Which proxy protocols a created user gets, and which inbounds each one uses.
    *
    * Empty until Phase 4D, on the reasoning that Marzban needs no configuration to be
    * PROBED — which is true, and was the wrong question. Marzban requires at least one
    * proxy protocol to create a user, and there is no safe default: choosing one is
    * choosing what a customer's client speaks.
+   *
+   * `inboundTags` joined it once a real panel showed that omitting it does not mean
+   * "every inbound" but "no inbound" — a create that answers 200 and delivers a
+   * zero-byte subscription. Choosing an inbound is choosing which server a customer
+   * reaches, so it has no default either.
    */
-  requiredActivationFields: ['proxyProtocols'],
+  requiredActivationFields: ['proxyProtocols', 'inboundTags'],
 };
 
 /**

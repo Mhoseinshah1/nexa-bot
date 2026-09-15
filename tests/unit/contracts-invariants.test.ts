@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   CALLBACK_REF_LENGTH,
+  canDeleteUser,
+  canDisableUser,
+  canEnableUser,
   ERROR_KINDS,
   ERROR_KIND_HTTP_STATUS,
   errors,
@@ -8,15 +11,19 @@ import {
   EVENT_PAYLOAD_SCHEMAS,
   EVENT_TYPES,
   isEventType,
+  isServiceAdapter,
   isLedgerReason,
   isRegisteredMetric,
   LEDGER_REASONS,
+  marzbanActivationSchema,
   metricDefinition,
   NexaError,
   PRICING_PRECEDENCE,
+  providerDescriptor,
   STATE_MACHINES,
   TELEGRAM_CALLBACK_DATA_MAX_BYTES,
   validateStateMachine,
+  type ProviderAdapter,
   type StateMachineDefinition,
 } from '@nexa/contracts';
 
@@ -185,5 +192,136 @@ describe('the notification list page size is parsed, not clamped', () => {
     const parsed = notificationListQuerySchema.safeParse({});
     expect(parsed.success).toBe(true);
     if (parsed.success) expect(parsed.data.limit).toBeUndefined();
+  });
+});
+
+describe('a Marzban panel must name the inbounds its accounts are created on', () => {
+  /*
+   * The regression this pins is not a validation nicety. `inboundTags` was OPTIONAL and
+   * documented as defaulting to "every inbound for those protocols, which is Marzban's
+   * own documented default". A real v0.8.4 panel disagreed: `UserCreate.excluded_inbounds`
+   * excludes every inbound NOT listed, so omitting the key excludes all of them. The
+   * create answers 200 with a subscription URL and the customer's subscription is zero
+   * bytes — a success by every status code the installation can see.
+   *
+   * `docs/providers/marzban.md` records the measurement. These five cases are what stop
+   * the field going back to optional, or to "some protocol has tags".
+   */
+  it('refuses an activation that names protocols and no inbounds at all', () => {
+    const parsed = marzbanActivationSchema.safeParse({ proxyProtocols: ['vless'] });
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues.some((issue) => issue.path[0] === 'inboundTags')).toBe(true);
+  });
+
+  it('refuses an activation whose tag list for a configured protocol is empty', () => {
+    expect(
+      marzbanActivationSchema.safeParse({ proxyProtocols: ['vless'], inboundTags: { vless: [] } })
+        .success,
+    ).toBe(false);
+  });
+
+  it('refuses tags for SOME protocol while another is left with none', () => {
+    /*
+     * The narrower path to the same zero-byte subscription: `vless` is configured and
+     * served, `vmess` is configured and silently excluded from every inbound. A record
+     * that is merely non-empty would pass.
+     */
+    const parsed = marzbanActivationSchema.safeParse({
+      proxyProtocols: ['vless', 'vmess'],
+      inboundTags: { vless: ['VLESS TCP'] },
+    });
+    expect(parsed.success).toBe(false);
+    expect(
+      parsed.error?.issues.some(
+        (issue) => issue.path[0] === 'inboundTags' && issue.path[1] === 'vmess',
+      ),
+    ).toBe(true);
+  });
+
+  it('accepts an activation that names a tag for every configured protocol', () => {
+    expect(
+      marzbanActivationSchema.safeParse({
+        proxyProtocols: ['vless', 'vmess'],
+        inboundTags: { vless: ['VLESS TCP'], vmess: ['VMess WS'] },
+      }).success,
+    ).toBe(true);
+  });
+
+  it('declares inboundTags as a field an operator must supply before the panel is usable', () => {
+    /*
+     * The descriptor is what `decideOperability` reads and what the Web Admin renders,
+     * so a required schema field that is not also declared here is a panel refused with
+     * no indication of which field is missing.
+     */
+    const marzban = providerDescriptor('marzban');
+    expect(marzban?.requiredActivationFields).toContain('inboundTags');
+    expect(marzban?.requiredActivationFields).toContain('proxyProtocols');
+  });
+});
+
+describe('an adapter may be called for a management operation only when it can do it', () => {
+  /*
+   * `canDisableUser` and its two siblings ask two questions and require both answers.
+   * These cases exist because each half alone fails in a different, specific way:
+   *
+   *   method without capability -> the executor performs an operation the providers
+   *     endpoint says the panel cannot do, so a customer is offered a button the
+   *     product denies having, and an operator's capability list is a lie.
+   *   capability without method -> the executor calls `undefined` inside a claimed
+   *     operation. A TypeError is the one failure shape provider outcomes exist to keep
+   *     out of this layer: it is not a `ProviderFailureKind`, so nothing classifies it
+   *     and a mutating operation cannot decide whether it took effect.
+   */
+  const stub = (
+    capabilities: readonly string[],
+    methods: Partial<Record<'suspendUser' | 'resumeUser' | 'terminateUser', () => unknown>>,
+  ): ProviderAdapter =>
+    ({
+      descriptor: { capabilities } as unknown,
+      supports: (capability: string) => capabilities.includes(capability),
+      probe: () => Promise.reject(new Error('not used')),
+      createUser: () => Promise.reject(new Error('not used')),
+      lookupUser: () => Promise.reject(new Error('not used')),
+      readUsage: () => Promise.reject(new Error('not used')),
+      ...methods,
+    }) as unknown as ProviderAdapter;
+
+  const noop = (): unknown => undefined;
+
+  it('says yes only when the method and the capability are both there', () => {
+    expect(canDisableUser(stub(['DISABLE_USER'], { suspendUser: noop }))).toBe(true);
+    expect(canEnableUser(stub(['ENABLE_USER'], { resumeUser: noop }))).toBe(true);
+    expect(canDeleteUser(stub(['DELETE_USER'], { terminateUser: noop }))).toBe(true);
+  });
+
+  it('says no to a method whose capability is not declared', () => {
+    expect(canDisableUser(stub([], { suspendUser: noop }))).toBe(false);
+    expect(canEnableUser(stub([], { resumeUser: noop }))).toBe(false);
+    expect(canDeleteUser(stub([], { terminateUser: noop }))).toBe(false);
+  });
+
+  it('says no to a declared capability with no method behind it', () => {
+    expect(canDisableUser(stub(['DISABLE_USER'], {}))).toBe(false);
+    expect(canEnableUser(stub(['ENABLE_USER'], {}))).toBe(false);
+    expect(canDeleteUser(stub(['DELETE_USER'], {}))).toBe(false);
+  });
+
+  it('does not let one capability answer for another', () => {
+    /*
+     * Three separate entries in PROVIDER_CAPABILITIES, so a panel that disables but
+     * cannot delete must read as exactly that. A bundled guard would advertise both.
+     */
+    const disableOnly = stub(['DISABLE_USER'], { suspendUser: noop, terminateUser: noop });
+    expect(canDisableUser(disableOnly)).toBe(true);
+    expect(canDeleteUser(disableOnly)).toBe(false);
+    expect(canEnableUser(disableOnly)).toBe(false);
+  });
+
+  it('still recognises the service half from the three methods that are not optional', () => {
+    /*
+     * `isServiceAdapter` must NOT start requiring the management three: an adapter that
+     * creates and reads users is a complete service adapter, and Sanaei is one.
+     */
+    expect(isServiceAdapter(stub(['CREATE_USER'], {}))).toBe(true);
   });
 });

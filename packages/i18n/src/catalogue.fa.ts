@@ -107,14 +107,27 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.received_for_review': 'رسید شما دریافت شد و برای بررسی در نوبت قرار گرفت.',
 
   'bot.service.list_empty': 'هنوز سرویسی ندارید.',
+  'bot.service.list_heading': 'سرویس‌های شما:',
+  // ONE message for a service that is not theirs and one that does not exist. Telling
+  // them apart would make the bot an oracle for guessing service ids; `templates.ts`
+  // records the reasoning.
+  'bot.service.not_found': 'این سرویس در دسترس شما نیست.',
   'bot.service.detail':
     'سرویس: {productTitle}\nوضعیت: {state}\nمصرف: {usedTrafficBytes} از {totalTrafficBytes}\nانقضا: {expiresAt}\nآخرین به‌روزرسانی مصرف: {syncedAt}',
   'bot.service.subscription': 'لینک اشتراک شما:\n<code>{subscriptionUrl}</code>',
+  'bot.service.resend_button': 'ارسال دوباره لینک اشتراک',
   'bot.service.provisioning': 'سرویس شما در حال ساخته شدن است. نتیجه به شما اطلاع داده می‌شود.',
   // Deliberately does NOT invite a retry: `templates.ts` records that a retry after an
   // unknown outcome is how a duplicate account is created.
   'bot.service.provision_delayed':
     'ساخت سرویس کامل نشد و موضوع به پشتیبانی اطلاع داده شد. لطفاً منتظر پیگیری بمانید.',
+  'bot.service.suspend_button': 'توقف موقت سرویس',
+  'bot.service.resume_button': 'فعال‌سازی دوباره سرویس',
+  'bot.service.terminate_button': 'حذف سرویس',
+  'bot.service.terminate_confirm':
+    'آیا از حذف «{productTitle}» مطمئن هستید؟ با تأیید، حساب شما روی سرور پاک می‌شود و این کار برگشت‌پذیر نیست.',
+  'bot.service.terminate_confirm_button': 'بله، سرویس حذف شود',
+  'bot.service.action_requested': 'درخواست شما ثبت شد و در حال اعمال روی سرور است.',
   'bot.service.capability_unsupported': 'این قابلیت برای سرویس شما در دسترس نیست.',
 
   'bot.discount.applied': 'کد تخفیف {code} اعمال شد. مبلغ تخفیف: {amount}',

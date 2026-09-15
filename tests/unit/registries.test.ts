@@ -1,11 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import {
+  failureOutcome,
+  isIdempotentMutation,
+  isMutatingOperation,
   isServiceAdapter,
+  operationFailureOutcome,
+  OPERATION_REQUIRED_CAPABILITIES,
+  OPERATION_TYPES,
   PROVIDER_CAPABILITIES,
   PROVIDER_TYPES,
+  SERVICE_MACHINE,
+  SERVICE_STATES,
   type ProviderCapability,
   type ProviderType,
 } from '@nexa/contracts';
+import {
+  isPerformableOperation,
+  OPERATION_LEGAL_FROM,
+  PERFORMABLE_OPERATION_TYPES,
+} from '../../apps/api/src/modules/commerce/provisioning/application/provision-executor';
 import {
   IMPLEMENTED_PROVIDER_TYPES,
   providerAdapter,
@@ -295,7 +308,26 @@ describe('the provider registry', () => {
     // it. This test is what makes that a deliberate edit rather than a
     // declaration somebody made in a descriptor.
     const EXECUTABLE_NOW: Record<ProviderType, readonly ProviderCapability[]> = {
-      marzban: ['HEALTH_CHECK', 'CREATE_USER', 'READ_USAGE', 'DELIVER_SUBSCRIPTION_LINK'],
+      /*
+       * The three management capabilities are Marzban's ALONE, and that asymmetry is a
+       * scope decision rather than a statement about the panels. 3X-UI can plainly
+       * disable and delete a client; how it does so has never been read out of the
+       * v3.7.0 source or run against the binary, so this release does not claim it.
+       * `docs/providers/sanaei-3xui.md` says so where an operator will find it.
+       *
+       * Each of Marzban's three was added by the commit that ran
+       * `tests/acceptance/real-panel-marzban.test.ts` against a real v0.8.4, not by the
+       * commit that wrote the methods.
+       */
+      marzban: [
+        'HEALTH_CHECK',
+        'CREATE_USER',
+        'READ_USAGE',
+        'DELIVER_SUBSCRIPTION_LINK',
+        'DISABLE_USER',
+        'ENABLE_USER',
+        'DELETE_USER',
+      ],
       // `LIMIT_DEVICES` for Sanaei only, and the asymmetry is the whole point of this
       // map being per provider. `SanaeiAdapter.createUser` writes `limitIp` from the
       // order's frozen `deviceLimit`; `MarzbanAdapter.createUser` does not read the
@@ -348,6 +380,23 @@ describe('the provider registry', () => {
       if (claimed.includes('READ_USAGE')) {
         expect(typeof methods['readUsage'], `${type}.readUsage`).toBe('function');
       }
+      /*
+       * The three management capabilities, on the same implication and for a sharper
+       * reason: `suspendUser`, `resumeUser` and `terminateUser` are OPTIONAL on the
+       * port, so a descriptor claiming one with no method behind it type-checks. The
+       * executor would then call `undefined` inside a claimed operation — a TypeError,
+       * which is not a `ProviderFailureKind`, so nothing classifies it and a mutating
+       * operation cannot decide whether it took effect.
+       */
+      if (claimed.includes('DISABLE_USER')) {
+        expect(typeof methods['suspendUser'], `${type}.suspendUser`).toBe('function');
+      }
+      if (claimed.includes('ENABLE_USER')) {
+        expect(typeof methods['resumeUser'], `${type}.resumeUser`).toBe('function');
+      }
+      if (claimed.includes('DELETE_USER')) {
+        expect(typeof methods['terminateUser'], `${type}.terminateUser`).toBe('function');
+      }
       // `lookupUser` has no capability of its own — OPERATION_REQUIRED_CAPABILITIES
       // gives RECONCILE an empty list, because reading a user is how both adapters
       // already establish health. It is required of any adapter that can create,
@@ -358,5 +407,140 @@ describe('the provider registry', () => {
         expect(isServiceAdapter(adapter), `${type} is a service adapter`).toBe(true);
       }
     }
+  });
+});
+
+// ===========================================================================
+// The operation dispatch, which the Phase 4E audit calls the most dangerous
+// edit in the phase
+// ===========================================================================
+describe('the operation dispatch cannot fail open', () => {
+  /**
+   * The property: an operation type this release cannot perform is refused before a
+   * panel is contacted, not defaulted to the one call the executor used to make.
+   *
+   * `provisionCall` calls `createUser` unconditionally and its own docblock records
+   * that a future type routed through it "would silently create a user on somebody's
+   * panel". `PERFORMABLE_OPERATION_TYPES` is the list the executor checks against, and
+   * these tests are what stop it drifting away from what the executor can actually do.
+   */
+  it('every performable type is a real operation type', () => {
+    for (const type of PERFORMABLE_OPERATION_TYPES) {
+      expect(OPERATION_TYPES).toContain(type);
+    }
+  });
+
+  it('every performable type declares the states it is legal from', () => {
+    // A performable type with an empty `OPERATION_LEGAL_FROM` would be refused by the
+    // state check on every service that exists — a type that can never run, which is
+    // the shape a half-finished addition takes.
+    for (const type of PERFORMABLE_OPERATION_TYPES) {
+      expect(OPERATION_LEGAL_FROM[type].length, `${type} is legal from nothing`).toBeGreaterThan(0);
+    }
+  });
+
+  it('every type this release cannot perform is legal from NOTHING', () => {
+    // The second, independent refusal. `isPerformableOperation` is the first; if a
+    // future edit removes that check, a type with an empty legal-from list is still
+    // ABANDONED by the state check rather than reaching `provisionCall`.
+    for (const type of OPERATION_TYPES) {
+      if (isPerformableOperation(type)) continue;
+      expect(OPERATION_LEGAL_FROM[type], `${type} must be legal from nothing`).toEqual([]);
+    }
+  });
+
+  it('names exactly the six types 4E performs, and no more', () => {
+    // Pinned as a literal on purpose. RENEW, ADD_TRAFFIC and ADD_TIME are commerce and
+    // belong to 4F; ROTATE_SUBSCRIPTION has neither an adapter method nor a product
+    // decision. Adding one to the constant without writing its branch fails here rather
+    // than on somebody's panel.
+    expect([...PERFORMABLE_OPERATION_TYPES].sort()).toEqual([
+      'PROVISION',
+      'RECONCILE',
+      'RESUME',
+      'SUSPEND',
+      'SYNC_USAGE',
+      'TERMINATE',
+    ]);
+  });
+
+  it('gives each management type exactly the SERVICE_MACHINE edges it may take', () => {
+    /*
+     * Transcribed from the machine and asserted AGAINST it, which is different from
+     * deriving one from the other: the derivation would track a future edge silently,
+     * and the whole point is that a new state the provisioner is willing to suspend
+     * from should be somebody's decision.
+     *
+     * So this checks the transcription is a SUBSET of what the machine allows — a
+     * legal-from state with no edge would be an operation that can never move its
+     * service, which is an operation that reports success and changes nothing.
+     */
+    const edges = (event: string): readonly string[] =>
+      SERVICE_MACHINE.transitions
+        .filter((transition) => transition.on === event)
+        .map((transition) => transition.from);
+
+    expect([...OPERATION_LEGAL_FROM['SUSPEND']].sort()).toEqual([...edges('SUSPEND')].sort());
+    expect([...OPERATION_LEGAL_FROM['RESUME']].sort()).toEqual([...edges('RESUME')].sort());
+    expect([...OPERATION_LEGAL_FROM['TERMINATE']].sort()).toEqual([...edges('TERMINATE')].sort());
+  });
+
+  it('never lets a terminated service be terminated again', () => {
+    // A second TERMINATE would be a second DELETE against somebody's panel for a
+    // service this installation already ended. `TERMINATED` is terminal in
+    // SERVICE_MACHINE and must stay absent here.
+    expect(OPERATION_LEGAL_FROM['TERMINATE']).not.toContain('TERMINATED');
+  });
+
+  it('classifies the three management types as idempotent mutations, and PROVISION not', () => {
+    /*
+     * The distinction measured against a real panel: a repeated disable is 200, a
+     * repeated enable is 200, a repeated delete is 404 — all three outcomes the
+     * operation asked for. A repeated create is a second account.
+     *
+     * The consequence is the row below: an uncertain suspend is FAILED, so it is
+     * retried as the same suspend; an uncertain create is UNKNOWN, so it waits for a
+     * read. Getting this backwards for PROVISION costs a customer a duplicate account;
+     * getting it backwards for SUSPEND strands the operation for ever, because
+     * `RECONCILE` reads whether an account EXISTS and never what state it is in.
+     */
+    for (const type of ['SUSPEND', 'RESUME', 'TERMINATE'] as const) {
+      expect(isMutatingOperation(type), `${type} mutates`).toBe(true);
+      expect(isIdempotentMutation(type), `${type} is idempotent`).toBe(true);
+      expect(operationFailureOutcome('TIMEOUT', type)).toBe('FAILED');
+      expect(operationFailureOutcome('PROVIDER_ERROR', type)).toBe('FAILED');
+    }
+    expect(isIdempotentMutation('PROVISION')).toBe(false);
+    expect(operationFailureOutcome('TIMEOUT', 'PROVISION')).toBe('UNKNOWN');
+    expect(operationFailureOutcome('PROVIDER_ERROR', 'PROVISION')).toBe('UNKNOWN');
+    // And a kind that proves nothing happened is still FAILED for a create.
+    expect(operationFailureOutcome('UNREACHABLE', 'PROVISION')).toBe('FAILED');
+  });
+
+  it('requires the capability each management operation actually needs', () => {
+    expect(OPERATION_REQUIRED_CAPABILITIES['SUSPEND']).toEqual(['DISABLE_USER']);
+    expect(OPERATION_REQUIRED_CAPABILITIES['RESUME']).toEqual(['ENABLE_USER']);
+    expect(OPERATION_REQUIRED_CAPABILITIES['TERMINATE']).toEqual(['DELETE_USER']);
+  });
+
+  it('every legal-from state is a real service state', () => {
+    for (const type of OPERATION_TYPES) {
+      for (const state of OPERATION_LEGAL_FROM[type]) {
+        expect(SERVICE_STATES, `${type} names ${state}`).toContain(state);
+      }
+    }
+  });
+
+  it('SYNC_USAGE is a read, so a failed one is never reconcilable', () => {
+    // The rule `finishUsageSync` relies on: `failureOutcome` gives a non-mutating
+    // operation `FAILED`, never `UNKNOWN`, so a usage read that did not answer leaves
+    // nothing to reconcile and cannot move a working service to UNRECONCILED.
+    expect(isMutatingOperation('SYNC_USAGE')).toBe(false);
+    expect(failureOutcome('TIMEOUT', isMutatingOperation('SYNC_USAGE'))).toBe('FAILED');
+    expect(failureOutcome('PROVIDER_ERROR', isMutatingOperation('SYNC_USAGE'))).toBe('FAILED');
+  });
+
+  it('SYNC_USAGE requires READ_USAGE, which is what a usage figure must come from', () => {
+    expect(OPERATION_REQUIRED_CAPABILITIES['SYNC_USAGE']).toEqual(['READ_USAGE']);
   });
 });

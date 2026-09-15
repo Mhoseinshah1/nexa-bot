@@ -10,7 +10,9 @@ import {
   type ProviderHttpResult,
   type ProviderLookupOutcome,
   type ProviderProbeOutcome,
+  type ProviderRemovalOutcome,
   type ProviderServiceTarget,
+  type ProviderStateChangeOutcome,
   type ProviderTarget,
   type ProviderUsage,
   type ProviderUsageOutcome,
@@ -50,8 +52,29 @@ import {
 /** Marzban's token endpoint. Form-encoded, as an OAuth2 password grant. */
 export const TOKEN_PATH = 'api/admin/token';
 export const SYSTEM_PATH = 'api/system';
-/** Creating a user, and reading one back. Marzban keys users by the name we chose. */
+/**
+ * Creating a user, reading one back, changing its state and deleting it.
+ *
+ * ONE constant for all four, because Marzban registers them all under
+ * `/api/user`: the create is a POST to the collection, the other three address
+ * `/api/user/{username}` with GET, PUT and DELETE. There is no dedicated
+ * disable route and no dedicated enable route — both are the ordinary modify
+ * call carrying nothing but a status, which is a fact from `app/routers/user.py`
+ * at the pinned commit and is verified against the running binary in
+ * `docs/providers/marzban.md`.
+ */
 export const USER_PATH = 'api/user';
+
+/**
+ * The two statuses this adapter ever sends.
+ *
+ * `UserStatusModify` in v0.8.4 accepts only `active`, `disabled` and `on_hold`;
+ * `limited` and `expired` are states Marzban puts a user INTO and answers 422
+ * for. Nexa never sends `on_hold`, which is Marzban's own deferred-start
+ * feature and not a state in `SERVICE_MACHINE`.
+ */
+const STATUS_DISABLED = 'disabled';
+const STATUS_ACTIVE = 'active';
 
 const DESCRIPTOR: ProviderDescriptor = providerDescriptor('marzban') ?? {
   // Unreachable: `marzban` is in `PROVIDER_TYPES`, and a unit test proves every
@@ -271,10 +294,13 @@ export class MarzbanAdapter implements ProviderAdapter {
    * keys — a fabricated `flow` or `id` would produce an account Marzban accepts and
    * Xray will not serve.
    *
-   * `inbounds` is sent ONLY when the operator named tags. Absent means "every inbound
-   * for those protocols", which is Marzban's own documented default and not a guess of
-   * ours; sending an empty object instead would mean "no inbounds", which is an account
-   * that cannot connect.
+   * `inbounds` is ALWAYS sent, and the activation schema makes it impossible not to
+   * have. This docblock used to say the opposite — that absent means "every inbound for
+   * those protocols, which is Marzban's own documented default" — and a real v0.8.4
+   * panel disagreed: `UserCreate.excluded_inbounds` excludes every inbound NOT listed,
+   * so absent excludes ALL of them. The create answers 200, returns a subscription URL,
+   * and the customer's subscription is zero bytes. `docs/providers/marzban.md` has the
+   * measurement.
    */
   async createUser(
     target: ProviderServiceTarget,
@@ -298,7 +324,7 @@ export class MarzbanAdapter implements ProviderAdapter {
       data_limit_reset_strategy: 'no_reset',
       status: 'active',
     };
-    if (activation.inboundTags !== undefined) payload['inbounds'] = activation.inboundTags;
+    payload['inbounds'] = activation.inboundTags;
 
     const created = await http.send({
       method: 'POST',
@@ -395,6 +421,141 @@ export class MarzbanAdapter implements ProviderAdapter {
       delivery: url === null ? { kind: 'NONE' } : { kind: 'SUBSCRIPTION_LINK', url },
       usage,
     };
+  }
+
+  /**
+   * Stop this account serving, or start it serving again.
+   *
+   * ONE implementation for both, because Marzban has one route: `PUT /api/user/{username}`
+   * carrying nothing but a status. Two copies would be two places for "a 404 is not a
+   * failure to reach the panel" to be decided, and the pair would drift the first time
+   * one of them was corrected.
+   *
+   * The body carries the status and NOTHING else, and that is load-bearing rather than
+   * minimalism. `UserModify` treats every omitted field as "no change", but a field
+   * that is present is applied: sending `expire`, `data_limit` or `proxies` here would
+   * make a suspend silently rewrite the customer's allowance, and sending `proxies`
+   * would additionally delete every proxy not named. A suspend changes one thing.
+   *
+   * The username in the path comes from `ref`, which the executor reads off the stored
+   * service row. Nothing a customer can send reaches it — the surfaces address a service
+   * by id and the provider username is never accepted as input.
+   */
+  private async setStatus(
+    target: ProviderServiceTarget,
+    http: ProviderHttpClient,
+    ref: ProviderUserRef,
+    status: typeof STATUS_ACTIVE | typeof STATUS_DISABLED,
+  ): Promise<ProviderStateChangeOutcome> {
+    const auth = await this.authenticate(target, http);
+    if (!auth.ok) return auth;
+
+    const changed = await http.send({
+      method: 'PUT',
+      path: `${USER_PATH}/${encodeURIComponent(ref.username)}`,
+      headers: { authorization: `Bearer ${auth.token}` },
+      body: { kind: 'json', value: { status } },
+    });
+    if (!changed.ok) return outcomeFromTransport(changed);
+    /*
+     * 404 is `found: false`, and only here.
+     *
+     * The request was authenticated — the token exchange already succeeded — so this is
+     * Marzban answering a question it understood: it does not have this account. That
+     * is a POSITIVE statement and the caller acts on it differently from every other
+     * failure. An unauthenticated 404 cannot reach this line.
+     */
+    if (changed.status === 404) return { ok: true, found: false };
+    if (changed.status === 429) return { ok: false, failure: 'RATE_LIMITED', status: 429 };
+    if (changed.status < 200 || changed.status >= 300) {
+      /*
+       * Nothing after a good token exchange may report an authentication failure — it
+       * would send an operator to replace a password that just worked. A 422 for a
+       * status Marzban will not take lands here as PROVIDER_ERROR, which classifies as
+       * UNKNOWN for a mutating operation and routes to reconciliation. That is right:
+       * this adapter only ever sends the two statuses v0.8.4 accepts, so a 422 means
+       * the panel is not the one this table describes and guessing is worse than asking.
+       */
+      return { ok: false, failure: 'PROVIDER_ERROR', status: changed.status };
+    }
+    const record = parseJson(changed.bodyText);
+    if (record === null) {
+      return { ok: false, failure: 'MALFORMED_RESPONSE', status: changed.status };
+    }
+    /*
+     * The panel's own word for what the account is NOW, checked rather than assumed.
+     *
+     * Marzban returns the whole user record from a modify, so there is no reason to
+     * infer the result from the request. A 200 whose record does not carry the status
+     * that was asked for is a panel doing something this adapter does not model, and
+     * reporting success for it would be reporting a suspension that did not happen.
+     */
+    if (record['status'] !== status) {
+      return { ok: false, failure: 'MALFORMED_RESPONSE', status: changed.status };
+    }
+    return { ok: true, found: true, usage: usageFromUser(record) };
+  }
+
+  /** Disable one account. `DISABLE_USER`. */
+  async suspendUser(
+    target: ProviderServiceTarget,
+    http: ProviderHttpClient,
+    ref: ProviderUserRef,
+  ): Promise<ProviderStateChangeOutcome> {
+    return this.setStatus(target, http, ref, STATUS_DISABLED);
+  }
+
+  /** Re-enable one account. `ENABLE_USER`. */
+  async resumeUser(
+    target: ProviderServiceTarget,
+    http: ProviderHttpClient,
+    ref: ProviderUserRef,
+  ): Promise<ProviderStateChangeOutcome> {
+    return this.setStatus(target, http, ref, STATUS_ACTIVE);
+  }
+
+  /**
+   * Delete one account. `DELETE_USER`.
+   *
+   * The 404 here is a SUCCESS, and it is the only place in this adapter where a 404
+   * means the work is done rather than that something is missing. A delete replayed
+   * after a lost answer finds nothing the second time, and "this account is not on this
+   * panel" — which is the whole of what a terminate asks for — holds either way.
+   * `wasPresent` is what keeps the operations record able to say which call did it.
+   *
+   * There is no confirmation step in this method and there must not be one. The
+   * decision that a service should be destroyed is made by the customer or an operator,
+   * in a surface, before an operation is ever planned; an adapter that re-asked would
+   * be a second, weaker gate that looks like a safeguard.
+   */
+  async terminateUser(
+    target: ProviderServiceTarget,
+    http: ProviderHttpClient,
+    ref: ProviderUserRef,
+  ): Promise<ProviderRemovalOutcome> {
+    const auth = await this.authenticate(target, http);
+    if (!auth.ok) return auth;
+
+    const removed = await http.send({
+      method: 'DELETE',
+      path: `${USER_PATH}/${encodeURIComponent(ref.username)}`,
+      headers: { authorization: `Bearer ${auth.token}` },
+    });
+    if (!removed.ok) return outcomeFromTransport(removed);
+    if (removed.status === 404) return { ok: true, wasPresent: false };
+    if (removed.status === 429) return { ok: false, failure: 'RATE_LIMITED', status: 429 };
+    if (removed.status < 200 || removed.status >= 300) {
+      return { ok: false, failure: 'PROVIDER_ERROR', status: removed.status };
+    }
+    /*
+     * The body is deliberately NOT parsed.
+     *
+     * v0.8.4 answers `{"detail": "User successfully deleted"}`, and reading it would
+     * make an English sentence load-bearing — a locale, a proxy that rewrites bodies,
+     * or an upstream wording change would each turn a completed delete into a failure.
+     * The 2xx is the statement; the sentence is decoration.
+     */
+    return { ok: true, wasPresent: true };
   }
 
   /** One user's traffic. A read, so a failure is never `UNKNOWN`. */

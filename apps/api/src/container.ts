@@ -1186,6 +1186,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     opsLog,
     outbox,
     scopeActivity: tenants,
+    settings: settingsResolver,
     workerId: `${role}:${ids.uuid()}`,
     leaseMs: OPERATION_LEASE_SECONDS_MIN * 1000,
   });
@@ -1666,6 +1667,24 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       orders: orderService,
       // The SAME messenger the delivery sweep uses, for the reason above it.
       messenger: customerMessenger,
+      // And the same provisioning and delivery services, for the same reason: a
+      // customer-requested resend and the automatic sweep share `markSendStarted`,
+      // and two instances would share nothing.
+      services: provisioningService,
+      delivery: deliveryService,
+      /*
+       * The plan a service was SOLD as, from the order's frozen snapshot.
+       *
+       * The same read the provisioner's `purchases` port makes, narrowed the same way
+       * and for the same reason: the runtime gets the title and not `OrderService`.
+       * From the ORDER, never from the product — `nexa_orders_snapshot_guard` froze it
+       * at confirmation, so it is the only copy that still says what the customer
+       * agreed to.
+       */
+      purchaseTitle: async (scope, orderId) => {
+        const order = await orderRepository.findById(scope, orderId);
+        return order?.line.title ?? null;
+      },
     }),
     panels: new PanelService({
       repository: panelRepository,

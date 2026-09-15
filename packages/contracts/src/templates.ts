@@ -518,6 +518,43 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.service.list_heading',
+    description:
+      'Introduces the list of services a customer owns. Separate from ' +
+      '`bot.catalog.heading` because the two lists are different things: one is what a ' +
+      'customer could buy, the other what they already have, and a tenant will word ' +
+      'them differently. The list itself is buttons, so this key carries no ' +
+      'placeholders \u2014 a heading that interpolated a count would be a heading that ' +
+      'went stale the moment a service expired between render and read.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.not_found',
+    description:
+      'Shown when a customer acts on a service id that is not theirs, or does not ' +
+      'exist. ONE message for both, deliberately, and it is the reason this key is not ' +
+      '`bot.unknown_command`: a tap on a stale button is not a typing mistake, and ' +
+      'telling the two apart would let anybody holding a service id learn whether it ' +
+      'exists by watching which answer they get. `getForCustomer` compares ownership ' +
+      'against the row it read rather than filtering the query, so both cases already ' +
+      'arrive here as the same outcome.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.resend_button',
+    description:
+      'The button that asks for a subscription link to be sent again. Its OWN key, ' +
+      'because a button label is rendered with no values and `bot.service.subscription` ' +
+      'requires a `subscriptionUrl` \u2014 using the message as the label made ' +
+      '`validateTemplateValues` refuse the whole send, which is the template layer ' +
+      'doing its job. It also has to be a different sentence: the label is a request ' +
+      'and the message is the answer.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.service.detail',
     description:
       'One service, as its owner sees it. Usage and expiry come from the last ' +
@@ -600,6 +637,76 @@ export const TEMPLATES = [
       'Shown when provisioning could not be completed and an operator has been told. ' +
       'Deliberately does NOT invite the customer to try again: a retry after an ' +
       'unknown outcome is how a duplicate account is created.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.suspend_button',
+    description:
+      'The button that asks for a service to be paused. Drawn only when the service ' +
+      'is ACTIVE and the panel behind it declares DISABLE_USER \u2014 but not drawing ' +
+      'it is never the control: `requestFromCustomer` checks ownership, the legal ' +
+      'from-state and the panel capability again, so a tap on a stale message is ' +
+      'refused rather than performed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.resume_button',
+    description:
+      'The button that asks for a paused service to start serving again. Drawn only ' +
+      'when the service is SUSPENDED and the panel declares ENABLE_USER.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.terminate_button',
+    description:
+      'The button that BEGINS ending a service. It does not end one: it asks for the ' +
+      'confirmation below. Its own key rather than a reuse of the confirm label ' +
+      'because the two must not read alike \u2014 one opens a question and the other ' +
+      'answers it, and a customer who cannot tell them apart will end a service by ' +
+      'tapping twice in the same place.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.terminate_confirm',
+    description:
+      'The confirmation question, naming the service about to be ended and saying ' +
+      'plainly that it cannot be undone. The only screen between a customer and the ' +
+      'deletion of their provider account, so it states the consequence rather than ' +
+      'asking "are you sure": the research records the legacy system destroying six ' +
+      'order classes on one unconfirmed press.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'productTitle',
+        type: 'STRING',
+        description:
+          'What the customer bought, from the order\u2019s frozen snapshot \u2014 ' +
+          'never the service id, which is not a name a customer can recognise.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.terminate_confirm_button',
+    description:
+      'The button that actually ends the service. The ONLY callback that plans a ' +
+      'TERMINATE; every other path through this surface stops at the question above.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.action_requested',
+    description:
+      'Acknowledges that a pause, resume or end was recorded and is being applied to ' +
+      'the panel. Deliberately does NOT say it is done: the provider call happens in ' +
+      'the provisioner, seconds later, and can fail. Claiming completion here would ' +
+      'be the fabricated success this codebase refuses \u2014 the same reason ' +
+      '`bot.service.provisioning` says a service is being made rather than made.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },

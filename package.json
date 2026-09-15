@@ -21,6 +21,7 @@
     "test": "vitest run --project unit",
     "test:web": "vitest run --project web",
     "test:integration": "vitest run --project integration",
+    "test:acceptance": "vitest run --project acceptance",
     "test:watch": "vitest",
     "build": "pnpm -r build",
     "db:migrate": "pnpm --filter @nexa/api db:migrate",

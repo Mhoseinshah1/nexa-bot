@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   money,
+  providerUsernameFor,
   type ActorContext,
   type BotInstanceId,
   type CorrelationId,
@@ -12,6 +13,7 @@ import {
   type UserId,
 } from '@nexa/contracts';
 import { providerDescriptor } from '@nexa/contracts';
+import { operationIdFor } from '../../apps/api/src/infrastructure/crypto/operation-id';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
 import { DrizzleOperationRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-operation.repository';
@@ -231,6 +233,26 @@ describe('a provisioned service announces itself', () => {
       sql`UPDATE services SET delivery_next_attempt_at = now() - interval '1 hour'`,
     );
   }
+
+  /**
+   * Ages a service so its usage figure is stale, without waiting out the cadence.
+   *
+   * `created_at` as well as `usage_synced_at`, because `listUsageSyncDue` measures
+   * staleness as `COALESCE(usage_synced_at, created_at)` — a service whose create
+   * returned no usage, which every Sanaei service is, is measured from when it was
+   * made. Moving only one of the two columns would leave the test unable to tell a
+   * sweep that read the panel from one that never found the row.
+   */
+  async function makeUsageStale(): Promise<void> {
+    await ctx.container.database.db.execute(
+      sql`UPDATE services SET created_at = now() - interval '30 days',
+                              usage_synced_at = NULL`,
+    );
+  }
+
+  /** How many times the panel was asked for a client's traffic. */
+  const trafficCalls = (): number =>
+    panel.requests.filter((request) => request.path.includes('panel/api/clients/traffic/')).length;
 
   it('sends the subscription in the SAME tick that provisions it', async () => {
     const orderId = await paidOrder('deliver-ok');
@@ -833,24 +855,37 @@ describe('a provisioned service announces itself', () => {
     await ctx.container.provisionerLoop.tick();
 
     /*
-     * v3.7.0 refuses a duplicate email with a successful envelope carrying
-     * `success: false` — a `PROVIDER_ERROR`, which `failureOutcome` classifies UNKNOWN
-     * on a mutating call, which is the state that means "ask the panel". The tick then
-     * DRAINS: the next `runOnce` plans the reconcile, claims it and adopts what is
-     * there, so one tick carries the service all the way to ACTIVE.
+     * The retry meets its own account and the panel says so.
+     *
+     * v3.7.0 exempts a MATCHING `subId` from `checkEmailsExistForClients` and then
+     * drops any client already on the inbound, returning `(false, nil)` when that
+     * leaves nothing — which the controller reports as success. Nexa's three
+     * identities are derived per service, so the replay carries the same email and
+     * the same subId: the panel treats it as the idempotent no-op it is, and the
+     * PROVISION operation simply SUCCEEDS. No reconcile is needed, because nothing
+     * was ever unknown.
+     *
+     * This assertion used to expect a `PROVIDER_ERROR` and a RECONCILE, on the
+     * strength of a docblock saying v3.7.0 "refuses a duplicate email". A real
+     * v3.7.0 panel does not, and `tests/acceptance/real-panel-sanaei.test.ts`
+     * is what established that — the fake had been written to agree with the
+     * adapter rather than with upstream.
+     *
+     * The claim this case exists to make is unchanged and still proven below: the
+     * optimism in `SAFE_TO_REPLAY_FAILURE_KINDS` costs an ATTEMPT and never an
+     * ACCOUNT, because the derived username makes the retry collide with itself.
      */
     const adopted = await services.findByOrderId(tenantA, orderId);
     expect(addClientCalls(), 'the retry did reach the panel').toBe(2);
     expect(panel.clients.size, 'and it did NOT make a second account').toBe(1);
-    expect(adopted?.state, 'the account was found and adopted').toBe('ACTIVE');
+    expect(adopted?.state, 'the replay completed the provision').toBe('ACTIVE');
     expect(adopted?.subscriptionUrl).not.toBeNull();
     expect(adopted?.expiresAt, 'with the duration the order paid for').not.toBeNull();
-    expect(addClientCalls(), 'and the reconcile created nothing').toBe(2);
     expect(panel.clients.size, 'one account, for one paid order').toBe(1);
 
     const all = await operations.listForService(tenantA, adopted?.id ?? '', 10);
-    expect(all.map((o) => o.type).sort()).toEqual(['PROVISION', 'RECONCILE']);
-    expect(all.find((o) => o.type === 'RECONCILE')?.state).toBe('SUCCEEDED');
+    expect(all.map((o) => o.type).sort()).toEqual(['PROVISION']);
+    expect(all.find((o) => o.type === 'PROVISION')?.state).toBe('SUCCEEDED');
 
     // And now that it is ACTIVE, the customer is told.
     expect(sent, 'the announcement follows the adoption').toHaveLength(1);
@@ -988,5 +1023,602 @@ describe('a provisioned service announces itself', () => {
     const sweep = await ctx.container.delivery.deliverDue(tenantA, 10);
     expect(sweep.claimed).toBe(0);
     expect(sent).toHaveLength(3);
+  });
+
+  // =========================================================================
+  // SYNC_USAGE — the figure a customer is told, refreshed from the panel
+  // =========================================================================
+
+  it('refreshes a stale usage figure from the panel, and writes what the panel said', async () => {
+    const orderId = await paidOrder('usage-ok');
+    await ctx.container.provisionerLoop.tick();
+    const provisioned = await services.findByOrderId(tenantA, orderId);
+    expect(provisioned?.state).toBe('ACTIVE');
+    // 3X-UI answers `obj: null` to a create, so there is no figure yet. That is the
+    // ordinary case and the reason this sweep exists.
+    expect(provisioned?.usageSyncedAt, 'a create leaves no usage figure').toBeNull();
+
+    // The customer uses their service. Only the PANEL knows this.
+    const username = providerUsernameFor(provisioned?.id ?? '');
+    panel.useTraffic(username, { up: 1_000_000, down: 24_000_000 });
+
+    await makeUsageStale();
+    const before = trafficCalls();
+    await ctx.container.provisionerLoop.tick();
+
+    expect(trafficCalls(), 'the panel was asked').toBe(before + 1);
+    const synced = await services.findByOrderId(tenantA, orderId);
+    expect(synced?.trafficUsedBytes, 'up + down, as the panel reports them').toBe(25_000_000n);
+    expect(synced?.usageSyncedAt, 'and when it was asked').not.toBeNull();
+    expect(synced?.state, 'a read moves no service').toBe('ACTIVE');
+
+    const all = await operations.listForService(tenantA, synced?.id ?? '', 10);
+    expect(all.map((o) => o.type).sort()).toEqual(['PROVISION', 'SYNC_USAGE']);
+    expect(all.find((o) => o.type === 'SYNC_USAGE')?.state).toBe('SUCCEEDED');
+  });
+
+  it('does not sync a service whose figure is still fresh', async () => {
+    // The cadence is the whole point of the setting. A service provisioned moments ago
+    // is not stale, and a sweep that read it anyway would spend a tenant's outbound
+    // budget re-reading an account the call before it had just created.
+    await paidOrder('usage-fresh');
+    await ctx.container.provisionerLoop.tick();
+    const before = trafficCalls();
+
+    await ctx.container.provisionerLoop.tick();
+    await ctx.container.provisionerLoop.tick();
+
+    expect(trafficCalls(), 'no panel read for a fresh figure').toBe(before);
+  });
+
+  it('plans ONE sync per cadence window however many ticks run', async () => {
+    // The operation id is derived from the service and the window, and `plan` is
+    // ON CONFLICT DO NOTHING — which is what makes two replicas on a rolling update
+    // produce one row between them rather than two reads of the same figure.
+    const orderId = await paidOrder('usage-once');
+    await ctx.container.provisionerLoop.tick();
+    const service = await services.findByOrderId(tenantA, orderId);
+    await makeUsageStale();
+
+    await ctx.container.provisionerLoop.tick();
+    // The first tick performed the sync; age it again so the PLANNER would queue
+    // another if the derived id did not stop it.
+    await makeUsageStale();
+    await ctx.container.provisionerLoop.tick();
+
+    const syncs = (await operations.listForService(tenantA, service?.id ?? '', 20)).filter(
+      (operation) => operation.type === 'SYNC_USAGE',
+    );
+    expect(syncs, 'one sync for one cadence window').toHaveLength(1);
+  });
+
+  it('a sync that the panel refuses is FAILED, never UNKNOWN, and moves no service', async () => {
+    // The rule `finishUsageSync` rests on: `isMutatingOperation('SYNC_USAGE')` is false,
+    // so `failureOutcome` gives FAILED. An UNKNOWN would send the service to
+    // UNRECONCILED — a working, paid service moved by a read that timed out.
+    const orderId = await paidOrder('usage-refused');
+    await ctx.container.provisionerLoop.tick();
+    const service = await services.findByOrderId(tenantA, orderId);
+
+    await makeUsageStale();
+    panel.setBehaviour('traffic-500');
+    await ctx.container.provisionerLoop.tick();
+
+    const after = await services.findByOrderId(tenantA, orderId);
+    expect(after?.state, 'a failed read moves nothing').toBe('ACTIVE');
+    expect(after?.usageSyncedAt, 'and claims no refresh it did not make').toBeNull();
+    const sync = (await operations.listForService(tenantA, service?.id ?? '', 20)).find(
+      (operation) => operation.type === 'SYNC_USAGE',
+    );
+    /*
+     * Back to PLANNED for another attempt, with the failure recorded — NOT `UNKNOWN`.
+     *
+     * The distinction is the claim. `UNKNOWN` means "a mutation may have taken effect
+     * and this installation must ask", and it is what sends a service to
+     * `UNRECONCILED`. A read that did not answer changed nothing by definition, so it
+     * is retried by the ordinary attempt machinery and the service stays where it is.
+     * Terminal `FAILED` arrives only at `OPERATION_MAX_ATTEMPTS`, which one tick is not.
+     */
+    expect(sync?.state).toBe('PLANNED');
+    expect(sync?.state).not.toBe('UNKNOWN');
+    expect(sync?.failureKind).toBe('PROVIDER_ERROR');
+    expect(sync?.attempts).toBe(1);
+  });
+
+  /** Plans one operation by hand, for the types no code plans. */
+  async function planByHand(
+    serviceId: string,
+    orderId: OrderId,
+    type: 'ROTATE_SUBSCRIPTION' | 'TERMINATE' | 'SUSPEND',
+    label: string,
+  ): Promise<void> {
+    await ctx.container.uow.run(tenantA, async (tx) =>
+      operations.plan(
+        tenantA,
+        {
+          id: ctx.container.ids.uuid(),
+          // Derived, because `provisioning_operations_operation_id_check` requires
+          // sixteen lowercase hex characters. A uuid is refused by the database, which
+          // is the schema saying the same thing the application does: an operation id
+          // is retry-stable, not random.
+          operationId: operationIdFor('provider', label),
+          serviceId,
+          orderId,
+          panelId: panelId as PanelId,
+          type,
+        },
+        ctx.container.clock.now(),
+        tx,
+      ),
+    );
+  }
+
+  it('refuses an operation type this release cannot perform, before contacting a panel', async () => {
+    /*
+     * The audit calls the dispatch the most dangerous edit in this phase, and this is
+     * the property it names: an operation whose type has no implementation is refused
+     * before any provider is contacted, not defaulted to the one call the executor used
+     * to make. `provisionCall` calls `createUser` unconditionally.
+     *
+     * `ROTATE_SUBSCRIPTION`, and it used to be `TERMINATE`. That swap is the test
+     * following the code rather than being weakened by it: TERMINATE became performable
+     * in this phase, so the row it simulates is no longer an unperformable one. The
+     * case it used to make is now made by the one below, against a panel that cannot do
+     * it — and the property here needs a type that genuinely has no branch.
+     *
+     * Planned by hand because no code plans a ROTATE_SUBSCRIPTION, which is the point:
+     * the row this simulates is one a later release plans and a rolled-back one claims.
+     */
+    const orderId = await paidOrder('usage-unperformable');
+    await ctx.container.provisionerLoop.tick();
+    const service = await services.findByOrderId(tenantA, orderId);
+    const before = addClientCalls();
+
+    await planByHand(service?.id ?? '', orderId, 'ROTATE_SUBSCRIPTION', 'unperformable-rotate');
+    await ctx.container.provisionerLoop.tick();
+
+    expect(addClientCalls(), 'no panel was contacted').toBe(before);
+    const rotate = (await operations.listForService(tenantA, service?.id ?? '', 20)).find(
+      (operation) => operation.type === 'ROTATE_SUBSCRIPTION',
+    );
+    // ABANDONED, not FAILED: no number of retries teaches this release an operation
+    // type, and a FAILED row would be claimed again on every tick.
+    expect(rotate?.state).toBe('ABANDONED');
+    const stillActive = await services.findByOrderId(tenantA, orderId);
+    expect(stillActive?.state, 'and the service is untouched').toBe('ACTIVE');
+  });
+
+  it('refuses a performable operation on a panel that cannot do it, before contacting it', async () => {
+    /*
+     * The other half, and the one the 3X-UI deferral rests on. `TERMINATE` has a branch
+     * in the executor now, so `isPerformableOperation` lets it through — and the panel
+     * is a 3X-UI, whose descriptor declares no `DELETE_USER`. `decideOperability` reads
+     * `OPERATION_REQUIRED_CAPABILITIES` against that descriptor and refuses.
+     *
+     * Terminal FAILED rather than ABANDONED, and the difference is exact:
+     * `refusalIsPermanent` says CAPABILITY_UNSUPPORTED cannot be fixed without a new
+     * release, so the row stops instead of being claimed on every tick. The panel is
+     * not contacted either way, which is the assertion that matters — a customer's
+     * account on a panel this release cannot manage is not touched by an operation it
+     * cannot carry out.
+     */
+    const orderId = await paidOrder('sanaei-terminate');
+    await ctx.container.provisionerLoop.tick();
+    const service = await services.findByOrderId(tenantA, orderId);
+    const before = panel.requests.length;
+
+    await planByHand(service?.id ?? '', orderId, 'TERMINATE', 'sanaei-terminate-refused');
+    await ctx.container.provisionerLoop.tick();
+
+    expect(panel.requests.length, 'the panel was not contacted at all').toBe(before);
+    const terminate = (await operations.listForService(tenantA, service?.id ?? '', 20)).find(
+      (operation) => operation.type === 'TERMINATE',
+    );
+    expect(terminate?.state).toBe('FAILED');
+    expect(terminate?.failureMessage).toBe('CAPABILITY_UNSUPPORTED');
+    expect((await services.findByOrderId(tenantA, orderId))?.state).toBe('ACTIVE');
+  });
+
+  // =========================================================================
+  // Expiry — a Nexa-side transition, with no panel contacted
+  // =========================================================================
+
+  it('expires a service whose window has closed, without contacting the panel', async () => {
+    const orderId = await paidOrder('expire-ok');
+    await ctx.container.provisionerLoop.tick();
+    const active = await services.findByOrderId(tenantA, orderId);
+    expect(active?.state).toBe('ACTIVE');
+    expect(active?.expiresAt, 'the create wrote a window').not.toBeNull();
+
+    const requestsBefore = panel.requests.length;
+    await ctx.container.database.db.execute(
+      sql`UPDATE services SET expires_at = now() - interval '1 minute'`,
+    );
+    await ctx.container.provisionerLoop.tick();
+
+    const expired = await services.findByOrderId(tenantA, orderId);
+    expect(expired?.state).toBe('EXPIRED');
+    /*
+     * No panel was contacted, and that is the point rather than an optimisation.
+     * 3X-UI enforces the `expiryTime` written into the client at creation, so the
+     * account has ALREADY stopped working; what was missing was Nexa agreeing. A
+     * provider call here would spend a tenant's outbound budget to be told something
+     * this installation already knew.
+     */
+    expect(panel.requests.length, 'expiry needs no panel').toBe(requestsBefore);
+  });
+
+  it('leaves an unlimited service alone for ever', async () => {
+    // `expires_at IS NULL` is an unlimited plan. A sweep that treated NULL as "long
+    // past" would expire every unlimited service on its first tick — and the adapter
+    // writes the panel's own unlimited rather than an epoch, so there is no zero here
+    // to be mistaken for a date in 1970 either.
+    const orderId = await paidOrder('expire-unlimited');
+    await ctx.container.provisionerLoop.tick();
+    await ctx.container.database.db.execute(sql`UPDATE services SET expires_at = NULL`);
+
+    await ctx.container.provisionerLoop.tick();
+    await ctx.container.provisionerLoop.tick();
+
+    const service = await services.findByOrderId(tenantA, orderId);
+    expect(service?.state).toBe('ACTIVE');
+  });
+
+  it('does not expire a service whose window is still open', async () => {
+    const orderId = await paidOrder('expire-future');
+    await ctx.container.provisionerLoop.tick();
+    await ctx.container.database.db.execute(
+      sql`UPDATE services SET expires_at = now() + interval '30 days'`,
+    );
+
+    await ctx.container.provisionerLoop.tick();
+
+    const service = await services.findByOrderId(tenantA, orderId);
+    expect(service?.state).toBe('ACTIVE');
+  });
+
+  it('records the state the service was actually in, not the one it moved to', async () => {
+    /*
+     * The reason `expireDue` runs one statement per source state. `RETURNING` hands
+     * back the NEW row, so a single UPDATE over {ACTIVE, SUSPENDED} would report
+     * EXPIRED as the `before` of every audit record — a record of nothing.
+     *
+     * SUSPENDED is set here by hand because nothing suspends a service yet: the
+     * provider mutations are gated behind the destructive real-panel acceptance. The
+     * row shape is real even though no code writes it today, and this is what stops
+     * the audit going wrong on the release that does.
+     */
+    const orderId = await paidOrder('expire-suspended');
+    await ctx.container.provisionerLoop.tick();
+    const service = await services.findByOrderId(tenantA, orderId);
+    await ctx.container.database.db.execute(
+      sql`UPDATE services SET state = 'SUSPENDED', expires_at = now() - interval '1 minute'`,
+    );
+
+    await ctx.container.provisionerLoop.tick();
+
+    const expired = await services.findByOrderId(tenantA, orderId);
+    expect(expired?.state).toBe('EXPIRED');
+
+    const records = await ctx.container.database.db.execute(
+      sql`SELECT before, after FROM audit_logs
+          WHERE action = 'service.expire' AND entity_id = ${service?.id ?? ''}`,
+    );
+    expect(records.rows).toHaveLength(1);
+    expect((records.rows[0] as { before: { state: string } }).before.state).toBe('SUSPENDED');
+    expect((records.rows[0] as { after: { state: string } }).after.state).toBe('EXPIRED');
+  });
+
+  it('expires nothing for a tenant that has stopped accepting work', async () => {
+    // Expiry is a durable write, so it is inside `uow.run` and behind the same tenant
+    // gate every other write in the tick is. A stopped tenant accepts none of them.
+    const orderId = await paidOrder('expire-stopped');
+    await ctx.container.provisionerLoop.tick();
+    await ctx.container.database.db.execute(
+      sql`UPDATE services SET expires_at = now() - interval '1 minute'`,
+    );
+    await ctx.container.database.db.execute(
+      sql`UPDATE tenants SET status = 'STOPPED' WHERE id = ${tenantA.tenantId}`,
+    );
+
+    await ctx.container.provisionerLoop.tick();
+
+    const service = await services.findByOrderId(tenantA, orderId);
+    expect(service?.state, 'a stopped tenant gets no writes').toBe('ACTIVE');
+  });
+
+  // =========================================================================
+  // The customer's own services, over Telegram
+  // =========================================================================
+
+  /** An update as Telegram sends one, through the real runtime rather than the webhook. */
+  let updateSeq = 7000;
+  const customerUpdate = (
+    payload: Record<string, unknown>,
+  ): {
+    idempotencyKey: string;
+    botInstanceId: typeof BOT_A;
+    update: unknown;
+    telegramUserId: string;
+    from: unknown;
+  } => {
+    updateSeq += 1;
+    return {
+      idempotencyKey: `bot-update-${String(updateSeq)}`,
+      botInstanceId: BOT_A,
+      update: { update_id: updateSeq, ...payload },
+      telegramUserId: '910910',
+      from: { id: 910910, first_name: 'مریم' },
+    };
+  };
+
+  const textUpdate = (text: string) =>
+    customerUpdate({
+      message: {
+        message_id: updateSeq,
+        date: 0,
+        chat: { id: 5150, type: 'private' },
+        from: { id: 910910, is_bot: false, first_name: 'مریم' },
+        text,
+      },
+    });
+
+  const tapUpdate = (data: string, chatType = 'private') =>
+    customerUpdate({
+      callback_query: {
+        id: `cbq-${String(updateSeq)}`,
+        from: { id: 910910, is_bot: false, first_name: 'مریم' },
+        data,
+        // The message a button hangs off is the BOT's. A runtime reading `message.from`
+        // would resolve a customer row for the bot on every tap.
+        message: {
+          message_id: updateSeq,
+          date: 0,
+          chat: { id: 5150, type: chatType },
+          from: { id: 999999, is_bot: true, first_name: 'Nexa' },
+        },
+      },
+    });
+
+  const runtime = () => ctx.container.botRuntime;
+
+  /**
+   * Only the `sendMessage` calls.
+   *
+   * A tapped button also produces an `answerCallbackQuery` to stop the spinner, so
+   * `sent[sent.length - 1]` after a tap is the spinner and not the answer. Counting or
+   * reading the raw array is how an assertion about a message ends up looking at an
+   * acknowledgement with no text in it.
+   */
+  const messages = () => sent.filter((one) => one.url.includes('/sendMessage'));
+
+  it('/services lists the customer’s own service, labelled as it was SOLD', async () => {
+    const orderId = await paidOrder('bot-services');
+    await ctx.container.provisionerLoop.tick();
+    const service = await services.findByOrderId(tenantA, orderId);
+
+    const result = await runtime().handle(tenantA, systemActor('bot'), textUpdate('/services'));
+
+    expect(result.intent).toBe('SERVICES');
+    expect(result.replyKey).toBe('bot.service.list_heading');
+    /*
+     * The label is the plan's frozen title, not the product's current one and not the
+     * service id. `nexa_orders_snapshot_guard` froze it at confirmation, which is the
+     * only copy that still says what the customer agreed to — the legacy defect where
+     * renaming a product rewrote past reports, applied to something a customer reads.
+     */
+    const listed = messages()[messages().length - 1];
+    expect(JSON.stringify(listed)).toContain('پلن پایه');
+    expect(JSON.stringify(listed)).toContain(`s:${service?.id ?? ''}`);
+  });
+
+  it('answers a customer with no services with a different key, not an empty list', async () => {
+    const result = await runtime().handle(tenantA, systemActor('bot'), textUpdate('/services'));
+    expect(result.replyKey).toBe('bot.service.list_empty');
+  });
+
+  it('shows one service, with the moment its usage was read', async () => {
+    const orderId = await paidOrder('bot-detail');
+    await ctx.container.provisionerLoop.tick();
+    const service = await services.findByOrderId(tenantA, orderId);
+
+    const result = await runtime().handle(
+      tenantA,
+      systemActor('bot'),
+      tapUpdate(`s:${service?.id ?? ''}`),
+    );
+
+    expect(result.intent).toBe('SERVICE');
+    expect(result.replyKey).toBe('bot.service.detail');
+    // `usage_synced_at` is null until a SYNC_USAGE succeeds, so the template gets an
+    // absent `syncedAt` rather than a fabricated one. A figure with no asOf is a figure
+    // a customer reads as live.
+    expect(service?.usageSyncedAt).toBeNull();
+    const shown = messages()[messages().length - 1];
+    expect(JSON.stringify(shown)).toContain('پلن پایه');
+  });
+
+  it('refuses another customer’s service with the SAME answer as one that does not exist', async () => {
+    /*
+     * The property that stops this being an oracle. `getForCustomer` compares ownership
+     * against the row it read rather than filtering the query, so a foreign id and a
+     * nonexistent id are one outcome — and both must reach the customer as one message,
+     * or the difference between the two answers tells anybody holding a service id
+     * whether it exists.
+     *
+     * The OTHER customer taps, rather than the service being reassigned. Reassigning it
+     * was the first shape and the database refused it: `services_order_fk` is composite
+     * on `(tenant_id, order_id, customer_id)`, so a service cannot change hands without
+     * its order. That is the schema making the same point this test does, and the
+     * realistic version — somebody else pressing the button — is the one a customer can
+     * actually perform.
+     */
+    const orderId = await paidOrder('bot-foreign');
+    await ctx.container.provisionerLoop.tick();
+    const theirs = await services.findByOrderId(tenantA, orderId);
+
+    // From here on, so the ORIGINAL announcement to the real owner — which of course
+    // carries the subscription — is not mistaken for something a stranger was shown.
+    const before = messages().length;
+
+    const stranger = (data: string) => ({
+      ...tapUpdate(data),
+      telegramUserId: '920920',
+      from: { id: 920920, first_name: 'سارا' },
+    });
+
+    const foreign = await runtime().handle(
+      tenantA,
+      systemActor('bot'),
+      stranger(`s:${theirs?.id ?? ''}`),
+    );
+    const absent = await runtime().handle(
+      tenantA,
+      systemActor('bot'),
+      stranger(`s:${ctx.container.ids.uuid()}`),
+    );
+
+    expect(foreign.replyKey).toBe('bot.service.not_found');
+    expect(absent.replyKey).toBe(foreign.replyKey);
+    // And a stranger asking for a resend is refused by the same comparison, before
+    // `redeliver`'s own ownership check ever runs.
+    const resend = await runtime().handle(
+      tenantA,
+      systemActor('bot'),
+      stranger(`r:${theirs?.id ?? ''}`),
+    );
+    expect(resend.replyKey).toBe('bot.service.not_found');
+    expect(JSON.stringify(messages().slice(before))).not.toContain(theirs?.subscriptionRef ?? 'X');
+  });
+
+  it('offers no management button for a service on a panel that cannot manage one', async () => {
+    /*
+     * The customer-facing half of the 3X-UI deferral. `customerActionsFor` asks the
+     * PANEL whether it can perform each operation, and this panel's descriptor declares
+     * no DISABLE_USER, ENABLE_USER or DELETE_USER — so a customer here is offered a
+     * subscription resend and nothing else.
+     *
+     * Drawing them anyway would be the legacy defect this codebase keeps naming: a
+     * product offering an action it cannot honour. Every tap would be refused by
+     * `requestFromCustomer` and the customer would have no way to know which of their
+     * services the buttons work on.
+     */
+    const orderId = await paidOrder('bot-no-management');
+    await ctx.container.provisionerLoop.tick();
+    const service = await services.findByOrderId(tenantA, orderId);
+    const id = service?.id ?? '';
+
+    const result = await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`s:${id}`));
+
+    expect(result.replyKey).toBe('bot.service.detail');
+    const body = JSON.stringify(messages()[messages().length - 1]);
+    expect(body, 'the resend button is still offered').toContain(`r:${id}`);
+    for (const prefix of ['u:', 'e:', 't:', 'k:']) {
+      expect(body, `${prefix} must not be offered on a panel that cannot do it`).not.toContain(
+        `${prefix}${id}`,
+      );
+    }
+
+    // And the request itself is refused, not merely undrawn.
+    const tapped = await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`u:${id}`));
+    expect(tapped.replyKey).toBe('bot.service.capability_unsupported');
+    expect(
+      (await operations.listForService(tenantA, id, 50)).some(
+        (operation) => operation.type === 'SUSPEND',
+      ),
+      'nothing was planned',
+    ).toBe(false);
+  });
+
+  it('sends the subscription again when the customer asks, through the delivery lane', async () => {
+    const orderId = await paidOrder('bot-resend');
+    await ctx.container.provisionerLoop.tick();
+    const service = await services.findByOrderId(tenantA, orderId);
+    expect(service?.deliveryState, 'the automatic announcement already ran').toBe('DELIVERED');
+    const before = messages().length;
+
+    const result = await runtime().handle(
+      tenantA,
+      systemActor('bot'),
+      tapUpdate(`r:${service?.id ?? ''}`),
+    );
+
+    /*
+     * `key: null`, and the message still arrives.
+     *
+     * `DeliveryService.redeliver` is what sends it — through the same `markSendStarted`
+     * stamp and the same delivery accounting the automatic sweep uses, so a
+     * customer-requested send and a swept one cannot race each other into two messages.
+     * A reply key here as well would be the runtime and the delivery lane both
+     * answering one tap.
+     */
+    expect(result.intent).toBe('SERVICE_RESEND');
+    expect(result.replyKey).toBeNull();
+    expect(messages().length, 'and the subscription really went out').toBeGreaterThan(before);
+    const resent = messages()[messages().length - 1];
+    expect(JSON.stringify(resent)).toContain(service?.subscriptionRef ?? 'MISSING');
+
+    const after = await services.findByOrderId(tenantA, orderId);
+    expect(after?.deliveryAttempts, 'the attempt is accounted for').toBeGreaterThan(
+      service?.deliveryAttempts ?? 0,
+    );
+  });
+
+  it('will not resend a subscription into a group chat', async () => {
+    /*
+     * A subscription link is a bearer capability. Delivering it anywhere other than the
+     * private chat it was asked from is how one lands in a group — and falling back to
+     * the chat it was FIRST delivered to would be the same mistake wearing a
+     * justification.
+     */
+    const orderId = await paidOrder('bot-resend-group');
+    await ctx.container.provisionerLoop.tick();
+    const service = await services.findByOrderId(tenantA, orderId);
+    const before = messages().length;
+
+    const result = await runtime().handle(
+      tenantA,
+      systemActor('bot'),
+      tapUpdate(`r:${service?.id ?? ''}`, 'supergroup'),
+    );
+
+    expect(result.replyKey).toBe('bot.service.not_found');
+    // NOT_ATTEMPTED because `privateChatIdOf` refuses a group, so `handle` has nowhere
+    // to send the refusal either. The customer sees nothing, which is right: the tap
+    // came from a chat this bot will not talk to about a subscription.
+    expect(result.sent, 'and nothing was sent anywhere').toBe('NOT_ATTEMPTED');
+    expect(messages().length).toBe(before);
+  });
+
+  it('answers a blocked customer with bot.blocked, whatever they tapped', async () => {
+    const orderId = await paidOrder('bot-blocked-services');
+    await ctx.container.provisionerLoop.tick();
+    const service = await services.findByOrderId(tenantA, orderId);
+    // Through the SERVICE, not an UPDATE. `customers_blocked_at_check` refuses a
+    // BLOCKED row with no `blocked_at`, which is the schema saying a block is an event
+    // with a time and not a flag — and a fixture that wrote the flag by hand would be
+    // testing a row shape no code path can produce.
+    await ctx.container.customers.block(tenantA, owner, {
+      idempotencyKey: 'block-for-bot-services',
+      customerId: customerA,
+      reason: 'fixture',
+    });
+    const before = messages().length;
+
+    const detail = await runtime().handle(
+      tenantA,
+      systemActor('bot'),
+      tapUpdate(`s:${service?.id ?? ''}`),
+    );
+    const resend = await runtime().handle(
+      tenantA,
+      systemActor('bot'),
+      tapUpdate(`r:${service?.id ?? ''}`),
+    );
+
+    expect(detail.replyKey).toBe('bot.blocked');
+    expect(resend.replyKey).toBe('bot.blocked');
+    // The blocked branch runs BEFORE `act`, so no subscription was read and none sent.
+    expect(JSON.stringify(messages().slice(before))).not.toContain(service?.subscriptionRef ?? 'X');
   });
 });

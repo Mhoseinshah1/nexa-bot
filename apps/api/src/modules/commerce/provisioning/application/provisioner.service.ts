@@ -1,6 +1,11 @@
 import {
+  canDeleteUser,
+  canDisableUser,
+  canEnableUser,
+  isIdempotentMutation,
   isMutatingOperation,
   PROVIDER_FAILURE_RETRYABLE,
+  USAGE_SYNC_PLAN_LIMIT,
   systemJobActor,
   type ActorContext,
   type Clock,
@@ -12,11 +17,14 @@ import {
   type OperationState,
   type ProviderAdapter,
   type ProviderFailureKind,
+  type ProviderRemovalOutcome,
+  type ProviderStateChangeOutcome,
   type ProviderType,
   type TenantContext,
   type UnitOfWork,
 } from '@nexa/contracts';
 import type { AuditWriter } from '@nexa/contracts';
+import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { SafeHttpClient } from '../../../../infrastructure/net/safe-http.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
@@ -36,7 +44,14 @@ import {
   failureNote,
   outcomeFor,
   providerRefFor,
+  isPerformableOperation,
+  MANAGEMENT_TARGET_STATE,
+  OPERATION_LEGAL_FROM,
   provisionCall,
+  resumeCall,
+  suspendCall,
+  terminateCall,
+  usageSyncCall,
   reconcileCall,
   serviceEventFor,
   type ExecutionRefusal,
@@ -114,6 +129,22 @@ export const LEASE_SWEEP_LIMIT = 20;
 export const RECONCILE_PLAN_LIMIT = 5;
 
 /**
+ * How many services one tick may expire.
+ *
+ * Larger than the two above because expiry costs no provider call and no claim: it is
+ * one conditional UPDATE, and the only reason to bound it at all is so that a tenant
+ * whose plans all lapse on the same midnight does not turn one tick into one
+ * statement over a hundred thousand rows holding locks the rest of the loop needs.
+ *
+ * Here rather than in `packages/contracts` alongside `USAGE_SYNC_PLAN_LIMIT`, and the
+ * difference is not arbitrary: that one bounds a sweep whose CADENCE is an operator
+ * setting, so its bound belongs beside the schema that checks the setting. This sweep
+ * has no setting — a service expires when its own `expires_at` says so — so its bound
+ * is an implementation detail of the loop, like `LEASE_SWEEP_LIMIT` above.
+ */
+export const SERVICE_EXPIRY_SWEEP_LIMIT = 200;
+
+/**
  * How many times one service may go round create → unknown → reconcile → absent.
  *
  * The cycle is legitimate ONCE: a create whose answer was lost, a panel that proves it
@@ -161,6 +192,16 @@ export interface ProvisionerDeps {
   readonly scopeActivity: ScopeActivityReader;
   readonly workerId: string;
   readonly leaseMs: number;
+  /**
+   * Where `provisioning.usage_sync_minutes` is read from.
+   *
+   * The resolver rather than a number, for the reason `OrderService` takes it: the
+   * cadence is a PER-TENANT setting and a worker serves several tenants, so a value
+   * read once at construction would apply one tenant's answer to all of them. Read on
+   * every tick, which is also what makes the key's declared RUNTIME mutability true —
+   * a change takes effect without a restart.
+   */
+  readonly settings: SettingsResolver;
 }
 
 /**
@@ -241,6 +282,23 @@ export class ProvisionerService {
      */
     await this.reapStrandedCalls(scope, now);
     await this.planReconciles(scope, now);
+    /*
+     * AFTER the reconciles, so a tick whose budget is tight spends it on a paid order
+     * that has not been delivered before it spends it refreshing a figure. `claimDue`
+     * is oldest-first across all types, so this is about which rows EXIST, not about
+     * which is claimed — but a reconcile planned in the same tick is already older than
+     * a sync planned after it.
+     */
+    await this.planUsageSyncs(scope, now);
+    /*
+     * And the services whose window has closed, which needs no panel at all.
+     *
+     * After the sweeps that plan work and before the claim, so a service that expires
+     * in this tick is `EXPIRED` before anything else in the tick reads it — which is
+     * what stops a usage sync being planned for a service that has just stopped being
+     * one, and spending an outbound request on a figure that cannot move again.
+     */
+    await this.expireDue(scope, now);
 
     const leaseUntil = new Date(now.getTime() + this.deps.leaseMs);
     /*
@@ -288,29 +346,71 @@ export class ProvisionerService {
     }
 
     /*
-     * The service must still be in the state this operation was planned for.
+     * An operation this release cannot perform is refused HERE, before anything else.
      *
-     * A `PROVISION` is only legal from `PENDING_PROVISION` and a `RECONCILE` only from
-     * `UNRECONCILED` — `SERVICE_MACHINE`'s edges, checked before anything is spent
-     * rather than discovered afterwards by a conditional UPDATE that quietly did
-     * nothing. Without this the executor would dial a panel for a service that is
-     * already ACTIVE, and the collision on the derived username comes back as a
-     * `PROVIDER_ERROR`, which classifies UNKNOWN on a mutating call, which moves a
-     * working service to `UNRECONCILED`.
+     * The Phase 4E audit calls the type dispatch "the single most dangerous edit in
+     * this phase", and names the property to preserve: an operation whose type has no
+     * implementation is refused before any provider is contacted, not defaulted to the
+     * one call the function used to make. `provisionCall` calls `createUser`
+     * unconditionally and its own docblock records that a future type routed through it
+     * "would silently create a user on somebody's panel".
      *
-     * ABANDONED rather than failed or retried: nothing about a stale operation improves
-     * by trying it again, and `OPERATION_MACHINE` provides that state for exactly the
-     * situation nothing else can resolve.
+     * So the check is a membership test against `PERFORMABLE_OPERATION_TYPES` and it
+     * runs before the state check, the tenant check, the panel read, the credential
+     * decryption and the budget — because every one of those is work, and none of it is
+     * owed to an operation nobody can carry out.
+     *
+     * ABANDONED rather than FAILED. `FAILED` is retried, and no number of retries
+     * teaches this release an operation type; `OPERATION_MACHINE` provides ABANDONED
+     * for exactly the situation nothing else can resolve. A row planned by a version
+     * that could perform it and claimed by one that cannot is a rollback, and the
+     * honest answer to a rollback is to stop, not to loop.
      */
-    const legalFrom = operation.type === 'RECONCILE' ? 'UNRECONCILED' : 'PENDING_PROVISION';
-    if (service.state !== legalFrom) {
+    if (!isPerformableOperation(operation.type)) {
       await this.deps.uow.run(scope, async (tx) => {
         await this.deps.operations.transition(
           scope,
           operation.id,
           'IN_FLIGHT',
           'ABANDONED',
-          { failureMessage: `the service is ${service.state}, not ${legalFrom}` },
+          { failureMessage: `this release does not perform ${operation.type} operations` },
+          now,
+          tx,
+        );
+      });
+      return { kind: 'REFUSED', operationId: operation.id, reason: 'CAPABILITY_UNSUPPORTED' };
+    }
+
+    /*
+     * The service must still be in a state this operation is legal from.
+     *
+     * `SERVICE_MACHINE`'s edges, checked before anything is spent rather than discovered
+     * afterwards by a conditional UPDATE that quietly did nothing. Without this the
+     * executor would dial a panel for a service that is already ACTIVE, and the
+     * collision on the derived username comes back as a `PROVIDER_ERROR`, which
+     * classifies UNKNOWN on a mutating call, which moves a working service to
+     * `UNRECONCILED`.
+     *
+     * A TABLE, `OPERATION_LEGAL_FROM`, rather than the ternary this used to be. The
+     * ternary read "RECONCILE from UNRECONCILED, everything else from
+     * PENDING_PROVISION", which answers confidently for a type nobody has thought
+     * about: `SYNC_USAGE` would have been declared legal only from the one state where
+     * there is no account to read.
+     *
+     * ABANDONED rather than failed or retried: nothing about a stale operation improves
+     * by trying it again.
+     */
+    const legalFrom = OPERATION_LEGAL_FROM[operation.type];
+    if (!legalFrom.includes(service.state)) {
+      await this.deps.uow.run(scope, async (tx) => {
+        await this.deps.operations.transition(
+          scope,
+          operation.id,
+          'IN_FLIGHT',
+          'ABANDONED',
+          {
+            failureMessage: `the service is ${service.state}, not ${legalFrom.join(' or ')}`,
+          },
           now,
           tx,
         );
@@ -467,8 +567,79 @@ export class ProvisionerService {
       return { kind: 'REFUSED', operationId: operation.id, reason: 'LEASE_LOST' };
     }
 
-    if (operation.type === 'RECONCILE') {
-      return this.finishReconcile(scope, operation, service, adapter, target, http, ref);
+    /*
+     * The dispatch. Exhaustive over what this release performs, and nothing else.
+     *
+     * `isPerformableOperation` above already refused every other member of
+     * `OPERATION_TYPES`, so the switch below has no reachable default — and it is
+     * written as a switch on the type rather than as two ifs and a fall-through,
+     * because a fall-through is how `provisionCall` came to be the thing an unhandled
+     * type does.
+     */
+    switch (operation.type) {
+      case 'RECONCILE':
+        return this.finishReconcile(scope, operation, service, adapter, target, http, ref);
+      case 'SYNC_USAGE':
+        return this.finishUsageSync(scope, operation, service, adapter, target, http, ref);
+      /*
+       * The three management branches, each narrowing the adapter at the point of call.
+       *
+       * The guards are what make the calls type-safe — `suspendUser` and its siblings
+       * are OPTIONAL on the port, so nothing else would stop this line calling
+       * `undefined`. They ask two questions and require both: the method exists AND the
+       * descriptor declares the capability.
+       *
+       * A `false` here is UNREACHABLE as the code stands, and is written out rather
+       * than asserted away. `decideOperability` already refused this operation above,
+       * because `OPERATION_REQUIRED_CAPABILITIES` names the same capability and it is
+       * read from the same descriptor — so a 3X-UI-backed service never arrives here at
+       * all. The branch earns its place against one specific future edit: a change that
+       * relaxed the operability check, or a descriptor that gained a capability without
+       * the method behind it. `tests/unit/registries.test.ts` asserts the second cannot
+       * happen; this is what happens if it does anyway, and it is a refusal rather than
+       * a TypeError, which is not a `ProviderFailureKind` and would leave a mutating
+       * operation unable to say whether it took effect.
+       */
+      case 'SUSPEND': {
+        if (!canDisableUser(adapter)) {
+          await this.refuse(scope, operation, service, 'CAPABILITY_UNSUPPORTED', now);
+          return { kind: 'REFUSED', operationId: operation.id, reason: 'CAPABILITY_UNSUPPORTED' };
+        }
+        return this.finishStateChange(
+          scope,
+          operation,
+          service,
+          'SUSPEND',
+          await suspendCall(adapter, target, http, ref),
+        );
+      }
+      case 'RESUME': {
+        if (!canEnableUser(adapter)) {
+          await this.refuse(scope, operation, service, 'CAPABILITY_UNSUPPORTED', now);
+          return { kind: 'REFUSED', operationId: operation.id, reason: 'CAPABILITY_UNSUPPORTED' };
+        }
+        return this.finishStateChange(
+          scope,
+          operation,
+          service,
+          'RESUME',
+          await resumeCall(adapter, target, http, ref),
+        );
+      }
+      case 'TERMINATE': {
+        if (!canDeleteUser(adapter)) {
+          await this.refuse(scope, operation, service, 'CAPABILITY_UNSUPPORTED', now);
+          return { kind: 'REFUSED', operationId: operation.id, reason: 'CAPABILITY_UNSUPPORTED' };
+        }
+        return this.finishTerminate(
+          scope,
+          operation,
+          service,
+          await terminateCall(adapter, target, http, ref),
+        );
+      }
+      case 'PROVISION':
+        break;
     }
 
     /*
@@ -699,6 +870,20 @@ export class ProvisionerService {
       );
       for (const operation of stranded) {
         if (!isMutatingOperation(operation.type)) continue;
+        /*
+         * A replayable mutation is not a stall, so it gets neither of the two things
+         * below.
+         *
+         * The repository returned it to `PLANNED` rather than `UNKNOWN`, because sending
+         * a suspend, a resume or a terminate again is sending it once — the property
+         * `docs/providers/marzban.md` measured against the panel. Moving its service to
+         * `UNRECONCILED` would announce that this installation does not know what exists
+         * when it does, and would hand the service to a reconcile that has no question to
+         * ask; opening `PROVISIONING_STALLED_CODE` would tell an operator to look into
+         * something the next tick simply does. If the retries run out, `retireExhausted`
+         * raises the condition then, which is when it is true.
+         */
+        if (isIdempotentMutation(operation.type)) continue;
         /*
          * The service moves only from `PENDING_PROVISION`.
          *
@@ -1014,6 +1199,530 @@ export class ProvisionerService {
       outcome: 'SUCCEEDED',
       failureKind: null,
     };
+  }
+
+  /**
+   * One service's usage, read back from its panel and written to the row.
+   *
+   * The narrowest operation this executor performs, and deliberately so: it is a READ,
+   * `isMutatingOperation` says so, and `failureOutcome` therefore never produces
+   * `UNKNOWN` for it. A sync that did not answer changed nothing by definition, so
+   * there is nothing to reconcile and nothing that needs asking about — it is simply
+   * `FAILED`, retried by the ordinary attempt machinery, and the figure on the row
+   * stays the last one somebody actually read.
+   *
+   * ## Three things it must not do
+   *
+   * **It must not move the service.** `SERVICE_MACHINE` has no edge for a usage read
+   * and this writes none. A panel that has lost the account answers `PROVIDER_ERROR`
+   * through `readUsage`, which is a real divergence an operator has to see — but
+   * "the panel does not have it" arriving on a READ is not the same evidence as a
+   * reconcile's `providerUserProvablyAbsent`, which is a lookup made for exactly that
+   * question from a service that is `UNRECONCILED`. Turning a failed usage read into a
+   * state change would let a rate limit or a rewritten body move a working service.
+   *
+   * **It must not invent a figure.** `recordUsage` is only called on `ok`, and only
+   * with what the panel returned. A sync that failed leaves `usage_synced_at` alone, so
+   * the row keeps saying how stale it is rather than claiming a refresh that did not
+   * happen — and the planner below, which orders by exactly that column, keeps the
+   * service at the front of the queue instead of resetting its place.
+   *
+   * **It must not overwrite a service that moved underneath it.** `recordUsage` is a
+   * conditional UPDATE naming `ACTIVE`, so a service suspended, expired or terminated
+   * during the provider call keeps whatever that transition wrote. There is no
+   * `setUsage`.
+   */
+  private async finishUsageSync(
+    scope: TenantContext,
+    operation: OperationRecord,
+    service: ServiceRecord,
+    adapter: ProviderAdapter,
+    target: Parameters<ProviderAdapter['readUsage']>[0],
+    http: Parameters<ProviderAdapter['readUsage']>[1],
+    ref: Parameters<ProviderAdapter['readUsage']>[2],
+  ): Promise<ExecutionResult> {
+    const read = await usageSyncCall(adapter, target, http, ref);
+    const now = this.deps.clock.now();
+    const serviceId = service.id;
+
+    if (!read.ok) {
+      /*
+       * `FAILED`, never `UNKNOWN`. `failureOutcome(kind, false)` would say the same;
+       * it is passed explicitly here so that a future change to `isMutatingOperation`
+       * cannot silently make a read reconcilable.
+       */
+      await this.persistFailure(
+        scope,
+        operation,
+        service,
+        'FAILED',
+        read.failure,
+        read.status,
+        now,
+      );
+      return {
+        kind: 'ATTEMPTED',
+        operationId: operation.id,
+        serviceId,
+        outcome: 'FAILED',
+        failureKind: read.failure,
+      };
+    }
+
+    await this.deps.uow.run(scope, async (tx) => {
+      await this.deps.operations.transition(
+        scope,
+        operation.id,
+        'IN_FLIGHT',
+        'SUCCEEDED',
+        {},
+        now,
+        tx,
+      );
+      await this.deps.services.recordUsage(
+        scope,
+        serviceId,
+        { usedBytes: read.usage.usedBytes, syncedAt: now },
+        tx,
+      );
+    });
+
+    /*
+     * No audit record and no operational event.
+     *
+     * An audit row is a MUTATION record with a before and an after, and this changed
+     * nothing an operator decided; `docs/conventions.md` keeps the two apart precisely
+     * so an audit trail does not become the activity feed `/admin/logs` was. The
+     * operation row itself carries who ran it, when, and what it found, and the
+     * service row carries the figure — which is the whole of what happened.
+     */
+    return {
+      kind: 'ATTEMPTED',
+      operationId: operation.id,
+      serviceId,
+      outcome: 'SUCCEEDED',
+      failureKind: null,
+    };
+  }
+
+  /**
+   * Records what a SUSPEND or a RESUME did. One method, because the two differ only in
+   * which edge of `SERVICE_MACHINE` they take.
+   *
+   * ## Why this does not go through `persistFailure`
+   *
+   * That helper writes `provisioning.stalled`, whose message is "A paid service could
+   * not be created on its panel." — true for a create and false here — and whose
+   * `PROVISION_LOST_TRACK` branch moves a service out of `PENDING_PROVISION`, a state
+   * neither of these operations is ever attempted from. Reusing it would put a false
+   * sentence into an operator's conditions log under a dedupe key that already means
+   * something else.
+   *
+   * ## No operational event at all, and that is deliberate
+   *
+   * `provisioning.stalled` is specifically about a PAID service a customer is waiting
+   * for, which is why it is ERROR and why it deduplicates per service. A suspend that
+   * did not take is not that: nothing in this release plans one unattended — a customer
+   * or an operator asked for it, in a surface, moments ago — so the person who needs to
+   * know is looking at the operation, and the operation row carries the failure kind,
+   * the status and the attempt count. Opening a condition here would fill the
+   * operations log with the outcomes of actions somebody is already watching, which is
+   * how `/admin/logs` became an activity feed.
+   *
+   * Adding a code later is cheap; splitting or renaming one is not (CLAUDE.md), so the
+   * decision is to add none until something plans these unattended.
+   */
+  private async finishStateChange(
+    scope: TenantContext,
+    operation: OperationRecord,
+    service: ServiceRecord,
+    kind: 'SUSPEND' | 'RESUME',
+    changed: ProviderStateChangeOutcome,
+  ): Promise<ExecutionResult> {
+    const now = this.deps.clock.now();
+    const serviceId = service.id;
+    const from = service.state;
+    const to = MANAGEMENT_TARGET_STATE[kind];
+
+    if (!changed.ok) {
+      /*
+       * `FAILED`, and `outcomeFor` is what says so — because `SUSPEND` and `RESUME` are
+       * in `IDEMPOTENT_MUTATIONS`, so even a TIMEOUT is retried as the same call rather
+       * than routed to a reconciliation that could not answer the question anyway
+       * (`lookupUser` reports whether an account EXISTS, never what state it is in).
+       *
+       * The service is left exactly where it was. A suspend that did not certainly
+       * happen must not move the service to SUSPENDED: the customer would be told their
+       * service is paused while the panel keeps serving it.
+       */
+      const outcome = outcomeFor(changed.failure, operation.type);
+      await this.recordManagementFailure(
+        scope,
+        operation,
+        outcome,
+        changed.failure,
+        failureNote(changed.failure, changed.status),
+        now,
+      );
+      return {
+        kind: 'ATTEMPTED',
+        operationId: operation.id,
+        serviceId,
+        outcome,
+        failureKind: changed.failure,
+      };
+    }
+
+    if (!changed.found) {
+      /*
+       * The panel answered, authenticated, that it does not have this account.
+       *
+       * A divergence, not a failure to reach anything: Nexa believes this service has
+       * an account on this panel and the panel says otherwise. The operation FAILS with
+       * a message naming exactly that, and the SERVICE IS NOT MOVED — reporting a
+       * suspend that suspended nothing would be the "fake external success" this
+       * codebase refuses, and reporting a resume would tell a customer their service is
+       * back when there is nothing to come back.
+       *
+       * No service state exists for this. `SERVICE_MACHINE` has no edge from `ACTIVE`
+       * or `SUSPENDED` to `UNRECONCILED` — that state is reachable only from
+       * `PENDING_PROVISION`, for a create whose answer was lost — and adding one is a
+       * contract change this phase has no evidence to justify. So the divergence is
+       * recorded where an operator reads it and the service keeps saying what it has
+       * always said, which is the honest of the two options.
+       */
+      await this.recordManagementFailure(
+        scope,
+        operation,
+        'FAILED',
+        null,
+        'the panel does not have this service’s account',
+        now,
+      );
+      return {
+        kind: 'ATTEMPTED',
+        operationId: operation.id,
+        serviceId,
+        outcome: 'FAILED',
+        failureKind: null,
+      };
+    }
+
+    const actor = this.actor();
+    await this.deps.uow.run(scope, async (tx) => {
+      await this.deps.operations.transition(
+        scope,
+        operation.id,
+        'IN_FLIGHT',
+        'SUCCEEDED',
+        {},
+        now,
+        tx,
+      );
+      /*
+       * The service moves only if it is still where the state check found it.
+       *
+       * A conditional UPDATE naming `from`, so a service that expired or was terminated
+       * while this call was on the wire keeps whatever that transition wrote. The
+       * operation still SUCCEEDED, because the panel really did apply the change and
+       * saying otherwise would be a lie about an external effect.
+       */
+      const moved = await this.deps.services.transition(scope, serviceId, from, to, null, now, tx);
+      if (!moved) return;
+      await this.deps.audit.record(
+        scope,
+        actor,
+        {
+          action: kind === 'SUSPEND' ? 'service.suspend' : 'service.resume',
+          entityType: 'Service',
+          entityId: serviceId,
+          before: { state: from },
+          after: { state: to },
+          result: 'SUCCESS',
+        },
+        tx,
+      );
+      await this.deps.outbox.write(tx, actor, {
+        eventType: 'ServiceStateChanged',
+        aggregateType: 'Service',
+        aggregateId: serviceId,
+        payload: { customerId: service.customerId, from, to },
+      });
+    });
+
+    return {
+      kind: 'ATTEMPTED',
+      operationId: operation.id,
+      serviceId,
+      outcome: 'SUCCEEDED',
+      failureKind: null,
+    };
+  }
+
+  /**
+   * Records what a TERMINATE did.
+   *
+   * Separate from `finishStateChange` because its success is a different shape: there is
+   * no `found`, the target state is `TERMINATED` from any of five, and an account the
+   * panel does not have is a SUCCESS rather than a divergence.
+   *
+   * That last one is the whole reason `wasPresent` exists. A delete replayed after a
+   * lost answer finds nothing the second time, and the goal — this account is not on
+   * this panel — holds either way. Treating the 404 as a failure would strand every
+   * terminate whose response went missing; treating it as `wasPresent: true` would let
+   * the record imply the second call did the work.
+   */
+  private async finishTerminate(
+    scope: TenantContext,
+    operation: OperationRecord,
+    service: ServiceRecord,
+    removed: ProviderRemovalOutcome,
+  ): Promise<ExecutionResult> {
+    const now = this.deps.clock.now();
+    const serviceId = service.id;
+    const from = service.state;
+
+    if (!removed.ok) {
+      const outcome = outcomeFor(removed.failure, operation.type);
+      await this.recordManagementFailure(
+        scope,
+        operation,
+        outcome,
+        removed.failure,
+        failureNote(removed.failure, removed.status),
+        now,
+      );
+      return {
+        kind: 'ATTEMPTED',
+        operationId: operation.id,
+        serviceId,
+        outcome,
+        failureKind: removed.failure,
+      };
+    }
+
+    const actor = this.actor();
+    await this.deps.uow.run(scope, async (tx) => {
+      await this.deps.operations.transition(
+        scope,
+        operation.id,
+        'IN_FLIGHT',
+        'SUCCEEDED',
+        {},
+        now,
+        tx,
+      );
+      const moved = await this.deps.services.transition(
+        scope,
+        serviceId,
+        from,
+        'TERMINATED',
+        null,
+        now,
+        tx,
+      );
+      if (!moved) return;
+      await this.deps.audit.record(
+        scope,
+        actor,
+        {
+          action: 'service.terminate',
+          entityType: 'Service',
+          entityId: serviceId,
+          before: { state: from },
+          /*
+           * `accountWasPresent` is recorded because the two cases are different facts
+           * about the world and an audit row is where the difference belongs: `false`
+           * says this installation ended a service whose provider account was already
+           * gone, which an operator investigating a customer complaint needs to know.
+           */
+          after: { state: 'TERMINATED', accountWasPresent: removed.wasPresent },
+          result: 'SUCCESS',
+        },
+        tx,
+      );
+      await this.deps.outbox.write(tx, actor, {
+        eventType: 'ServiceStateChanged',
+        aggregateType: 'Service',
+        aggregateId: serviceId,
+        payload: { customerId: service.customerId, from, to: 'TERMINATED' },
+      });
+    });
+
+    return {
+      kind: 'ATTEMPTED',
+      operationId: operation.id,
+      serviceId,
+      outcome: 'SUCCEEDED',
+      failureKind: null,
+    };
+  }
+
+  /**
+   * The operation row for a management call that did not succeed, and nothing else.
+   *
+   * It shares `persistFailure`'s retry decision deliberately — both axes, the same way
+   * round — and shares nothing else with it. `PROVIDER_FAILURE_RETRYABLE` answers
+   * "would trying again plausibly help", which is a different question from the one
+   * `outcomeFor` answered, and conflating them is what once made the provisioner log in
+   * wrongly five times against a panel that locks accounts.
+   *
+   * `failure` is null for the one outcome that is not a provider failure at all — the
+   * panel answering that it does not have the account. There is no
+   * `ProviderFailureKind` for that and inventing one would put a fact about Nexa's
+   * bookkeeping into a vocabulary that describes wires.
+   */
+  private async recordManagementFailure(
+    scope: TenantContext,
+    operation: OperationRecord,
+    outcome: OperationState,
+    failure: ProviderFailureKind | null,
+    message: string,
+    now: Date,
+  ): Promise<void> {
+    const retryable =
+      outcome === 'FAILED' &&
+      failure !== null &&
+      PROVIDER_FAILURE_RETRYABLE[failure] &&
+      !exhausted(operation.attempts);
+    await this.deps.uow.run(scope, async (tx) => {
+      await this.deps.operations.transition(
+        scope,
+        operation.id,
+        'IN_FLIGHT',
+        retryable ? 'PLANNED' : outcome,
+        {
+          ...(failure === null ? {} : { failureKind: failure }),
+          failureMessage: message,
+          nextAttemptAt: retryable ? new Date(now.getTime() + backoffMs(operation.attempts)) : null,
+        },
+        now,
+        tx,
+      );
+    });
+  }
+
+  /**
+   * Moves services whose window has closed to `EXPIRED`. No provider is contacted.
+   *
+   * ## Why this is a Nexa-side transition and not an operation
+   *
+   * The panel already stopped serving the account: `expiryTime` was written into the
+   * client at creation and 3X-UI enforces it, as Marzban enforces `expire`. Nothing
+   * needs to be asked and nothing needs to be told. What was missing was Nexa AGREEING
+   * — `services.expires_at` was written by the create and by the adopt path,
+   * `services_expiry_idx` existed, and no code read either, so a service whose window
+   * had closed stayed `ACTIVE` here for ever while the panel refused it. Two
+   * authorities disagreeing is the shape `SERVICE_MACHINE`'s own comment about the
+   * provider being "not the authority, and not ignored either" exists to prevent.
+   *
+   * So this is not a `SYNC_USAGE`-style operation with a claim, a lease and an
+   * attempt counter. There is no external call to fail, nothing to be uncertain about,
+   * and no budget to spend. It is one conditional UPDATE.
+   *
+   * ## What it must not do
+   *
+   * **It must not expire a service the panel might still be serving.** Only rows whose
+   * own `expires_at` has passed, and `expires_at` is NULL for an unlimited plan — which
+   * `provisionCall` writes as the panel's own unlimited rather than as an epoch.
+   *
+   * **It must not move a service that is not ACTIVE or SUSPENDED.** `SERVICE_MACHINE`
+   * has `EXPIRE` from exactly those two. A `PENDING_PROVISION` service has no account
+   * to have expired, and `TERMINATED` is terminal — a terminated service that could
+   * come back would make "terminate" a word an operator could not rely on.
+   *
+   * **It must not run for a tenant that has stopped accepting work.** `runOnce` checks
+   * that first, and this is a durable write inside `uow.run`, which is also where
+   * ADR-0028's quiesce gate lives.
+   */
+  private async expireDue(scope: TenantContext, now: Date): Promise<void> {
+    const actor = this.actor();
+    await this.deps.uow.run(scope, async (tx) => {
+      const expired = await this.deps.services.expireDue(
+        scope,
+        now,
+        SERVICE_EXPIRY_SWEEP_LIMIT,
+        tx,
+      );
+      for (const service of expired) {
+        /*
+         * An AUDIT record and no operational event.
+         *
+         * `docs/conventions.md` keeps the two apart: an audit row is a mutation with a
+         * before and an after, which this is, and an operational event is a condition
+         * an operator has to act on, which this is not. A service reaching the end of
+         * the window somebody bought is the product working. Recording it as an
+         * operator condition would fill the operations log with the ordinary passage
+         * of time, which is how `/admin/logs` became an activity feed.
+         */
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action: 'service.expire',
+            entityType: 'Service',
+            entityId: service.id,
+            before: { state: service.state, expiresAt: service.expiresAt?.toISOString() ?? null },
+            after: { state: 'EXPIRED' },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+      }
+    });
+  }
+
+  /**
+   * Plans a usage sync for the services whose figure has gone stale.
+   *
+   * Bounded by `USAGE_SYNC_PLAN_LIMIT` and ordered by how stale the figure is, for the
+   * reason the panel monitor's discovery is bounded and ordered: a tenant with ten
+   * thousand services must not turn one tick into ten thousand rows, and the next tick
+   * has to pick up where this one stopped rather than starting again at the top.
+   *
+   * The operation id is DERIVED from the service and the window it belongs to, not
+   * random. `plan` is `ON CONFLICT DO NOTHING` on `(tenant_id, operation_id)`, so two
+   * replicas planning in the same window produce one row — two replicas is the normal
+   * case on every rolling update — and a tick that runs twice inside one window does
+   * not queue a second read of the same figure.
+   */
+  private async planUsageSyncs(scope: TenantContext, now: Date): Promise<void> {
+    await this.deps.uow.run(scope, async (tx) => {
+      const minutes = await this.deps.settings.valueOf<number>(
+        scope,
+        'provisioning.usage_sync_minutes',
+        tx,
+      );
+      const staleBefore = new Date(now.getTime() - minutes * 60_000);
+      /*
+       * The window an operation id belongs to, as a whole number of cadences since the
+       * epoch. Two ticks inside one window derive the SAME id and therefore plan once;
+       * the next window derives a different one, so a sync that failed and was retired
+       * is planned again rather than being suppressed for ever by its own history.
+       */
+      const window = Math.floor(now.getTime() / (minutes * 60_000));
+      const stale = await this.deps.services.listUsageSyncDue(
+        scope,
+        staleBefore,
+        USAGE_SYNC_PLAN_LIMIT,
+        tx,
+      );
+      for (const candidate of stale) {
+        await this.deps.operations.plan(
+          scope,
+          {
+            id: this.deps.ids.uuid(),
+            operationId: this.deps.operationId(`${candidate.id}:SYNC_USAGE:${String(window)}`),
+            serviceId: candidate.id,
+            orderId: candidate.orderId,
+            panelId: candidate.panelId,
+            type: 'SYNC_USAGE',
+          },
+          now,
+          tx,
+        );
+      }
+    });
   }
 
   /** A refusal: nothing was contacted, so nothing about a provider is recorded. */

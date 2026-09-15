@@ -22,9 +22,20 @@ import {
 import { CATALOGUE_FA } from '@nexa/i18n';
 import {
   BOT_INTENTS,
+  CONFIRM_CALLBACK_PREFIX,
+  GATEWAY_PAY_CALLBACK_PREFIX,
   intentOf,
+  MANUAL_PAY_CALLBACK_PREFIX,
+  ORDER_CALLBACK_PREFIX,
   privateChatIdOf,
   replyFor,
+  SERVICE_CALLBACK_PREFIX,
+  SERVICE_RESEND_CALLBACK_PREFIX,
+  SERVICE_RESUME_CALLBACK_PREFIX,
+  SERVICE_SUSPEND_CALLBACK_PREFIX,
+  SERVICE_TERMINATE_ASK_CALLBACK_PREFIX,
+  SERVICE_TERMINATE_CALLBACK_PREFIX,
+  WALLET_PAY_CALLBACK_PREFIX,
 } from '../../apps/api/src/surfaces/telegram/bot-runtime.js';
 import { telegramUserIdOf } from '../../apps/api/src/surfaces/telegram/webhook.controller.js';
 
@@ -307,6 +318,73 @@ describe('profile metadata, normalised before it is ever stored', () => {
      *
      * None of them instructs a customer to do something that can only answer
      * `bot.unknown_command`, and none claims an effect that did not happen.
+     *
+     * Four more joined in 4E, when a customer could finally see a service at all.
+     * Reviewed, one at a time:
+     *
+     *   `bot.service.list_heading`     introduces the customer's own services. It names
+     *                                  no count, because a count interpolated at render
+     *                                  goes stale the moment a service expires.
+     *   `bot.service.not_found`        ONE answer for a service that is not theirs and
+     *                                  one that does not exist, so the bot is not an
+     *                                  oracle for guessing ids. It also answers every
+     *                                  refusal `redeliver` can produce, and the reason
+     *                                  it does is written where it is returned.
+     *   `bot.service.list_empty`       the honest answer to owning nothing, and a
+     *                                  different KEY from the heading rather than the
+     *                                  heading with nothing under it.
+     *   `bot.service.detail`           usage and expiry WITH the moment they were read.
+     *                                  `syncedAt` is absent until a sync has succeeded,
+     *                                  which is why the placeholder is not required: a
+     *                                  figure with no asOf is one a customer reads as
+     *                                  live.
+     *   `bot.service.resend_button`    a button label, and its own key rather than
+     *                                  `bot.service.subscription`. That was the first
+     *                                  attempt and `validateTemplateValues` refused the
+     *                                  send: a label is rendered with no values and
+     *                                  that key requires a `subscriptionUrl`. The
+     *                                  button carries a service id and no link; the
+     *                                  link is sent by `DeliveryService.redeliver`,
+     *                                  read from the row.
+     *
+     * Seven more joined when a customer could act on a service rather than only look
+     * at one. Reviewed, one at a time:
+     *
+     *   `bot.service.suspend_button`   asks for a pause. Drawn only when the service is
+     *                                  ACTIVE and the panel declares DISABLE_USER, so
+     *                                  it is never offered where it cannot be honoured.
+     *   `bot.service.resume_button`    the mirror, from SUSPENDED and ENABLE_USER.
+     *   `bot.service.terminate_button` BEGINS ending a service and does not end one: it
+     *                                  carries the ask prefix, so no message in this
+     *                                  product ends a service on one tap.
+     *   `bot.service.terminate_confirm` the question, and it states the consequence —
+     *                                  the account on the panel is deleted, and it
+     *                                  cannot be undone — rather than asking "are you
+     *                                  sure". A question with no consequence in it is
+     *                                  the same button with a delay.
+     *   `bot.service.terminate_confirm_button`
+     *                                  the only callback in this surface that plans a
+     *                                  TERMINATE. It reads differently from the button
+     *                                  that opened the question, because a customer who
+     *                                  cannot tell them apart ends a service by tapping
+     *                                  twice in the same place.
+     *   `bot.service.action_requested` says the request was RECORDED, not that it is
+     *                                  done. The panel is called by the provisioner
+     *                                  seconds later and can fail; claiming completion
+     *                                  here would be a claim about somebody else's
+     *                                  machine made before anything was asked of it.
+     *   `bot.service.capability_unsupported`
+     *                                  frozen since Phase 4 and first SENT here. It
+     *                                  answers a state the action is not legal from, a
+     *                                  panel that cannot perform it, and a tenant that
+     *                                  has stopped — one sentence for three, because
+     *                                  none is the customer's to fix and telling them
+     *                                  apart would describe an operator's panel to a
+     *                                  customer.
+     *
+     * None of them instructs a customer to do something that can only answer
+     * `bot.unknown_command` either — `/services` is a real command in `intentOf`, and
+     * every callback prefix is parsed.
      */
     expect([...sent].sort()).toEqual([
       'bot.blocked',
@@ -323,6 +401,18 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.manual_instructions',
       'bot.payment.unconfigured',
       'bot.payment.wallet_button',
+      'bot.service.action_requested',
+      'bot.service.capability_unsupported',
+      'bot.service.detail',
+      'bot.service.list_empty',
+      'bot.service.list_heading',
+      'bot.service.not_found',
+      'bot.service.resend_button',
+      'bot.service.resume_button',
+      'bot.service.suspend_button',
+      'bot.service.terminate_button',
+      'bot.service.terminate_confirm',
+      'bot.service.terminate_confirm_button',
       'bot.start.welcome',
       'bot.start.welcome_back',
       'bot.unknown_command',
@@ -496,5 +586,75 @@ describe('a provider failure is classified by what it means, not how it feels', 
     expect(isMutatingOperation('RECONCILE')).toBe(false);
     expect(isMutatingOperation('PROVISION')).toBe(true);
     expect(isMutatingOperation('TERMINATE')).toBe(true);
+  });
+});
+
+describe('a callback prefix decides what happens, so no prefix may shadow another', () => {
+  /*
+   * `intentOf` tests prefixes in a fixed order and returns on the first match, so a
+   * prefix that is a prefix of another routes every tap for the longer one to whichever
+   * branch comes first. The comment beside the resend/service pair already says this;
+   * here it is checked, because the consequence is no longer "the customer gets the
+   * wrong screen".
+   *
+   * `t:` opens a question and `k:` ends a service. If one ever shadowed the other, one
+   * of them would silently stop happening — and the direction that matters is that a
+   * tap meaning "ask me first" must never be able to arrive as "do it".
+   */
+  const PREFIXES: Readonly<Record<string, string>> = {
+    ORDER: ORDER_CALLBACK_PREFIX,
+    CONFIRM: CONFIRM_CALLBACK_PREFIX,
+    PAY_WALLET: WALLET_PAY_CALLBACK_PREFIX,
+    PAY_MANUAL: MANUAL_PAY_CALLBACK_PREFIX,
+    PAY_GATEWAY: GATEWAY_PAY_CALLBACK_PREFIX,
+    SERVICE: SERVICE_CALLBACK_PREFIX,
+    SERVICE_RESEND: SERVICE_RESEND_CALLBACK_PREFIX,
+    SERVICE_SUSPEND: SERVICE_SUSPEND_CALLBACK_PREFIX,
+    SERVICE_RESUME: SERVICE_RESUME_CALLBACK_PREFIX,
+    SERVICE_TERMINATE_ASK: SERVICE_TERMINATE_ASK_CALLBACK_PREFIX,
+    SERVICE_TERMINATE: SERVICE_TERMINATE_CALLBACK_PREFIX,
+  };
+
+  it('gives every prefix a distinct string that no other prefix begins with', () => {
+    const values = Object.values(PREFIXES);
+    expect(new Set(values).size, 'two intents share a prefix').toBe(values.length);
+    for (const one of values) {
+      for (const other of values) {
+        if (one === other) continue;
+        expect(other.startsWith(one), `${other} is shadowed by ${one}`).toBe(false);
+      }
+    }
+  });
+
+  it('routes each prefix to its own intent, and carries the id through unchanged', () => {
+    // A real uuid, because `callbackCommand` validates the payload rather than casting
+    // it: `callback_data` is whatever the client sent, and a malformed id is answered
+    // rather than turned into a 500 at the column.
+    const id = '0191f4a0-2d3c-7c2b-9a41-6f2b0c7e51aa';
+    for (const [intent, prefix] of Object.entries(PREFIXES)) {
+      const command = intentOf({
+        callback_query: { id: 'cbq', data: `${prefix}${id}` },
+      });
+      expect(command.intent, `${prefix} must route to ${intent}`).toBe(intent);
+      expect(command.targetId).toBe(id);
+    }
+  });
+
+  it('never routes anything but the confirmation button to SERVICE_TERMINATE', () => {
+    /*
+     * The destructive intent, checked from the other direction: every OTHER prefix, and
+     * a payload with no prefix at all, must produce something that is not
+     * SERVICE_TERMINATE. A future prefix chosen carelessly — `k` followed by something,
+     * say — fails here rather than by ending a customer's service.
+     */
+    for (const [intent, prefix] of Object.entries(PREFIXES)) {
+      if (intent === 'SERVICE_TERMINATE') continue;
+      expect(
+        intentOf({
+          callback_query: { id: 'c', data: `${prefix}0191f4a0-2d3c-7c2b-9a41-6f2b0c7e51aa` },
+        }).intent,
+      ).not.toBe('SERVICE_TERMINATE');
+    }
+    expect(intentOf({ callback_query: { id: 'c', data: 'nonsense' } }).intent).toBe('UNSUPPORTED');
   });
 });
