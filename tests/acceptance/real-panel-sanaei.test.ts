@@ -413,9 +413,16 @@ describe('A6. a retry does not give the customer two accounts', () => {
 describe('A7. no credential reaches an outcome, an error or a log', () => {
   const secrets = (): readonly string[] => {
     const credentials = panel.credentials;
-    return credentials.shape === 'USERNAME_PASSWORD'
-      ? [credentials.password]
-      : [credentials.token];
+    switch (credentials.shape) {
+      case 'USERNAME_PASSWORD':
+        return [credentials.password];
+      case 'OPAQUE_TOKEN':
+        return [credentials.token];
+      // `NONE` carries nothing to leak, and a panel configured that way is not
+      // one this suite can authenticate against in the first place.
+      case 'NONE':
+        return [];
+    }
   };
 
   it('a successful create carries no credential', async () => {

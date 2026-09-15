@@ -236,7 +236,9 @@ export async function countClientsNamed(panel: RealPanel, email: string): Promis
   for (const inbound of body.obj ?? []) {
     const settings = (inbound as { settings?: unknown }).settings;
     const parsed =
-      typeof settings === 'string' ? (JSON.parse(settings) as { clients?: readonly unknown[] }) : ((settings ?? {}) as { clients?: readonly unknown[] });
+      typeof settings === 'string'
+        ? (JSON.parse(settings) as { clients?: readonly unknown[] })
+        : ((settings ?? {}) as { clients?: readonly unknown[] });
     for (const client of parsed.clients ?? []) {
       if ((client as { email?: unknown }).email === email) count += 1;
     }

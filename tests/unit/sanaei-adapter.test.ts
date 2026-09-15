@@ -620,11 +620,7 @@ describe('the Sanaei adapter — a session-mode create carries the CSRF token', 
   it('20. a DIFFERENT identity on a taken name is refused', async () => {
     const server = await panel();
     const adapter = new SanaeiAdapter();
-    await adapter.createUser(
-      serviceTarget(server, withPassword()),
-      client(server.baseUrl),
-      input,
-    );
+    await adapter.createUser(serviceTarget(server, withPassword()), client(server.baseUrl), input);
     const impostor = await adapter.createUser(
       serviceTarget(server, withPassword()),
       client(server.baseUrl),

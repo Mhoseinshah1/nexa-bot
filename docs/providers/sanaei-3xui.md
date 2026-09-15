@@ -119,7 +119,32 @@ free.
    submit the operator's username and password to find out.
 
 3. `POST login` with the same cookie and token, JSON `{username, password}`.
-4. `GET panel/api/server/status` with the session cookie.
+4. `GET panel/api/server/status` with the session cookie **and the same token**.
+
+#### The token does not stop at the login form
+
+`internal/web/controller/api.go`'s `initRouter` mounts, in order,
+`checkAPIAuth`, `enforceTokenScope`, `ConfigEnvelopeMiddleware` and
+`middleware.CSRFMiddleware()` — on the **whole `/panel/api` group**.
+`CSRFMiddleware` short-circuits on exactly one condition,
+`c.GetBool("api_authed")`, which `checkAPIAuth` sets for a Bearer caller and
+**never** for a session one. `isSafeMethod` then exempts GET, HEAD, OPTIONS and
+TRACE.
+
+So in mode B every **unsafe** `/panel/api` request needs `X-CSRF-Token` too, and
+without it the panel answers `AbortWithStatus(403)` with no body. Reads are
+unaffected, which is what made the absence of this survive review: a panel with
+the header missing probes perfectly healthy and cannot create an account.
+
+The token survives the login. `login` reaches `session.SetLoginUser`, which does
+`s.Set` and `s.Save` and never `s.Clear`, so the `CSRF_TOKEN` minted at step 1
+is still what `ValidateCSRFToken` compares against afterwards. A **rotated
+cookie** is adopted; the token inside that session is unchanged.
+
+The adapter therefore carries the token on every session-mode request rather
+than only on unsafe ones — inert on a GET, and impossible for a later mutating
+method to forget. Verified against a real v3.7.0 panel;
+`docs/real-panel-acceptance.md` is the record.
 
 **HTTP 200 is not success.** A wrong username, a wrong password and a wrong 2FA
 code all return HTTP 200 with `{"success": false, …}`. Every consumed response
@@ -323,8 +348,38 @@ shape the panel does not accept", which is the opposite of what `create` does.
 with `obj: null`. That is what makes `lookupUser` able to report `found: false` and what
 makes a fresh create legal after a reconcile.
 
-**What guards this table.** `tests/unit/provider-wire-routes.test.ts` asserts the
-adapter's path constants against it. That does not prove the table matches upstream —
-nothing offline can — but it makes this the one place a route is verified and stops an
-adapter disagreeing with it silently. The other half is `docs/vps-acceptance.md`, which
-has never been run; first contact with a real panel is what catches the next one.
+**A repeated create is an idempotent no-op, not a refusal.**
+`ClientService.AddInboundClient` runs `checkEmailsExistForClients`, which **exempts a
+client whose `subId` matches** so one identity can live on several inbounds, then drops
+anything already on this inbound and returns `(false, nil)` when that leaves nothing —
+no error, so the controller answers success. Upstream made that the behaviour
+deliberately (#5770, `TestAddInboundClient_SkipsClientsAlreadyOnInbound`) because
+retried and raced adds were duplicating one email inside a single settings array.
+
+Nexa's three identities are derived per service, so a replayed create carries the same
+email **and** the same subId: it succeeds and the PROVISION operation completes, with no
+reconcile, because nothing was ever unknown. A **different** identity claiming a taken
+name is still refused with `Duplicate email: <email>` under `success: false`. The
+adapter used to assert the opposite, and the fake enforced the opposite.
+
+**Reading a client back.** `GET panel/api/clients/get/:email` answers
+`{obj: {client: {…}, inboundIds, externalLinks, usedTraffic}}`, and inside `client` the
+VLESS UUID is **`uuid`** while `id` is the database row id, an integer. The adapter does
+not read this route — it is how an operator, or an acceptance check, verifies what the
+panel actually stored.
+
+**What guards this table.** Three things, in increasing strength.
+
+`tests/unit/provider-wire-routes.test.ts` asserts the adapter's path constants against
+it. That does not prove the table matches upstream — nothing offline can — but it makes
+this the one place a route is verified and stops an adapter disagreeing with it
+silently.
+
+`internal/web/dist/openapi.json`, emitted by the frontend build from the Go source via
+`tools/openapigen`, lists 183 paths at the pinned commit including exactly the four this
+adapter uses. That is an upstream-generated artifact rather than a transcription.
+
+`tests/acceptance/real-panel-sanaei.test.ts` runs the shipped adapter against a real
+panel built from this commit. It is what caught the CSRF rule above and the duplicate
+semantics here, neither of which any amount of re-reading had. `docs/real-panel-acceptance.md`
+is how to run it.

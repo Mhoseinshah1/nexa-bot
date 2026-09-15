@@ -129,6 +129,16 @@ looks like a restore and is not:
   two executor replicas all safe, and a convenience setter would quietly remove
   it from all three.
 
+One more, learned by running a real panel (`docs/real-panel-acceptance.md`):
+
+- A fake this repository wrote and an adapter this repository wrote can only
+  prove they **agree with each other**. Three defects reached `main` on the
+  Sanaei create path that way — two wrong routes and a dropped CSRF token — and
+  each shipped behind a green suite. So a provider rule is verified against the
+  real panel binary, and the fake is corrected to match it in the same commit.
+  `pnpm test:acceptance` needs a disposable panel and **fails rather than skips**
+  without one; it is not in `pnpm verify` and CI does not run it.
+
 One more, learned in Phase 3C:
 
 - An operational-event CODE is part of the schema, not a string. `operational_events`
