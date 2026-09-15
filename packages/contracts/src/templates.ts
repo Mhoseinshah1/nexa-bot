@@ -692,6 +692,130 @@ export const TEMPLATES = [
     ],
   },
   {
+    key: 'bot.service.renew_button',
+    description:
+      'The button that opens a renewal quote. It buys nothing: it shows the price and ' +
+      'asks. Drawn only when the service is ACTIVE or EXPIRED, its product is still ' +
+      'purchasable, and the panel declares RENEW_USER — and not drawing it is ' +
+      'never the control, because every one of those is re-checked when the tap ' +
+      'arrives and again when the money moves.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.add_traffic_button',
+    description:
+      'The button that lists the extra-traffic packages on offer. Drawn only when the ' +
+      'service is ACTIVE, the panel declares ADD_VOLUME, and at least one package is ' +
+      'configured and priced — an action with no configured price is explicitly ' +
+      'unavailable rather than free.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.add_time_button',
+    description:
+      'The button that lists the extra-time packages on offer. Drawn under the same ' +
+      'three conditions as extra traffic, against ADD_TIME.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.action_unavailable',
+    description:
+      'Shown when an action a customer asked for cannot be sold right now — no ' +
+      'package is configured, the plan behind a renewal has been withdrawn, or the ' +
+      'panel cannot perform it. One message for all three because the customer’s ' +
+      'next step is the same and naming which would tell them about an operator’s ' +
+      'configuration; the operational log carries the distinction an operator needs.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.action_not_allowed',
+    description:
+      'Shown when the SERVICE is not in a state this action means anything from — ' +
+      'a terminated service cannot be renewed, a suspended one cannot be topped up. ' +
+      'Distinct from the message above because the remedy is the customer’s ' +
+      'rather than the operator’s.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.addon_choice',
+    description:
+      'The heading above the configured packages a customer may buy. The amounts and ' +
+      'prices are on the BUTTONS, each of which carries a package id and nothing else ' +
+      '— a callback is an intent and an identifier, never a quantity or a price.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.addon_option',
+    description:
+      'One package button: what it adds and what it costs. Rendered from the row the ' +
+      'operator configured, so an amount a customer sees is an amount the server will ' +
+      'charge for.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'title',
+        type: 'STRING',
+        description: 'The package’s own name, as the operator wrote it.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'price',
+        type: 'MONEY',
+        description:
+          'What it costs, with its currency. A MONEY placeholder rather than a number, ' +
+          'for the reason the whole catalogue uses one: the legacy system rendered the ' +
+          'same figure as تومان on one template and ' +
+          'ریال on its twin, a factor of ten apart.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.action_quote',
+    description:
+      'The offer a customer answers: what this action buys for this service, and what ' +
+      'it costs. The number here is the number the order was written with — the ' +
+      'quote is taken when the draft is made and never re-taken, so a customer is ' +
+      'never charged a price they did not see.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'productTitle',
+        type: 'STRING',
+        description:
+          'What is being bought — the plan’s title for a renewal, the ' +
+          'package’s for a quantity purchase.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'total',
+        type: 'MONEY',
+        description: 'What it costs, with its currency.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.action_confirm_button',
+    description:
+      'The button that commits the customer to the quote above and moves the order to ' +
+      'awaiting payment. Its own key rather than a reuse of the purchase confirmation, ' +
+      'because the two answer different questions and a shared label is a label that ' +
+      'cannot say which.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.service.terminate_confirm_button',
     description:
       'The button that actually ends the service. The ONLY callback that plans a ' +
