@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { OPERATIONAL_SEVERITIES } from './ports.js';
 import { ORDER_EXPIRY_MINUTES_MAX, ORDER_EXPIRY_MINUTES_MIN } from './commerce.js';
+import { USAGE_SYNC_MINUTES_MAX, USAGE_SYNC_MINUTES_MIN } from './provisioning.js';
 import { moneySchema, salesCurrencyCodeSchema } from './money.js';
 
 /**
@@ -345,6 +346,36 @@ export const SETTINGS = [
     defaultValue: 60,
     // Zero is outside the schema entirely — the minimum is five — so it can never be
     // stored and does not need a meaning.
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'provisioning.usage_sync_minutes',
+    description:
+      'How stale a service\u2019s traffic figure may get before this installation asks its panel ' +
+      'for a fresh one. The figure is what a customer is told when they ask how much traffic ' +
+      'they have left, and it is written once at provisioning and then never again unless ' +
+      'something refreshes it. An operator setting rather than a constant because every sync ' +
+      'is an outbound request against the tenant\u2019s ONE probe budget \u2014 the same bucket ' +
+      'the panel monitor and provisioning spend from \u2014 so how often a tenant wants to poll ' +
+      'depends on how many services sit on that panel and what the panel tolerates. ' +
+      'USAGE_SYNC_MINUTES_MIN and _MAX in provisioning.ts are the bounds a configured value is ' +
+      'checked against.',
+    // Bounded by the CONTRACT's own constants rather than by numbers retyped here,
+    // for the reason `sales.order_expiry_minutes` gives: two copies of a bound drift.
+    schema: z.number().int().min(USAGE_SYNC_MINUTES_MIN).max(USAGE_SYNC_MINUTES_MAX),
+    // Four hours. Six reads a day per service is a figure an operator can explain to a
+    // customer without being a load an ordinary panel notices, and it is well inside
+    // the floor that keeps these reads from crowding out an operator's own panel work.
+    defaultValue: 240,
+    // Zero is outside the schema entirely \u2014 the minimum is fifteen \u2014 so it can
+    // never be stored and does not need a meaning. Turning the sweep OFF is not
+    // expressible here on purpose: a usage figure nothing refreshes is the defect this
+    // key exists to close, and a tenant that does not want the reads should not be
+    // selling metered services.
     zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',

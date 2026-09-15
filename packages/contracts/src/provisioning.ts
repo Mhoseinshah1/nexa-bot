@@ -278,6 +278,32 @@ export const OPERATION_LEASE_SECONDS_MAX = 3600;
 export const OPERATION_MAX_ATTEMPTS = 5;
 
 /**
+ * How stale a service's usage figure may get before a `SYNC_USAGE` is planned for it.
+ *
+ * A BOUND, not a cadence: the cadence is `provisioning.usage_sync_minutes`, an operator
+ * setting, because how often a tenant wants to poll somebody else's panel depends on
+ * how many services they have on it and what that panel tolerates.
+ *
+ * The floor exists because every sync is an outbound request against the tenant's ONE
+ * probe budget — the same bucket the monitor and provisioning spend from — so a cadence
+ * of seconds would starve the operator's own panel work with reads nobody asked for.
+ * The ceiling exists because the figure this refreshes is what a customer is told when
+ * they ask how much traffic they have left, and a number a day old is the kind the
+ * legacy reports were made of.
+ */
+export const USAGE_SYNC_MINUTES_MIN = 15;
+export const USAGE_SYNC_MINUTES_MAX = 1440;
+
+/**
+ * How many services one tick may plan a usage sync for.
+ *
+ * Bounded for the same reason the monitor's discovery is: a tenant with ten thousand
+ * services must not turn one tick into ten thousand rows, and the next tick picks up
+ * where this one stopped because the query orders by how stale the figure is.
+ */
+export const USAGE_SYNC_PLAN_LIMIT = 50;
+
+/**
  * The provider-side username this installation assigns.
  *
  * Deterministic from the service id, which is the property that makes adoption possible:
