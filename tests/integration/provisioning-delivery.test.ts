@@ -439,6 +439,27 @@ describe('a provisioned service announces itself', () => {
     const sweep = await ctx.container.delivery.deliverDue(tenantA, 10);
     expect(sweep.claimed, 'nothing is even claimed').toBe(0);
     expect(sent, 'and nothing reaches Telegram').toHaveLength(0);
+
+    /*
+     * And the CUSTOMER-initiated path is refused too.
+     *
+     * The sweep's early return is an optimisation — it stops a stopped tenant's rows
+     * being claimed and leased only to be refused one at a time. The gate that makes
+     * the rule true is inside `deliver`, and `redeliver` is its other caller. Exercised
+     * through that caller so the gate is not a rule with no test, which is how the
+     * early return alone would leave it.
+     */
+    const service = (await services.list(tenantA, {}, 1, null)).items[0];
+    await expect(
+      ctx.container.delivery.redeliver(
+        tenantA,
+        service ?? (undefined as never),
+        customerA,
+        '910910',
+        BOT_A,
+      ),
+    ).rejects.toThrow();
+    expect(sent, 'still nothing').toHaveLength(0);
   });
 
   it('keeps the committed service when the reply dies on the wire', async () => {
