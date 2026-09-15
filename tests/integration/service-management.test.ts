@@ -1021,6 +1021,50 @@ describe('a customer manages the service they bought', () => {
     ).rejects.toMatchObject({ code: 'commerce.addon_not_purchasable' });
   });
 
+  it('refuses a package the operator has withdrawn since the button was drawn', async () => {
+    /*
+     * The callback a customer is holding outlives the row it names.
+     *
+     * `availableFor` stops drawing the button the moment an add-on is deactivated, and
+     * that is not the guard — a customer scrolling back to a message from this morning
+     * sends the same id either way. F4F-21 measured it: with the purchasability check
+     * removed, every case stayed green and a withdrawn package was still sellable.
+     *
+     * Deactivating is the operator saying stop selling this. The price is the other
+     * half of the same rule — `catalog.ts` says an absent price means unsellable and
+     * never free — and both are refused where the id arrives.
+     */
+    const service = await activeService('withdrawn');
+    const addon = await offeredAddon('ADD_TRAFFIC', { trafficBytes: 5_000_000_000n }, 'withdrawn');
+    await fund('withdrawn');
+
+    await ctx.container.serviceAddons.deactivate(tenantA, owner, {
+      idempotencyKey: 'withdrawn-addon-off',
+      addonId: addon,
+    });
+
+    // Not offered any more...
+    const offered = await ctx.container.commercialActions.availableFor(
+      tenantA,
+      systemActor('w'),
+      (await services.findById(tenantA, service.id)) ??
+        (() => {
+          throw new Error('no service');
+        })(),
+    );
+    expect(offered).not.toContain('ADD_TRAFFIC');
+
+    // ...and the tap that names it anyway is refused rather than priced.
+    await expect(
+      ctx.container.commercialActions.draft(tenantA, systemActor('w'), customerA, {
+        serviceId: service.id,
+        kind: 'ADD_TRAFFIC',
+        addonId: addon,
+        idempotencyKey: 'withdrawn-quote',
+      }),
+    ).rejects.toMatchObject({ code: 'commerce.addon_not_purchasable' });
+  });
+
   it('refuses another tenant’s customer, with the answer an absent service gets', async () => {
     const service = await activeService('cross-tenant');
     const stranger = await ctx.container.customers.resolveFromUpdate(
