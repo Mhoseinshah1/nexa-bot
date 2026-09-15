@@ -20,13 +20,25 @@ finding rather than a gap — see F4E-02.
 
 | #      | Rule                                                            | Mutation                                                                     | Named test                                                                                                         | Result   |
 | ------ | --------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | -------- |
-| F4E-06 | `PERFORMABLE_OPERATION_TYPES` names only what has a branch      | `'TERMINATE'` appended to the constant                                       | `registries.test.ts` › names exactly the six types 4E performs, and no more                                        | KILLED   |
+| F4E-06 | `PERFORMABLE_OPERATION_TYPES` names only what has a branch      | `'TERMINATE'` appended to the constant (see the note below)                  | `registries.test.ts` › names exactly the nine types this release performs, and no more                             | KILLED   |
 | F4E-07 | The executor refuses an unperformable type before anything else | `if (!isPerformableOperation(operation.type)) {` → `if (false as boolean) {` | `provisioning-delivery.test.ts` › refuses an operation type this release cannot perform, before contacting a panel | SURVIVED |
 | F4E-08 | An unperformable type is legal from NO service state            | `ROTATE_SUBSCRIPTION: []` → `ROTATE_SUBSCRIPTION: ['ACTIVE']`                | `provisioning-delivery.test.ts` › refuses an operation type this release cannot perform, before contacting a panel | SURVIVED |
 | F4E-09 | A usage sync writes what the panel said                         | `recordUsage(...)` call removed from `finishUsageSync`                       | `provisioning-delivery.test.ts` › refreshes a stale usage figure from the panel, and writes what the panel said    | KILLED   |
 | F4E-10 | A fresh figure is not re-read                                   | `COALESCE(usage_synced_at, created_at)` → `usage_synced_at IS NULL OR …`     | `provisioning-delivery.test.ts` › does not sync a service whose figure is still fresh                              | KILLED   |
 | F4E-11 | One sync per cadence window, however many ticks run             | the window removed from the derived operation id                             | `provisioning-delivery.test.ts` › plans ONE sync per cadence window however many ticks run                         | KILLED   |
 | F4E-12 | A failed sync claims no refresh it did not make                 | `if (!read.ok)` branch falls through to `recordUsage`                        | `provisioning-delivery.test.ts` › a sync that the panel refuses is FAILED, never UNKNOWN, and moves no service     | KILLED   |
+
+#### F4E-06 after Phase 4F
+
+The cited case was RENAMED in Phase 4F — six types became nine — and the citation
+here was repointed in the same commit that noticed, which is the check
+`scripts/check-falsification-citations.mjs` exists to force.
+
+The MUTATION in that row is historical and is no longer applicable on this head:
+`TERMINATE` became performable in 4E itself, and the three commercial types in
+4F, so appending `'TERMINATE'` is now a no-op. The rule is unchanged and is
+re-measured on the current code as **F4F-30**, which removes the three types 4F
+added and kills the same case.
 
 ### F4E-07 and F4E-08, the two survivals, and what they actually mean
 
