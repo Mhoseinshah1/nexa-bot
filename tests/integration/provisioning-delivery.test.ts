@@ -1491,6 +1491,45 @@ describe('a provisioned service announces itself', () => {
     expect(JSON.stringify(messages().slice(before))).not.toContain(theirs?.subscriptionRef ?? 'X');
   });
 
+  it('offers no management button for a service on a panel that cannot manage one', async () => {
+    /*
+     * The customer-facing half of the 3X-UI deferral. `customerActionsFor` asks the
+     * PANEL whether it can perform each operation, and this panel's descriptor declares
+     * no DISABLE_USER, ENABLE_USER or DELETE_USER — so a customer here is offered a
+     * subscription resend and nothing else.
+     *
+     * Drawing them anyway would be the legacy defect this codebase keeps naming: a
+     * product offering an action it cannot honour. Every tap would be refused by
+     * `requestFromCustomer` and the customer would have no way to know which of their
+     * services the buttons work on.
+     */
+    const orderId = await paidOrder('bot-no-management');
+    await ctx.container.provisionerLoop.tick();
+    const service = await services.findByOrderId(tenantA, orderId);
+    const id = service?.id ?? '';
+
+    const result = await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`s:${id}`));
+
+    expect(result.replyKey).toBe('bot.service.detail');
+    const body = JSON.stringify(messages()[messages().length - 1]);
+    expect(body, 'the resend button is still offered').toContain(`r:${id}`);
+    for (const prefix of ['u:', 'e:', 't:', 'k:']) {
+      expect(body, `${prefix} must not be offered on a panel that cannot do it`).not.toContain(
+        `${prefix}${id}`,
+      );
+    }
+
+    // And the request itself is refused, not merely undrawn.
+    const tapped = await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`u:${id}`));
+    expect(tapped.replyKey).toBe('bot.service.capability_unsupported');
+    expect(
+      (await operations.listForService(tenantA, id, 50)).some(
+        (operation) => operation.type === 'SUSPEND',
+      ),
+      'nothing was planned',
+    ).toBe(false);
+  });
+
   it('sends the subscription again when the customer asks, through the delivery lane', async () => {
     const orderId = await paidOrder('bot-resend');
     await ctx.container.provisionerLoop.tick();
