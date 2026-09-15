@@ -1047,15 +1047,36 @@ const MARZBAN: ProviderDescriptor = {
   canonicalName: 'Marzban',
   credentialShape: 'USERNAME_PASSWORD',
   /*
-   * Four, and each one is executed by code in `marzban.adapter.ts`.
+   * Seven, and each one is executed by code in `marzban.adapter.ts` that has been
+   * RUN against a panel.
    *
    * `DELIVER_SUBSCRIPTION_LINK` because `createUser` returns Marzban's own
    * `subscription_url` made absolute. `READ_USAGE` because `readUsage` reads
-   * `used_traffic` back. The other twelve are absent because this release cannot
-   * perform them — renewing, disabling, adding volume — and each returns in the
-   * commit that implements it, per the rule this array's history established.
+   * `used_traffic` back.
+   *
+   * `DISABLE_USER`, `ENABLE_USER` and `DELETE_USER` joined them only after
+   * `tests/acceptance/real-panel-marzban.test.ts` drove the shipped adapter against
+   * a real v0.8.4 and watched one account stop serving while its sibling kept
+   * serving, watched it start again, and watched one account be deleted while the
+   * sibling survived. That ordering — implement, prove, then advertise — is the
+   * owner's, and it is why the three were absent from the commit that wrote the
+   * methods: this array is what tells an operator what the product can do, and a
+   * promise made before the evidence exists is the kind this array's history is
+   * made of.
+   *
+   * The other nine are absent because this release cannot perform them — renewing,
+   * adding volume, rotating a link — and each returns in the commit that implements
+   * it, per that same rule.
    */
-  capabilities: ['HEALTH_CHECK', 'CREATE_USER', 'READ_USAGE', 'DELIVER_SUBSCRIPTION_LINK'],
+  capabilities: [
+    'HEALTH_CHECK',
+    'CREATE_USER',
+    'READ_USAGE',
+    'DELIVER_SUBSCRIPTION_LINK',
+    'DISABLE_USER',
+    'ENABLE_USER',
+    'DELETE_USER',
+  ],
   // A token exchange, then a status read.
   maxRequestsPerProbe: 2,
   /*

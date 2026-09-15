@@ -51,7 +51,9 @@ outcome that was asked for.
 dispatches `xray.operations.remove_user` whenever the resulting status is not `active`
 or `on_hold`, and the running panel does it: an account disabled through this route
 stopped carrying traffic within seconds, while a sibling account on the same inbound
-kept carrying it. `docs/real-panel-acceptance.md` records the run.
+kept carrying it. `scripts/marzban-lifecycle-check.sh` is that measurement, committed
+rather than described — it drives the whole lifecycle and prints what each account
+served at each step, with a never-created UUID as the control.
 
 **Nothing re-enables a disabled user behind your back.** `app/jobs/review_users.py`
 iterates `status=active` only, so `disabled` is a state the panel will not leave on its

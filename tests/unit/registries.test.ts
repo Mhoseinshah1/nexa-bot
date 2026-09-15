@@ -305,7 +305,26 @@ describe('the provider registry', () => {
     // it. This test is what makes that a deliberate edit rather than a
     // declaration somebody made in a descriptor.
     const EXECUTABLE_NOW: Record<ProviderType, readonly ProviderCapability[]> = {
-      marzban: ['HEALTH_CHECK', 'CREATE_USER', 'READ_USAGE', 'DELIVER_SUBSCRIPTION_LINK'],
+      /*
+       * The three management capabilities are Marzban's ALONE, and that asymmetry is a
+       * scope decision rather than a statement about the panels. 3X-UI can plainly
+       * disable and delete a client; how it does so has never been read out of the
+       * v3.7.0 source or run against the binary, so this release does not claim it.
+       * `docs/providers/sanaei-3xui.md` says so where an operator will find it.
+       *
+       * Each of Marzban's three was added by the commit that ran
+       * `tests/acceptance/real-panel-marzban.test.ts` against a real v0.8.4, not by the
+       * commit that wrote the methods.
+       */
+      marzban: [
+        'HEALTH_CHECK',
+        'CREATE_USER',
+        'READ_USAGE',
+        'DELIVER_SUBSCRIPTION_LINK',
+        'DISABLE_USER',
+        'ENABLE_USER',
+        'DELETE_USER',
+      ],
       // `LIMIT_DEVICES` for Sanaei only, and the asymmetry is the whole point of this
       // map being per provider. `SanaeiAdapter.createUser` writes `limitIp` from the
       // order's frozen `deviceLimit`; `MarzbanAdapter.createUser` does not read the
@@ -357,6 +376,23 @@ describe('the provider registry', () => {
       }
       if (claimed.includes('READ_USAGE')) {
         expect(typeof methods['readUsage'], `${type}.readUsage`).toBe('function');
+      }
+      /*
+       * The three management capabilities, on the same implication and for a sharper
+       * reason: `suspendUser`, `resumeUser` and `terminateUser` are OPTIONAL on the
+       * port, so a descriptor claiming one with no method behind it type-checks. The
+       * executor would then call `undefined` inside a claimed operation — a TypeError,
+       * which is not a `ProviderFailureKind`, so nothing classifies it and a mutating
+       * operation cannot decide whether it took effect.
+       */
+      if (claimed.includes('DISABLE_USER')) {
+        expect(typeof methods['suspendUser'], `${type}.suspendUser`).toBe('function');
+      }
+      if (claimed.includes('ENABLE_USER')) {
+        expect(typeof methods['resumeUser'], `${type}.resumeUser`).toBe('function');
+      }
+      if (claimed.includes('DELETE_USER')) {
+        expect(typeof methods['terminateUser'], `${type}.terminateUser`).toBe('function');
       }
       // `lookupUser` has no capability of its own — OPERATION_REQUIRED_CAPABILITIES
       // gives RECONCILE an empty list, because reading a user is how both adapters

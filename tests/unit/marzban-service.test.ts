@@ -329,28 +329,30 @@ describe('the Marzban adapter — terminate', () => {
   });
 });
 
-describe('the Marzban adapter — what it may NOT yet be asked to do', () => {
-  it('has all three methods and is still refused, because the descriptor does not claim them', () => {
+describe('the Marzban adapter — what it may be asked to do', () => {
+  it('is callable for all three management operations, method and capability together', () => {
     /*
-     * The intermediate state the owner's ordering requires: implement, then prove
-     * against a real panel, then advertise. `canDisableUser` and its siblings require
-     * the method AND the capability, so until the acceptance run adds the capabilities
-     * nothing can dispatch to these methods — `decideOperability` refuses a SUSPEND
-     * against a Marzban panel with CAPABILITY_UNSUPPORTED, exactly as it does for 3X-UI.
+     * The pairing, asserted on the SHIPPED adapter rather than a stub. A descriptor
+     * edit that dropped a capability, or a refactor that dropped a method, fails here.
      *
-     * This case is replaced, not deleted, by the commit that adds the capabilities: the
-     * pairing is then asserted the other way round, against the shipped adapter.
+     * This case replaced one asserting the opposite. Between the commit that wrote the
+     * three methods and the commit that ran the acceptance, all three were present and
+     * all three were refused, because the descriptor did not claim them — which is the
+     * owner's ordering made mechanical rather than remembered.
      */
-    expect(typeof adapter.suspendUser).toBe('function');
-    expect(typeof adapter.resumeUser).toBe('function');
-    expect(typeof adapter.terminateUser).toBe('function');
+    expect(canDisableUser(adapter)).toBe(true);
+    expect(canEnableUser(adapter)).toBe(true);
+    expect(canDeleteUser(adapter)).toBe(true);
+  });
 
+  it('declares each capability it implements, and nothing it does not', () => {
     const declared = providerDescriptor('marzban')?.capabilities ?? [];
     for (const capability of ['DISABLE_USER', 'ENABLE_USER', 'DELETE_USER']) {
+      expect(declared).toContain(capability);
+    }
+    // Still absent, because no code performs them.
+    for (const capability of ['RENEW_USER', 'ADD_VOLUME', 'ADD_TIME', 'RESET_USAGE']) {
       expect(declared).not.toContain(capability);
     }
-    expect(canDisableUser(adapter)).toBe(false);
-    expect(canEnableUser(adapter)).toBe(false);
-    expect(canDeleteUser(adapter)).toBe(false);
   });
 });
