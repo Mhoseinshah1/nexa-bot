@@ -98,8 +98,23 @@ const LOGIN_PATH = 'login';
  * traffic read is keyed by `email`, which is 3X-UI's name for the per-client label
  * this adapter sets to the derived provider username.
  */
-const ADD_CLIENT_PATH = 'panel/api/inbounds/addClient';
-const CLIENT_TRAFFICS_PATH = 'panel/api/inbounds/getClientTraffics';
+/*
+ * The client routes, read from v3.7.0's own router.
+ *
+ * `internal/web/controller/client.go` registers these under the `/panel/api/clients`
+ * group: `POST /add`, `GET /traffic/:email`, `POST /update/:email`, `POST /del/:email`.
+ * `internal/web/controller/inbound.go` registers NO client routes at all.
+ *
+ * They used to be `panel/api/inbounds/addClient` and
+ * `panel/api/inbounds/getClientTraffics/<email>`, which are the **v2.x** paths. Neither
+ * exists at v3.7.0: a grep of the whole tree at that tag finds `addClient` only as a UI
+ * translation string and `getClientTraffics` nowhere, and the one back-compat alias in
+ * the tree is an unrelated `outbound-subs` route. So every create and every usage read
+ * this release issued against a real panel would have been a 404 — the phase that
+ * shipped them could take a customer's money and call a route that is not there.
+ */
+const ADD_CLIENT_PATH = 'panel/api/clients/add';
+const CLIENT_TRAFFICS_PATH = 'panel/api/clients/traffic';
 
 /**
  * v3.7.0's `checkAPIAuth` answers an unauthenticated `/panel/api` request 401
@@ -324,7 +339,7 @@ function sessionCookieFrom(setCookie: readonly string[]): SessionCookieRead {
 }
 
 /**
- * One client, as `addClient` wants it.
+ * The body `POST panel/api/clients/add` binds.
  *
  * `totalGB` is BYTES despite its name — v3.7.0's `model.Client.TotalGB` is an int64 of
  * bytes and the name is upstream's, not ours. Renaming it here would be a lie about the
@@ -340,31 +355,47 @@ function sessionCookieFrom(setCookie: readonly string[]): SessionCookieRead {
  * some inbound configurations, and setting one the inbound does not support produces a
  * client the panel accepts and Xray refuses to serve — a service that looks provisioned
  * and does not work. Empty is what every inbound accepts.
+ *
+ * ## The envelope, which this had wrong
+ *
+ * v3.7.0's handler is `c.ShouldBindJSON(&payload)` into
+ * `service.ClientCreatePayload`, which is `{client: {…}, inboundIds: [n]}` — ONE client
+ * as a nested object, and the inbound ids as a list beside it.
+ *
+ * It used to build `{id, settings: "<json string with a clients array>"}` and send it as
+ * a FORM, with a comment asserting that v3.7.0 "binds `id` and `settings` from a form"
+ * and that nested JSON "is the shape the panel does not accept". The source says the
+ * exact opposite, and that sentence is the reason the mistake survived review: it read
+ * as a verified wire fact. It was the v2.x shape.
+ *
+ * `tgId` is a NUMBER at v3.7.0 (`model.Client.TgID` is an `int64`), not the empty string
+ * this used to send. Zero is its "no Telegram id", and a string there is a bind error on
+ * a field Nexa does not use.
  */
-function clientSettings(input: {
+function clientCreateBody(input: {
   readonly clientId: string;
   readonly email: string;
   readonly subId: string;
   readonly totalBytes: bigint;
   readonly expiryEpochMs: number;
   readonly deviceLimit: number | null;
-}): string {
-  return JSON.stringify({
-    clients: [
-      {
-        id: input.clientId,
-        flow: '',
-        email: input.email,
-        limitIp: input.deviceLimit ?? 0,
-        totalGB: Number(input.totalBytes),
-        expiryTime: input.expiryEpochMs,
-        enable: true,
-        tgId: '',
-        subId: input.subId,
-        reset: 0,
-      },
-    ],
-  });
+  readonly inboundId: number;
+}): unknown {
+  return {
+    client: {
+      id: input.clientId,
+      flow: '',
+      email: input.email,
+      limitIp: input.deviceLimit ?? 0,
+      totalGB: Number(input.totalBytes),
+      expiryTime: input.expiryEpochMs,
+      enable: true,
+      tgId: 0,
+      subId: input.subId,
+      reset: 0,
+    },
+    inboundIds: [input.inboundId],
+  };
 }
 
 /**
@@ -688,22 +719,20 @@ export class SanaeiAdapter implements ProviderAdapter {
       method: 'POST',
       path: ADD_CLIENT_PATH,
       headers: auth.headers,
-      // Form, because v3.7.0's handler binds `id` and `settings` from a form and
-      // `settings` is itself a JSON STRING rather than a nested object. Sending JSON
-      // with a nested object is the shape the panel does not accept.
+      // JSON, because v3.7.0's handler is `ShouldBindJSON` into a struct with a nested
+      // `client` object and an `inboundIds` list. The form-plus-embedded-JSON-string
+      // envelope this used to send is the v2.x shape.
       body: {
-        kind: 'form',
-        value: {
-          id: String(activation.inboundId),
-          settings: clientSettings({
-            clientId: input.clientId,
-            email: input.username,
-            subId: input.subscriptionRef,
-            totalBytes: input.volumeBytes ?? 0n,
-            expiryEpochMs,
-            deviceLimit: input.deviceLimit,
-          }),
-        },
+        kind: 'json',
+        value: clientCreateBody({
+          clientId: input.clientId,
+          email: input.username,
+          subId: input.subscriptionRef,
+          totalBytes: input.volumeBytes ?? 0n,
+          expiryEpochMs,
+          deviceLimit: input.deviceLimit,
+          inboundId: activation.inboundId,
+        }),
       },
     });
     if (!added.ok) return fromTransport(added);
@@ -727,7 +756,7 @@ export class SanaeiAdapter implements ProviderAdapter {
         kind: 'SUBSCRIPTION_LINK',
         url: subscriptionUrl(activation.subscriptionDomain, input.subscriptionRef),
       },
-      // `addClient` answers with `obj: null`, so there is nothing to report. Null
+      // `clients/add` answers with `obj: null`, so there is nothing to report. Null
       // rather than a zero-usage record invented here: a figure with no read behind it
       // is exactly the kind the legacy reports are made of.
       usage: null,

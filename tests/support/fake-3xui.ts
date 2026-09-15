@@ -143,7 +143,7 @@ export type Behaviour =
   /** The 2FA question's response rotates the session the same way. */
   | 'twofactor-enormous-cookie'
   /**
-   * `addClient` RECORDS the client and then dies without answering.
+   * `clients/add` RECORDS the client and then dies without answering.
    *
    * The create whose answer was lost — the case `failureOutcome` classifies UNKNOWN on
    * a mutating call and the reason `UNRECONCILED` exists. The account is really there,
@@ -151,7 +151,7 @@ export type Behaviour =
    */
   | 'add-client-lost-reply'
   /**
-   * `addClient` answers 500 and stores NOTHING.
+   * `clients/add` answers 500 and stores NOTHING.
    *
    * The other half of the same uncertainty: a 5xx may or may not have committed a
    * write, so Nexa cannot tell these two apart from the outside — which is exactly why
@@ -165,7 +165,7 @@ export interface Fake3xUi {
   readonly origin: string;
   /** Every request the fake saw, in order. */
   readonly requests: ReadonlyArray<RecordedRequest>;
-  /** Every client `addClient` accepted, keyed by the `email` it was given. */
+  /** Every client `clients/add` accepted, keyed by the `email` it was given. */
   readonly clients: ReadonlyMap<string, FakeClient>;
   /**
    * Changes what the panel does, without changing its address.
@@ -483,32 +483,39 @@ export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake
         return false;
       };
 
-      // --- panel/api/inbounds/addClient (v3.7.0 inbound.go) ------------------
+      // --- panel/api/clients/add (v3.7.0 client.go, `POST /add` -> create) ----
       //
-      // Binds `id` and `settings` from a FORM, and `settings` is itself a JSON string
-      // rather than a nested object — the shape the adapter has to send and the one a
-      // JSON body would not satisfy. Answers `obj: null` on success, which is why the
-      // adapter reports no usage from a create rather than inventing a zero.
-      if (route === 'panel/api/inbounds/addClient') {
+      // Binds `service.ClientCreatePayload` with `ShouldBindJSON`: ONE client as a
+      // nested object plus an `inboundIds` list. Answers `obj: null` on success, which
+      // is why the adapter reports no usage from a create rather than inventing a zero.
+      //
+      // This fake used to implement `panel/api/inbounds/addClient` taking a FORM with an
+      // embedded JSON string, and said so in a comment citing `inbound.go` — a file that
+      // registers no client routes at all. Both the route and the envelope were the v2.x
+      // shape, and because the adapter sent exactly what this accepted, forty-odd
+      // scenarios agreed with each other while neither agreed with the panel.
+      if (route === 'panel/api/clients/add') {
         if (request.method !== 'POST') return void json(404, envelope(false, null));
         if (apiRefused()) return;
         if (behaviour === 'add-client-500') {
           return void json(500, { error: 'internal' });
         }
-        const form = new URLSearchParams(body);
-        const settingsRaw = form.get('settings');
-        if (form.get('id') === null || settingsRaw === null) {
-          return void json(200, envelope(false, null, 'invalid parameter'));
-        }
         let parsed: unknown;
         try {
-          parsed = JSON.parse(settingsRaw);
+          parsed = JSON.parse(body);
         } catch {
-          return void json(200, envelope(false, null, 'invalid settings'));
+          return void json(200, envelope(false, null, 'invalid parameter'));
         }
-        const first = (parsed as { clients?: unknown[] }).clients?.[0] as
-          Record<string, unknown> | undefined;
-        if (first === undefined) return void json(200, envelope(false, null, 'no client'));
+        const payload = parsed as { client?: unknown; inboundIds?: unknown };
+        const first = payload.client as Record<string, unknown> | undefined;
+        if (first === undefined || typeof first !== 'object') {
+          return void json(200, envelope(false, null, 'no client'));
+        }
+        // `inboundIds` is required by the payload: a create naming no inbound is one
+        // v3.7.0 has nowhere to put.
+        if (!Array.isArray(payload.inboundIds) || payload.inboundIds.length === 0) {
+          return void json(200, envelope(false, null, 'invalid parameter'));
+        }
         const email = String(first['email'] ?? '');
         if (clients.has(email)) {
           // v3.7.0 refuses a duplicate email inside one inbound. Recorded so a test can
@@ -532,16 +539,14 @@ export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake
         return void json(200, envelope(true, null, 'Client added Successfully'));
       }
 
-      // --- panel/api/inbounds/getClientTraffics/:email -----------------------
+      // --- panel/api/clients/traffic/:email (v3.7.0 client.go) ---------------
       //
       // An UNKNOWN email is a perfectly successful envelope carrying `obj: null`, not a
       // 404. That is what makes absence a positive answer from the panel, and therefore
       // what makes a fresh create legal after a create whose reply was lost.
-      if (route.startsWith('panel/api/inbounds/getClientTraffics/')) {
+      if (route.startsWith('panel/api/clients/traffic/')) {
         if (apiRefused()) return;
-        const email = decodeURIComponent(
-          route.slice('panel/api/inbounds/getClientTraffics/'.length),
-        );
+        const email = decodeURIComponent(route.slice('panel/api/clients/traffic/'.length));
         const client = clients.get(email);
         if (client === undefined) return void json(200, envelope(true, null));
         return void json(
