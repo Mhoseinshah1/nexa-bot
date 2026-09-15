@@ -78,21 +78,29 @@ describe('the routes each provider adapter dials', () => {
   });
 
   /*
-   * Gozargah/Marzban, read at commit 7f396db3e703d71a28060bc9ce4a532ec64cb1f4.
+   * Gozargah/Marzban, tag `v0.8.4` = commit 7f396db3e703d71a28060bc9ce4a532ec64cb1f4,
+   * which is the commit `docs/providers/marzban.md` pins.
    *
-   *   app/routers/admin.py  -> POST /api/admin/token       (prefix="/api")
-   *   app/routers/system.py -> GET  /api/system            (prefix="/api")
-   *   app/routers/user.py   -> POST /api/user              (prefix="/api")
-   *   app/routers/user.py   -> GET  /api/user/{username}
+   *   app/routers/admin.py  -> POST   /api/admin/token       (prefix="/api")
+   *   app/routers/system.py -> GET    /api/system            (prefix="/api")
+   *   app/routers/user.py   -> POST   /api/user              (prefix="/api")
+   *   app/routers/user.py   -> GET    /api/user/{username}
+   *   app/routers/user.py   -> PUT    /api/user/{username}   (disable AND re-enable)
+   *   app/routers/user.py   -> DELETE /api/user/{username}
    *
    * Checked because Phase 4D's Sanaei paths were wrong and Marzban's had never been
-   * verified against any pinned upstream at all — there is still no
-   * `docs/providers/marzban.md`. These four are correct.
+   * verified against any pinned upstream at all. These are correct, and unlike the
+   * 3X-UI half above they have since been RUN against a panel built from the commit.
+   *
+   * Only three constants for six calls, because the last four all address the same
+   * `/api/user/{username}` and differ by method. That is the shape of the router, not a
+   * shortcut: there is no dedicated disable route and no dedicated enable route, so a
+   * reader looking for one will not find it and must not invent it.
    */
   it('dials only paths Marzban actually registers', () => {
     expect(TOKEN_PATH).toBe('api/admin/token');
     expect(SYSTEM_PATH).toBe('api/system');
-    // `/{username}` is appended by the caller for the single-user read.
+    // `/{username}` is appended by the caller for read, modify and delete alike.
     expect(USER_PATH).toBe('api/user');
   });
 });
