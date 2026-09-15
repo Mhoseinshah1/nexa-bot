@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
+  PANEL_ACTIVATION_SCHEMAS,
   createPanelRequestSchema,
   errors,
   setPanelCredentialsRequestSchema,
@@ -26,6 +27,7 @@ import {
   shapeAcceptsCredential,
   providerDescriptor,
 } from '@nexa/contracts';
+import type { PanelActivation } from '@nexa/contracts';
 import type { PermissionGuard } from '../../access/application/permission-guard.js';
 import {
   recordMutationDenial,
@@ -91,6 +93,12 @@ export interface CreatePanelCommand {
   readonly providerType: ProviderType;
   readonly baseUrl: string;
   readonly credentials?: PanelCredentialWrite;
+  /**
+   * The per-panel provider configuration, already parsed against this provider's own
+   * schema. Absent means none was given, which is a legal panel that cannot yet be
+   * provisioned onto — `decideOperability` answers `ACTIVATION_INCOMPLETE`.
+   */
+  readonly activation?: PanelActivation;
   readonly idempotencyKey: string;
 }
 
@@ -103,6 +111,8 @@ export interface UpdatePanelCommand {
    */
   readonly name?: string | undefined;
   readonly baseUrl?: string | undefined;
+  /** Absent leaves it; `null` clears it; an object replaces it after validation. */
+  readonly activation?: Record<string, unknown> | null | undefined;
   readonly idempotencyKey: string;
 }
 
@@ -220,6 +230,32 @@ function parseCommand<T>(
     });
   }
   return result.data;
+}
+
+/**
+ * The activation an operator submitted, parsed against THIS provider's schema.
+ *
+ * Per provider, because the field set is: 3X-UI needs a subscription domain and an
+ * inbound number, Marzban needs proxy protocols, and a value validated against the
+ * union would let either panel be configured with the other's fields. The union exists
+ * for reading a stored row; a WRITE knows which provider it is for and must use the
+ * exact schema.
+ *
+ * Refused here rather than at the first provision, deliberately, for the reason create
+ * already refuses a provider with no adapter: an operator who has just typed a
+ * subscription domain should learn it is malformed now, not when a customer's paid
+ * order stalls.
+ */
+function parseActivation(providerType: ProviderType, value: unknown): PanelActivation {
+  return parseCommand<PanelActivation>(PANEL_ACTIVATION_SCHEMAS[providerType], value);
+}
+
+/** Which activation fields a stored row carries, for an audit entry. Never values. */
+function activationKeys(activation: unknown): readonly string[] | null {
+  if (typeof activation !== 'object' || activation === null || Array.isArray(activation)) {
+    return null;
+  }
+  return Object.keys(activation as Record<string, unknown>).sort();
 }
 
 /**
@@ -492,6 +528,9 @@ export class PanelService {
               apiToken: parsed.credentials.apiToken,
             },
           }),
+      ...(parsed.activation === undefined || parsed.activation === null
+        ? {}
+        : { activation: parseActivation(parsed.providerType, parsed.activation) }),
       idempotencyKey: parsed.idempotencyKey,
     };
     // Two different refusals, and the difference is the operator's next move.
@@ -602,7 +641,14 @@ export class PanelService {
           }
           await this.deps.repository.create(
             tenant,
-            { id: panelId, name: command.name, providerType, baseUrl, at: now },
+            {
+              id: panelId,
+              name: command.name,
+              providerType,
+              baseUrl,
+              ...(command.activation === undefined ? {} : { activation: command.activation }),
+              at: now,
+            },
             tx,
           );
           // The schedule row is born with the panel and in the same transaction.
@@ -645,6 +691,13 @@ export class PanelService {
                 name: command.name,
                 providerType,
                 baseUrl,
+                // The FIELD NAMES only, never their values. A subscription domain is
+                // not a secret, but an audit entry is a projection an operator reads
+                // at a glance and the question it answers here is "was this panel
+                // given its provider configuration", not "what is in it" — the panel
+                // read already answers that, under the same permission.
+                activation:
+                  command.activation === undefined ? null : Object.keys(command.activation).sort(),
                 configured: credentialKindsIn(command.credentials),
               },
               result: 'SUCCESS',
@@ -695,7 +748,20 @@ export class PanelService {
     });
     const command: UpdatePanelCommand = parseCommand(updatePanelRequestSchema, input);
     const baseUrl = command.baseUrl === undefined ? undefined : this.validateUrl(command.baseUrl);
-    const requestHash = hashRequest({ panelId, name: command.name, baseUrl });
+    /*
+     * In the hash, because it is part of what the request asks for.
+     *
+     * Two edits with one key and different activations must not be treated as the same
+     * request — the second would replay the first and report success having written
+     * nothing, which is the legacy system's "re-adding an admin returns success and
+     * writes nothing" in another column.
+     */
+    const requestHash = hashRequest({
+      panelId,
+      name: command.name,
+      baseUrl,
+      activation: command.activation,
+    });
     const existing = await this.deps.idempotency.find<{ panelId: string }>(
       scope,
       actor.surface,
@@ -735,9 +801,28 @@ export class PanelService {
             'Another panel of this tenant already uses that name.',
           );
         }
-        const changes: { name?: string; baseUrl?: string } = {};
+        const changes: {
+          name?: string;
+          baseUrl?: string;
+          activation?: PanelActivation | null;
+        } = {};
         if (command.name !== undefined) changes.name = command.name;
         if (baseUrl !== undefined) changes.baseUrl = baseUrl;
+        if (command.activation !== undefined) {
+          /*
+           * Parsed against the STORED provider type, which is why this is here and not
+           * beside the name check above.
+           *
+           * `updatePanelRequestSchema` carries no `providerType` — changing one is
+           * forbidden because it would reinterpret the stored credentials against a
+           * different protocol — so the only truthful source is the row itself, read
+           * under the lock this transaction already holds.
+           */
+          changes.activation =
+            command.activation === null
+              ? null
+              : parseActivation(before.panel.providerType, command.activation);
+        }
 
         // An edit that changes nothing is a no-op, not a cheap way to force a
         // probe. The frozen request schema permits a body carrying only an
@@ -776,8 +861,17 @@ export class PanelService {
             action: 'panel.update',
             entityType: 'Panel',
             entityId: panelId,
-            before: { name: before.panel.name, baseUrl: before.panel.baseUrl },
-            after: { name: updated.name, baseUrl: updated.baseUrl },
+            // Field names only, for the reason `panel.create` states.
+            before: {
+              name: before.panel.name,
+              baseUrl: before.panel.baseUrl,
+              activation: activationKeys(before.panel.activation),
+            },
+            after: {
+              name: updated.name,
+              baseUrl: updated.baseUrl,
+              activation: activationKeys(updated.activation),
+            },
             result: 'SUCCESS',
           },
           tx,

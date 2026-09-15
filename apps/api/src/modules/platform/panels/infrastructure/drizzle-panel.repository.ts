@@ -266,6 +266,7 @@ export class DrizzlePanelRepository implements PanelRepository {
           providerType: input.providerType,
           baseUrl: input.baseUrl,
           status: 'ACTIVE',
+          ...(input.activation === undefined ? {} : { activation: input.activation }),
           createdAt: input.at,
           updatedAt: input.at,
         })
@@ -290,6 +291,8 @@ export class DrizzlePanelRepository implements PanelRepository {
     const changes: Record<string, unknown> = { updatedAt: at };
     if (input.name !== undefined) changes['name'] = input.name;
     if (input.baseUrl !== undefined) changes['baseUrl'] = input.baseUrl;
+    // `null` is a VALUE here, not an absence: it clears the stored activation.
+    if (input.activation !== undefined) changes['activation'] = input.activation;
 
     let row;
     try {

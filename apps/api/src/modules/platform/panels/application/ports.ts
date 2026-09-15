@@ -1,5 +1,6 @@
 import type {
   MonitorDeferralReason,
+  PanelActivation,
   PanelHealthState,
   PanelStatus,
   ProviderFailureKind,
@@ -109,6 +110,8 @@ export interface CreatePanelInput {
   readonly name: string;
   readonly providerType: ProviderType;
   readonly baseUrl: string;
+  /** The per-panel provider configuration, when the create carried one. */
+  readonly activation?: PanelActivation;
   /**
    * From the `Clock` port, not the database's `now()`.
    *
@@ -125,6 +128,8 @@ export interface CreatePanelInput {
 export interface UpdatePanelInput {
   readonly name?: string;
   readonly baseUrl?: string;
+  /** Absent leaves it; `null` clears it; an object replaces it. */
+  readonly activation?: PanelActivation | null;
 }
 
 /**
