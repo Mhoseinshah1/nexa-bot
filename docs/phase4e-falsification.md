@@ -83,6 +83,27 @@ test would catch THAT, which is the mutation worth having a test for.
 The measurement: both sites changed at once, `1 passed | 26 skipped`, restore verified
 byte-identical against a copy taken beforehand, `git status` clean.
 
+## The customer-facing service surface
+
+| #      | Rule                                                           | Mutation                                                          | Named test                                                                                                           | Result |
+| ------ | -------------------------------------------------------------- | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ------ |
+| F4E-17 | A service that is not the customer's is refused                | `service.customerId !== customerId` dropped from `getForCustomer` | `provisioning-delivery.test.ts` › refuses another customer’s service with the SAME answer as one that does not exist | KILLED |
+| F4E-18 | A subscription is only ever resent into a private chat         | the null chat falls back to the callback message's own chat       | `provisioning-delivery.test.ts` › will not resend a subscription into a group chat                                   | KILLED |
+| F4E-19 | A service is labelled as it was SOLD, from the frozen snapshot | the button label → `service.id`                                   | `provisioning-delivery.test.ts` › /services lists the customer’s own service, labelled as it was SOLD                | KILLED |
+| F4E-20 | A resend produces ONE message, sent by the delivery lane       | `key: null` → a template key, so the runtime answers as well      | `provisioning-delivery.test.ts` › sends the subscription again when the customer asks, through the delivery lane     | KILLED |
+
+### A first attempt at F4E-17 that proved nothing
+
+`ownedService` was mutated to fall back to the tenant's first service on a refusal,
+and it SURVIVED — because the fallback itself threw and the surrounding `catch`
+turned it back into the same `null`. The mutation never changed behaviour, so the
+survival said nothing about the test.
+
+Recorded because that is the shape a manufactured verdict takes: `scripts/falsify.sh`
+reports SURVIVED for a mutation that does nothing exactly as it does for a rule with
+no test. The second attempt mutates the production rule itself — the ownership
+comparison in `getForCustomer` — and kills.
+
 ## F4E-02, the survival
 
 Disabling the fake's CSRF gate does not fail a test **on its own**, and that is

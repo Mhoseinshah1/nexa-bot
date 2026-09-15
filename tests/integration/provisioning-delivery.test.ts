@@ -1345,7 +1345,7 @@ describe('a provisioned service announces itself', () => {
    */
   const messages = () => sent.filter((one) => one.url.includes('/sendMessage'));
 
-  it('/services lists the customer\u2019s own service, labelled as it was SOLD', async () => {
+  it('/services lists the customer’s own service, labelled as it was SOLD', async () => {
     const orderId = await paidOrder('bot-services');
     await ctx.container.provisionerLoop.tick();
     const service = await services.findByOrderId(tenantA, orderId);
@@ -1391,7 +1391,7 @@ describe('a provisioned service announces itself', () => {
     expect(JSON.stringify(shown)).toContain('پلن پایه');
   });
 
-  it('refuses another customer\u2019s service with the SAME answer as one that does not exist', async () => {
+  it('refuses another customer’s service with the SAME answer as one that does not exist', async () => {
     /*
      * The property that stops this being an oracle. `getForCustomer` compares ownership
      * against the row it read rather than filtering the query, so a foreign id and a
