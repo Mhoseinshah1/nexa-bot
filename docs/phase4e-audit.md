@@ -67,6 +67,61 @@ those states were designed around.
 - **The Web Admin Services surface is the later Web Admin phase**, per the standing
   scope correction. The HTTP layer may gain routes; the React screens do not.
 
+## The audit's actual headline: the service half addresses routes that do not exist
+
+Going to the v3.7.0 source for the three NEW routes found that the two 4D already
+uses are wrong. This is a defect in merged `main`, not in this phase's plan.
+
+`SanaeiAdapter` sends:
+
+```
+POST panel/api/inbounds/addClient
+GET  panel/api/inbounds/getClientTraffics/<email>
+```
+
+At `v3.7.0` — tag `v3.7.0`, which `git rev-parse` confirms IS the commit
+`docs/providers/sanaei-3xui.md` pins, `f727d04f6522bb94a8fb52e8352fdcafb51c11e1` —
+the client routes are registered in `internal/web/controller/client.go`:
+
+```
+POST /panel/api/clients/add            -> create
+GET  /panel/api/clients/traffic/:email -> getTrafficByEmail
+POST /panel/api/clients/update/:email  -> update
+POST /panel/api/clients/del/:email     -> delete
+```
+
+and `internal/web/controller/inbound.go` registers no client routes at all. A grep of
+the whole tree finds `addClient` only as a UI translation string and
+`getClientTraffics` **nowhere**. There is no legacy alias: the one back-compat route in
+the tree is an unrelated `outbound-subs` POST alias.
+
+The request shape differs too. `create` binds `service.ClientCreatePayload`, which is
+`{ "client": { …model.Client…, "limitHwid": n }, "inboundIds": [n] }` — not the
+`{ id, settings: "<json string>" }` envelope the adapter builds, which is the **v2.x**
+shape.
+
+**So Phase 4D cannot create an account on a real v3.7.0 panel.** It would take the
+customer's money, call a route that is not there, and classify the answer as whatever a
+404 from an authenticated `/panel/api` request maps to.
+
+**Why every test passes.** `tests/support/fake-3xui.ts` implements the same two wrong
+paths. The fake and the adapter agree with each other and neither agrees with the panel
+— which is the exact failure the fake's own comment warns about, written about
+authentication: _"a fake whose routes disagree about authentication proves the adapter
+matches the fake rather than the panel."_ The same sentence is true of routes, and
+nothing checked it.
+
+Phase 3B verified its one route, `panel/api/server/status`, from the source, and that
+one is correct — it is in the v3.7.0 route map. Phase 4D added three more and the
+verification step was not repeated for them, while `docs/providers/sanaei-3xui.md` went
+on saying "Implemented and verified against the v3.7.0 wire contract".
+
+**This is 4E's first slice**, ahead of anything in the plan above: correct the paths and
+the payload shapes against the source, rebuild the fake to model the real routes, and
+add a check that keeps the two from agreeing with each other again. Suspend, resume and
+terminate are then three more routes on the same corrected surface rather than three
+routes bolted to a broken one.
+
 ## Two things to verify before writing the adapter
 
 Phase 3B's rule was that a wire fact is read from the upstream source, not assumed, and
