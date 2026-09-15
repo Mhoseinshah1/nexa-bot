@@ -246,6 +246,32 @@ export class DrizzleOperationRepository implements OperationRepository {
    * `attempts < OPERATION_MAX_ATTEMPTS` is in the predicate rather than checked after,
    * so an exhausted operation is not claimed at all. Checking afterwards would consume
    * a claim to discover the claim was not allowed.
+   *
+   * ## ONE operation in flight per SERVICE
+   *
+   * The `NOT EXISTS` below is what makes that true, and it is a WHERE clause rather
+   * than a check in a process for the same reason everything else here is: two worker
+   * replicas are the normal case on every rolling update.
+   *
+   * It was a no-op until this release, because the types that existed could not
+   * coexist — `PROVISION` is legal only from `PENDING_PROVISION`, `RECONCILE` only from
+   * `UNRECONCILED`, `SYNC_USAGE` only from `ACTIVE`, and a service is in one state. The
+   * management operations broke that: `TERMINATE` is legal from every non-terminal
+   * state, so a customer tapping "end my service" while its `PROVISION` is on the wire
+   * gave two replicas two claimable operations for one service.
+   *
+   * What that produced is worth naming, because nothing else in the system would have
+   * reported it: the terminate DELETEs an account that does not exist yet (404, which
+   * is a success), the service goes `TERMINATED`, and then the create returns 200. The
+   * create's own `transition('PENDING_PROVISION' -> 'ACTIVE')` correctly does nothing —
+   * so the operation succeeds, no state is wrong, no error is raised, and an account
+   * exists on somebody's panel that this installation has no row for. An orphan with a
+   * green log on both sides.
+   *
+   * The clause blocks the SECOND claim rather than resolving the race, and that is the
+   * right shape: the blocked operation is still PLANNED and is claimed on the next tick
+   * once the first has finished, by which time the state check decides it on real
+   * information instead of a guess about ordering.
    */
   async claimDue(
     scope: TenantContext,
@@ -267,6 +293,19 @@ export class DrizzleOperationRepository implements OperationRepository {
             isNull(provisioningOperations.nextAttemptAt),
             lte(provisioningOperations.nextAttemptAt, now),
           ),
+          /*
+           * No sibling of this service is already in flight.
+           *
+           * Correlated on `service_id` and scoped to the tenant like every other
+           * predicate here. `in_flight` is this same table under an alias, which is
+           * what lets the sub-query see the row it must not collide with.
+           */
+          sql`NOT EXISTS (
+            SELECT 1 FROM ${provisioningOperations} AS in_flight
+            WHERE in_flight.tenant_id = ${provisioningOperations.tenantId}
+              AND in_flight.service_id = ${provisioningOperations.serviceId}
+              AND in_flight.state = 'IN_FLIGHT'
+          )`,
         ),
       )
       /*

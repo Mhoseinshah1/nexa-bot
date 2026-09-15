@@ -559,6 +559,69 @@ describe('a customer manages the service they bought', () => {
     expect((await services.findById(tenantA, service.id))?.state).toBe('TERMINATED');
   });
 
+  it('claims no second operation for a service that already has one in flight', async () => {
+    /*
+     * The race this phase created, and the only one it created.
+     *
+     * Until TERMINATE became performable, two operations for one service could not both
+     * be claimable: each type is legal from exactly one state and a service is in one
+     * state. TERMINATE is legal from every non-terminal state, so a customer tapping
+     * "end my service" while its PROVISION is on the wire gives two replicas two
+     * claimable rows for one service.
+     *
+     * What that produces is invisible to everything else: the terminate DELETEs an
+     * account that does not exist yet — a 404, which is a success — the service goes
+     * TERMINATED, and then the create returns 200 and correctly moves nothing. Both
+     * operations SUCCEED, no state is wrong, and an account exists on somebody's panel
+     * that this installation has no row for.
+     *
+     * Simulated by stamping a PROVISION in flight with a live lease, which is what a
+     * second replica mid-call looks like from this one's point of view.
+     */
+    const service = await activeService('one-in-flight');
+    await ctx.container.database.db.execute(
+      /*
+       * `completed_at` is cleared in the same statement because
+       * `provisioning_operations_completed_check` ties it to the state: a row in
+       * IN_FLIGHT that still carries a completion timestamp is not a state this
+       * schema will hold. Stamping one is the shape of the real race — a PROVISION
+       * still on the wire — not a finished row pretending to be running.
+       */
+      sql`UPDATE provisioning_operations
+             SET state = 'IN_FLIGHT',
+                 claimed_by = 'other-replica',
+                 lease_until = now() + interval '5 minutes',
+                 completed_at = NULL
+           WHERE service_id = ${service.id} AND type = 'PROVISION'`,
+    );
+    await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`u:${service.id}`));
+    const deletesBefore = panel.requests.filter((one) => one.method === 'PUT').length;
+
+    await ctx.container.provisionerLoop.tick();
+
+    expect((await operationOf(service.id, 'SUSPEND'))?.state, 'not claimed').toBe('PLANNED');
+    expect(panel.requests.filter((one) => one.method === 'PUT').length).toBe(deletesBefore);
+    expect(panel.users.get(service.username)?.status).toBe('active');
+
+    /*
+     * And it is BLOCKED, not lost: once the sibling is no longer in flight the next
+     * tick claims it and it runs on real information rather than a guess about
+     * ordering.
+     */
+    await ctx.container.database.db.execute(
+      sql`UPDATE provisioning_operations
+             SET state = 'SUCCEEDED',
+                 claimed_by = NULL,
+                 lease_until = NULL,
+                 completed_at = now()
+           WHERE service_id = ${service.id} AND type = 'PROVISION'`,
+    );
+    await ctx.container.provisionerLoop.tick();
+
+    expect((await operationOf(service.id, 'SUSPEND'))?.state).toBe('SUCCEEDED');
+    expect(panel.users.get(service.username)?.status).toBe('disabled');
+  });
+
   it('records WHO asked for a service to be ended, as its own decision', async () => {
     /*
      * `plan` records no actor — an operation row says what is to be done and which
