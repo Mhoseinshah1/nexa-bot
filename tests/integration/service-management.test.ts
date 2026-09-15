@@ -942,6 +942,44 @@ describe('a customer manages the service they bought', () => {
     expect(panel.users.get(service.username)?.dataLimit).toBe(Number(before?.trafficLimitBytes));
   });
 
+  it('takes an EXPIRED service back to ACTIVE, which is the edge this phase exists for', async () => {
+    /*
+     * `SERVICE_MACHINE`'s `EXPIRED -> ACTIVE on RENEW` was frozen in Phase 4D with no
+     * caller at all. This is that caller, end to end: a service whose window closed,
+     * a renewal bought for it, and the state the machine — not this file — says it
+     * lands in.
+     *
+     * The period starts from NOW rather than from the old expiry, which is
+     * `extendedExpiry`'s second half and `OQ-4F-02`: a customer must not be sold days
+     * that have already elapsed. So the new window is in the future, and the sweep on
+     * the next tick leaves it alone rather than expiring it again immediately.
+     */
+    const service = await activeService('renew-expired');
+    await ctx.container.database.db.execute(
+      sql`UPDATE services SET expires_at = now() - interval '2 days' WHERE id = ${service.id}`,
+    );
+    await ctx.container.provisionerLoop.tick();
+    expect((await services.findById(tenantA, service.id))?.state).toBe('EXPIRED');
+
+    await fund('renew-expired');
+    await buy(service.id, 'RENEW', null, 'renew-expired');
+    await ctx.container.provisionerLoop.tick();
+
+    expect((await operationOf(service.id, 'RENEW'))?.state).toBe('SUCCEEDED');
+    const revived = await services.findById(tenantA, service.id);
+    expect(revived?.state).toBe('ACTIVE');
+    expect(revived?.expiresAt?.getTime()).toBeGreaterThan(Date.now());
+
+    // And the panel agrees, rather than Nexa reporting a revival it did not make.
+    expect(panel.users.get(service.username)?.expire).toBe(
+      Math.floor((revived?.expiresAt?.getTime() ?? 0) / 1000),
+    );
+
+    // A second sweep does not take it straight back out again.
+    await ctx.container.provisionerLoop.tick();
+    expect((await services.findById(tenantA, service.id))?.state).toBe('ACTIVE');
+  });
+
   it('settles a renewal without creating a second service', async () => {
     /*
      * The defect the whole phase opened by naming. `confirmAndSettle` used to end in an
