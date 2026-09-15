@@ -178,19 +178,33 @@ describe('panel HTTP surface', () => {
     return get(PANEL_ROUTES.providers, ownerCookie).then((response) => {
       const body = providerListResponseSchema.parse(response.json());
       expect(body.providers.length).toBeGreaterThan(0);
-      for (const provider of body.providers) {
-        // Both providers implement the same four in this release. Asserted as an
-        // EXACT list per provider rather than as a shared constant, so a provider
-        // that later implements a fifth has to say so here.
-        expect(provider.capabilities, provider.key).toEqual([
+      /*
+       * PER PROVIDER, and no longer the same list for both.
+       *
+       * The two used to publish an identical four, and the comment here said a
+       * provider that later implemented a fifth would have to say so. This is that
+       * case: `SanaeiAdapter.createUser` writes `limitIp` from the order's frozen
+       * `deviceLimit` and `MarzbanAdapter.createUser` never reads the field, so
+       * `LIMIT_DEVICES` is Sanaei's and only Sanaei's. Keeping one shared list would
+       * mean this endpoint publishes a claim about Marzban that its adapter does not
+       * honour, which is the whole failure this catalogue test exists to catch.
+       */
+      const PUBLISHED: Record<string, readonly string[]> = {
+        marzban: ['HEALTH_CHECK', 'CREATE_USER', 'READ_USAGE', 'DELIVER_SUBSCRIPTION_LINK'],
+        sanaei: [
           'HEALTH_CHECK',
           'CREATE_USER',
           'READ_USAGE',
           'DELIVER_SUBSCRIPTION_LINK',
-        ]);
-        // And the twelve that have no code behind them are named, not inferred by
-        // omission — a complement computed from the descriptor would pass whichever
-        // side a capability moved to.
+          'LIMIT_DEVICES',
+        ],
+      };
+      for (const provider of body.providers) {
+        expect(PUBLISHED[provider.key], `${provider.key} has no expected list`).toBeDefined();
+        expect(provider.capabilities, provider.key).toEqual(PUBLISHED[provider.key]);
+        // And the ones with no code behind them are named, not inferred by omission —
+        // a complement computed from the descriptor would pass whichever side a
+        // capability moved to.
         for (const unimplemented of [
           'RENEW_USER',
           'DELETE_USER',
@@ -202,12 +216,17 @@ describe('panel HTTP surface', () => {
           'ROTATE_SUBSCRIPTION_LINK',
           'DELIVER_RAW_CONFIGS',
           'DELIVER_CONFIG_FILE',
-          'LIMIT_DEVICES',
           'INACTIVE_ACCOUNT_INBOUND',
         ]) {
           expect(provider.capabilities, `${provider.key}.${unimplemented}`).not.toContain(
             unimplemented,
           );
+        }
+        // `LIMIT_DEVICES` is checked on the side it is NOT implemented, by name, for
+        // the same reason: a provider that starts publishing it without writing the
+        // field fails here.
+        if (provider.key === 'marzban') {
+          expect(provider.capabilities, 'marzban.LIMIT_DEVICES').not.toContain('LIMIT_DEVICES');
         }
       }
     });
@@ -249,6 +268,10 @@ describe('panel HTTP surface', () => {
         'CREATE_USER',
         'READ_USAGE',
         'DELIVER_SUBSCRIPTION_LINK',
+        // `createUser` writes `limitIp` from the order's frozen `deviceLimit`, and has
+        // since Phase 4D. The descriptor understated it until the provisioner began
+        // refusing device-limited orders on panels that cannot apply one.
+        'LIMIT_DEVICES',
       ]);
       for (const unimplemented of ['RENEW_USER', 'ADD_VOLUME', 'ADD_TIME', 'DELETE_USER']) {
         expect(sanaei?.capabilities, unimplemented).not.toContain(unimplemented);
@@ -273,6 +296,7 @@ describe('panel HTTP surface', () => {
       'CREATE_USER',
       'READ_USAGE',
       'DELIVER_SUBSCRIPTION_LINK',
+      'LIMIT_DEVICES',
     ]);
     expect(body.panel.capabilities).not.toContain('RENEW_USER');
   });
