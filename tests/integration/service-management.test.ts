@@ -559,6 +559,42 @@ describe('a customer manages the service they bought', () => {
     expect((await services.findById(tenantA, service.id))?.state).toBe('TERMINATED');
   });
 
+  it('records WHO asked for a service to be ended, as its own decision', async () => {
+    /*
+     * `plan` records no actor — an operation row says what is to be done and which
+     * worker claimed it, not who wanted it — so without this row the only answer to
+     * "who asked for this account to be deleted" is inferred from the fact that nobody
+     * else can. Inference is what the legacy `/admin/logs` offered.
+     *
+     * TWO rows, and they are different facts: the request is a decision and the
+     * execution is an effect. A terminate that was asked for and never carried out must
+     * not look like one that was.
+     */
+    const service = await activeService('audit-terminate');
+    await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`k:${service.id}`));
+
+    const requested = await ctx.container.database.db.execute(
+      sql`SELECT action, after FROM audit_logs WHERE entity_id = ${service.id} ORDER BY occurred_at`,
+    );
+    expect(requested.rows.map((row) => row['action'])).toContain('service.request_terminate');
+    const decision = requested.rows.find((row) => row['action'] === 'service.request_terminate');
+    expect((decision?.['after'] as Record<string, unknown>)['requestedBy']).toBe(customerA);
+
+    await ctx.container.provisionerLoop.tick();
+
+    const after = await ctx.container.database.db.execute(
+      sql`SELECT action FROM audit_logs WHERE entity_id = ${service.id} ORDER BY occurred_at`,
+    );
+    expect(after.rows.map((row) => row['action'])).toEqual([
+      // The whole life of this service, in order: settled, created on the panel, asked
+      // to be ended, ended.
+      'service.plan',
+      'service.provision',
+      'service.request_terminate',
+      'service.terminate',
+    ]);
+  });
+
   it('makes its provider calls outside every database transaction', async () => {
     /*
      * Not an assertion about a counter: `refuseNetworkInsideTransaction` THROWS inside

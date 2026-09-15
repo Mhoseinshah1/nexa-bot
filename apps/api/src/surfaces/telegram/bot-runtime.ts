@@ -626,10 +626,24 @@ export class BotRuntime {
       return this.serviceResend(scope, customer, command.targetId, input);
     }
     if (command.intent === 'SERVICE_SUSPEND' && command.targetId !== null) {
-      return this.serviceAction(scope, customer, command.targetId, 'SUSPEND', input.idempotencyKey);
+      return this.serviceAction(
+        scope,
+        actor,
+        customer,
+        command.targetId,
+        'SUSPEND',
+        input.idempotencyKey,
+      );
     }
     if (command.intent === 'SERVICE_RESUME' && command.targetId !== null) {
-      return this.serviceAction(scope, customer, command.targetId, 'RESUME', input.idempotencyKey);
+      return this.serviceAction(
+        scope,
+        actor,
+        customer,
+        command.targetId,
+        'RESUME',
+        input.idempotencyKey,
+      );
     }
     if (command.intent === 'SERVICE_TERMINATE_ASK' && command.targetId !== null) {
       return this.serviceTerminateAsk(scope, customer, command.targetId);
@@ -637,6 +651,7 @@ export class BotRuntime {
     if (command.intent === 'SERVICE_TERMINATE' && command.targetId !== null) {
       return this.serviceAction(
         scope,
+        actor,
         customer,
         command.targetId,
         'TERMINATE',
@@ -903,23 +918,29 @@ export class BotRuntime {
    * paused" here would be a claim about somebody else's machine, made before anything
    * was asked of it.
    *
-   * Every refusal `requestFromCustomer` can produce is answered, and the mapping is
-   * deliberate rather than a catch-all: `SERVICE_NOT_FOUND` is the same answer an id
-   * that is not theirs gets, and everything else — a state the action is not legal
-   * from, a panel that cannot perform it, a tenant that has stopped — is
-   * `bot.service.capability_unsupported`, which says the action is not available for
-   * this service. That sentence is true for all three and none of them is a customer's
-   * to fix; distinguishing them would tell a customer about an operator's panel.
+   * Every refusal `requestFromCustomer` can produce is answered BY NAME, and the
+   * mapping is a closed list rather than a catch-all. `SERVICE_NOT_FOUND` is the same
+   * answer an id that is not theirs gets. The other three — a state the action is not
+   * legal from, a panel that cannot perform it, a tenant that has stopped — are one
+   * sentence, because that sentence is true for all of them, none is the customer's to
+   * fix, and telling them apart would describe an operator's panel to a customer.
+   *
+   * Anything ELSE is re-thrown, and that is the part worth stating. A catch-all here
+   * would answer a database failure with "this action is not available for your
+   * service" — a false statement about the customer's panel, made to hide an outage,
+   * and indistinguishable from the three real refusals in every log this installation
+   * keeps. The runtime's own error path exists for the unknown case.
    */
   private async serviceAction(
     scope: TenantContext,
+    actor: ActorContext,
     customer: CustomerRecord,
     serviceId: string,
     type: CustomerServiceOperation,
     idempotencyKey: string,
   ): Promise<PendingReply> {
     try {
-      await this.deps.services.requestFromCustomer(scope, customer.id, serviceId, type, {
+      await this.deps.services.requestFromCustomer(scope, actor, customer.id, serviceId, type, {
         idempotencyKey,
       });
     } catch (error) {
@@ -927,6 +948,12 @@ export class BotRuntime {
       if (code === COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND) {
         return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
       }
+      const refusals: readonly unknown[] = [
+        COMMERCE_ERROR_CODES.ORDER_STATE_INVALID,
+        COMMERCE_ERROR_CODES.PANEL_NOT_OPERABLE,
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+      ];
+      if (!refusals.includes(code)) throw error;
       return { key: 'bot.service.capability_unsupported', values: {}, buttons: [], orderId: null };
     }
     return { key: 'bot.service.action_requested', values: {}, buttons: [], orderId: null };

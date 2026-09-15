@@ -521,6 +521,7 @@ export class ProvisioningService {
    */
   async requestFromCustomer(
     scope: TenantContext,
+    actor: ActorContext,
     customerId: UserId,
     serviceId: string,
     type: CustomerServiceOperation,
@@ -554,7 +555,7 @@ export class ProvisioningService {
       }
       const open = await this.deps.operations.findOpen(scope, serviceId, type, tx);
       if (open !== null) return open;
-      return this.deps.operations.plan(
+      const operation = await this.deps.operations.plan(
         scope,
         {
           id: this.deps.ids.uuid(),
@@ -567,6 +568,39 @@ export class ProvisioningService {
         now,
         tx,
       );
+      /*
+       * WHO asked, and when.
+       *
+       * `plan` records no actor — an operation row says what is to be done and by which
+       * worker it was claimed, not who wanted it — so without this the only answer to
+       * "who asked for this service to be deleted" would be inferred from the fact that
+       * nobody else can. Inference is what `/admin/logs` offered, and the research
+       * records what that was worth.
+       *
+       * The actor is the SYSTEM_JOB the webhook runs as, because a customer is not an
+       * admin and has no `ActorContext` of their own; the customer id goes in the
+       * payload, where it is a fact about the request rather than a fabricated identity.
+       * That distinction is the reason `docs/conventions.md` forbids inventing actors.
+       *
+       * The executor writes a SECOND audit row when the panel actually applies the
+       * change, and the two are different facts: this one is a decision, that one is an
+       * effect, and a terminate that was asked for and never carried out must not look
+       * like one that was.
+       */
+      await this.deps.audit.record(
+        scope,
+        actor,
+        {
+          action: `service.request_${type.toLowerCase()}`,
+          entityType: 'Service',
+          entityId: serviceId,
+          before: { state: service.state },
+          after: { requestedBy: customerId, operationId: operation.operationId },
+          result: 'SUCCESS',
+        },
+        tx,
+      );
+      return operation;
     });
   }
 
