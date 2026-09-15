@@ -67,6 +67,23 @@ function toRecord(row: Row): OperationRecord {
     claimedBy: row.claimedBy,
     leaseUntil: row.leaseUntil,
     callStartedAt: row.callStartedAt,
+    /*
+     * The two columns read back as ONE value, or as null when neither is set.
+     *
+     * `provisioning_operations_target_present_check` makes "neither set" impossible for
+     * the three commercial types, and `..._target_check` makes "either set" impossible
+     * for the other seven — so this reassembly is total: a commercial operation always
+     * has a target and nothing else ever does. Reassembling rather than exposing two
+     * nullable fields is the same rule the price pair follows: a caller must not be
+     * able to read one half without noticing the other.
+     */
+    target:
+      row.targetExpiresAt === null && row.targetTrafficLimitBytes === null
+        ? null
+        : {
+            expiresAt: row.targetExpiresAt,
+            trafficLimitBytes: row.targetTrafficLimitBytes,
+          },
     providerReference: row.providerReference,
     failureKind: row.failureKind as ProviderFailureKind | null,
     failureMessage: row.failureMessage,
@@ -118,6 +135,17 @@ export class DrizzleOperationRepository implements OperationRepository {
         panelId: draft.panelId,
         type: draft.type,
         state: 'PLANNED',
+        /*
+         * Written HERE and never again.
+         *
+         * `plan` is called from inside the transaction that settles the order, so the
+         * numbers are computed once against the service as it stood when the money
+         * moved. Nothing updates these columns afterwards — not the claim, not a retry,
+         * not the reaper — which is what makes a replayed provider call send the same
+         * request as the first one.
+         */
+        targetExpiresAt: draft.target?.expiresAt ?? null,
+        targetTrafficLimitBytes: draft.target?.trafficLimitBytes ?? null,
         /*
          * Due NOW, stamped rather than left null.
          *

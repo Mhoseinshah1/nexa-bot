@@ -2,6 +2,7 @@ import type {
   BotInstanceId,
   OperationId,
   OperationState,
+  OperationTarget,
   OperationType,
   OrderId,
   PanelActivation,
@@ -407,6 +408,16 @@ export interface OperationRecord {
   readonly claimedBy: string | null;
   readonly leaseUntil: Date | null;
   readonly callStartedAt: Date | null;
+  /**
+   * What a commercial operation is trying to make true, absolute, or null on every
+   * other type.
+   *
+   * `provisioning_operations_target_check` refuses one on anything but `RENEW`,
+   * `ADD_TRAFFIC` and `ADD_TIME`, and `..._target_present_check` refuses a commercial
+   * operation that carries neither field — an operation that asks the panel for nothing
+   * while an order records that a customer paid for something.
+   */
+  readonly target: OperationTarget | null;
   readonly providerReference: string | null;
   readonly failureKind: ProviderFailureKind | null;
   readonly failureMessage: string | null;
@@ -422,6 +433,19 @@ export interface OperationDraft {
   readonly orderId: OrderId | null;
   readonly panelId: PanelId;
   readonly type: OperationType;
+  /**
+   * Computed ONCE, by the caller, inside the transaction that settles the order.
+   *
+   * Optional, because seven of the ten operation types have no target and passing
+   * `null` at each of those call sites would be noise. Absent means null, and the CHECK
+   * constraints make the two directions of that mistake impossible to persist.
+   *
+   * It must not be recomputed later. A target derived at execution time from whatever
+   * the panel currently holds would differ between an attempt and its replay, and the
+   * arithmetic would compound into a customer receiving two renewals for one payment —
+   * which is the property `IDEMPOTENT_MUTATIONS` now depends on for these three types.
+   */
+  readonly target?: OperationTarget | null;
 }
 
 export interface OperationRepository {
