@@ -107,6 +107,11 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.received_for_review': 'رسید شما دریافت شد و برای بررسی در نوبت قرار گرفت.',
 
   'bot.service.list_empty': 'هنوز سرویسی ندارید.',
+  'bot.service.list_heading': 'سرویس‌های شما:',
+  // ONE message for a service that is not theirs and one that does not exist. Telling
+  // them apart would make the bot an oracle for guessing service ids; `templates.ts`
+  // records the reasoning.
+  'bot.service.not_found': 'این سرویس در دسترس شما نیست.',
   'bot.service.detail':
     'سرویس: {productTitle}\nوضعیت: {state}\nمصرف: {usedTrafficBytes} از {totalTrafficBytes}\nانقضا: {expiresAt}\nآخرین به‌روزرسانی مصرف: {syncedAt}',
   'bot.service.subscription': 'لینک اشتراک شما:\n<code>{subscriptionUrl}</code>',

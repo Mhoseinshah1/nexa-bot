@@ -518,6 +518,31 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.service.list_heading',
+    description:
+      'Introduces the list of services a customer owns. Separate from ' +
+      '`bot.catalog.heading` because the two lists are different things: one is what a ' +
+      'customer could buy, the other what they already have, and a tenant will word ' +
+      'them differently. The list itself is buttons, so this key carries no ' +
+      'placeholders \u2014 a heading that interpolated a count would be a heading that ' +
+      'went stale the moment a service expired between render and read.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.not_found',
+    description:
+      'Shown when a customer acts on a service id that is not theirs, or does not ' +
+      'exist. ONE message for both, deliberately, and it is the reason this key is not ' +
+      '`bot.unknown_command`: a tap on a stale button is not a typing mistake, and ' +
+      'telling the two apart would let anybody holding a service id learn whether it ' +
+      'exists by watching which answer they get. `getForCustomer` compares ownership ' +
+      'against the row it read rather than filtering the query, so both cases already ' +
+      'arrive here as the same outcome.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.service.detail',
     description:
       'One service, as its owner sees it. Usage and expiry come from the last ' +
