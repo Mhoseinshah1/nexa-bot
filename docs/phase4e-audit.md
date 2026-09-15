@@ -150,3 +150,55 @@ dispatch must classify each new type's mutations through the existing
 `OQ-PROV-02` — the announcement uses the bot the customer FIRST wrote to — is a
 natural fit for this phase, because it wants a column on `orders` and this phase is
 already in the service lifecycle. It is listed as a candidate, not a commitment.
+
+---
+
+# Scope correction, mid-phase: Marzban only
+
+After the non-destructive half of this phase shipped — usage sync, service expiry and
+the customer-facing My Services surface — the owner narrowed what remains:
+
+> For now, Nexa only needs Marzban as the supported service-management provider.
+> Do NOT continue implementing or enabling destructive service-management capabilities
+> for 3X-UI/Sanaei in Phase 4E. 3X-UI support may remain where already implemented for
+> existing non-destructive/provisioning compatibility.
+
+So the plan above is amended, and the amendment is recorded here rather than by
+deleting what it replaces — the earlier text is what the acceptance work was
+scoped against and the reason the Sanaei adapter was corrected against a real
+panel binary first.
+
+## What 3X-UI keeps
+
+Everything it has today, unchanged: `HEALTH_CHECK`, `CREATE_USER`, `READ_USAGE`,
+`DELIVER_SUBSCRIPTION_LINK`, the v3.7.0 wire contract verified in
+`docs/providers/sanaei-3xui.md`, and the acceptance suite in
+`tests/acceptance/real-panel-sanaei.test.ts`. A 3X-UI panel can still be connected,
+probed, monitored, provisioned onto and read back from.
+
+## What 3X-UI does NOT get, and what that costs
+
+`DISABLE_USER`, `ENABLE_USER` and `DELETE_USER` stay out of the Sanaei descriptor,
+and `SanaeiAdapter` gains no `suspendUser`, `resumeUser` or `terminateUser`.
+
+The consequence is exact and is a refusal, not a silent gap: `decideOperability`
+reads `OPERATION_REQUIRED_CAPABILITIES` against the panel's descriptor, so a
+`SUSPEND`, `RESUME` or `TERMINATE` planned against a 3X-UI-backed service is refused
+with `CAPABILITY_UNSUPPORTED` before any request is sent. The customer-facing surface
+asks the same question before it draws a button, so a 3X-UI customer is not offered
+an action the executor would refuse.
+
+**Deferred to a future phase**, and deliberately not carried as an open question,
+because nothing is unknown about whether it should exist — only when:
+
+- the three wire facts the earlier plan listed (how v3.7.0 disables and re-enables one
+  client; how it deletes one and what it answers when the client is already gone;
+  what each does to the inbound's other clients) are **not established**. Phase 4E did
+  not read them out of the v3.7.0 source and did not run them against the panel binary,
+  so this repository holds no evidence for them and must not act as though it does;
+- the acceptance that would prove them — the destructive half of
+  `docs/real-panel-acceptance.md` — was not written and not run.
+
+A future phase implementing 3X-UI service management starts by reading those three
+facts out of the upstream source and proving them against a disposable panel, in that
+order. It does not start from this document.

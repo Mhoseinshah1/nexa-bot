@@ -383,3 +383,32 @@ adapter uses. That is an upstream-generated artifact rather than a transcription
 panel built from this commit. It is what caught the CSRF rule above and the duplicate
 semantics here, neither of which any amount of re-reading had. `docs/real-panel-acceptance.md`
 is how to run it.
+
+## Service management is DEFERRED for this provider
+
+This adapter creates users, looks them up and reads their traffic. It does **not**
+disable, re-enable or delete one, and the `sanaei` descriptor does not carry
+`DISABLE_USER`, `ENABLE_USER` or `DELETE_USER`.
+
+That is a scope decision the owner took part-way through Phase 4E — Marzban is the
+supported service-management provider for now — and not an assessment that 3X-UI
+cannot do these things. It plainly can; nobody here has established **how**.
+
+Specifically, this repository holds no evidence for any of:
+
+- whether v3.7.0 disables one client through a field on an update call or a dedicated
+  route, and what that does to the inbound's other clients;
+- how it deletes one, and what it answers when the client is already gone — which is
+  what decides whether a replayed terminate is idempotent or an error;
+- whether either operation needs the CSRF token in session mode, as the create path
+  turned out to.
+
+None of those three was read out of the upstream source and none was run against a
+panel. The table above is verified; anything about suspend, resume or terminate would
+not be, and must not be written from the shape of the routes that are.
+
+A `SUSPEND`, `RESUME` or `TERMINATE` planned against a 3X-UI-backed service is refused
+with `CAPABILITY_UNSUPPORTED` by `decideOperability`, before any request leaves this
+installation, because the descriptor does not claim the capability the operation
+requires. That refusal is the whole point of the capability list: the product does not
+offer an action it cannot perform.
