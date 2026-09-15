@@ -350,7 +350,15 @@ nexa_pull_release() {
 # release whose compose does not define `caddy` simply does not have it
 # required, which is the same rule that lets a rollback to a pre-monitor
 # release still become ready — and now a rollback to a pre-recovery one.
-NEXA_READY_SERVICES="api worker monitor recovery caddy"
+# `provisioner` is here for the reason `recovery` is, with the money attached.
+# It is the only process that turns a SETTLED order into an account on a panel.
+# An installation whose provisioner is dead takes payments, answers every
+# health check, reports a successful `botctl update`, and creates nothing: the
+# orders pile up in PENDING_PROVISION, which is indistinguishable from an order
+# that is about to be provisioned. Leaving it out meant a release could be
+# called ready while the one process a paying customer depends on was absent or
+# crash-looping.
+NEXA_READY_SERVICES="api worker monitor recovery provisioner caddy"
 
 # The required services that the ACTIVE compose file actually defines.
 #

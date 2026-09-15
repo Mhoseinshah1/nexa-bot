@@ -1019,6 +1019,45 @@ describe('panels', () => {
     expect(await ctx.container.database.db.select().from(panels)).toHaveLength(1);
   });
 
+  it('refuses to replay a create whose activation differs', async () => {
+    const idempotencyKey = key();
+    const base = {
+      name: 'Activated',
+      providerType: 'sanaei' as const,
+      baseUrl: 'https://panel.example.test',
+      credentials: { password: PASSWORD },
+      idempotencyKey,
+    };
+    const first = await ctx.container.panels.create(tenantA, adminActorFor(owner), {
+      ...base,
+      activation: { subscriptionDomain: 'sub-a.example.test', inboundId: 1 },
+    });
+
+    /*
+     * The same key, a DIFFERENT activation. Not a retry: a different request.
+     *
+     * Create began accepting activation in this phase and its request hash was not
+     * widened with it, so this second call matched the first request's hash and was
+     * answered with the first panel — reported as a success while writing none of what
+     * it asked for. The panel then provisioned against a `subscriptionDomain` its
+     * operator believed they had replaced, which is the legacy system's "re-adding an
+     * admin returns success and writes nothing" in another column.
+     */
+    await expect(
+      ctx.container.panels.create(tenantA, adminActorFor(owner), {
+        ...base,
+        activation: { subscriptionDomain: 'sub-b.example.test', inboundId: 2 },
+      }),
+    ).rejects.toThrow();
+
+    const rows = await ctx.container.database.db.select().from(panels);
+    expect(rows, 'and no second panel was written either').toHaveLength(1);
+    expect(
+      (rows[0]?.activation as { subscriptionDomain?: string } | null)?.subscriptionDomain,
+      'and the first activation is untouched',
+    ).toBe('sub-a.example.test');
+  });
+
   it('replays a create whose credentials differ, because the values are not in the hash', async () => {
     const idempotencyKey = key();
     const base = {

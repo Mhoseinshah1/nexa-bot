@@ -594,7 +594,25 @@ export class PanelService {
     // different passwords must not be treated as different requests — that
     // would defeat the replay — and hashing a secret puts a value derived from
     // it in a table nothing else protects.
-    const requestHash = hashRequest({ name: command.name, providerType, baseUrl });
+    /*
+     * `activation` is in the hash because create now ACCEPTS it.
+     *
+     * The update path has carried it since activation became writable there; create
+     * gained the field in this phase and its hash was not widened with it. That left
+     * the replay check unable to tell two different requests apart: the same
+     * idempotency key with a different `subscriptionDomain` or `inboundId` matched the
+     * first request's hash, so the second was answered with the first panel and
+     * reported as a success having written nothing of what it asked for — and the
+     * panel then provisioned against an activation its operator had tried to replace.
+     * That is the legacy system's "re-adding an admin returns success and writes
+     * nothing", which the comment on the update path already names.
+     */
+    const requestHash = hashRequest({
+      name: command.name,
+      providerType,
+      baseUrl,
+      activation: command.activation,
+    });
     const existing = await this.deps.idempotency.find<{ panelId: string }>(
       scope,
       actor.surface,
