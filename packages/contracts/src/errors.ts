@@ -703,6 +703,24 @@ export const COMMERCE_ERROR_CODES = {
    * again rather than wonder what went wrong.
    */
   PAYMENT_WINDOW_TOO_SHORT: 'commerce.payment_window_too_short',
+  /**
+   * The customer asked to cancel an order whose transfer they have SAID they sent.
+   *
+   * 4H gives a customer two new actions on the same message: "I have sent it" and
+   * "cancel this order". Between them there is one combination that must not be
+   * performed — cancelling an order after claiming to have paid for it. The claim says
+   * money may already be in flight, and cancelling would close the payment it was
+   * against while a bank transfer is on its way to a reference nobody is holding open.
+   *
+   * Distinct from `ORDER_STATE_INVALID`, which says the order can no longer be acted
+   * on at all. This one says the order is perfectly live and the customer's own earlier
+   * claim is what stops them: the remedy is to wait for the review they asked for, and
+   * the sentence has to say so or the customer taps again.
+   *
+   * It is deliberately NOT a permission failure and not a not-found. Both would hide a
+   * live order from the person who placed it.
+   */
+  ORDER_TRANSFER_UNDER_REVIEW: 'commerce.order_transfer_under_review',
 } as const;
 
 /*

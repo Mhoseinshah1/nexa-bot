@@ -458,7 +458,59 @@ export const TEMPLATES = [
   },
   {
     key: 'bot.order.cancelled',
-    description: 'Confirms that an order was withdrawn.',
+    description:
+      'Confirms that an order was withdrawn. Its producer, since 4H, is the customer’s ' +
+      'own cancellation of an order they have not paid for. Distinct from ' +
+      '`bot.order.expired`, which is the window closing on its own: this one is a ' +
+      'decision the customer made, and a customer who is told their order “expired” ' +
+      'when they cancelled it learns that the product did not register what they did.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.order.cancel_button',
+    description:
+      'The label on the button a customer presses to withdraw an order they have not ' +
+      'paid for. A key rather than a literal, for the reason `bot.payment.wallet_button` ' +
+      'gives. It is the ORDER, not the payment: `bot.payment.cancel_button` withdraws ' +
+      'one transfer and leaves the order open to be paid another way, and these two ' +
+      'appear in the same conversation, so neither label may read as the other.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.order.cancel_confirm',
+    description:
+      'The question between the cancel button and the cancellation itself. ' +
+      '`bot.payment.cancel_confirm` is the same shape one aggregate over and exists for ' +
+      'the same reason: the message carrying the button stays in the chat for ever, so a ' +
+      'destructive tap reached by scrolling is not a decision the customer has made. It ' +
+      'must say what cannot be taken back — `ORDER_MACHINE` has no edge out of ' +
+      'CANCELLED, so the price they were quoted is gone and a new order starts at ' +
+      'whatever the plan costs today.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.order.cancel_confirm_button',
+    description:
+      'The label on the one button that actually cancels the order. ' +
+      '`bot.payment.cancel_confirm_button` is its counterpart one aggregate over, and ' +
+      'both must read as an ANSWER to the question above them rather than as a fresh ' +
+      'offer — that is what distinguishes the second tap from the first.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.order.transfer_under_review',
+    description:
+      'Shown when a customer asks to cancel an order whose transfer they have already ' +
+      'said they sent. It is NOT a refusal to be argued with: it says the claim they ' +
+      'made is queued for review and that money already sent cannot be unsent by ' +
+      'cancelling the order it was for. Distinct from `bot.order.not_awaiting_payment`, ' +
+      'which says the order can no longer be acted on — here the order is perfectly ' +
+      'live and the customer’s own earlier claim is what stops them, so the sentence ' +
+      'has to say so or they simply tap again.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -548,7 +600,25 @@ export const TEMPLATES = [
   },
   {
     key: 'bot.payment.received_for_review',
-    description: 'Confirms that submitted evidence is queued for an operator to review.',
+    description:
+      'The answer to a customer pressing “I have sent it” on the message that gave ' +
+      'them the reference. It must be careful about WHOSE claim it repeats: nothing has ' +
+      'been received, nothing has been verified, and an operator has yet to look at a ' +
+      'bank statement. What is true is that the customer’s claim is on record and ' +
+      'somebody will check it, and the sentence says exactly that. A wording along the ' +
+      'lines of “your payment was confirmed” would be the legacy receipt ' +
+      'review’s defect in a message — `PRBR-004`, where “receipt” and ' +
+      '“payment” name one record and nobody can tell a claim from a check.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.sent_button',
+    description:
+      'The label on the button a customer presses to say they have sent the transfer. A ' +
+      'key rather than a literal, for the reason `bot.payment.wallet_button` gives. It ' +
+      'sits beside `bot.payment.cancel_button` on the instructions message and is the ' +
+      'opposite action, so the two labels must be impossible to confuse at a glance.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },

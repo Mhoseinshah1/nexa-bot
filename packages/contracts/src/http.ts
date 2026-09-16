@@ -1965,6 +1965,20 @@ export const paymentSummarySchema = z.object({
    * about an approval, and a rejection deserves the same answer.
    */
   resolvedByAdminId: z.string().nullable(),
+  /**
+   * When the customer said they had sent the transfer. Their CLAIM, never evidence.
+   *
+   * On the SUMMARY rather than the detail, because it is the field that makes the
+   * pending list triageable: `docs/phase4h-audit.md` §4 measured that an operator
+   * learns of a transfer from their bank rather than from the product, and a list where
+   * every PENDING row looks alike is why.
+   *
+   * It is deliberately not folded into `state`. A customer's assertion and an
+   * operator's confirmation are different facts, and a surface that could not tell them
+   * apart is the legacy receipt review, where "receipt" and "payment" name one record
+   * (`PRBR-004`). A signalled payment is still PENDING and still needs a human.
+   */
+  customerSignalledAt: z.iso.datetime().nullable(),
   expiresAt: z.iso.datetime().nullable(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),

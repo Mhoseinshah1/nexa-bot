@@ -106,16 +106,50 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    */
   'bot.order.settled': 'پرداخت با موفقیت تأیید شد و سفارش شما پرداخت‌شده است.',
   'bot.order.cancelled': 'سفارش لغو شد.',
+  'bot.order.cancel_button': 'لغو سفارش',
+  /*
+   * The two things the customer cannot take back, said before the destructive tap.
+   *
+   * `ORDER_MACHINE` has no edge out of CANCELLED, so the quoted price is gone with the
+   * order: a new order is priced at whatever the plan costs today. Saying so is what
+   * makes this a decision rather than a mis-touch on a message they scrolled past.
+   */
+  'bot.order.cancel_confirm':
+    'آیا از لغو این سفارش مطمئن هستید؟ این کار برگشت‌پذیر نیست و قیمت فعلی شما از بین می‌رود؛ سفارش بعدی با قیمت روز ثبت می‌شود.',
+  'bot.order.cancel_confirm_button': 'بله، سفارش را لغو کن',
+  /*
+   * NOT a refusal to argue with. The customer said they had paid, and money already
+   * sent cannot be unsent by cancelling the order it was for.
+   */
+  'bot.order.transfer_under_review':
+    'شما اعلام کرده‌اید که مبلغ این سفارش را واریز کرده‌اید، بنابراین تا پایان بررسی نمی‌توان آن را لغو کرد. نتیجهٔ بررسی به شما اطلاع داده می‌شود.',
 
   'bot.wallet.balance': 'موجودی کیف پول شما: {balance}',
   'bot.wallet.insufficient': 'موجودی کیف پول کافی نیست. کمبود: {shortfall}',
 
+  /*
+   * It used to end «سپس رسید را ارسال نمایید» — "then send the receipt" — and no
+   * surface in this product accepts one. Owner revision 17 says no receipt is stored,
+   * archived or displayed, so the instruction described a step the customer could
+   * attempt for ever without anything happening. 4H gives them the step that exists.
+   */
   'bot.payment.manual_instructions':
-    'برای پرداخت مبلغ {total} طبق راهنمای فروشنده اقدام کنید و سپس رسید را ارسال نمایید.\nکد پیگیری این پرداخت: {reference}',
+    'برای پرداخت مبلغ {total} طبق راهنمای فروشنده اقدام کنید و سپس دکمهٔ «پرداخت را انجام دادم» را بزنید.\nکد پیگیری این پرداخت: {reference}',
   'bot.payment.wallet_button': 'پرداخت از کیف پول',
   'bot.payment.manual_button': 'پرداخت کارت به کارت',
   'bot.payment.unconfigured': 'این روش پرداخت در حال حاضر فعال نیست.',
-  'bot.payment.received_for_review': 'رسید شما دریافت شد و برای بررسی در نوبت قرار گرفت.',
+  'bot.payment.sent_button': 'پرداخت را انجام دادم',
+  /*
+   * Whose claim this repeats is the whole of the wording.
+   *
+   * It used to read «رسید شما دریافت شد» — "your receipt has been received" — which is
+   * two untruths at once: no receipt is accepted anywhere in this product, and nothing
+   * has been received. What is true is that the CUSTOMER's claim is recorded and a
+   * person will check it against a bank statement. A sentence that blurred the two
+   * would be `PRBR-004` in a message.
+   */
+  'bot.payment.received_for_review':
+    'اعلام شما ثبت شد. هنوز مبلغی دریافت یا تأیید نشده است؛ پس از بررسی، نتیجه به شما اطلاع داده می‌شود.',
   'bot.payment.window_too_short':
     'مهلت این سفارش برای پرداخت کارت به کارت کافی نیست. لطفاً دوباره سفارش دهید.',
   'bot.payment.cancel_button': 'انصراف از پرداخت',
