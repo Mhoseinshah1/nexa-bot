@@ -362,9 +362,11 @@ export class DrizzleBotInstanceRepository implements BotInstanceRepository, BotB
        * Named constraint, not bare 23505. `bot_instances` also has a unique index
        * on `username`, and answering "already bound to another tenant" for that
        * one would be a confident wrong answer — the username index catches a
-       * genuinely different mistake, and it is not this one.
+       * genuinely different mistake, and it is not this one. That one now has its
+       * own branch and its own code; until 4I it had neither, and reached the
+       * operator as a raw 23505.
        */
-      rethrowAlreadyBound(error, input.telegramBotId);
+      rethrowAlreadyBound(error, input.telegramBotId, input.username);
     }
   }
 
@@ -430,7 +432,7 @@ export class DrizzleBotInstanceRepository implements BotInstanceRepository, BotB
         .returning({ id: botInstances.id });
       return filled.length > 0;
     } catch (error: unknown) {
-      rethrowAlreadyBound(error, input.telegramBotId);
+      rethrowAlreadyBound(error, input.telegramBotId, input.username);
     }
   }
 }
@@ -443,11 +445,15 @@ export class DrizzleBotInstanceRepository implements BotInstanceRepository, BotB
  * raw 23505. Two copies of one refusal drift, and the copy that drifts is the
  * one nobody reached in testing.
  *
- * Named constraint, not bare 23505: `bot_instances` also has a unique index on
- * `username`, and answering "already bound to another tenant" for that one would
- * be a confident wrong answer about a genuinely different mistake.
+ * TWO named constraints, never a bare 23505, and never one answer for both.
+ * `bot_instances` has a unique index on `username` as well, and answering
+ * "already bound to another tenant" for that one would be a confident wrong
+ * answer about a genuinely different mistake. That argument was here before the
+ * second branch was, and it is still the argument: the branch below exists so the
+ * username violation has its OWN answer, not so this one can be widened to cover
+ * it.
  */
-function rethrowAlreadyBound(error: unknown, telegramBotId: string): never {
+function rethrowAlreadyBound(error: unknown, telegramBotId: string, username: string): never {
   if (isUniqueViolation(error, 'bot_instances_telegram_bot_id_key')) {
     throw errors.conflict(
       PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_BOT_ALREADY_BOUND,
@@ -455,6 +461,30 @@ function rethrowAlreadyBound(error: unknown, telegramBotId: string): never {
         "installation, and Telegram delivers a bot's updates to one webhook only — binding it " +
         'here would silently stop the other tenant receiving anything. Nothing was changed. Use ' +
         'a separate bot for this tenant.',
+    );
+  }
+  /*
+   * The SECOND constraint, which had no translation and reached the operator as
+   * a raw 23505 (`OQ-TG-04` item 10).
+   *
+   * A second branch and not a wider first one. The comment above this function
+   * is right that answering "already bound to another tenant" here would be a
+   * confident wrong answer, and widening the match is exactly how that would
+   * happen: the realistic cause is a rename in BotFather that left a stale copy
+   * on a row nobody reconciled, not one bot bound twice.
+   *
+   * Still `conflict`, because that is what it is, and the message says which row
+   * to look at rather than prescribing a fix — deciding which of two rows keeps
+   * a name is not a decision this layer may take.
+   */
+  if (isUniqueViolation(error, 'bot_instances_username_key')) {
+    throw errors.conflict(
+      PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_USERNAME_TAKEN,
+      `The username @${username} is already stored against another bot instance on this ` +
+        'installation. That is not the same as the bot being bound twice: a username is changed ' +
+        'in BotFather at will and the stored copy goes stale the moment it is, so the usual ' +
+        `cause is a rename nobody reconciled. Nothing was changed. Bot ${telegramBotId} is the ` +
+        'one this run was configuring; the row still holding the name is the one to look at.',
     );
   }
   throw error;

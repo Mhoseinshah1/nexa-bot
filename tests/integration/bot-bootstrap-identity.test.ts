@@ -33,7 +33,16 @@ describe('a Telegram bot belongs to one tenant', () => {
   const SAME_BOT = '8123456789';
 
   /** The service with Telegram faked and everything below it real. */
-  const bootstrap = (username: string): BotBootstrapService =>
+  const bootstrap = (username: string): BotBootstrapService => bootstrapFor(SAME_BOT, username);
+
+  /**
+   * The same service, for a bot that is NOT `SAME_BOT`.
+   *
+   * Needed by the username-collision case, which is about the OTHER unique index:
+   * two different bots claiming one name. Every other case here is about one bot
+   * and two tenants, so they keep the shorter spelling.
+   */
+  const bootstrapFor = (botId: string, username: string): BotBootstrapService =>
     new BotBootstrapService({
       uow: ctx.container.uow,
       bots: new DrizzleBotInstanceRepository(
@@ -56,7 +65,7 @@ describe('a Telegram bot belongs to one tenant', () => {
       telegram: {
         // `identify` answers with the SAME numeric id and a DIFFERENT username —
         // the post-rename state, which is what slips past the username index.
-        identify: async () => ({ outcome: 'IDENTIFIED', botId: SAME_BOT, username }) as never,
+        identify: async () => ({ outcome: 'IDENTIFIED', botId, username }) as never,
         registerWebhook: async () => ({ outcome: 'REGISTERED' }) as never,
         // The command menu. Answering `true` is the ordinary case; the bootstrap
         // service's own unit test covers a refusal, which must not fail an install.
@@ -169,6 +178,50 @@ describe('a Telegram bot belongs to one tenant', () => {
         publicBaseUrl: 'https://bot.example.com',
       }),
     ).rejects.toThrowError(/already configured for another tenant/);
+  });
+
+  /*
+   * `OQ-TG-04` item 10. The OTHER constraint on this table, which had no
+   * translation at all and reached the CLI as a raw PostgreSQL 23505.
+   *
+   * Two DIFFERENT bots, one username. That is a rename nobody reconciled — a
+   * name freed in BotFather and taken by another bot, while the first row still
+   * stores it — and it is not the bot being bound twice, which is why it gets
+   * its own code rather than the already-bound one. The comment on
+   * `rethrowAlreadyBound` has argued that since before either branch existed.
+   */
+  it('names a stale username collision instead of leaking a raw 23505', async () => {
+    const first = tenantA as TenantContext;
+    const second = tenantB as TenantContext;
+
+    await bootstrap('acme_bot').execute(first, {
+      token: `${SAME_BOT}:AAH-first`,
+      publicBaseUrl: 'https://bot.example.com',
+    });
+
+    // A different bot id entirely, so `bot_instances_telegram_bot_id_key` is not
+    // what fires — the SAME username is, which is the point.
+    const OTHER_BOT = '9987654321';
+    const attempt = bootstrapFor(OTHER_BOT, 'acme_bot').execute(second, {
+      token: `${OTHER_BOT}:AAH-second`,
+      publicBaseUrl: 'https://bot.example.com',
+    });
+
+    await expect(attempt).rejects.toSatisfy(
+      (error: unknown) =>
+        isNexaError(error) && error.code === PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_USERNAME_TAKEN,
+    );
+    // And it does NOT claim the bot is bound twice, which is the confident wrong
+    // answer a widened first branch would have given.
+    await expect(attempt).rejects.not.toThrowError(/already configured for another tenant/);
+    await expect(attempt).rejects.toThrowError(/@acme_bot/);
+
+    // Nothing was written for the second tenant.
+    const rows = await ctx.container.database.db
+      .select()
+      .from(botInstances)
+      .where(eq(botInstances.tenantId, second.tenantId));
+    expect(rows).toHaveLength(0);
   });
 
   it('still lets the tenant that owns the bot reconcile it', async () => {

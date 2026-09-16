@@ -473,6 +473,38 @@ describe('bot bootstrap — a webhook failure is recoverable and is not success'
     expect(await service.status(scope, ORIGIN)).toBe('incomplete');
   });
 
+  /*
+   * `OQ-TG-04` item 8. `REFUSED` means Telegram LOOKED AT the URL and would not
+   * take it, and both outcomes used to share one code and one sentence telling
+   * the operator to rerun — which submits the same URL and is refused again.
+   */
+  it('reports a URL Telegram refused separately from one it could not be asked about', async () => {
+    const { service, telegram } = build();
+    telegram.registration = { outcome: 'REFUSED', detail: 'Bad webhook: HTTPS url must be https' };
+
+    expect(
+      await codeThrownBy(() => service.execute(scope, { token: TOKEN, publicBaseUrl: ORIGIN })),
+    ).toBe(PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_WEBHOOK_REFUSED);
+  });
+
+  it('does not tell an operator to rerun a registration that would be refused again', async () => {
+    const { service, telegram } = build();
+    telegram.registration = { outcome: 'REFUSED', detail: 'Bad webhook: HTTPS url must be https' };
+
+    const message = await messageThrownBy(() =>
+      service.execute(scope, { token: TOKEN, publicBaseUrl: ORIGIN }),
+    );
+
+    // Asserted on the advice, not only the code: the code alone is satisfied by
+    // a refusal that then repeats the rerun sentence underneath it, which is the
+    // defect exactly.
+    expect(message).toContain('is refused the same way');
+    expect(message).not.toContain('Rerun the installer to retry the registration');
+    // And it still says the expensive things survived, because that is true of
+    // both halves and is the first thing somebody at a failed install asks.
+    expect(message).toContain('nothing was undone');
+  });
+
   it('resumes from the stored token on the next run, without being given one', async () => {
     const { service, bots, telegram } = build();
     telegram.registration = { outcome: 'UNREACHABLE', detail: 'socket hang up' };

@@ -728,18 +728,40 @@ export class BotBootstrapService {
    * operator the URL itself is wrong — not https, not resolvable, a port it does
    * not accept — and no amount of waiting fixes it.
    */
+  /**
+   * Why the registration did not happen, and what that means for the operator.
+   *
+   * TWO codes and two sentences, and the split is `OQ-TG-04` item 8. This built
+   * ONE `detail` for both outcomes — "rerun the installer to retry the
+   * registration" — and chose only the error KIND from which outcome it was. But
+   * `REFUSED` means Telegram LOOKED AT the URL and would not take it: not https,
+   * a port it does not accept, a name it cannot resolve. An unchanged rerun
+   * submits the same URL and is refused the same way, so the advice was a step
+   * that cannot work, given to the operator in the same words as the step that
+   * does.
+   *
+   * What both halves keep saying is that nothing was undone, because that is
+   * true of both and is the first thing somebody standing at a failed install
+   * wants to know.
+   */
   private webhookFailure(outcome: Exclude<WebhookRegistration, { outcome: 'REGISTERED' }>): Error {
-    const detail =
-      `Telegram did not register the webhook: ${outcome.detail}. The bot instance and its ` +
-      'encrypted token are stored and correct; rerun the installer to retry the registration. ' +
-      'It will not ask for the token again.';
+    const intact =
+      'The bot instance and its encrypted token are stored and correct; nothing was undone.';
     if (outcome.outcome === 'REFUSED') {
-      return errors.configuration(PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_WEBHOOK_FAILED, detail);
+      return errors.configuration(
+        PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_WEBHOOK_REFUSED,
+        `Telegram refused the webhook URL: ${outcome.detail}. ${intact} Rerunning submits the ` +
+          'same URL and is refused the same way — the usual causes are a URL that is not https, ' +
+          'a port Telegram does not accept, or a host name it cannot resolve. Correct the public ' +
+          'base URL, or the DNS record behind it, and run this again.',
+      );
     }
     return new NexaError({
       kind: 'UPSTREAM_UNAVAILABLE',
       code: PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_WEBHOOK_FAILED,
-      message: detail,
+      message:
+        `Telegram did not register the webhook: ${outcome.detail}. ${intact} Rerun the installer ` +
+        'to retry the registration; it will not ask for the token again.',
     });
   }
 
