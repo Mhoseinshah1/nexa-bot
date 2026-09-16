@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, lt, lte, or, sql } from 'drizzle-orm';
 import {
   isIdempotentMutation,
   isMutatingOperation,
@@ -239,6 +239,87 @@ export class DrizzleOperationRepository implements OperationRepository {
       .limit(1);
     const row = rows[0];
     return row === undefined ? null : toRecord(row);
+  }
+
+  /**
+   * Terminal operations nobody has answered for, oldest first.
+   *
+   * The sweep behind `OperationOutcomeAnnouncer.announceDue`. Three predicates,
+   * and each is load-bearing:
+   *
+   * - `state IN ('SUCCEEDED','ABANDONED')` — the terminal pair the announcer
+   *   acts on. `FAILED` is deliberately absent: it is not terminal while
+   *   attempts remain, and `UNKNOWN` never becomes an answer at all.
+   * - `announced_at IS NULL` — nobody has spoken. The stamp is written in the
+   *   same transaction as the enqueue, so a row that is NULL here is a row whose
+   *   answer did not commit.
+   * - `completed_at < before` — the grace. `completed_at` and not `updated_at`,
+   *   because any bookkeeping write moves the latter and would keep pushing a
+   *   stranded operation out of reach of its own sweep.
+   *
+   * Ordered by `completed_at` so the customer who has been waiting longest is
+   * answered first, and bounded by `limit` because this runs every tick.
+   *
+   * No claim and no lease, unlike the executor's own discovery: `announce` is
+   * idempotent by the stamp and by `customer_notifications_subject_key`, so two
+   * replicas sweeping the same rows produce one message rather than a conflict
+   * to arbitrate. A lease here would be machinery protecting against something
+   * that is already safe.
+   */
+  async dueForAnnouncement(
+    scope: TenantContext,
+    before: Date,
+    limit: number,
+    tx?: unknown,
+  ): Promise<readonly string[]> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ id: provisioningOperations.id })
+      .from(provisioningOperations)
+      .where(
+        and(
+          eq(provisioningOperations.tenantId, tenantId),
+          inArray(provisioningOperations.state, ['SUCCEEDED', 'ABANDONED']),
+          isNull(provisioningOperations.announcedAt),
+          lt(provisioningOperations.completedAt, before),
+        ),
+      )
+      .orderBy(asc(provisioningOperations.completedAt))
+      .limit(limit);
+    return rows.map((row) => row.id);
+  }
+
+  /**
+   * Records that the customer has been answered about this operation.
+   *
+   * `announced_at IS NULL` in the predicate, so the FIRST writer wins and a
+   * second does nothing — which is what makes two sweeping replicas safe without
+   * a lease. It is not a transition and carries no `from` state, because the
+   * operation's own state does not move: this records that somebody spoke, and
+   * `docs/phase4j-audit.md` is explicit that whether an operation is terminal and
+   * whether anybody has answered for it are different facts a crash can separate.
+   *
+   * `updated_at` is deliberately NOT touched. The row's business content has not
+   * changed, and moving it would push the operation out of its own sweep window
+   * if that window were ever keyed on it.
+   */
+  async markAnnounced(
+    scope: TenantContext,
+    operationId: string,
+    now: Date,
+    tx?: unknown,
+  ): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    await this.exec(tx)
+      .update(provisioningOperations)
+      .set({ announcedAt: now })
+      .where(
+        and(
+          eq(provisioningOperations.tenantId, tenantId),
+          eq(provisioningOperations.id, operationId),
+          isNull(provisioningOperations.announcedAt),
+        ),
+      );
   }
 
   async findByOperationId(

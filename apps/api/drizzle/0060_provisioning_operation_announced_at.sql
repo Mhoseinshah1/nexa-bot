@@ -1,0 +1,1 @@
+ALTER TABLE "provisioning_operations" ADD COLUMN "announced_at" timestamp with time zone;

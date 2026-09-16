@@ -1489,6 +1489,26 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
           customerId: service.customerId,
         };
       },
+      /*
+       * Delegated straight through, unlike `subjectFor` above.
+       *
+       * That one composes two narrow reads so the loop never holds a repository;
+       * this is a single bounded query over one table and there is nothing to
+       * compose. Passing it through keeps the predicate — terminal, unannounced,
+       * past the grace — in the repository where the columns are, rather than
+       * splitting it across a layer that would then need the schema.
+       */
+      dueForAnnouncement: async (scope, before, limit, tx) =>
+        operationRepository.dueForAnnouncement(scope, before, limit, tx),
+    },
+    /*
+     * The write, in its own dependency because the reader promises it cannot
+     * mutate. `OperationOutcomeReader`'s docblock is that promise, and the
+     * arrangement here is what keeps it true rather than aspirational.
+     */
+    announcements: {
+      markAnnounced: async (scope, operationId, now, tx) =>
+        operationRepository.markAnnounced(scope, operationId, now, tx),
     },
     notifier: customerNotifier,
     uow,

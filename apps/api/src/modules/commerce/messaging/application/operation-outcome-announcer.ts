@@ -38,6 +38,20 @@ export const CUSTOMER_INITIATED_OPERATIONS: readonly OperationType[] = [
  */
 export const DELAY_ANNOUNCED_OPERATIONS: readonly OperationType[] = ['PROVISION', 'RECONCILE'];
 
+/**
+ * How long a terminal operation is left to the loop before the sweep takes it.
+ *
+ * A module constant and not a settings-registry entry: the registry is contract
+ * surface, declared once and readable by an operator, and this is a number
+ * nobody will ever tune. `DRAIN_LIMIT` in `provisioner-loop.ts` is the
+ * precedent.
+ *
+ * Five minutes is well past any ordinary tick — the loop announces within
+ * milliseconds of terminalising — so anything this sweep finds is a crash, not a
+ * race with the loop.
+ */
+export const ANNOUNCE_GRACE_MS = 5 * 60 * 1000;
+
 /** What the announcer needs to look up. Narrow, so a loop cannot mutate either row. */
 export interface OperationOutcomeReader {
   /**
@@ -61,6 +75,46 @@ export interface OperationOutcomeReader {
     readonly serviceId: string;
     readonly customerId: UserId;
   } | null>;
+
+  /**
+   * Terminal operations nobody has answered for, oldest first.
+   *
+   * The sweep's claim surface, and the reason it cannot miss a terminalising
+   * site: it never looks at one. `provisioner.service.ts` writes a terminal
+   * state at roughly sixteen places, and a fix that added an enqueue to each
+   * would be wrong the moment somebody adds a seventeenth — silently, because a
+   * missing announcement looks exactly like an operation that had nothing to
+   * say. Keying on the STATE instead means a new terminalising path is swept by
+   * construction.
+   *
+   * `before` is the grace cutoff against `completed_at`, NOT `updated_at`: any
+   * bookkeeping write moves the latter, and an operation that terminalised ten
+   * minutes ago should be swept whether or not something touched the row since.
+   */
+  dueForAnnouncement(
+    scope: TenantContext,
+    before: Date,
+    limit: number,
+    tx: TransactionScope,
+  ): Promise<readonly string[]>;
+}
+
+/**
+ * The one write the announcer makes to an operation.
+ *
+ * Its OWN port, because `OperationOutcomeReader` above promises in as many words
+ * that it cannot mutate — "Narrow, so a loop cannot mutate either row" — and
+ * adding `markAnnounced` to it would make that sentence false. The sentence is
+ * the reason the reader is shaped the way it is, so the write goes beside it
+ * rather than into it.
+ */
+export interface OperationAnnouncementWriter {
+  markAnnounced(
+    scope: TenantContext,
+    operationId: string,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<void>;
 }
 
 /**
@@ -79,6 +133,7 @@ export class OperationOutcomeAnnouncer {
   constructor(
     private readonly deps: {
       readonly reader: OperationOutcomeReader;
+      readonly announcements: OperationAnnouncementWriter;
       readonly notifier: CustomerNotifier;
       readonly uow: UnitOfWork<TransactionScope>;
       readonly clock: Clock;
@@ -110,8 +165,38 @@ export class OperationOutcomeAnnouncer {
    */
   async announce(scope: TenantContext, operationId: string): Promise<void> {
     await this.deps.uow.run(scope, async (tx) => {
+      /*
+       * The stamp, and the four exits that take it.
+       *
+       * `announced_at` means ANSWERED, not "a message was sent". Four of the five
+       * ways out of this method are answers — including the three that decide the
+       * operation says nothing — because a row left NULL is a row the sweep
+       * re-reads for ever. The fifth, a state that is not terminal, must NOT
+       * stamp: a `FAILED` with attempts left goes back to `PLANNED`, and marking
+       * it answered before it has finished is the same silence from the other
+       * side.
+       *
+       * Every stamp is inside THIS transaction, the one that also enqueues. That
+       * is what makes the pair atomic: a crash before the commit leaves NULL and
+       * the sweep retries; a retry after it enqueues nothing, because
+       * `customer_notifications_subject_key` plus `onConflictDoNothing` is
+       * already the lane's told-once rule.
+       */
+      const stamp = (): Promise<void> =>
+        this.deps.announcements.markAnnounced(scope, operationId, this.deps.clock.now(), tx);
+
       const subject = await this.deps.reader.subjectFor(scope, operationId, tx);
-      if (subject === null) return;
+      /*
+       * No subject: nothing will ever be owed, so this IS answered.
+       *
+       * Leaving it NULL would make the sweep re-read an operation whose service
+       * or customer is gone on every tick, for ever.
+       */
+      if (subject === null) {
+        await stamp();
+        return;
+      }
+      /* The one exit that does not stamp. See above. */
       if (subject.state !== 'SUCCEEDED' && subject.state !== 'ABANDONED') return;
       const { serviceId } = subject;
       const outcome = subject.state;
@@ -151,10 +236,15 @@ export class OperationOutcomeAnnouncer {
           this.deps.clock.now(),
           tx,
         );
+        await stamp();
         return;
       }
 
-      if (!CUSTOMER_INITIATED_OPERATIONS.includes(subject.type)) return;
+      /* Nobody is owed a message about this one, which is an answer. */
+      if (!CUSTOMER_INITIATED_OPERATIONS.includes(subject.type)) {
+        await stamp();
+        return;
+      }
 
       /*
        * The SUBJECT is the operation, not the service.
@@ -171,6 +261,67 @@ export class OperationOutcomeAnnouncer {
         this.deps.clock.now(),
         tx,
       );
+      await stamp();
     });
+  }
+
+  /**
+   * The operations a crash left terminal and unanswered, answered.
+   *
+   * ## Why this exists rather than an enqueue at each terminalising site
+   *
+   * `ProvisionerLoop` calls `announce` on the line AFTER `executor.runOnce`
+   * returns, and those are two transactions with a process boundary between
+   * them. A container restart in that gap — a rolling update, an OOM, a host
+   * reboot — leaves an operation that is terminal, un-announced, and that
+   * nothing will ever call `announce` for again: the loop has moved on, and
+   * `grep -n "announce("` finds exactly one call site in the tree.
+   *
+   * The 4H Codex review asked for the enqueue to move INSIDE each terminalising
+   * transaction. `docs/phase4j-audit.md` measures why that was declined:
+   * `provisioner.service.ts` terminalises at roughly sixteen places, and a fix
+   * that adds an enqueue to each is wrong the moment somebody adds a
+   * seventeenth — silently, because a missing announcement looks exactly like an
+   * operation that had nothing to say. This keys on the STATE instead and never
+   * reads a call site, so a terminalising path added later is swept by
+   * construction rather than by somebody remembering.
+   *
+   * ## Why a grace period
+   *
+   * `before` is `now - GRACE`, so the ordinary operation is announced by the
+   * loop's own synchronous call and never reaches here. Both paths are safe —
+   * `announce` is idempotent by the subject key and by the stamp — but a sweep
+   * that fired for every operation would make the loop's call dead code, and
+   * dead code is code nothing would notice breaking.
+   *
+   * ## Bounded, and one batch
+   *
+   * `limit` per tick, and no drain. `announce` enqueues rather than sends, so
+   * this touches no network — but the rows it writes are claimed later by the
+   * dispatcher against Telegram, whose limits are somebody else's, and
+   * `ProvisionerLoop`'s delivery call makes the same argument for the same
+   * reason.
+   *
+   * Two replicas sweeping at once is safe and expected: they may both hand the
+   * same id to `announce`, and the second finds the row already stamped by the
+   * first's committed transaction, or loses the insert to
+   * `customer_notifications_subject_key`. Neither produces a second message.
+   */
+  async announceDue(scope: TenantContext, limit: number): Promise<number> {
+    const before = new Date(this.deps.clock.now().getTime() - ANNOUNCE_GRACE_MS);
+    const due = await this.deps.uow.run(scope, async (tx) =>
+      this.deps.reader.dueForAnnouncement(scope, before, limit, tx),
+    );
+    /*
+     * One transaction each, deliberately.
+     *
+     * `announce` opens its own, and batching them into one would mean a single
+     * failing subject rolled back every stamp beside it — turning one stuck
+     * operation into a sweep that can never make progress.
+     */
+    for (const operationId of due) {
+      await this.announce(scope, operationId);
+    }
+    return due.length;
   }
 }

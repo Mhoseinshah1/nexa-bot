@@ -143,6 +143,25 @@ export class ProvisionerLoop {
        * and a backlog larger than that takes more ticks rather than one long one.
        */
       await this.delivery.deliverDue(scope, DRAIN_LIMIT);
+      /*
+       * And the operations a CRASH left terminal and unanswered.
+       *
+       * The line above this tick's drain — `await this.outcomes.announce(...)`
+       * — runs in a transaction AFTER the one that terminalised the operation,
+       * and a process that dies between them leaves an operation nothing will
+       * ever announce again: the loop has moved on and there is one call site.
+       * `announceDue` sweeps on the STATE rather than on a call site, so a
+       * terminalising path added later is covered without anybody remembering.
+       *
+       * Its grace period means the ordinary operation never reaches it — the
+       * synchronous call above answers within milliseconds — so anything this
+       * returns is a crash rather than a race with the loop.
+       *
+       * ONE batch per tick and not drained, for the same reason `deliverDue`
+       * gives one line up: what it queues is claimed against Telegram, whose
+       * limits are somebody else's.
+       */
+      await this.outcomes.announceDue(scope, DRAIN_LIMIT);
       this.lastProgressAt = this.options.now();
     } catch (error: unknown) {
       /*

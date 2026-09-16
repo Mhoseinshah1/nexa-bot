@@ -802,4 +802,131 @@ describe('provisioning invariants', () => {
     const far = new Date(now.getTime() + 86_400_000);
     expect(await services.claimDeliveryDue(tenantA, far, far, 10)).toHaveLength(0);
   });
+
+  /*
+   * The crash window between terminalising an operation and answering for it.
+   *
+   * `ProvisionerLoop` terminalises inside `executor.runOnce` and announces on the
+   * NEXT line, in a second transaction. A process that dies in that gap leaves an
+   * operation that is terminal, un-announced, and that nothing will ever call
+   * `announce` for again — `docs/phase4j-audit.md` measures it, and these prove the
+   * sweep that closes it against real rows rather than against a stub.
+   *
+   * Against the DATABASE and not a mock, because every property here is held by a
+   * predicate: `announced_at IS NULL`, the `completed_at` grace, and the conditional
+   * UPDATE that makes two replicas safe. A mock would assert the shape of a call.
+   */
+  describe('an operation a crash left terminal and unanswered', () => {
+    async function terminalOperation(
+      key: string,
+      opts: { readonly completedAt: Date },
+    ): Promise<string> {
+      const order = await awaitingPayment(key);
+      await settle(key, order);
+      const service = await services.findByOrderId(tenantA, order.id);
+      const serviceId = service?.id ?? '';
+      const planned = await operations.listForService(tenantA, serviceId, 10);
+      const id = planned[0]?.id ?? '';
+      // PLANNED -> IN_FLIGHT -> SUCCEEDED, the real path, so `completed_at` is
+      // written by the same statement production uses rather than by the test.
+      await ctx.container.uow.run(tenantA, async (tx) => {
+        await operations.transition(tenantA, id, 'PLANNED', 'IN_FLIGHT', {}, opts.completedAt, tx);
+        await operations.transition(
+          tenantA,
+          id,
+          'IN_FLIGHT',
+          'SUCCEEDED',
+          { completedAt: opts.completedAt },
+          opts.completedAt,
+          tx,
+        );
+      });
+      return id;
+    }
+
+    const GRACE_MS = 5 * 60 * 1000;
+
+    it('is found by the sweep once it is past the grace, and not before', async () => {
+      const now = ctx.container.clock.now();
+      const justNow = await terminalOperation('sweep-fresh', { completedAt: now });
+      const longAgo = await terminalOperation('sweep-stale', {
+        completedAt: new Date(now.getTime() - GRACE_MS - 60_000),
+      });
+
+      const due = await ctx.container.uow.run(tenantA, async (tx) =>
+        operations.dueForAnnouncement(tenantA, new Date(now.getTime() - GRACE_MS), 10, tx),
+      );
+      expect(due, 'the stale operation is swept').toContain(longAgo);
+      expect(
+        due,
+        'the fresh one is left to the loop, which answers it within milliseconds',
+      ).not.toContain(justNow);
+    });
+
+    it('stops being found once it has been answered', async () => {
+      const now = ctx.container.clock.now();
+      const before = new Date(now.getTime() - GRACE_MS);
+      const id = await terminalOperation('sweep-once', {
+        completedAt: new Date(now.getTime() - GRACE_MS - 60_000),
+      });
+
+      const first = await ctx.container.uow.run(tenantA, async (tx) =>
+        operations.dueForAnnouncement(tenantA, before, 10, tx),
+      );
+      expect(first).toContain(id);
+
+      await ctx.container.uow.run(tenantA, async (tx) =>
+        operations.markAnnounced(tenantA, id, now, tx),
+      );
+
+      const second = await ctx.container.uow.run(tenantA, async (tx) =>
+        operations.dueForAnnouncement(tenantA, before, 10, tx),
+      );
+      expect(second, 'a stamped operation is never swept again').not.toContain(id);
+    });
+
+    it('keeps the FIRST answer when two replicas stamp the same operation', async () => {
+      /*
+       * Two sweepers is the normal case on every rolling update. `markAnnounced`
+       * carries `announced_at IS NULL` in its predicate, so the second writer
+       * changes nothing — which is what makes the sweep safe WITHOUT a lease, and
+       * a lease is machinery this would otherwise need.
+       */
+      const now = ctx.container.clock.now();
+      const id = await terminalOperation('sweep-race', {
+        completedAt: new Date(now.getTime() - GRACE_MS - 60_000),
+      });
+
+      const firstAt = new Date(now.getTime() - 1000);
+      await ctx.container.uow.run(tenantA, async (tx) =>
+        operations.markAnnounced(tenantA, id, firstAt, tx),
+      );
+      await ctx.container.uow.run(tenantA, async (tx) =>
+        operations.markAnnounced(tenantA, id, now, tx),
+      );
+
+      const result = await ctx.container.database.db.execute(
+        sql`select announced_at from provisioning_operations where id = ${id}`,
+      );
+      const row = result.rows[0] as { announced_at: Date | string } | undefined;
+      expect(row, 'the operation row could not be read; this check is vacuous').toBeDefined();
+      expect(
+        new Date(row?.announced_at ?? 0).getTime(),
+        'the second stamp overwrote the first',
+      ).toBe(firstAt.getTime());
+    });
+
+    it('never sweeps an operation belonging to another tenant', async () => {
+      const now = ctx.container.clock.now();
+      const before = new Date(now.getTime() - GRACE_MS);
+      const id = await terminalOperation('sweep-tenant', {
+        completedAt: new Date(now.getTime() - GRACE_MS - 60_000),
+      });
+
+      const otherTenant = await ctx.container.uow.run(tenantB, async (tx) =>
+        operations.dueForAnnouncement(tenantB, before, 10, tx),
+      );
+      expect(otherTenant, 'tenant B cannot see tenant A operations').not.toContain(id);
+    });
+  });
 });

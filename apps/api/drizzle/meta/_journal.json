@@ -421,6 +421,13 @@
       "when": 1789572771503,
       "tag": "0059_bot_instance_commands_revision",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1789586608208,
+      "tag": "0060_provisioning_operation_announced_at",
+      "breakpoints": true
     }
   ]
 }
