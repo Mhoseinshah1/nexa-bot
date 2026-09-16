@@ -64,6 +64,34 @@ function toRecord(row: Row): ServiceRecord {
  * another tenant's row and leaves the caller holding something it should never have
  * seen. On this table that row is a subscription URL, which is a bearer capability.
  */
+/**
+ * A service with a PAID commercial action still waiting is not expired yet.
+ *
+ * `runOnce` expires before it claims, in the same tick, and `OPERATION_LEGAL_FROM`
+ * allows `ADD_TRAFFIC` and `ADD_TIME` only from `ACTIVE`. So a window that closes
+ * between the settlement and the next claim made the provisioner refuse an operation
+ * the customer had already been charged for — permanently, because
+ * `CAPABILITY_UNSUPPORTED` and a state refusal are both terminal. `ADD_TIME` is the
+ * worst of the three: the purchase exists precisely BECAUSE the window was ending, and
+ * its stored target is a date past the one that just elapsed.
+ *
+ * Deferring costs one tick. The operation applies against the `ACTIVE` service it was
+ * planned from — an `ADD_TIME` moves the window forward and the service legitimately
+ * stops being due, an `ADD_TRAFFIC` raises the allowance and the NEXT tick expires it
+ * honestly, having applied what was paid for.
+ *
+ * Correlated on the service and scoped to the tenant, the same shape `claimDue`'s
+ * sibling predicate uses. The three types and two states are
+ * `provisioning_operations_open_commercial_key`'s, which is what this index also serves.
+ */
+const NO_PAID_ACTION_WAITING = sql`NOT EXISTS (
+  SELECT 1 FROM provisioning_operations waiting
+   WHERE waiting.tenant_id = ${services.tenantId}
+     AND waiting.service_id = ${services.id}
+     AND waiting.type IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME')
+     AND waiting.state IN ('PLANNED', 'IN_FLIGHT')
+)`;
+
 export class DrizzleServiceRepository implements ServiceRepository {
   constructor(private readonly db: Database) {}
 
@@ -557,6 +585,47 @@ export class DrizzleServiceRepository implements ServiceRepository {
     return rows.length === 1;
   }
 
+  /**
+   * The allowance a commercial operation bought, on a service still in the state it was
+   * planned from.
+   *
+   * One UPDATE, naming `from`, so a service suspended, expired or terminated while the
+   * provider call was on the wire keeps whatever that transition wrote and this returns
+   * false. The caller treats that as a successful operation whose service moved, which
+   * it is.
+   *
+   * A null field is skipped rather than written as null: null on the operation row
+   * means "this operation did not buy that", and writing it would clear a window the
+   * customer still has. `traffic_limit_bytes` is NOT NULL in any case, so a null there
+   * could not be written at all — the skip is what makes the two fields behave the
+   * same way rather than one of them throwing.
+   */
+  async recordAllowance(
+    scope: TenantContext,
+    id: string,
+    from: ServiceState,
+    to: ServiceState,
+    allowance: {
+      readonly expiresAt: Date | null;
+      readonly trafficLimitBytes: bigint | null;
+    },
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const patch: Record<string, unknown> = { state: to, updatedAt: now };
+    if (allowance.expiresAt !== null) patch['expiresAt'] = allowance.expiresAt;
+    if (allowance.trafficLimitBytes !== null) {
+      patch['trafficLimitBytes'] = allowance.trafficLimitBytes;
+    }
+    const rows = await this.exec(tx)
+      .update(services)
+      .set(patch)
+      .where(and(eq(services.tenantId, tenantId), eq(services.id, id), eq(services.state, from)))
+      .returning({ id: services.id });
+    return rows.length === 1;
+  }
+
   async expireDue(
     scope: TenantContext,
     now: Date,
@@ -611,6 +680,7 @@ export class DrizzleServiceRepository implements ServiceRepository {
              */
             isNotNull(services.expiresAt),
             lte(services.expiresAt, now),
+            NO_PAID_ACTION_WAITING,
           ),
         )
         .orderBy(asc(services.expiresAt), asc(services.id))
@@ -630,6 +700,9 @@ export class DrizzleServiceRepository implements ServiceRepository {
             // sub-select above. `lte` is what excludes an unlimited plan.
             isNotNull(services.expiresAt),
             lte(services.expiresAt, now),
+            // Re-checked after the lock too: an order can settle between the sub-select
+            // and this UPDATE, and the row it plans is exactly the one this must spare.
+            NO_PAID_ACTION_WAITING,
             sql`${services.id} IN ${due}`,
           ),
         )

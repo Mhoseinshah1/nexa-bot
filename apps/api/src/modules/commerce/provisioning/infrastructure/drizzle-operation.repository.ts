@@ -4,6 +4,10 @@ import {
   isMutatingOperation,
   OPERATION_MAX_ATTEMPTS,
   OPERATION_TYPES,
+  TARGETED_OPERATION_TYPES,
+  COMMERCE_ERROR_CODES,
+  errors,
+  operationTypeCarriesTarget,
 } from '@nexa/contracts';
 import type {
   OperationId,
@@ -67,6 +71,23 @@ function toRecord(row: Row): OperationRecord {
     claimedBy: row.claimedBy,
     leaseUntil: row.leaseUntil,
     callStartedAt: row.callStartedAt,
+    /*
+     * The two columns read back as ONE value, or as null when neither is set.
+     *
+     * `provisioning_operations_target_present_check` makes "neither set" impossible for
+     * the three commercial types, and `..._target_check` makes "either set" impossible
+     * for the other seven — so this reassembly is total: a commercial operation always
+     * has a target and nothing else ever does. Reassembling rather than exposing two
+     * nullable fields is the same rule the price pair follows: a caller must not be
+     * able to read one half without noticing the other.
+     */
+    target:
+      row.targetExpiresAt === null && row.targetTrafficLimitBytes === null
+        ? null
+        : {
+            expiresAt: row.targetExpiresAt,
+            trafficLimitBytes: row.targetTrafficLimitBytes,
+          },
     providerReference: row.providerReference,
     failureKind: row.failureKind as ProviderFailureKind | null,
     failureMessage: row.failureMessage,
@@ -119,6 +140,17 @@ export class DrizzleOperationRepository implements OperationRepository {
         type: draft.type,
         state: 'PLANNED',
         /*
+         * Written HERE and never again.
+         *
+         * `plan` is called from inside the transaction that settles the order, so the
+         * numbers are computed once against the service as it stood when the money
+         * moved. Nothing updates these columns afterwards — not the claim, not a retry,
+         * not the reaper — which is what makes a replayed provider call send the same
+         * request as the first one.
+         */
+        targetExpiresAt: draft.target?.expiresAt ?? null,
+        targetTrafficLimitBytes: draft.target?.trafficLimitBytes ?? null,
+        /*
          * Due NOW, stamped rather than left null.
          *
          * "Not yet attempted" used to be an ABSENCE, and an absence has no position in
@@ -154,6 +186,33 @@ export class DrizzleOperationRepository implements OperationRepository {
        * tell whether it or somebody else planned the attempt, and does not need to.
        */
       (await this.findOpen(scope, draft.serviceId, draft.type, tx));
+
+    /*
+     * The THIRD index this insert can lose on, and the only one whose loss is a
+     * refusal rather than an idempotent win.
+     *
+     * `provisioning_operations_open_commercial_key` admits one open commercial action
+     * per service across all three types, so a `RENEW` planned while an `ADD_TRAFFIC`
+     * is still open conflicts here — and neither read above finds it, because the
+     * derived id is different and `findOpen` is asked for the wrong type.
+     *
+     * Returning the operation that won would be wrong in a way the other two are not:
+     * the caller asked for a renewal and would be handed somebody else's top-up. So
+     * this is the NAMED refusal `planCommercialAction` raises from its own read, raised
+     * again from the one place that is proof against two replicas settling at once. The
+     * application check is the fast path; this is the correct one.
+     */
+    if (existing === null && operationTypeCarriesTarget(draft.type)) {
+      const open = await this.findOpenCommercial(scope, draft.serviceId, tx);
+      if (open !== null) {
+        throw errors.conflict(
+          COMMERCE_ERROR_CODES.SERVICE_ACTION_IN_PROGRESS,
+          'This service already has an action waiting to be applied.',
+          { operationId: open.operationId },
+        );
+      }
+    }
+
     if (existing === null) {
       /*
        * The insert conflicted and the row is not there.
@@ -217,6 +276,34 @@ export class DrizzleOperationRepository implements OperationRepository {
           eq(provisioningOperations.tenantId, tenantId),
           eq(provisioningOperations.serviceId, serviceId),
           eq(provisioningOperations.type, type),
+          inArray(provisioningOperations.state, ['PLANNED', 'IN_FLIGHT']),
+        ),
+      )
+      .limit(1);
+    const row = rows[0];
+    return row === undefined ? null : toRecord(row);
+  }
+
+  async findOpenCommercial(
+    scope: TenantContext,
+    serviceId: string,
+    tx?: unknown,
+  ): Promise<OperationRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select()
+      .from(provisioningOperations)
+      .where(
+        and(
+          eq(provisioningOperations.tenantId, tenantId),
+          eq(provisioningOperations.serviceId, serviceId),
+          /*
+           * The SAME three types and the SAME two states as
+           * `provisioning_operations_open_commercial_key`, which is the rule this read
+           * reports rather than enforces. `TARGETED_OPERATION_TYPES` is the contract's
+           * own list, so the query and the index cannot drift apart silently.
+           */
+          inArray(provisioningOperations.type, [...TARGETED_OPERATION_TYPES]),
           inArray(provisioningOperations.state, ['PLANNED', 'IN_FLIGHT']),
         ),
       )

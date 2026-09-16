@@ -3,6 +3,7 @@ import { money, priceQuoteWireSchema, type PriceQuote, type PriceQuoteWire } fro
 import type {
   CurrencyCode,
   OrderId,
+  OrderPurpose,
   OrderState,
   PanelId,
   ProductId,
@@ -56,6 +57,10 @@ export class DrizzleOrderRepository implements OrderRepository {
         tenantId,
         customerId: draft.customerId,
         state: 'DRAFT',
+        // `NEW_SERVICE` when the caller did not say, which is what the column defaults
+        // to. Stated here so the ordinary purchase path reads as a decision rather than
+        // as an omission somebody has to look up.
+        purpose: draft.purpose ?? 'NEW_SERVICE',
         productId: draft.line.productId,
         panelId: draft.line.panelId,
         lineTitle: draft.line.title,
@@ -243,6 +248,7 @@ function toRecord(row: typeof orders.$inferSelect): OrderRecord {
     id: row.id as OrderId,
     customerId: row.customerId as UserId,
     state: row.state as OrderState,
+    purpose: row.purpose as OrderPurpose,
     line: {
       productId: row.productId as ProductId,
       panelId: row.panelId as PanelId,

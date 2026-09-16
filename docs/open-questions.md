@@ -1390,3 +1390,128 @@ rather than bolted onto the delivery wiring.
 **Found by** the Codex review of PR #25, which reported it as a P1. The severity is
 right about the rule and wrong about this release: the leak it describes needs a
 second bot instance to exist, and nothing creates one yet.
+
+---
+
+## OQ-4F-01 — what a renewal does to an allowance the customer has not spent
+
+**Status: OPEN. Phase 4F ships a default and names it.**
+
+The research corpus contains two findings on this, from two surfaces, both verified, and
+they point opposite ways.
+
+- `PBR-003` — the panel carries a setting `روش تمدید سرویس` with **five** mutually
+  exclusive strategies, and its default on a new panel is `ریست حجم و زمان`: reset volume
+  and time. `XUI-BR-014` records the same five on 3X-UI, so this is not provider-specific.
+  Both `VERIFIED_BY_UI`.
+- `TBR-012` — the bot's own `/support` FAQ states that unused **days** stack on renewal: a
+  one-month account renewed five days early gets 5 + 30. `VERIFIED_BY_TELEGRAM` as the
+  bot's stated policy, never confirmed by a completed renewal.
+
+They reconcile only if the live deployment is set to one of the four non-default
+carry-over methods, and `UNK-XUI-006` records that nobody could read the current selection
+off either screen — the enum is rendered as a bare list with no current value marked. The
+five strategy names were never captured either.
+
+So there is no single legacy behaviour to copy, and the corpus itself says to treat this
+as a configuration variable rather than a rule.
+
+**What Phase 4F does:** the strictly additive rule, and only that.
+
+```
+new_limit   = old_limit   + purchased_traffic
+new_expiry  = max(old_expiry, now) + purchased_days
+```
+
+Consumption is never cleared and an unspent allowance is never forfeited, so the outcome
+is the one no customer can be worse off under. `POST /api/user/{name}/reset` is not called
+anywhere. The four other legacy strategies are not implemented, and the setting that would
+choose between them is not invented.
+
+**What is unresolved:** whether the owner wants forfeit-on-renewal
+(`new_limit = used + purchased`) or any of the other three carry-over methods, and whether
+that choice belongs to the panel, the product or the tenant. Implementing a chooser before
+that decision exists would be inventing the policy.
+
+## OQ-4F-02 — does a renewal's period run from now, or from the old expiry?
+
+**Status: OPEN for the expired case. Phase 4F ships `max(old_expiry, now)`.**
+
+`TBR-012` covers the early-renewal case only, and only as stated policy text: renewing five
+days early adds to the remaining five. Nothing in the corpus describes renewing a service
+that has **already** expired, in either direction.
+
+Three adjacent facts constrain the question without answering it, all
+`VERIFIED_BY_MATH` from the log-group phase: an expired service is removed at −3 days
+(`LGR-BR-032`, 15/15), a volume-exhausted service is removed regardless of days remaining
+(`LGR-BR-033`), and the expiry warning fires at exactly 2 days (`LGR-BR-031`, 24/24). So
+the legacy system has a three-day window in which an expired service still exists and
+could in principle be renewed, and it never says what happens inside it.
+
+`max(old_expiry, now)` is the only rule that is right in both directions: it never
+shortens a live service, and it never sells an expired customer a period that has already
+elapsed. Nexa has no equivalent of the three-day removal and does not acquire one here —
+`EXPIRED` is not terminal and `SERVICE_MACHINE`'s `EXPIRED → ACTIVE on RENEW` edge is what
+this phase finally gives a caller.
+
+## OQ-4F-03 — what a renewal costs when its product has changed since the purchase
+
+**Status: OPEN. Phase 4F refuses rather than guesses.**
+
+`TBR-008` establishes that the legacy renewal is priced from the ordinary catalogue: a
+"renew the current plan" shortcut at the identical price, or the full picker, which means
+a renewal can become an upgrade. `SBR-011` adds that withdrawing a product from sale does
+**not** stop renewals of services already bought from it — and says nothing about what
+those renewals then cost, because the price is read from a row the operator has just
+withdrawn.
+
+Phase 4F quotes a renewal from the product's **current** list price, snapshotted into the
+order at quote time, and makes the action explicitly unavailable when that product is
+absent, unpriced, or priced in a currency that is not the tenant's `sales.currency`. The
+order's own frozen snapshot is never recomputed from the product afterwards.
+
+That diverges from `SBR-011` on purpose: continuing to sell against a withdrawn row means
+charging a price no operator can see. A renewal price that survives withdrawal needs a
+place to live, and that place does not exist in this schema.
+
+## OQ-4F-04 — the legacy renewal configuration Phase 4F does not implement
+
+**Status: DEFERRED, recorded so it is not mistaken for an oversight.**
+
+- `SBR-003` — a global renewal-eligibility threshold: a maximum remaining volume above
+  which the bot refuses a renewal, currently `0 GB`, meaning unrestricted.
+  `VERIFIED_BY_TELEGRAM` from the prompt text; the value was never changed.
+- `SBR-013` — a per-product `نوع استفاده محصول` gate with three values: new-purchase only,
+  renewal only, or both, defaulting to both. `VERIFIED_BY_TELEGRAM`.
+
+Neither is implemented. Phase 4F's eligibility is the service's own lifecycle state, the
+panel's declared capability, and the product still being purchasable — nothing else. Both
+settings are ordinary catalogue configuration and belong with the Web Admin commercial
+surfaces, not with the operation that spends a customer's money.
+
+## OQ-4F-05 — a free-entry add-on quantity has no home in a bot with no FSM
+
+**Status: RESOLVED by architecture, recorded because it is a deliberate divergence.**
+
+`TBR-009` establishes that the legacy extra-volume flow takes a **free-text GB count**,
+prices it at a flat rate — 4,500 Toman/GB, confirmed to the Toman on a 5 GB sample — and
+creates the invoice at quantity entry, before any payment method is chosen. `PBR-009` adds
+that the rate is configured per panel, as `قیمت حجم اضافه` and `قیمت زمان اضافه`. The
+extra-time flow takes a free-text day count; **its rate was never captured**, so `TBR-015`
+grouping the two as one pricing mechanism is an inference and not a measurement.
+
+This bot has no FSM and no conversation state, by a rule with an incident behind it: the
+legacy prompt capture swallowed an ordinary message and overwrote a production gateway
+setting (`INCIDENT-FIN-001`). A callback carries an intent and an identifier, never a
+quantity — so there is nowhere for a typed number to arrive and nowhere safe for it to be
+carried.
+
+Phase 4F therefore ships **configured add-on rows the customer selects by id**: the
+amount, the unit and the price are server-side, and the callback names a row. Until an
+operator configures one, the action is explicitly unavailable — never free, never
+inferred from a per-unit rate that does not exist for one of the two kinds.
+
+**What is unresolved:** whether the owner wants the legacy per-unit rate restored later
+through a different surface — a Mini App or a Web Admin form, both of which can carry a
+typed quantity safely — and whether add-on prices should be scoped per panel as `PBR-009`
+has them rather than per tenant.

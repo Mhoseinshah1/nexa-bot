@@ -2,6 +2,7 @@ import type {
   BotInstanceId,
   OperationId,
   OperationState,
+  OperationTarget,
   OperationType,
   OrderId,
   PanelActivation,
@@ -306,6 +307,43 @@ export interface ServiceRepository {
   ): Promise<boolean>;
 
   /**
+   * Writes what a commercial operation bought, conditionally on the state it was
+   * planned from.
+   *
+   * A THIRD axis beside `transition` and `recordDelivery`, and separate for the reason
+   * they are separate from one another: a renewal must not be able to move a service
+   * the way a provider outcome can, and one setter that could write a state and an
+   * allowance together is how it eventually would.
+   *
+   * `from` and `to` may be the SAME state, and usually are — renewing an `ACTIVE`
+   * service buys it more time and leaves it active. `SERVICE_MACHINE` has no
+   * `ACTIVE -> ACTIVE` edge and must not grow one; that is why this is not `transition`
+   * with a null outcome. The one case where they differ is the machine's own
+   * `EXPIRED -> ACTIVE on RENEW`, which is the edge Phase 4F finally gives a caller.
+   *
+   * A `null` field is one the operation did not buy, and it is left exactly as it is —
+   * the same meaning it has on the operation row and in the provider call, so the three
+   * agree without anybody translating between them.
+   *
+   * Returns false when the service moved under the call, which is a normal outcome: a
+   * service terminated while the panel was being asked keeps what that termination
+   * wrote. The OPERATION still succeeded, because the panel really did apply the
+   * change, and saying otherwise would be a lie about an external effect.
+   */
+  recordAllowance(
+    scope: TenantContext,
+    id: string,
+    from: ServiceState,
+    to: ServiceState,
+    allowance: {
+      readonly expiresAt: Date | null;
+      readonly trafficLimitBytes: bigint | null;
+    },
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean>;
+
+  /**
    * Moves services whose window has closed to `EXPIRED`, and returns them AS THEY WERE.
    *
    * One conditional UPDATE with `RETURNING`, rather than a select followed by writes.
@@ -407,6 +445,16 @@ export interface OperationRecord {
   readonly claimedBy: string | null;
   readonly leaseUntil: Date | null;
   readonly callStartedAt: Date | null;
+  /**
+   * What a commercial operation is trying to make true, absolute, or null on every
+   * other type.
+   *
+   * `provisioning_operations_target_check` refuses one on anything but `RENEW`,
+   * `ADD_TRAFFIC` and `ADD_TIME`, and `..._target_present_check` refuses a commercial
+   * operation that carries neither field — an operation that asks the panel for nothing
+   * while an order records that a customer paid for something.
+   */
+  readonly target: OperationTarget | null;
   readonly providerReference: string | null;
   readonly failureKind: ProviderFailureKind | null;
   readonly failureMessage: string | null;
@@ -422,6 +470,19 @@ export interface OperationDraft {
   readonly orderId: OrderId | null;
   readonly panelId: PanelId;
   readonly type: OperationType;
+  /**
+   * Computed ONCE, by the caller, inside the transaction that settles the order.
+   *
+   * Optional, because seven of the ten operation types have no target and passing
+   * `null` at each of those call sites would be noise. Absent means null, and the CHECK
+   * constraints make the two directions of that mistake impossible to persist.
+   *
+   * It must not be recomputed later. A target derived at execution time from whatever
+   * the panel currently holds would differ between an attempt and its replay, and the
+   * arithmetic would compound into a customer receiving two renewals for one payment —
+   * which is the property `IDEMPOTENT_MUTATIONS` now depends on for these three types.
+   */
+  readonly target?: OperationTarget | null;
 }
 
 export interface OperationRepository {
@@ -461,6 +522,27 @@ export interface OperationRepository {
     scope: TenantContext,
     serviceId: string,
     type: OperationType,
+    tx?: unknown,
+  ): Promise<OperationRecord | null>;
+
+  /**
+   * Any open `RENEW`, `ADD_TRAFFIC` or `ADD_TIME` for this service.
+   *
+   * Its own method rather than three `findOpen` calls, because the question is not
+   * "is this kind in flight" but "has anything already been computed from the two
+   * columns I am about to read". A commercial target is ABSOLUTE and is derived once
+   * from the service row, so a second purchase settling against the same reading plans
+   * the same number: two five-gigabyte packages against a ten-gigabyte service each
+   * plan fifteen, both are charged, and the panel ends where one would have left it.
+   *
+   * The DURABLE guarantee is `provisioning_operations_open_commercial_key`, not this
+   * read — two replicas settling two orders in the same instant both see nothing here.
+   * This exists so the refusal has a NAME and a customer is told "not yet" rather than
+   * meeting a unique-violation reported as a 500.
+   */
+  findOpenCommercial(
+    scope: TenantContext,
+    serviceId: string,
     tx?: unknown,
   ): Promise<OperationRecord | null>;
 

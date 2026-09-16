@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "provisioning_operations_open_commercial_key" ON "provisioning_operations" USING btree ("tenant_id","service_id") WHERE type IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME') AND state IN ('PLANNED', 'IN_FLIGHT');

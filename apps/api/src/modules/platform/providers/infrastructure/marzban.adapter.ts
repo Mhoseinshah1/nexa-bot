@@ -12,6 +12,7 @@ import {
   type ProviderProbeOutcome,
   type ProviderRemovalOutcome,
   type ProviderServiceTarget,
+  type ProviderAllowancePlan,
   type ProviderStateChangeOutcome,
   type ProviderTarget,
   type ProviderUsage,
@@ -496,6 +497,94 @@ export class MarzbanAdapter implements ProviderAdapter {
     return { ok: true, found: true, usage: usageFromUser(record) };
   }
 
+  /**
+   * Make this account's allowance read as the plan says. `RENEW_USER`, `ADD_VOLUME`
+   * and `ADD_TIME`, all three over the one route that performs them.
+   *
+   * The body carries exactly the fields the plan sets and no others, because an omitted
+   * key is no change on this panel and a key set to something read back a moment ago
+   * would turn a replay into a different request. `crud.update_user` assigns
+   * `dbuser.expire` and `dbuser.data_limit` absolutely, so the same body sent twice
+   * leaves the same two numbers — which is the whole basis on which `RENEW`,
+   * `ADD_TRAFFIC` and `ADD_TIME` are in `IDEMPOTENT_MUTATIONS`.
+   *
+   * `expire` is epoch SECONDS. Milliseconds would be a date in the year 58,000 and the
+   * panel would take it without complaint, so the conversion is here and the unit is
+   * named where somebody editing this will read it.
+   *
+   * There is deliberately no `status` in the body, and no call to
+   * `POST /api/user/{name}/reset` anywhere in this adapter. Marzban decides the status
+   * itself from the new numbers — a `limited` account whose limit now exceeds its usage
+   * becomes `active`, a `disabled` one stays disabled — and sending one would override
+   * a decision the panel is better placed to make. A reset would clear `used_traffic`,
+   * and replayed after the customer had consumed more it would destroy real evidence of
+   * consumption; `scripts/marzban-allowance-check.sh` row 4 is the measurement showing
+   * that raising a limit already keeps the counter.
+   *
+   * The response's own record is CHECKED rather than the request assumed, exactly as
+   * `setStatus` does: a 200 whose user does not carry the values that were asked for is
+   * a panel doing something this adapter does not model, and reporting success for it
+   * would be reporting a renewal that did not happen.
+   */
+  async applyAllowance(
+    target: ProviderServiceTarget,
+    http: ProviderHttpClient,
+    ref: ProviderUserRef,
+    plan: ProviderAllowancePlan,
+  ): Promise<ProviderStateChangeOutcome> {
+    if (plan.expiresAt === null && plan.trafficLimitBytes === null) {
+      /*
+       * An empty plan is a caller defect, not a provider one.
+       *
+       * `provisioning_operations_target_present_check` refuses such a row, so this is
+       * unreachable from the executor. It is a refusal rather than an empty PUT because
+       * a request that asks for nothing and answers 200 would be recorded as a renewal
+       * that succeeded.
+       */
+      return { ok: false, failure: 'PROVIDER_ERROR', status: null };
+    }
+
+    const auth = await this.authenticate(target, http);
+    if (!auth.ok) return auth;
+
+    const body: Record<string, unknown> = {};
+    if (plan.expiresAt !== null) {
+      body['expire'] = Math.floor(plan.expiresAt.getTime() / 1000);
+    }
+    if (plan.trafficLimitBytes !== null) {
+      /*
+       * `0` is what this installation stores for "no limit", and it is what Marzban
+       * reads as "no limit" too — `data_limit: 0` becomes SQL NULL. The two sentinels
+       * agree, so no branch is needed and none must be added: a branch that skipped the
+       * key for zero would leave an unlimited renewal quietly keeping the old cap.
+       */
+      body['data_limit'] = Number(plan.trafficLimitBytes);
+    }
+
+    const changed = await http.send({
+      method: 'PUT',
+      path: `${USER_PATH}/${encodeURIComponent(ref.username)}`,
+      headers: { authorization: `Bearer ${auth.token}` },
+      body: { kind: 'json', value: body },
+    });
+    if (!changed.ok) return outcomeFromTransport(changed);
+    // A 404 after a good token exchange is the panel saying it does not hold this
+    // account. A positive statement, and the caller acts on it differently.
+    if (changed.status === 404) return { ok: true, found: false };
+    if (changed.status === 429) return { ok: false, failure: 'RATE_LIMITED', status: 429 };
+    if (changed.status < 200 || changed.status >= 300) {
+      return { ok: false, failure: 'PROVIDER_ERROR', status: changed.status };
+    }
+    const record = parseJson(changed.bodyText);
+    if (record === null) {
+      return { ok: false, failure: 'MALFORMED_RESPONSE', status: changed.status };
+    }
+    if (!appliedPlan(record, plan)) {
+      return { ok: false, failure: 'MALFORMED_RESPONSE', status: changed.status };
+    }
+    return { ok: true, found: true, usage: usageFromUser(record) };
+  }
+
   /** Disable one account. `DISABLE_USER`. */
   async suspendUser(
     target: ProviderServiceTarget,
@@ -575,4 +664,37 @@ export class MarzbanAdapter implements ProviderAdapter {
     if (found.usage === null) return { ok: false, failure: 'MALFORMED_RESPONSE', status: null };
     return { ok: true, usage: found.usage };
   }
+}
+
+/**
+ * Did the panel's own record come back carrying what the plan asked for?
+ *
+ * Read from the RESPONSE rather than inferred from the request, for the reason
+ * `setStatus` states: Marzban returns the whole user record from a modify, so there is
+ * no reason to assume. A 200 whose record still holds the old expiry is a panel doing
+ * something this adapter does not model, and reporting success for it would tell a
+ * customer their service was renewed when it was not.
+ *
+ * Both sentinels are folded the way the panel folds them: `expire: 0` and
+ * `data_limit: 0` are stored as SQL NULL and read back as `null`, so a plan asking for
+ * "no limit" is satisfied by an absent value. That is the same mapping `usageFromUser`
+ * makes, and it is why zero and null are never distinguished here.
+ *
+ * A field the plan did not set is not checked, because the adapter did not send it and
+ * the panel was right to leave it alone.
+ */
+function appliedPlan(record: Record<string, unknown>, plan: ProviderAllowancePlan): boolean {
+  if (plan.expiresAt !== null) {
+    const wanted = Math.floor(plan.expiresAt.getTime() / 1000);
+    const got = record['expire'];
+    const normalised = got === null || got === 0 ? 0 : got;
+    if (normalised !== wanted) return false;
+  }
+  if (plan.trafficLimitBytes !== null) {
+    const wanted = Number(plan.trafficLimitBytes);
+    const got = record['data_limit'];
+    const normalised = got === null || got === 0 ? 0 : got;
+    if (normalised !== wanted) return false;
+  }
+  return true;
 }

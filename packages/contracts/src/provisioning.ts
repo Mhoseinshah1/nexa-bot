@@ -292,11 +292,40 @@ export function isMutatingOperation(type: OperationType): boolean {
  *
  * Adding a type to this list is a claim about a wire contract. It needs the same
  * evidence the three above have: a panel, run twice.
+ *
+ * ## The three Phase 4F added, and the evidence they were added on
+ *
+ * `RENEW`, `ADD_TRAFFIC` and `ADD_TIME` have the property for a reason that is a
+ * DESIGN DECISION and not a gift from the provider: each is expressed as an absolute
+ * TARGET — this expiry, this total allowance — rather than as an increment. An
+ * increment would be the exact opposite, and a replayed `+10 GB` is the defect this
+ * whole file exists to prevent.
+ *
+ * `scripts/marzban-allowance-check.sh` is the measurement, against v0.8.4 at the pinned
+ * commit, rows 1 and 2: `PUT {"expire": <epoch>}` and `PUT {"data_limit": <bytes>}` are
+ * each assigned absolutely by `crud.update_user`, and the identical PUT sent again
+ * answers `200` having changed nothing. Row 3 adds that an omitted key is no change
+ * rather than a reset, which is what lets one operation carry exactly the field it
+ * bought.
+ *
+ * So the hazard the three above are safe from — an uncertain call replayed against a
+ * state somebody moved in between — is closed here by the target, not by luck. A
+ * replayed renewal writes the same expiry and the same limit the first one did. If the
+ * customer bought ANOTHER renewal in between, that is a different order, a different
+ * operation id, and a different target.
+ *
+ * The one thing this does NOT make safe is a target computed at execution time from
+ * whatever the panel currently holds. Such a target would differ between the first
+ * attempt and the replay, and the arithmetic would compound. The target is therefore
+ * computed ONCE, in the settling transaction, and stored on the operation row.
  */
 export const IDEMPOTENT_MUTATIONS = [
   'SUSPEND',
   'RESUME',
   'TERMINATE',
+  'RENEW',
+  'ADD_TRAFFIC',
+  'ADD_TIME',
 ] as const satisfies readonly OperationType[];
 
 export function isIdempotentMutation(type: OperationType): boolean {
@@ -466,3 +495,97 @@ export const DELIVERY_MAX_ATTEMPTS = 3;
  */
 export const SUBSCRIPTION_REF_LENGTH = 32;
 export const SUBSCRIPTION_REF_BYTES = 16;
+
+/**
+ * What a commercial operation is trying to make true on the panel.
+ *
+ * Absolute values, computed ONCE — in the transaction that settles the order that
+ * bought them — and stored on the operation row. That placement is the whole of why
+ * `RENEW`, `ADD_TRAFFIC` and `ADD_TIME` may sit in `IDEMPOTENT_MUTATIONS`: a target
+ * recomputed at execution time from whatever the panel currently holds would differ
+ * between the first attempt and its replay, and the arithmetic would compound. A stored
+ * target replays to the same two numbers for ever.
+ *
+ * `null` on either field means **this operation did not buy that field**, and the
+ * provider call omits the key entirely — which the pinned Marzban treats as no change
+ * rather than as a reset (`scripts/marzban-allowance-check.sh`, row 3). So an `ADD_TIME`
+ * carries an expiry and no limit, an `ADD_TRAFFIC` the reverse, and a `RENEW` both.
+ *
+ * `null` does NOT mean "unlimited". Unlimited traffic is `UNLIMITED_TRAFFIC_BYTES`,
+ * which is zero, exactly as it is on a product and on `services.traffic_limit_bytes`.
+ * There is deliberately no encoding for "make the window unlimited", because reaching
+ * it would require renewing a time-limited service from a product that has no duration
+ * — a shape change rather than a renewal — and the commercial path refuses that
+ * combination with `SERVICE_ACTION_UNAVAILABLE` rather than expressing it here. An
+ * operator who wants to change what a customer holds changes the service, not the
+ * renewal.
+ */
+export interface OperationTarget {
+  /** The absolute moment the service should then expire. Null: not bought here. */
+  readonly expiresAt: Date | null;
+  /** The absolute TOTAL allowance, consumption included. Null: not bought here. */
+  readonly trafficLimitBytes: bigint | null;
+}
+
+/**
+ * The operation types that carry a target, and the only ones a target is legal on.
+ *
+ * A `SUSPEND` with a desired expiry would be a row nothing reads and a reviewer would
+ * have to decide the meaning of; the schema carries this as a CHECK so it cannot exist.
+ */
+export const TARGETED_OPERATION_TYPES = [
+  'RENEW',
+  'ADD_TRAFFIC',
+  'ADD_TIME',
+] as const satisfies readonly OperationType[];
+
+export function operationTypeCarriesTarget(type: OperationType): boolean {
+  return (TARGETED_OPERATION_TYPES as readonly string[]).includes(type);
+}
+
+/**
+ * The absolute expiry a bought period produces, from the period the service is in.
+ *
+ * `max(current, now) + days`, and each half of that is a decision.
+ *
+ * Taking the LATER of the two is what makes renewing early honest: a service with five
+ * days left, renewed for thirty, has thirty-five. That is what the legacy system's own
+ * `/support` FAQ tells customers (`TBR-012`), and it is the only reading under which a
+ * customer is never punished for renewing before they have to.
+ *
+ * Falling back to `now` is what makes renewing LATE honest in the other direction: a
+ * service that expired a week ago must not be sold a period that has already elapsed.
+ * `OQ-4F-02` records that the research says nothing about this case in either
+ * direction, which is why the rule is written here rather than inferred.
+ *
+ * A service with no expiry has an unlimited window and there is nothing to extend, so
+ * the answer is `null` — the target omits the field and the panel's own value is left
+ * alone.
+ */
+export function extendedExpiry(currentExpiry: Date | null, now: Date, days: number): Date | null {
+  if (currentExpiry === null) return null;
+  const from = currentExpiry.getTime() > now.getTime() ? currentExpiry : now;
+  return new Date(from.getTime() + days * 86_400_000);
+}
+
+/**
+ * The absolute allowance a bought quantity produces, from the allowance in force.
+ *
+ * Strictly ADDITIVE, and consumption is never touched. `OQ-4F-01` records why this is a
+ * decision and not a transcription: the legacy system has five per-panel renewal
+ * strategies whose default is "reset volume and time", its own FAQ says unused days
+ * stack, and `UNK-XUI-006` says nobody could read which is actually live. There is no
+ * single behaviour to copy, so this ships the one no customer can be worse off under.
+ *
+ * `UNLIMITED_TRAFFIC_BYTES` — zero — is absorbing in both directions, and both are the
+ * only defensible readings. A service that already has no limit cannot be given more,
+ * so its target stays unlimited. And an add-on may not carry zero at all
+ * (`serviceAddonSpecificationSchema` requires a positive amount), so zero arriving here
+ * as `purchased` means a PRODUCT with no traffic limit was renewed — which buys an
+ * unlimited allowance, and adding a finite number to it would sell the customer LESS
+ * than they just paid for.
+ */
+export function extendedAllowance(currentLimitBytes: bigint, purchasedBytes: bigint): bigint {
+  if (currentLimitBytes === 0n || purchasedBytes === 0n) return 0n;
+  return currentLimitBytes + purchasedBytes;
+}

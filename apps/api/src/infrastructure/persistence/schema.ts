@@ -52,6 +52,10 @@ import {
   CUSTOMER_STATUSES,
   PRODUCT_STATUSES,
   PRODUCT_AUDIENCES,
+  SERVICE_ADDON_KINDS,
+  SERVICE_ADDON_STATUSES,
+  COMMERCIAL_ORDER_PURPOSES,
+  ORDER_PURPOSES,
   ORDER_STATES,
   PAYMENT_STATES,
   PAYMENT_METHODS,
@@ -2243,6 +2247,96 @@ export const products = pgTable(
 );
 
 /**
+ * A configured quantity a customer can buy for a service they already own.
+ *
+ * Not a product: a product is provisioned into a new account, and one of these is
+ * applied to an account that exists. They share almost no columns for that reason —
+ * there is no panel, no audience, no device limit and no description, because none of
+ * them means anything about a quantity added to something already running.
+ *
+ * ## Why rows rather than a per-unit rate
+ *
+ * The legacy system prices these per unit, per panel, and takes a free-text quantity
+ * (`TBR-009`, `PBR-009`). This bot has no FSM and no conversation state — the rule with
+ * `INCIDENT-FIN-001` behind it, where the legacy prompt capture swallowed an ordinary
+ * message and overwrote a production gateway setting — so there is nowhere for a typed
+ * number to arrive, and a callback carries an intent and an identifier rather than a
+ * quantity. The amounts a customer may buy therefore have to be rows they select.
+ * `OQ-4F-05` records that as a deliberate divergence and what would have to exist for
+ * the per-unit form to come back.
+ *
+ * ## The two amount columns are a union
+ *
+ * `kind` decides which one means anything, and `service_addons_amount_matches_kind`
+ * makes the other one NULL rather than zero. Zero would be readable as
+ * `UNLIMITED_TRAFFIC_BYTES`, which is what it means on a product, and an unlimited
+ * amount is not a thing that can be ADDED to an allowance.
+ */
+export const serviceAddons = pgTable(
+  'service_addons',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    kind: text('kind').notNull(),
+    title: text('title').notNull(),
+    status: text('status').notNull().default('INACTIVE'),
+    sortOrder: integer('sort_order').notNull().default(0),
+    /** Bytes added to the allowance. Set for `ADD_TRAFFIC`, NULL otherwise. */
+    trafficBytes: bigint('traffic_bytes', { mode: 'bigint' }),
+    /** Days added to the window. Set for `ADD_TIME`, NULL otherwise. */
+    durationDays: integer('duration_days'),
+    priceAmount: bigint('price_amount', { mode: 'bigint' }),
+    priceCurrency: text('price_currency'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    index('service_addons_tenant_status_idx').on(table.tenantId, table.status),
+    /** The operator's list, and its keyset: kind, then sort, then created, then id. */
+    index('service_addons_tenant_sort_idx').on(
+      table.tenantId,
+      table.kind,
+      table.sortOrder,
+      table.createdAt,
+      table.id,
+    ),
+    check('service_addons_kind_check', enumCheck('kind', SERVICE_ADDON_KINDS)),
+    check('service_addons_status_check', enumCheck('status', SERVICE_ADDON_STATUSES)),
+    check(
+      'service_addons_price_currency_check',
+      nullableEnumCheck('price_currency', CURRENCY_CODES),
+    ),
+    /** A price is an amount AND a currency, or it is absent. The products rule. */
+    check(
+      'service_addons_price_pair_check',
+      sql`(price_amount IS NULL) = (price_currency IS NULL)`,
+    ),
+    check('service_addons_price_positive_check', sql`price_amount IS NULL OR price_amount > 0`),
+    /**
+     * The union, as a constraint rather than as application discipline.
+     *
+     * An `ADD_TRAFFIC` row whose bytes sit in `duration_days` would be sold for a
+     * quantity of nothing, and the surface reading it would show a plausible price
+     * beside an amount it could not find. Both halves are asserted — the field the kind
+     * reads is positive, and the other is NULL — so neither a swap nor a stray write can
+     * produce one.
+     */
+    check(
+      'service_addons_amount_matches_kind',
+      sql`(kind = 'ADD_TRAFFIC' AND traffic_bytes IS NOT NULL AND traffic_bytes > 0 AND duration_days IS NULL)
+          OR (kind = 'ADD_TIME' AND duration_days IS NOT NULL AND duration_days > 0 AND traffic_bytes IS NULL)`,
+    ),
+    check(
+      'service_addons_duration_bound_check',
+      sql`duration_days IS NULL OR duration_days <= 3650`,
+    ),
+    unique('service_addons_tenant_id_key').on(table.tenantId, table.id),
+  ],
+);
+
+/**
  * An order — one commercial intent and its snapshot of what was bought.
  *
  * Every `line_*` column is a snapshot taken at confirmation. `product_id` and
@@ -2263,6 +2357,32 @@ export const orders = pgTable(
       .references(() => tenants.id),
     customerId: uuid('customer_id').notNull(),
     state: text('state').notNull().default('DRAFT'),
+    /**
+     * What this order is FOR, and the column settlement dispatches on.
+     *
+     * `PaymentService.confirmAndSettle` used to end in an unconditional
+     * `planForSettledOrder`, so every settled order wrote a service and a `PROVISION`.
+     * A renewal is a NEW order against the SAME service — `services.order_id` says so —
+     * and through that path it would have settled and then created a SECOND provider
+     * account. `services_tenant_order_key` does not catch it: the index is unique on
+     * `(tenant_id, order_id)` and a renewal has its own order id.
+     *
+     * The DEFAULT is what makes this expand-only. The release running beside this one
+     * during a rolling update writes orders without the column and gets `NEW_SERVICE`,
+     * which is exactly the behaviour it already had —
+     * `migration-compatibility.test.ts` requires that and would fail a NOT NULL with no
+     * default.
+     *
+     * WHICH service a commercial order acts on is not here. It is on
+     * `service_commercial_actions`, one row per commercial order, declared after
+     * `services` so that it can carry the CUSTOMER in both of its references — an order
+     * that named service A while claiming customer B is the bypass
+     * `orders_tenant_id_customer_key` describes, in the direction that puts a renewal
+     * somebody paid for onto another account. A column here could not express that: it
+     * would have to point back at a table that already points at this one, and a
+     * composite foreign key cannot be written in either direction of a cycle.
+     */
+    purpose: text('purpose').notNull().default('NEW_SERVICE'),
 
     /** Navigation only. The snapshot below is the truth about this purchase. */
     productId: uuid('product_id').notNull(),
@@ -2314,6 +2434,24 @@ export const orders = pgTable(
       .where(sql`state = 'AWAITING_PAYMENT'`),
     check('orders_state_check', enumCheck('state', ORDER_STATES)),
     check('orders_currency_check', enumCheck('currency', CURRENCY_CODES)),
+    check('orders_purpose_check', enumCheck('purpose', ORDER_PURPOSES)),
+    /**
+     * What the line snapshot MEANS, per purpose, as a constraint rather than a comment.
+     *
+     * Zero is `UNLIMITED_TRAFFIC_BYTES` and `UNLIMITED_DURATION_DAYS` on a product
+     * snapshot, and on a quantity purchase the same zero has to mean "no time was
+     * bought" instead. That overload is a real trap for a reader, so the shape is
+     * pinned: an `ADD_TRAFFIC` order carries positive bytes and zero days, an `ADD_TIME`
+     * order the reverse, and neither can be written the other way round. `NEW_SERVICE`
+     * and `RENEW` are unconstrained here — both carry a product specification, where
+     * zero keeps its usual meaning.
+     */
+    check(
+      'orders_quantity_line_check',
+      sql`purpose NOT IN ('ADD_TRAFFIC', 'ADD_TIME')
+          OR (purpose = 'ADD_TRAFFIC' AND line_traffic_bytes > 0 AND line_duration_days = 0)
+          OR (purpose = 'ADD_TIME' AND line_duration_days > 0 AND line_traffic_bytes = 0)`,
+    ),
     /**
      * A total is never negative, and the parts agree with the whole.
      *
@@ -2758,6 +2896,160 @@ export const services = pgTable(
       .on(table.deliveryNextAttemptAt)
       .where(sql`delivery_state = 'PENDING'`),
     unique('services_tenant_id_key').on(table.tenantId, table.id),
+    /**
+     * Redundant against the primary key, and the target of a CUSTOMER-bearing
+     * composite reference — exactly as `orders_tenant_id_customer_key` is.
+     *
+     * `service_commercial_actions` names a service and a customer, and a two-column
+     * `(tenant_id, service_id)` reference would let the pair disagree: a renewal one
+     * customer paid for, recorded against another customer's account. The three-column
+     * form makes that unrepresentable rather than merely unlikely, and it needs this
+     * index to point at.
+     */
+    unique('services_tenant_id_customer_key').on(table.tenantId, table.id, table.customerId),
+  ],
+);
+
+/**
+ * One commercial action bought against a service that already exists.
+ *
+ * The immutable evidence a renewal, an extra-traffic purchase or an extra-time purchase
+ * leaves behind, and the answer to every question an operator or an accountant can ask
+ * about one: which tenant, which customer, which service, what kind, what was paid, in
+ * what currency, how much was bought, where the price came from, and which order settled
+ * it. A row is written in the SAME transaction that confirms the order and is never
+ * updated afterwards — `nexa_service_commercial_actions_immutable` is the guard.
+ *
+ * ## Why a table rather than columns on `orders`
+ *
+ * Two reasons, and the second is the one that decided it.
+ *
+ * The legacy system has the same shape: `/invoice/service` is an append-only ancillary
+ * ledger with seven operation types, separate from `/invoice/`, and the log topics for
+ * purchases and for renewals are disjoint — "orders exclude renewals, add-ons and tests"
+ * (`LGR-REC-004`). A renewal produces a new financial record and no new service.
+ *
+ * And a column on `orders` could not carry the customer. Every child row that names an
+ * order also names a customer, and a two-column reference lets the pair disagree —
+ * which here would put a renewal one customer paid for onto another customer's account.
+ * The three-column form is what makes that unrepresentable, and it needs `services` to
+ * be declared already. `services` references `orders`, so a column on `orders` would be
+ * the other side of a cycle and a composite key cannot be written in either direction of
+ * one.
+ *
+ * ## What is NOT here
+ *
+ * The absolute target the panel is asked to make true. That is on the operation row,
+ * because it is a different fact: this row says what the customer BOUGHT — thirty days,
+ * fifty gigabytes — and the operation says what the account should then READ as. The
+ * second is computed from the first plus the service's state at settlement, once, and
+ * a replay of the operation must reproduce it exactly.
+ */
+export const serviceCommercialActions = pgTable(
+  'service_commercial_actions',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    customerId: uuid('customer_id').notNull(),
+    serviceId: uuid('service_id').notNull(),
+    /** One per order, and the order is what was paid. */
+    orderId: uuid('order_id').notNull(),
+    /** `RENEW`, `ADD_TRAFFIC` or `ADD_TIME` — the `OrderPurpose` minus `NEW_SERVICE`. */
+    kind: text('kind').notNull(),
+    /**
+     * Where the price came from, as a row id, so the operator can navigate.
+     *
+     * A renewal names the product it was quoted from; a quantity purchase names the
+     * add-on. Exactly one is set, and neither is how the purchase is reconstructed — the
+     * amounts below and the order's own quote are.
+     */
+    productId: uuid('product_id'),
+    addonId: uuid('addon_id'),
+    /** What was bought. Bytes for traffic, days for time; zero where nothing was. */
+    purchasedTrafficBytes: bigint('purchased_traffic_bytes', { mode: 'bigint' })
+      .notNull()
+      .default(sql`0`),
+    purchasedDurationDays: integer('purchased_duration_days').notNull().default(0),
+    /** What was paid, with its currency. Never an amount without one. */
+    amount: bigint('amount', { mode: 'bigint' }).notNull(),
+    currency: text('currency').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'service_commercial_actions_customer_fk',
+    }),
+    /** The customer travels with the service, or a renewal lands on the wrong account. */
+    foreignKey({
+      columns: [table.tenantId, table.serviceId, table.customerId],
+      foreignColumns: [services.tenantId, services.id, services.customerId],
+      name: 'service_commercial_actions_service_fk',
+    }),
+    /** And with the order, so the money and the effect cannot name two people. */
+    foreignKey({
+      columns: [table.tenantId, table.orderId, table.customerId],
+      foreignColumns: [orders.tenantId, orders.id, orders.customerId],
+      name: 'service_commercial_actions_order_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.productId],
+      foreignColumns: [products.tenantId, products.id],
+      name: 'service_commercial_actions_product_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.addonId],
+      foreignColumns: [serviceAddons.tenantId, serviceAddons.id],
+      name: 'service_commercial_actions_addon_fk',
+    }),
+    /**
+     * ONE action per order, as a constraint rather than as worker discipline.
+     *
+     * The exactly-once rule, in the same shape `services_tenant_order_key` gives the
+     * original purchase: the row is written inside the transaction that confirms the
+     * order, so a replayed confirmation, a second replica and a double-tapped button all
+     * lose here rather than each buying the customer a renewal.
+     */
+    uniqueIndex('service_commercial_actions_order_key').on(table.tenantId, table.orderId),
+    index('service_commercial_actions_service_idx').on(table.serviceId, table.createdAt, table.id),
+    index('service_commercial_actions_customer_idx').on(
+      table.customerId,
+      table.createdAt,
+      table.id,
+    ),
+    check('service_commercial_actions_kind_check', enumCheck('kind', COMMERCIAL_ORDER_PURPOSES)),
+    check('service_commercial_actions_currency_check', enumCheck('currency', CURRENCY_CODES)),
+    check('service_commercial_actions_amount_check', sql`amount >= 0`),
+    /**
+     * The price came from exactly one place.
+     *
+     * A row naming both a product and an add-on could be read as either, and the two
+     * answer "what did this cost and why" differently. A row naming neither cannot
+     * answer it at all — which is the legacy defect where a deleted product collapses a
+     * historical line to «محصول حذف‌شده».
+     */
+    check(
+      'service_commercial_actions_source_check',
+      sql`(product_id IS NULL) <> (addon_id IS NULL)`,
+    ),
+    /**
+     * What each kind may have bought, pinned so the amounts cannot be swapped.
+     *
+     * A renewal buys a period and an allowance together — the pinned Marzban leaves a
+     * traffic-exhausted account exhausted when only time is extended, so a renewal that
+     * sent one field would take the money and leave the customer cut off. A quantity
+     * purchase buys exactly one of them, and the other is zero.
+     */
+    check(
+      'service_commercial_actions_purchased_check',
+      sql`(kind = 'RENEW')
+          OR (kind = 'ADD_TRAFFIC' AND purchased_traffic_bytes > 0 AND purchased_duration_days = 0)
+          OR (kind = 'ADD_TIME' AND purchased_duration_days > 0 AND purchased_traffic_bytes = 0)`,
+    ),
+    unique('service_commercial_actions_tenant_id_key').on(table.tenantId, table.id),
   ],
 );
 
@@ -2810,6 +3102,27 @@ export const provisioningOperations = pgTable(
      * during a call", and therefore the one fact that decides whether a release is safe.
      */
     callStartedAt: timestamptz('call_started_at'),
+    /**
+     * What this operation is trying to make TRUE on the panel.
+     *
+     * Absolute, and written once — in the transaction that settles the order that bought
+     * it — rather than computed when the worker runs. That placement is the whole reason
+     * `RENEW`, `ADD_TRAFFIC` and `ADD_TIME` may sit in `IDEMPOTENT_MUTATIONS`: a target
+     * derived at execution time from whatever the panel currently holds would differ
+     * between the first attempt and its replay, and the arithmetic would compound into a
+     * customer receiving two renewals for one payment. A stored target replays to the
+     * same two numbers for ever.
+     *
+     * NULL means this operation did not BUY that field, and the provider call omits the
+     * key — which the pinned Marzban treats as no change rather than as a reset
+     * (`scripts/marzban-allowance-check.sh`, row 3). So an `ADD_TIME` carries an expiry
+     * and no limit, an `ADD_TRAFFIC` the reverse, and a `RENEW` both.
+     *
+     * NULL is NOT "unlimited". Unlimited traffic is zero, the same sentinel
+     * `services.traffic_limit_bytes` and `products.traffic_bytes` already use.
+     */
+    targetExpiresAt: timestamptz('target_expires_at'),
+    targetTrafficLimitBytes: bigint('target_traffic_limit_bytes', { mode: 'bigint' }),
     /** The provider's own reference for the effect, when it gave one. */
     providerReference: text('provider_reference'),
     /** A kind from the EXISTING provider taxonomy. Never a new vocabulary. */
@@ -2870,6 +3183,35 @@ export const provisioningOperations = pgTable(
     uniqueIndex('provisioning_operations_open_provision_key')
       .on(table.tenantId, table.serviceId)
       .where(sql`type = 'PROVISION' AND state IN ('PLANNED', 'IN_FLIGHT')`),
+    /**
+     * ONE open COMMERCIAL action per service, for the reason the PROVISION index above
+     * exists and a different failure than the one it prevents.
+     *
+     * A commercial target is ABSOLUTE and is computed once, in the transaction that
+     * settles the order, from the service as it stood when the money moved. Two
+     * purchases that settle before the first reaches the panel therefore read the same
+     * allowance and plan the same number: two five-gigabyte packages against a
+     * ten-gigabyte service each plan FIFTEEN, both are charged, and the account ends
+     * where one purchase would have left it.
+     *
+     * `claimDue` already refuses to run two operations for one service at once, and
+     * that is not this: serialising EXECUTION does not help when both rows were
+     * computed from the same reading. The refusal has to be at PLAN time, which is why
+     * it is an index rather than a check in a service — two API replicas settling two
+     * orders in the same instant is exactly the case a read-then-write loses.
+     *
+     * All three types together rather than one index each: a renewal's target is
+     * computed from the same two columns an add-on's is, so a renewal in flight
+     * interferes with a top-up exactly as another top-up would.
+     *
+     * The two NON-TERMINAL states only, as above. A `FAILED` action has written nothing
+     * to the service, so the next purchase reads an unchanged row and is safe.
+     */
+    uniqueIndex('provisioning_operations_open_commercial_key')
+      .on(table.tenantId, table.serviceId)
+      .where(
+        sql`type IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME') AND state IN ('PLANNED', 'IN_FLIGHT')`,
+      ),
     index('provisioning_operations_unknown_idx')
       .on(table.tenantId, table.createdAt)
       .where(sql`state = 'UNKNOWN'`),
@@ -2880,6 +3222,33 @@ export const provisioningOperations = pgTable(
       nullableEnumCheck('failure_kind', PROVIDER_FAILURE_KINDS),
     ),
     check('provisioning_operations_operation_id_check', sql`operation_id ~ '^[0-9a-f]{16}$'`),
+    /**
+     * Only a commercial operation may carry a target.
+     *
+     * A `SUSPEND` with a desired expiry is a row nothing reads and the next reviewer has
+     * to decide the meaning of — and the reading they would reach for, that the suspend
+     * should also set it, is the one that would silently widen what a management action
+     * does. Refused here so it cannot be written at all.
+     */
+    check(
+      'provisioning_operations_target_check',
+      sql`type IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME')
+          OR (target_expires_at IS NULL AND target_traffic_limit_bytes IS NULL)`,
+    ),
+    /**
+     * And a commercial operation must carry at least one, or it asks the panel for
+     * nothing while an order records that a customer paid for something.
+     */
+    check(
+      'provisioning_operations_target_present_check',
+      sql`type NOT IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME')
+          OR target_expires_at IS NOT NULL
+          OR target_traffic_limit_bytes IS NOT NULL`,
+    ),
+    check(
+      'provisioning_operations_target_traffic_check',
+      sql`target_traffic_limit_bytes IS NULL OR target_traffic_limit_bytes >= 0`,
+    ),
     check('provisioning_operations_attempts_check', sql`attempts >= 0 AND attempts <= 100`),
     /** A claim is a holder AND a deadline, together or not at all. */
     check('provisioning_operations_claim_check', sql`(claimed_by IS NULL) = (lease_until IS NULL)`),

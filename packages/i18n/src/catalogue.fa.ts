@@ -121,6 +121,22 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // unknown outcome is how a duplicate account is created.
   'bot.service.provision_delayed':
     'ساخت سرویس کامل نشد و موضوع به پشتیبانی اطلاع داده شد. لطفاً منتظر پیگیری بمانید.',
+  'bot.service.renew_button': 'تمدید سرویس',
+  'bot.service.add_traffic_button': 'حجم اضافه',
+  'bot.service.add_time_button': 'زمان اضافه',
+  // ONE message for "no package is configured", "the plan behind this renewal was
+  // withdrawn" and "this panel cannot do it". The customer's next step is the same for
+  // all three, and naming which would tell them about an operator's configuration;
+  // `templates.ts` records that the operational log carries the distinction.
+  'bot.service.action_unavailable': 'این امکان در حال حاضر برای این سرویس در دسترس نیست.',
+  'bot.service.action_not_allowed': 'وضعیت این سرویس اجازه‌ی این کار را نمی‌دهد.',
+  'bot.service.action_in_progress':
+    'یک درخواست قبلی برای این سرویس هنوز اعمال نشده است. چند لحظه بعد دوباره تلاش کنید.',
+  'bot.service.addon_choice': 'یکی از بسته‌های زیر را انتخاب کنید:',
+  'bot.service.addon_option': '{title} — {price}',
+  'bot.service.action_quote':
+    '{productTitle}\nحجم افزوده: {trafficBytes}\nمدت افزوده: {durationDays}\nمبلغ: {total}',
+  'bot.service.action_confirm_button': 'تأیید و پرداخت',
   'bot.service.suspend_button': 'توقف موقت سرویس',
   'bot.service.resume_button': 'فعال‌سازی دوباره سرویس',
   'bot.service.terminate_button': 'حذف سرویس',

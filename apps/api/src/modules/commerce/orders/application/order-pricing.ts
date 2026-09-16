@@ -87,3 +87,57 @@ export function quoteProduct(
 
   return { subtotal, discount: money(discountMinor, currency), total, currency, quote };
 }
+
+/**
+ * The same one step, for an add-on.
+ *
+ * A separate function rather than a parameter on `quoteProduct`, because the two quote
+ * different THINGS and the difference shows up in the trace: `PriceQuote.productId` is
+ * `null` here, which the contract already admits, and the rule label names the package
+ * rather than a plan. A shared function taking "a thing with a price" would have made
+ * the trace say `BASE_PRICE` with a product id that belonged to something else.
+ *
+ * `effect` is read from `PRICING_PRECEDENCE` for the reason `quoteProduct` states: a
+ * contract change to the precedence table has to show up in this trace rather than
+ * silently disagreeing with it.
+ */
+export const ADDON_PRICE_RULE_LABEL = "The package's list price";
+
+export function quoteAddon(price: Money, quotedAt: Date): OrderTotalsRecord {
+  const basePrecedence = PRICING_PRECEDENCE[0];
+  if (basePrecedence === undefined || basePrecedence.step !== 'BASE_PRICE') {
+    throw new Error('PRICING_PRECEDENCE no longer begins with BASE_PRICE.');
+  }
+
+  const currency = price.currency;
+  const subtotal = money(price.amountMinor, currency);
+  // The clamp, for the reason `quoteProduct` routes through it: one place computes a
+  // total, so one place cannot forget that a total is never negative.
+  const discountMinor = clampDiscount(subtotal.amountMinor, 0n);
+  const total = money(subtotal.amountMinor - discountMinor, currency);
+
+  const step: PriceQuoteStep = {
+    step: 'BASE_PRICE',
+    effect: basePrecedence.effect,
+    ruleId: null,
+    ruleLabel: ADDON_PRICE_RULE_LABEL,
+    amountBefore: zero(currency),
+    amountAfter: subtotal,
+  };
+
+  return {
+    subtotal,
+    discount: money(discountMinor, currency),
+    total,
+    currency,
+    // `productId: null` — an add-on is not a product, and the contract's own type says
+    // a quote may name none.
+    quote: {
+      productId: null,
+      quotedAt: quotedAt.toISOString(),
+      currency,
+      finalAmount: total,
+      trace: [step],
+    },
+  };
+}

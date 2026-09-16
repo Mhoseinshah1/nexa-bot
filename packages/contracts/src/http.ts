@@ -18,6 +18,9 @@ import {
   PRODUCT_SORT_MIN,
   PRODUCT_STATUSES,
   PRODUCT_TITLE_MAX_LENGTH,
+  SERVICE_ADDON_KINDS,
+  SERVICE_ADDON_STATUSES,
+  SERVICE_ADDON_TITLE_MAX_LENGTH,
 } from './catalog.js';
 import { ORDER_STATES } from './commerce.js';
 import { LEDGER_DIRECTIONS, LEDGER_REASONS } from './ledger.js';
@@ -1537,6 +1540,137 @@ export const PRODUCT_ROUTES = {
   update: (id: string) => `/products/${encodeURIComponent(id)}`,
   activate: (id: string) => `/products/${encodeURIComponent(id)}/activate`,
   deactivate: (id: string) => `/products/${encodeURIComponent(id)}/deactivate`,
+} as const;
+
+// --- Service add-ons ---------------------------------------------------------
+
+export const SERVICE_ADDON_PAGE_DEFAULT = 25;
+export const SERVICE_ADDON_PAGE_MAX = 100;
+
+/**
+ * One configured add-on, as the Web Admin renders it.
+ *
+ * `trafficBytes` and `priceAmount` are decimal STRINGS on the wire for the reason
+ * `productSummarySchema` gives: JSON has one number type and it is a double, and both
+ * of these pass 2^53 within reach.
+ *
+ * The two amount fields are a union the `kind` decides between, and exactly one of them
+ * is present on any row — `serviceAddonAmountMatchesKind` is the rule and the schema
+ * refines it here as well, because a row whose amount sits in the field its kind does
+ * not read is a row that would be sold for a quantity of nothing.
+ */
+export const serviceAddonSummarySchema = z
+  .object({
+    id: z.string(),
+    kind: z.enum(SERVICE_ADDON_KINDS),
+    title: z.string(),
+    status: z.enum(SERVICE_ADDON_STATUSES),
+    sortOrder: z.number().int(),
+    trafficBytes: z.string().nullable(),
+    durationDays: z.number().int().nullable(),
+    priceAmount: z.string().nullable(),
+    priceCurrency: z.enum(CURRENCY_CODES).nullable(),
+    createdAt: z.iso.datetime(),
+    updatedAt: z.iso.datetime(),
+  })
+  .refine((a) => (a.priceAmount === null) === (a.priceCurrency === null), {
+    message: 'A price is an amount and a currency, or it is absent.',
+  })
+  .refine(
+    (a) =>
+      a.kind === 'ADD_TRAFFIC'
+        ? a.trafficBytes !== null && a.durationDays === null
+        : a.durationDays !== null && a.trafficBytes === null,
+    { message: 'An add-on carries exactly the amount its kind can use.' },
+  );
+export type ServiceAddonSummaryResponse = z.infer<typeof serviceAddonSummarySchema>;
+
+/**
+ * The fields an operator writes.
+ *
+ * `status` is absent for the same reason it is absent from `productWriteSchema`: an
+ * add-on is created INACTIVE and becomes purchasable through its own command, so one
+ * call cannot publish an unpriced one.
+ *
+ * `kind` is writable on create and is rejected on edit by the service rather than by
+ * this schema — changing an `ADD_TRAFFIC` into an `ADD_TIME` would leave every order
+ * that already bought it describing a quantity in the wrong unit, and the orders carry
+ * their own snapshot precisely so that they do not have to be re-read through this row.
+ */
+export const serviceAddonWriteSchema = z
+  .object({
+    idempotencyKey: z.string().min(8).max(255),
+    kind: z.enum(SERVICE_ADDON_KINDS),
+    title: z.string().trim().min(1).max(SERVICE_ADDON_TITLE_MAX_LENGTH),
+    sortOrder: z.number().int().min(PRODUCT_SORT_MIN).max(PRODUCT_SORT_MAX),
+    /* Positive and present for `ADD_TRAFFIC`, absent otherwise. Zero is not unlimited here. */
+    trafficBytes: z
+      .string()
+      .regex(/^\d{1,19}$/u)
+      .nullable(),
+    durationDays: z.number().int().min(1).max(MAX_DURATION_DAYS).nullable(),
+    priceAmount: z
+      .string()
+      .regex(/^\d{1,19}$/u)
+      .nullable(),
+    priceCurrency: z.enum(CURRENCY_CODES).nullable(),
+  })
+  .refine((a) => (a.priceAmount === null) === (a.priceCurrency === null), {
+    message: 'A price is an amount and a currency, or it is absent.',
+    path: ['priceAmount'],
+  })
+  .refine((a) => a.priceAmount === null || BigInt(a.priceAmount) > 0n, {
+    message: 'A price must be greater than zero. Leave it empty for an add-on not for sale.',
+    path: ['priceAmount'],
+  })
+  .refine((a) => a.priceAmount === null || BigInt(a.priceAmount) <= MAX_MONEY_AMOUNT_MINOR, {
+    message: 'That price is past the largest amount this system stores.',
+    path: ['priceAmount'],
+  })
+  .refine(
+    (a) =>
+      a.kind === 'ADD_TRAFFIC'
+        ? a.trafficBytes !== null && a.durationDays === null
+        : a.durationDays !== null && a.trafficBytes === null,
+    {
+      message: 'An add-on carries exactly the amount its kind can use.',
+      path: ['trafficBytes'],
+    },
+  )
+  .refine((a) => a.trafficBytes === null || BigInt(a.trafficBytes) > 0n, {
+    message: 'An add-on of no traffic is not something a customer can buy.',
+    path: ['trafficBytes'],
+  })
+  .refine((a) => a.trafficBytes === null || BigInt(a.trafficBytes) <= MAX_TRAFFIC_BYTES, {
+    message: 'That traffic amount is past any real plan.',
+    path: ['trafficBytes'],
+  });
+export type ServiceAddonWriteRequest = z.infer<typeof serviceAddonWriteSchema>;
+
+export const serviceAddonListQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(SERVICE_ADDON_PAGE_MAX).optional(),
+  cursor: z.string().max(512).optional(),
+  kind: z.enum(SERVICE_ADDON_KINDS).optional(),
+  status: z.enum(SERVICE_ADDON_STATUSES).optional(),
+});
+export type ServiceAddonListQuery = z.infer<typeof serviceAddonListQuerySchema>;
+
+export const serviceAddonListResponseSchema = z.object({
+  addons: z.array(serviceAddonSummarySchema),
+  nextCursor: z.string().nullable(),
+});
+export type ServiceAddonListResponse = z.infer<typeof serviceAddonListResponseSchema>;
+
+export const serviceAddonResponseSchema = z.object({ addon: serviceAddonSummarySchema });
+export type ServiceAddonResponse = z.infer<typeof serviceAddonResponseSchema>;
+
+export const SERVICE_ADDON_ROUTES = {
+  list: '/service-addons',
+  create: '/service-addons',
+  detail: (id: string) => `/service-addons/${encodeURIComponent(id)}`,
+  update: (id: string) => `/service-addons/${encodeURIComponent(id)}`,
+  activate: (id: string) => `/service-addons/${encodeURIComponent(id)}/activate`,
+  deactivate: (id: string) => `/service-addons/${encodeURIComponent(id)}/deactivate`,
 } as const;
 
 // --- Orders ------------------------------------------------------------------

@@ -12,7 +12,7 @@ import type {
   TenantId,
 } from '@nexa/contracts';
 import { createTranslator } from '@nexa/i18n';
-import type { Translator } from '@nexa/contracts';
+import type { OperationType, TenantContext, Translator } from '@nexa/contracts';
 
 import { acceptsV1, type AppConfig } from './infrastructure/config/config.schema.js';
 import { readFileSync } from 'node:fs';
@@ -112,6 +112,10 @@ import { CustomerService } from './modules/commerce/customers/application/custom
 import { DrizzleCustomerRepository } from './modules/commerce/customers/infrastructure/drizzle-customer.repository.js';
 import { TelegramCustomerMessenger } from './modules/commerce/messaging/infrastructure/telegram-customer-messenger.js';
 import { ProductService } from './modules/commerce/catalog/application/product.service.js';
+import { ServiceAddonService } from './modules/commerce/catalog/application/addon.service.js';
+import { CommercialActionService } from './modules/commerce/commercial/application/commercial-action.service.js';
+import { DrizzleCommercialActionRepository } from './modules/commerce/commercial/infrastructure/drizzle-commercial-action.repository.js';
+import { DrizzleServiceAddonRepository } from './modules/commerce/catalog/infrastructure/drizzle-addon.repository.js';
 import {
   DrizzlePanelDirectory,
   DrizzleProductRepository,
@@ -254,6 +258,8 @@ export interface Container {
    */
   readonly customers: CustomerService;
   readonly products: ProductService;
+  readonly serviceAddons: ServiceAddonService;
+  readonly commercialActions: CommercialActionService;
   readonly wallet: WalletService;
   readonly payments: PaymentService;
   readonly orders: OrderService;
@@ -697,6 +703,44 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   });
 
   /**
+   * Service add-ons, under the SAME `catalog.*` permissions as products.
+   *
+   * The same kind of thing — a priced offer an operator curates — so the same pair.
+   * Its own permissions would have meant a contracts change, a migration backfilling
+   * grants into every existing role, and an operator who can edit the catalogue
+   * discovering they cannot edit half of it.
+   *
+   * No `panels` dependency, and that is not an omission: an add-on names no panel. What
+   * decides whether a customer may buy one is the SERVICE's panel and its declared
+   * capability, asked by `decideOperability` where the operation is planned.
+   */
+  const serviceAddonRepository = new DrizzleServiceAddonRepository(database.db);
+
+  const serviceAddonService = new ServiceAddonService({
+    repository: serviceAddonRepository,
+    /* `sales.currency`. An add-on is priced in what the tenant sells in, or refused. */
+    settings: settingsResolver,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    uow,
+    idempotency,
+    clock,
+    ids,
+  });
+
+  /**
+   * The invoice line a commercial order carries.
+   *
+   * ONE instance, shared by the service that writes it and the settlement path that
+   * reads it, so a replay handled by either is seen by both — the same reason
+   * `customerRepository` is built here rather than inline.
+   */
+  const commercialActionRepository = new DrizzleCommercialActionRepository(database.db);
+
+  /**
    * The wallet, under the FROZEN `users.wallet.*` permissions.
    *
    * `operationId` is bound HERE and not inside the service, for the reason
@@ -785,41 +829,51 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const panelRepository = new DrizzlePanelRepository(database.db);
   const serviceRepository = new DrizzleServiceRepository(database.db);
   const operationRepository = new DrizzleOperationRepository(database.db);
+  /**
+   * A narrow closure, not the panel repository, and ONE of it.
+   *
+   * It answers from the panel's own fields and a credential SUMMARY — three timestamps,
+   * no values — so a surface asking "can this be retried" cannot materialise a password
+   * to find out. `decideOperability` is the single place that decision is made, here, in
+   * the executor, and now in the commercial path that refuses before any money moves.
+   *
+   * Shared rather than copied, because two copies would be two chances for a Sanaei
+   * service to be refused by one caller and charged by the other.
+   */
+  const panelOperability = {
+    operability: async (
+      scope: TenantContext,
+      panelId: string,
+      type: OperationType,
+      tx?: unknown,
+    ) => {
+      const view = await panelRepository.find(scope, panelId, tx as never);
+      return decideOperability({
+        panel:
+          view === null
+            ? null
+            : {
+                status: view.panel.status,
+                providerType: view.panel.providerType,
+                baseUrl: view.panel.baseUrl,
+                archivedAt: view.panel.archivedAt,
+                activation: view.panel.activation,
+              },
+        credentials: view?.credentials ?? null,
+        type,
+        // The SERVICE list, not the connection one. `panel-operability.ts` documents
+        // this field as "code exists that can create a user", and a provider can
+        // legitimately have a connection adapter and no service half.
+        serviceAdapterExists:
+          view !== null && SERVICE_PROVIDER_TYPES.includes(view.panel.providerType),
+      });
+    },
+  };
+
   const provisioningService = new ProvisioningService({
     services: serviceRepository,
     operations: operationRepository,
-    /*
-     * A narrow closure, not the panel repository.
-     *
-     * It answers from the panel's own fields and a credential SUMMARY — three
-     * timestamps, no values — so a surface asking "can this be retried" cannot
-     * materialise a password to find out. `decideOperability` is the single place that
-     * decision is made, here and in the executor alike.
-     */
-    panels: {
-      operability: async (scope, panelId, type, tx) => {
-        const view = await panelRepository.find(scope, panelId, tx as never);
-        return decideOperability({
-          panel:
-            view === null
-              ? null
-              : {
-                  status: view.panel.status,
-                  providerType: view.panel.providerType,
-                  baseUrl: view.panel.baseUrl,
-                  archivedAt: view.panel.archivedAt,
-                  activation: view.panel.activation,
-                },
-          credentials: view?.credentials ?? null,
-          type,
-          // The SERVICE list, not the connection one. `panel-operability.ts` documents
-          // this field as "code exists that can create a user", and a provider can
-          // legitimately have a connection adapter and no service half.
-          serviceAdapterExists:
-            view !== null && SERVICE_PROVIDER_TYPES.includes(view.panel.providerType),
-        });
-      },
-    },
+    panels: panelOperability,
     uow,
     guard,
     audit,
@@ -832,10 +886,51 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     secrets: serviceSecrets,
   });
 
+  /**
+   * Buying something for a service that already exists.
+   *
+   * It takes the SAME `panelOperability` closure the executor does, so a Sanaei-backed
+   * service is refused here — before an order exists and before any money moves — with
+   * the same answer the executor would have given after it. Two copies of that decision
+   * would be two chances for a service to be refused by one and charged by the other.
+   *
+   * It writes the order and the invoice line and nothing else: payment is
+   * `PaymentService`, unchanged, because a commercial order is an ordinary
+   * `AWAITING_PAYMENT` order and wallet settlement works on it without knowing it is one.
+   */
+  const commercialActionService = new CommercialActionService({
+    services: serviceRepository,
+    products: productRepository,
+    addons: serviceAddonRepository,
+    orders: orderRepository,
+    actions: commercialActionRepository,
+    panels: panelOperability,
+    settings: settingsResolver,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    uow,
+    idempotency,
+    outbox,
+    clock,
+    ids,
+  });
+
   const paymentService = new PaymentService({
     repository: new DrizzlePaymentRepository(database.db),
     orders: orderRepository,
     provisioning: provisioningService,
+    /*
+     * The READ alone, narrowed here rather than by the type.
+     *
+     * Settlement needs to know which service a commercial order acts on and must never
+     * write an invoice line — that happens once, when the order is created, and the
+     * table refuses an UPDATE anyway. Passing the whole repository would put the write
+     * within reach of the one path that must not take it.
+     */
+    commercialActions: commercialActionRepository,
     wallet: walletRepository,
     customers: customerRepository,
     guard,
@@ -1648,6 +1743,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     recordPing,
     customers: customerService,
     products: productService,
+    serviceAddons: serviceAddonService,
+    commercialActions: commercialActionService,
     wallet: walletService,
     payments: paymentService,
     provisioning: provisioningService,
@@ -1664,6 +1761,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       // handled by one would not be seen as a replay by the other — which is the whole
       // mechanism that stops a redelivery becoming a second order.
       products: productService,
+      commercial: commercialActionService,
       orders: orderService,
       // The SAME messenger the delivery sweep uses, for the reason above it.
       messenger: customerMessenger,

@@ -174,6 +174,11 @@ describe('panel HTTP surface', () => {
       'DISABLE_USER',
       'ENABLE_USER',
       'DELETE_USER',
+      // And the commercial three, by the same route: A8 of that same acceptance drove
+      // `applyAllowance` against the binary before any of these appeared here.
+      'RENEW_USER',
+      'ADD_VOLUME',
+      'ADD_TIME',
     ]);
   });
 
@@ -204,6 +209,9 @@ describe('panel HTTP surface', () => {
           'DISABLE_USER',
           'ENABLE_USER',
           'DELETE_USER',
+          'RENEW_USER',
+          'ADD_VOLUME',
+          'ADD_TIME',
         ],
         sanaei: [
           'HEALTH_CHECK',
@@ -220,10 +228,7 @@ describe('panel HTTP surface', () => {
         // a complement computed from the descriptor would pass whichever side a
         // capability moved to.
         for (const unimplemented of [
-          'RENEW_USER',
           'RESET_USAGE',
-          'ADD_VOLUME',
-          'ADD_TIME',
           'ROTATE_SUBSCRIPTION_LINK',
           'DELIVER_RAW_CONFIGS',
           'DELIVER_CONFIG_FILE',
@@ -243,7 +248,22 @@ describe('panel HTTP surface', () => {
          * disables, re-enables or deletes a client, so the product does not claim it.
          */
         if (provider.key === 'sanaei') {
-          for (const deferred of ['DISABLE_USER', 'ENABLE_USER', 'DELETE_USER']) {
+          /*
+           * Six now, not three. `RENEW_USER`, `ADD_VOLUME` and `ADD_TIME` joined the
+           * Marzban side in Phase 4F and left this list for the same reason the
+           * management three did: a capability that moves out of the shared
+           * "unimplemented" list has to be named on the side that still lacks it, or a
+           * checked absence quietly becomes an unchecked one for the provider the
+           * owner's deferral is actually about.
+           */
+          for (const deferred of [
+            'DISABLE_USER',
+            'ENABLE_USER',
+            'DELETE_USER',
+            'RENEW_USER',
+            'ADD_VOLUME',
+            'ADD_TIME',
+          ]) {
             expect(provider.capabilities, `sanaei.${deferred}`).not.toContain(deferred);
           }
         }
@@ -275,8 +295,12 @@ describe('panel HTTP surface', () => {
       'DISABLE_USER',
       'ENABLE_USER',
       'DELETE_USER',
+      'RENEW_USER',
+      'ADD_VOLUME',
+      'ADD_TIME',
     ]);
-    expect(body.panel.capabilities).not.toContain('RENEW_USER');
+    // Named on the side that still lacks it: Marzban publishes ten and not eleven.
+    expect(body.panel.capabilities).not.toContain('ROTATE_SUBSCRIPTION_LINK');
   });
 
   it('publishes for Sanaei only the capabilities this release implements', () => {
@@ -301,7 +325,14 @@ describe('panel HTTP surface', () => {
         // refusing device-limited orders on panels that cannot apply one.
         'LIMIT_DEVICES',
       ]);
-      for (const unimplemented of ['RENEW_USER', 'ADD_VOLUME', 'ADD_TIME', 'DELETE_USER']) {
+      for (const unimplemented of [
+        'RENEW_USER',
+        'ADD_VOLUME',
+        'ADD_TIME',
+        'DELETE_USER',
+        'DISABLE_USER',
+        'ENABLE_USER',
+      ]) {
         expect(sanaei?.capabilities, unimplemented).not.toContain(unimplemented);
       }
     });

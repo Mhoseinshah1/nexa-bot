@@ -22,6 +22,7 @@ import type {
 } from '../../modules/commerce/messaging/application/ports.js';
 import type { CustomerRecord } from '../../modules/commerce/customers/application/ports.js';
 import type { ProductService } from '../../modules/commerce/catalog/application/product.service.js';
+import type { CommercialActionService } from '../../modules/commerce/commercial/application/commercial-action.service.js';
 import type { OrderService } from '../../modules/commerce/orders/application/order.service.js';
 import type { PaymentService } from '../../modules/commerce/payments/application/payment.service.js';
 import type { WalletService } from '../../modules/commerce/wallet/application/wallet.service.js';
@@ -58,6 +59,12 @@ export const BOT_INTENTS = [
   'SERVICE_RESUME',
   'SERVICE_TERMINATE_ASK',
   'SERVICE_TERMINATE',
+  'SERVICE_RENEW',
+  'SERVICE_ADD_TRAFFIC',
+  'SERVICE_ADD_TIME',
+  'SERVICE_BUY_TRAFFIC',
+  'SERVICE_BUY_TIME',
+  'SERVICE_ACTION_CONFIRM',
   'UNSUPPORTED',
 ] as const;
 export type BotIntent = (typeof BOT_INTENTS)[number];
@@ -78,8 +85,62 @@ export type BotIntent = (typeof BOT_INTENTS)[number];
 export interface BotCommand {
   readonly intent: BotIntent;
   readonly targetId: string | null;
+  /**
+   * A SECOND identifier, for the one callback that needs two.
+   *
+   * Buying a package names both the service it is for and the package itself, and
+   * neither can be inferred from the other: the customer owns the service and CHOOSES
+   * the package. With no conversation state there is nowhere else to keep the first
+   * while they pick the second — that absence is deliberate, and `INCIDENT-FIN-001` is
+   * what a stateful prompt does when it outlives its question.
+   *
+   * Still an identifier and never a quantity. `encodeIdPair` is what makes two of them
+   * fit in Telegram's 64 bytes, and both come back through the same UUID validation the
+   * single-id path uses.
+   */
+  readonly secondaryId?: string | null;
   /** Telegram's id for the tapped button, so the spinner can be stopped. */
   readonly callbackQueryId: string | null;
+}
+
+/**
+ * Two UUIDs in 45 bytes, because `callback_data` holds 64 and two of them spell 73.
+ *
+ * Raw base64url of the thirty-two bytes the pair actually is — not hex, which spells
+ * sixty-six and still would not fit, and not a shortened id, which would stop being the
+ * id. An encoding, not a token: it carries no authority, it is not signed, and nothing
+ * downstream trusts it. Both halves are re-validated as UUIDs and then checked against
+ * rows — the service against the customer who owns it, the package against the kind the
+ * path is for.
+ *
+ * `callback_ref`, the registry table Phase 0 planned for exactly this, was dropped by
+ * `0002_drop_callback_refs` for having no producer and no reader. This needs no row: the
+ * two ids ARE the message, so there is nothing to look up.
+ */
+export function encodeIdPair(first: string, second: string): string {
+  const bytes = Buffer.concat([uuidBytes(first), uuidBytes(second)]);
+  return bytes.toString('base64url');
+}
+
+export function decodeIdPair(encoded: string): { first: string; second: string } | null {
+  if (!/^[A-Za-z0-9_-]{43}$/.test(encoded)) return null;
+  let bytes: Buffer;
+  try {
+    bytes = Buffer.from(encoded, 'base64url');
+  } catch {
+    return null;
+  }
+  if (bytes.length !== 32) return null;
+  return { first: uuidFrom(bytes.subarray(0, 16)), second: uuidFrom(bytes.subarray(16, 32)) };
+}
+
+function uuidBytes(uuid: string): Buffer {
+  return Buffer.from(uuid.replace(/-/g, ''), 'hex');
+}
+
+function uuidFrom(bytes: Buffer): string {
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 /**
@@ -139,6 +200,28 @@ export const SERVICE_SUSPEND_CALLBACK_PREFIX = 'u:';
 export const SERVICE_RESUME_CALLBACK_PREFIX = 'e:';
 export const SERVICE_TERMINATE_ASK_CALLBACK_PREFIX = 't:';
 export const SERVICE_TERMINATE_CALLBACK_PREFIX = 'k:';
+/*
+ * The five commercial prefixes.
+ *
+ * `n:`, `v:` and `h:` each open a QUOTE and buy nothing — they name a service. `a:` and
+ * `b:` name a service AND a package, and they are TWO prefixes rather than one because
+ * the KIND has to come from which button was pressed: with one shared prefix the kind
+ * would have to be read off the package the customer chose, and then the check that an
+ * `ADD_TIME` package cannot be bought through the extra-traffic path would be checking
+ * a value against itself. `q:` names the order the quote produced and is the only one
+ * that commits.
+ *
+ * None of them carries a price, a quantity or a duration, which is the rule the whole
+ * prefix table exists to make structural: a callback is an intent and an identifier.
+ * `v:` and `h:` are single letters for the reason the others are — `callback_data` is
+ * capped at 64 bytes and a UUID is 36 of them.
+ */
+export const SERVICE_RENEW_CALLBACK_PREFIX = 'n:';
+export const SERVICE_ADD_TRAFFIC_CALLBACK_PREFIX = 'v:';
+export const SERVICE_ADD_TIME_CALLBACK_PREFIX = 'h:';
+export const SERVICE_BUY_TRAFFIC_CALLBACK_PREFIX = 'a:';
+export const SERVICE_BUY_TIME_CALLBACK_PREFIX = 'b:';
+export const SERVICE_ACTION_CONFIRM_CALLBACK_PREFIX = 'q:';
 
 /**
  * How many services one `/services` answer shows.
@@ -256,6 +339,56 @@ export function intentOf(update: unknown): BotCommand {
         id,
       );
     }
+    if (data.startsWith(SERVICE_RENEW_CALLBACK_PREFIX)) {
+      return callbackCommand('SERVICE_RENEW', data.slice(SERVICE_RENEW_CALLBACK_PREFIX.length), id);
+    }
+    if (data.startsWith(SERVICE_ADD_TRAFFIC_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'SERVICE_ADD_TRAFFIC',
+        data.slice(SERVICE_ADD_TRAFFIC_CALLBACK_PREFIX.length),
+        id,
+      );
+    }
+    if (data.startsWith(SERVICE_ADD_TIME_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'SERVICE_ADD_TIME',
+        data.slice(SERVICE_ADD_TIME_CALLBACK_PREFIX.length),
+        id,
+      );
+    }
+    if (
+      data.startsWith(SERVICE_BUY_TRAFFIC_CALLBACK_PREFIX) ||
+      data.startsWith(SERVICE_BUY_TIME_CALLBACK_PREFIX)
+    ) {
+      const buying = data.startsWith(SERVICE_BUY_TRAFFIC_CALLBACK_PREFIX)
+        ? ('SERVICE_BUY_TRAFFIC' as const)
+        : ('SERVICE_BUY_TIME' as const);
+      /*
+       * The one callback carrying two ids, and both go through the SAME validation the
+       * single-id path uses. A malformed pair is `UNSUPPORTED`, not a 500 at a `uuid`
+       * cast, and not a half-read that would buy a package for a service nobody named.
+       */
+      const pair = decodeIdPair(data.slice(2));
+      if (pair === null) return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      const service = uuidV7Schema.safeParse(pair.first);
+      const addon = uuidV7Schema.safeParse(pair.second);
+      if (!service.success || !addon.success) {
+        return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      }
+      return {
+        intent: buying,
+        targetId: service.data,
+        secondaryId: addon.data,
+        callbackQueryId: id,
+      };
+    }
+    if (data.startsWith(SERVICE_ACTION_CONFIRM_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'SERVICE_ACTION_CONFIRM',
+        data.slice(SERVICE_ACTION_CONFIRM_CALLBACK_PREFIX.length),
+        id,
+      );
+    }
     if (data.startsWith(SERVICE_CALLBACK_PREFIX)) {
       return callbackCommand('SERVICE', data.slice(SERVICE_CALLBACK_PREFIX.length), id);
     }
@@ -315,6 +448,7 @@ export interface BotRuntimeDeps {
   readonly customers: CustomerService;
   readonly messenger: CustomerMessenger;
   readonly products: ProductService;
+  readonly commercial: CommercialActionService;
   readonly orders: OrderService;
   readonly payments: PaymentService;
   readonly wallet: WalletService;
@@ -439,6 +573,49 @@ const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
    *   listed because an unlisted code is the failure mode, not a tidy absence.
    */
   [COMMERCE_ERROR_CODES.WALLET_CURRENCY_UNSUPPORTED]: 'bot.order.unavailable',
+  /*
+   * The commercial refusals, split exactly where the CUSTOMER's next step differs.
+   *
+   * `SERVICE_ACTION_NOT_ALLOWED` is the service's own state — a terminated service
+   * cannot be renewed, a suspended one cannot be topped up — and that is something the
+   * customer can act on, so it says so.
+   *
+   * `SERVICE_ACTION_UNAVAILABLE` and the two add-on refusals are CONFIGURATION: nothing
+   * is offered, the plan was withdrawn, the package was deactivated between the list
+   * and the tap. One sentence for all three, because the customer's next step is the
+   * same and naming which would describe an operator's configuration to them — the same
+   * reasoning `PRODUCT_NOT_FOR_AUDIENCE` follows above. The operational log and the
+   * audit row carry the distinction an operator needs.
+   *
+   * `PANEL_NOT_OPERABLE` used to be absent here, with a comment saying it "stays with
+   * 4E's `bot.service.capability_unsupported`". That was FALSE, and the falsehood is
+   * worth recording because it is the shape this map exists to prevent: 4E answers the
+   * code inside `serviceAction`, which the commercial handlers never pass through. They
+   * go to `refusal`, an unmapped code reaches its `throw`, and the customer who tapped
+   * a renewal button drawn before the operator disabled the panel got no reply at all —
+   * the exact "unknown code, no answer" failure the `WALLET_INSUFFICIENT_FUNDS` note
+   * above spells out. It is the SAME sentence 4E uses, reached the ordinary way.
+   *
+   * `SERVICE_ACTION_IN_PROGRESS` is the one TRANSIENT refusal in this group and gets
+   * its own sentence for that reason: every other answer here means "not for you" or
+   * "not offered", and this one means "try again in a moment". Telling a customer whose
+   * renewal is seconds from being applied that the action is unavailable would send
+   * them to support over a wait.
+   */
+  [COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED]: 'bot.service.action_not_allowed',
+  [COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE]: 'bot.service.action_unavailable',
+  [COMMERCE_ERROR_CODES.ADDON_NOT_FOUND]: 'bot.service.action_unavailable',
+  [COMMERCE_ERROR_CODES.ADDON_NOT_PURCHASABLE]: 'bot.service.action_unavailable',
+  [COMMERCE_ERROR_CODES.PANEL_NOT_OPERABLE]: 'bot.service.capability_unsupported',
+  [COMMERCE_ERROR_CODES.SERVICE_ACTION_IN_PROGRESS]: 'bot.service.action_in_progress',
+  /*
+   * A renewal priced in a unit this store has stopped selling.
+   *
+   * Reachable from a callback drawn before `sales.currency` moved: `availableFor` and
+   * `offer` both filter on it now, and neither un-draws a message already in the chat.
+   * The configuration sentence, because that is what it is.
+   */
+  [COMMERCE_ERROR_CODES.PRODUCT_CURRENCY_UNSUPPORTED]: 'bot.service.action_unavailable',
 };
 
 function refusal(error: unknown): PendingReply {
@@ -618,9 +795,51 @@ export class BotRuntime {
     if (command.intent === 'PAY_GATEWAY') {
       return { key: 'bot.payment.unconfigured', values: {}, buttons: [], orderId: null };
     }
+    if (command.intent === 'SERVICE_RENEW' && command.targetId !== null) {
+      return this.commercialQuote(scope, actor, customer, command.targetId, 'RENEW', null, input);
+    }
+    if (command.intent === 'SERVICE_ADD_TRAFFIC' && command.targetId !== null) {
+      return this.addonChoice(scope, actor, customer, command.targetId, 'ADD_TRAFFIC');
+    }
+    if (command.intent === 'SERVICE_ADD_TIME' && command.targetId !== null) {
+      return this.addonChoice(scope, actor, customer, command.targetId, 'ADD_TIME');
+    }
+    if (
+      command.intent === 'SERVICE_BUY_TRAFFIC' &&
+      command.targetId !== null &&
+      command.secondaryId != null
+    ) {
+      return this.commercialQuote(
+        scope,
+        actor,
+        customer,
+        command.targetId,
+        'ADD_TRAFFIC',
+        command.secondaryId,
+        input,
+      );
+    }
+    if (
+      command.intent === 'SERVICE_BUY_TIME' &&
+      command.targetId !== null &&
+      command.secondaryId != null
+    ) {
+      return this.commercialQuote(
+        scope,
+        actor,
+        customer,
+        command.targetId,
+        'ADD_TIME',
+        command.secondaryId,
+        input,
+      );
+    }
+    if (command.intent === 'SERVICE_ACTION_CONFIRM' && command.targetId !== null) {
+      return this.commercialConfirm(scope, actor, customer, command.targetId, input);
+    }
     if (command.intent === 'SERVICES') return this.services(scope, customer);
     if (command.intent === 'SERVICE' && command.targetId !== null) {
-      return this.serviceDetail(scope, customer, command.targetId);
+      return this.serviceDetail(scope, actor, customer, command.targetId);
     }
     if (command.intent === 'SERVICE_RESEND' && command.targetId !== null) {
       return this.serviceResend(scope, customer, command.targetId, input);
@@ -718,6 +937,7 @@ export class BotRuntime {
    */
   private async serviceDetail(
     scope: TenantContext,
+    actor: ActorContext,
     customer: CustomerRecord,
     serviceId: string,
   ): Promise<PendingReply> {
@@ -790,6 +1010,38 @@ export class BotRuntime {
       }
     }
 
+    /*
+     * The commercial buttons, offered on the same terms as the management ones: the
+     * state must allow it, the panel must declare the capability, AND there must be
+     * something configured to sell. `availableFor` applies all three — a renewal whose
+     * plan has been withdrawn, or an extra-traffic button with no package behind it, is
+     * a button whose tap is a refusal.
+     *
+     * Each opens a QUOTE and buys nothing. There is no callback anywhere in this surface
+     * that takes a customer's money in one tap, which is the same structural rule the
+     * terminate confirmation follows.
+     */
+    for (const action of await this.deps.commercial.availableFor(scope, actor, service)) {
+      if (action === 'RENEW') {
+        buttons.push({
+          label: { kind: 'TEMPLATE', key: 'bot.service.renew_button' },
+          data: `${SERVICE_RENEW_CALLBACK_PREFIX}${service.id}`,
+        });
+      }
+      if (action === 'ADD_TRAFFIC') {
+        buttons.push({
+          label: { kind: 'TEMPLATE', key: 'bot.service.add_traffic_button' },
+          data: `${SERVICE_ADD_TRAFFIC_CALLBACK_PREFIX}${service.id}`,
+        });
+      }
+      if (action === 'ADD_TIME') {
+        buttons.push({
+          label: { kind: 'TEMPLATE', key: 'bot.service.add_time_button' },
+          data: `${SERVICE_ADD_TIME_CALLBACK_PREFIX}${service.id}`,
+        });
+      }
+    }
+
     return {
       key: 'bot.service.detail',
       values: {
@@ -821,6 +1073,159 @@ export class BotRuntime {
    * delivery service has already sent the subscription; a second message here would be
    * the runtime and the delivery lane both answering the same tap.
    */
+  /**
+   * The packages a customer may buy for one service, as buttons.
+   *
+   * A read and nothing else — no order, no row, no money. Each button carries the
+   * service AND the package, because with no conversation state there is nowhere to
+   * keep the first while the customer chooses the second, and neither can be inferred
+   * from the other: they OWN the service and CHOOSE the package.
+   *
+   * The amount and the price are rendered from the row the operator configured, and
+   * neither travels in the callback. What comes back is two identifiers.
+   */
+  private async addonChoice(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    serviceId: string,
+    kind: 'ADD_TRAFFIC' | 'ADD_TIME',
+  ): Promise<PendingReply> {
+    let offer;
+    try {
+      offer = await this.deps.commercial.offer(scope, actor, customer.id, serviceId, kind);
+    } catch (error) {
+      return refusal(error);
+    }
+
+    const prefix =
+      kind === 'ADD_TRAFFIC'
+        ? SERVICE_BUY_TRAFFIC_CALLBACK_PREFIX
+        : SERVICE_BUY_TIME_CALLBACK_PREFIX;
+    return {
+      key: 'bot.service.addon_choice',
+      values: {},
+      /*
+       * Unpriced rows are dropped rather than rendered at zero.
+       *
+       * `listOfferable` already filters them out in SQL, so this cannot fire — and it
+       * is a filter rather than a `?? zero` because `catalog.ts` says an absent price
+       * means unsellable and never free. A zero here would offer a customer a package
+       * for nothing, which is the one way to be wrong that money cannot be taken back
+       * from.
+       */
+      buttons: offer.addons
+        .filter((addon): addon is typeof addon & { price: Money } => addon.price !== null)
+        .map((addon) => ({
+          label: {
+            kind: 'TEMPLATE' as const,
+            key: 'bot.service.addon_option' as const,
+            values: {
+              // A MONEY value, rendered by the catalogue with its currency. A bare
+              // number is the legacy defect where one template said تومان and its twin
+              // ریال for the same figure, a factor of ten apart.
+              title: addon.title,
+              price: addon.price,
+            },
+          },
+          data: `${prefix}${encodeIdPair(serviceId, addon.id)}`,
+        })),
+      orderId: null,
+    };
+  }
+
+  /**
+   * The quote a customer answers: what this action buys, and what it costs.
+   *
+   * It writes a DRAFT order and its invoice line — both in one transaction — and
+   * commits the customer to nothing. The number shown is the number the order was
+   * written with, and it is never re-taken: confirming re-checks that the service and
+   * the package are still eligible and leaves the price exactly as the customer saw it.
+   *
+   * `idempotencyKey` is the update's, so Telegram redelivering the same tap produces
+   * the same draft rather than a second one.
+   */
+  private async commercialQuote(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    serviceId: string,
+    kind: 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME',
+    addonId: string | null,
+    input: { readonly idempotencyKey: string },
+  ): Promise<PendingReply> {
+    try {
+      const { order } = await this.deps.commercial.draft(scope, actor, customer.id, {
+        serviceId,
+        kind,
+        ...(addonId === null ? {} : { addonId }),
+        idempotencyKey: `${input.idempotencyKey}:${kind.toLowerCase()}`,
+      });
+      return {
+        key: 'bot.service.action_quote',
+        values: {
+          // The order's own line snapshot, which is what was quoted — the plan's title
+          // for a renewal, the package's for a quantity purchase.
+          productTitle: order.line.title,
+          total: order.totals.total,
+          /*
+           * WHAT is being bought, beside what it costs, and from the same frozen line.
+           *
+           * A title is free text an operator wrote: «بسته ویژه» encodes no allowance at
+           * all. This screen is the one the customer answers, so it is where the figures
+           * have to be — exactly as `bot.order.summary` carries them for a product, and
+           * for the same reason a product's catalogue button does not.
+           */
+          trafficBytes: order.line.specification.trafficBytes,
+          durationDays: order.line.specification.durationDays,
+        },
+        buttons: [
+          {
+            label: { kind: 'TEMPLATE', key: 'bot.service.action_confirm_button' },
+            data: `${SERVICE_ACTION_CONFIRM_CALLBACK_PREFIX}${order.id}`,
+          },
+        ],
+        orderId: order.id,
+      };
+    } catch (error) {
+      return refusal(error);
+    }
+  }
+
+  /**
+   * The customer answering the quote: DRAFT to AWAITING_PAYMENT, then the payment
+   * buttons.
+   *
+   * The same two steps a product purchase takes, and deliberately the same screen after
+   * them — `paymentButtons` is shared, so wallet and manual transfer work on a
+   * commercial order without knowing it is one.
+   */
+  private async commercialConfirm(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    orderId: string,
+    input: { readonly idempotencyKey: string },
+  ): Promise<PendingReply> {
+    try {
+      const order = await this.deps.commercial.confirm(scope, actor, customer.id, {
+        orderId,
+        idempotencyKey: `${input.idempotencyKey}:action_confirm`,
+      });
+      return {
+        key: 'bot.order.awaiting_payment',
+        values: {
+          total: order.totals.total,
+          ...(order.expiresAt === null ? {} : { expiresAt: order.expiresAt }),
+        },
+        buttons: paymentButtons(order.id),
+        orderId: order.id,
+      };
+    } catch (error) {
+      return refusal(error);
+    }
+  }
+
   private async serviceResend(
     scope: TenantContext,
     customer: CustomerRecord,
