@@ -1294,15 +1294,37 @@ export class PaymentService {
 
         const stamped = await this.deps.repository.signalSent(scope, paymentId, now, tx);
         /*
-         * `false` means the row was already signalled, or moved out of PENDING between
-         * the read above and this statement, or is not a transfer at all. The customer
-         * is told the same thing in every case — their claim is on record — because
-         * every one of them is true of a payment whose claim IS on record or whose
-         * outcome they will hear about through the notification lane.
+         * `false` does NOT mean the claim is on record, and this used to assume it did.
+         *
+         * Three things produce it: the row was already signalled, it is not a transfer,
+         * or it moved out of `PENDING` between the read above and this statement. The
+         * first is a second tap and the reply is true; the third is a race with an
+         * expiry, a rejection or a cancellation, and there the claim is NOT recorded,
+         * no operator will ever see it, and the bot said "your transfer is on record"
+         * anyway — with the idempotency store remembering that answer. Found by the
+         * Codex review of PR #30.
+         *
+         * So the row is re-read and the reply follows the evidence: a
+         * `customerSignalledAt` that exists is a claim on record whoever stamped it,
+         * and its absence is reported as the terminal state the payment actually
+         * reached. Throwing rolls back the idempotency row with it, so a retry after
+         * the customer's next tap is answered by the state rather than by this reply.
          *
          * The audit row is written only when this call is the one that stamped it, so
          * the log does not grow a row per tap.
          */
+        if (!stamped) {
+          const settled = await this.deps.repository.findById(scope, paymentId, tx);
+          if (settled === null) {
+            throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
+          }
+          if (settled.customerSignalledAt === null) {
+            throw errors.conflict(
+              COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID,
+              'This payment is no longer pending.',
+            );
+          }
+        }
         if (stamped) {
           await this.deps.audit.record(
             scope,

@@ -232,19 +232,26 @@ export class DrizzleCustomerNotificationRepository implements CustomerNotificati
   }
 
   /**
-   * Records a rate limit: still `PENDING`, still unresolved, and NO attempt spent.
+   * Puts a claimed row back on the queue at `retryAt`: still `PENDING`, NO attempt spent.
    *
    * The whole method exists so that the attempt counter cannot move here. ADR 0030 §2
-   * and audit §6b carry the argument; the consequence of the alternative is that three
-   * bursts fail a message Telegram never rejected on its merits, in exactly the
-   * conditions that produce bursts.
+   * and audit §6b carry the argument for the rate-limit case; the consequence of the
+   * alternative is that three bursts fail a message Telegram never rejected on its
+   * merits, in exactly the conditions that produce bursts.
    *
-   * `send_started_at` is cleared, because the send definitely did not happen: a 429 is
-   * Telegram declining the request, not a request whose fate is unknown. That is the
-   * one place this differs from every other unresolved outcome, and it is why the row
-   * becomes claimable again rather than waiting for `reapStranded`.
+   * `send_started_at` is cleared, because the send definitely did not happen. That is
+   * the one place this differs from every other unresolved outcome, and it is why the
+   * row becomes claimable again rather than waiting for `reapStranded`.
+   *
+   * Named for what it DOES rather than for the first caller that needed it. The Codex
+   * review of PR #30 found the second: a customer blocked between the claim and the
+   * contact lookup was recorded terminally `FAILED`, while the very same customer
+   * blocked one moment earlier was simply not claimed — `claimDue` excludes them at the
+   * query, and its comment argues at length that burning an attempt would punish a
+   * customer for a moderation decision that may be reversed. Two halves of one rule
+   * disagreeing, decided by a race. Both now defer.
    */
-  async rateLimited(
+  async deferUntil(
     scope: TenantContext,
     id: string,
     retryAt: Date,

@@ -636,6 +636,28 @@ export class OrderService {
 
         const withdrawn = await this.deps.payments.withdrawPendingFor(scope, orderId, now, tx);
 
+        /*
+         * The claim guard, asked AGAIN after the withdrawal — and this one is the check.
+         *
+         * The read above happens before any write, and READ COMMITTED lets a
+         * `signalTransferSent` commit between the two: the guard says no claim, the
+         * customer's claim lands, and `withdrawPendingFor` then cancels the payment they
+         * were just told is recorded for review. The repository's UPDATE now refuses a
+         * signalled row, so this re-ask is what turns "we left one behind" into a
+         * refusal rather than a silent partial cancellation. Found by the Codex review
+         * of PR #30.
+         *
+         * Throwing rolls the withdrawal back with it, which is the whole point: the
+         * order stays open, the claim stands, and the customer is told a transfer is
+         * waiting to be reviewed — the same answer the pre-write guard gives.
+         */
+        if (await this.deps.payments.claimedPendingFor(scope, orderId, tx)) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.ORDER_TRANSFER_UNDER_REVIEW,
+            'A transfer for this order is waiting to be reviewed.',
+          );
+        }
+
         const changed = await this.deps.repository.transition(
           scope,
           orderId,
@@ -655,6 +677,30 @@ export class OrderService {
         /* istanbul ignore next -- read in the same transaction as the read above. */
         if (after === null) {
           throw errors.notFound(COMMERCE_ERROR_CODES.ORDER_NOT_FOUND, 'Unknown order.');
+        }
+
+        /*
+         * A transition that moved NOTHING is not a cancellation, and must not be
+         * reported as one.
+         *
+         * `changed` was computed and then used only as an audit field. If confirmation
+         * or the expiry sweep moved the order between the `before` read and this
+         * statement, the UPDATE matches no row — and the method went on to audit
+         * SUCCESS, store the idempotency result, and return the now-`PAID` row, which
+         * `BotRuntime.cancelOrder` renders as "your order was cancelled". A customer
+         * whose payment had just settled would be told it was withdrawn. Found by the
+         * Codex review of PR #30.
+         *
+         * `CANCELLED` is the one losing outcome that is still success: two taps, or a
+         * replay racing itself, and the end state is the one the customer asked for.
+         * Everything else is a conflict, and throwing rolls back the withdrawal above
+         * so a settled order does not lose its payment rows on the way out.
+         */
+        if (!changed && after.state !== 'CANCELLED') {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.ORDER_STATE_INVALID,
+            'This order can no longer be cancelled.',
+          );
         }
 
         await this.deps.audit.record(

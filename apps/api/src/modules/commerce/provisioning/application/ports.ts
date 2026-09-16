@@ -585,7 +585,33 @@ export interface OperationRepository {
     tx?: unknown,
   ): Promise<OperationRecord | null>;
 
+  /**
+   * A service's operations, OLDEST first, bounded.
+   *
+   * The order is part of the contract because a caller counts with it:
+   * `ProvisionerService` reads the first 50 to count provisioning cycles against a
+   * ceiling, and a limit applied to the other end of the same list would count a
+   * different set. Anything that wants the RECENT history wants
+   * `listRecentForService`.
+   */
   listForService(
+    scope: TenantContext,
+    serviceId: string,
+    limit: number,
+    tx?: unknown,
+  ): Promise<readonly OperationRecord[]>;
+
+  /**
+   * A service's operations, NEWEST first, bounded.
+   *
+   * Its own method rather than a flag on `listForService`, because the two answer
+   * different questions and one of them bounds a decision. The operator's history is
+   * the newest N attempts — "why has this customer not had their service" is answered
+   * by the last failure, never by the first fifty — and the Codex review of PR #30
+   * found the admin endpoint serving the OLDEST fifty behind a docblock promising the
+   * newest, which is precisely the case where the history is long enough to matter.
+   */
+  listRecentForService(
     scope: TenantContext,
     serviceId: string,
     limit: number,

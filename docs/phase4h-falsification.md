@@ -240,6 +240,87 @@ that no gate run in this session had reported. The contract's own docblock says 
 field sits on the SUMMARY "because it is the field that makes the pending list
 triageable"; until this slice, the list it was for did not have it.
 
+## The Codex review of PR #30
+
+Nine findings on head `a472a8b`, all validated against the code before anything was
+changed. Seven were fixed; two are recorded as `OQ-4H-01` and `OQ-4H-02` with the
+reason, because each needs a contract or a schema decision rather than a fix.
+
+| #      | Rule                                                       | Mutation                                                        | Named test                                                                                                     | Result |
+| ------ | ---------------------------------------------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------ |
+| F4H-29 | every operation the loop terminalises is announced         | `announce` moved back below the `REFUSED` break                 | `provisioner-loop-announcement.test.ts` › announces an operation a refusal abandoned, before it stops draining | KILLED |
+| F4H-30 | a cancellation never withdraws a signalled transfer        | `isNull(customerSignalledAt)` and the post-write re-ask removed | `customer-order-actions.test.ts` › refuses to cancel an order whose transfer was signalled during the attempt  | KILLED |
+| F4H-31 | a cancel that lost its transition is refused, not reported | the `!changed` guard removed                                    | `customer-order-actions.test.ts` › refuses a cancellation when the order settles first                         | KILLED |
+| F4H-32 | a transfer signal that was not recorded is refused         | the `!stamped` re-read removed                                  | `customer-order-actions.test.ts` › refuses a transfer signal when the payment is rejected first                | KILLED |
+
+F4H-29 is the one worth reading. Codex reported C2 as a crash window — the terminal
+transition commits, the announcement is a second transaction, and a process that dies
+between them leaves a terminal operation nobody will claim again. That half is real and
+is NOT fixed here; it is `OQ-4H-01`'s neighbour in kind and 4J's subject.
+
+The half that WAS fixed is the one the report mentions second and which turned out to be
+much worse: three refusal paths in `runOnce` transition the operation to `ABANDONED` and
+return `{ kind: 'REFUSED' }`, and `ProvisionerLoop` broke on `REFUSED` before announcing.
+So a customer whose RENEW was refused because this release cannot renew on their panel
+type was told nothing — not as a race, but every time, deterministically. The fix moves
+the call above the break and removes the `outcome` PARAMETER entirely: `announce` now
+reads the operation's own state, so no caller can hand it an outcome that does not match
+the row, and the call is idempotent and safe from anywhere.
+
+The remaining six fixes are conditional-write results that were computed and ignored,
+which is one shape wearing six hats:
+
+- **C1** `cancelPendingForOrder` matched `state = 'PENDING'` only, so a transfer the
+  customer had just claimed was withdrawn by a cancellation whose guard read had run
+  before the claim committed. The UPDATE now refuses a signalled row AND the guard is
+  re-asked after it, so a row left behind is a refusal rather than a partial cancel.
+- **C4** `cancelByCustomer` computed `changed` and used it only as an audit field, so a
+  cancel that lost to a settlement audited SUCCESS and returned the `PAID` row — which
+  the bot renders as "your order was cancelled".
+- **C3** `signalTransferSent` read a `false` from `signalSent` as "already on record".
+  One of its three causes leaves `customer_signalled_at` null, so the claim reached
+  nobody and the customer was told it was filed.
+- **C5** a customer blocked between the claim and the contact lookup was recorded
+  terminally `FAILED`, while the same customer blocked a moment earlier was simply not
+  claimed — `claimDue` excludes them at the query and argues at length that burning an
+  attempt would punish a reversible moderation decision. One rule, two answers, decided
+  by a race.
+- **C7** the operator's operation history promised "newest first" in its docblock and in
+  its Persian copy, and called a repository method that orders ASCENDING — so a service
+  with more than fifty operations showed the oldest fifty, losing exactly the recent
+  failures an operator opened the page to read.
+- **C9** the delay precondition tested `state !== 'ACTIVE'`, and `TERMINATE` is legal
+  from both `PENDING_PROVISION` and `UNRECONCILED` — so a customer who ended their
+  service could still be told its provisioning was taking longer than expected.
+
+### Two of the three race tests SURVIVED their first mutation
+
+Worth more than the fixes. F4H-31 and F4H-32 were first written as two calls started
+together with `Promise.allSettled`, asserting an invariant — and both passed with the
+production fix REVERTED. The reason is the same in each: the competing transaction
+committed entirely before the method under test took its opening read, so the PRE-READ
+guard refused and the branch the fix added was never reached. The tests were measuring
+a path that was already correct, which is the shape `CLAUDE.md` calls a test that
+cannot fail.
+
+The rewrite drives the window with a real row lock instead of hoping for it. The test
+holds the payment row on its own connection; the method under test reads the row as
+`PENDING`, blocks on its conditional UPDATE, and the competing change commits while it
+waits. It then resumes into exactly the state the branch exists for — an opening read
+that said one thing and a conditional write that matches nothing. Both mutations fail
+against the rewritten cases.
+
+F4H-30 killed its mutation on the first attempt, because `withdrawPendingFor` takes the
+payment row lock itself and the interleaving happens without help.
+
+One incident along the way, recorded because it cost a run: the first lock-driven
+version wrote `state = 'PAID'` without `settled_at`, which `orders_settled_at_check`
+refuses — `(state = 'PAID' OR state = 'REFUNDED') = (settled_at IS NOT NULL)`. That
+aborted the holder's transaction and returned a poisoned connection to the pool, and
+the failure surfaced several statements later as "current transaction is aborted"
+inside an unrelated helper. Both lock-driven cases now roll back in a `catch` rather
+than trusting the commit.
+
 ## A note on how these were run
 
 The first pass of F4H-08 to F4H-14 was run while a full `pnpm test:integration`

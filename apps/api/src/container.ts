@@ -1474,12 +1474,20 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    */
   const outcomeAnnouncer = new OperationOutcomeAnnouncer({
     reader: {
-      subjectFor: async (scope, operationId, serviceId, tx) => {
+      subjectFor: async (scope, operationId, tx) => {
         const operation = await operationRepository.findById(scope, operationId, tx);
         if (operation === null) return null;
-        const service = await serviceRepository.findById(scope, serviceId, tx);
+        // The operation's OWN service, not one the caller supplied: an announcement
+        // keyed to a service the operation does not belong to is the mismatch this
+        // signature removes rather than documents.
+        const service = await serviceRepository.findById(scope, operation.serviceId, tx);
         if (service === null) return null;
-        return { type: operation.type, customerId: service.customerId };
+        return {
+          type: operation.type,
+          state: operation.state,
+          serviceId: operation.serviceId,
+          customerId: service.customerId,
+        };
       },
     },
     notifier: customerNotifier,

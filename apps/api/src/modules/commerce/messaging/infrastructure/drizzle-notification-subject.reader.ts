@@ -1,6 +1,9 @@
 import { and, eq } from 'drizzle-orm';
 import type { CustomerNotificationKind, TenantContext } from '@nexa/contracts';
-import { CUSTOMER_NOTIFICATION_PRECONDITIONS } from '@nexa/contracts';
+import {
+  CUSTOMER_NOTIFICATION_PRECONDITIONS,
+  SERVICE_UNRESOLVED_PROVISION_STATES,
+} from '@nexa/contracts';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { services } from '../../../../infrastructure/persistence/schema.js';
@@ -16,7 +19,10 @@ import type { NotificationSubjectReader } from '../application/customer-notifica
  * Today that is one kind. `SERVICE_PROVISION_DELAYED` says "your service is taking
  * longer than expected", which stops being true the moment the service is `ACTIVE` —
  * and arriving a second after the subscription link would be worse than not arriving at
- * all. Every other kind is a terminal fact that an hour's delay does not make false.
+ * all. It is equally untrue once the service is `TERMINATED`, `EXPIRED` or `SUSPENDED`,
+ * which is why the test is against `SERVICE_UNRESOLVED_PROVISION_STATES` rather than
+ * against `!== 'ACTIVE'`. Every other kind is a terminal fact that an hour's delay does
+ * not make false.
  */
 export class DrizzleNotificationSubjectReader implements NotificationSubjectReader {
   constructor(private readonly db: Database) {}
@@ -47,6 +53,15 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
      * fabricated claim this codebase refuses, and the absence is the evidence.
      */
     if (row === undefined) return false;
-    return row.state !== 'ACTIVE';
+    /*
+     * The states that ARE unresolved provisioning, not "everything except ACTIVE".
+     *
+     * `TERMINATE` is legal from `PENDING_PROVISION` and from `UNRECONCILED`, so a
+     * queued delay notice can be claimed after the customer ended the service — and a
+     * not-ACTIVE test would then tell them their provisioning was taking longer than
+     * expected for a service they had already terminated. `EXPIRED` and `SUSPENDED`
+     * are the same mistake one state over. Found by the Codex review of PR #30.
+     */
+    return (SERVICE_UNRESOLVED_PROVISION_STATES as readonly string[]).includes(row.state);
   }
 }

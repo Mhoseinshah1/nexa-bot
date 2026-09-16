@@ -114,10 +114,23 @@ export class ProvisionerLoop {
       const scope = this.options.scope();
       for (let drained = 0; drained < DRAIN_LIMIT; drained += 1) {
         const result = await this.executor.runOnce(scope);
-        if (result.kind === 'IDLE' || result.kind === 'REFUSED') break;
-        // Queued, not sent. `announce` decides whether a customer asked for this one
-        // and whether the outcome is terminal enough to be worth a sentence.
-        await this.outcomes.announce(scope, result.operationId, result.serviceId, result.outcome);
+        if (result.kind === 'IDLE') break;
+        /*
+         * Announced BEFORE the `REFUSED` break, and for a refusal too.
+         *
+         * Three refusal paths terminalise the operation to `ABANDONED` — a missing
+         * service, a capability this release does not implement, a service in a state
+         * the operation is not legal from — and this used to break on `REFUSED` first.
+         * So a customer whose renewal was refused because their panel type cannot be
+         * renewed on was told nothing at all, deterministically, every time. Found by
+         * the Codex review of PR #30.
+         *
+         * `announce` reads the operation's own state and queues nothing for one that is
+         * not terminal, so calling it for every refusal — including the ones that hold
+         * off and retry — is correct rather than merely harmless. Queued, not sent.
+         */
+        await this.outcomes.announce(scope, result.operationId);
+        if (result.kind === 'REFUSED') break;
       }
       /*
        * Then the announcements, for the services the drain above just activated.

@@ -24,6 +24,7 @@ import type { TransactionScope } from '../../apps/api/src/infrastructure/persist
 describe('announcing how an operation turned out', () => {
   const scope = { tenantId: 'tenant-1', botInstanceId: null } as unknown as TenantContext;
   const CUSTOMER = 'customer-1' as UserId;
+  const SERVICE = 'service-1';
   const NOW = new Date('2026-09-16T00:00:00.000Z');
 
   /*
@@ -42,11 +43,19 @@ describe('announcing how an operation turned out', () => {
     readonly subjectId: string;
   }
 
-  function announcerFor(type: OperationType) {
+  /*
+   * The STATE comes from the reader now, not from the caller.
+   *
+   * `announce` used to take the outcome as a parameter and the loop supplied
+   * `result.outcome`, which only an `ATTEMPTED` result has — so the refusal paths that
+   * terminalise an operation announced nothing. The harness follows: each case says
+   * what the ROW says, which is what the production reader answers from.
+   */
+  function announcerFor(type: OperationType, state: OperationState = 'SUCCEEDED') {
     const queued: Queued[] = [];
     const announcer = new OperationOutcomeAnnouncer({
       reader: {
-        subjectFor: async () => ({ type, customerId: CUSTOMER }),
+        subjectFor: async () => ({ type, state, serviceId: SERVICE, customerId: CUSTOMER }),
       },
       notifier: {
         notify: async (
@@ -90,8 +99,8 @@ describe('announcing how an operation turned out', () => {
       ['ABANDONED', 'SERVICE_ACTION_FAILED'],
     ];
     for (const [outcome, kind] of announced) {
-      const { announcer, queued } = announcerFor('RENEW');
-      await announcer.announce(scope, 'operation-1', 'service-1', outcome);
+      const { announcer, queued } = announcerFor('RENEW', outcome);
+      await announcer.announce(scope, 'operation-1');
       expect(
         queued.map((q) => q.kind),
         `${outcome} must be announced`,
@@ -102,8 +111,8 @@ describe('announcing how an operation turned out', () => {
   it('says nothing about a FAILED operation', async () => {
     const silent: OperationState[] = ['FAILED', 'UNKNOWN', 'IN_FLIGHT', 'PLANNED'];
     for (const outcome of silent) {
-      const { announcer, queued } = announcerFor('RENEW');
-      await announcer.announce(scope, 'operation-1', 'service-1', outcome);
+      const { announcer, queued } = announcerFor('RENEW', outcome);
+      await announcer.announce(scope, 'operation-1');
       expect(queued, `${outcome} must say nothing`).toEqual([]);
     }
   });
@@ -116,16 +125,16 @@ describe('announcing how an operation turned out', () => {
      * about either would be told about something they never did.
      */
     for (const type of ['PROVISION', 'RECONCILE', 'SYNC_USAGE'] as OperationType[]) {
-      const { announcer, queued } = announcerFor(type);
-      await announcer.announce(scope, 'operation-1', 'service-1', 'SUCCEEDED');
+      const { announcer, queued } = announcerFor(type, 'SUCCEEDED');
+      await announcer.announce(scope, 'operation-1');
       expect(queued, `${type} must not be announced`).toEqual([]);
     }
   });
 
   it('announces every operation a customer can start from My Services', async () => {
     for (const type of CUSTOMER_INITIATED_OPERATIONS) {
-      const { announcer, queued } = announcerFor(type);
-      await announcer.announce(scope, 'operation-1', 'service-1', 'SUCCEEDED');
+      const { announcer, queued } = announcerFor(type, 'SUCCEEDED');
+      await announcer.announce(scope, 'operation-1');
       expect(queued.length, `${type} must be announced`).toBe(1);
     }
   });
@@ -142,8 +151,8 @@ describe('announcing how an operation turned out', () => {
      * `services.state`. Keyed on the operation, that lookup finds nothing and answers
      * `false`, so every delay notification would be SUPERSEDED instead of sent.
      */
-    const { announcer, queued } = announcerFor('PROVISION');
-    await announcer.announce(scope, 'operation-1', 'service-1', 'ABANDONED');
+    const { announcer, queued } = announcerFor('PROVISION', 'ABANDONED');
+    await announcer.announce(scope, 'operation-1');
     expect(queued).toEqual([
       { customerId: CUSTOMER, kind: 'SERVICE_PROVISION_DELAYED', subjectId: 'service-1' },
     ]);
@@ -155,8 +164,8 @@ describe('announcing how an operation turned out', () => {
      * abandoned leaves the service `UNRECONCILED` — a customer waiting on a link
      * nobody can produce, which is the same silence from their side.
      */
-    const { announcer, queued } = announcerFor('RECONCILE');
-    await announcer.announce(scope, 'operation-1', 'service-1', 'ABANDONED');
+    const { announcer, queued } = announcerFor('RECONCILE', 'ABANDONED');
+    await announcer.announce(scope, 'operation-1');
     expect(queued.map((q) => q.kind)).toEqual(['SERVICE_PROVISION_DELAYED']);
   });
 
@@ -166,8 +175,8 @@ describe('announcing how an operation turned out', () => {
      * which is a better message than "your request was applied". Only the ABANDONMENT
      * of these two is announced.
      */
-    const { announcer, queued } = announcerFor('PROVISION');
-    await announcer.announce(scope, 'operation-1', 'service-1', 'SUCCEEDED');
+    const { announcer, queued } = announcerFor('PROVISION', 'SUCCEEDED');
+    await announcer.announce(scope, 'operation-1');
     expect(queued).toEqual([]);
   });
 
@@ -176,8 +185,8 @@ describe('announcing how an operation turned out', () => {
      * `SYNC_USAGE` reads a number back from a panel. A customer waiting on nothing is
      * not delayed, and announcing it would be a message about our housekeeping.
      */
-    const { announcer, queued } = announcerFor('SYNC_USAGE');
-    await announcer.announce(scope, 'operation-1', 'service-1', 'ABANDONED');
+    const { announcer, queued } = announcerFor('SYNC_USAGE', 'ABANDONED');
+    await announcer.announce(scope, 'operation-1');
     expect(queued).toEqual([]);
   });
 
@@ -187,9 +196,9 @@ describe('announcing how an operation turned out', () => {
      * service would tell a customer about their FIRST renewal and silently drop every
      * one after it, because the second enqueue would hit the unique index and no-op.
      */
-    const { announcer, queued } = announcerFor('RENEW');
-    await announcer.announce(scope, 'operation-1', 'service-1', 'SUCCEEDED');
-    await announcer.announce(scope, 'operation-2', 'service-1', 'SUCCEEDED');
+    const { announcer, queued } = announcerFor('RENEW', 'SUCCEEDED');
+    await announcer.announce(scope, 'operation-1');
+    await announcer.announce(scope, 'operation-2');
     expect(queued.map((q) => q.subjectId)).toEqual(['operation-1', 'operation-2']);
   });
 
@@ -206,7 +215,25 @@ describe('announcing how an operation turned out', () => {
       uow: passthroughUow,
       clock: { now: () => NOW },
     });
-    await announcer.announce(scope, 'operation-1', 'service-1', 'SUCCEEDED');
+    await announcer.announce(scope, 'operation-1');
     expect(queued).toEqual([]);
+  });
+
+  /**
+   * The refusal paths that terminalise, which announced nothing at all.
+   *
+   * `ProvisionerLoop` broke on `REFUSED` before calling the announcer, and three
+   * refusals transition the operation to `ABANDONED` — a missing service, a capability
+   * this release does not implement, and a service in a state the operation is not
+   * legal from. A customer whose RENEW was refused because their panel type cannot be
+   * renewed on was told nothing, deterministically. Found by the Codex review of PR #30.
+   *
+   * Asserted HERE as well as in the loop test because this is the half that makes it
+   * safe: `announce` reads the state itself, so a caller cannot hand it the wrong one.
+   */
+  it('announces an operation abandoned by a refusal, not only an attempted one', async () => {
+    const { announcer, queued } = announcerFor('RENEW', 'ABANDONED');
+    await announcer.announce(scope, 'operation-1');
+    expect(queued.map((q) => q.kind)).toEqual(['SERVICE_ACTION_FAILED']);
   });
 });

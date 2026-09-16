@@ -332,6 +332,22 @@ export class DrizzlePaymentRepository implements PaymentRepository {
           eq(payments.tenantId, tenantId),
           eq(payments.orderId, orderId),
           eq(payments.state, 'PENDING'),
+          /*
+           * A SIGNALLED transfer is never withdrawn here, and the predicate belongs in
+           * this statement rather than in the caller's guard.
+           *
+           * `OrderService.cancelByCustomer` asks whether a claim exists before it
+           * writes, and READ COMMITTED lets a `signalTransferSent` commit between that
+           * read and this UPDATE — so a `state = 'PENDING'` predicate alone cancelled
+           * the payment whose customer had just been told it was recorded for review.
+           * The guard cannot close that window; only the write can. The caller re-asks
+           * afterwards and turns a row left behind into a refusal. Found by the Codex
+           * review of PR #30.
+           *
+           * An operator's own withdrawal is unaffected: that path is
+           * `PaymentService.withdrawPending` over a payment id, not this one.
+           */
+          isNull(payments.customerSignalledAt),
         ),
       )
       .returning({ id: payments.id });

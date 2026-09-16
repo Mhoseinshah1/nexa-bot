@@ -52,7 +52,16 @@ export interface NotificationSweepReport {
   readonly superseded: number;
   /** Telegram asked us to slow down. No attempt spent, back on the queue. */
   readonly rateLimited: number;
-  /** Claimed, then found to belong to a customer with no reachable chat. */
+  /**
+   * Claimed, then found to belong to a customer an operator had just blocked.
+   *
+   * Back on the queue with no attempt spent, NOT failed: `claimDue` excludes a blocked
+   * customer at the query, so a row that reached the send only because the block
+   * committed mid-claim must end up where the query would have left it. A block may be
+   * reversed, and a terminal `FAILED` could not be.
+   */
+  readonly blocked: number;
+  /** Claimed, then found to belong to a customer with no reachable chat at all. */
   readonly unreachable: number;
   /** The send threw. The lease stands and the row comes back later. */
   readonly errored: number;
@@ -124,6 +133,7 @@ export class CustomerNotificationService {
       unconfirmed: 0,
       superseded: 0,
       rateLimited: 0,
+      blocked: 0,
       unreachable: 0,
       errored: 0,
       lost: 0,
@@ -160,6 +170,7 @@ export class CustomerNotificationService {
       unconfirmed: counts.unconfirmed ?? 0,
       superseded: counts.superseded ?? 0,
       rateLimited: counts.rateLimited ?? 0,
+      blocked: counts.blocked ?? 0,
       unreachable: counts.unreachable ?? 0,
       errored: counts.errored ?? 0,
       lost: counts.lost ?? 0,
@@ -198,14 +209,40 @@ export class CustomerNotificationService {
       }
 
       const lookup = await this.deps.contacts.contactFor(scope, row.customerId);
+      /*
+       * A BLOCKED customer is a PAUSE, not a failure — and the two used to disagree.
+       *
+       * `claimDue` excludes a blocked customer AT THE QUERY, and its comment argues the
+       * case at length: burning an attempt would punish a customer for a moderation
+       * decision that may be reversed. A block that commits between that query and this
+       * lookup is the SAME situation, and recording it `FAILED` made it permanent —
+       * only `PENDING` rows are claimable, so unblocking could never resume delivery.
+       * One rule decided by a race, which is what the Codex review of PR #30 found.
+       *
+       * Deferred by a backoff rather than released immediately, because the block is
+       * very unlikely to be reversed within one tick and a row that returns every tick
+       * crowds out messages that could be delivered.
+       */
+      if (lookup.kind === 'BLOCKED') {
+        const at = this.deps.clock.now();
+        await this.deps.uow.run(scope, async (tx) =>
+          this.deps.notifications.deferUntil(
+            scope,
+            row.id,
+            new Date(at.getTime() + CUSTOMER_NOTIFICATION_BACKOFF_MS),
+            at,
+            tx,
+          ),
+        );
+        return 'blocked';
+      }
       if (lookup.kind !== 'CONTACT') {
         /*
-         * No reachable chat. Terminal, and it spends the row rather than looping.
+         * No chat at all. Terminal, and it spends the row rather than looping.
          *
-         * `BLOCKED` cannot normally reach here — `claimDue` excludes a blocked customer
-         * at the query — so this is the race where a block committed between the claim
-         * and now. Either way there is nobody to send to and re-claiming the row on
-         * every tick would crowd out messages that could be delivered.
+         * Distinct from the block above: there is no destination to reach rather than a
+         * decision to reverse, and re-claiming such a row on every tick would crowd out
+         * messages that could be delivered.
          */
         const at = this.deps.clock.now();
         await this.deps.uow.run(scope, async (tx) =>
@@ -253,7 +290,7 @@ export class CustomerNotificationService {
           at.getTime() + (result.retryAfterMs ?? CUSTOMER_NOTIFICATION_BACKOFF_MS),
         );
         await this.deps.uow.run(scope, async (tx) =>
-          this.deps.notifications.rateLimited(scope, row.id, retryAt, at, tx),
+          this.deps.notifications.deferUntil(scope, row.id, retryAt, at, tx),
         );
         return 'rateLimited';
       }

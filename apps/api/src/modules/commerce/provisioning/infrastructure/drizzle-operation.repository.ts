@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import {
   isIdempotentMutation,
   isMutatingOperation,
@@ -329,6 +329,35 @@ export class DrizzleOperationRepository implements OperationRepository {
         ),
       )
       .orderBy(asc(provisioningOperations.createdAt), asc(provisioningOperations.id))
+      .limit(limit);
+    return rows.map(toRecord);
+  }
+
+  /**
+   * The same rows, NEWEST first.
+   *
+   * A separate statement rather than a direction flag on `listForService`, because
+   * that method's ascending order bounds a DECISION — `ProvisionerService` counts
+   * provisioning cycles in the first 50 against a ceiling — and flipping it would
+   * change which rows that count sees. The operator's history wants the other end.
+   */
+  async listRecentForService(
+    scope: TenantContext,
+    serviceId: string,
+    limit: number,
+    tx?: unknown,
+  ): Promise<readonly OperationRecord[]> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select()
+      .from(provisioningOperations)
+      .where(
+        and(
+          eq(provisioningOperations.tenantId, tenantId),
+          eq(provisioningOperations.serviceId, serviceId),
+        ),
+      )
+      .orderBy(desc(provisioningOperations.createdAt), desc(provisioningOperations.id))
       .limit(limit);
     return rows.map(toRecord);
   }

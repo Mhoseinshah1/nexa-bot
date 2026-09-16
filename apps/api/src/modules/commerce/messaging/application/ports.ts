@@ -251,14 +251,18 @@ export interface CustomerNotificationRepository {
   ): Promise<boolean>;
 
   /**
-   * Records a RATE LIMIT: back to the queue, no attempt spent.
+   * Puts a claimed row back on the queue at `retryAt`: no attempt spent.
    *
    * Its own method rather than a flag on `record`, because the difference is exactly
    * the one ADR 0030 §2 exists to make and a boolean parameter is how it would be lost.
-   * A 429 is Telegram declining to look at the message, not an outcome about it, so the
+   * A 429 is Telegram declining to LOOK at the message, not an outcome about it, so the
    * attempt counter — which bounds refusals OF THIS MESSAGE — must not move.
+   *
+   * Two callers, and the second is why the name is about the effect rather than the
+   * cause: a customer blocked between the claim and the contact lookup has an outcome
+   * nobody observed either, and `claimDue` already declines to claim such a row at all.
    */
-  rateLimited(
+  deferUntil(
     scope: TenantContext,
     id: string,
     retryAt: Date,

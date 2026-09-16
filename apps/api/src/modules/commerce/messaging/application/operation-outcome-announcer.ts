@@ -40,13 +40,27 @@ export const DELAY_ANNOUNCED_OPERATIONS: readonly OperationType[] = ['PROVISION'
 
 /** What the announcer needs to look up. Narrow, so a loop cannot mutate either row. */
 export interface OperationOutcomeReader {
-  /** The operation's type and the service's customer, or null if either is gone. */
+  /**
+   * Everything the announcement depends on, from the operation id alone.
+   *
+   * The STATE is read here rather than passed in, and the service id is derived rather
+   * than supplied, because both used to come from the caller: `ProvisionerLoop` passed
+   * `result.outcome`, which only an `ATTEMPTED` result carries — so the three `REFUSED`
+   * paths that terminalise an operation to `ABANDONED` announced nothing at all. A
+   * reader that answers from the row cannot be handed the wrong outcome, and makes the
+   * call safe to make for any operation at any time. Found by the Codex review of
+   * PR #30.
+   */
   subjectFor(
     scope: TenantContext,
     operationId: string,
-    serviceId: string,
     tx: TransactionScope,
-  ): Promise<{ readonly type: OperationType; readonly customerId: UserId } | null>;
+  ): Promise<{
+    readonly type: OperationType;
+    readonly state: OperationState;
+    readonly serviceId: string;
+    readonly customerId: UserId;
+  } | null>;
 }
 
 /**
@@ -72,9 +86,21 @@ export class OperationOutcomeAnnouncer {
   ) {}
 
   /**
-   * Queues the outcome of one attempted operation, if a customer asked for it.
+   * Queues the outcome of one operation, if a customer asked for it.
    *
-   * Only TERMINAL outcomes are announced. A `FAILED` with attempts left goes back to
+   * Takes an operation ID and NOTHING ELSE, and decides from the row. The outcome used
+   * to be a parameter, supplied by `ProvisionerLoop` from `result.outcome` — a field
+   * only an `ATTEMPTED` result has. Three `REFUSED` paths terminalise an operation to
+   * `ABANDONED` (a missing service, an unsupported capability, a service in the wrong
+   * state) and the loop broke on `REFUSED` before announcing, so a customer whose
+   * renewal was refused because this release cannot renew on their panel was told
+   * nothing, every time. Not a race: a deterministic silence.
+   *
+   * Reading the state here also makes the call IDEMPOTENT and safe from anywhere:
+   * `customer_notifications_subject_key` plus `onConflictDoNothing` mean a second call
+   * about the same operation queues nothing.
+   *
+   * Only TERMINAL states are announced. A `FAILED` with attempts left goes back to
    * PLANNED and will be tried again, and telling a customer their renewal failed while
    * the provisioner is still retrying it would be false — the rule `persistFailure`
    * already encodes, read from the other side.
@@ -82,17 +108,13 @@ export class OperationOutcomeAnnouncer {
    * `UNKNOWN` says nothing either: the request may have taken effect, and this
    * repository's standing answer to "we do not know" is never to claim we do.
    */
-  async announce(
-    scope: TenantContext,
-    operationId: string,
-    serviceId: string,
-    outcome: OperationState,
-  ): Promise<void> {
-    if (outcome !== 'SUCCEEDED' && outcome !== 'ABANDONED') return;
-
+  async announce(scope: TenantContext, operationId: string): Promise<void> {
     await this.deps.uow.run(scope, async (tx) => {
-      const subject = await this.deps.reader.subjectFor(scope, operationId, serviceId, tx);
+      const subject = await this.deps.reader.subjectFor(scope, operationId, tx);
       if (subject === null) return;
+      if (subject.state !== 'SUCCEEDED' && subject.state !== 'ABANDONED') return;
+      const { serviceId } = subject;
+      const outcome = subject.state;
 
       /*
        * The one thing a customer is told about an operation they did NOT start.

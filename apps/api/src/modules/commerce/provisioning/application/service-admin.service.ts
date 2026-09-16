@@ -112,7 +112,17 @@ export class ServiceAdminService {
     id: string,
   ): Promise<readonly OperationRecord[]> {
     const service = await this.get(scope, actor, id);
-    return this.deps.operations.listForService(scope, service.id, SERVICE_OPERATION_LIMIT);
+    /*
+     * `listRecentForService`, not `listForService`.
+     *
+     * The bound and the ORDER have to agree: `listForService` is ascending because a
+     * caller counts provisioning cycles in its first fifty, so asking it for fifty here
+     * returned the OLDEST fifty behind a docblock promising the newest — exactly when
+     * the history is long enough for the difference to matter, and with the most recent
+     * failures, the ones an operator came to read, missing. Found by the Codex review
+     * of PR #30.
+     */
+    return this.deps.operations.listRecentForService(scope, service.id, SERVICE_OPERATION_LIMIT);
   }
 
   /**

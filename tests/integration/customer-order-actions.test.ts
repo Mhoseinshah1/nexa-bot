@@ -599,4 +599,207 @@ describe('a customer acting on their own order', () => {
     expect(results.map((r) => r.state)).toEqual(['CANCELLED', 'CANCELLED']);
     expect((await auditActions(order.id)).filter((a) => a === 'order.cancel')).toHaveLength(1);
   });
+
+  /**
+   * The three races the Codex review of PR #30 found, each of which told a customer
+   * something false.
+   *
+   * All three are the same shape: a conditional write LOST, and the method carried on
+   * as though it had won. READ COMMITTED is what opens every one of them — the guard
+   * read and the write are two statements, and another transaction commits between.
+   */
+  describe('a decision that lost its race', () => {
+    /**
+     * C1. Cancelling must not withdraw a transfer the customer has just claimed.
+     *
+     * `claimedPendingFor` runs before any write, and a `signalTransferSent` that
+     * commits after it leaves the guard's answer stale — so `cancelPendingForOrder`,
+     * whose UPDATE matched only `state = 'PENDING'`, cancelled the payment the customer
+     * had been told was recorded for review. Both halves are fixed: the UPDATE refuses
+     * a signalled row, and the guard is re-asked afterwards so a row left behind
+     * becomes a refusal rather than a silent partial cancellation.
+     */
+    it('refuses to cancel an order whose transfer was signalled during the attempt', async () => {
+      const order = await awaitingPayment(tenantA, customerA, panelA, 'race-1');
+      const payment = await transferFor(tenantA, customerA, order.id, 'race-1-pay');
+
+      const [signal, cancel] = await Promise.allSettled([
+        ctx.container.payments.signalTransferSent(tenantA, systemActor('race-1-s'), customerA, {
+          idempotencyKey: 'race-1-signal',
+          paymentId: payment.id,
+        }),
+        ctx.container.orders.cancelByCustomer(tenantA, systemActor('race-1-c'), {
+          idempotencyKey: 'race-1-cancel',
+          customerId: customerA,
+          orderId: order.id,
+        }),
+      ]);
+
+      /*
+       * Whichever order they interleave in, the one invariant holds: a payment that
+       * carries a customer's claim is NOT cancelled. Either the cancel ran first (the
+       * signal then refuses a non-pending payment) or the signal did (the cancel
+       * refuses), and both are legitimate — what must never happen is a CANCELLED
+       * payment with a `customer_signalled_at`.
+       */
+      const after = await paymentRow(payment.id);
+      expect(
+        after.customer_signalled_at === null || after.state !== 'CANCELLED',
+        'a claimed transfer was cancelled anyway',
+      ).toBe(true);
+      expect(
+        signal.status === 'fulfilled' || cancel.status === 'fulfilled',
+        'both refused; one of the two had to win',
+      ).toBe(true);
+    });
+
+    /**
+     * C4. A cancel that lost to a settlement must not be reported as a cancellation.
+     *
+     * `transition` returned `false`, and the method audited SUCCESS, stored the
+     * idempotency result and returned the now-`PAID` row — which `BotRuntime` renders
+     * as "your order was cancelled". A customer whose payment had just settled would be
+     * told it was withdrawn.
+     */
+    it('refuses a cancellation when the order settles first', async () => {
+      /*
+       * The window is DRIVEN with a real row lock, not hoped for.
+       *
+       * The first version of this case started a settlement and a cancellation with
+       * `Promise.allSettled` and asserted an invariant. It passed — and it passed with
+       * the fix REVERTED, because the two never interleaved inside the window: the
+       * settlement committed before the cancellation's opening read, so the pre-read
+       * guard refused and the `!changed` branch was never reached. A test that cannot
+       * fail is not a test, and `CLAUDE.md` names this exact shape.
+       *
+       * So the test holds the pending payment's row lock on its own connection. The
+       * cancellation reads the order as `AWAITING_PAYMENT`, then BLOCKS inside
+       * `withdrawPendingFor` on that lock. While it is blocked the order is settled and
+       * the lock released, so the cancellation resumes into precisely the state the
+       * branch exists for: its opening read said `AWAITING_PAYMENT` and its conditional
+       * transition matches nothing.
+       */
+      const order = await awaitingPayment(tenantA, customerA, panelA, 'race-2');
+      const payment = await transferFor(tenantA, customerA, order.id, 'race-2-pay');
+
+      const cancelled = await ctx.container.database.withClient(async (holder) => {
+        await holder.query('BEGIN');
+        try {
+          await holder.query('SELECT id FROM payments WHERE id = $1 FOR UPDATE', [payment.id]);
+
+          const attempt = ctx.container.orders.cancelByCustomer(tenantA, systemActor('race-2-c'), {
+            idempotencyKey: 'race-2-cancel',
+            customerId: customerA,
+            orderId: order.id,
+          });
+          /* Swallowed here and asserted below: an unhandled rejection fails the file. */
+          const settled = attempt.then(
+            () => ({ ok: true }) as const,
+            (error: unknown) => ({ ok: false, error }) as const,
+          );
+
+          /*
+           * Long enough for the cancellation to reach the lock and stop there. It
+           * cannot proceed past `withdrawPendingFor` while this transaction holds the
+           * row, so the wait establishes the ordering rather than hoping for it.
+           */
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          /*
+           * `settled_at` moves with the state because `orders_settled_at_check` binds
+           * them — `(state = 'PAID' OR state = 'REFUNDED') = (settled_at IS NOT NULL)`.
+           * The first version of this wrote the state alone, which aborted this
+           * transaction and handed a poisoned connection back to the pool.
+           */
+          await holder.query(
+            "UPDATE orders SET state = 'PAID', settled_at = now(), updated_at = now() WHERE id = $1",
+            [order.id],
+          );
+          await holder.query('COMMIT');
+          return settled;
+        } catch (error: unknown) {
+          await holder.query('ROLLBACK');
+          throw error;
+        }
+      });
+
+      const outcome = await cancelled;
+      expect(
+        outcome.ok,
+        'an order settled under the cancellation must not report a cancellation',
+      ).toBe(false);
+
+      const settled = await orderRow(order.id);
+      expect(settled.state).toBe('PAID');
+      /* And never the impossible pair: PAID carrying a cancellation stamp. */
+      expect(settled.cancelled_at).toBeNull();
+    });
+
+    /**
+     * C3. A signal that was not recorded must not say it was.
+     *
+     * `signalSent` returning `false` was read as "already on record". One of its three
+     * causes is a payment that moved out of `PENDING` between the read and the update,
+     * and there `customer_signalled_at` stays null: no operator ever sees the claim,
+     * and the bot said it was filed. The method now re-reads and follows the evidence.
+     */
+    it('refuses a transfer signal when the payment is rejected first', async () => {
+      /*
+       * Driven by a row lock, for the reason the case above carries in full.
+       *
+       * The window is between `signalTransferSent`'s own read — which sees `PENDING`
+       * and passes its state check — and its conditional UPDATE. Started as two
+       * concurrent calls the rejection simply finished first, the pre-read check
+       * refused, and the `!stamped` branch was never reached: the test passed with the
+       * fix reverted.
+       *
+       * Holding the payment row makes the ordering a fact. The signal reads `PENDING`,
+       * blocks on the UPDATE, and by the time it is granted the row the rejection has
+       * committed — so its `state = 'PENDING'` predicate matches nothing, which is
+       * exactly the `false` that used to be read as "already on record".
+       */
+      const order = await awaitingPayment(tenantA, customerA, panelA, 'race-3');
+      const payment = await transferFor(tenantA, customerA, order.id, 'race-3-pay');
+
+      const signalled = await ctx.container.database.withClient(async (holder) => {
+        await holder.query('BEGIN');
+        try {
+          await holder.query('SELECT id FROM payments WHERE id = $1 FOR UPDATE', [payment.id]);
+
+          const attempt = ctx.container.payments.signalTransferSent(
+            tenantA,
+            systemActor('race-3-s'),
+            customerA,
+            { idempotencyKey: 'race-3-signal', paymentId: payment.id },
+          );
+          const outcome = attempt.then(
+            () => ({ ok: true }) as const,
+            (error: unknown) => ({ ok: false, error }) as const,
+          );
+
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          /*
+           * `resolved_at` moves with the state because `payments_resolved_check` binds
+           * them for FAILED, CANCELLED and EXPIRED alike.
+           */
+          await holder.query(
+            "UPDATE payments SET state = 'FAILED', resolved_at = now(), updated_at = now() WHERE id = $1",
+            [payment.id],
+          );
+          await holder.query('COMMIT');
+          return outcome;
+        } catch (error: unknown) {
+          await holder.query('ROLLBACK');
+          throw error;
+        }
+      });
+
+      const result = await signalled;
+      expect(result.ok, 'an unrecorded claim must not report success').toBe(false);
+
+      const after = await paymentRow(payment.id);
+      /* The evidence the reply would have been claiming: it is not there. */
+      expect(after.customer_signalled_at).toBeNull();
+      expect(after.state).toBe('FAILED');
+    });
+  });
 });
