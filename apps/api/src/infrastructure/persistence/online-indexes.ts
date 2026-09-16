@@ -122,9 +122,17 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
      * transition for the length of the build.
      */
     name: 'provisioning_operations_unannounced_idx',
+    /*
+     * The predicate is written in POSTGRESQL's own canonical form — parenthesised
+     * conjuncts and `= ANY (ARRAY[...])` rather than `IN (...)` — because
+     * `online-indexes.test.ts` compares the declaration against `pg_indexes`
+     * TEXTUALLY. An `IN` list is stored as `= ANY (ARRAY[...])` and the comparison
+     * then fails on an index that is correct. Writing what the server stores keeps
+     * that check able to catch a declaration that has actually drifted.
+     */
     definition:
       'ON "provisioning_operations" USING btree ("tenant_id","completed_at") ' +
-      "WHERE announced_at IS NULL AND state IN ('SUCCEEDED','ABANDONED')",
+      "WHERE (announced_at IS NULL) AND (state = ANY (ARRAY['SUCCEEDED','ABANDONED']))",
   },
 ];
 
