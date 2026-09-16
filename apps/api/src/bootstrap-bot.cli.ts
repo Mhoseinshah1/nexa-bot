@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { stdin, stdout } from 'node:process';
 import { isNexaError, type TenantContext } from '@nexa/contracts';
 import type { BotBootstrapStatus } from './modules/platform/tenancy/application/bot-bootstrap.service.js';
+import { bootstrapRemedy } from './telegram-bootstrap-remedy.js';
 import { Prompter, PromptInputError } from './infrastructure/tty/prompt.js';
 import { createContainer } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
@@ -238,9 +239,24 @@ async function main(): Promise<void> {
     const publicBaseUrl = requirePublicBaseUrl(args.publicBaseUrl);
 
     if (args.status) {
+      const { state, reason } = await container.bootstrapBot.statusWithReason(scope, publicBaseUrl);
       // The ONLY thing on stdout, so a shell can read it without parsing prose.
       // Every other line this CLI writes goes to stderr.
-      process.stdout.write(`${await container.bootstrapBot.status(scope, publicBaseUrl)}\n`);
+      process.stdout.write(`${state}\n`);
+      /*
+       * And WHY, on stderr, when there is a why (`OQ-TG-04` item 9).
+       *
+       * `unavailable` used to be the whole answer, while the service had already
+       * computed which of three conditions produced it and thrown the sentence
+       * away. The `--skip-telegram` text sends operators to this command to find
+       * out, and skipping is precisely the path that avoids the `execute` call
+       * that would have told them.
+       *
+       * Stderr keeps the stdout contract exactly as `docs/deployment.md`
+       * documents it: a shell reading this still gets one word. A reason on
+       * stdout would break every caller that compares it.
+       */
+      if (reason !== null) console.warn(reason);
       return;
     }
 
@@ -331,8 +347,19 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
   main().catch((error: unknown) => {
     // A NexaError's message is written for an operator; anything else is a bug
     // and keeps its stack.
-    if (isNexaError(error)) console.error(`${error.code}: ${error.message}`);
-    else if (error instanceof PromptInputError) console.error(error.message);
+    if (isNexaError(error)) {
+      console.error(`${error.code}: ${error.message}`);
+      /*
+       * And the bootstrap context, for the codes whose message cannot carry it.
+       *
+       * `bootstrapRemedy` answers for the four `platform.secret_*` codes and
+       * nothing else, because every `telegram.bootstrap_*` code is raised by a
+       * service that knows its own path and already says the right thing. See
+       * that function for why a bigger table would be worse than none.
+       */
+      const remedy = bootstrapRemedy(error.code);
+      if (remedy !== null) console.error(remedy);
+    } else if (error instanceof PromptInputError) console.error(error.message);
     else console.error(error);
     // Non-zero, always. ADR-0029 decision 4: an installation whose bot cannot
     // receive updates is not a completed installation, and the row surviving is

@@ -607,14 +607,29 @@ describe("botctl reads the application's booleans per key, not one vocabulary fo
           .sort();
       return { truthy: split(truthy), falsy: split(falsy) };
     };
-    // The strict branch comes first in the function; split on it so each arm pair
-    // is read from the branch it belongs to.
+    // The strict branch is still inside `nexa_listing_boolean`; split on it so its
+    // arm pair is read from the branch it belongs to.
     const strictAt = reader.indexOf('if [ "$vocab" = strict ]');
     expect(strictAt).toBeGreaterThan(-1);
     const strict = arms(reader.slice(strictAt));
-    const loose = arms(
-      reader.slice(reader.indexOf('case "$raw" in', reader.indexOf('return 0', strictAt))),
+
+    // The LOOSE arm moved. It used to sit under this same function's second
+    // `case`, and Phase 4I extracted it into `nexa_boolean_word` so that a caller
+    // holding a plain VALUE rather than a resolved listing reads the same list —
+    // `cmd_update`'s command-menu reconciliation had reimplemented it as the
+    // literal `true` and silently skipped every installation configured with `1`.
+    //
+    // Read from its new home rather than relaxed: this assertion is the one that
+    // binds the shell's vocabulary to `booleanish`, and an extraction that left it
+    // matching an empty string would have kept passing while checking nothing.
+    const looseReader = /nexa_boolean_word\(\) \{[\s\S]*?\n\}/.exec(lib)?.[0] ?? '';
+    expect(looseReader, 'nexa_boolean_word is not where this test looks for it').toContain(
+      "printf 'on'",
     );
+    expect(reader, 'nexa_listing_boolean no longer delegates its loose arm').toContain(
+      'nexa_boolean_word "$raw"',
+    );
+    const loose = arms(looseReader);
 
     expect(strict.truthy).toEqual(['true']);
     expect(strict.falsy).toEqual(['false']);

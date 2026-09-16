@@ -1102,7 +1102,14 @@ of OQ-TG-01 and the reason it should not stay open indefinitely.
 
 ## OQ-TG-04 — Telegram bootstrap hardening deferred by owner decision
 
-Status: OPEN, DEFERRED. **Not rejected, and not false positives** — every item below
+**Status: RESOLVED in Phase 4I.** All thirteen items were re-verified against the
+4H merge before any of them was touched — a finding written at `22239a6` is
+evidence about `22239a6` — and all thirteen were still real. See
+`docs/phase4i-audit.md` for the re-verification and `docs/phase4i-falsification.md`
+for the evidence. The account below is kept intact because it is what the
+resolution rests on; the closing section records what was done to each item.
+
+The original status line, for the record: OPEN, DEFERRED. **Not rejected, and not false positives** — every item below
 was reported by an independent review of head `22239a6` and is, as far as it was
 examined, real. The owner stopped the review-and-fix loop and deferred them; this
 entry exists so they can be picked up rather than rediscovered.
@@ -1208,6 +1215,41 @@ items individually.
     script-readable contract still reads `none | incomplete | ready`; `unavailable`
     is missing, so automation written from that section rejects a legitimate
     answer exactly when something is disabled.
+
+### How 4I resolved it
+
+The structural fix this entry recommended was done FIRST, and it is what closes
+most of the list: `deploy/install.sh` no longer derives a cause. The `case "$out"`
+classifier is deleted, and three summaries keyed on `telegram_state()` replace
+seven keyed on a grep over output the interactive path does not capture.
+
+Three rather than the two suggested, and the third is what the rule produces
+rather than an exception to it: after item 11 an inactive tenant answers
+`unavailable` with no bot row, and the post-failure state read can fail outright
+and leave the state empty. Neither may produce a sentence about a credential.
+
+| item | what closed it                                                                                                                                                                                                                                                                            |
+| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1    | `getMe` branches the rejection message on `existing`; a FIRST bootstrap is told nothing is stored and a corrected token is the recovery                                                                                                                                                   |
+| 2    | the classifier is gone, so there is nothing left to be unreachable                                                                                                                                                                                                                        |
+| 3    | `refuseRepointing` is told whether the legacy identity fill committed, and stops saying "Nothing was changed." when it did                                                                                                                                                                |
+| 4    | the heredoc is gone; the four secrets codes get four sentences from `bootstrapRemedy`, two of which say key material does not fix them                                                                                                                                                    |
+| 5    | `rethrowAlreadyBound` takes which statement raised it and gives the fill path its own remedy                                                                                                                                                                                              |
+| 6, 7 | `TELEGRAM_BOOTSTRAP_API_BASE_INVALID`; the gateway keys on `telegram.rejected.getme_shape`, which the transport always reported and the adapter discarded. The 0041 preflight stops prescribing what does not remediate, and `docs/deployment.md` documents the condition it is cited for |
+| 8    | `TELEGRAM_BOOTSTRAP_WEBHOOK_REFUSED`, with its own sentence: an unchanged rerun submits the same URL                                                                                                                                                                                      |
+| 9    | `statusWithReason`; the bare state stays on stdout and the cause goes to stderr                                                                                                                                                                                                           |
+| 10   | a SECOND branch for `bot_instances_username_key`, never a wider first one                                                                                                                                                                                                                 |
+| 11   | the scope-level causes are checked before the row lookup, so a stopped tenant with no bot never reaches the prompt that sends a credential to Telegram                                                                                                                                    |
+| 12   | the unreachable message names the OUTBOUND boundary and rules out the two inbound things the webhook summary sent people to                                                                                                                                                               |
+| 13   | all four values documented, and a deploy check reads the list from `BotBootstrapStatus` so a fifth cannot go undocumented                                                                                                                                                                 |
+
+Three contract codes were added, each landing with its producer rather than in a
+contracts-only commit — `check-boundaries.sh` refuses a declared code nothing can
+produce, and argues in the file why: "A code arrives when a path produces it."
+
+`OQ-TG-01` — token rotation — is deliberately NOT resolved here. Several of these
+messages point at it and none of them invents it; removing prose that gestured at
+a rotation is not the same as adding the command.
 
 ## OQ-4C-01 — when an unpaid order and its pending payment expire
 
@@ -1716,7 +1758,11 @@ or whether the webhook turn gains its own bounded retry before acknowledging.
 
 ## OQ-4H-02 — an upgraded installation keeps its old Telegram command menu
 
-**Status: OPEN, and it is a gap in a shipped feature.** Found by the Codex review of
+**Status: RESOLVED in Phase 4I**, by the mechanism this entry itself named. See
+the closing section below; the account is kept because it is the evidence.
+
+The original status line, for the record: OPEN, and it is a gap in a shipped
+feature. Found by the Codex review of
 PR #30 and confirmed against the code.
 
 `registerCommands` runs inside `BotBootstrapService.execute` and nowhere else. A
@@ -1736,3 +1782,32 @@ outbound Telegram call on the readiness path of every process, which is the coup
 **Trigger to resolve:** Phase 4I. Its subject is `OQ-TG-04` — Telegram bootstrap and
 upgrade behaviour — and this is the same surface: what a RERUN reconciles, and what an
 installation that upgrades rather than installs is left holding.
+
+### How 4I resolved it
+
+The mechanism is the one this entry specified, with no deviation: "a command
+REVISION stored beside the bot, so an upgrade re-registers exactly once rather
+than on every boot of every replica".
+
+- `bot_instances.commands_revision` (migration `0059`) holds a digest of the menu
+  Telegram last accepted. NULL means UNKNOWN, never "matches" — the same rule
+  `webhook_secret_fingerprint` states, and every installation that upgrades into
+  this release starts there, so each registers once.
+- The digest is computed by the ADAPTER, from the rendered menu rather than from
+  `BOT_COMMANDS` alone, so a catalogue rewording counts as a change too. It has to
+  be the adapter: rendering needs `@nexa/i18n`, which `check-boundaries.sh`
+  refuses to an application file by name.
+- `execute` reconciles the menu on the ALREADY_COMPLETE path as well, which is
+  the actual gap. `setMyCommands` ran only below that early return, so an
+  installation whose webhook was current never reached it — not even under
+  `botctl telegram register`.
+- `botctl update` now invokes the bootstrap CLI once the release is COMMITTED.
+  Best effort by construction and by placement: everything that can fail the
+  update has already succeeded, and a customer whose client shows no command list
+  types `/help` instead. The CLI's own digest comparison means this is at most one
+  extra Telegram request per release that changes the menu.
+
+The entry's two rejected alternatives stayed rejected. Registering
+unconditionally at startup would put an outbound Telegram call on every process's
+readiness path; a hand-bumped version number is a number somebody forgets to
+increment in exactly the release that changed the list.

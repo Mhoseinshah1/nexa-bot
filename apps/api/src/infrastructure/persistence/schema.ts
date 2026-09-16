@@ -280,6 +280,27 @@ export const botInstances = pgTable(
      * matching.
      */
     webhookSecretFingerprint: text('webhook_secret_fingerprint'),
+    /**
+     * A digest of the command menu Telegram was last given, as hex.
+     *
+     * `OQ-4H-02`: `setMyCommands` ran inside `execute` and nowhere else, and
+     * `execute` returns ALREADY_COMPLETE before reaching it on an installation
+     * whose webhook is current. So an installation that UPGRADES into a release
+     * carrying a new command keeps whatever menu it had — for most, none — and
+     * the discoverability 4H shipped applied to fresh installs only.
+     *
+     * A digest rather than a hand-bumped version number, for the reason
+     * `webhook_secret_fingerprint` above is one: a number somebody has to
+     * remember to increment is a number that will be forgotten in exactly the
+     * release that changed the list. It covers the rendered menu — the commands
+     * AND their descriptions — so a catalogue rewording re-registers too.
+     *
+     * NULL means "unknown", never "matches". A row written before this column
+     * needs one registration to become knowable, and one unnecessary
+     * `setMyCommands` is a far cheaper mistake than a silent claim. It is the
+     * same argument the fingerprint above makes, and the same answer.
+     */
+    commandsRevision: text('commands_revision'),
     status: text('status').notNull().default('ACTIVE'),
     /** Envelope-encrypted. Never returned by any API, never logged. */
     tokenCiphertext: text('token_ciphertext').notNull(),

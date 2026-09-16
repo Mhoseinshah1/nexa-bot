@@ -179,16 +179,59 @@ export class BotBootstrapService {
    * version an installer may act on.
    */
   async status(scope: TenantContext, publicBaseUrl: string): Promise<BotBootstrapStatus> {
+    return (await this.statusWithReason(scope, publicBaseUrl)).state;
+  }
+
+  /**
+   * The state, AND the sentence that says why when the state is `unavailable`.
+   *
+   * `OQ-TG-04` item 9. `unavailableReason` has always computed a cause-specific,
+   * actionable sentence for each of its three causes, and `status` collapsed all
+   * three to one word — so `botctl telegram status` could report that a bot is
+   * held back and not which of three things is holding it, and the
+   * `--skip-telegram` text sent operators there to find out.
+   *
+   * Two returns rather than a second lookup: asking twice would run the
+   * activity read again and could answer about a different moment.
+   *
+   * `reason` is NULL for every other state, including `none` — there is nothing
+   * to explain about an installation that has not been configured yet.
+   */
+  async statusWithReason(
+    scope: TenantContext,
+    publicBaseUrl: string,
+  ): Promise<{ readonly state: BotBootstrapStatus; readonly reason: string | null }> {
+    /*
+     * The two SCOPE-level causes are checked before the row is looked up, and
+     * that ordering is `OQ-TG-04` item 11 rather than tidiness.
+     *
+     * `scopeIsActive` used to be consulted only inside `unavailableReason`,
+     * which was reached only when a bot row EXISTED. So a tenant an operator had
+     * stopped, with no bot yet, answered `none` — the installer prompted for a
+     * bearer credential, sent it to `getMe`, and only THEN did the create
+     * transaction refuse. The token need never have left the host.
+     *
+     * `view.status !== 'ACTIVE'` stays below, because it is a fact about a row
+     * and there is no row here to have one.
+     */
+    const scopeReason = await this.unavailableScopeReason(scope);
+    if (scopeReason !== null) return { state: 'unavailable', reason: scopeReason };
+
     const existing = await this.deps.bots.findBootstrapTarget(scope);
-    if (existing === null) return 'none';
+    if (existing === null) return { state: 'none', reason: null };
     // Not a bootstrap state to converge out of — see `unavailableReason`.
-    if ((await this.unavailableReason(scope, existing)) !== null) return 'unavailable';
+    if (existing.status !== 'ACTIVE') {
+      return { state: 'unavailable', reason: this.botNotActiveReason(existing.status) };
+    }
     // Normalised through the SAME function `execute` uses, so a trailing slash
     // in the configured origin cannot make `status` report `incomplete` for a
     // webhook `execute` would then find already registered — an installer that
     // re-registers on every rerun, discarding queued updates each time.
     const url = this.webhookUrlFor(this.requireOrigin(publicBaseUrl), existing.id);
-    return this.registrationIsCurrent(existing, url) ? 'ready' : 'incomplete';
+    return {
+      state: this.registrationIsCurrent(existing, url) ? 'ready' : 'incomplete',
+      reason: null,
+    };
   }
 
   /**
@@ -221,17 +264,37 @@ export class BotBootstrapService {
     scope: TenantContext,
     view: BotBootstrapView,
   ): Promise<string | null> {
+    const scopeReason = await this.unavailableScopeReason(scope);
+    if (scopeReason !== null) return scopeReason;
+    if (view.status !== 'ACTIVE') return this.botNotActiveReason(view.status);
+    return null;
+  }
+
+  /**
+   * The two causes that are true of the INSTALLATION and the TENANT, not a row.
+   *
+   * Split out so `status` can consult them before it has looked for a bot at
+   * all (`OQ-TG-04` item 11). Both are reads that decide what to report rather
+   * than writes that need holding still, which is why `scopeIsActive` is called
+   * without a transaction here; the transactional checks inside `uow.run` are
+   * untouched and they are the ones that make a write safe.
+   *
+   * This MOVED the precedence, and the move is deliberate rather than a
+   * side-effect of the split. The three causes used to be ordered webhook
+   * route, then bot status, then tenant activity; they are now webhook route,
+   * then tenant activity, then bot status. A tenant that has stopped accepting
+   * work makes its bot's own status moot — starting the bot changes nothing
+   * while the tenant refuses every update — so naming the bot first would send
+   * an operator to fix the thing that is not in the way. `reports the tenant
+   * before the bot when BOTH are in the way` pins it; without that test the two
+   * orders are indistinguishable, which is how this was nearly a silent change.
+   */
+  private async unavailableScopeReason(scope: TenantContext): Promise<string | null> {
     if (!this.deps.webhookEnabled()) {
       return (
         'TELEGRAM_WEBHOOK_ENABLED is false, so this installation does not serve the webhook route ' +
         'at all. Telegram would deliver every update to a 404. Set it to true in nexa.env, ' +
         'restart, and run this again.'
-      );
-    }
-    if (view.status !== 'ACTIVE') {
-      return (
-        `The bot instance for this tenant is ${view.status}, not ACTIVE. The webhook route refuses ` +
-        'every update for a bot that is not active. Start the bot and run this again.'
       );
     }
     if (!(await this.deps.scopeActivity.scopeIsActive(scope))) {
@@ -241,6 +304,13 @@ export class BotBootstrapService {
       );
     }
     return null;
+  }
+
+  private botNotActiveReason(status: BotBootstrapView['status']): string {
+    return (
+      `The bot instance for this tenant is ${status}, not ACTIVE. The webhook route refuses ` +
+      'every update for a bot that is not active. Start the bot and run this again.'
+    );
   }
 
   private registrationIsCurrent(view: BotBootstrapView, url: string): boolean {
@@ -292,7 +362,11 @@ export class BotBootstrapService {
      * a registered webhook that was never registered, arrived at from the other
      * side.
      */
-    const identity = ensured.identity ?? (await this.getMe(scope, view, token));
+    const probed =
+      ensured.identity === null
+        ? await this.getMe(scope, view, token)
+        : { identity: ensured.identity, filledLegacyIdentity: false };
+    const { identity } = probed;
 
     /*
      * The supplied token is compared AGAIN, now that the bot's identity is known.
@@ -309,7 +383,11 @@ export class BotBootstrapService {
      * IS this identity, and on an ordinary reconcile the first comparison has
      * already passed or thrown.
      */
-    this.refuseRepointing({ ...view, telegramBotId: identity.botId }, input.token);
+    this.refuseRepointing(
+      { ...view, telegramBotId: identity.botId },
+      input.token,
+      probed.filledLegacyIdentity,
+    );
 
     /*
      * Already pointed here: register nothing, and say so.
@@ -320,6 +398,22 @@ export class BotBootstrapService {
      * an installer somebody ran to fix something unrelated.
      */
     if (!ensured.createdNow && this.registrationIsCurrent(view, url)) {
+      /*
+       * The menu is reconciled even here, and THIS is `OQ-4H-02`.
+       *
+       * `setMyCommands` used to run only below, after this early return — so an
+       * installation whose webhook is already current never reached it. That is
+       * every installation that UPGRADES rather than installs: `botctl update`
+       * does not invoke this CLI, and even `botctl telegram register` returned
+       * here without registering. The discoverability 4H shipped therefore
+       * applied to fresh installs only.
+       *
+       * Guarded by the stored digest, so it is at most ONE extra Telegram call
+       * per release that changes the menu, not one per rerun. `commandsRevision`
+       * is computed by the adapter from the rendered menu, so a catalogue
+       * rewording counts as a change too.
+       */
+      await this.reconcileCommands(scope, view.id, view.commandsRevision, token);
       return {
         kind: 'ALREADY_COMPLETE',
         botInstanceId: view.id,
@@ -420,50 +514,7 @@ export class BotBootstrapService {
       );
     });
 
-    /*
-     * The command menu, registered after the webhook and never allowed to fail the run.
-     *
-     * `docs/phase4h-audit.md` §9: the bot answered four commands, registered none, and
-     * the greeting named only `/catalog` — so `/wallet` and `/services` were reachable
-     * by guessing alone. `BOT_COMMANDS` is the one list; `/help` renders the same one,
-     * so the menu and the help text cannot drift.
-     *
-     * Deliberately weaker than the webhook above. A webhook that did not register means
-     * updates do not arrive and `status` must keep answering `incomplete`; a command
-     * menu that did not register means a customer types a command instead of tapping
-     * it, and `/help` still answers. Failing the install for the second would send an
-     * operator hunting a problem they do not have.
-     *
-     * WHICH commands and WHETHER to register is this layer's decision; rendering their
-     * descriptions is not, and the boundary check enforces the difference — an
-     * application file may not import `@nexa/i18n`. So the gateway renders from the same
-     * `BOT_COMMANDS` this service counts, and the catalogue stays on the infrastructure
-     * side of the line where every other piece of customer-facing text is resolved.
-     */
-    const registeredMenu = await this.deps.telegram.registerCommands({ token });
-    /*
-     * Recorded as an AUDIT row rather than thrown or logged into the void.
-     *
-     * An operator who later wonders why the menu is empty has somewhere to look, and a
-     * row is what this repository uses for "something happened that a person may care
-     * about but nothing is broken". `result` is the honest field: the run continues
-     * either way.
-     */
-    await this.deps.uow.run(scope, async (tx) =>
-      this.deps.audit.record(
-        scope,
-        this.systemActor(),
-        {
-          action: 'bot.commands.register',
-          entityType: 'BotInstance',
-          entityId: ensured.view.id,
-          before: {},
-          after: { commands: BOT_COMMANDS.length },
-          result: registeredMenu ? 'SUCCESS' : 'FAILED',
-        },
-        tx,
-      ),
-    );
+    await this.reconcileCommands(scope, ensured.view.id, view.commandsRevision, token);
 
     return {
       kind: ensured.createdNow ? 'CREATED' : 'RECONCILED',
@@ -504,7 +555,7 @@ export class BotBootstrapService {
      * token is proved to work and asked WHICH bot it belongs to, and only an
      * answered token is encrypted and stored.
      */
-    const identity = await this.getMe(scope, null, token);
+    const { identity } = await this.getMe(scope, null, token);
 
     const id = this.deps.ids.uuid() as BotInstanceId;
     const now = this.deps.clock.now();
@@ -566,6 +617,7 @@ export class BotBootstrapService {
           webhookRegisteredAt: null,
           webhookUrl: null,
           webhookSecretFingerprint: null,
+          commandsRevision: null,
         },
         createdNow: true,
         identity,
@@ -587,14 +639,131 @@ export class BotBootstrapService {
    * different act from rewriting one that is already set, and the repository
    * enforces the difference in its WHERE clause rather than trusting this.
    */
+  /**
+   * Registers the command menu when it is not already what Telegram has.
+   *
+   * Called from BOTH the reconcile-and-register path and the ALREADY_COMPLETE
+   * early return, which is the whole of `OQ-4H-02`: the second caller is the one
+   * an upgraded installation actually reaches.
+   *
+   * Deliberately weaker than the webhook. A webhook that did not register means
+   * updates do not arrive and `status` must keep answering `incomplete`; a menu
+   * that did not register means a customer types a command instead of tapping it,
+   * and `/help` still answers. Failing an install for the second would send an
+   * operator hunting a problem they do not have — so this returns void, records
+   * an audit row either way, and the digest is written ONLY on success.
+   *
+   * WHICH commands and WHETHER to register is this layer's decision; rendering
+   * their descriptions is not, and `check-boundaries.sh` enforces the difference
+   * by refusing `@nexa/i18n` to an application file. So the adapter renders, and
+   * this compares two opaque strings.
+   */
+  private async reconcileCommands(
+    scope: TenantContext,
+    id: BotInstanceId,
+    stored: string | null,
+    token: string,
+  ): Promise<void> {
+    const revision = this.deps.telegram.commandsRevision();
+    // NULL is "unknown", never "matches" — the same rule the webhook secret
+    // fingerprint states, and for the same reason: one unnecessary call is a
+    // far cheaper mistake than a silent claim.
+    if (stored === revision) return;
+
+    const registered = await this.deps.telegram.registerCommands({ token });
+
+    /*
+     * Recorded as an AUDIT row rather than thrown or logged into the void.
+     *
+     * An operator who later wonders why the menu is empty has somewhere to look,
+     * and a row is what this repository uses for "something happened that a
+     * person may care about but nothing is broken". `result` is the honest field:
+     * the run continues either way.
+     */
+    await this.deps.uow.run(scope, async (tx) => {
+      /*
+       * The lock FIRST, then the activity check, exactly as every other write in
+       * this service does it — and for the reason CLAUDE.md states as a
+       * non-negotiable: "Every write path also reads `ScopeActivityReader`
+       * INSIDE its transaction". `execute` checks activity earlier, but that
+       * check is outside this transaction and a stop can commit in between.
+       *
+       * Found by the self-review of this phase's own diff: the first version of
+       * this method wrote `commands_revision` and an audit row with neither, on
+       * a path that is now reached by every `botctl update` of every
+       * installation. The check being unreachable today (an inactive tenant is
+       * refused before ALREADY_COMPLETE) is not the same as it being unnecessary
+       * — that refusal is one reordering away from moving.
+       *
+       * The shared-lock-then-upgrade deadlock is why the order is this way round
+       * and not the other.
+       */
+      await this.deps.bots.lockTenantForBotChange(scope, tx);
+      await this.requireActiveScope(scope, tx);
+      if (registered) {
+        // Written only on success. A digest stored after a FAILED call would
+        // make the next reconcile skip it, and the menu would stay wrong until
+        // the list changed again.
+        await this.deps.bots.markCommandsRegistered(
+          scope,
+          id,
+          { revision, now: this.deps.clock.now() },
+          tx,
+        );
+      }
+      await this.deps.audit.record(
+        scope,
+        this.systemActor(),
+        {
+          action: 'bot.commands.register',
+          entityType: 'BotInstance',
+          entityId: id,
+          before: { commandsRevision: stored },
+          after: {
+            commandsRevision: registered ? revision : stored,
+            commands: BOT_COMMANDS.length,
+          },
+          result: registered ? 'SUCCESS' : 'FAILED',
+        },
+        tx,
+      );
+    });
+  }
+
   private async getMe(
     scope: TenantContext,
     existing: BotBootstrapView | null,
     token: string,
-  ): Promise<BotIdentity> {
+  ): Promise<{ readonly identity: BotIdentity; readonly filledLegacyIdentity: boolean }> {
     const probe = await this.deps.telegram.identify(token);
 
     if (probe.outcome === 'REJECTED') {
+      /*
+       * TWO messages, because `existing` decides which one is true, and the
+       * single message this replaces was written for only one of them
+       * (`OQ-TG-04` item 1).
+       *
+       * "There is no supported recovery … a newly issued one is not used,
+       * because the registration always reads the credential already stored" is
+       * a statement about a STORED credential. On a FIRST bootstrap there is
+       * none — `getMe` runs before `createFromBootstrap` precisely so a rejected
+       * token writes nothing — and rerunning with a corrected token IS the
+       * recovery. The installer's own nothing-stored summary then advised
+       * exactly that, so the two surfaces contradicted each other.
+       *
+       * `existing` is already a parameter here. The branch costs nothing and the
+       * absence of it cost an operator an afternoon being told their situation
+       * was unrecoverable when it was a typo.
+       */
+      if (existing === null) {
+        throw errors.configuration(
+          PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_TOKEN_REJECTED,
+          `Telegram rejected the bot token: ${probe.detail}. Nothing was stored: the token is ` +
+            'validated with Telegram before anything is written, so there is no credential here ' +
+            'to repair and nothing to undo. Check the token in BotFather and run this again with ' +
+            'a corrected one.',
+        );
+      }
       throw errors.configuration(
         PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_TOKEN_REJECTED,
         `Telegram rejected the bot token: ${probe.detail}. ` +
@@ -606,11 +775,50 @@ export class BotBootstrapService {
           'the credential already stored.',
       );
     }
+    /*
+     * The configured API base answered, and it is not Telegram.
+     *
+     * Checked BEFORE the `!== 'IDENTIFIED'` fallthrough, which would file it as
+     * UNREACHABLE and tell the operator to rerun — and rerunning asks the same
+     * wrong host the same question. A CONFIGURATION error, not an upstream one:
+     * nothing is waiting to come back.
+     *
+     * The message names the variable, because the operator's next action is to
+     * look at it, and says the token is not the problem, because the sentence
+     * this replaces sent them to BotFather (`OQ-TG-04` items 6 and 7).
+     */
+    if (probe.outcome === 'NOT_TELEGRAM') {
+      throw errors.configuration(
+        PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_API_BASE_INVALID,
+        `The configured Telegram API base answered, and what came back does not describe a bot: ${probe.detail}. ` +
+          'TELEGRAM_API_BASE_URL is pointing at something that is not Telegram. The bot token is ' +
+          'not the problem and does not need reissuing in BotFather; correct that variable and run ' +
+          'this again.',
+      );
+    }
     if (probe.outcome !== 'IDENTIFIED') {
+      /*
+       * OUTBOUND, and the message says so because the installer used to guess
+       * inbound (`OQ-TG-04` item 12).
+       *
+       * This is a call FROM this host TO Telegram, made before `setWebhook` is
+       * reached at all. The installer's classifier had no arm for this code, so
+       * the failure fell through to a summary about DNS for the operator's own
+       * domain and a certificate not yet issued — the opposite network boundary,
+       * and an afternoon spent looking at a webhook that was never attempted.
+       *
+       * "Rerun the installer" is kept, because for a timeout or a 5xx that IS
+       * the remedy; what it now says is where to look first if rerunning does
+       * not help.
+       */
       throw new NexaError({
         kind: 'UPSTREAM_UNAVAILABLE',
         code: PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_UNREACHABLE,
-        message: `Telegram could not be reached: ${probe.detail}. Rerun the installer.`,
+        message:
+          `Telegram could not be reached: ${probe.detail}. This is OUTBOUND: a call from this ` +
+          'host to the Telegram API, made before any webhook is registered — so DNS for your own ' +
+          'domain and your certificate are not involved and nothing was asked of them. Rerun the ' +
+          'installer; if it keeps failing, check egress from this host to the Telegram API.',
       });
     }
 
@@ -625,13 +833,28 @@ export class BotBootstrapService {
             'every stored Telegram user and chat attached to a bot that has never spoken to them.',
         );
       }
-      return identity;
+      return { identity, filledLegacyIdentity: false };
     }
 
     if (existing !== null) {
       const now = this.deps.clock.now();
       const actor = this.systemActor();
-      await this.deps.uow.run(scope, async (tx) => {
+      /*
+       * Whether the blank was actually filled, carried out of the closure.
+       *
+       * `refuseRepointing` runs AFTER this and its message used to open "Nothing
+       * was changed." — which on this path is false: the UPDATE and its audit row
+       * are committed by the time the refusal is thrown (`OQ-TG-04` item 3). The
+       * refusal itself is right; only that clause was wrong, and a refusal that
+       * misdescribes the state it leaves behind is the failure this whole phase
+       * is about.
+       *
+       * Read from `recordTelegramIdentity`'s own boolean, never assumed: its
+       * WHERE carries `telegram_bot_id IS NULL` and a concurrent run can fill the
+       * blank first, in which case nothing WAS changed here and the plain message
+       * is the true one.
+       */
+      const filledLegacyIdentity = await this.deps.uow.run(scope, async (tx) => {
         await this.deps.bots.lockTenantForBotChange(scope, tx);
         await this.requireActiveScope(scope, tx);
         /*
@@ -648,7 +871,7 @@ export class BotBootstrapService {
           { telegramBotId: identity.botId, username: identity.username, now },
           tx,
         );
-        if (!filled) return;
+        if (!filled) return false;
         await this.deps.audit.record(
           scope,
           actor,
@@ -664,10 +887,12 @@ export class BotBootstrapService {
           },
           tx,
         );
+        return true;
       });
+      return { identity, filledLegacyIdentity };
     }
 
-    return identity;
+    return { identity, filledLegacyIdentity: false };
   }
 
   /**
@@ -687,38 +912,78 @@ export class BotBootstrapService {
    * neither refused nor applied: the stored credential is used, and the outcome
    * says the run reconciled rather than changed anything.
    */
-  private refuseRepointing(existing: BotBootstrapView, suppliedToken: string | null): void {
+  private refuseRepointing(
+    existing: BotBootstrapView,
+    suppliedToken: string | null,
+    /**
+     * Whether a legacy row's identity was FILLED before this refusal was reached.
+     *
+     * `OQ-TG-04` item 3. On a row that predates migration 0038 the first
+     * `refuseRepointing` returns early — `telegramBotId` is NULL, so it compares
+     * nothing — then `getMe` commits the bot id, the username and an audit row,
+     * and only then does this call have an id to refuse against. "Nothing was
+     * changed." is false at that moment, and a refusal that misdescribes the
+     * state it leaves behind is the defect this phase exists to remove.
+     *
+     * The refusal itself stays: repointing is still forbidden, and the fill is a
+     * legitimate audited migration of a row that predates the column. Only the
+     * clause changes, which is why this is a parameter rather than a reordering
+     * — deriving the id from the stored token before the fill would decrypt a
+     * credential earlier than it needs to be, to buy prose.
+     */
+    filledLegacyIdentity = false,
+  ): void {
     if (suppliedToken === null || existing.telegramBotId === null) return;
     const claimed = suppliedToken.trim().split(':')[0] ?? '';
     if (claimed === '' || claimed === existing.telegramBotId) return;
+    const changed = filledLegacyIdentity
+      ? `This installation's own bot identity was recorded from its stored token first, which is ` +
+        'a one-off migration of a row that predates that column and is in the audit log. Nothing ' +
+        'else was changed, and nothing was repointed.'
+      : 'Nothing was changed.';
     throw errors.configuration(
       PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_DIFFERENT_BOT,
       `The supplied token belongs to bot ${claimed}, and this installation is bound to bot ` +
-        `${existing.telegramBotId}. Nothing was changed. An installer rerun reconciles; it never ` +
+        `${existing.telegramBotId}. ${changed} An installer rerun reconciles; it never ` +
         'repoints an installation at another bot, because every stored Telegram user and chat ' +
         'belongs to the one it already has.',
     );
   }
 
   /**
-   * One code, two kinds, and the split is the remedy rather than tidiness.
+   * Why the registration did not happen, and what that means for the operator.
    *
-   * A timeout or a 5xx is waited out and rerun; a 4xx is Telegram telling the
-   * operator the URL itself is wrong — not https, not resolvable, a port it does
-   * not accept — and no amount of waiting fixes it.
+   * TWO codes and two sentences, and the split is `OQ-TG-04` item 8. This built
+   * ONE `detail` for both outcomes — "rerun the installer to retry the
+   * registration" — and chose only the error KIND from which outcome it was. But
+   * `REFUSED` means Telegram LOOKED AT the URL and would not take it: not https,
+   * a port it does not accept, a name it cannot resolve. An unchanged rerun
+   * submits the same URL and is refused the same way, so the advice was a step
+   * that cannot work, given to the operator in the same words as the step that
+   * does.
+   *
+   * What both halves keep saying is that nothing was undone, because that is
+   * true of both and is the first thing somebody standing at a failed install
+   * wants to know.
    */
   private webhookFailure(outcome: Exclude<WebhookRegistration, { outcome: 'REGISTERED' }>): Error {
-    const detail =
-      `Telegram did not register the webhook: ${outcome.detail}. The bot instance and its ` +
-      'encrypted token are stored and correct; rerun the installer to retry the registration. ' +
-      'It will not ask for the token again.';
+    const intact =
+      'The bot instance and its encrypted token are stored and correct; nothing was undone.';
     if (outcome.outcome === 'REFUSED') {
-      return errors.configuration(PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_WEBHOOK_FAILED, detail);
+      return errors.configuration(
+        PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_WEBHOOK_REFUSED,
+        `Telegram refused the webhook URL: ${outcome.detail}. ${intact} Rerunning submits the ` +
+          'same URL and is refused the same way — the usual causes are a URL that is not https, ' +
+          'a port Telegram does not accept, or a host name it cannot resolve. Correct the public ' +
+          'base URL, or the DNS record behind it, and run this again.',
+      );
     }
     return new NexaError({
       kind: 'UPSTREAM_UNAVAILABLE',
       code: PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_WEBHOOK_FAILED,
-      message: detail,
+      message:
+        `Telegram did not register the webhook: ${outcome.detail}. ${intact} Rerun the installer ` +
+        'to retry the registration; it will not ask for the token again.',
     });
   }
 

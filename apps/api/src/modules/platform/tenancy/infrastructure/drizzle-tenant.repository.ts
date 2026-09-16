@@ -153,6 +153,7 @@ function toBootstrapView(row: BotInstanceRow): BotBootstrapView {
     webhookRegisteredAt: row.webhookRegisteredAt,
     webhookUrl: row.webhookUrl,
     webhookSecretFingerprint: row.webhookSecretFingerprint,
+    commandsRevision: row.commandsRevision,
   };
 }
 
@@ -362,10 +363,25 @@ export class DrizzleBotInstanceRepository implements BotInstanceRepository, BotB
        * Named constraint, not bare 23505. `bot_instances` also has a unique index
        * on `username`, and answering "already bound to another tenant" for that
        * one would be a confident wrong answer — the username index catches a
-       * genuinely different mistake, and it is not this one.
+       * genuinely different mistake, and it is not this one. That one now has its
+       * own branch and its own code; until 4I it had neither, and reached the
+       * operator as a raw 23505.
        */
-      rethrowAlreadyBound(error, input.telegramBotId);
+      rethrowAlreadyBound(error, input.telegramBotId, input.username, 'FRESH_INSERT');
     }
+  }
+
+  async markCommandsRegistered(
+    scope: ScopeContext,
+    id: BotInstanceId,
+    input: { readonly revision: string; readonly now: Date },
+    tx: unknown,
+  ): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    await executorOf(this.db, tx)
+      .update(botInstances)
+      .set({ commandsRevision: input.revision, updatedAt: input.now })
+      .where(and(eq(botInstances.tenantId, tenantId), eq(botInstances.id, id)));
   }
 
   async markWebhookRegistered(
@@ -430,7 +446,7 @@ export class DrizzleBotInstanceRepository implements BotInstanceRepository, BotB
         .returning({ id: botInstances.id });
       return filled.length > 0;
     } catch (error: unknown) {
-      rethrowAlreadyBound(error, input.telegramBotId);
+      rethrowAlreadyBound(error, input.telegramBotId, input.username, 'LEGACY_IDENTITY_FILL');
     }
   }
 }
@@ -443,18 +459,77 @@ export class DrizzleBotInstanceRepository implements BotInstanceRepository, BotB
  * raw 23505. Two copies of one refusal drift, and the copy that drifts is the
  * one nobody reached in testing.
  *
- * Named constraint, not bare 23505: `bot_instances` also has a unique index on
- * `username`, and answering "already bound to another tenant" for that one would
- * be a confident wrong answer about a genuinely different mistake.
+ * TWO named constraints, never a bare 23505, and never one answer for both.
+ * `bot_instances` has a unique index on `username` as well, and answering
+ * "already bound to another tenant" for that one would be a confident wrong
+ * answer about a genuinely different mistake. That argument was here before the
+ * second branch was, and it is still the argument: the branch below exists so the
+ * username violation has its OWN answer, not so this one can be widened to cover
+ * it.
  */
-function rethrowAlreadyBound(error: unknown, telegramBotId: string): never {
+/**
+ * Which statement hit the constraint, because the remedy is not the same.
+ *
+ * `OQ-TG-04` item 5. One code covered two situations and said one thing about
+ * both: "Use a separate bot for this tenant." From the INSERT that is right —
+ * the row rolled back and this tenant has nothing. From the identity fill it is
+ * not: the tenant ALREADY holds a legacy row and an encrypted token for the
+ * duplicated bot, no operation in this release replaces a stored credential
+ * (OQ-TG-01), and reconciliation resolves that same token and hits the same
+ * violation every time. Telling that operator to create a second bot describes
+ * a retry that cannot repair what they have.
+ *
+ * It travels as a PARAMETER rather than being inferred, because only the caller
+ * knows, and a message is the one place a path-dependent remedy may live: the
+ * error CODE is shared, so anything keyed on the code alone — `bootstrapRemedy`
+ * in the CLI, for one — must not try to say this.
+ */
+type BoundCollisionSource = 'FRESH_INSERT' | 'LEGACY_IDENTITY_FILL';
+
+function rethrowAlreadyBound(
+  error: unknown,
+  telegramBotId: string,
+  username: string,
+  source: BoundCollisionSource,
+): never {
   if (isUniqueViolation(error, 'bot_instances_telegram_bot_id_key')) {
+    const remedy =
+      source === 'FRESH_INSERT'
+        ? 'Nothing was changed. Use a separate bot for this tenant.'
+        : 'Nothing was changed. This tenant already has a bot row holding an encrypted token for ' +
+          'that same bot, from before its identity was recorded — so creating a second bot in ' +
+          'BotFather does not resolve it, because this release has no operation that replaces a ' +
+          'stored token (docs/open-questions.md, OQ-TG-01). Decide which tenant keeps this bot ' +
+          'before running this again.';
     throw errors.conflict(
       PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_BOT_ALREADY_BOUND,
       `Telegram bot ${telegramBotId} is already configured for another tenant on this ` +
         "installation, and Telegram delivers a bot's updates to one webhook only — binding it " +
-        'here would silently stop the other tenant receiving anything. Nothing was changed. Use ' +
-        'a separate bot for this tenant.',
+        `here would silently stop the other tenant receiving anything. ${remedy}`,
+    );
+  }
+  /*
+   * The SECOND constraint, which had no translation and reached the operator as
+   * a raw 23505 (`OQ-TG-04` item 10).
+   *
+   * A second branch and not a wider first one. The comment above this function
+   * is right that answering "already bound to another tenant" here would be a
+   * confident wrong answer, and widening the match is exactly how that would
+   * happen: the realistic cause is a rename in BotFather that left a stale copy
+   * on a row nobody reconciled, not one bot bound twice.
+   *
+   * Still `conflict`, because that is what it is, and the message says which row
+   * to look at rather than prescribing a fix — deciding which of two rows keeps
+   * a name is not a decision this layer may take.
+   */
+  if (isUniqueViolation(error, 'bot_instances_username_key')) {
+    throw errors.conflict(
+      PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_USERNAME_TAKEN,
+      `The username @${username} is already stored against another bot instance on this ` +
+        'installation. That is not the same as the bot being bound twice: a username is changed ' +
+        'in BotFather at will and the stored copy goes stale the moment it is, so the usual ' +
+        `cause is a rename nobody reconciled. Nothing was changed. Bot ${telegramBotId} is the ` +
+        'one this run was configuring; the row still holding the name is the one to look at.',
     );
   }
   throw error;

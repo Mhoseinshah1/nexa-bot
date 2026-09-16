@@ -153,9 +153,9 @@ export const PLATFORM_ERROR_CODES = {
   TELEGRAM_BAD_SECRET_TOKEN: 'telegram.bad_secret_token',
 
   /*
-   * The fresh-install bot bootstrap. Four codes, and the split is the point:
+   * The fresh-install bot bootstrap. SEVEN codes, and the split is the point:
    * each one has a DIFFERENT remedy, and collapsing them would tell an operator
-   * standing at a half-finished install to try the same thing four times.
+   * standing at a half-finished install to try the same thing seven times.
    */
 
   /**
@@ -208,13 +208,66 @@ export const PLATFORM_ERROR_CODES = {
   TELEGRAM_BOOTSTRAP_BOT_ALREADY_BOUND: 'telegram.bootstrap_bot_already_bound',
 
   /**
+   * Another bot instance on this installation still stores that username.
+   *
+   * Its own code rather than a widening of the one above, and
+   * `rethrowAlreadyBound` argued this before the code existed: answering
+   * "already bound to another tenant" for a username collision "would be a
+   * confident wrong answer about a genuinely different mistake".
+   *
+   * It IS a different mistake. `bot_instances_username_key` is not the identity
+   * — a username is changed in BotFather at will and the stored copy goes stale
+   * the moment it is — so this fires when a bot takes a name another row is
+   * still holding, which is usually a rename nobody reconciled rather than one
+   * bot bound twice. Until now it had no translation at all and surfaced as a
+   * raw PostgreSQL 23505 (`OQ-TG-04` item 10).
+   */
+  TELEGRAM_BOOTSTRAP_USERNAME_TAKEN: 'telegram.bootstrap_username_taken',
+
+  /**
+   * The configured Telegram API base answered, and what came back is not a bot.
+   *
+   * The shape a wrong `TELEGRAM_API_BASE_URL` produces: a 2xx that parsed and does
+   * not carry a numeric id and a username. `telegramGetMe` has always separated it
+   * — `telegram.rejected.getme_shape` rather than `telegram.rejected.401` — and the
+   * bootstrap gateway collapsed both into one rejection, so the operator was told
+   * Telegram had refused their token and sent to BotFather to reissue a credential
+   * that is fine (`OQ-TG-04` items 6 and 7).
+   *
+   * Distinct from `TELEGRAM_BOOTSTRAP_TOKEN_REJECTED` for the reason that code's
+   * own docblock gives about `_UNREACHABLE`: a configuration change and a new
+   * credential are not interchangeable remedies, and guessing between them is how
+   * an install stalls for an afternoon.
+   */
+  TELEGRAM_BOOTSTRAP_API_BASE_INVALID: 'telegram.bootstrap_api_base_invalid',
+
+  /**
    * The webhook could not be registered, though the bot instance is written.
    *
    * The one outcome that is deliberately NOT fatal to an install: DNS that has
    * not propagated and a certificate not yet issued both land here, and both are
    * fixed by waiting and rerunning rather than by undoing anything.
+   *
+   * TRANSIENT ONLY, which is what the code below exists to make true. It used to
+   * carry both halves of `WebhookRegistration`, so a URL Telegram had LOOKED AT
+   * and refused shared this code — and its one sentence, "rerun the installer to
+   * retry the registration" — with the case that waiting actually fixes.
    */
   TELEGRAM_BOOTSTRAP_WEBHOOK_FAILED: 'telegram.bootstrap_webhook_failed',
+
+  /**
+   * Telegram looked at the webhook URL and refused it.
+   *
+   * Not https, a port it does not accept, a name it cannot resolve. An unchanged
+   * rerun submits the same URL and is refused identically, which is why this is
+   * not `_WEBHOOK_FAILED` (`OQ-TG-04` item 8): one remedy is to wait and the
+   * other is to change something, and an operator cannot tell which they have
+   * from a code that means both.
+   *
+   * Nothing is undone by it either. The bot instance and its encrypted token are
+   * stored and correct; what is wrong is the URL they were registered against.
+   */
+  TELEGRAM_BOOTSTRAP_WEBHOOK_REFUSED: 'telegram.bootstrap_webhook_refused',
 
   /**
    * A backup archive failed authenticated decryption. ONE code, as above.

@@ -5200,11 +5200,17 @@ assert_contains 'the retry state after a first-attempt failure was not none' \
 # retry is the installer rather than a command that cannot create a first row.
 telegram_nothing_summary="$(sed -n '/INCOMPLETE_NOTHING_STORED$/,/^INCOMPLETE_NOTHING_STORED$/p' "${REPO}/deploy/install.sh")"
 assert_contains 'the summary does not distinguish a failure that stored nothing' \
-  "$telegram_nothing_summary" 'The token was NOT stored'
-assert_contains 'the nothing-stored summary does not name the installer retry' \
+  "$telegram_nothing_summary" 'Nothing was stored'
+assert_contains 'the nothing-stored summary does not point at the error above' \
+  "$telegram_nothing_summary" 'the error printed above this summary'
+# `OQ-TG-04` item 2. "Rerun with a token source" is itself a cause-derived
+# remedy, and it is false for an already-bound refusal — whose rolled-back insert
+# leaves the state `none` too, so that rerun refuses identically for ever. This
+# summary states what is stored and stops.
+assert_not_contains 'the nothing-stored summary still prescribes an installer rerun' \
   "$telegram_nothing_summary" '--bot-token-file'
-assert_contains 'the nothing-stored summary does not say why botctl cannot finish it' \
-  "$telegram_nothing_summary" 'supplies no token by design'
+assert_not_contains 'the nothing-stored summary still prescribes a botctl command' \
+  "$telegram_nothing_summary" 'botctl telegram register'
 
 test_case 'an unreadable Telegram state is refused rather than guessed'
 # Both readings are wrong in a way the operator pays for: treating it as `none`
@@ -5318,56 +5324,184 @@ assert_contains 'the supplied token never reached the CLI in the unavailable sta
 # it makes it.
 assert_contains 'an unavailable bot was not given its own retry state' \
   "$telegram_stopped" 'RETRY=unavailable'
-telegram_unavailable_summary="$(sed -n '/INCOMPLETE_UNAVAILABLE$/,/^INCOMPLETE_UNAVAILABLE$/p' "${REPO}/deploy/install.sh")"
-assert_contains 'the unavailable summary does not say the webhook is not the outstanding work' \
-  "$telegram_unavailable_summary" 'NOT the webhook'
+# `unavailable` now reaches the summary that claims NOTHING about a stored
+# credential, because after `OQ-TG-04` item 11 an inactive tenant answers
+# `unavailable` with no bot row at all — so "a token is stored" stopped being
+# provable in this state. What is outstanding comes from the CLI's own error and
+# from `botctl telegram status`, which prints the reason on stderr.
+telegram_unproven_summary="$(sed -n '/INCOMPLETE_UNPROVEN$/,/^INCOMPLETE_UNPROVEN$/p' "${REPO}/deploy/install.sh")"
+assert_contains 'the unproven summary does not admit what it cannot prove' \
+  "$telegram_unproven_summary" 'cannot prove it either way'
+assert_not_contains 'the unproven summary claims a token is stored' \
+  "$telegram_unproven_summary" 'token IS stored'
 
-test_case 'a revoked stored token is not reported as a registration to retry'
-# The two summaries were not exhaustive, and the state alone cannot make them
-# so: `ready` and `incomplete` are equally true of a webhook that was never
-# registered and of a stored token Telegram has since refused. The old branch
-# sent the second case to `botctl telegram register`, which reads the same
-# stored token and fails identically.
-telegram_revoked="$(bash -c '
-  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
-  telegram_state() { printf "ready"; }
-  nexa_compose() { printf "telegram.bootstrap_token_rejected: Telegram refused it.\n"; return 1; }
-  configure_telegram_bot 2>&1
-  printf "INCOMPLETE=%s RETRY=%s\n" "$TELEGRAM_INCOMPLETE" "$TELEGRAM_RETRY"
-' _ "${REPO}/deploy/install.sh" || printf 'THE_STEP_DIED')"
-assert_not_contains 'a revoked token aborted the install' "$telegram_revoked" 'THE_STEP_DIED'
-assert_contains 'a revoked stored token was not distinguished from a webhook failure' \
-  "$telegram_revoked" 'RETRY=token-rejected'
-# The CLI's own output still reaches the operator: capturing it to classify the
-# failure must not be the same as swallowing it.
-assert_contains 'the CLI output was swallowed by the capture' \
-  "$telegram_revoked" 'telegram.bootstrap_token_rejected'
-telegram_revoked_summary="$(sed -n '/INCOMPLETE_TOKEN_REJECTED$/,/^INCOMPLETE_TOKEN_REJECTED$/p' "${REPO}/deploy/install.sh")"
-assert_contains 'the revoked-token summary does not refuse the retry that cannot work' \
-  "$telegram_revoked_summary" 'NOT'
-assert_contains 'the revoked-token summary does not name the open question' \
-  "$telegram_revoked_summary" 'OQ-TG-01'
+test_case 'a completed update reconciles the Telegram command menu'
+# `OQ-4H-02`. `setMyCommands` runs inside the bootstrap CLI and nowhere else, and
+# `botctl update` did not invoke it — so an installation that UPGRADED into a
+# release adding a command kept whatever menu it had until somebody happened to
+# run `botctl telegram register`.
+update_body="$(sed -n '/^cmd_update() {/,/^}/p' "${REPO}/deploy/bin/botctl")"
+assert_ok 'the cmd_update body could not be read; this check is vacuous' test -n "$update_body"
+# COMMENTS STRIPPED, and the CALL asserted with its argument.
+#
+# Searching the whole body for the function's NAME is a check that cannot fail:
+# the comment above the call names it too, so deleting the call leaves the
+# assertion passing on prose. That is not hypothetical — it is how the first
+# version of this pair let F4I-21 survive its mutation with 267 checks green.
+update_code="$(printf '%s\n' "$update_body" | grep -vE '^[[:space:]]*#')"
+assert_contains 'a completed update does not reconcile the command menu' \
+  "$update_code" 'telegram_reconcile_menu "${target}"'
+# AFTER the release is committed, never before. Everything that can fail the
+# update has already succeeded by then, and a menu is not a reason to fail a
+# healthy committed release.
+update_tail="${update_code#*nexa_prune_releases}"
+assert_contains 'the menu reconcile does not run after the release is committed' \
+  "$update_tail" 'telegram_reconcile_menu "${target}"'
+# And it cannot fail the update: the failure branch warns rather than dying.
+assert_not_contains 'a failed menu reconcile kills a completed update' \
+  "$update_tail" 'nexa_die'
+# The invocation itself moved into `telegram_reconcile_menu` when `rollback`
+# needed the same thing, so the rules about WHAT it does are asserted against
+# that body rather than against this one.
+reconcile_body="$(sed -n '/^telegram_reconcile_menu() {/,/^}/p' "${REPO}/deploy/bin/botctl")"
+assert_ok 'the reconcile body could not be read; this check is vacuous' \
+  test -n "$reconcile_body"
+assert_contains 'the reconcile does not invoke the bootstrap CLI' \
+  "$reconcile_body" 'dist/bootstrap-bot.cli.js'
+assert_not_contains 'a failed menu reconcile kills its caller' "$reconcile_body" 'nexa_die'
+assert_contains 'a failed menu reconcile says nothing to the operator' \
+  "$reconcile_body" "run 'botctl telegram register'"
 
-test_case 'an already-bound refusal is classified even though nothing was stored'
-# The `none`-outranks-the-code rule, and the one case it got wrong. An
-# already-bound refusal rolls its insert back, so the state after it is
-# NECESSARILY `none` — and the nothing-stored summary then told the operator
-# their token was rejected or Telegram unreachable, and to rerun with a token
-# source, which would refuse identically for ever.
-telegram_bound="$(bash -c '
-  . "$1" --domain admin.example.test --acme-email ops@example.test --bot-token-file "$2" >/dev/null 2>&1
-  telegram_state() { printf "none"; }
-  nexa_compose() { printf "telegram.bootstrap_bot_already_bound: bot 8123456789 is taken.\n"; return 1; }
-  configure_telegram_bot 2>&1
-  printf "RETRY=%s\n" "$TELEGRAM_RETRY"
-' _ "${REPO}/deploy/install.sh" "${NEXA_ROOT}/unavailable-token" || printf 'THE_STEP_DIED')"
-assert_contains 'an already-bound refusal was reported as nothing-stored' \
-  "$telegram_bound" 'RETRY=already-bound'
-telegram_bound_summary="$(sed -n '/INCOMPLETE_ALREADY_BOUND$/,/^INCOMPLETE_ALREADY_BOUND$/p' "${REPO}/deploy/install.sh")"
-assert_contains 'the already-bound summary does not say a second bot is needed' \
-  "$telegram_bound_summary" 'Create a second bot'
-assert_contains 'the already-bound summary does not say the other tenant is untouched' \
-  "$telegram_bound_summary" 'untouched'
+test_case 'the booleanish vocabulary botctl reads is the one the schema accepts'
+# Read from `config.schema.ts` rather than restated here. A list copied into a
+# test is a list that agrees with the copy rather than with the schema, and this
+# check exists BECAUSE a copied vocabulary was already wrong once: the command
+# menu reconciliation compared against the literal `true`, so an installation
+# configured with `1` — which `booleanish` accepts and the API boots on — skipped
+# the reconciliation on every update, silently. Found by the Codex review of
+# PR 31.
+schema_booleanish="$(sed -n "/^const booleanish = z$/,/;/p" "${REPO}/apps/api/src/infrastructure/config/config.schema.ts")"
+assert_ok 'the booleanish schema could not be read; this check is vacuous' \
+  test -n "$schema_booleanish"
+# Every spelling the enum lists, in the order it lists them, classified by the
+# shell helper both botctl readers now share.
+# `[^]]*` rather than `.*`: sed is greedy and has no lazy quantifier, so `.*`
+# ran to the LAST bracket on the line and carried `])` into the final value.
+booleanish_values="$(printf '%s' "$schema_booleanish" | sed -n "s/.*z\.enum(\[\([^]]*\)\]).*/\1/p" | tr -d "' " | tr ',' ' ')"
+assert_ok 'no booleanish values were parsed; this check is vacuous' \
+  test -n "$booleanish_values"
+for value in $booleanish_values; do
+  assert_ok "nexa_boolean_word calls ${value} invalid, and the schema accepts it" \
+    test "$(nexa_boolean_word "$value")" != invalid
+done
+# And the other side, so the loop above cannot pass on a function that says `on`
+# to everything: a spelling the schema REFUSES must not be classified either.
+assert_equals 'nexa_boolean_word accepted a spelling the schema refuses' \
+  invalid "$(nexa_boolean_word 'TRUE')"
+assert_equals 'nexa_boolean_word accepted an empty value' invalid "$(nexa_boolean_word '')"
+
+test_case 'the command menu is reconciled only where there is a menu to reconcile'
+# Drives the real `telegram_reconcile_menu` with its three seams stubbed: what
+# nexa.env says about the webhook, what the CLI answers for `--status`, and what
+# the register invocation does. `main` is never reached, so the function is
+# exercised rather than the whole command.
+reconcile_calls_for() {
+  bash -c '
+    ENABLED="$2"; STATE="$3"; CALLS="$4"
+    # shellcheck source=/dev/null
+    . "$5"
+    eval "$(sed -n "/^telegram_reconcile_menu() {/,/^}/p" "$1")"
+    nexa_env_value() { printf "%s" "$ENABLED"; }
+    telegram_origin() { printf "https://admin.example.test"; }
+    nexa_ok() { printf "OK %s\n" "$*"; }
+    nexa_warn() { printf "WARN %s\n" "$*"; }
+    nexa_compose() {
+      printf "%s\n" "$*" >>"$CALLS"
+      case "$*" in *--status*) printf "%s\n" "$STATE" ;; esac
+      return 0
+    }
+    telegram_reconcile_menu "v9.9.9"
+  ' _ "$BOTCTL" "$1" "$2" "$3" "$NEXA_LIB"
+}
+
+: >"${NEXA_ROOT}/menu-ready-calls"
+menu_ready_out="$(reconcile_calls_for '1' 'ready' "${NEXA_ROOT}/menu-ready-calls")"
+menu_ready_calls="$(cat "${NEXA_ROOT}/menu-ready-calls")"
+# `1`, not `true`. This is the spelling the old comparison dropped.
+assert_contains 'a webhook enabled with 1 did not reconcile the menu' \
+  "$menu_ready_calls" 'dist/bootstrap-bot.cli.js --public-base-url'
+# It asks FIRST and registers second, so a state that cannot be reconciled never
+# reaches the CLI at all.
+assert_contains 'the state was not read before the CLI was invoked' \
+  "$menu_ready_calls" '--status'
+# What it says. It can prove the release was asked; it cannot prove the menu
+# matches, because a rollback targets an image that may have no reconciliation to
+# perform and exits 0 regardless.
+assert_contains 'the reconcile reported nothing at all' "$menu_ready_out" 'OK '
+assert_not_contains 'the reconcile claimed the menu IS the release menu' \
+  "$menu_ready_out" 'command menu is v9.9.9'
+
+: >"${NEXA_ROOT}/menu-yes-calls"
+reconcile_calls_for 'yes' 'ready' "${NEXA_ROOT}/menu-yes-calls" >/dev/null
+assert_contains 'a webhook enabled with yes did not reconcile the menu' \
+  "$(cat "${NEXA_ROOT}/menu-yes-calls")" 'dist/bootstrap-bot.cli.js --public-base-url'
+
+: >"${NEXA_ROOT}/menu-none-calls"
+menu_none_out="$(reconcile_calls_for 'true' 'none' "${NEXA_ROOT}/menu-none-calls")"
+menu_none_calls="$(cat "${NEXA_ROOT}/menu-none-calls")"
+# An installation that took `--skip-telegram` has no bot row. Invoking the CLI
+# here reached `promptForToken`, which refuses without a terminal — and the
+# refusal went to /dev/null, after which this printed "run
+# 'botctl telegram register'": a command that fails in exactly the same way for
+# exactly the same reason. Telling an operator to run a command that cannot work
+# is the defect `OQ-TG-04` item 2 generalises.
+assert_contains 'the state was not read at all in the none state' "$menu_none_calls" '--status'
+assert_not_contains 'a bot-less installation was sent to the bootstrap CLI' \
+  "$menu_none_calls" '--public-base-url "https://admin.example.test"
+'
+assert_equals 'a bot-less installation produced more than the status call' \
+  1 "$(printf '%s\n' "$menu_none_calls" | grep -c 'bootstrap-bot.cli.js')"
+assert_equals 'a bot-less installation was reported as a failure' '' "$menu_none_out"
+
+: >"${NEXA_ROOT}/menu-unavailable-calls"
+reconcile_calls_for '1' 'unavailable' "${NEXA_ROOT}/menu-unavailable-calls" >/dev/null
+assert_equals 'a stopped tenant produced more than the status call' \
+  1 "$(grep -c 'bootstrap-bot.cli.js' "${NEXA_ROOT}/menu-unavailable-calls")"
+
+: >"${NEXA_ROOT}/menu-off-calls"
+reconcile_calls_for 'false' 'ready' "${NEXA_ROOT}/menu-off-calls" >/dev/null
+assert_equals 'a disabled webhook called the CLI' \
+  0 "$(grep -c 'bootstrap-bot.cli.js' "${NEXA_ROOT}/menu-off-calls")"
+
+test_case 'a rollback reconciles the command menu too'
+# 4I gave `update` the reconciliation and left `rollback` without it, so a release
+# that adds or renames a command and is then rolled back left Telegram
+# advertising commands the running release no longer has. Found by the Codex
+# review of PR 31.
+rollback_body="$(sed -n '/^cmd_rollback() {/,/^}/p' "${REPO}/deploy/bin/botctl")"
+assert_ok 'the cmd_rollback body could not be read; this check is vacuous' \
+  test -n "$rollback_body"
+# Comments stripped, for the reason the update side gives at length: the comment
+# above this call explains why it reports what it reports, and NAMES the
+# function while doing so. Asserting on the name alone passed with the call
+# deleted.
+rollback_code="$(printf '%s\n' "$rollback_body" | grep -vE '^[[:space:]]*#')"
+assert_contains 'a completed rollback does not reconcile the command menu' \
+  "$rollback_code" 'telegram_reconcile_menu "${previous}"'
+# LAST, after the three lines that report the rollback itself — those describe
+# what happened, and this describes something afterwards that cannot fail it.
+rollback_tail="${rollback_code#*the database was not touched}"
+assert_contains 'the menu reconcile does not run after the rollback is reported' \
+  "$rollback_tail" 'telegram_reconcile_menu "${previous}"'
+assert_not_contains 'a failed menu reconcile kills a completed rollback' \
+  "$rollback_tail" 'nexa_die'
+
+# No token, ever, from this path: it reconciles from the stored credential.
+# Asserted against the body that HOLDS the invocation. Left pointing at
+# `$update_tail` it would have passed on the absence of any CLI call at all,
+# which is a check that cannot fail.
+assert_not_contains 'the reconcile passes a token to the bootstrap CLI' \
+  "$reconcile_body" '--bot-token'
 
 test_case 'a first install with no terminal and no token records its release'
 # `nexa_die` here exited before the manifest and the `current` pointer were
@@ -5375,6 +5509,9 @@ test_case 'a first install with no terminal and no token records its release'
 # — the failure the owner step records from a real staging host. ADR-0029
 # decision 4 already says what to do instead: finish recording the release,
 # report INCOMPLETE, exit non-zero.
+#
+# Untouched by the 4I collapse, which changes only which SUMMARY is printed
+# afterwards. Cited by `docs/telegram-bootstrap-falsification.md` row F7.
 telegram_no_tty="$(bash -c '
   . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
   telegram_state() { printf "none"; }
@@ -5386,73 +5523,106 @@ assert_not_contains 'a missing token killed the install before the manifest' \
   "$telegram_no_tty" 'THE_STEP_DIED'
 assert_contains 'a missing token did not mark the install incomplete' \
   "$telegram_no_tty" 'INCOMPLETE=yes'
-assert_contains 'a missing token did not reach the nothing-stored summary' \
-  "$telegram_no_tty" 'RETRY=none'
 # And it did not silently run the CLI without a way to read a token.
 assert_not_contains 'the CLI was invoked with no token source and no terminal' \
   "$telegram_no_tty" 'SHOULD_NOT_RUN'
 
-test_case 'a stored token that cannot be DECRYPTED is not a webhook retry either'
-# The round that made this five summaries was not exhaustive either. `execute`
-# resolves the credential before it calls anything, so a missing key, a key id
-# that no longer matches, or v1 acceptance having been turned off fails BEFORE
-# Telegram is reached — and the first classifier knew only the two Telegram
-# codes, so every one of those fell through to the webhook summary and was told
-# to run a command that reads the same unreadable ciphertext.
-telegram_unreadable="$(bash -c '
-  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
-  telegram_state() { printf "incomplete"; }
-  nexa_compose() { printf "platform.secret_key_unknown: no key with that id.\n"; return 1; }
-  configure_telegram_bot 2>&1
-  printf "RETRY=%s\n" "$TELEGRAM_RETRY"
-' _ "${REPO}/deploy/install.sh" || printf 'THE_STEP_DIED')"
-assert_contains 'a decryption failure was not distinguished from a webhook failure' \
-  "$telegram_unreadable" 'RETRY=token-unreadable'
-telegram_unreadable_summary="$(sed -n '/INCOMPLETE_TOKEN_UNREADABLE$/,/^INCOMPLETE_TOKEN_UNREADABLE$/p' "${REPO}/deploy/install.sh")"
-assert_contains 'the unreadable-token summary does not say it is a secrets problem' \
-  "$telegram_unreadable_summary" 'SECRETS problem'
-# It must not promise ONE repair for four codes. `secret_auth_failed` is
-# corruption or a value moved between rows, and `secret_key_id_mismatch` is
-# contradictory metadata — restoring key material fixes neither, and the first
-# version of this summary said it would.
-assert_contains 'the unreadable-token summary does not name the concrete codes' \
-  "$telegram_unreadable_summary" 'platform.secret_key_id_mismatch'
-assert_contains 'the unreadable-token summary still promises one key-shaped repair' \
-  "$telegram_unreadable_summary" 'not recoverable by restoring key material'
-assert_contains 'the unreadable-token summary does not name the secrets command' \
-  "$telegram_unreadable_summary" 'botctl secrets'
-# And it must NOT send them to BotFather: the token is fine and reissuing it
-# would be the one action that makes this unrecoverable.
-assert_not_contains 'the unreadable-token summary sends the operator to BotFather' \
-  "$telegram_unreadable_summary" 'BotFather having'
+test_case 'the CLI error reaches the operator, whatever the state'
+# The classifier is gone (`OQ-TG-04`), so what has to hold is the other half:
+# capturing the CLI's output to PRINT it must never be the same as swallowing it.
+# That output is now the only thing carrying the cause, so every one of these
+# failures is only as visible as this line makes it.
+for cli_error in \
+  'telegram.bootstrap_token_rejected: Telegram refused it.' \
+  'telegram.bootstrap_bot_already_bound: bot 8123456789 is taken.' \
+  'telegram.bootstrap_different_bot: belongs to bot 999.' \
+  'telegram.bootstrap_unreachable: ETIMEDOUT.' \
+  'platform.secret_key_unknown: no key with that id.'; do
+  # `CLI_ERROR` is captured BEFORE the function is defined, for the reason the
+  # READY-rerun case above already records: inside a function `$2` is that
+  # function's own second argument, not the script's.
+  telegram_relay="$(bash -c '
+    CLI_ERROR="$2"
+    . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+    telegram_state() { printf "incomplete"; }
+    nexa_compose() { printf "%s\n" "$CLI_ERROR"; return 1; }
+    configure_telegram_bot 2>&1
+  ' _ "${REPO}/deploy/install.sh" "$cli_error" || printf 'THE_STEP_DIED')"
+  assert_not_contains "a CLI failure aborted the install (${cli_error%%:*})" \
+    "$telegram_relay" 'THE_STEP_DIED'
+  assert_contains "the CLI error was swallowed (${cli_error%%:*})" \
+    "$telegram_relay" "${cli_error%%:*}"
+done
 
-test_case 'the revoked-token summary does not invent a rotation this release cannot do'
-# The summary added for a revoked token told the operator to reissue in BotFather
-# and rerun this installer. That cannot work and the sentence above it said so:
-# `execute` always registers with the credential already in the row, and a
-# supplied token is read only to REFUSE one naming a different bot. A remedy that
-# cannot work is the exact failure this whole step exists to avoid, arrived at
-# from the inside.
-telegram_revoked_summary_2="$(sed -n '/INCOMPLETE_TOKEN_REJECTED$/,/^INCOMPLETE_TOKEN_REJECTED$/p' "${REPO}/deploy/install.sh")"
-assert_contains 'the revoked-token summary does not say a rerun cannot replace the token' \
-  "$telegram_revoked_summary_2" 'rerunning this installer with a'
-assert_not_contains 'the revoked-token summary still calls a rerun the supported route' \
-  "$telegram_revoked_summary_2" 'is the supported
-route'
+test_case 'the summary is chosen by the state alone, never by the CLI output'
+# The rule the collapse installs, asserted as behaviour rather than as prose.
+# The SAME state with five different CLI errors must produce the SAME summary:
+# the installer cannot see which failure it was, and the six summaries it used to
+# choose between are what `OQ-TG-04` records nine false sentences from.
+# The summaries live in `main`, after the release manifest is written — which is
+# ADR-0029 decision 4 and is why a failed Telegram step still records a release.
+# So this drives the BLOCK rather than the step: the state and the captured error
+# are the two inputs, and the `state` line of whichever summary is chosen is the
+# output.
+telegram_summary_for() {
+  bash -c '
+    CLI_ERROR="$2"
+    CLI_STATE="$3"
+    . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+    telegram_state() { printf "%s" "$CLI_STATE"; }
+    nexa_compose() { printf "%s\n" "$CLI_ERROR"; return 1; }
+    configure_telegram_bot >/dev/null 2>&1
+    VERSION="v0.0.0-test"
+    DOMAIN="admin.example.test"
+    if [ -n "$TELEGRAM_INCOMPLETE" ]; then
+      TELEGRAM_RETRY="$(telegram_state)"
+      telegram_incomplete_summary 2>&1 | grep -F "  state "
+    fi
+  ' _ "${REPO}/deploy/install.sh" "$1" "$2"
+}
+summary_a="$(telegram_summary_for 'telegram.bootstrap_token_rejected: no.' 'incomplete')"
+summary_b="$(telegram_summary_for 'platform.secret_key_unknown: no key.' 'incomplete')"
+summary_c="$(telegram_summary_for 'telegram.bootstrap_unreachable: nope.' 'incomplete')"
+assert_ok 'the state line could not be read; this check is vacuous' test -n "$summary_a"
+assert_equals 'a different CLI error changed the summary for one state' "$summary_a" "$summary_b"
+assert_equals 'a different CLI error changed the summary for one state' "$summary_a" "$summary_c"
+# And a DIFFERENT state does change it, or the check above would pass on a
+# constant.
+summary_none="$(telegram_summary_for 'telegram.bootstrap_token_rejected: no.' 'none')"
+assert_ok 'the summary did not change with the state' test "$summary_a" != "$summary_none"
 
-test_case 'a token naming another bot is reported as that, not as a failed install'
-telegram_other_bot="$(bash -c '
-  . "$1" --domain admin.example.test --acme-email ops@example.test --bot-token-file "$2" >/dev/null 2>&1
-  telegram_state() { printf "ready"; }
-  nexa_compose() { printf "telegram.bootstrap_different_bot: belongs to bot 999.\n"; return 1; }
-  configure_telegram_bot 2>&1
-  printf "INCOMPLETE=%s RETRY=%s\n" "$TELEGRAM_INCOMPLETE" "$TELEGRAM_RETRY"
-' _ "${REPO}/deploy/install.sh" "${NEXA_ROOT}/unavailable-token" || printf 'THE_STEP_DIED')"
-assert_contains 'a different-bot refusal was not distinguished' \
-  "$telegram_other_bot" 'RETRY=different-bot'
-telegram_other_summary="$(sed -n '/INCOMPLETE_DIFFERENT_BOT$/,/^INCOMPLETE_DIFFERENT_BOT$/p' "${REPO}/deploy/install.sh")"
-assert_contains 'the different-bot summary does not say nothing was changed' \
-  "$telegram_other_summary" 'Nothing was changed'
+test_case 'the token-stored summary names no cause it cannot see'
+telegram_stored_summary="$(sed -n '/INCOMPLETE_TOKEN_STORED$/,/^INCOMPLETE_TOKEN_STORED$/p' "${REPO}/deploy/install.sh")"
+assert_contains 'the token-stored summary does not say the token was not changed' \
+  "$telegram_stored_summary" 'was not changed by this run'
+assert_contains 'the token-stored summary does not point at the error above' \
+  "$telegram_stored_summary" 'the error printed above this summary'
+# Every one of these was a cause-specific remedy in one of the six deleted
+# heredocs, and each was false in at least one state reachable with it. The CLI
+# says them now, where the cause is known: `bootstrapRemedy` carries the secrets
+# ones and `BotBootstrapService` carries the rest.
+for forbidden in 'BotFather' 'botctl secrets' 'DNS' 'certificate' 'Create a second bot'; do
+  assert_not_contains "the token-stored summary still diagnoses a cause (${forbidden})" \
+    "$telegram_stored_summary" "$forbidden"
+done
+
+test_case 'the installer no longer classifies a failure from captured CLI output'
+# The rule, not a sentence. Every `case "$out"` arm that set `TELEGRAM_RETRY` was
+# a cause the installer INFERRED rather than knew, and the interactive path is
+# deliberately not captured, so none of them could run on a first install at a
+# terminal. `TELEGRAM_RETRY` may now be assigned from `telegram_state` and
+# nothing else.
+# Two assignments and no more: the declaration at the top of the file, and the
+# state read. Any third is a cause the installer inferred.
+telegram_retry_writes="$(grep -c 'TELEGRAM_RETRY=' "${REPO}/deploy/install.sh")"
+assert_equals 'TELEGRAM_RETRY is assigned somewhere other than its declaration and the state read' \
+  '2' "$telegram_retry_writes"
+assert_contains 'TELEGRAM_RETRY is not assigned from telegram_state' \
+  "$(grep 'TELEGRAM_RETRY=' "${REPO}/deploy/install.sh")" 'telegram_state'
+for inferred in 'already-bound' 'different-bot' 'token-rejected' 'token-unreadable'; do
+  assert_not_contains "the installer still classifies a cause from CLI output (${inferred})" \
+    "$(cat "${REPO}/deploy/install.sh")" "TELEGRAM_RETRY=\"${inferred}\""
+done
 
 test_case 'a first attempt that stored nothing outranks the error code'
 # Order matters and is easy to get backwards. A rejected token on a FIRST
@@ -5690,5 +5860,27 @@ assert_contains 'the unattended path does not stream the token on stdin' \
 # the container gets EACCES.
 assert_not_contains 'the installer bind-mounts the token file into the container' \
   "$telegram_calls" '/run/nexa-bot-token'
+
+test_case 'the documented telegram status contract names every value the CLI can print'
+# `OQ-TG-04` item 13. `docs/deployment.md` documented three values and the CLI
+# has returned four since `unavailable` was added, so automation written from
+# that section rejected a legitimate answer exactly when something had been
+# disabled. Read from the TYPE rather than a hard-coded list here: a fifth value
+# added to `BotBootstrapStatus` and not documented fails this, which is the whole
+# point — the doc is a contract callers parse, not prose.
+status_union="$(sed -n "s/^export type BotBootstrapStatus = //p" \
+  "${REPO}/apps/api/src/modules/platform/tenancy/application/bot-bootstrap.service.ts")"
+assert_ok 'the BotBootstrapStatus union could not be read; this check is vacuous' \
+  test -n "$status_union"
+status_line="$(grep -F 'botctl telegram status' "${REPO}/docs/deployment.md" | head -n 1)"
+assert_ok 'the documented status line could not be found' test -n "$status_line"
+for value in $(printf '%s' "$status_union" | tr -d "';" | tr '|' ' '); do
+  assert_contains "docs/deployment.md does not document the status value ${value}" \
+    "$status_line" "$value"
+done
+# And it says where the reason goes, because the reason is on stderr precisely so
+# that `$(botctl telegram status)` keeps returning one word.
+assert_contains 'docs/deployment.md does not say the reason is on stderr' \
+  "$(cat "${REPO}/docs/deployment.md")" 'printed on stderr'
 
 report

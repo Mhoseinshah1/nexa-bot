@@ -1957,7 +1957,29 @@ nexa_listing_boolean() {
     esac
     return 0
   fi
-  case "$raw" in
+  nexa_boolean_word "$raw"
+}
+
+# The `loose` vocabulary, applied to a VALUE rather than to a resolved listing.
+#
+# Extracted from `nexa_listing_boolean` rather than written beside it, so there
+# is ONE list of the spellings `booleanish` accepts. The reason is recorded in
+# that function and was then reproduced anyway: `cmd_update`'s command-menu
+# reconciliation compared against the literal `true`, so an installation
+# configured with `1` or `yes` — values the schema accepts, and on which the API
+# starts and serves the webhook — silently skipped the reconciliation on every
+# update, for ever, with nothing to see.
+#
+# A caller holding a value and no listing is the case this exists for. It does
+# NOT resolve, trim or decode anything: `nexa_listing_boolean` still owns that,
+# because resolution and validation in one place is what five rounds of failure
+# there were all about.
+#
+# Prints `on`, `off`, or `invalid` — and `invalid` covers absent and empty,
+# which is correct for both callers: the schema applies its default to an
+# ABSENT key and refuses an empty one, so neither is a value to act on.
+nexa_boolean_word() {
+  case "${1:-}" in
     true | 1 | yes) printf 'on' ;;
     false | 0 | no) printf 'off' ;;
     *) printf 'invalid' ;;

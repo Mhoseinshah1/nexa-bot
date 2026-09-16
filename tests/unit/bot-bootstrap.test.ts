@@ -52,6 +52,7 @@ interface Row {
   webhookRegisteredAt: Date | null;
   webhookUrl: string | null;
   webhookSecretFingerprint: string | null;
+  commandsRevision: string | null;
   token: string;
 }
 
@@ -68,6 +69,7 @@ class FakeBots implements BotBootstrapRepository {
   tokenWrites: string[] = [];
   identityWrites: { id: string; telegramBotId: string }[] = [];
   webhookMarks: { id: string; url: string }[] = [];
+  commandMarks: { id: string; revision: string }[] = [];
   locks = 0;
   /** Runs inside the transaction, once, just after the lock is taken. */
   onLocked: (() => void) | null = null;
@@ -91,7 +93,18 @@ class FakeBots implements BotBootstrapRepository {
       webhookRegisteredAt: row.webhookRegisteredAt,
       webhookUrl: row.webhookUrl,
       webhookSecretFingerprint: row.webhookSecretFingerprint,
+      commandsRevision: row.commandsRevision,
     };
+  }
+
+  async markCommandsRegistered(
+    _scope: unknown,
+    id: string,
+    input: { readonly revision: string; readonly now: Date },
+  ): Promise<void> {
+    const row = this.rows.find((candidate) => candidate.id === id);
+    if (row) row.commandsRevision = input.revision;
+    this.commandMarks.push({ id, revision: input.revision });
   }
 
   async createFromBootstrap(
@@ -112,6 +125,7 @@ class FakeBots implements BotBootstrapRepository {
       webhookRegisteredAt: null,
       webhookUrl: null,
       webhookSecretFingerprint: null,
+      commandsRevision: null,
       token: input.token,
     });
   }
@@ -176,6 +190,13 @@ class FakeTelegram implements BotBootstrapTelegram {
     expect(currentTransactionLabel()).toBeUndefined();
     this.identifyCalls.push(token);
     return this.probe;
+  }
+
+  /** The digest of the menu this fake would send. Changing it is a release that added a command. */
+  revision = 'rev-1';
+
+  commandsRevision(): string {
+    return this.revision;
   }
 
   async registerCommands(input: { readonly token: string }): Promise<boolean> {
@@ -340,13 +361,22 @@ describe('bot bootstrap — a fresh install', () => {
      * summary printed immediately afterwards, and contradicted the sentence
      * before it in the same string. That is the second time on this branch that
      * a message invented a recovery; the first was the installer's own summary.
+     *
+     * This assertion has itself been CORRECTED, and the correction is `OQ-TG-04`
+     * item 1. It used to require "no supported recovery" and "OQ-TG-01" HERE, on
+     * a fresh install — and both are statements about a stored credential, of
+     * which this path has none. So the test pinned the defect: it made the
+     * sentence mandatory in the one state where it is false, and a rerun that
+     * removed it from this path would have failed a green suite for being right.
+     * The stored-credential sentence is asserted where it is true, in "still asks
+     * Telegram whether the stored token works".
      */
     const message = await messageThrownBy(() =>
       service.execute(scope, { token: TOKEN, publicBaseUrl: ORIGIN }),
     );
     expect(message).not.toMatch(/restore it in BotFather/);
-    expect(message).toMatch(/no supported recovery/);
-    expect(message).toMatch(/OQ-TG-01/);
+    expect(message).toMatch(/Nothing was stored/);
+    expect(message).not.toMatch(/no supported recovery/);
   });
 
   it('creates the bot, registers the webhook, and marks it afterwards', async () => {
@@ -473,6 +503,38 @@ describe('bot bootstrap — a webhook failure is recoverable and is not success'
     expect(await service.status(scope, ORIGIN)).toBe('incomplete');
   });
 
+  /*
+   * `OQ-TG-04` item 8. `REFUSED` means Telegram LOOKED AT the URL and would not
+   * take it, and both outcomes used to share one code and one sentence telling
+   * the operator to rerun — which submits the same URL and is refused again.
+   */
+  it('reports a URL Telegram refused separately from one it could not be asked about', async () => {
+    const { service, telegram } = build();
+    telegram.registration = { outcome: 'REFUSED', detail: 'Bad webhook: HTTPS url must be https' };
+
+    expect(
+      await codeThrownBy(() => service.execute(scope, { token: TOKEN, publicBaseUrl: ORIGIN })),
+    ).toBe(PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_WEBHOOK_REFUSED);
+  });
+
+  it('does not tell an operator to rerun a registration that would be refused again', async () => {
+    const { service, telegram } = build();
+    telegram.registration = { outcome: 'REFUSED', detail: 'Bad webhook: HTTPS url must be https' };
+
+    const message = await messageThrownBy(() =>
+      service.execute(scope, { token: TOKEN, publicBaseUrl: ORIGIN }),
+    );
+
+    // Asserted on the advice, not only the code: the code alone is satisfied by
+    // a refusal that then repeats the rerun sentence underneath it, which is the
+    // defect exactly.
+    expect(message).toContain('is refused the same way');
+    expect(message).not.toContain('Rerun the installer to retry the registration');
+    // And it still says the expensive things survived, because that is true of
+    // both halves and is the first thing somebody at a failed install asks.
+    expect(message).toContain('nothing was undone');
+  });
+
   it('resumes from the stored token on the next run, without being given one', async () => {
     const { service, bots, telegram } = build();
     telegram.registration = { outcome: 'UNREACHABLE', detail: 'socket hang up' };
@@ -540,6 +602,79 @@ describe('bot bootstrap — a webhook failure is recoverable and is not success'
       await codeThrownBy(() => service.execute(scope, { token: TOKEN, publicBaseUrl: ORIGIN })),
     ).toBe(PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_UNREACHABLE);
   });
+
+  /*
+   * `OQ-TG-04` item 12. The installer's classifier had no arm for this code, so
+   * an outbound failure during `getMe` fell through to a summary about inbound
+   * DNS and certificates — the opposite network boundary, for a call that never
+   * reached `setWebhook`. The classifier is gone; the code still has to say
+   * which direction it is, because that is what the operator acts on.
+   */
+  it('names the OUTBOUND boundary when Telegram cannot be reached', async () => {
+    const { service, telegram } = build();
+    telegram.probe = { outcome: 'UNREACHABLE', detail: 'ETIMEDOUT' };
+
+    const message = await messageThrownBy(() =>
+      service.execute(scope, { token: TOKEN, publicBaseUrl: ORIGIN }),
+    );
+
+    expect(message).toContain('OUTBOUND');
+    expect(message).toContain('before any webhook is registered');
+    // And it rules out the two things the webhook summary sent people to.
+    expect(message).toContain('your certificate are not involved');
+  });
+
+  /*
+   * `OQ-TG-04` item 1. The rejection message is a statement about a STORED
+   * credential, and on a first bootstrap there is none: `getMe` runs before
+   * `createFromBootstrap` precisely so a rejected token writes nothing, and
+   * rerunning with a corrected one IS the recovery. The installer's own
+   * nothing-stored summary said exactly that, so the two contradicted each other.
+   */
+  it('does not tell a FIRST bootstrap that a rejected token is unrecoverable', async () => {
+    const { service, telegram } = build();
+    telegram.probe = { outcome: 'REJECTED', detail: 'Unauthorized' };
+
+    const message = await messageThrownBy(() =>
+      service.execute(scope, { token: TOKEN, publicBaseUrl: ORIGIN }),
+    );
+
+    expect(message).toContain('Nothing was stored');
+    expect(message).toContain('run this again with a corrected one');
+    expect(message).not.toContain('There is no supported recovery');
+    expect(message).not.toContain('OQ-TG-01');
+  });
+
+  /*
+   * items 6 and 7. An API base that is not Telegram used to be
+   * reported as a revoked token, which sends the operator to BotFather to
+   * reissue a credential that is fine — and reissuing is the one action that
+   * makes the real problem harder to see, because the new token fails the same
+   * way against the same wrong host.
+   */
+  it('reports a configured API base that is not Telegram as its own failure', async () => {
+    const { service, telegram } = build();
+    telegram.probe = { outcome: 'NOT_TELEGRAM', detail: 'getMe answered without a usable id' };
+
+    expect(
+      await codeThrownBy(() => service.execute(scope, { token: TOKEN, publicBaseUrl: ORIGIN })),
+    ).toBe(PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_API_BASE_INVALID);
+  });
+
+  it('does not send the operator to BotFather for a misconfigured API base', async () => {
+    const { service, telegram } = build();
+    telegram.probe = { outcome: 'NOT_TELEGRAM', detail: 'getMe answered without a usable id' };
+
+    const message = await messageThrownBy(() =>
+      service.execute(scope, { token: TOKEN, publicBaseUrl: ORIGIN }),
+    );
+
+    // The variable to look at, and the thing that is NOT the problem. Asserted
+    // separately from the code, because the code alone would be satisfied by a
+    // refusal that then repeated the revoked-token advice underneath it.
+    expect(message).toContain('TELEGRAM_API_BASE_URL');
+    expect(message).toContain('does not need reissuing in BotFather');
+  });
 });
 
 describe('bot bootstrap — a rerun reconciles and never rotates', () => {
@@ -572,6 +707,141 @@ describe('bot bootstrap — a rerun reconciles and never rotates', () => {
     expect(
       await codeThrownBy(() => service.execute(scope, { token: null, publicBaseUrl: ORIGIN })),
     ).toBe(PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_TOKEN_REJECTED);
+  });
+
+  /*
+   * The other half of `OQ-TG-04` item 1, and the reason the message branches
+   * rather than losing a sentence. HERE a credential IS stored, `execute` always
+   * registers with the one in the row, and this release ships nothing that
+   * replaces it — so "there is no supported recovery" is true, and telling this
+   * operator to rerun with a reissued token would be the invented remedy the
+   * fresh-install branch exists to stop giving to somebody else.
+   */
+  it('still says a STORED token has no supported replacement in this release', async () => {
+    const { service, telegram } = await installed();
+    telegram.probe = { outcome: 'REJECTED', detail: 'Unauthorized' };
+
+    const message = await messageThrownBy(() =>
+      service.execute(scope, { token: null, publicBaseUrl: ORIGIN }),
+    );
+
+    expect(message).toMatch(/no supported recovery/);
+    expect(message).toMatch(/OQ-TG-01/);
+    expect(message).not.toMatch(/Nothing was stored/);
+  });
+
+  /*
+   * `OQ-4H-02`. `setMyCommands` ran only on the register-and-mark path, which an
+   * installation whose webhook is already current never reaches: `execute`
+   * returns ALREADY_COMPLETE above it. So every installation that UPGRADED into
+   * the release carrying `BOT_COMMANDS` kept whatever menu it had — for most,
+   * none — and 4H's discoverability applied to fresh installs only.
+   */
+  it('registers a CHANGED command menu on an installation that is already complete', async () => {
+    const { service, telegram, bots } = await installed();
+    const before = telegram.commandCalls.length;
+
+    // The release that adds a command, or reworders one: the digest is computed
+    // from the rendered menu, so both look the same from here.
+    telegram.revision = 'rev-2';
+    const result = await service.execute(scope, { token: null, publicBaseUrl: ORIGIN });
+
+    expect(result.kind).toBe('ALREADY_COMPLETE');
+    expect(telegram.commandCalls).toHaveLength(before + 1);
+    expect(bots.rows[0]?.commandsRevision).toBe('rev-2');
+    // And it did NOT re-register the webhook, which carries dropPendingUpdates.
+    expect(telegram.webhookCalls).toHaveLength(1);
+  });
+
+  it('does not re-register an UNCHANGED menu on every rerun', async () => {
+    // Otherwise this is an outbound Telegram call on every `botctl update` of
+    // every installation, for a menu that has not moved.
+    const { service, telegram } = await installed();
+    const before = telegram.commandCalls.length;
+
+    await service.execute(scope, { token: null, publicBaseUrl: ORIGIN });
+    await service.execute(scope, { token: null, publicBaseUrl: ORIGIN });
+
+    expect(telegram.commandCalls).toHaveLength(before);
+  });
+
+  it('does not record a revision the registration did not achieve', async () => {
+    // A digest stored after a FAILED call would make the next reconcile skip it,
+    // and the menu would stay wrong until the list changed again — the failure
+    // this whole item is about, reintroduced by its own fix.
+    const { service, telegram, bots } = await installed();
+    telegram.revision = 'rev-2';
+    telegram.commandsRegister = false;
+
+    const result = await service.execute(scope, { token: null, publicBaseUrl: ORIGIN });
+
+    expect(result.kind).toBe('ALREADY_COMPLETE');
+    expect(bots.rows[0]?.commandsRevision).not.toBe('rev-2');
+
+    // And the next run tries again.
+    telegram.commandsRegister = true;
+    const calls = telegram.commandCalls.length;
+    await service.execute(scope, { token: null, publicBaseUrl: ORIGIN });
+    expect(telegram.commandCalls).toHaveLength(calls + 1);
+    expect(bots.rows[0]?.commandsRevision).toBe('rev-2');
+  });
+
+  it('treats a NULL stored revision as unknown rather than as matching', async () => {
+    // The pre-0059 row, which is every installation that upgrades into this
+    // release. The same rule `webhook_secret_fingerprint` states: one
+    // unnecessary call is cheaper than a silent claim.
+    const { service, telegram, bots } = await installed();
+    bots.rows[0]!.commandsRevision = null;
+    const before = telegram.commandCalls.length;
+
+    await service.execute(scope, { token: null, publicBaseUrl: ORIGIN });
+
+    expect(telegram.commandCalls).toHaveLength(before + 1);
+    expect(bots.rows[0]?.commandsRevision).toBe(telegram.revision);
+  });
+
+  /*
+   * The menu write is a WRITE, and CLAUDE.md's non-negotiable applies to it:
+   * "Every write path also reads `ScopeActivityReader` INSIDE its transaction".
+   *
+   * `execute` checks activity earlier, but outside this transaction, and a stop
+   * can commit in between — which is the whole reason the rule says "inside".
+   * The reader answers TRUE outside a transaction and FALSE inside one, which is
+   * not a contrivance: it is the exact race, and a constant `false` would be
+   * caught by the readiness read long before this write.
+   *
+   * This test exists because the first falsification of the check SURVIVED. The
+   * check was added by the self-review of this phase's diff and had nothing
+   * asserting it, so removing it again left the suite green — recorded as
+   * F4I-18 in `docs/phase4i-falsification.md`.
+   */
+  it('refuses to record a menu revision for a scope that stopped mid-run', async () => {
+    const built = await installed();
+    built.telegram.revision = 'rev-2';
+    const refusing = new BotBootstrapService({
+      ...serviceDeps(built),
+      scopeActivity: { scopeIsActive: async (_scope: unknown, tx?: unknown) => tx === undefined },
+    });
+
+    expect(
+      await codeThrownBy(() => refusing.execute(scope, { token: null, publicBaseUrl: ORIGIN })),
+    ).toBe(PLATFORM_ERROR_CODES.TENANT_NOT_FOUND);
+    // Telegram WAS asked — the call happens outside the transaction, as it must
+    // — and the durable record of it was refused, so the next run tries again.
+    expect(built.bots.rows[0]?.commandsRevision).not.toBe('rev-2');
+  });
+
+  it('takes the bot-change lock before recording a menu revision', async () => {
+    // The same lock every other write here takes, and in the same order: the
+    // activity check takes a SHARE lock on the tenant row, so taking the shared
+    // one first and upgrading is how two writers deadlock instead of queueing.
+    const built = await installed();
+    const before = built.bots.locks;
+    built.telegram.revision = 'rev-2';
+
+    await built.service.execute(scope, { token: null, publicBaseUrl: ORIGIN });
+
+    expect(built.bots.locks).toBe(before + 1);
   });
 
   it('does not rewrite the token when the same one is supplied again', async () => {
@@ -638,6 +908,7 @@ describe('bot bootstrap — a rerun reconciles and never rotates', () => {
       webhookRegisteredAt: null,
       webhookUrl: null,
       webhookSecretFingerprint: null,
+      commandsRevision: null,
       token: TOKEN,
     });
 
@@ -672,6 +943,7 @@ describe('bot bootstrap — a rerun reconciles and never rotates', () => {
       webhookRegisteredAt: null,
       webhookUrl: null,
       webhookSecretFingerprint: null,
+      commandsRevision: null,
       token: TOKEN,
     });
 
@@ -728,6 +1000,7 @@ describe('bot bootstrap — a rerun reconciles and never rotates', () => {
       webhookRegisteredAt: null,
       webhookUrl: null,
       webhookSecretFingerprint: null,
+      commandsRevision: null,
       token: TOKEN,
     });
 
@@ -869,6 +1142,123 @@ describe('bot bootstrap — the rules the review found untested', () => {
     ).rejects.toThrowError(/not ACTIVE/);
   });
 
+  /*
+   * `OQ-TG-04` item 11, and it is a credential leak rather than a wording bug.
+   *
+   * `scopeIsActive` used to be consulted only inside `unavailableReason`, which
+   * was reached only when a bot row EXISTED. A tenant an operator had stopped,
+   * with no bot yet, therefore answered `none` — and `none` is the one state in
+   * which the installer PROMPTS for a bearer credential, sends it to `getMe`,
+   * and only then has the create transaction refuse. The token need never have
+   * left the host.
+   */
+  it('does not answer none for a stopped tenant that has no bot yet', async () => {
+    const fresh = build({ scopeActivity: { scopeIsActive: async () => false } });
+    expect(fresh.bots.rows).toHaveLength(0);
+
+    expect(await fresh.service.status(scope, ORIGIN)).toBe('unavailable');
+  });
+
+  it('does not answer none when this installation does not serve the webhook route', async () => {
+    const off = build({ webhookEnabled: () => false });
+    expect(off.bots.rows).toHaveLength(0);
+
+    expect(await off.service.status(scope, ORIGIN)).toBe('unavailable');
+  });
+
+  it('still answers none for an ACTIVE tenant with no bot', async () => {
+    // The other side, so `unavailable` cannot become the answer to everything:
+    // a fresh install of a healthy tenant must still reach the path that asks
+    // for a token, or nothing can ever be configured.
+    const { service } = build();
+    expect(await service.status(scope, ORIGIN)).toBe('none');
+  });
+
+  /*
+   * `OQ-TG-04` item 9. `unavailableReason` computes a cause-specific sentence
+   * for each of its three causes and `status` collapsed all three to one word,
+   * so `botctl telegram status` could say a bot was held back and not which of
+   * three things was holding it — while `--skip-telegram` sent operators there
+   * to find out.
+   */
+  it('reports WHICH condition makes a bot unavailable, alongside the state', async () => {
+    const off = build({ webhookEnabled: () => false });
+    await expect(off.service.statusWithReason(scope, ORIGIN)).resolves.toMatchObject({
+      state: 'unavailable',
+      reason: expect.stringContaining('TELEGRAM_WEBHOOK_ENABLED is false'),
+    });
+
+    const stopped = build({ scopeActivity: { scopeIsActive: async () => false } });
+    await expect(stopped.service.statusWithReason(scope, ORIGIN)).resolves.toMatchObject({
+      reason: expect.stringContaining('tenant is not accepting work'),
+    });
+
+    const halted = await installed();
+    halted.bots.rows[0]!.status = 'STOPPED';
+    await expect(halted.service.statusWithReason(scope, ORIGIN)).resolves.toMatchObject({
+      state: 'unavailable',
+      reason: expect.stringContaining('not ACTIVE'),
+    });
+  });
+
+  /*
+   * The PRECEDENCE, which 4I moved and which nothing pinned.
+   *
+   * The three causes used to be ordered webhook route, bot status, tenant
+   * activity; splitting the scope-level pair out for item 11 made it webhook
+   * route, tenant activity, bot status. Every existing test builds one cause at
+   * a time, so both orders passed identically — found by the self-review of this
+   * phase's own diff, and pinned here rather than left as a comment.
+   */
+  it('reports the tenant before the bot when BOTH are in the way', async () => {
+    const stopped = await installed();
+    stopped.bots.rows[0]!.status = 'STOPPED';
+    const both = new BotBootstrapService({
+      ...serviceDeps(stopped),
+      scopeActivity: { scopeIsActive: async () => false },
+    });
+
+    // Starting the bot changes nothing while the tenant refuses every update,
+    // so naming the bot first would send an operator to fix what is not in the
+    // way.
+    await expect(both.statusWithReason(scope, ORIGIN)).resolves.toMatchObject({
+      state: 'unavailable',
+      reason: expect.stringContaining('tenant is not accepting work'),
+    });
+  });
+
+  it('reports the webhook route being off before either of those', async () => {
+    const stopped = await installed();
+    stopped.bots.rows[0]!.status = 'STOPPED';
+    const all3 = new BotBootstrapService({
+      ...serviceDeps(stopped),
+      scopeActivity: { scopeIsActive: async () => false },
+      webhookEnabled: () => false,
+    });
+
+    // It is the widest of the three: with the route unserved, nothing this
+    // installation does with a tenant or a bot makes an update arrive.
+    await expect(all3.statusWithReason(scope, ORIGIN)).resolves.toMatchObject({
+      reason: expect.stringContaining('TELEGRAM_WEBHOOK_ENABLED is false'),
+    });
+  });
+
+  it('carries no reason for a state that has nothing to explain', async () => {
+    // Otherwise a caller printing `reason` unconditionally would narrate every
+    // healthy run, and `none` in particular is not a problem to diagnose.
+    const { service } = build();
+    await expect(service.statusWithReason(scope, ORIGIN)).resolves.toEqual({
+      state: 'none',
+      reason: null,
+    });
+
+    const ready = await installed();
+    await expect(ready.service.statusWithReason(scope, ORIGIN)).resolves.toEqual({
+      state: 'ready',
+      reason: null,
+    });
+  });
+
   it('refuses a scope that has stopped accepting work, inside the transaction', async () => {
     /*
      * A CLAUDE.md non-negotiable that had no test at all: deleting all three
@@ -923,6 +1313,7 @@ describe('bot bootstrap — the rules the review found untested', () => {
       webhookRegisteredAt: null,
       webhookUrl: null,
       webhookSecretFingerprint: null,
+      commandsRevision: null,
       token: TOKEN,
     });
     // The concurrent run, landing between the unlocked read and the UPDATE.
@@ -952,6 +1343,7 @@ describe('bot bootstrap — two installers at once', () => {
         webhookRegisteredAt: null,
         webhookUrl: null,
         webhookSecretFingerprint: null,
+        commandsRevision: null,
         token: TOKEN,
       });
     };
@@ -979,6 +1371,7 @@ describe('bot bootstrap — two installers at once', () => {
         webhookRegisteredAt: null,
         webhookUrl: null,
         webhookSecretFingerprint: null,
+        commandsRevision: null,
         token: TOKEN,
       });
     };

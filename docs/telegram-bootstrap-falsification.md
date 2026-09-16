@@ -128,14 +128,14 @@ class reached from a new direction: something claiming a state it was not in.
 Two of them are the states the first round's fixes did not cover — which is the
 pattern `CLAUDE.md` records about reviewing a fix as hard as the bug.
 
-| #   | Rule                                                              | Mutation                                                    | Test that dies                                                                                  | Result |
-| --- | ----------------------------------------------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ------ |
-| D1  | Only callers that take the deployment lock run the compiled CLI   | restore `bot:bootstrap` to `apps/api/package.json`          | `bootstrap-callers.test.ts` › does not expose the compiled CLI as a package script              | KILLED |
-| D1b | ...and the allow list holding that rule cannot be widened quietly | add `apps/api/package.json` to the check's `grep -vxF` list | `bootstrap-callers.test.ts` › agrees with the allow list the build actually enforces            | KILLED |
-| D2  | An `unavailable` installation still runs the CLI                  | restore the early `return 0`                                | `botctl.test.sh` › an unavailable bot still runs the CLI, and a supplied token still reaches it | KILLED |
-| D3  | The CLI's error CODE refines what the state cannot say            | drop the `case "$out"` refinement                           | `botctl.test.sh` › a revoked stored token is not reported as a registration to retry            | KILLED |
-| D3b | ...but `none` outranks it, because nothing was stored             | `[ "$TELEGRAM_RETRY" != "none" ]` → `true`                  | `botctl.test.sh` › a first attempt that stored nothing outranks the error code                  | KILLED |
-| D3c | Capturing the CLI's output is not the same as swallowing it       | drop the `printf '%s\n' "$out" >&2` echo                    | `botctl.test.sh` › a revoked stored token is not reported as a registration to retry            | KILLED |
+| #   | Rule                                                              | Mutation                                                    | Test that dies                                                                                  | Result                |
+| --- | ----------------------------------------------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | --------------------- |
+| D1  | Only callers that take the deployment lock run the compiled CLI   | restore `bot:bootstrap` to `apps/api/package.json`          | `bootstrap-callers.test.ts` › does not expose the compiled CLI as a package script              | KILLED                |
+| D1b | ...and the allow list holding that rule cannot be widened quietly | add `apps/api/package.json` to the check's `grep -vxF` list | `bootstrap-callers.test.ts` › agrees with the allow list the build actually enforces            | KILLED                |
+| D2  | An `unavailable` installation still runs the CLI                  | restore the early `return 0`                                | `botctl.test.sh` › an unavailable bot still runs the CLI, and a supplied token still reaches it | KILLED                |
+| D3  | The CLI's error CODE refines what the state cannot say            | drop the `case "$out"` refinement                           | `botctl.test.sh` › the installer no longer classifies a failure from captured CLI output        | SUPERSEDED, see below |
+| D3b | ...but `none` outranks it, because nothing was stored             | `[ "$TELEGRAM_RETRY" != "none" ]` → `true`                  | `botctl.test.sh` › a first attempt that stored nothing outranks the error code                  | KILLED                |
+| D3c | Capturing the CLI's output is not the same as swallowing it       | drop the `printf '%s\n' "$out" >&2` echo                    | `botctl.test.sh` › the CLI error reaches the operator, whatever the state                       | KILLED                |
 
 D1 is the one worth reading twice. The service's comment asserted "there is no
 third caller" and `apps/api/package.json` had been exposing one — the COMPILED
@@ -163,13 +163,13 @@ done.
 
 | #   | Rule                                                             | Mutation                                                      | Test that dies                                                                                             | Result |
 | --- | ---------------------------------------------------------------- | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------ |
-| E1  | The revoked-token summary invents no rotation this release lacks | restore "reissuing ... is the supported route"                | `botctl.test.sh` › the revoked-token summary does not invent a rotation this release cannot do             | KILLED |
+| E1  | The revoked-token summary invents no rotation this release lacks | restore "reissuing ... is the supported route"                | `bot-bootstrap.test.ts` › still says a STORED token has no supported replacement in this release           | KILLED |
 | E2  | The additive Telegram config is written by rename, not by append | write straight to `$app_env` instead of a temp file           | `botctl.test.sh` › the additive Telegram configuration is written by rename, not by append                 | KILLED |
 | E3  | One Telegram bot binds to one row, cross-tenant                  | point `isUniqueViolation` at an index that does not exist     | `bot-bootstrap-identity.test.ts` › refuses a second tenant binding the same bot, even under a new username | KILLED |
 | E3b | ...and the INDEX is what holds it, not the mapping               | `DROP INDEX bot_instances_telegram_bot_id_key` in `nexa_test` | `bot-bootstrap-identity.test.ts` › refuses a second tenant binding the same bot, even under a new username | KILLED |
 | E4  | An unrecognised CLI argument is refused, not ignored             | accept every argument the parser does not recognise           | `bootstrap-bot-cli.test.ts` › refuses an unknown flag rather than ignoring it                              | KILLED |
 | E5  | A directory is refused as a token file, in PREFLIGHT             | remove the `-f` check                                         | `botctl.test.sh` › a DIRECTORY as --bot-token-file is refused before the host is changed                   | KILLED |
-| E6  | A stored token that cannot be DECRYPTED is its own outcome       | match a code no error produces                                | `botctl.test.sh` › a stored token that cannot be DECRYPTED is not a webhook retry either                   | KILLED |
+| E6  | A stored token that cannot be DECRYPTED is its own outcome       | match a code no error produces                                | `telegram-bootstrap-remedy.test.ts` › explains every secrets code a stored token can fail with             | KILLED |
 
 E3b is the only mutation in this record made against a database rather than a
 file, and it is the one that matters: the mapping E3 kills is how the rule
@@ -191,17 +191,28 @@ covered one path and not its sibling**. That is the pattern, and it is the rule
 `CLAUDE.md` already states — a fix is reviewed as hard as the bug — missed five
 separate times in a row.
 
-| #   | Rule                                                         | Mutation                                               | Test that dies                                                                                             | Result |
-| --- | ------------------------------------------------------------ | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- | ------ |
-| F1  | An already-bound refusal outranks the `none` rule            | drop the `already-bound` arm of the classifier         | `botctl.test.sh` › an already-bound refusal is classified even though nothing was stored                   | KILLED |
-| F2  | Duplicate bot ids are refused BEFORE 0041 runs               | drop the preflight call                                | `migration-preflight.test.ts` › refuses a database where one Telegram bot is bound twice, before 0041 runs | KILLED |
-| F3  | A `botctl telegram` subcommand refuses an argument           | remove the refusal                                     | `botctl.test.sh` › telegram subcommands refuse an argument rather than dropping it                         | KILLED |
-| F4  | An `unavailable` skipped bot is not sent to `register` alone | make the `unavailable` arm unreachable                 | `botctl.test.sh` › skip-telegram does not prescribe registration for an UNAVAILABLE bot                    | KILLED |
-| F5  | A legacy row still refuses a token naming a different bot    | drop the second `refuseRepointing`                     | `bot-bootstrap.test.ts` › refuses a different bot on a row that predates the identity column               | KILLED |
-| F6  | BOTH writers of `telegram_bot_id` name the collision         | rethrow raw from `recordTelegramIdentity`              | `bot-bootstrap-identity.test.ts` › names the collision when a LEGACY row learns an id another row holds    | KILLED |
-| F7  | A missing token records the release instead of dying         | restore the `nexa_die`                                 | `botctl.test.sh` › a first install with no terminal and no token records its release                       | KILLED |
-| F8  | The decryption summary names each code, not one repair       | restore "restoring the key material makes it readable" | `botctl.test.sh` › a stored token that cannot be DECRYPTED is not a webhook retry either                   | KILLED |
-| F9  | The rejected-token MESSAGE invents no recovery either        | restore "restore it in BotFather"                      | `bot-bootstrap.test.ts` › validates the token with getMe BEFORE it writes anything                         | KILLED |
+| #   | Rule                                                         | Mutation                                               | Test that dies                                                                                             | Result                |
+| --- | ------------------------------------------------------------ | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- | --------------------- |
+| F1  | An already-bound refusal outranks the `none` rule            | drop the `already-bound` arm of the classifier         | `botctl.test.sh` › the installer no longer classifies a failure from captured CLI output                   | SUPERSEDED, see below |
+| F2  | Duplicate bot ids are refused BEFORE 0041 runs               | drop the preflight call                                | `migration-preflight.test.ts` › refuses a database where one Telegram bot is bound twice, before 0041 runs | KILLED                |
+| F3  | A `botctl telegram` subcommand refuses an argument           | remove the refusal                                     | `botctl.test.sh` › telegram subcommands refuse an argument rather than dropping it                         | KILLED                |
+| F4  | An `unavailable` skipped bot is not sent to `register` alone | make the `unavailable` arm unreachable                 | `botctl.test.sh` › skip-telegram does not prescribe registration for an UNAVAILABLE bot                    | KILLED                |
+| F5  | A legacy row still refuses a token naming a different bot    | drop the second `refuseRepointing`                     | `bot-bootstrap.test.ts` › refuses a different bot on a row that predates the identity column               | KILLED                |
+| F6  | BOTH writers of `telegram_bot_id` name the collision         | rethrow raw from `recordTelegramIdentity`              | `bot-bootstrap-identity.test.ts` › names the collision when a LEGACY row learns an id another row holds    | KILLED                |
+| F7  | A missing token records the release instead of dying         | restore the `nexa_die`                                 | `botctl.test.sh` › a first install with no terminal and no token records its release                       | KILLED                |
+| F8  | The decryption summary names each code, not one repair       | restore "restoring the key material makes it readable" | `telegram-bootstrap-remedy.test.ts` › gives each of the four a DIFFERENT sentence                          | KILLED, re-run in 4I  |
+| F9  | The rejected-token MESSAGE invents no recovery either        | restore "restore it in BotFather"                      | `bot-bootstrap.test.ts` › validates the token with getMe BEFORE it writes anything                         | KILLED                |
+
+F8 was re-run in Phase 4I and cites a different test than it did when it was
+written. The one it named — "does not promise key material fixes the two it
+cannot fix" — was RENAMED, because the Codex review of PR 31 established that the
+claim was true of only ONE of those two codes: restoring key material is exactly
+the recovery when `SECRET_AUTH_FAILED` comes from a right key id holding wrong
+material. F8's rule is unchanged — four codes, four sentences, not one repair —
+and collapsing them to one repair still kills four tests, of which "gives each of
+the four a DIFFERENT sentence" is the one that pins the rule as stated. Re-run
+here rather than left pointing at a name that no longer exists, which
+`check:citations` would have caught anyway and did.
 
 F9 is E1 again, one layer down: the installer summary was corrected and the CLI
 error printed immediately before it still told the operator to restore a revoked
@@ -254,3 +265,59 @@ checked" and two of these are load-bearing.
 | `telegram_bot_id` is filled but never rewritten          | `isNull(botInstances.telegramBotId)` in the UPDATE's WHERE, not a caller-side check                                     |
 | The bot token never reaches an audit payload             | asserted over the WHOLE entry — an earlier fake discarded `before` and `reason` before the assertion ran                |
 | The installer never passes a token through argv or env   | `botctl.test.sh` reads the whole `configure_telegram_bot` body, not four lines forward from `cli.js`                    |
+
+## What Phase 4I did to six of these rows
+
+Four rules moved and two were DELETED on purpose. Neither is a reason to remove a
+row: the mutations were run and the rules were real when they were written, and a
+record that quietly drops what a later phase changed its mind about is worth less
+than one that says so.
+
+**Re-pointed, because the rule survived and its test moved:**
+
+- **D3c** — "capturing the CLI's output is not the same as swallowing it" matters
+  MORE after 4I, not less: that output is now the only thing carrying the cause.
+  Its new test asserts it for five different error codes.
+- **E1** — "the revoked-token summary invents no rotation this release lacks" was
+  a rule about installer prose. The prose is gone and the rule is now in the
+  SERVICE message, where `getMe` branches on whether anything is stored — so the
+  sentence appears on a rerun, where it is true, and not on a first bootstrap,
+  where it never was.
+- **E6, F8** — see below.
+
+**SUPERSEDED, because 4I removed the mechanism they protected:**
+
+- **D3** — "the CLI's error CODE refines what the state cannot say", and
+- **F1** — "an already-bound refusal outranks the `none` rule".
+
+Both describe the `case "$out"` classifier, and `OQ-TG-04` is the record of what
+it cost: it reads output the interactive path deliberately does not capture, so
+on a first install at a terminal none of its arms could run, and nine
+operator-facing sentences were false in a state reachable with them. F1 is itself
+an exception bolted onto D3 after D3's rule got a case wrong — which is the shape
+that stopped rather than a rule to keep.
+
+Their citations now point at the test that pins the classifier's ABSENCE. That is
+the honest successor: the rule these rows protected was replaced, and the
+replacement is checked.
+
+## Where E6 and F8 live now (Phase 4I)
+
+Both rows were verified as written, and the RULES they name survive. Their tests
+did not: `OQ-TG-04` moved the decryption explanation out of `deploy/install.sh`,
+where it was selected by grepping the CLI's captured output — a selection that
+cannot run on the interactive path at all — and into `bootstrapRemedy`, which is
+keyed on the error code in the process that raised it.
+
+So the citations are re-pointed rather than deleted, and the mutations still
+kill:
+
+- **E6** — "a stored token that cannot be DECRYPTED is its own outcome" is now
+  held by the remedy table answering for all four `platform.secret_*` codes
+  instead of by an installer arm that classified one of them.
+- **F8** — "the decryption summary names each code, not one repair" is now four
+  distinct sentences, two of which say restoring key material does NOT fix them.
+
+The row text is left exactly as it was written. A falsification record that
+quietly rewrites its own history is worth less than one that says where a rule
+moved and why.
