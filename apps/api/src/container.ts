@@ -1990,6 +1990,21 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     delivery: deliveryService,
     orders: orderService,
     botRuntime: new BotRuntime({
+      /*
+       * The one write the turn makes after its Telegram send, and the transaction
+       * it needs, kept OUT of the surface.
+       *
+       * `OQ-4H-01`. A surface must not open a transaction — the runtime has no
+       * unit of work and gets none here — so the composition root supplies a
+       * function that opens one and calls the same notifier the background lanes
+       * use. Nothing about the enqueue is different because the caller is
+       * interactive; only the decision to make it is.
+       */
+      queueRateLimitedFact: async (scope, customerId, kind, subjectId) => {
+        await uow.run(scope, async (tx) =>
+          customerNotifier.notify(scope, customerId, kind, subjectId, clock.now(), tx),
+        );
+      },
       customers: customerService,
       payments: paymentService,
       wallet: walletService,

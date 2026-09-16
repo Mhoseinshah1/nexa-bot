@@ -1,7 +1,9 @@
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  CUSTOMER_NOTIFICATION_KINDS,
   CUSTOMER_NOTIFICATION_MAX_ATTEMPTS,
+  CUSTOMER_NOTIFICATION_PRECONDITIONS,
   CUSTOMER_NOTIFICATION_SWEEP_LIMIT,
   type ActorContext,
   type BotInstanceId,
@@ -19,6 +21,7 @@ import type {
   CustomerSendResult,
 } from '../../apps/api/src/modules/commerce/messaging/application/ports';
 import { DrizzleCustomerRepository } from '../../apps/api/src/modules/commerce/customers/infrastructure/drizzle-customer.repository';
+import { DrizzleNotificationSubjectReader } from '../../apps/api/src/modules/commerce/messaging/infrastructure/drizzle-notification-subject.reader';
 import { createTestContext, SEED_IDS, tenantA, tenantB, type TestContext } from './harness';
 
 /**
@@ -296,7 +299,7 @@ describe('the customer notification lane', () => {
   });
 
   it('does not ask the precondition for a kind that declares none', async () => {
-    // Five of the six kinds are terminal facts. Asking would be a read that can only
+    // Seven of the eight kinds are terminal facts. Asking would be a read that can only
     // agree, and the reader THROWS if asked, so a regression here fails loudly.
     const id = await customer(tenantA, '5008');
     await enqueue(tenantA, id, 'ORDER_EXPIRED', ctx.container.ids.uuid());
@@ -312,6 +315,67 @@ describe('the customer notification lane', () => {
       };
     await sweep(l);
     expect(asked, 'the dispatcher asked a precondition for a terminal fact').toBe(false);
+  });
+
+  it('delivers the two rate-limit fallbacks as the SAME sentences the reply carries', async () => {
+    /*
+     * `OQ-4H-01`. These two kinds stand in for a reply a 429 stopped, so they must
+     * render the key the interactive path renders — a customer who hit the rate limit
+     * reading different words from one who did not is a second wording of one fact, and
+     * this lane exists to stop exactly that kind of divergence.
+     *
+     * Both declare NO precondition, so `stillHolds` is never asked. That matters more
+     * than it looks: `DrizzleNotificationSubjectReader` THROWS for a kind declaring
+     * none, so marking either one `true` without giving the reader a branch would fail
+     * at send time rather than answer wrong — and this case is what notices.
+     */
+    const id = await customer(tenantA, '5014');
+    await enqueue(tenantA, id, 'PAYMENT_TRANSFER_RECORDED', ctx.container.ids.uuid());
+    await enqueue(tenantA, id, 'ORDER_CANCELLED', ctx.container.ids.uuid());
+
+    const report = await sweep(lane());
+
+    expect(report.delivered).toBe(2);
+    expect(sends.map((one) => one.templateKey)).toEqual([
+      'bot.payment.received_for_review',
+      'bot.order.cancelled',
+    ]);
+    expect(
+      (await rows(tenantA)).map((row) => row.state),
+      'a fallback the lane could not resolve',
+    ).toEqual(['DELIVERED', 'DELIVERED']);
+  });
+
+  it('has a real reader for every kind that declares a precondition', async () => {
+    /*
+     * The assertion the fake `stillHolds` above cannot make, and the one that catches
+     * the mutation the whole precondition table exists to make expensive.
+     *
+     * `DrizzleNotificationSubjectReader` interrogates the `services` table and nothing
+     * else. Declaring a precondition for a kind whose subject is a PAYMENT or an ORDER
+     * therefore used to be silent: the reader looked a payment id up in `services`,
+     * found no row, returned `false`, and the message was SUPERSEDED and never sent.
+     * A customer not told, with a resolved row saying the lane did its job.
+     *
+     * So this drives the REAL reader over every kind, and requires it to answer the ones
+     * declaring a precondition and refuse the ones that do not. Flipping any `false` in
+     * `CUSTOMER_NOTIFICATION_PRECONDITIONS` to `true` fails here until the reader learns
+     * to read that kind's subject.
+     */
+    const reader = new DrizzleNotificationSubjectReader(ctx.container.database.db);
+
+    for (const kind of CUSTOMER_NOTIFICATION_KINDS) {
+      const asked = reader.stillHolds(tenantA, kind, ctx.container.ids.uuid());
+      if (CUSTOMER_NOTIFICATION_PRECONDITIONS[kind]) {
+        await expect(asked, `${kind} declares a precondition nothing can answer`).resolves.toBe(
+          false,
+        );
+      } else {
+        await expect(asked, `${kind} was answered although it declares none`).rejects.toThrow(
+          /stillHolds asked about/,
+        );
+      }
+    }
   });
 
   it('resolves a send stranded by a process that died, and never re-sends it', async () => {

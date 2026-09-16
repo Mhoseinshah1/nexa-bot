@@ -9,12 +9,14 @@ import type {
   ActorContext,
   BotInstanceId,
   CustomerArrival,
+  CustomerNotificationKind,
   Money,
   OrderId,
   OrderPurpose,
   TemplateKey,
   TemplateValues,
   TenantContext,
+  UserId,
 } from '@nexa/contracts';
 import type { CustomerService } from '../../modules/commerce/customers/application/customer.service.js';
 import type {
@@ -554,6 +556,26 @@ export interface BotRuntimeDeps {
   readonly services: ProvisioningService;
   readonly delivery: DeliveryService;
   /**
+   * Puts a rate-limited FACT on the customer notification lane.
+   *
+   * A narrow function and not the notifier itself, because `CustomerNotifier.notify`
+   * takes a transaction and a SURFACE must not open one — `CLAUDE.md`: "Surfaces
+   * call application services and never touch the database." The container owns
+   * the unit of work and the clock; this hands over the two values only the turn
+   * knows.
+   *
+   * Returns nothing. The turn's own outcome is already `RATE_LIMITED` and stays
+   * that way: the operational log records what happened to the REPLY, and
+   * reporting a successful enqueue as a successful send is the kind of
+   * cheerfulness this codebase removes.
+   */
+  readonly queueRateLimitedFact: (
+    scope: TenantContext,
+    customerId: UserId,
+    kind: CustomerNotificationKind,
+    subjectId: string,
+  ) => Promise<void>;
+  /**
    * The plan a service was SOLD as, from the order's frozen snapshot.
    *
    * A narrow port rather than `OrderService`, for the reason the provisioner's
@@ -616,6 +638,30 @@ interface PendingReply {
    * turn still has ONE answer, with a note after it.
    */
   readonly followUpKey?: TemplateKey;
+  /**
+   * The lane kind this reply falls back to when Telegram rate-limits it.
+   *
+   * `OQ-4H-01`: the durable write commits, the synchronous reply gets a 429, and
+   * the customer sees nothing — so they send the transfer twice, or conclude the
+   * cancellation did not happen. The background lanes already handle a 429 by
+   * requeueing at Telegram's own `retryAfterMs` with no attempt spent; the
+   * interactive path had nowhere to put it.
+   *
+   * Set on exactly the replies that are a FACT about an entity the customer just
+   * changed — a recorded transfer, a cancelled order. Those carry `values: {}`
+   * and `buttons: []`, which is what makes them expressible as a lane kind at
+   * all.
+   *
+   * DELIBERATELY absent on every reply that RENDERS state. A menu, a catalogue
+   * and a service list have no subject and no fact; queueing one would deliver a
+   * stale screen minutes later against state that has moved, and would need the
+   * parameterised payload `ADR 0030` §1 refuses. The customer's next tap
+   * reproduces those, which is why they need no fallback.
+   */
+  readonly fallback?: {
+    readonly kind: CustomerNotificationKind;
+    readonly subjectId: string;
+  };
 }
 
 /**
@@ -903,6 +949,40 @@ export class BotRuntime {
         values: {},
         botInstanceId: input.botInstanceId,
       });
+    }
+
+    /*
+     * A rate-limited FACT goes on the lane rather than being lost.
+     *
+     * `OQ-4H-01`. The durable write has already committed by the time this runs —
+     * the transfer claim is recorded, the order is cancelled — and Telegram
+     * answered 429. Telegram does not redeliver the update and nothing here
+     * rescheduled the reply, so the customer was left believing nothing happened.
+     * For a transfer that means sending the money twice.
+     *
+     * ONLY on `RATE_LIMITED`, and the narrowness is the design:
+     *
+     * - `DELIVERED` needs nothing.
+     * - `REFUSED` is Telegram saying it will never accept this — a blocked bot, a
+     *   dead chat — and queueing a second copy would produce a row the dispatcher
+     *   burns attempts on for a destination that is gone.
+     * - `UNKNOWN` is the one this must not touch. The send may have arrived; the
+     *   lane's own `UNCONFIRMED` state exists because a retried "your payment was
+     *   rejected" is a customer wondering which message is true, and this would
+     *   be that mistake one layer up.
+     *
+     * The enqueue is idempotent by `customer_notifications_subject_key`, so a
+     * customer who taps twice and is limited twice still hears once. It is also
+     * the only write here and it happens AFTER the business transaction closed,
+     * so nothing is held open across a Telegram call.
+     */
+    if (sent.outcome === 'RATE_LIMITED' && reply.fallback !== undefined) {
+      await this.deps.queueRateLimitedFact(
+        scope,
+        customer.id,
+        reply.fallback.kind,
+        reply.fallback.subjectId,
+      );
     }
 
     // After the real answer, not before it. The spinner is cosmetic and its failure is
@@ -1934,7 +2014,15 @@ export class BotRuntime {
         idempotencyKey: `${idempotencyKey}:pay-sent`,
         paymentId,
       });
-      return { key: 'bot.payment.received_for_review', values: {}, buttons: [], orderId: null };
+      return {
+        key: 'bot.payment.received_for_review',
+        values: {},
+        buttons: [],
+        orderId: null,
+        // The claim is recorded and an operator will review it. A customer who
+        // does not learn that sends the money again.
+        fallback: { kind: 'PAYMENT_TRANSFER_RECORDED', subjectId: paymentId },
+      };
     } catch (error) {
       return refusal(error);
     }
@@ -2013,7 +2101,15 @@ export class BotRuntime {
         customerId: customer.id,
         orderId,
       });
-      return { key: 'bot.order.cancelled', values: {}, buttons: [], orderId: null };
+      return {
+        key: 'bot.order.cancelled',
+        values: {},
+        buttons: [],
+        orderId: null,
+        // The order is gone. A customer who does not learn that keeps waiting for
+        // a service that will never be made.
+        fallback: { kind: 'ORDER_CANCELLED', subjectId: orderId },
+      };
     } catch (error) {
       return refusal(error);
     }
