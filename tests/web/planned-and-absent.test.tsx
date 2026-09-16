@@ -8,7 +8,7 @@ import { NAV, isCurrent, resolve } from '../../apps/web/src/app';
 import { renderPage, stubApi } from './harness';
 
 /**
- * The eight surfaces with no backend, and the concepts the owner removed.
+ * The four surfaces with no backend, and the concepts the owner removed.
  *
  * Half of these revisions are satisfied by ABSENCE — no receipts, no protocol,
  * no least-loaded routing, no logs. An absence with no test is an absence that
@@ -27,6 +27,11 @@ import { renderPage, stubApi } from './harness';
  * assertions moved with them. Revision 6 — real order history is preserved — is no
  * longer only a record: every `line*` field on an order is a snapshot, so there is now
  * behaviour to assert as well as copy.
+ *
+ * `services` left for `services.test.tsx` in Phase 4H, carrying owner revisions 12, 13
+ * and 14. Revision 13 went the same way revision 6 did: the repository pages
+ * `(created_at, id)` DESCENDING because of it, so there is a row order to assert and
+ * not only a sentence.
  */
 describe('planned surfaces', () => {
   const render = (key: string) => {
@@ -40,9 +45,9 @@ describe('planned surfaces', () => {
       // written out rather than derived, so activating or deactivating a surface
       // has to change this line too.
       // `payments` left this list in 4C, exactly as `products` and `orders` left it
-      // in 4B: the surface is real, and a promoted page still listed here renders its
-      // placeholder instead of itself.
-      ['bots', 'discounts', 'reports', 'resellers', 'services'].sort(),
+      // in 4B, and `services` left it in 4H: the surface is real, and a promoted page
+      // still listed here renders its placeholder instead of itself.
+      ['bots', 'discounts', 'reports', 'resellers'].sort(),
     );
   });
 
@@ -152,25 +157,6 @@ describe('planned surfaces', () => {
     },
   );
 
-  /**
-   * Revisions 4, 5, 6, 11, 13, 14 and 17 — recorded, and each one named.
-   *
-   * These six are decisions about surfaces that have no backend, so there is
-   * no behaviour to assert; the deliverable IS the record, on the page whoever
-   * builds the surface will open. Until this block existed they were covered
-   * only by the generic "says what is missing" case above, which passes for
-   * any page carrying any sentence — so the ledger claimed six mandatory
-   * revisions were delivered on the strength of an assertion that could not
-   * tell whether they were there.
-   */
-  it.each<[string, RegExp, string]>([
-    ['services', /created_at نزولی/, 'revision 13 — newest first, ordered by the server'],
-    ['services', /فیلتر چندانتخابی/, 'revision 14 — plan filter replaces location'],
-  ])('records on %s: %s', (surface, pattern) => {
-    render(surface);
-    expect(screen.getByText(pattern)).toBeInTheDocument();
-  });
-
   /*
    * Revisions 4, 5 and 17 left this page with the placeholder, and none of them was
    * dropped.
@@ -200,36 +186,12 @@ describe('planned surfaces', () => {
     expect(doc).toContain('بررسی رسید در تلگرام انجام می‌شود');
   });
 
-  /** Owner revision 15 — user tags are gone entirely. */
-  /** Owner revision 12 — protocol is not a normal service field. */
-  it('records that protocol stays out of the normal services UI', () => {
-    const { container } = render('services');
-    const text = container.textContent ?? '';
-    // The word appears exactly once, inside the sentence that excludes it. The
-    // protocol NAMES are allowed there too — naming what is excluded is how the
-    // rule stays legible — so the assertion is that the mention and the
-    // exclusion are the same sentence, not that the word is absent.
-    const sentence = text.split('.').find((part) => part.includes('پروتکل'));
-    expect(sentence).toBeDefined();
-    expect(sentence).toContain('نمایش داده نمی‌شود');
-    expect(sentence).toContain('لینک اشتراک');
-    // And nothing on the page is a protocol FIELD: no label, no column, no
-    // control of any kind. The per-surface assertion above proves the last part
-    // for every surface; this names the one that matters here.
-    expect(screen.queryByLabelText(/پروتکل/)).toBeNull();
-    expect(container.querySelectorAll('th')).toHaveLength(0);
-  });
-
-  /** Owner revisions 13 and 14 — server ordering, and a plan filter. */
-  it('records the ordering rule and the plan filter, and no location filter', () => {
-    const { container } = render('services');
-    const text = container.textContent ?? '';
-    expect(text).toContain('created_at');
-    expect(text).toContain('id');
-    expect(text).toContain('پلن');
-    expect(text).toContain('لوکیشن'); // only as the thing being removed
-    expect(text).toContain('وجود نخواهد داشت');
-  });
+  /*
+   * Owner revisions 12, 13 and 14 were asserted HERE and are asserted in
+   * `services.test.tsx` now, against the live `/services` page that carries the copy.
+   * Leaving them here would have meant three green assertions about a placeholder no
+   * route renders — a screen nobody can open cannot lose a rule it never shows.
+   */
 
   /** Owner revision 20 — only a reseller sales bot, and not creatable. */
   it('records that the only future bot type is the reseller sales bot, disabled', () => {

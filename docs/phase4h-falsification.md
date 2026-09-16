@@ -136,11 +136,11 @@ lane that works perfectly and delivers none of them.
 
 ## The Services surface
 
-| #      | Rule                                                        | Mutation                                               | Named test                                                                       | Result |
-| ------ | ----------------------------------------------------------- | ------------------------------------------------------ | -------------------------------------------------------------------------------- | ------ |
-| F4H-21 | no credential appears in a service response                 | `subscriptionUrl` added to the projection              | `services-http.test.ts` › lists a service without any of the three credentials   | KILLED |
-| F4H-22 | the page cursor carries PostgreSQL's own microsecond text   | the cursor rebuilt from the row's `Date`               | `services-http.test.ts` › pages without repeating a row whose created_at carries microseconds | KILLED |
-| F4H-23 | `services.view` is checked in the SERVICE, not the surface  | both `guard.check` calls removed                       | `services-http.test.ts` › refuses an authenticated operator who does not hold services.view | KILLED |
+| #      | Rule                                                       | Mutation                                  | Named test                                                                                    | Result |
+| ------ | ---------------------------------------------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------- | ------ |
+| F4H-21 | no credential appears in a service response                | `subscriptionUrl` added to the projection | `services-http.test.ts` › lists a service without any of the three credentials                | KILLED |
+| F4H-22 | the page cursor carries PostgreSQL's own microsecond text  | the cursor rebuilt from the row's `Date`  | `services-http.test.ts` › pages without repeating a row whose created_at carries microseconds | KILLED |
+| F4H-23 | `services.view` is checked in the SERVICE, not the surface | both `guard.check` calls removed          | `services-http.test.ts` › refuses an authenticated operator who does not hold services.view   | KILLED |
 
 F4H-22 is a latent defect this surface would have shipped rather than a rule this
 phase invented. `ServiceCursor.createdAt` was a `Date`, and `timestamptz` keeps
@@ -201,6 +201,44 @@ order over the wire, and asks before it does, and › answers a cancel tap on an
 order that is no longer awaiting payment. Reverting to `orders.get` fails the
 first of them. The lesson is narrower than "test the surface": an assertion that a
 control EXISTS is not an assertion that it works, and the two look alike in a diff.
+
+## The Web Admin Services page, and the payment signal it exposed
+
+| #      | Rule                                                         | Mutation                                            | Named test                                                                                      | Result |
+| ------ | ------------------------------------------------------------ | --------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ------ |
+| F4H-24 | the service list pages newest first (owner revision 13)      | `desc` -> `asc` and `<` -> `>` in the keyset        | `services-http.test.ts` › serves the newest service first                                       | KILLED |
+| F4H-25 | the Web Admin shows a customer's transfer claim on the list  | the column's renderer replaced with a constant dash | `payments.test.tsx` › shows that a customer said they paid, and still calls the payment pending | KILLED |
+| F4H-26 | `/services` issues no write                                  | a `POST .../terminate` added to the page            | `services.test.tsx` › offers no write: every request the page makes is a GET                    | KILLED |
+| F4H-27 | a descending list does not flip the pager labels             | `nextLabel="web.newer"` copied from `/orders`       | `services.test.tsx` › labels the next page older, the way a descending list must                | KILLED |
+| F4H-28 | a promoted page leaves `PLANNED_SURFACES` in the same commit | a `services` entry re-added to the list             | `services.test.tsx` › is gone from PLANNED_SURFACES, so the placeholder cannot shadow it        | KILLED |
+
+F4H-24 is a correction rather than a rule this slice invented. `/users`, `/orders`
+and `/products` all page an ASCENDING keyset, the service list was written the same
+way, and owner revision 13 says services are ordered `created_at` descending — a
+rule the placeholder had recorded in words since Phase 3D and that nothing in code
+obeyed. Promoting the page would have printed that sentence above a list whose first
+page was the oldest service the installation ever sold. Both halves moved: the
+repository pages descending, and the pager keeps `CursorPager`'s default labels
+instead of the flipped pair the three ascending lists pass. The mutation fails the
+microsecond-paging case too, which is the same keyset seen from the other end.
+
+F4H-25 is the one that SURVIVED first, and the record matters more than the fix.
+The original case asserted that the column HEADER was present and that not every
+cell in the table was a dash; a mutation replacing the column's renderer with a
+constant dash left both true, because the header comes from the column definition
+rather than from the data. The rewritten case reads the body cell under that header
+by index and compares it against `formatTimestamp` of the fixture's own instant,
+with a companion case pinning the dash for an unsignalled payment — so neither can
+pass by rendering a constant. Only then did the mutation fail.
+
+The defect underneath it was worse than the weak test. `customerSignalledAt` has
+been REQUIRED by `paymentSummarySchema` since `7b934a5`, the controller has
+returned it since `eef356f`, and the Web Admin rendered it nowhere — while
+`tests/web/payments.test.tsx` carried a fixture without the field, so all nineteen
+cases in that file failed the zod parse and the branch head had a red web suite
+that no gate run in this session had reported. The contract's own docblock says the
+field sits on the SUMMARY "because it is the field that makes the pending list
+triageable"; until this slice, the list it was for did not have it.
 
 ## A note on how these were run
 
