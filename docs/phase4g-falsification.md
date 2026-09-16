@@ -5,13 +5,22 @@ that fails as a result. `scripts/falsify.sh` applies the mutation, runs the name
 file, restores the tree and refuses to report anything if the restore is not
 byte-identical.
 
-**Thirteen KILLED, four recorded as SURVIVED with the reading that makes each one
-a finding rather than a gap, and three run by hand because the harness cannot
-reach what they test.** Two of the four survivors are the same rule stated on
-both sides of a query and neither side alone is load-bearing; one was a mutation
-that turned out to be equivalent to the original, which is not the same as a rule
-with no test and is recorded as what it was; and one is an application check that
-a deeper guard catches first.
+**Nineteen KILLED, three recorded as SURVIVED with the reading that makes each
+one a finding rather than a gap, and four run by hand because the harness cannot
+reach what they test.** Six of the nineteen are rules the self-review of the
+whole diff added; two of the original SURVIVED rows became KILLED in that round,
+by a better mutation rather than a new test.
+
+The three survivors are each a finding in their own right and none is a missing
+test: one is an application check a deeper guard catches first, one is a mutation
+that turned out to be equivalent to the original, and one is a predicate whose
+own comment already calls it redundant — the survival being the evidence for that
+claim rather than a hole in it.
+
+Section headings are the section a rule belongs to, not the round it was found
+in: the three rows under _"what the self-review found"_ are rules that did not
+exist until that round, and F4G-16 and F4G-17 are beside the sweep rows they
+belong with.
 
 ## The two decisions a person makes
 
@@ -25,13 +34,15 @@ a deeper guard catches first.
 
 ## The sweep
 
-| #      | Rule                                                                      | Mutation                                                        | Named test                                                                                   | Result   |
-| ------ | ------------------------------------------------------------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | -------- |
-| F4G-02 | A stopped tenant's rows are not swept, checked inside the transaction     | the `scopeIsActive` guard → `if (false)`                        | `payments.test.ts` › refuses to expire anything for a tenant that has stopped accepting work | KILLED   |
-| F4G-08 | Every expired payment leaves an audit row under its own action name       | `action: 'payment.expire'` → `'payment.expired'`                | `payments.test.ts` › expires a stale payment and the order it was against, in one pass       | KILLED   |
-| F4G-09 | Every expired order leaves an audit row under its own action name         | `action: 'order.expire'` → `'order.expired'`                    | `payments.test.ts` › expires a stale payment and the order it was against, in one pass       | KILLED   |
-| F4G-14 | The order sweep's candidate query excludes anything not awaiting payment  | the sub-select's state and confirmed-payment predicates removed | `payments.test.ts` › never touches a confirmed payment or the order it settled               | SURVIVED |
-| F4G-15 | The order sweep's UPDATE re-checks the same predicates after the row lock | the UPDATE's state and confirmed-payment predicates removed     | `payments.test.ts` › never touches a confirmed payment or the order it settled               | SURVIVED |
+| #      | Rule                                                                     | Mutation                                                    | Named test                                                                                           | Result   |
+| ------ | ------------------------------------------------------------------------ | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | -------- |
+| F4G-02 | A stopped tenant's rows are not swept, checked inside the transaction    | the `scopeIsActive` guard → `if (false)`                    | `payments.test.ts` › expires nothing for a tenant that has stopped, and does not call that a failure | KILLED   |
+| F4G-16 | ...and a stopped tenant is a COMPLETED pass, not a failed one            | the zero report → `throw`                                   | `payments.test.ts` › expires nothing for a tenant that has stopped, and does not call that a failure | KILLED   |
+| F4G-17 | An order with a PENDING payment against it is never expired              | `noLivePayment`'s `'PENDING'` → a state no row holds        | `payments.test.ts` › never expires an order while a payment against it is still pending              | KILLED   |
+| F4G-08 | Every expired payment leaves an audit row under its own action name      | `action: 'payment.expire'` → `'payment.expired'`            | `payments.test.ts` › expires a stale payment and the order it was against, in one pass               | KILLED   |
+| F4G-09 | Every expired order leaves an audit row under its own action name        | `action: 'order.expire'` → `'order.expired'`                | `payments.test.ts` › expires a stale payment and the order it was against, in one pass               | KILLED   |
+| F4G-14 | An order with a CONFIRMED payment against it is never expired            | `noConfirmedPayment`'s `'CONFIRMED'` → a state no row holds | `payments.test.ts` › never touches a confirmed payment or the order it settled                       | SURVIVED |
+| F4G-15 | The order sweep states its state predicate on both sides of the row lock | the UPDATE's state predicate removed                        | `payments.test.ts` › never touches a confirmed payment or the order it settled                       | SURVIVED |
 
 ## The window
 
@@ -39,6 +50,14 @@ a deeper guard catches first.
 | ------ | ------------------------------------------------------------------ | --------------------------------------------------- | ------------------------------------------------------------------------------------- | ------ |
 | F4G-05 | A payment's deadline never outlives the order it names             | `paymentDeadline` → always the configured window    | `payments.test.ts` › never outlives the order it names                                | KILLED |
 | F4G-06 | A payment's deadline is bounded by the window even on a long order | `paymentDeadline` → always the order's own deadline | `payments.test.ts` › holds a transfer open for the configured window, not the order’s | KILLED |
+
+## Three rules the self-review of the whole diff added
+
+| #      | Rule                                                                | Mutation                                       | Named test                                                                                                   | Result |
+| ------ | ------------------------------------------------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ------ |
+| F4G-18 | Approve and reject are different commands under one idempotency key | `decision: 'REJECT'` → `'CONFIRM'` in the hash | `payments.test.ts` › will not honour a confirmation under the key a rejection already used                   | KILLED |
+| F4G-19 | A window too short to transfer money in is refused, not issued      | the floor comparison → `false`                 | `payments.test.ts` › refuses to issue bank instructions that would die before the customer acts              | KILLED |
+| F4G-20 | The first tap ASKS; only the second withdraws                       | the ASK dispatch → the withdrawal directly     | `telegram-payment-flow.test.ts` › offers a way out with the instructions, and withdrawing closes the payment | KILLED |
 
 ## The surfaces
 
@@ -57,11 +76,12 @@ nothing about the database the test runs against. Each was run by the same
 procedure — mutate, run the named test, restore, re-run — with the transcript in
 this session.
 
-| #     | Rule                                                                                    | Mutation                                                                                                         | Named test                                                                     | Result |
-| ----- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ------ |
-| H4G-1 | A rejection is refused on a non-`PENDING` payment by the application AND the repository | F4G-04 and F4G-01 applied together                                                                               | `payments.test.ts` › refuses to reject a payment that was confirmed            | KILLED |
-| H4G-2 | The order sweep states its predicates on BOTH sides of the lock                         | F4G-14 and F4G-15 applied together                                                                               | `payments.test.ts` › never touches a confirmed payment or the order it settled | KILLED |
-| H4G-3 | Migration 0052 freezes a resolved payment against a raw UPDATE                          | the function's resolved-state branch dropped in the live test database, 0033/0035's CONFIRMED branch left intact | `payments.test.ts` › refuses a raw UPDATE that would reopen a rejected payment | KILLED |
+| #     | Rule                                                                                    | Mutation                                                                                                         | Named test                                                                            | Result |
+| ----- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ------ |
+| H4G-1 | A rejection is refused on a non-`PENDING` payment by the application AND the repository | F4G-04 and F4G-01 applied together                                                                               | `payments.test.ts` › refuses to reject a payment that was confirmed                   | KILLED |
+| H4G-2 | The order sweep states its predicates on BOTH sides of the lock                         | F4G-14 and F4G-15 applied together                                                                               | `payments.test.ts` › never touches a confirmed payment or the order it settled        | KILLED |
+| H4G-3 | Migration 0052 freezes a resolved payment against a raw UPDATE                          | the function's resolved-state branch dropped in the live test database, 0033/0035's CONFIRMED branch left intact | `payments.test.ts` › refuses a raw UPDATE that would reopen a rejected payment        | KILLED |
+| H4G-4 | Migration 0053 freezes the three evidence columns 0052 left writable                    | the live function replaced with 0052's own body, which is that state exactly                                     | `payments.test.ts` › refuses a raw UPDATE that would dress a rejection up as a review | KILLED |
 
 H4G-3 is the one that matters most and the one a source-file mutation would have
 reported SURVIVED for a rule fully in force. The guard is a `CREATE OR REPLACE`
@@ -102,12 +122,22 @@ a `PENDING` row to be reachable at all — on a resolved one, 0052's trigger rai
 before any CHECK is evaluated, so a test written the obvious way would have
 proved the trigger twice and the constraint never.
 
-## What this pass did NOT find
+## What this pass did NOT find, and what the round after it did
 
-Unlike 4F, no rule in this phase turned out to have no test at all. Every
-mutation either died against a test written with the code, or survived for a
-reason stated above — and the two reasons are "another layer catches it first"
-and "the mutation was equivalent", neither of which is a missing test.
+No rule in this phase turned out to have no test at all. Every mutation either
+died against a test written with the code, or survived for a reason stated above
+— and the three reasons are "another layer catches it first", "the mutation was
+equivalent" and "the predicate is redundant and says so", none of which is a
+missing test.
+
+What the pass could not find is the class the self-review of the whole diff did:
+rules that were WRONG rather than untested. A mutation proves a rule is enforced;
+it cannot tell you the rule should have been a different rule. The sweep's
+ordering invariant had a test that passed and a docblock that was false for any
+backlog larger than the bound; the two halves of `receipts.review` shared an
+idempotency identity and every test of each half passed; a stopped tenant took
+the worker's health down and nothing asserted otherwise. Six of the rows above
+exist because that review ran after this one, not instead of it.
 
 The honest limit of that claim: this pass falsified the rules 4G ADDS. It says
 nothing about the rules 4G leaves in place, and the audit is explicit that three
