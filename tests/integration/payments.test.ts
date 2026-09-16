@@ -16,6 +16,9 @@ import type { OrderRecord } from '../../apps/api/src/modules/commerce/orders/app
 import { DrizzleOrderRepository } from '../../apps/api/src/modules/commerce/orders/infrastructure/drizzle-order.repository';
 import { DrizzlePaymentRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-payment.repository';
 import { PaymentExpiryService } from '../../apps/api/src/modules/commerce/payments/application/payment-expiry.service';
+import { CustomerNotifier } from '../../apps/api/src/modules/commerce/messaging/application/customer-notifier';
+import { DrizzleCustomerNotificationRepository } from '../../apps/api/src/modules/commerce/messaging/infrastructure/drizzle-customer-notification.repository';
+import { DrizzleCustomerRepository } from '../../apps/api/src/modules/commerce/customers/infrastructure/drizzle-customer.repository';
 import {
   adminActorFor,
   createAdmin,
@@ -1165,6 +1168,28 @@ describe('payments and settlement', () => {
       scopeActivity: ctx.container.tenants,
       clock: ctx.container.clock,
       ids: ctx.container.ids,
+      /*
+       * The customer notification lane, real rather than stubbed.
+       *
+       * A stub here would let the sweep's enqueue drift from the lane's constraint
+       * without any test noticing, and the enqueue is INSIDE the sweep's transaction —
+       * so the thing worth asserting is that an expiry and the notification it owes
+       * commit together or not at all.
+       */
+      notifier: new CustomerNotifier({
+        notifications: new DrizzleCustomerNotificationRepository(ctx.container.database.db),
+        bots: {
+          botFor: async (scope, customerId, tx) =>
+            (
+              await new DrizzleCustomerRepository(ctx.container.database.db).findById(
+                scope,
+                customerId,
+                tx,
+              )
+            )?.firstBotInstanceId ?? null,
+        },
+        ids: ctx.container.ids,
+      }),
     });
 
   const paymentRow = async (
