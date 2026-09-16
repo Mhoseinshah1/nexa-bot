@@ -340,13 +340,22 @@ describe('bot bootstrap — a fresh install', () => {
      * summary printed immediately afterwards, and contradicted the sentence
      * before it in the same string. That is the second time on this branch that
      * a message invented a recovery; the first was the installer's own summary.
+     *
+     * This assertion has itself been CORRECTED, and the correction is `OQ-TG-04`
+     * item 1. It used to require "no supported recovery" and "OQ-TG-01" HERE, on
+     * a fresh install — and both are statements about a stored credential, of
+     * which this path has none. So the test pinned the defect: it made the
+     * sentence mandatory in the one state where it is false, and a rerun that
+     * removed it from this path would have failed a green suite for being right.
+     * The stored-credential sentence is asserted where it is true, in "still asks
+     * Telegram whether the stored token works".
      */
     const message = await messageThrownBy(() =>
       service.execute(scope, { token: TOKEN, publicBaseUrl: ORIGIN }),
     );
     expect(message).not.toMatch(/restore it in BotFather/);
-    expect(message).toMatch(/no supported recovery/);
-    expect(message).toMatch(/OQ-TG-01/);
+    expect(message).toMatch(/Nothing was stored/);
+    expect(message).not.toMatch(/no supported recovery/);
   });
 
   it('creates the bot, registers the webhook, and marks it afterwards', async () => {
@@ -574,7 +583,28 @@ describe('bot bootstrap — a webhook failure is recoverable and is not success'
   });
 
   /*
-   * `OQ-TG-04` items 6 and 7. An API base that is not Telegram used to be
+   * `OQ-TG-04` item 1. The rejection message is a statement about a STORED
+   * credential, and on a first bootstrap there is none: `getMe` runs before
+   * `createFromBootstrap` precisely so a rejected token writes nothing, and
+   * rerunning with a corrected one IS the recovery. The installer's own
+   * nothing-stored summary said exactly that, so the two contradicted each other.
+   */
+  it('does not tell a FIRST bootstrap that a rejected token is unrecoverable', async () => {
+    const { service, telegram } = build();
+    telegram.probe = { outcome: 'REJECTED', detail: 'Unauthorized' };
+
+    const message = await messageThrownBy(() =>
+      service.execute(scope, { token: TOKEN, publicBaseUrl: ORIGIN }),
+    );
+
+    expect(message).toContain('Nothing was stored');
+    expect(message).toContain('run this again with a corrected one');
+    expect(message).not.toContain('There is no supported recovery');
+    expect(message).not.toContain('OQ-TG-01');
+  });
+
+  /*
+   * items 6 and 7. An API base that is not Telegram used to be
    * reported as a revoked token, which sends the operator to BotFather to
    * reissue a credential that is fine — and reissuing is the one action that
    * makes the real problem harder to see, because the new token fails the same
@@ -635,6 +665,27 @@ describe('bot bootstrap — a rerun reconciles and never rotates', () => {
     expect(
       await codeThrownBy(() => service.execute(scope, { token: null, publicBaseUrl: ORIGIN })),
     ).toBe(PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_TOKEN_REJECTED);
+  });
+
+  /*
+   * The other half of `OQ-TG-04` item 1, and the reason the message branches
+   * rather than losing a sentence. HERE a credential IS stored, `execute` always
+   * registers with the one in the row, and this release ships nothing that
+   * replaces it — so "there is no supported recovery" is true, and telling this
+   * operator to rerun with a reissued token would be the invented remedy the
+   * fresh-install branch exists to stop giving to somebody else.
+   */
+  it('still says a STORED token has no supported replacement in this release', async () => {
+    const { service, telegram } = await installed();
+    telegram.probe = { outcome: 'REJECTED', detail: 'Unauthorized' };
+
+    const message = await messageThrownBy(() =>
+      service.execute(scope, { token: null, publicBaseUrl: ORIGIN }),
+    );
+
+    expect(message).toMatch(/no supported recovery/);
+    expect(message).toMatch(/OQ-TG-01/);
+    expect(message).not.toMatch(/Nothing was stored/);
   });
 
   it('does not rewrite the token when the same one is supplied again', async () => {

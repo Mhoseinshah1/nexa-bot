@@ -115,6 +115,11 @@ describe('a Telegram bot belongs to one tenant', () => {
 
     // Named, not a bare 23505 out through the CLI as a stack trace.
     await expect(attempt).rejects.toThrowError(/already configured for another tenant/);
+    // And the FRESH-INSERT remedy, which is right here and wrong on the legacy
+    // fill path below: this tenant's row rolled back, so it has nothing, and a
+    // second bot in BotFather genuinely resolves it.
+    await expect(attempt).rejects.toThrowError(/Use a separate bot for this tenant/);
+    await expect(attempt).rejects.not.toThrowError(/OQ-TG-01/);
 
     // And the refusal left exactly one binding: the first tenant's, untouched.
     const rows = await ctx.container.database.db
@@ -172,12 +177,23 @@ describe('a Telegram bot belongs to one tenant', () => {
     // reported the same name the UPDATE would collide on
     // `bot_instances_username_key` instead, and that is a genuinely different
     // mistake this refusal must not claim.
-    await expect(
-      bootstrap('acme_support_bot').execute(second, {
-        token: null,
-        publicBaseUrl: 'https://bot.example.com',
-      }),
-    ).rejects.toThrowError(/already configured for another tenant/);
+    const attempt = bootstrap('acme_support_bot').execute(second, {
+      token: null,
+      publicBaseUrl: 'https://bot.example.com',
+    });
+    await expect(attempt).rejects.toThrowError(/already configured for another tenant/);
+
+    /*
+     * `OQ-TG-04` item 5. One code, two situations, and until 4I one sentence:
+     * "Use a separate bot for this tenant." That is right from the fresh INSERT,
+     * where the row rolled back. It is wrong HERE — this tenant already holds a
+     * legacy row AND an encrypted token for the duplicated bot, and no operation
+     * in this release replaces a stored credential, so reconciliation resolves
+     * that same token and hits the same violation for ever.
+     */
+    await expect(attempt).rejects.not.toThrowError(/Use a separate bot for this tenant/);
+    await expect(attempt).rejects.toThrowError(/OQ-TG-01/);
+    await expect(attempt).rejects.toThrowError(/Decide which tenant keeps this bot/);
   });
 
   /*
@@ -222,6 +238,60 @@ describe('a Telegram bot belongs to one tenant', () => {
       .from(botInstances)
       .where(eq(botInstances.tenantId, second.tenantId));
     expect(rows).toHaveLength(0);
+  });
+
+  /*
+   * `OQ-TG-04` item 3. The legacy identity fill COMMITS — an UPDATE and an audit
+   * row — before the second `refuseRepointing` can refuse, because the first one
+   * returns early on a NULL `telegram_bot_id` and has nothing to compare. The
+   * refusal is right; "Nothing was changed." was not.
+   */
+  it('does not claim nothing changed after it filled a legacy identity', async () => {
+    const first = tenantA as TenantContext;
+    await bootstrap('acme_bot').execute(first, {
+      token: `${SAME_BOT}:AAH-first`,
+      publicBaseUrl: 'https://bot.example.com',
+    });
+    // The pre-0038 shape: a row with a stored token and no recorded identity.
+    await ctx.container.database.db.update(botInstances).set({ telegramBotId: null });
+
+    // A token for a DIFFERENT bot, supplied to a rerun. `getMe` reads the STORED
+    // token, fills the blank from its answer, and only then is there an id to
+    // refuse against.
+    const attempt = bootstrap('acme_bot').execute(first, {
+      token: '9987654321:AAH-someone-elses',
+      publicBaseUrl: 'https://bot.example.com',
+    });
+
+    await expect(attempt).rejects.toSatisfy(
+      (error: unknown) =>
+        isNexaError(error) && error.code === PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_DIFFERENT_BOT,
+    );
+    await expect(attempt).rejects.not.toThrowError(/Nothing was changed\./);
+    await expect(attempt).rejects.toThrowError(/bot identity was recorded from its stored token/);
+
+    // And the fill really did commit, which is what makes the old clause false.
+    const rows = await ctx.container.database.db.select().from(botInstances);
+    expect(rows[0]?.telegramBotId).toBe(SAME_BOT);
+  });
+
+  it('still says nothing changed when no fill happened', async () => {
+    // The other side, so the new sentence cannot be printed unconditionally: on
+    // a row that already names its bot there is no migration to report, and
+    // claiming one would be the same untruth in the opposite direction.
+    const first = tenantA as TenantContext;
+    await bootstrap('acme_bot').execute(first, {
+      token: `${SAME_BOT}:AAH-first`,
+      publicBaseUrl: 'https://bot.example.com',
+    });
+
+    const attempt = bootstrap('acme_bot').execute(first, {
+      token: '9987654321:AAH-someone-elses',
+      publicBaseUrl: 'https://bot.example.com',
+    });
+
+    await expect(attempt).rejects.toThrowError(/Nothing was changed\./);
+    await expect(attempt).rejects.not.toThrowError(/recorded from its stored token/);
   });
 
   it('still lets the tenant that owns the bot reconcile it', async () => {

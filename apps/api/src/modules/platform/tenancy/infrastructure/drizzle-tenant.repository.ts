@@ -366,7 +366,7 @@ export class DrizzleBotInstanceRepository implements BotInstanceRepository, BotB
        * own branch and its own code; until 4I it had neither, and reached the
        * operator as a raw 23505.
        */
-      rethrowAlreadyBound(error, input.telegramBotId, input.username);
+      rethrowAlreadyBound(error, input.telegramBotId, input.username, 'FRESH_INSERT');
     }
   }
 
@@ -432,7 +432,7 @@ export class DrizzleBotInstanceRepository implements BotInstanceRepository, BotB
         .returning({ id: botInstances.id });
       return filled.length > 0;
     } catch (error: unknown) {
-      rethrowAlreadyBound(error, input.telegramBotId, input.username);
+      rethrowAlreadyBound(error, input.telegramBotId, input.username, 'LEGACY_IDENTITY_FILL');
     }
   }
 }
@@ -453,14 +453,45 @@ export class DrizzleBotInstanceRepository implements BotInstanceRepository, BotB
  * username violation has its OWN answer, not so this one can be widened to cover
  * it.
  */
-function rethrowAlreadyBound(error: unknown, telegramBotId: string, username: string): never {
+/**
+ * Which statement hit the constraint, because the remedy is not the same.
+ *
+ * `OQ-TG-04` item 5. One code covered two situations and said one thing about
+ * both: "Use a separate bot for this tenant." From the INSERT that is right —
+ * the row rolled back and this tenant has nothing. From the identity fill it is
+ * not: the tenant ALREADY holds a legacy row and an encrypted token for the
+ * duplicated bot, no operation in this release replaces a stored credential
+ * (OQ-TG-01), and reconciliation resolves that same token and hits the same
+ * violation every time. Telling that operator to create a second bot describes
+ * a retry that cannot repair what they have.
+ *
+ * It travels as a PARAMETER rather than being inferred, because only the caller
+ * knows, and a message is the one place a path-dependent remedy may live: the
+ * error CODE is shared, so anything keyed on the code alone — `bootstrapRemedy`
+ * in the CLI, for one — must not try to say this.
+ */
+type BoundCollisionSource = 'FRESH_INSERT' | 'LEGACY_IDENTITY_FILL';
+
+function rethrowAlreadyBound(
+  error: unknown,
+  telegramBotId: string,
+  username: string,
+  source: BoundCollisionSource,
+): never {
   if (isUniqueViolation(error, 'bot_instances_telegram_bot_id_key')) {
+    const remedy =
+      source === 'FRESH_INSERT'
+        ? 'Nothing was changed. Use a separate bot for this tenant.'
+        : 'Nothing was changed. This tenant already has a bot row holding an encrypted token for ' +
+          'that same bot, from before its identity was recorded — so creating a second bot in ' +
+          'BotFather does not resolve it, because this release has no operation that replaces a ' +
+          'stored token (docs/open-questions.md, OQ-TG-01). Decide which tenant keeps this bot ' +
+          'before running this again.';
     throw errors.conflict(
       PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_BOT_ALREADY_BOUND,
       `Telegram bot ${telegramBotId} is already configured for another tenant on this ` +
         "installation, and Telegram delivers a bot's updates to one webhook only — binding it " +
-        'here would silently stop the other tenant receiving anything. Nothing was changed. Use ' +
-        'a separate bot for this tenant.',
+        `here would silently stop the other tenant receiving anything. ${remedy}`,
     );
   }
   /*

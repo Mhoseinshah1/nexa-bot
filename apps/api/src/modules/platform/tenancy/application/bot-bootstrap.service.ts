@@ -292,7 +292,11 @@ export class BotBootstrapService {
      * a registered webhook that was never registered, arrived at from the other
      * side.
      */
-    const identity = ensured.identity ?? (await this.getMe(scope, view, token));
+    const probed =
+      ensured.identity === null
+        ? await this.getMe(scope, view, token)
+        : { identity: ensured.identity, filledLegacyIdentity: false };
+    const { identity } = probed;
 
     /*
      * The supplied token is compared AGAIN, now that the bot's identity is known.
@@ -309,7 +313,11 @@ export class BotBootstrapService {
      * IS this identity, and on an ordinary reconcile the first comparison has
      * already passed or thrown.
      */
-    this.refuseRepointing({ ...view, telegramBotId: identity.botId }, input.token);
+    this.refuseRepointing(
+      { ...view, telegramBotId: identity.botId },
+      input.token,
+      probed.filledLegacyIdentity,
+    );
 
     /*
      * Already pointed here: register nothing, and say so.
@@ -504,7 +512,7 @@ export class BotBootstrapService {
      * token is proved to work and asked WHICH bot it belongs to, and only an
      * answered token is encrypted and stored.
      */
-    const identity = await this.getMe(scope, null, token);
+    const { identity } = await this.getMe(scope, null, token);
 
     const id = this.deps.ids.uuid() as BotInstanceId;
     const now = this.deps.clock.now();
@@ -591,10 +599,36 @@ export class BotBootstrapService {
     scope: TenantContext,
     existing: BotBootstrapView | null,
     token: string,
-  ): Promise<BotIdentity> {
+  ): Promise<{ readonly identity: BotIdentity; readonly filledLegacyIdentity: boolean }> {
     const probe = await this.deps.telegram.identify(token);
 
     if (probe.outcome === 'REJECTED') {
+      /*
+       * TWO messages, because `existing` decides which one is true, and the
+       * single message this replaces was written for only one of them
+       * (`OQ-TG-04` item 1).
+       *
+       * "There is no supported recovery … a newly issued one is not used,
+       * because the registration always reads the credential already stored" is
+       * a statement about a STORED credential. On a FIRST bootstrap there is
+       * none — `getMe` runs before `createFromBootstrap` precisely so a rejected
+       * token writes nothing — and rerunning with a corrected token IS the
+       * recovery. The installer's own nothing-stored summary then advised
+       * exactly that, so the two surfaces contradicted each other.
+       *
+       * `existing` is already a parameter here. The branch costs nothing and the
+       * absence of it cost an operator an afternoon being told their situation
+       * was unrecoverable when it was a typo.
+       */
+      if (existing === null) {
+        throw errors.configuration(
+          PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_TOKEN_REJECTED,
+          `Telegram rejected the bot token: ${probe.detail}. Nothing was stored: the token is ` +
+            'validated with Telegram before anything is written, so there is no credential here ' +
+            'to repair and nothing to undo. Check the token in BotFather and run this again with ' +
+            'a corrected one.',
+        );
+      }
       throw errors.configuration(
         PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_TOKEN_REJECTED,
         `Telegram rejected the bot token: ${probe.detail}. ` +
@@ -646,13 +680,28 @@ export class BotBootstrapService {
             'every stored Telegram user and chat attached to a bot that has never spoken to them.',
         );
       }
-      return identity;
+      return { identity, filledLegacyIdentity: false };
     }
 
     if (existing !== null) {
       const now = this.deps.clock.now();
       const actor = this.systemActor();
-      await this.deps.uow.run(scope, async (tx) => {
+      /*
+       * Whether the blank was actually filled, carried out of the closure.
+       *
+       * `refuseRepointing` runs AFTER this and its message used to open "Nothing
+       * was changed." — which on this path is false: the UPDATE and its audit row
+       * are committed by the time the refusal is thrown (`OQ-TG-04` item 3). The
+       * refusal itself is right; only that clause was wrong, and a refusal that
+       * misdescribes the state it leaves behind is the failure this whole phase
+       * is about.
+       *
+       * Read from `recordTelegramIdentity`'s own boolean, never assumed: its
+       * WHERE carries `telegram_bot_id IS NULL` and a concurrent run can fill the
+       * blank first, in which case nothing WAS changed here and the plain message
+       * is the true one.
+       */
+      const filledLegacyIdentity = await this.deps.uow.run(scope, async (tx) => {
         await this.deps.bots.lockTenantForBotChange(scope, tx);
         await this.requireActiveScope(scope, tx);
         /*
@@ -669,7 +718,7 @@ export class BotBootstrapService {
           { telegramBotId: identity.botId, username: identity.username, now },
           tx,
         );
-        if (!filled) return;
+        if (!filled) return false;
         await this.deps.audit.record(
           scope,
           actor,
@@ -685,10 +734,12 @@ export class BotBootstrapService {
           },
           tx,
         );
+        return true;
       });
+      return { identity, filledLegacyIdentity };
     }
 
-    return identity;
+    return { identity, filledLegacyIdentity: false };
   }
 
   /**
@@ -708,26 +759,44 @@ export class BotBootstrapService {
    * neither refused nor applied: the stored credential is used, and the outcome
    * says the run reconciled rather than changed anything.
    */
-  private refuseRepointing(existing: BotBootstrapView, suppliedToken: string | null): void {
+  private refuseRepointing(
+    existing: BotBootstrapView,
+    suppliedToken: string | null,
+    /**
+     * Whether a legacy row's identity was FILLED before this refusal was reached.
+     *
+     * `OQ-TG-04` item 3. On a row that predates migration 0038 the first
+     * `refuseRepointing` returns early — `telegramBotId` is NULL, so it compares
+     * nothing — then `getMe` commits the bot id, the username and an audit row,
+     * and only then does this call have an id to refuse against. "Nothing was
+     * changed." is false at that moment, and a refusal that misdescribes the
+     * state it leaves behind is the defect this phase exists to remove.
+     *
+     * The refusal itself stays: repointing is still forbidden, and the fill is a
+     * legitimate audited migration of a row that predates the column. Only the
+     * clause changes, which is why this is a parameter rather than a reordering
+     * — deriving the id from the stored token before the fill would decrypt a
+     * credential earlier than it needs to be, to buy prose.
+     */
+    filledLegacyIdentity = false,
+  ): void {
     if (suppliedToken === null || existing.telegramBotId === null) return;
     const claimed = suppliedToken.trim().split(':')[0] ?? '';
     if (claimed === '' || claimed === existing.telegramBotId) return;
+    const changed = filledLegacyIdentity
+      ? `This installation's own bot identity was recorded from its stored token first, which is ` +
+        'a one-off migration of a row that predates that column and is in the audit log. Nothing ' +
+        'else was changed, and nothing was repointed.'
+      : 'Nothing was changed.';
     throw errors.configuration(
       PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_DIFFERENT_BOT,
       `The supplied token belongs to bot ${claimed}, and this installation is bound to bot ` +
-        `${existing.telegramBotId}. Nothing was changed. An installer rerun reconciles; it never ` +
+        `${existing.telegramBotId}. ${changed} An installer rerun reconciles; it never ` +
         'repoints an installation at another bot, because every stored Telegram user and chat ' +
         'belongs to the one it already has.',
     );
   }
 
-  /**
-   * One code, two kinds, and the split is the remedy rather than tidiness.
-   *
-   * A timeout or a 5xx is waited out and rerun; a 4xx is Telegram telling the
-   * operator the URL itself is wrong — not https, not resolvable, a port it does
-   * not accept — and no amount of waiting fixes it.
-   */
   /**
    * Why the registration did not happen, and what that means for the operator.
    *
