@@ -2,8 +2,10 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  COMMERCIAL_ORDER_PURPOSES,
   CUSTOMER_ARRIVALS,
   CUSTOMER_NAME_MAX_LENGTH,
+  ORDER_PURPOSES,
   CUSTOMER_USERNAME_MAX_LENGTH,
   normaliseProfileField,
   profileFactsFrom,
@@ -23,6 +25,7 @@ import { CATALOGUE_FA } from '@nexa/i18n';
 import {
   BOT_INTENTS,
   CONFIRM_CALLBACK_PREFIX,
+  followUpForSettlement,
   GATEWAY_PAY_CALLBACK_PREFIX,
   intentOf,
   MANUAL_PAY_CALLBACK_PREFIX,
@@ -566,6 +569,19 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.service.list_empty',
       'bot.service.list_heading',
       'bot.service.not_found',
+      /*
+       * 4H's follow-up to `bot.order.settled`, and the one key here that is sent as a
+       * SECOND message rather than as a turn's answer.
+       *
+       * `docs/phase4h-audit.md` §5: a customer who had paid saw the settled message and
+       * then nothing at all until the subscription link arrived. Reviewed against this
+       * case's own rule — it instructs the customer to do nothing and promises a
+       * follow-up rather than a duration, because the duration depends on a panel.
+       *
+       * It is sent only for `NEW_SERVICE`. `followUpForSettlement` is the rule and has
+       * its own cases below; a renewal creates nothing and is told nothing.
+       */
+      'bot.service.provisioning',
       'bot.service.renew_button',
       'bot.service.resend_button',
       'bot.service.resume_button',
@@ -874,5 +890,47 @@ describe('a callback prefix decides what happens, so no prefix may shadow anothe
       ).not.toBe('SERVICE_TERMINATE');
     }
     expect(intentOf({ callback_query: { id: 'c', data: 'nonsense' } }).intent).toBe('UNSUPPORTED');
+  });
+});
+
+describe('what follows a settlement', () => {
+  /*
+   * The rule that decides whether `bot.service.provisioning` is sent after
+   * `bot.order.settled`, tested as a pure function.
+   *
+   * It is a function rather than an inline ternary because of what happened when it was
+   * one: no test in this repository settles a RENEW over Telegram, so removing the
+   * purpose check — telling every paying customer their service was being created —
+   * left the whole suite green. A rule that can only be reached through a webhook is a
+   * rule the suite cannot distinguish from its absence.
+   */
+  it('promises a service only for the purpose that creates one', () => {
+    expect(followUpForSettlement('NEW_SERVICE')).toEqual({
+      followUpKey: 'bot.service.provisioning',
+    });
+  });
+
+  it('says nothing further about a purpose that changes a service that exists', () => {
+    /*
+     * A renewal settles and CHANGES a service the customer already has. Telling them it
+     * is being created describes something that is not happening, and they would then
+     * wait for a link that is never coming — because they already have it.
+     *
+     * Every commercial purpose, from the frozen list, so a fourth one added later is
+     * covered by this case rather than needing a new one.
+     */
+    for (const purpose of COMMERCIAL_ORDER_PURPOSES) {
+      expect(followUpForSettlement(purpose), `${purpose} must promise nothing`).toEqual({});
+    }
+  });
+
+  it('covers every purpose the contract declares', () => {
+    /*
+     * The two cases above between them must exhaust `ORDER_PURPOSES`. Without this a
+     * purpose added to the contract would be silently untested by both.
+     */
+    expect([...COMMERCIAL_ORDER_PURPOSES, 'NEW_SERVICE'].sort()).toEqual(
+      [...ORDER_PURPOSES].sort(),
+    );
   });
 });

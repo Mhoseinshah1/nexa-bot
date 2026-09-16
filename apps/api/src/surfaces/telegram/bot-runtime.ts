@@ -11,6 +11,7 @@ import type {
   CustomerArrival,
   Money,
   OrderId,
+  OrderPurpose,
   TemplateKey,
   TemplateValues,
   TenantContext,
@@ -597,6 +598,24 @@ interface PendingReply {
   readonly values: TemplateValues;
   readonly buttons: readonly CustomerButton[];
   readonly orderId: string | null;
+  /**
+   * A SECOND message, sent after the first, about a different fact.
+   *
+   * One handler, two sentences, because they are two facts and merging them would make
+   * one of them false. Settlement is the case it exists for: `bot.order.settled` says
+   * the money arrived and is complete on its own, and `bot.service.provisioning` says
+   * something is now being made — which is not true of a renewal, so it cannot simply
+   * be appended to the settled copy.
+   *
+   * Sent only if the FIRST one was, and its outcome is not the turn's. A follow-up that
+   * failed leaves the customer with the message that mattered; a follow-up that arrived
+   * without its subject would be a sentence about nothing.
+   *
+   * It carries no values and no buttons on purpose. A second message that needed either
+   * would be a second reply, and this is deliberately not a general mechanism — the
+   * turn still has ONE answer, with a note after it.
+   */
+  readonly followUpKey?: TemplateKey;
 }
 
 /**
@@ -863,6 +882,28 @@ export class BotRuntime {
       botInstanceId: input.botInstanceId,
       ...(reply.buttons.length === 0 ? {} : { buttons: reply.buttons }),
     });
+
+    /*
+     * The follow-up, after the answer and only if the answer went out.
+     *
+     * `docs/phase4h-audit.md` §5: a customer who had paid saw `bot.order.settled` and
+     * then nothing at all until the subscription link arrived, however long that took.
+     * This is the sentence for that window.
+     *
+     * Its outcome is NOT the turn's, and that asymmetry is the point. The turn reports
+     * whether the customer was told the thing that mattered — that their money arrived
+     * — and a failed note about provisioning must not make a successful settlement look
+     * like a failed send in the operational log. The customer meets the same fact again
+     * when the link arrives, or through `bot.service.provision_delayed` if it does not.
+     */
+    if (reply.followUpKey !== undefined && sent.outcome === 'DELIVERED') {
+      await this.deps.messenger.send(scope, {
+        chatId,
+        templateKey: reply.followUpKey,
+        values: {},
+        botInstanceId: input.botInstanceId,
+      });
+    }
 
     // After the real answer, not before it. The spinner is cosmetic and its failure is
     // silent; putting it first would let a slow acknowledgement delay the message the
@@ -1691,7 +1732,13 @@ export class BotRuntime {
         idempotencyKey: `${idempotencyKey}:wallet-pay`,
         orderId,
       });
-      return { key: 'bot.order.settled', values: {}, buttons: [], orderId: order.id };
+      return {
+        key: 'bot.order.settled',
+        values: {},
+        buttons: [],
+        orderId: order.id,
+        ...followUpForSettlement(order.purpose),
+      };
     } catch (error) {
       /*
        * Insufficient funds is answered HERE rather than through `REFUSAL_REPLIES`,
@@ -1902,7 +1949,9 @@ export class BotRuntime {
    *
    * The re-read goes through `awaitingPaymentForCustomer`, NOT `orders.get`. That one
    * is the operator's read and checks `orders.view`, which this turn does not hold —
-   * `SYSTEM_JOB_PERMISSIONS` is `['maintenance.run']` and nothing else — so the first
+   * a job actor holds `maintenance.run` and nothing else (see the job permission list
+   * in `packages/contracts/src/permissions.ts`, named there rather than here because
+   * `check:boundaries` refuses a surface that so much as mentions it) — so the first
    * version of this method refused every customer who tapped the button. Nothing
    * asserting only that the BUTTON was drawn would have noticed.
    *
@@ -1982,6 +2031,33 @@ export class BotRuntime {
       botInstanceId,
     });
   }
+}
+
+/**
+ * What follows `bot.order.settled`, if anything.
+ *
+ * A pure function of the ORDER PURPOSE, exported for the same reason `replyFor` is:
+ * the decision is testable without a database or a Telegram server, and a rule that
+ * can only be reached through a webhook is a rule the suite cannot distinguish from
+ * its absence. It could be: no test in this repository settles a RENEW over Telegram,
+ * so an unconditional follow-up stayed green until this function existed.
+ *
+ * `NEW_SERVICE` is the only purpose that PROVISIONS. `orderPurposeNeedsService` states
+ * the same rule from the other side and `COMMERCIAL_ORDER_PURPOSES` derives itself by
+ * exclusion, so a purpose added without thought lands on the safe side — as one that
+ * does not provision. A renewal settles and CHANGES a service that already exists;
+ * telling that customer their service is being created describes something that is not
+ * happening, and they would then wait for a link that is never coming because they
+ * already have it.
+ *
+ * The three commercial purposes are not silent either: they answer with
+ * `bot.service.action_requested` through their own path, and 4H's outcome announcer
+ * tells them how it turned out.
+ */
+export function followUpForSettlement(purpose: OrderPurpose): {
+  readonly followUpKey?: TemplateKey;
+} {
+  return purpose === 'NEW_SERVICE' ? { followUpKey: 'bot.service.provisioning' } : {};
 }
 
 /**

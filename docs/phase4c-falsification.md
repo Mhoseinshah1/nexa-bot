@@ -144,16 +144,24 @@ different claims.
 
 ## The Telegram financial flow
 
-| #    | Rule                                                           | Mutation                                                       | Test that dies                                                                                                | Result |
-| ---- | -------------------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------ |
-| T01  | Only rails this installation can perform are offered           | a gateway button added to `paymentButtons`                     | `telegram-payment-flow.test.ts` › never offers a gateway, and refuses one tapped from an older message        | KILLED |
-| T02  | A gateway tap is NAMED, not answered as an unknown command     | `'bot.payment.unconfigured'` → `'bot.unknown_command'`         | `telegram-payment-flow.test.ts` › never offers a gateway, and refuses one tapped from an older message        | KILLED |
-| T03  | The settled message claims no service                          | the shipped copy reverted to «سرویس شما در حال آماده‌سازی است» | `telegram-payment-flow.test.ts` › settles from the wallet, debits exactly the order total, and says only that | KILLED |
-| T04  | An insufficiency names the SHORTFALL                           | the reply key → `'bot.order.unavailable'`                      | `telegram-payment-flow.test.ts` › refuses a settlement the balance cannot cover, and names the SHORTFALL      | KILLED |
-| T05  | A callback id is validated as a UUID at the boundary           | the `uuidV7Schema` parse removed                               | `telegram-payment-flow.test.ts` › ignores an AMOUNT a tampered callback tries to carry                        | KILLED |
-| T06b | A transfer key is derived from the update, not minted          | `:manual-pay` suffix → a random one                            | `telegram-payment-flow.test.ts` › treats a REDELIVERED transfer tap as a replay: one pending payment          | KILLED |
-| T07  | A BLOCKED customer reaches no financial command                | the blocked gate removed from `handle`                         | `telegram-payment-flow.test.ts` › lets a BLOCKED customer move no money at all                                | KILLED |
-| T08  | `/wallet` answers about the RESOLVED customer, from the ledger | the derived balance replaced with a constant zero              | `telegram-payment-flow.test.ts` › answers /wallet with the balance derived from the ledger                    | KILLED |
+| #    | Rule                                                           | Mutation                                                       | Test that dies                                                                                                        | Result |
+| ---- | -------------------------------------------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ------ |
+| T01  | Only rails this installation can perform are offered           | a gateway button added to `paymentButtons`                     | `telegram-payment-flow.test.ts` › never offers a gateway, and refuses one tapped from an older message                | KILLED |
+| T02  | A gateway tap is NAMED, not answered as an unknown command     | `'bot.payment.unconfigured'` → `'bot.unknown_command'`         | `telegram-payment-flow.test.ts` › never offers a gateway, and refuses one tapped from an older message                | KILLED |
+| T03  | The settled message claims no service                          | the shipped copy reverted to «سرویس شما در حال آماده‌سازی است» | `telegram-payment-flow.test.ts` › settles from the wallet, debits exactly the order total, and then says what follows | KILLED |
+| T04  | An insufficiency names the SHORTFALL                           | the reply key → `'bot.order.unavailable'`                      | `telegram-payment-flow.test.ts` › refuses a settlement the balance cannot cover, and names the SHORTFALL              | KILLED |
+| T05  | A callback id is validated as a UUID at the boundary           | the `uuidV7Schema` parse removed                               | `telegram-payment-flow.test.ts` › ignores an AMOUNT a tampered callback tries to carry                                | KILLED |
+| T06b | A transfer key is derived from the update, not minted          | `:manual-pay` suffix → a random one                            | `telegram-payment-flow.test.ts` › treats a REDELIVERED transfer tap as a replay: one pending payment                  | KILLED |
+| T07  | A BLOCKED customer reaches no financial command                | the blocked gate removed from `handle`                         | `telegram-payment-flow.test.ts` › lets a BLOCKED customer move no money at all                                        | KILLED |
+| T08  | `/wallet` answers about the RESOLVED customer, from the ledger | the derived balance replaced with a constant zero              | `telegram-payment-flow.test.ts` › answers /wallet with the balance derived from the ledger                            | KILLED |
+
+> **Renamed in 4H, prohibition intact.** That case was called "…and says only that"
+> until Phase 4H gave a settlement a SECOND message — `bot.service.provisioning`,
+> for the window `docs/phase4h-audit.md` §5 measured, where a customer who had paid
+> saw nothing until the subscription link arrived. The rule T03 pins did not change
+> and is still asserted against the settled message's own text: `bot.order.settled`
+> is sent for a RENEW too, where nothing is being made, so a copy that folds the two
+> facts back together is still false. Only the title moved.
 
 Nine mutations over the Telegram rules, eight rules covered. T06 is not a row in
 the table, for the reason W06 is not: a citation table lists rules with tests, and

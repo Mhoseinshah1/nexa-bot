@@ -130,6 +130,57 @@ describe('announcing how an operation turned out', () => {
     }
   });
 
+  it('announces a delay when a PROVISION is abandoned', async () => {
+    /*
+     * `docs/phase4h-audit.md` §5. A customer who had paid saw nothing at all once
+     * provisioning stopped finishing, for as long as it took.
+     *
+     * The subject is the SERVICE here and the operation everywhere else, and the
+     * asymmetry is load-bearing rather than an inconsistency:
+     * `CUSTOMER_NOTIFICATION_PRECONDITIONS` marks this kind as needing a re-check
+     * before sending, and `DrizzleNotificationSubjectReader` performs it by reading
+     * `services.state`. Keyed on the operation, that lookup finds nothing and answers
+     * `false`, so every delay notification would be SUPERSEDED instead of sent.
+     */
+    const { announcer, queued } = announcerFor('PROVISION');
+    await announcer.announce(scope, 'operation-1', 'service-1', 'ABANDONED');
+    expect(queued).toEqual([
+      { customerId: CUSTOMER, kind: 'SERVICE_PROVISION_DELAYED', subjectId: 'service-1' },
+    ]);
+  });
+
+  it('announces a delay when a RECONCILE is abandoned', async () => {
+    /*
+     * A reconcile is this installation asking a panel what it did. One that is
+     * abandoned leaves the service `UNRECONCILED` — a customer waiting on a link
+     * nobody can produce, which is the same silence from their side.
+     */
+    const { announcer, queued } = announcerFor('RECONCILE');
+    await announcer.announce(scope, 'operation-1', 'service-1', 'ABANDONED');
+    expect(queued.map((q) => q.kind)).toEqual(['SERVICE_PROVISION_DELAYED']);
+  });
+
+  it('says nothing when a PROVISION succeeds', async () => {
+    /*
+     * The success already produces the subscription link through `DeliveryService`,
+     * which is a better message than "your request was applied". Only the ABANDONMENT
+     * of these two is announced.
+     */
+    const { announcer, queued } = announcerFor('PROVISION');
+    await announcer.announce(scope, 'operation-1', 'service-1', 'SUCCEEDED');
+    expect(queued).toEqual([]);
+  });
+
+  it('says nothing when a background read is abandoned', async () => {
+    /*
+     * `SYNC_USAGE` reads a number back from a panel. A customer waiting on nothing is
+     * not delayed, and announcing it would be a message about our housekeeping.
+     */
+    const { announcer, queued } = announcerFor('SYNC_USAGE');
+    await announcer.announce(scope, 'operation-1', 'service-1', 'ABANDONED');
+    expect(queued).toEqual([]);
+  });
+
   it('keys the notification on the operation, not the service', async () => {
     /*
      * `customer_notifications_subject_key` is (tenant, kind, subject). Keying on the

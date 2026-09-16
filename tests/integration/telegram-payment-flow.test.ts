@@ -283,7 +283,7 @@ describe('the customer payment flow over Telegram', () => {
   // The wallet settlement
   // -------------------------------------------------------------------------
 
-  it('settles from the wallet, debits exactly the order total, and says only that', async () => {
+  it('settles from the wallet, debits exactly the order total, and then says what follows', async () => {
     const orderId = await awaitingPayment();
     await creditWallet(CUSTOMER_TELEGRAM_ID, 1_000_000n);
     sent = [];
@@ -307,19 +307,30 @@ describe('the customer payment flow over Telegram', () => {
     expect(String(ledger[1]?.['amount'])).toBe('250000');
 
     /*
-     * The message says the payment was confirmed and NOTHING about a service.
+     * TWO messages since 4H, and keeping them apart is the point.
      *
-     * The shipped copy used to say «سرویس شما در حال آماده‌سازی است» — "your service is
-     * being prepared" — and this is the phase that first sends this key. Asserted as a
-     * PROHIBITION as well as an equality, so a future re-word that reintroduces the
-     * claim fails here rather than in production.
+     * The first says the money arrived and NOTHING about a service. The shipped copy
+     * used to say «سرویس شما در حال آماده‌سازی است» — "your service is being prepared" —
+     * when 4C provisioned nothing, and the prohibition below is kept verbatim so a
+     * future re-word that folds the two facts back together fails here rather than in
+     * production. It is still the right prohibition: `bot.order.settled` is also sent
+     * for a RENEW, where nothing is being made.
+     *
+     * The second is `bot.service.provisioning`, and `docs/phase4h-audit.md` §5 is the
+     * gap it closes — a customer who had paid saw the settled message and then nothing
+     * at all until the subscription link arrived, however long that took.
      */
-    const text = String(lastMessage()?.body['text']);
-    expect(text).toBe(CATALOGUE_FA['bot.order.settled']);
+    const texts = messages().map((one) => String(one.body['text']));
+    expect(texts).toEqual([
+      CATALOGUE_FA['bot.order.settled'],
+      CATALOGUE_FA['bot.service.provisioning'],
+    ]);
+    const settled = texts[0] ?? '';
     for (const claim of ['آماده‌سازی', 'سرویس شما', 'در حال ساخت']) {
-      expect(text, `the settled message claims "${claim}" and 4C provisions nothing`).not.toContain(
-        claim,
-      );
+      expect(
+        settled,
+        `the settled message claims "${claim}", which is false for a renewal`,
+      ).not.toContain(claim);
     }
   });
 
@@ -363,9 +374,21 @@ describe('the customer payment flow over Telegram', () => {
       'OrderSettled',
       'WalletEntryRecorded',
     ]);
-    // The customer is answered BOTH times. A replay that stayed silent would leave a
-    // customer who never saw the first reply staring at nothing, for ever.
-    expect(messages()).toHaveLength(2);
+    /*
+     * The customer is answered BOTH times, and since 4H each answer is two messages —
+     * the settlement and what follows it — so four in total.
+     *
+     * A replay that stayed silent would leave a customer who never saw the first reply
+     * staring at nothing, for ever. The pairing is asserted rather than the count
+     * alone, so a follow-up that started arriving without its subject, or a subject
+     * that lost its follow-up on the replay path, fails here.
+     */
+    expect(messages().map((one) => String(one.body['text']))).toEqual([
+      CATALOGUE_FA['bot.order.settled'],
+      CATALOGUE_FA['bot.service.provisioning'],
+      CATALOGUE_FA['bot.order.settled'],
+      CATALOGUE_FA['bot.service.provisioning'],
+    ]);
   });
 
   it('converges two concurrent settlement taps on ONE financial effect', async () => {

@@ -25,6 +25,19 @@ export const CUSTOMER_INITIATED_OPERATIONS: readonly OperationType[] = [
   'ADD_TIME',
 ];
 
+/**
+ * The operations whose ABANDONMENT is a delay the customer is waiting on.
+ *
+ * Neither is customer-initiated, which is why they are a separate list rather than
+ * members of the one above: the customer did not ask for either, but they ARE waiting
+ * on what both produce — a subscription link they have paid for.
+ *
+ * `SYNC_USAGE` is deliberately absent. It reads a number back from a panel and a
+ * customer waiting on nothing is not delayed; announcing it would be a message about
+ * this installation's housekeeping.
+ */
+export const DELAY_ANNOUNCED_OPERATIONS: readonly OperationType[] = ['PROVISION', 'RECONCILE'];
+
 /** What the announcer needs to look up. Narrow, so a loop cannot mutate either row. */
 export interface OperationOutcomeReader {
   /** The operation's type and the service's customer, or null if either is gone. */
@@ -80,6 +93,45 @@ export class OperationOutcomeAnnouncer {
     await this.deps.uow.run(scope, async (tx) => {
       const subject = await this.deps.reader.subjectFor(scope, operationId, serviceId, tx);
       if (subject === null) return;
+
+      /*
+       * The one thing a customer is told about an operation they did NOT start.
+       *
+       * `docs/phase4h-audit.md` §5: a customer who had paid saw `bot.order.settled`,
+       * then `bot.service.provisioning`, and then nothing at all if provisioning did
+       * not finish — for as long as it took, with no way to ask.
+       *
+       * ABANDONED only. A held-off operation is still being retried and a FAILED one
+       * with attempts left goes back to PLANNED, so saying "this is taking longer than
+       * expected" then would be a statement the next attempt contradicts — and
+       * `bot.service.provision_delayed` deliberately does NOT invite a retry, because a
+       * retry after an unknown outcome is how a duplicate paid-for account is made.
+       * `OPERATION_MACHINE` reaches ABANDONED when nothing else can resolve it, which
+       * is the moment the sentence becomes true.
+       *
+       * `RECONCILE` counts as well as `PROVISION`: a reconcile is this installation
+       * asking a panel what it did, and one that is abandoned leaves the service
+       * `UNRECONCILED` — a customer waiting on a link nobody can produce.
+       *
+       * The subject is the SERVICE, not the operation, and it is the one place in this
+       * class where that is right: `CUSTOMER_NOTIFICATION_PRECONDITIONS` marks this
+       * kind as needing a re-check, and the check reads `services.state`. Keying on the
+       * operation would leave `stillHolds` looking up a service id that is an operation
+       * id, and a lookup that finds nothing answers `false` — so every delay
+       * notification would be SUPERSEDED instead of sent.
+       */
+      if (outcome === 'ABANDONED' && DELAY_ANNOUNCED_OPERATIONS.includes(subject.type)) {
+        await this.deps.notifier.notify(
+          scope,
+          subject.customerId,
+          'SERVICE_PROVISION_DELAYED',
+          serviceId,
+          this.deps.clock.now(),
+          tx,
+        );
+        return;
+      }
+
       if (!CUSTOMER_INITIATED_OPERATIONS.includes(subject.type)) return;
 
       /*

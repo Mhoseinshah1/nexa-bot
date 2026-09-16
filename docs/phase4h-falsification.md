@@ -100,6 +100,40 @@ also throw and neither would prove the trigger fired:
 - `payments_customer_signal_check` — for a claim on anything that is not a
   `MANUAL_TRANSFER`.
 
+## What is said while a customer waits
+
+| #      | Rule                                                  | Mutation                                                    | Named test                                                                                                            | Result |
+| ------ | ----------------------------------------------------- | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ------ |
+| F4H-15 | a settlement is followed by a second message          | the follow-up send short-circuited to false                 | `telegram-payment-flow.test.ts` › settles from the wallet, debits exactly the order total, and then says what follows | KILLED |
+| F4H-16 | only `NEW_SERVICE` is told a service is being made    | the purpose check removed, so every settlement promises one | `bot-runtime.test.ts` › says nothing further about a purpose that changes a service that exists                       | KILLED |
+| F4H-17 | `NEW_SERVICE` IS told                                 | the follow-up never chosen                                  | `bot-runtime.test.ts` › promises a service only for the purpose that creates one                                      | KILLED |
+| F4H-18 | an abandoned PROVISION or RECONCILE announces a delay | the `ABANDONED` guard dropped                               | `operation-outcome-announcer.test.ts` › says nothing when a PROVISION succeeds                                        | KILLED |
+| F4H-19 | the delay notification is keyed on the SERVICE        | `operationId` passed as the subject                         | `operation-outcome-announcer.test.ts` › announces a delay when a PROVISION is abandoned                               | KILLED |
+| F4H-20 | a background read being abandoned is not a delay      | `SYNC_USAGE` added to `DELAY_ANNOUNCED_OPERATIONS`          | `operation-outcome-announcer.test.ts` › says nothing when a background read is abandoned                              | KILLED |
+
+F4H-16 is the third rule this phase that survived its first mutation, and the
+reason is the same shape as the other two: **no test in this repository settles a
+RENEW over Telegram**, so an unconditional follow-up — every paying customer told
+their service was being created, including the ones renewing a service they
+already have — left the whole suite green.
+
+Building a renewal through the webhook needs an ACTIVE service and an add-on
+catalogue, which is a fixture rather than a case. So the DECISION was extracted
+instead: `followUpForSettlement(purpose)` is a pure function, exported and unit
+tested the way `replyFor` already is, and a third case asserts the two cases
+between them exhaust `ORDER_PURPOSES` — so a fourth purpose added to the contract
+cannot be silently untested by both.
+
+F4H-19 is the counterpart of F4H-07 and points the opposite way, which is worth
+stating because the two look inconsistent. Every other announcement is keyed on
+the OPERATION, so that a second renewal is not swallowed by the first's unique
+index. This one is keyed on the SERVICE, because
+`CUSTOMER_NOTIFICATION_PRECONDITIONS` marks `SERVICE_PROVISION_DELAYED` as needing
+a re-check before sending and `DrizzleNotificationSubjectReader` performs it by
+reading `services.state`. Keyed on the operation, that lookup finds nothing,
+answers `false`, and every delay notification is SUPERSEDED instead of sent — a
+lane that works perfectly and delivers none of them.
+
 ## The defect a button assertion could not see
 
 Not a mutation — a real bug, found by reading the diff after the tests were green,
