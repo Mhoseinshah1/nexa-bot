@@ -2007,10 +2007,15 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
        * a stop landing between that commit and Telegram's 429 must not turn a
        * recorded transfer into silence. It may enqueue and nothing else.
        */
-      queueRateLimitedFact: async (scope, customerId, kind, subjectId) => {
-        await uow.run(scope, async (tx) =>
-          customerNotifier.notify(scope, customerId, kind, subjectId, clock.now(), tx),
-        );
+      queueRateLimitedFact: async (scope, customerId, kind, subjectId, retryAfterMs) => {
+        await uow.run(scope, async (tx) => {
+          const now = clock.now();
+          // Telegram's own deadline becomes the row's floor. `undefined` means it
+          // sent no `retry_after`, and then the row is due now like every other.
+          const notBefore =
+            retryAfterMs === undefined ? null : new Date(now.getTime() + retryAfterMs);
+          return customerNotifier.notify(scope, customerId, kind, subjectId, now, tx, notBefore);
+        });
       },
       customers: customerService,
       payments: paymentService,

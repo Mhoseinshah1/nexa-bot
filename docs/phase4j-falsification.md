@@ -81,3 +81,40 @@ This is the inverse of every other row: the mutation is a **fix**, and the test
 exists to refuse it. `docs/conventions.md` carries the exception and its bound so
 the next reader can tell a decision from an oversight without re-deriving the
 argument.
+
+## The Codex review of PR #32, processed once
+
+Three findings, all CONFIRMED by reading the code rather than by accepting the
+verdict — and one of them confirmed with a correction to its premise, which is
+recorded below rather than smoothed over.
+
+| #      | Rule                                                                      | Mutation                                                                 | Named test                                                                                           | Result |
+| ------ | ------------------------------------------------------------------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- | ------ |
+| F4J-10 | a kind this build cannot render is deferred, never stamped or spent       | the `row.kind in CUSTOMER_NOTIFICATION_TEMPLATES` guard made unreachable | `customer-notifications.test.ts` › defers a kind this build cannot render instead of spending it     | KILLED |
+| F4J-11 | a producer that knows a deadline sets the row's floor                     | `input.nextAttemptAt ?? null` reverted to `null`                         | `customer-notifications.test.ts` › honours a producer that already knows when the dispatcher may try | KILLED |
+| F4J-12 | the sweep is served by its partial index rather than the answered history | the declaration deleted from `ONLINE_INDEXES` and the index dropped      | `provisioning.test.ts` › finds the unanswered one without walking the history behind it              | KILLED |
+
+### C3, and the half of its premise that does not hold here
+
+Codex's P1 asked for the two new kinds to be STAGED across two releases: reader
+support everywhere first, producer second, because widening the `kind` CHECK is
+write-compatible and not reader-compatible.
+
+The mechanism is exactly right. An older dispatcher indexes
+`CUSTOMER_NOTIFICATION_TEMPLATES` with a kind it has never heard of, gets
+`undefined`, and — before this fix — had already stamped `send_started_at`, so the
+throw left `reapStranded` to resolve a message that was never sent. Permanently
+lost, no Telegram request, nothing saying so.
+
+What does not hold is that it is reachable for THIS release. Nothing has ever been
+deployed — `CLAUDE.md` and `docs/vps-acceptance.md` both record that the deployment
+checkpoint has never been run against a real server — so there is no older worker
+in any field to meet these rows. The first release carries all of Phase 4 at once.
+
+So the finding is taken as a RULE rather than as a staging requirement, and the
+fix is in code rather than in a release plan: the dispatcher now refuses a kind it
+cannot render, deferring the row with no stamp and no attempt spent, so a replica
+that DOES know it claims it later. That pays off on every future kind addition,
+including the direction Codex named, and it is what makes the rule enforceable
+rather than a note somebody has to remember. `docs/conventions.md` carries the
+staging rule beside it.

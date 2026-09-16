@@ -70,12 +70,28 @@ export class CustomerNotifier {
     subjectId: string,
     now: Date,
     tx: TransactionScope,
+    /**
+     * The earliest the dispatcher may try, when the caller already knows one.
+     *
+     * Optional and trailing, so every background producer stays as it was: a
+     * fact that just became true is due now. Only the rate-limit fallback
+     * passes it, carrying the `retry_after` Telegram answered the interactive
+     * send with — see `CustomerNotificationEnqueue.nextAttemptAt`.
+     */
+    notBefore?: Date | null,
   ): Promise<boolean> {
     const botInstanceId = await this.deps.bots.botFor(scope, customerId, tx);
     if (botInstanceId === null) return false;
     return this.deps.notifications.enqueue(
       scope,
-      { id: this.deps.ids.uuid(), customerId, botInstanceId, kind, subjectId },
+      {
+        id: this.deps.ids.uuid(),
+        customerId,
+        botInstanceId,
+        kind,
+        subjectId,
+        nextAttemptAt: notBefore ?? null,
+      },
       now,
       tx,
     );

@@ -53,6 +53,22 @@ export interface NotificationSweepReport {
   /** Telegram asked us to slow down. No attempt spent, back on the queue. */
   readonly rateLimited: number;
   /**
+   * Claimed, and the kind is one THIS build cannot render. Deferred, never spent.
+   *
+   * A row a NEWER release produced. `customer_notifications.kind` is pinned by a CHECK
+   * built from the contract, so widening it is write-compatible — and it is not READER
+   * compatible: an older dispatcher indexing `CUSTOMER_NOTIFICATION_TEMPLATES` with a
+   * kind it has never heard of gets `undefined`, and before this it had already stamped
+   * `send_started_at`, so the throw left a row the reaper resolved `UNCONFIRMED` — lost
+   * for ever, with no Telegram request ever made.
+   *
+   * That is the rolling-update and the ROLLBACK window, and rollback is the one that
+   * matters: `botctl rollback` never restores the database, so rows a newer release
+   * wrote outlive it. Deferring leaves the row exactly where a replica that DOES know
+   * the kind will find it. Found by the Codex review of PR #32.
+   */
+  readonly unsupported: number;
+  /**
    * Claimed, then found to belong to a customer an operator had just blocked.
    *
    * Back on the queue with no attempt spent, NOT failed: `claimDue` excludes a blocked
@@ -133,6 +149,7 @@ export class CustomerNotificationService {
       unconfirmed: 0,
       superseded: 0,
       rateLimited: 0,
+      unsupported: 0,
       blocked: 0,
       unreachable: 0,
       errored: 0,
@@ -170,6 +187,7 @@ export class CustomerNotificationService {
       unconfirmed: counts.unconfirmed ?? 0,
       superseded: counts.superseded ?? 0,
       rateLimited: counts.rateLimited ?? 0,
+      unsupported: counts.unsupported ?? 0,
       blocked: counts.blocked ?? 0,
       unreachable: counts.unreachable ?? 0,
       errored: counts.errored ?? 0,
@@ -179,6 +197,37 @@ export class CustomerNotificationService {
 
   private async deliverOne(scope: TenantContext, row: CustomerNotificationRecord): Promise<string> {
     try {
+      /*
+       * A kind this build cannot render: put it back, spend nothing, stamp nothing.
+       *
+       * FIRST, before the precondition and long before `markSendStarted`, because the
+       * damage this prevents is done by the stamp. See `unsupported` on the report for
+       * the window it closes; the short version is that a newer release can write a kind
+       * an older dispatcher has no template for, `botctl rollback` never restores the
+       * database, and the old code stamped the row before discovering it could not
+       * render it — leaving the reaper to resolve a message that was never sent.
+       *
+       * Deferred rather than failed, and by the ordinary backoff: nothing is wrong with
+       * the row. A replica that knows the kind claims it on a later pass, and until one
+       * exists the row waits instead of being spent.
+       *
+       * The `in` check is a RUNTIME one although `row.kind` is typed. The type says what
+       * this build's contract declares; the row says what some build wrote.
+       */
+      if (!(row.kind in CUSTOMER_NOTIFICATION_TEMPLATES)) {
+        const at = this.deps.clock.now();
+        await this.deps.uow.run(scope, async (tx) =>
+          this.deps.notifications.deferUntil(
+            scope,
+            row.id,
+            new Date(at.getTime() + CUSTOMER_NOTIFICATION_BACKOFF_MS),
+            at,
+            tx,
+          ),
+        );
+        return 'unsupported';
+      }
+
       /*
        * The precondition, re-checked AFTER the claim and before the send.
        *

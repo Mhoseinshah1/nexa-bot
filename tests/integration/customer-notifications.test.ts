@@ -346,6 +346,86 @@ describe('the customer notification lane', () => {
     ).toEqual(['DELIVERED', 'DELIVERED']);
   });
 
+  it('defers a kind this build cannot render instead of spending it', async () => {
+    /*
+     * A row a NEWER release produced, seen by THIS dispatcher. Found by the Codex
+     * review of PR #32, and the window that makes it reachable is `botctl rollback`:
+     * it never restores the database, so rows a newer release wrote outlive it.
+     *
+     * The CHECK constraint is dropped for the insert and restored afterwards, which
+     * is exactly how such a row comes to exist — a future migration widens it. The
+     * old code stamped `send_started_at` before indexing the template map, so the
+     * throw left the reaper to resolve a message that was never sent: lost for ever,
+     * with no Telegram request ever made.
+     */
+    const id = await customer(tenantA, '5015');
+    const rowId = ctx.container.ids.uuid();
+    await ctx.container.database.db.execute(
+      sql`ALTER TABLE customer_notifications DROP CONSTRAINT customer_notifications_kind_check`,
+    );
+    try {
+      await ctx.container.database.db.execute(sql`
+        INSERT INTO customer_notifications (id, tenant_id, customer_id, bot_instance_id, kind, subject_id, state, attempts, created_at, updated_at)
+        VALUES (${rowId}, ${tenantA.tenantId}, ${id}, ${SEED_IDS.botA1}, 'A_KIND_FROM_THE_FUTURE',
+                ${ctx.container.ids.uuid()}, 'PENDING', 0, now(), now())`);
+
+      const report = await sweep(lane());
+
+      expect(report.claimed, 'the row was not claimable at all').toBe(1);
+      expect(report.unsupported).toBe(1);
+      expect(sends, 'a kind with no template was sent anyway').toHaveLength(0);
+
+      const [row] = await rows(tenantA);
+      expect(row?.state, 'the row was spent rather than deferred').toBe('PENDING');
+      expect(row?.attempts, 'an attempt was spent on a build mismatch').toBe(0);
+      expect(row?.send_started_at, 'the stamp that makes the row unrecoverable').toBeNull();
+      expect(row?.resolved_at).toBeNull();
+    } finally {
+      await ctx.container.database.db.execute(
+        sql`DELETE FROM customer_notifications WHERE id = ${rowId}`,
+      );
+      await ctx.container.database.db.execute(sql`
+        ALTER TABLE customer_notifications ADD CONSTRAINT customer_notifications_kind_check
+        CHECK (kind IN ('PAYMENT_REJECTED','PAYMENT_EXPIRED','ORDER_EXPIRED','SERVICE_ACTION_SUCCEEDED','SERVICE_ACTION_FAILED','SERVICE_PROVISION_DELAYED','PAYMENT_TRANSFER_RECORDED','ORDER_CANCELLED'))`);
+    }
+  });
+
+  it('honours a producer that already knows when the dispatcher may try', async () => {
+    /*
+     * The rate-limit fallback is the one producer that knows a deadline: Telegram
+     * answered its interactive send 429 with a `retry_after`. Enqueueing with no floor
+     * lets the next sweep walk into the same refusal — a request Telegram already
+     * declined, and a longer throttle for every other message to that chat.
+     */
+    const id = await customer(tenantA, '5016');
+    const later = new Date(ctx.container.clock.now().getTime() + 120_000);
+    await ctx.container.uow.run(tenantA, async (tx) =>
+      repo.enqueue(
+        tenantA,
+        {
+          id: ctx.container.ids.uuid(),
+          customerId: id,
+          botInstanceId: BOT_A,
+          kind: 'PAYMENT_TRANSFER_RECORDED',
+          subjectId: ctx.container.ids.uuid(),
+          nextAttemptAt: later,
+        },
+        ctx.container.clock.now(),
+        tx,
+      ),
+    );
+
+    expect((await sweep(lane())).claimed, 'the floor was ignored').toBe(0);
+    expect(sends).toHaveLength(0);
+
+    // And it is claimed once the floor passes, so the floor is a delay and not a loss.
+    await ctx.container.database.db.execute(
+      sql`UPDATE customer_notifications SET next_attempt_at = now() - interval '1 second'
+          WHERE tenant_id = ${tenantA.tenantId}`,
+    );
+    expect((await sweep(lane())).delivered).toBe(1);
+  });
+
   it('has a real reader for every kind that declares a precondition', async () => {
     /*
      * The assertion the fake `stillHolds` above cannot make, and the one that catches

@@ -983,6 +983,73 @@ describe('provisioning invariants', () => {
       ).not.toBeNull();
     });
 
+    it('finds the unanswered one without walking the history behind it', async () => {
+      /*
+       * `dueForAnnouncement` runs on EVERY provisioner tick, and the rows it wants are
+       * the rarest in the table: an operation is unanswered only between its terminal
+       * transition and the announcement. Without the partial index that is a scan of
+       * every terminal operation an installation has ever completed, every tick, to
+       * find none. Raised by the Codex review of PR #32.
+       *
+       * An index is a CLAIM until the planner is asked the question a CALLER asks, so
+       * this asks it. Measured on THIS fixture, by deleting the declaration from
+       * `ONLINE_INDEXES`, dropping the index and reading the failure: 67 buffers and a
+       * `Seq Scan on provisioning_operations` without it. With it the assertion below
+       * passes under 25. Both figures come from this file rather than from a
+       * standalone probe, which is a distinction this repository has got wrong before.
+       */
+      const now = ctx.container.clock.now();
+      const id = await terminalOperation('sweep-plan', {
+        completedAt: new Date(now.getTime() - GRACE_MS - 60_000),
+      });
+      const seed = await operations.findById(tenantA, id);
+      if (seed === null) throw new Error('no seed operation');
+
+      // 3,000 operations this installation has already answered for, which is what the
+      // sweep must NOT walk. Straight into the table: this is about the planner.
+      await ctx.container.database.db.execute(sql`
+        INSERT INTO provisioning_operations
+          (id, tenant_id, operation_id, service_id, panel_id, type, state, attempts,
+           completed_at, announced_at, created_at, updated_at)
+        SELECT gen_random_uuid(), ${tenantA.tenantId}, lpad(to_hex(g + 4096), 16, '0'),
+               ${seed.serviceId}, ${seed.panelId}, 'SYNC_USAGE', 'SUCCEEDED', 1,
+               now() - ((g + 3600) || ' seconds')::interval,
+               now() - ((g + 3000) || ' seconds')::interval,
+               now() - ((g + 7200) || ' seconds')::interval,
+               now() - ((g + 3000) || ' seconds')::interval
+          FROM generate_series(1, 3000) AS g`);
+      await ctx.container.database.db.execute(sql`ANALYZE provisioning_operations`);
+
+      const explained = await ctx.container.database.db.execute(sql`
+        EXPLAIN (ANALYZE, BUFFERS, COSTS OFF, TIMING OFF, SUMMARY OFF)
+        SELECT id FROM provisioning_operations
+         WHERE tenant_id = ${tenantA.tenantId}
+           AND state IN ('SUCCEEDED', 'ABANDONED')
+           AND announced_at IS NULL
+           AND completed_at < ${new Date(now.getTime() - GRACE_MS)}
+         ORDER BY completed_at ASC
+         LIMIT 25`);
+      const plan = (explained.rows as { 'QUERY PLAN': string }[])
+        .map((row) => row['QUERY PLAN'])
+        .join('\n');
+
+      expect(plan, `the sweep is not served by its index:\n${plan}`).toContain(
+        'provisioning_operations_unannounced_idx',
+      );
+      const buffers = /Buffers: shared( hit=(\d+))?( read=(\d+))?/.exec(plan);
+      expect(buffers, `no buffer accounting in:\n${plan}`).not.toBeNull();
+      expect(
+        Number(buffers?.[2] ?? 0) + Number(buffers?.[4] ?? 0),
+        `the sweep walked the answered history:\n${plan}`,
+      ).toBeLessThan(25);
+
+      // And it still returns the right row, so the index is not merely fast.
+      const due = await ctx.container.uow.run(tenantA, async (tx) =>
+        operations.dueForAnnouncement(tenantA, new Date(now.getTime() - GRACE_MS), 25, tx),
+      );
+      expect(due).toEqual([id]);
+    });
+
     it('never sweeps an operation belonging to another tenant', async () => {
       const now = ctx.container.clock.now();
       const before = new Date(now.getTime() - GRACE_MS);

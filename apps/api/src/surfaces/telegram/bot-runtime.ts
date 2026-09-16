@@ -574,6 +574,15 @@ export interface BotRuntimeDeps {
     customerId: UserId,
     kind: CustomerNotificationKind,
     subjectId: string,
+    /**
+     * Telegram's own `retry_after`, when it supplied one.
+     *
+     * Passed through rather than dropped, because it is the one thing this path
+     * knows and the lane does not. Without it the row is due immediately and the
+     * next sweep walks into the same refusal — a request Telegram already
+     * declined, and a longer throttle for every other message to that chat.
+     */
+    retryAfterMs: number | undefined,
   ) => Promise<void>;
   /**
    * The plan a service was SOLD as, from the order's frozen snapshot.
@@ -982,6 +991,7 @@ export class BotRuntime {
         customer.id,
         reply.fallback.kind,
         reply.fallback.subjectId,
+        sent.retryAfterMs,
       );
     }
 

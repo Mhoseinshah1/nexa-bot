@@ -314,6 +314,31 @@ consulted for it; an integration test asserts the denial is recorded.
 
 ---
 
+## A widened enum is write-compatible, not reader-compatible
+
+**Rule.** Adding a value to an enum that a CHECK constraint pins — a
+notification kind, an operation type, a state — makes the database accept it
+immediately and does not make older code able to READ it. A release that both
+widens the constraint and produces the new value assumes every reader is on that
+release. Either stage it (readers first, producer next) or make the reader
+refuse what it cannot handle.
+
+**Why.** `botctl rollback` never restores the database, so rows a newer release
+wrote outlive it. The customer notification lane is the worked example: an older
+dispatcher looked a new kind up in `CUSTOMER_NOTIFICATION_TEMPLATES`, got
+`undefined`, and had already stamped `send_started_at` — so the throw left the
+stranded-send reaper to resolve a message that was never sent. Permanently lost,
+no Telegram request, nothing saying so. Raised by the Codex review of PR #32.
+
+**Enforced by.** `CustomerNotificationService.deliverOne` refuses a kind with no
+template BEFORE the stamp, deferring the row with no attempt spent, so a replica
+that knows the kind claims it later.
+`tests/integration/customer-notifications.test.ts` › defers a kind this build
+cannot render instead of spending it. The same shape is owed by any other lane
+that dispatches on a pinned enum.
+
+---
+
 ## A stopped scope accepts no new business work — with one stated exception
 
 **Rule.** Every write path reads `ScopeActivityReader` **inside its
