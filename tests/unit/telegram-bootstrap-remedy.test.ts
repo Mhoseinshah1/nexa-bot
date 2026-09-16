@@ -83,24 +83,42 @@ describe('the bootstrap remedy table', () => {
     }
   });
 
-  it('does not promise key material fixes the two it cannot fix', () => {
+  it('does not promise key material fixes the ONE it cannot fix', () => {
+    // `SECRET_KEY_ID_MISMATCH` is the stored column disagreeing with the
+    // envelope. No key material changes what either of them says, so this is the
+    // one place the claim is true.
     expect(bootstrapRemedy(PLATFORM_ERROR_CODES.SECRET_KEY_ID_MISMATCH)).toContain(
-      'restoring key material does NOT fix it',
-    );
-    expect(bootstrapRemedy(PLATFORM_ERROR_CODES.SECRET_AUTH_FAILED)).toContain(
       'restoring key material does NOT fix it',
     );
   });
 
-  it('does name the key-shaped repair for the two that have one', () => {
+  it('does not tell an operator a wrong key cannot be the cause of an auth failure', () => {
+    // The regression. This text used to say a key was not the problem while
+    // listing a wrong key among the causes it cannot distinguish — and a wrong
+    // key is the ONE of those causes an operator can undo, by restoring the
+    // material they replaced. Found by the Codex review of PR 31.
+    const text = bootstrapRemedy(PLATFORM_ERROR_CODES.SECRET_AUTH_FAILED);
+    expect(text).not.toContain('does NOT fix it');
+    expect(text).not.toContain('A key is not the problem');
+    expect(text).toContain('restoring the original is worth trying first');
+  });
+
+  it('does not name a configuration remedy for an envelope that may be truncated', () => {
+    // The other regression, and the same shape from the other side.
+    // `secret-cipher.ts` raises this code for a v1 value with acceptance off AND
+    // for an envelope that is not a recognised format — the second is a damaged
+    // value, and the cipher's own message, printed directly above this, says so.
+    // Recommending a configuration change for it contradicted that message.
+    const text = bootstrapRemedy(PLATFORM_ERROR_CODES.SECRET_VERSION_UNSUPPORTED);
+    expect(text).toContain('truncated');
+    expect(text).not.toContain('Re-enable acceptance, or upgrade');
+  });
+
+  it('does name the key-shaped repair for the one that has one', () => {
     // The other side, so "restoring does not fix it" cannot become the answer to
-    // everything: a missing key genuinely is restored, and a rejected envelope
-    // version genuinely is re-enabled.
+    // everything: a missing key genuinely is restored.
     expect(bootstrapRemedy(PLATFORM_ERROR_CODES.SECRET_KEY_UNKNOWN)).toContain(
       'restore SECRETS_KEK',
-    );
-    expect(bootstrapRemedy(PLATFORM_ERROR_CODES.SECRET_VERSION_UNSUPPORTED)).toContain(
-      'Re-enable acceptance',
     );
     expect(bootstrapRemedy(PLATFORM_ERROR_CODES.SECRET_KEY_UNKNOWN)).not.toContain(
       'does NOT fix it',
