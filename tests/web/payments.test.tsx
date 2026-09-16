@@ -394,6 +394,37 @@ describe('the payment detail', () => {
     expect(screen.getByRole('button', { name: 'تأیید دریافت' })).toBeDisabled();
   });
 
+  it('disables the confirmation while a rejection is in flight, the mirror case', async () => {
+    /*
+     * The OTHER direction, and it needs its own test rather than a second assertion in
+     * the one above. Each button carries its own expression, so a test that only clicks
+     * confirm leaves the confirm button's mention of `reject.isPending` unexercised:
+     * removing it was measured to survive that test (F4G-23) and to die against this one.
+     */
+    stubApi(detail(payment({ state: 'PENDING', method: 'MANUAL_TRANSFER' })));
+    const answered = globalThis.fetch;
+    vi.stubGlobal('fetch', (input: unknown, init?: RequestInit) =>
+      String(input).endsWith('/reject')
+        ? new Promise<Response>(() => {})
+        : (answered as typeof fetch)(input as RequestInfo, init),
+    );
+
+    const view = renderPage(<PaymentDetailPage id={ROW_ID} mayReview denied={false} />);
+    await screen.findAllByText('a1b2c3d4e5f60718:manual');
+
+    const note = view.container.querySelector('#payment-note') as HTMLInputElement;
+    const reason = view.container.querySelector('#payment-reason') as HTMLInputElement;
+    fireEvent.change(note, { target: { value: 'money arrived' } });
+    fireEvent.change(reason, { target: { value: 'no transfer arrived' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'رد رسید' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'تأیید دریافت' })).toBeDisabled();
+    });
+    expect(screen.getByRole('button', { name: 'رد رسید' })).toBeDisabled();
+  });
+
   it('offers no rejection to an operator without receipts.review', async () => {
     stubApi(detail(payment({ state: 'PENDING', method: 'MANUAL_TRANSFER' })));
     const view = renderPage(<PaymentDetailPage id={ROW_ID} mayReview={false} denied={false} />);
