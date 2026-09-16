@@ -49,15 +49,25 @@ export class TelegramBotBootstrapGateway implements BotBootstrapTelegram {
           username: outcome.identity.username,
         };
       /*
-       * PERMANENT is REJECTED: Telegram read the token and said no.
+       * PERMANENT splits, and the field that splits it was already here.
        *
-       * The 401 that a revoked token produces arrives here, and so does a 2xx
-       * that did not describe a bot — which means the configured API base is not
-       * Telegram. Both are fixed by changing configuration rather than by
-       * waiting, which is the distinction the two codes exist to draw.
+       * Two causes land in `FAILED_PERMANENT`: the 401 a revoked token produces,
+       * and a 2xx that did not describe a bot — which means the configured API
+       * base is not Telegram. This used to answer `REJECTED` for both, and the
+       * service turns `REJECTED` into "Telegram rejected the bot token", so a
+       * misconfigured `TELEGRAM_API_BASE_URL` sent the operator to BotFather to
+       * reissue a credential that was never the problem (`OQ-TG-04` items 6 and
+       * 7). `telegramGetMe` has always reported the difference; the loss was
+       * here, in the translation this class exists to do.
+       *
+       * Keyed on the exact code, not a prefix or a substring of the message. A
+       * message is written for a person and can be reworded; `getme_shape` is
+       * the one value that means this and is set in one place.
        */
       case 'FAILED_PERMANENT':
-        return { outcome: 'REJECTED', detail: outcome.errorMessage };
+        return outcome.errorCode === 'telegram.rejected.getme_shape'
+          ? { outcome: 'NOT_TELEGRAM', detail: outcome.errorMessage }
+          : { outcome: 'REJECTED', detail: outcome.errorMessage };
       /*
        * Everything else is UNREACHABLE, 429 included.
        *

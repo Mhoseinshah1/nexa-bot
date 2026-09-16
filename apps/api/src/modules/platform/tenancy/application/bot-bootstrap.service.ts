@@ -606,6 +606,27 @@ export class BotBootstrapService {
           'the credential already stored.',
       );
     }
+    /*
+     * The configured API base answered, and it is not Telegram.
+     *
+     * Checked BEFORE the `!== 'IDENTIFIED'` fallthrough, which would file it as
+     * UNREACHABLE and tell the operator to rerun — and rerunning asks the same
+     * wrong host the same question. A CONFIGURATION error, not an upstream one:
+     * nothing is waiting to come back.
+     *
+     * The message names the variable, because the operator's next action is to
+     * look at it, and says the token is not the problem, because the sentence
+     * this replaces sent them to BotFather (`OQ-TG-04` items 6 and 7).
+     */
+    if (probe.outcome === 'NOT_TELEGRAM') {
+      throw errors.configuration(
+        PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_API_BASE_INVALID,
+        `The configured Telegram API base answered, and what came back does not describe a bot: ${probe.detail}. ` +
+          'TELEGRAM_API_BASE_URL is pointing at something that is not Telegram. The bot token is ' +
+          'not the problem and does not need reissuing in BotFather; correct that variable and run ' +
+          'this again.',
+      );
+    }
     if (probe.outcome !== 'IDENTIFIED') {
       throw new NexaError({
         kind: 'UPSTREAM_UNAVAILABLE',

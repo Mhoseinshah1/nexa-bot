@@ -153,9 +153,9 @@ export const PLATFORM_ERROR_CODES = {
   TELEGRAM_BAD_SECRET_TOKEN: 'telegram.bad_secret_token',
 
   /*
-   * The fresh-install bot bootstrap. Four codes, and the split is the point:
+   * The fresh-install bot bootstrap. FIVE codes, and the split is the point:
    * each one has a DIFFERENT remedy, and collapsing them would tell an operator
-   * standing at a half-finished install to try the same thing four times.
+   * standing at a half-finished install to try the same thing five times.
    */
 
   /**
@@ -206,6 +206,23 @@ export const PLATFORM_ERROR_CODES = {
    * partial unique index on `telegram_bot_id`; this is how it reaches an operator.
    */
   TELEGRAM_BOOTSTRAP_BOT_ALREADY_BOUND: 'telegram.bootstrap_bot_already_bound',
+
+  /**
+   * The configured Telegram API base answered, and what came back is not a bot.
+   *
+   * The shape a wrong `TELEGRAM_API_BASE_URL` produces: a 2xx that parsed and does
+   * not carry a numeric id and a username. `telegramGetMe` has always separated it
+   * — `telegram.rejected.getme_shape` rather than `telegram.rejected.401` — and the
+   * bootstrap gateway collapsed both into one rejection, so the operator was told
+   * Telegram had refused their token and sent to BotFather to reissue a credential
+   * that is fine (`OQ-TG-04` items 6 and 7).
+   *
+   * Distinct from `TELEGRAM_BOOTSTRAP_TOKEN_REJECTED` for the reason that code's
+   * own docblock gives about `_UNREACHABLE`: a configuration change and a new
+   * credential are not interchangeable remedies, and guessing between them is how
+   * an install stalls for an afternoon.
+   */
+  TELEGRAM_BOOTSTRAP_API_BASE_INVALID: 'telegram.bootstrap_api_base_invalid',
 
   /**
    * The webhook could not be registered, though the bot instance is written.

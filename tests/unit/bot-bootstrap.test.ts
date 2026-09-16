@@ -540,6 +540,37 @@ describe('bot bootstrap — a webhook failure is recoverable and is not success'
       await codeThrownBy(() => service.execute(scope, { token: TOKEN, publicBaseUrl: ORIGIN })),
     ).toBe(PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_UNREACHABLE);
   });
+
+  /*
+   * `OQ-TG-04` items 6 and 7. An API base that is not Telegram used to be
+   * reported as a revoked token, which sends the operator to BotFather to
+   * reissue a credential that is fine — and reissuing is the one action that
+   * makes the real problem harder to see, because the new token fails the same
+   * way against the same wrong host.
+   */
+  it('reports a configured API base that is not Telegram as its own failure', async () => {
+    const { service, telegram } = build();
+    telegram.probe = { outcome: 'NOT_TELEGRAM', detail: 'getMe answered without a usable id' };
+
+    expect(
+      await codeThrownBy(() => service.execute(scope, { token: TOKEN, publicBaseUrl: ORIGIN })),
+    ).toBe(PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_API_BASE_INVALID);
+  });
+
+  it('does not send the operator to BotFather for a misconfigured API base', async () => {
+    const { service, telegram } = build();
+    telegram.probe = { outcome: 'NOT_TELEGRAM', detail: 'getMe answered without a usable id' };
+
+    const message = await messageThrownBy(() =>
+      service.execute(scope, { token: TOKEN, publicBaseUrl: ORIGIN }),
+    );
+
+    // The variable to look at, and the thing that is NOT the problem. Asserted
+    // separately from the code, because the code alone would be satisfied by a
+    // refusal that then repeated the revoked-token advice underneath it.
+    expect(message).toContain('TELEGRAM_API_BASE_URL');
+    expect(message).toContain('does not need reissuing in BotFather');
+  });
 });
 
 describe('bot bootstrap — a rerun reconciles and never rotates', () => {

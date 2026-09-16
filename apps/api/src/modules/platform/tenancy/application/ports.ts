@@ -150,6 +150,15 @@ export type BotIdentityProbe =
   | { readonly outcome: 'IDENTIFIED'; readonly botId: string; readonly username: string }
   /** Telegram answered, and its answer was no. A new token is the remedy. */
   | { readonly outcome: 'REJECTED'; readonly detail: string }
+  /**
+   * The configured API base answered, and what came back is not a bot.
+   *
+   * Its own outcome rather than a `REJECTED` with a different message, because
+   * the SERVICE decides the error code from this and the two codes have
+   * different remedies. Folding it back in is how the distinction was lost the
+   * first time: it exists in the transport, and the adapter discarded it.
+   */
+  | { readonly outcome: 'NOT_TELEGRAM'; readonly detail: string }
   /** Telegram could not be asked. Waiting and rerunning is the remedy. */
   | { readonly outcome: 'UNREACHABLE'; readonly detail: string };
 
