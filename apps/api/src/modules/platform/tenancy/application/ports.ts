@@ -66,6 +66,15 @@ export interface BotBootstrapView {
   readonly webhookUrl: string | null;
   /** SHA-256 of the secret it was registered with. NULL means unknown. */
   readonly webhookSecretFingerprint: string | null;
+  /**
+   * A digest of the command menu Telegram was last given. NULL means unknown.
+   *
+   * Compared against `BotBootstrapTelegram.commandsRevision()` on every
+   * reconcile, which is how an installation that UPGRADED into a release
+   * carrying a new command gets that command's menu (`OQ-4H-02`). NULL is
+   * "register once and find out", never "matches".
+   */
+  readonly commandsRevision: string | null;
 }
 
 /**
@@ -115,6 +124,21 @@ export interface BotBootstrapRepository {
     tx: unknown,
   ): Promise<void>;
   /** Written AFTER Telegram accepted, which is what makes both crashes converge. */
+  /**
+   * Records the menu digest Telegram accepted. Its own method, not a flag.
+   *
+   * Separate from `markWebhookRegistered` because the two calls fail
+   * independently and a menu that did not register must not stop the webhook
+   * marker being written — the whole point of `registerCommands` returning a
+   * boolean rather than throwing.
+   */
+  markCommandsRegistered(
+    scope: ScopeContext,
+    id: BotInstanceId,
+    input: { readonly revision: string; readonly now: Date },
+    tx: unknown,
+  ): Promise<void>;
+
   markWebhookRegistered(
     scope: ScopeContext,
     id: BotInstanceId,
@@ -209,6 +233,19 @@ export interface BotBootstrapTelegram {
    * invites the caller to treat them alike.
    */
   registerCommands(input: { readonly token: string }): Promise<boolean>;
+
+  /**
+   * A digest of the menu `registerCommands` would send RIGHT NOW.
+   *
+   * On the adapter because only the adapter can compute it: the digest covers
+   * the rendered descriptions, and rendering needs `@nexa/i18n`, which
+   * `check-boundaries.sh` refuses to an application file by name. This layer
+   * decides WHETHER to register and compares two opaque strings to do it.
+   *
+   * Pure and free of network. It is called on every reconcile, including the
+   * ones that have nothing else to do.
+   */
+  commandsRevision(): string;
 }
 
 export const TENANT_REPOSITORY = Symbol('TENANT_REPOSITORY');

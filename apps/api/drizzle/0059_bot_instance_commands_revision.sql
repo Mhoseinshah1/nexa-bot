@@ -1,0 +1,1 @@
+ALTER TABLE "bot_instances" ADD COLUMN "commands_revision" text;

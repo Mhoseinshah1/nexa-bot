@@ -3,6 +3,7 @@ import {
   telegramSetWebhook,
   telegramSetMyCommands,
 } from '../../../../infrastructure/telegram/send-message.js';
+import { createHash } from 'node:crypto';
 import { BOT_COMMANDS } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
 import type {
@@ -116,6 +117,30 @@ export class TelegramBotBootstrapGateway implements BotBootstrapTelegram {
    * means a customer types `/help` instead of tapping it. Reporting the second as
    * gravely as the first would send an operator to look for a problem they do not have.
    */
+  /**
+   * What the menu looks like now, as a digest, so a reconcile can tell it changed.
+   *
+   * Computed from the SAME `menu()` the registration sends, which is what makes the
+   * comparison meaningful: a digest of `BOT_COMMANDS` alone would miss a catalogue
+   * rewording, and a digest of anything else would drift from what was actually
+   * registered.
+   *
+   * `JSON.stringify` over an array of two-key objects is stable here because the input
+   * is a frozen literal in declaration order — this is not general-purpose object
+   * hashing. Truncated to 32 hex characters: this is a change detector, not a security
+   * boundary, and it is stored in a column an operator may read.
+   */
+  commandsRevision(): string {
+    return createHash('sha256').update(JSON.stringify(this.menu())).digest('hex').slice(0, 32);
+  }
+
+  private menu(): ReadonlyArray<{ readonly command: string; readonly description: string }> {
+    return BOT_COMMANDS.map((entry) => ({
+      command: entry.command,
+      description: CATALOGUE_FA[entry.description],
+    }));
+  }
+
   async registerCommands(input: { readonly token: string }): Promise<boolean> {
     /*
      * Rendered HERE, from the frozen list and the shared catalogue.
@@ -129,10 +154,7 @@ export class TelegramBotBootstrapGateway implements BotBootstrapTelegram {
       token: input.token,
       apiBaseUrl: this.apiBaseUrl,
       timeoutMs: this.timeoutMs,
-      commands: BOT_COMMANDS.map((entry) => ({
-        command: entry.command,
-        description: CATALOGUE_FA[entry.description],
-      })),
+      commands: this.menu(),
     });
     return outcome.outcome === 'SUCCEEDED';
   }

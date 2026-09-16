@@ -52,6 +52,7 @@ interface Row {
   webhookRegisteredAt: Date | null;
   webhookUrl: string | null;
   webhookSecretFingerprint: string | null;
+  commandsRevision: string | null;
   token: string;
 }
 
@@ -68,6 +69,7 @@ class FakeBots implements BotBootstrapRepository {
   tokenWrites: string[] = [];
   identityWrites: { id: string; telegramBotId: string }[] = [];
   webhookMarks: { id: string; url: string }[] = [];
+  commandMarks: { id: string; revision: string }[] = [];
   locks = 0;
   /** Runs inside the transaction, once, just after the lock is taken. */
   onLocked: (() => void) | null = null;
@@ -91,7 +93,18 @@ class FakeBots implements BotBootstrapRepository {
       webhookRegisteredAt: row.webhookRegisteredAt,
       webhookUrl: row.webhookUrl,
       webhookSecretFingerprint: row.webhookSecretFingerprint,
+      commandsRevision: row.commandsRevision,
     };
+  }
+
+  async markCommandsRegistered(
+    _scope: unknown,
+    id: string,
+    input: { readonly revision: string; readonly now: Date },
+  ): Promise<void> {
+    const row = this.rows.find((candidate) => candidate.id === id);
+    if (row) row.commandsRevision = input.revision;
+    this.commandMarks.push({ id, revision: input.revision });
   }
 
   async createFromBootstrap(
@@ -112,6 +125,7 @@ class FakeBots implements BotBootstrapRepository {
       webhookRegisteredAt: null,
       webhookUrl: null,
       webhookSecretFingerprint: null,
+      commandsRevision: null,
       token: input.token,
     });
   }
@@ -176,6 +190,13 @@ class FakeTelegram implements BotBootstrapTelegram {
     expect(currentTransactionLabel()).toBeUndefined();
     this.identifyCalls.push(token);
     return this.probe;
+  }
+
+  /** The digest of the menu this fake would send. Changing it is a release that added a command. */
+  revision = 'rev-1';
+
+  commandsRevision(): string {
+    return this.revision;
   }
 
   async registerCommands(input: { readonly token: string }): Promise<boolean> {
@@ -709,6 +730,76 @@ describe('bot bootstrap — a rerun reconciles and never rotates', () => {
     expect(message).not.toMatch(/Nothing was stored/);
   });
 
+  /*
+   * `OQ-4H-02`. `setMyCommands` ran only on the register-and-mark path, which an
+   * installation whose webhook is already current never reaches: `execute`
+   * returns ALREADY_COMPLETE above it. So every installation that UPGRADED into
+   * the release carrying `BOT_COMMANDS` kept whatever menu it had — for most,
+   * none — and 4H's discoverability applied to fresh installs only.
+   */
+  it('registers a CHANGED command menu on an installation that is already complete', async () => {
+    const { service, telegram, bots } = await installed();
+    const before = telegram.commandCalls.length;
+
+    // The release that adds a command, or reworders one: the digest is computed
+    // from the rendered menu, so both look the same from here.
+    telegram.revision = 'rev-2';
+    const result = await service.execute(scope, { token: null, publicBaseUrl: ORIGIN });
+
+    expect(result.kind).toBe('ALREADY_COMPLETE');
+    expect(telegram.commandCalls).toHaveLength(before + 1);
+    expect(bots.rows[0]?.commandsRevision).toBe('rev-2');
+    // And it did NOT re-register the webhook, which carries dropPendingUpdates.
+    expect(telegram.webhookCalls).toHaveLength(1);
+  });
+
+  it('does not re-register an UNCHANGED menu on every rerun', async () => {
+    // Otherwise this is an outbound Telegram call on every `botctl update` of
+    // every installation, for a menu that has not moved.
+    const { service, telegram } = await installed();
+    const before = telegram.commandCalls.length;
+
+    await service.execute(scope, { token: null, publicBaseUrl: ORIGIN });
+    await service.execute(scope, { token: null, publicBaseUrl: ORIGIN });
+
+    expect(telegram.commandCalls).toHaveLength(before);
+  });
+
+  it('does not record a revision the registration did not achieve', async () => {
+    // A digest stored after a FAILED call would make the next reconcile skip it,
+    // and the menu would stay wrong until the list changed again — the failure
+    // this whole item is about, reintroduced by its own fix.
+    const { service, telegram, bots } = await installed();
+    telegram.revision = 'rev-2';
+    telegram.commandsRegister = false;
+
+    const result = await service.execute(scope, { token: null, publicBaseUrl: ORIGIN });
+
+    expect(result.kind).toBe('ALREADY_COMPLETE');
+    expect(bots.rows[0]?.commandsRevision).not.toBe('rev-2');
+
+    // And the next run tries again.
+    telegram.commandsRegister = true;
+    const calls = telegram.commandCalls.length;
+    await service.execute(scope, { token: null, publicBaseUrl: ORIGIN });
+    expect(telegram.commandCalls).toHaveLength(calls + 1);
+    expect(bots.rows[0]?.commandsRevision).toBe('rev-2');
+  });
+
+  it('treats a NULL stored revision as unknown rather than as matching', async () => {
+    // The pre-0059 row, which is every installation that upgrades into this
+    // release. The same rule `webhook_secret_fingerprint` states: one
+    // unnecessary call is cheaper than a silent claim.
+    const { service, telegram, bots } = await installed();
+    bots.rows[0]!.commandsRevision = null;
+    const before = telegram.commandCalls.length;
+
+    await service.execute(scope, { token: null, publicBaseUrl: ORIGIN });
+
+    expect(telegram.commandCalls).toHaveLength(before + 1);
+    expect(bots.rows[0]?.commandsRevision).toBe(telegram.revision);
+  });
+
   it('does not rewrite the token when the same one is supplied again', async () => {
     const { service, bots } = await installed();
     await service.execute(scope, { token: TOKEN, publicBaseUrl: ORIGIN });
@@ -773,6 +864,7 @@ describe('bot bootstrap — a rerun reconciles and never rotates', () => {
       webhookRegisteredAt: null,
       webhookUrl: null,
       webhookSecretFingerprint: null,
+      commandsRevision: null,
       token: TOKEN,
     });
 
@@ -807,6 +899,7 @@ describe('bot bootstrap — a rerun reconciles and never rotates', () => {
       webhookRegisteredAt: null,
       webhookUrl: null,
       webhookSecretFingerprint: null,
+      commandsRevision: null,
       token: TOKEN,
     });
 
@@ -863,6 +956,7 @@ describe('bot bootstrap — a rerun reconciles and never rotates', () => {
       webhookRegisteredAt: null,
       webhookUrl: null,
       webhookSecretFingerprint: null,
+      commandsRevision: null,
       token: TOKEN,
     });
 
@@ -1133,6 +1227,7 @@ describe('bot bootstrap — the rules the review found untested', () => {
       webhookRegisteredAt: null,
       webhookUrl: null,
       webhookSecretFingerprint: null,
+      commandsRevision: null,
       token: TOKEN,
     });
     // The concurrent run, landing between the unlocked read and the UPDATE.
@@ -1162,6 +1257,7 @@ describe('bot bootstrap — two installers at once', () => {
         webhookRegisteredAt: null,
         webhookUrl: null,
         webhookSecretFingerprint: null,
+        commandsRevision: null,
         token: TOKEN,
       });
     };
@@ -1189,6 +1285,7 @@ describe('bot bootstrap — two installers at once', () => {
         webhookRegisteredAt: null,
         webhookUrl: null,
         webhookSecretFingerprint: null,
+        commandsRevision: null,
         token: TOKEN,
       });
     };

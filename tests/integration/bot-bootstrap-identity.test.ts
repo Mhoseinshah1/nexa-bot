@@ -61,6 +61,12 @@ describe('a Telegram bot belongs to one tenant', () => {
        * because the real gateway reaches Telegram and these tests must not, but every
        * method the port declares is now present — an `as never` stub is a promise the
        * test makes on its own behalf and has to keep by hand.
+       *
+       * It happened AGAIN in 4I, with `commandsRevision`, in six cases. Same file, same
+       * cast, same class of failure, and the comment above had already named it. That is
+       * worth recording rather than quietly fixing twice: the cost of the cast is a
+       * run-time break every time the port grows, and the only thing standing between
+       * this file and a silent one is that every method here is called on every path.
        */
       telegram: {
         // `identify` answers with the SAME numeric id and a DIFFERENT username —
@@ -70,6 +76,9 @@ describe('a Telegram bot belongs to one tenant', () => {
         // The command menu. Answering `true` is the ordinary case; the bootstrap
         // service's own unit test covers a refusal, which must not fail an install.
         registerCommands: async () => true,
+        // Constant: nothing here is about the menu, and a fresh bootstrap
+        // registers it once whatever this answers.
+        commandsRevision: () => 'integration-revision',
       } as never,
       // A value of Telegram's own alphabet and past the schema's minimum. The test
       // config does not set one, and the service refuses a short secret on purpose.

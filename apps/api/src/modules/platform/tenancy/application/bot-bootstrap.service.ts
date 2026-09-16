@@ -388,6 +388,22 @@ export class BotBootstrapService {
      * an installer somebody ran to fix something unrelated.
      */
     if (!ensured.createdNow && this.registrationIsCurrent(view, url)) {
+      /*
+       * The menu is reconciled even here, and THIS is `OQ-4H-02`.
+       *
+       * `setMyCommands` used to run only below, after this early return — so an
+       * installation whose webhook is already current never reached it. That is
+       * every installation that UPGRADES rather than installs: `botctl update`
+       * does not invoke this CLI, and even `botctl telegram register` returned
+       * here without registering. The discoverability 4H shipped therefore
+       * applied to fresh installs only.
+       *
+       * Guarded by the stored digest, so it is at most ONE extra Telegram call
+       * per release that changes the menu, not one per rerun. `commandsRevision`
+       * is computed by the adapter from the rendered menu, so a catalogue
+       * rewording counts as a change too.
+       */
+      await this.reconcileCommands(scope, view.id, view.commandsRevision, token);
       return {
         kind: 'ALREADY_COMPLETE',
         botInstanceId: view.id,
@@ -488,50 +504,7 @@ export class BotBootstrapService {
       );
     });
 
-    /*
-     * The command menu, registered after the webhook and never allowed to fail the run.
-     *
-     * `docs/phase4h-audit.md` §9: the bot answered four commands, registered none, and
-     * the greeting named only `/catalog` — so `/wallet` and `/services` were reachable
-     * by guessing alone. `BOT_COMMANDS` is the one list; `/help` renders the same one,
-     * so the menu and the help text cannot drift.
-     *
-     * Deliberately weaker than the webhook above. A webhook that did not register means
-     * updates do not arrive and `status` must keep answering `incomplete`; a command
-     * menu that did not register means a customer types a command instead of tapping
-     * it, and `/help` still answers. Failing the install for the second would send an
-     * operator hunting a problem they do not have.
-     *
-     * WHICH commands and WHETHER to register is this layer's decision; rendering their
-     * descriptions is not, and the boundary check enforces the difference — an
-     * application file may not import `@nexa/i18n`. So the gateway renders from the same
-     * `BOT_COMMANDS` this service counts, and the catalogue stays on the infrastructure
-     * side of the line where every other piece of customer-facing text is resolved.
-     */
-    const registeredMenu = await this.deps.telegram.registerCommands({ token });
-    /*
-     * Recorded as an AUDIT row rather than thrown or logged into the void.
-     *
-     * An operator who later wonders why the menu is empty has somewhere to look, and a
-     * row is what this repository uses for "something happened that a person may care
-     * about but nothing is broken". `result` is the honest field: the run continues
-     * either way.
-     */
-    await this.deps.uow.run(scope, async (tx) =>
-      this.deps.audit.record(
-        scope,
-        this.systemActor(),
-        {
-          action: 'bot.commands.register',
-          entityType: 'BotInstance',
-          entityId: ensured.view.id,
-          before: {},
-          after: { commands: BOT_COMMANDS.length },
-          result: registeredMenu ? 'SUCCESS' : 'FAILED',
-        },
-        tx,
-      ),
-    );
+    await this.reconcileCommands(scope, ensured.view.id, view.commandsRevision, token);
 
     return {
       kind: ensured.createdNow ? 'CREATED' : 'RECONCILED',
@@ -634,6 +607,7 @@ export class BotBootstrapService {
           webhookRegisteredAt: null,
           webhookUrl: null,
           webhookSecretFingerprint: null,
+          commandsRevision: null,
         },
         createdNow: true,
         identity,
@@ -655,6 +629,78 @@ export class BotBootstrapService {
    * different act from rewriting one that is already set, and the repository
    * enforces the difference in its WHERE clause rather than trusting this.
    */
+  /**
+   * Registers the command menu when it is not already what Telegram has.
+   *
+   * Called from BOTH the reconcile-and-register path and the ALREADY_COMPLETE
+   * early return, which is the whole of `OQ-4H-02`: the second caller is the one
+   * an upgraded installation actually reaches.
+   *
+   * Deliberately weaker than the webhook. A webhook that did not register means
+   * updates do not arrive and `status` must keep answering `incomplete`; a menu
+   * that did not register means a customer types a command instead of tapping it,
+   * and `/help` still answers. Failing an install for the second would send an
+   * operator hunting a problem they do not have — so this returns void, records
+   * an audit row either way, and the digest is written ONLY on success.
+   *
+   * WHICH commands and WHETHER to register is this layer's decision; rendering
+   * their descriptions is not, and `check-boundaries.sh` enforces the difference
+   * by refusing `@nexa/i18n` to an application file. So the adapter renders, and
+   * this compares two opaque strings.
+   */
+  private async reconcileCommands(
+    scope: TenantContext,
+    id: BotInstanceId,
+    stored: string | null,
+    token: string,
+  ): Promise<void> {
+    const revision = this.deps.telegram.commandsRevision();
+    // NULL is "unknown", never "matches" — the same rule the webhook secret
+    // fingerprint states, and for the same reason: one unnecessary call is a
+    // far cheaper mistake than a silent claim.
+    if (stored === revision) return;
+
+    const registered = await this.deps.telegram.registerCommands({ token });
+
+    /*
+     * Recorded as an AUDIT row rather than thrown or logged into the void.
+     *
+     * An operator who later wonders why the menu is empty has somewhere to look,
+     * and a row is what this repository uses for "something happened that a
+     * person may care about but nothing is broken". `result` is the honest field:
+     * the run continues either way.
+     */
+    await this.deps.uow.run(scope, async (tx) => {
+      if (registered) {
+        // Written only on success. A digest stored after a FAILED call would
+        // make the next reconcile skip it, and the menu would stay wrong until
+        // the list changed again.
+        await this.deps.bots.markCommandsRegistered(
+          scope,
+          id,
+          { revision, now: this.deps.clock.now() },
+          tx,
+        );
+      }
+      await this.deps.audit.record(
+        scope,
+        this.systemActor(),
+        {
+          action: 'bot.commands.register',
+          entityType: 'BotInstance',
+          entityId: id,
+          before: { commandsRevision: stored },
+          after: {
+            commandsRevision: registered ? revision : stored,
+            commands: BOT_COMMANDS.length,
+          },
+          result: registered ? 'SUCCESS' : 'FAILED',
+        },
+        tx,
+      );
+    });
+  }
+
   private async getMe(
     scope: TenantContext,
     existing: BotBootstrapView | null,

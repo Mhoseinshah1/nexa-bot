@@ -1340,6 +1340,38 @@ cmd_update() {
     nexa_ok "rollback target is ${current}"
   fi
   nexa_prune_releases
+
+  # 9. RECONCILE THE COMMAND MENU, after the release is committed and never
+  #    before it.
+  #
+  #    `OQ-4H-02`: `setMyCommands` runs inside the bootstrap CLI and nowhere
+  #    else, and `botctl update` did not invoke that CLI — so an installation
+  #    that upgraded into a release adding a command kept whatever menu it had,
+  #    which for most is none, until somebody happened to run `botctl telegram
+  #    register`. The discoverability 4H shipped applied to fresh installs only.
+  #
+  #    BEST EFFORT, and the placement is what makes that honest. Everything that
+  #    can fail the update has already succeeded; this is an outbound Telegram
+  #    call about a MENU, and a customer whose client shows no command list types
+  #    `/help` instead. Failing a completed, healthy, committed update for that
+  #    would be a far worse outcome than the gap it closes.
+  #
+  #    The CLI itself is what decides whether to call Telegram at all: it
+  #    compares a stored digest of the rendered menu against the current one and
+  #    returns without a call when they match. So this is one extra invocation
+  #    per update, and at most one extra Telegram request per release that
+  #    actually changes the menu.
+  #
+  #    No lock is taken and none is needed: the CLI's own registration path takes
+  #    the installation lock, and this runs after the update released it.
+  if [ "$(nexa_env_value "${NEXA_CONFIG_DIR}/nexa.env" TELEGRAM_WEBHOOK_ENABLED 2>/dev/null || true)" = "true" ]; then
+    if nexa_compose run --rm --no-deps -T --entrypoint node api \
+      dist/bootstrap-bot.cli.js --public-base-url "$(telegram_origin)" >/dev/null 2>&1; then
+      nexa_ok "the Telegram command menu is ${target}'s"
+    else
+      nexa_warn "the Telegram command menu could not be reconciled; run 'botctl telegram register'. The update itself is complete."
+    fi
+  fi
 }
 
 # ---------------------------------------------------------------------------

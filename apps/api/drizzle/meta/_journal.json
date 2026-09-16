@@ -414,6 +414,13 @@
       "when": 1789543681057,
       "tag": "0058_freeze_the_customer_signal_too",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1789572771503,
+      "tag": "0059_bot_instance_commands_revision",
+      "breakpoints": true
     }
   ]
 }

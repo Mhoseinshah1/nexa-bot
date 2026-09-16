@@ -153,6 +153,7 @@ function toBootstrapView(row: BotInstanceRow): BotBootstrapView {
     webhookRegisteredAt: row.webhookRegisteredAt,
     webhookUrl: row.webhookUrl,
     webhookSecretFingerprint: row.webhookSecretFingerprint,
+    commandsRevision: row.commandsRevision,
   };
 }
 
@@ -368,6 +369,19 @@ export class DrizzleBotInstanceRepository implements BotInstanceRepository, BotB
        */
       rethrowAlreadyBound(error, input.telegramBotId, input.username, 'FRESH_INSERT');
     }
+  }
+
+  async markCommandsRegistered(
+    scope: ScopeContext,
+    id: BotInstanceId,
+    input: { readonly revision: string; readonly now: Date },
+    tx: unknown,
+  ): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    await executorOf(this.db, tx)
+      .update(botInstances)
+      .set({ commandsRevision: input.revision, updatedAt: input.now })
+      .where(and(eq(botInstances.tenantId, tenantId), eq(botInstances.id, id)));
   }
 
   async markWebhookRegistered(

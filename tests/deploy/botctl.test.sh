@@ -5335,6 +5335,31 @@ assert_contains 'the unproven summary does not admit what it cannot prove' \
 assert_not_contains 'the unproven summary claims a token is stored' \
   "$telegram_unproven_summary" 'token IS stored'
 
+test_case 'a completed update reconciles the Telegram command menu'
+# `OQ-4H-02`. `setMyCommands` runs inside the bootstrap CLI and nowhere else, and
+# `botctl update` did not invoke it — so an installation that UPGRADED into a
+# release adding a command kept whatever menu it had until somebody happened to
+# run `botctl telegram register`.
+update_body="$(sed -n '/^cmd_update() {/,/^}/p' "${REPO}/deploy/bin/botctl")"
+assert_ok 'the cmd_update body could not be read; this check is vacuous' test -n "$update_body"
+assert_contains 'a completed update does not reconcile the command menu' \
+  "$update_body" 'dist/bootstrap-bot.cli.js'
+# AFTER the release is committed, never before. Everything that can fail the
+# update has already succeeded by then, and a menu is not a reason to fail a
+# healthy committed release.
+update_tail="${update_body#*nexa_prune_releases}"
+assert_contains 'the menu reconcile does not run after the release is committed' \
+  "$update_tail" 'dist/bootstrap-bot.cli.js'
+# And it cannot fail the update: the invocation is guarded and the failure
+# branch warns rather than dying.
+assert_not_contains 'a failed menu reconcile kills a completed update' \
+  "$update_tail" 'nexa_die'
+assert_contains 'a failed menu reconcile says nothing to the operator' \
+  "$update_tail" "run 'botctl telegram register'"
+# No token, ever, from this path: it reconciles from the stored credential.
+assert_not_contains 'the update passes a token to the bootstrap CLI' \
+  "$update_tail" '--bot-token'
+
 test_case 'a first install with no terminal and no token records its release'
 # `nexa_die` here exited before the manifest and the `current` pointer were
 # written, leaving a RUNNING installation that `botctl version` cannot describe
