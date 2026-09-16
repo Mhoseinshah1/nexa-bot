@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { OperationState, OperationType, TenantContext, UserId } from '@nexa/contracts';
+import type {
+  OperationState,
+  OperationType,
+  TenantContext,
+  UnitOfWork,
+  UserId,
+} from '@nexa/contracts';
 import {
   CUSTOMER_INITIATED_OPERATIONS,
   OperationOutcomeAnnouncer,
@@ -19,6 +25,16 @@ describe('announcing how an operation turned out', () => {
   const scope = { tenantId: 'tenant-1', botInstanceId: null } as unknown as TenantContext;
   const CUSTOMER = 'customer-1' as UserId;
   const NOW = new Date('2026-09-16T00:00:00.000Z');
+
+  /*
+   * The announcer only ever calls `run`. A full stub would have to implement
+   * `runSnapshot` and `runNested` too, and a test that implemented them would be
+   * claiming the announcer might use them.
+   */
+  const passthroughUow = {
+    run: async <T>(_scope: TenantContext, fn: (tx: TransactionScope) => Promise<T>): Promise<T> =>
+      fn({ tx: {}, scope } as unknown as TransactionScope),
+  } as unknown as UnitOfWork<TransactionScope>;
 
   interface Queued {
     readonly customerId: UserId;
@@ -43,12 +59,7 @@ describe('announcing how an operation turned out', () => {
           return true;
         },
       } as unknown as CustomerNotifier,
-      uow: {
-        run: async <T>(
-          _scope: TenantContext,
-          fn: (tx: TransactionScope) => Promise<T>,
-        ): Promise<T> => fn({ tx: {}, scope } as unknown as TransactionScope),
-      },
+      uow: passthroughUow,
       clock: { now: () => NOW },
     });
     return { announcer, queued };
@@ -66,7 +77,7 @@ describe('announcing how an operation turned out', () => {
     ['ABANDONED', 'SERVICE_ACTION_FAILED'],
     ['FAILED', null],
     ['UNKNOWN', null],
-    ['RUNNING', null],
+    ['IN_FLIGHT', null],
     ['PLANNED', null],
   ];
 
@@ -122,12 +133,7 @@ describe('announcing how an operation turned out', () => {
           return true;
         },
       } as unknown as CustomerNotifier,
-      uow: {
-        run: async <T>(
-          _scope: TenantContext,
-          fn: (tx: TransactionScope) => Promise<T>,
-        ): Promise<T> => fn({ tx: {}, scope } as unknown as TransactionScope),
-      },
+      uow: passthroughUow,
       clock: { now: () => NOW },
     });
     await announcer.announce(scope, 'operation-1', 'service-1', 'SUCCEEDED');
