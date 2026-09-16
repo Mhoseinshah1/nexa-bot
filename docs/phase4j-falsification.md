@@ -17,12 +17,13 @@ same transaction, but the process can die between the transition committing and
 the loop reaching `announce`. `announced_at` makes that state visible, and the
 sweep answers it.
 
-| #      | Rule                                           | Mutation                                                                           | Named test                                                                                 | Result |
-| ------ | ---------------------------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | ------ |
-| F4J-01 | the provisioner loop runs the sweep every tick | the `await this.outcomes.announceDue(scope, DRAIN_LIMIT)` line deleted             | `provisioning.test.ts` › still answers a customer after an operator has STOPPED the tenant | KILLED |
-| F4J-02 | `markAnnounced` keeps the FIRST answer         | `isNull(provisioningOperations.announcedAt)` removed from its predicate            | `provisioning.test.ts` › keeps the FIRST answer when two replicas stamp the same operation | KILLED |
-| F4J-03 | a non-terminal operation is NOT stamped        | the early `return` replaced with `await stamp(); return;`                          | `operation-outcome-announcer.test.ts` › does NOT stamp an operation that has not finished  | KILLED |
-| F4J-04 | the sweep takes only operations past the grace | `lt(provisioningOperations.completedAt, before)` removed from `dueForAnnouncement` | `provisioning.test.ts` › is found by the sweep once it is past the grace, and not before   | KILLED |
+| #      | Rule                                                 | Mutation                                                                           | Named test                                                                                        | Result |
+| ------ | ---------------------------------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ------ |
+| F4J-01 | the provisioner loop runs the sweep every tick       | the `await this.outcomes.announceDue(scope, DRAIN_LIMIT)` line deleted             | `provisioning.test.ts` › still answers a customer after an operator has STOPPED the tenant        | KILLED |
+| F4J-02 | `markAnnounced` keeps the FIRST answer               | `isNull(provisioningOperations.announcedAt)` removed from its predicate            | `provisioning.test.ts` › keeps the FIRST answer when two replicas stamp the same operation        | KILLED |
+| F4J-03 | a non-terminal operation is NOT stamped              | the early `return` replaced with `await stamp(); return;`                          | `operation-outcome-announcer.test.ts` › does NOT stamp an operation that has not finished         | KILLED |
+| F4J-04 | the sweep takes only operations past the grace       | `lt(provisioningOperations.completedAt, before)` removed from `dueForAnnouncement` | `provisioning.test.ts` › is found by the sweep once it is past the grace, and not before          | KILLED |
+| F4J-09 | one failing operation does not end the sweep's batch | the per-operation `try`/`catch` removed, so the first throw ends the loop          | `operation-outcome-announcer.test.ts` › announces the rest of the batch when one operation throws | KILLED |
 
 ### What F4J-01 says about its own coverage
 

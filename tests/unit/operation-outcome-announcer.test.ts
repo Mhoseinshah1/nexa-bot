@@ -277,6 +277,38 @@ describe('announcing how an operation turned out', () => {
       expect(stamped).toEqual(['op-a', 'op-b']);
     });
 
+    it('announces the rest of the batch when one operation throws', async () => {
+      /*
+       * `dueForAnnouncement` orders OLDEST FIRST, so an operation that throws is
+       * first again on the next tick and on every tick after it. Without this,
+       * one poisoned row stops the sweep for ever and everybody behind it is
+       * never told — the head-of-line block the sweep exists to avoid, one level
+       * up from the transaction boundary that avoids it.
+       *
+       * The error is re-thrown after the batch rather than swallowed: a broken
+       * sweep must not look like an idle one, and `ProvisionerLoop.tick` logs it.
+       */
+      const { announcer, queued, stamped } = sweeperFor(['op-bad', 'op-good']);
+      const reader = (
+        announcer as unknown as {
+          deps: { reader: { subjectFor: (...args: unknown[]) => Promise<unknown> } };
+        }
+      ).deps.reader;
+      const real = reader.subjectFor.bind(reader);
+      reader.subjectFor = async (...args: unknown[]) => {
+        if (args[1] === 'op-bad') throw new Error('the subject read failed');
+        return real(...args);
+      };
+
+      await expect(announcer.announceDue(scope, 25)).rejects.toThrow('the subject read failed');
+
+      expect(
+        queued.map((q) => q.subjectId),
+        'the good operation was skipped',
+      ).toEqual(['op-good']);
+      expect(stamped).toEqual(['op-good']);
+    });
+
     it('does nothing when no operation is stranded', async () => {
       const { announcer, queued, stamped } = sweeperFor([]);
       expect(await announcer.announceDue(scope, 25)).toBe(0);

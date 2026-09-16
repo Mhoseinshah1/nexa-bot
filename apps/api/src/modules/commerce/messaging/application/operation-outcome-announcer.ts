@@ -336,15 +336,32 @@ export class OperationOutcomeAnnouncer {
       this.deps.reader.dueForAnnouncement(scope, before, limit, tx),
     );
     /*
-     * One transaction each, deliberately.
+     * One transaction each, and one failure does not end the batch.
      *
-     * `announce` opens its own, and batching them into one would mean a single
-     * failing subject rolled back every stamp beside it — turning one stuck
-     * operation into a sweep that can never make progress.
+     * `announce` opens its own transaction, so batching them into one would mean
+     * a single failing subject rolling back every stamp beside it. The loop that
+     * called them had the same defect one level up and it is the reason this
+     * `try` exists: `dueForAnnouncement` orders OLDEST FIRST, so a row that
+     * throws is first again on the next tick and on every tick after it —
+     * head-of-line blocking that would stop the sweep for ever while the
+     * docblock above claimed it could not happen.
+     *
+     * The first error is kept and re-thrown AFTER the rest of the batch, not
+     * instead of it. Swallowing it would make a broken sweep look like an idle
+     * one; `ProvisionerLoop.tick` catches and logs, and its `lastProgressAt`
+     * deliberately does not advance on a tick that failed.
      */
+    let failure: unknown = null;
+    let swept = 0;
     for (const operationId of due) {
-      await this.announce(scope, operationId);
+      try {
+        await this.announce(scope, operationId);
+        swept += 1;
+      } catch (error: unknown) {
+        if (failure === null) failure = error;
+      }
     }
-    return due.length;
+    if (failure !== null) throw failure;
+    return swept;
   }
 }
