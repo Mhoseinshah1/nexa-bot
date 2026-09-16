@@ -146,6 +146,7 @@ import {
 } from './modules/commerce/messaging/application/customer-notification-loop.js';
 import { DrizzleCustomerNotificationRepository } from './modules/commerce/messaging/infrastructure/drizzle-customer-notification.repository.js';
 import { CustomerNotifier } from './modules/commerce/messaging/application/customer-notifier.js';
+import { OperationOutcomeAnnouncer } from './modules/commerce/messaging/application/operation-outcome-announcer.js';
 import { DrizzleNotificationSubjectReader } from './modules/commerce/messaging/infrastructure/drizzle-notification-subject.reader.js';
 import { BotRuntime } from './surfaces/telegram/bot-runtime.js';
 import { I18nTemplateCatalogue } from './modules/control/templates/infrastructure/i18n-template-catalogue.js';
@@ -1439,7 +1440,28 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     leaseMs: OPERATION_LEASE_SECONDS_MIN * 1000,
   });
 
-  const provisionerLoop = new ProvisionerLoop(provisioner, deliveryService, {
+  /**
+   * How a customer learns that the thing they asked for happened.
+   *
+   * Reads the operation's type and the service's customer with two narrow queries, so
+   * the loop never holds a repository that could mutate either.
+   */
+  const outcomeAnnouncer = new OperationOutcomeAnnouncer({
+    reader: {
+      subjectFor: async (scope, operationId, serviceId, tx) => {
+        const operation = await operationRepository.findById(scope, operationId, tx);
+        if (operation === null) return null;
+        const service = await serviceRepository.findById(scope, serviceId, tx);
+        if (service === null) return null;
+        return { type: operation.type, customerId: service.customerId };
+      },
+    },
+    notifier: customerNotifier,
+    uow,
+    clock,
+  });
+
+  const provisionerLoop = new ProvisionerLoop(provisioner, deliveryService, outcomeAnnouncer, {
     /*
      * The installation's own tenant.
      *

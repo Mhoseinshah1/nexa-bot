@@ -1,5 +1,6 @@
 import type { TenantContext } from '@nexa/contracts';
 import type { DeliveryService } from './delivery.service.js';
+import type { OperationOutcomeAnnouncer } from '../../messaging/application/operation-outcome-announcer.js';
 import type { ProvisionerService } from './provisioner.service.js';
 
 /**
@@ -47,6 +48,17 @@ export class ProvisionerLoop {
      * does not wait for another process's timer.
      */
     private readonly delivery: DeliveryService,
+    /**
+     * The other announcement half: how the thing a CUSTOMER asked for turned out.
+     *
+     * Here for the identical reason `delivery` is, and it is the same guarantee seen
+     * once more: the executor has no messenger and this class has none either. Both
+     * write rows; the worker's lane sends them.
+     *
+     * Between `bot.service.action_requested` and this, a customer who had PAID for a
+     * renewal heard nothing about whether it happened.
+     */
+    private readonly outcomes: OperationOutcomeAnnouncer,
     private readonly options: {
       readonly scope: () => TenantContext;
       readonly tickMs: number;
@@ -103,6 +115,9 @@ export class ProvisionerLoop {
       for (let drained = 0; drained < DRAIN_LIMIT; drained += 1) {
         const result = await this.executor.runOnce(scope);
         if (result.kind === 'IDLE' || result.kind === 'REFUSED') break;
+        // Queued, not sent. `announce` decides whether a customer asked for this one
+        // and whether the outcome is terminal enough to be worth a sentence.
+        await this.outcomes.announce(scope, result.operationId, result.serviceId, result.outcome);
       }
       /*
        * Then the announcements, for the services the drain above just activated.
