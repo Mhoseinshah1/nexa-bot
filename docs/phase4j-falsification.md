@@ -106,18 +106,47 @@ The mechanism is exactly right. An older dispatcher indexes
 throw left `reapStranded` to resolve a message that was never sent. Permanently
 lost, no Telegram request, nothing saying so.
 
-What does not hold is that it is reachable for THIS release. Nothing has ever been
-deployed — `CLAUDE.md` and `docs/vps-acceptance.md` both record that the deployment
-checkpoint has never been run against a real server — so there is no older worker
-in any field to meet these rows. The first release carries all of Phase 4 at once.
+### CORRECTION: the premise this section first gave was wrong
 
-So the finding is taken as a RULE rather than as a staging requirement, and the
-fix is in code rather than in a release plan: the dispatcher now refuses a kind it
-cannot render, deferring the row with no stamp and no attempt spent, so a replica
-that DOES know it claims it later. That pays off on every future kind addition,
-including the direction Codex named, and it is what makes the rule enforceable
-rather than a note somebody has to remember. `docs/conventions.md` carries the
-staging rule beside it.
+What was written here, and is false: _"it is not reachable for THIS release,
+because nothing has ever been deployed."_ That was read out of `CLAUDE.md` and
+`docs/vps-acceptance.md`, both of which said the deployment model had never been
+run against a real server. Both were stale.
+
+`git tag` says otherwise. **`v0.2.0` is tagged at `40f13d3`** — the Phase 4I
+merge — and fifteen `v0.1.0-staging.*` tags precede it, and the owner ran a real
+v0.2.0 staging acceptance against a deployed installation (it is what produced
+the 4J-5 finding below). So an older reader exists, in the field, today.
+
+**The exposure, stated exactly.** `v0.2.0`'s dispatcher has no guard and no
+template for the two new kinds. Reading its
+`customer-notification.service.ts` at `40f13d3`: `markSendStarted` commits
+BEFORE the send, `CUSTOMER_NOTIFICATION_TEMPLATES[row.kind]` is `undefined`, the
+send throws, the catch logs `customer notification send failed` and returns
+`errored` leaving the lease, and `reapStranded` later resolves the row
+`UNCONFIRMED`. Never sent, never retried, and the row reads as one that may have
+been delivered.
+
+The window is a ROLLBACK, because `botctl rollback` never restores the database:
+update an installation to this release, let a 429 produce a fallback row, roll
+back to `v0.2.0`, and that row is stranded. It is bounded — only the two new
+kinds, only rows written while this release ran, only where Telegram rate-limited
+one of two interactive replies — and it is not quite silent, because the old
+release logs an error per row. It is still a customer who is never told.
+
+**What the fix does and does not cover.** The `unsupported` guard is in the NEW
+code, so it protects every rollback to this release or later and every future
+kind addition — which is the direction that matters from here, and is why the
+finding is also recorded as a rule in `docs/conventions.md`. It does nothing for
+a rollback BELOW this release, because that code is already published.
+
+So the residual risk is an operational caveat rather than a code change:
+`docs/deployment.md` now carries it under "Rolling back", with the remedy — roll
+forward again and reset the stranded rows to `PENDING`. Staging the two kinds
+across two releases, which is what Codex asked for, would have avoided it
+entirely; that option was rejected on a false premise, and the honest record is
+that the caveat exists because of this mistake rather than because the design
+required it.
 
 ## 4J-5 — the persistent main menu, after real v0.2.0 staging acceptance
 

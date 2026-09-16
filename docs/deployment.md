@@ -807,6 +807,58 @@ gzip -dc /var/backups/nexa/nexa-<version>-<stamp>.sql.gz \
 Rollback is itself undoable: the release you just left becomes the new rollback
 target.
 
+### What a rollback can strand: a customer notification kind the old release cannot read
+
+A release that adds a value to an enum a CHECK constraint pins makes the database
+accept it immediately and does **not** make the previous release able to read it.
+`botctl rollback` never restores the database, so rows the newer release wrote
+outlive it.
+
+There is one instance of this today, and it is bounded. The release that follows
+`v0.2.0` adds the customer notification kinds `PAYMENT_TRANSFER_RECORDED` and
+`ORDER_CANCELLED`, which are queued only when Telegram rate-limits one of two
+interactive replies — a recorded transfer claim or a withdrawn order. Roll back
+to `v0.2.0` with such a row still `PENDING` and that release's dispatcher cannot
+render it: it logs `customer notification send failed` once per sweep and the
+stranded-send reaper resolves the row `UNCONFIRMED`. The customer is never told,
+and nothing tells them afterwards either.
+
+**How to see whether it happened**, on the rolled-back installation:
+
+```bash
+docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+  exec -T postgres psql -U nexa -d nexa -c \
+  "SELECT state, count(*) FROM customer_notifications
+    WHERE kind IN ('PAYMENT_TRANSFER_RECORDED','ORDER_CANCELLED') GROUP BY state"
+```
+
+**The remedy is to roll forward, then requeue.** Update to the release that knows
+the kinds — it defers rather than strands anything it cannot render — and then
+reset the rows the old release resolved:
+
+```bash
+docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+  exec -T postgres psql -U nexa -d nexa -c \
+  "UPDATE customer_notifications
+      SET state = 'PENDING', resolved_at = NULL, next_attempt_at = NULL,
+          send_started_at = NULL
+    WHERE kind IN ('PAYMENT_TRANSFER_RECORDED','ORDER_CANCELLED')
+      AND state = 'UNCONFIRMED'"
+```
+
+Do this ONLY for these two kinds and only after rolling forward. `UNCONFIRMED`
+normally means "Telegram may have it", and requeueing one of those is how a
+customer comes to read two contradictory messages; here it means the send was
+never attempted, which is why this narrow case is safe and no other is.
+
+Releases after that one carry a guard: a dispatcher that meets a kind it has no
+template for defers the row, spending no attempt and writing no stamp, so a
+replica that knows the kind delivers it. That covers every rollback to that
+release or later. It cannot cover a rollback below it, because that code is
+already published — see `docs/conventions.md`, "A widened enum is
+write-compatible, not reader-compatible", for the staging rule that avoids
+repeating this.
+
 ### How far back you can roll
 
 **One release**, safely. Migrations are expand-only within a release
