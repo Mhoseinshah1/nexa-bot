@@ -64,6 +64,8 @@ import {
   LEDGER_DIRECTIONS,
   LEDGER_REASONS,
   SERVICE_DELIVERY_STATES,
+  CUSTOMER_NOTIFICATION_KINDS,
+  CUSTOMER_NOTIFICATION_STATES,
   SERVICE_STATES,
   OPERATION_STATES,
   OPERATION_TYPES,
@@ -3600,5 +3602,135 @@ export const resellers = pgTable(
       'resellers_discount_range_check',
       sql`discount_percentage IS NULL OR (discount_percentage >= 1 AND discount_percentage <= 100)`,
     ),
+  ],
+);
+
+/**
+ * The queue of things to tell a customer that they did not ask for.
+ *
+ * `ADR 0030` decides the shape and `docs/phase4h-audit.md` §1 measures the absence it
+ * fills: before Phase 4H this product could tell a customer exactly ONE such thing, the
+ * subscription link, whose lane is two columns on `services` and a state table about a
+ * subscription link. Phases 4D–4G created several more facts a customer needs and none
+ * of them had anywhere to travel.
+ *
+ * Its own table rather than more columns on the subjects, because the subjects are four
+ * different tables and a column pair per table is four copies of one state machine. Its
+ * own table rather than `notifications`, because that one's destinations are OPERATOR
+ * channels and its `DELIVERY_OUTCOMES` enum is pinned by a CHECK constraint — an
+ * operator alert that arrives late is still useful and a duplicate is merely noise, and
+ * for a customer neither is true. Not the outbox either: that carries domain EVENTS and
+ * freezes their content, and a customer message is an EFFECT of an event.
+ *
+ * There is no `values` column, and its absence is a decision rather than an omission.
+ * Every one of the six kinds renders a template that declares NO placeholders, so there
+ * is nothing to carry; a jsonb column with no producer is the empty table this
+ * repository refuses elsewhere. The first kind that needs one adds it, in the migration
+ * that needs it.
+ */
+export const customerNotifications = pgTable(
+  'customer_notifications',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    customerId: uuid('customer_id').notNull(),
+    /**
+     * Which bot to send from, and never "the tenant's active bot".
+     *
+     * `CustomerMessenger`'s port states the rule and the reason: a customer wrote to a
+     * specific bot, and a reply from a different one arrives from an account they have
+     * never heard of — which, for a tenant running a public bot and a reseller bot,
+     * leaks the relationship between them. So the producer resolves it at enqueue time
+     * from the subject, and the dispatcher does not get to choose.
+     */
+    botInstanceId: uuid('bot_instance_id').notNull(),
+    /** One of `CUSTOMER_NOTIFICATION_KINDS`. The kind decides the template AND the table `subject_id` names. */
+    kind: text('kind').notNull(),
+    /**
+     * The row this notification is about, in the table its `kind` implies.
+     *
+     * Deliberately NOT accompanied by a `subject_type` column. The kind already
+     * determines the table — `PAYMENT_REJECTED` names a payment and nothing else — and a
+     * second column saying so is a second source of truth that can disagree with the
+     * first. `CUSTOMER_NOTIFICATION_PRECONDITIONS` is keyed on kind for the same reason.
+     *
+     * No foreign key, and that is deliberate too: the four possible targets are four
+     * different tables, and a column cannot reference all of them. What protects it is
+     * that the producer writes this row in the SAME transaction as the fact, so a
+     * subject that never existed cannot have produced one.
+     */
+    subjectId: uuid('subject_id').notNull(),
+    state: text('state').notNull().default('PENDING'),
+    /**
+     * Definite refusals observed for THIS message.
+     *
+     * A rate limit is not one. `CUSTOMER_NOTIFICATION_MAX_ATTEMPTS` states why at
+     * length: an attempt is an outcome somebody observed about this message, and
+     * Telegram declining to look at it yet is not that. Spending attempts on rate limits
+     * fails messages that were never rejected on their merits, in exactly the conditions
+     * that produce rate limits.
+     */
+    attempts: integer('attempts').notNull().default(0),
+    /** When the dispatcher may next try. Null means now. */
+    nextAttemptAt: timestamptz('next_attempt_at'),
+    /**
+     * When a send was handed to Telegram with no outcome recorded yet.
+     *
+     * `services.delivery_send_started_at` for this lane, and it exists for the identical
+     * reason: it is the one fact distinguishing "this process died BEFORE sending" from
+     * "this process died AFTER sending", and only the second must never be repeated
+     * automatically. Without it a dispatcher killed mid-send leaves a row `PENDING`
+     * behind nothing but a lease, and the next pass tells the customer again.
+     *
+     * Cleared by every recorded outcome, so a set value always means an unresolved send.
+     */
+    sendStartedAt: timestamptz('send_started_at'),
+    /**
+     * When this row stopped being `PENDING`, whatever it became.
+     *
+     * One stamp rather than one per terminal state. `state` already says WHICH outcome,
+     * and a `delivered_at` beside a `failed_at` beside a `superseded_at` is three
+     * columns that can disagree with the one that decides.
+     */
+    resolvedAt: timestamptz('resolved_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'customer_notifications_customer_fk',
+    }),
+    check('customer_notifications_kind_check', enumCheck('kind', CUSTOMER_NOTIFICATION_KINDS)),
+    check('customer_notifications_state_check', enumCheck('state', CUSTOMER_NOTIFICATION_STATES)),
+    /**
+     * A resolved row has a stamp and a `PENDING` one does not, as an equality.
+     *
+     * The same shape as `orders_cancelled_at_check`, which the 4G audit found had made
+     * its own state unwritable — so this one is stated as an equality over the state
+     * rather than a one-way implication, and 4H-2's tests write every terminal state
+     * through it rather than trusting that they can.
+     */
+    check(
+      'customer_notifications_resolved_check',
+      sql`(state <> 'PENDING') = (resolved_at IS NOT NULL)`,
+    ),
+    /**
+     * One notification of one kind per subject, for ever.
+     *
+     * This is the idempotency of the whole lane and it is a CONSTRAINT rather than a
+     * check in a service: the producers enqueue inside the transaction that produced the
+     * fact, two worker replicas are the normal case on every rolling update, and a
+     * redelivered outbox message replays its effect. "Payment X was rejected" is told
+     * once whichever of those happens.
+     */
+    unique('customer_notifications_subject_key').on(table.tenantId, table.kind, table.subjectId),
+    /** The dispatcher's claim: queued rows whose backoff has elapsed, oldest first. */
+    index('customer_notifications_due_idx')
+      .on(table.nextAttemptAt)
+      .where(sql`state = 'PENDING'`),
   ],
 );

@@ -393,6 +393,13 @@
       "when": 1789522519838,
       "tag": "0055_receipt_reviewer_payments_view",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1789534876953,
+      "tag": "0056_customer_notifications",
+      "breakpoints": true
     }
   ]
 }
