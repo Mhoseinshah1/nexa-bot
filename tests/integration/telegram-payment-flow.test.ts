@@ -550,6 +550,64 @@ describe('the customer payment flow over Telegram', () => {
     expect(messages()).toHaveLength(2);
   });
 
+  it('offers a way out with the instructions, and withdrawing closes the payment', async () => {
+    const orderId = await awaitingPayment();
+    sent = [];
+
+    await tap(`m:${orderId}`);
+    const payment = (await payments())[0];
+
+    /*
+     * The button is ON the instructions message, not somewhere else. That placement is
+     * the rule: the message that creates the obligation carries the way out of it, and
+     * the customer who is looking at a reference they are not going to use does not
+     * have to go and find a menu.
+     */
+    const keyboard = lastMessage()?.body['reply_markup'] as
+      | { inline_keyboard: { text: string; callback_data: string }[][] }
+      | undefined;
+    const buttons = (keyboard?.inline_keyboard ?? []).flat();
+    expect(buttons).toHaveLength(1);
+    // It names the PAYMENT, not the order — the only id that identifies what a
+    // withdrawal would close.
+    expect(buttons[0]?.callback_data).toBe(`x:${String(payment?.['id'])}`);
+
+    sent = [];
+    await tap(String(buttons[0]?.callback_data));
+
+    expect((await payments())[0]?.['state']).toBe('CANCELLED');
+    // The ORDER is still open, which is what the reply says too.
+    expect((await orders())[0]?.['state']).toBe('AWAITING_PAYMENT');
+    expect(String(lastMessage()?.body['text'])).toContain('پرداخت شما لغو شد');
+  });
+
+  it('answers a second tap on a withdrawn payment without withdrawing anything else', async () => {
+    const orderId = await awaitingPayment();
+    await tap(`m:${orderId}`);
+    const payment = (await payments())[0];
+    await tap(`x:${String(payment?.['id'])}`);
+    sent = [];
+
+    // The message lives in the chat for ever. A tap on it a week later must not read as
+    // a fault in the product, and must not produce a second anything.
+    await tap(`x:${String(payment?.['id'])}`);
+
+    expect(await payments()).toHaveLength(1);
+    expect((await payments())[0]?.['state']).toBe('CANCELLED');
+  });
+
+  it('refuses a withdrawal naming another customer\u2019s payment', async () => {
+    const orderId = await awaitingPayment();
+    await tap(`m:${orderId}`);
+    const payment = (await payments())[0];
+    sent = [];
+
+    // A different Telegram user, which resolves to a different customer.
+    await tap(`x:${String(payment?.['id'])}`, { from: 900_999 });
+
+    expect((await payments())[0]?.['state']).toBe('PENDING');
+  });
+
   it('settles only when an operator confirms, and the wallet stays untouched', async () => {
     const orderId = await awaitingPayment();
     await tap(`m:${orderId}`);
