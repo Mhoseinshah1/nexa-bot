@@ -42,3 +42,6 @@ ADR says so explicitly.
 | [0025](0025-backup-pipeline.md)                     | What a backup IS: dump, verify by restore, then deliver           | Accepted — implements 0011                   |
 | [0026](0026-webhook-edge.md)                        | What bounds the Telegram webhook, and what deliberately does not  | Accepted — Architecture Hardening            |
 | [0027](0027-retention.md)                           | What this installation keeps, and for how long                    | Accepted — extends 0020                      |
+| [0028](0028-web-disaster-recovery.md)               | Restoring this installation from the Web Admin                    | Accepted — Web Admin Disaster Recovery       |
+| [0029](0029-telegram-fresh-install-bootstrap.md)    | Telegram fresh-install bootstrap                                  | Accepted                                     |
+| [0030](0030-customer-notification-lane.md)          | The customer notification lane, and what a failed send means      | Accepted — Phase 4H                          |

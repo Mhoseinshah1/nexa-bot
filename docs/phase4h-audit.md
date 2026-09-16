@@ -125,6 +125,31 @@ fails on the provisioner's own schedule. Nothing tells the customer which happen
 For the three commercial actions this is money: the customer has paid for a renewal and
 is told only that the request was recorded.
 
+## 6b. A rate limit permanently withholds a paid customer's subscription link
+
+Found while answering §11's design question, and it is a defect in merged code rather
+than an absence. The chain is four links, each checkable by reading:
+
+1. `infrastructure/telegram/send-message.ts:135` — a 429 returns `FAILED_RETRYABLE` with
+   `errorCode: 'telegram.rate_limited'` and Telegram's own `retry_after` as `retryAfterMs`.
+2. `messaging/infrastructure/telegram-customer-messenger.ts:181` —
+   `const unknown = result.outcome === 'FAILED_RETRYABLE'`, so every retryable failure
+   becomes `UNKNOWN`. The distinct code and the `retryAfterMs` are discarded.
+3. `provisioning/application/delivery.service.ts:61` —
+   `deliveryStateAfter('PENDING', 'UNKNOWN', n)` is `'UNCONFIRMED'`.
+4. `provisioning/infrastructure/drizzle-service.repository.ts:451` — the due query claims
+   `deliveryState = 'PENDING'` only, so `UNCONFIRMED` is never re-claimed.
+
+So a single 429 parks a paid customer's subscription link out of the automatic lane until
+a person notices — and a 429 is what Telegram sends precisely when many customers are
+being served at once. `UNKNOWN` is the right answer for a timeout, a 5xx and an unreadable
+2xx, all of which may have been delivered; a 429 is Telegram declining the request and is
+not ambiguous about delivery.
+
+No committed test asserts either the current behaviour or the corrected one. ADR 0030 §2
+decides the correction and 4H-2 implements it, with its regression test, for the lane and
+for `DeliveryService` together so there is no second copy to drift.
+
 ## 7. The Web Admin has no Services surface at all
 
 ```
@@ -238,16 +263,18 @@ policy, so 4H answers them rather than recording them.
 
 ## Summary: the 4H work list, as the audit establishes it
 
-| #   | Item                                                    | Evidence            |
-| --- | ------------------------------------------------------- | ------------------- |
-| 1   | A durable customer notification lane                    | §1, §11, `OQ-4G-01` |
-| 2   | Payment rejected / expired reaches the customer         | §1, `OQ-4G-01`      |
-| 3   | Operation outcome reaches the customer (6 kinds)        | §6                  |
-| 4   | Provisioning progress and delay reach the customer      | §5                  |
-| 5   | A customer-side "I have sent the transfer" signal       | §4                  |
-| 6   | A customer may cancel their own unpaid order            | §3                  |
-| 7   | Web Admin Services surface, end to end                  | §7                  |
-| 8   | Telegram command discovery: menu, help, `setMyCommands` | §9                  |
+| #   | Item                                                            | Evidence            |
+| --- | --------------------------------------------------------------- | ------------------- |
+| 1   | A durable customer notification lane                            | §1, §11, `OQ-4G-01` |
+| 2   | Payment rejected / expired reaches the customer                 | §1, `OQ-4G-01`      |
+| 3   | Operation outcome reaches the customer (6 kinds)                | §6                  |
+| 4   | Provisioning progress and delay reach the customer              | §5                  |
+| 5   | A customer-side "I have sent the transfer" signal               | §4                  |
+| 6   | A customer may cancel their own unpaid order                    | §3                  |
+| 7   | Web Admin Services surface, end to end                          | §7                  |
+| 8   | Telegram command discovery: menu, help, `setMyCommands`         | §9                  |
+| 9   | A rate limit must not park a customer's message out of the lane | §6b, ADR 0030 §2    |
 
-Items 2–4 are one mechanism applied three times; item 1 is that mechanism. Items 5, 6, 7
-and 8 are independent and can land in any order.
+Items 2–4 are one mechanism applied three times; item 1 is that mechanism, and item 9 is
+a correction that mechanism has to carry. Items 5, 6, 7 and 8 are independent and can
+land in any order.
