@@ -681,6 +681,78 @@ describe('payments and settlement', () => {
    * not the call site" shape recorded on the Phase 4B branch, inverted.
    */
   describe('the payment repository', () => {
+    /*
+     * The repository's OWN guard, exercised without the service in front of it.
+     *
+     * `rejectManualTransfer` and `withdrawPending` both check the state before calling
+     * `resolve`, so every case driven through them is refused one layer higher and says
+     * nothing about this one. The layer that matters is the one that survives a race:
+     * two operators, a customer and the sweep, and a replayed command all reach the
+     * same row, and it is `WHERE state = 'PENDING'` that makes one of them win rather
+     * than the last writer.
+     */
+    it('resolves only from PENDING, and tells the loser it lost', async () => {
+      const order = await awaitingPayment(tenantA, customerA, panelA, 'r0');
+      const pending = await ctx.container.payments.requestManualTransfer(
+        tenantA,
+        systemActor('manual-r0'),
+        customerA,
+        { idempotencyKey: 'manual-r0-0001', orderId: order.id },
+      );
+      const repository = new DrizzlePaymentRepository(ctx.container.database.db);
+      const now = ctx.container.clock.now();
+
+      const first = await repository.resolve(
+        tenantA,
+        pending.id,
+        'FAILED',
+        { resolvedByAdminId: null, resolutionNote: 'first', resolvedAt: now },
+        now,
+      );
+      // The SAME target, which is the case a state check in the service never sees:
+      // both callers believed the row was PENDING when they read it.
+      const second = await repository.resolve(
+        tenantA,
+        pending.id,
+        'FAILED',
+        { resolvedByAdminId: null, resolutionNote: 'second', resolvedAt: now },
+        now,
+      );
+
+      expect(first).toBe(true);
+      expect(second).toBe(false);
+      expect((await paymentRow(pending.id)).resolution_note).toBe('first');
+    });
+
+    it('will not resolve a payment that was confirmed', async () => {
+      const order = await awaitingPayment(tenantA, customerA, panelA, 'r0b');
+      const pending = await ctx.container.payments.requestManualTransfer(
+        tenantA,
+        systemActor('manual-r0b'),
+        customerA,
+        { idempotencyKey: 'manual-r0b-0001', orderId: order.id },
+      );
+      await ctx.container.payments.confirmManualTransfer(tenantA, owner, pending.id, {
+        idempotencyKey: 'manual-r0b-confirm-0001',
+        note: 'money arrived',
+      });
+      const repository = new DrizzlePaymentRepository(ctx.container.database.db);
+      const now = ctx.container.clock.now();
+
+      // Money moved. Nothing below the service may take it back, and the guard that
+      // stops it is the same one that settles the race above.
+      const moved = await repository.resolve(
+        tenantA,
+        pending.id,
+        'FAILED',
+        { resolvedByAdminId: null, resolutionNote: 'too late', resolvedAt: now },
+        now,
+      );
+
+      expect(moved).toBe(false);
+      expect((await paymentRow(pending.id)).state).toBe('CONFIRMED');
+    });
+
     it('confirms only from PENDING, and tells the loser it lost', async () => {
       const order = await awaitingPayment(tenantA, customerA, panelA, 'r1');
       const pending = await ctx.container.payments.requestManualTransfer(
