@@ -145,6 +145,7 @@ import {
   CUSTOMER_NOTIFICATION_INTERVAL_MS,
 } from './modules/commerce/messaging/application/customer-notification-loop.js';
 import { DrizzleCustomerNotificationRepository } from './modules/commerce/messaging/infrastructure/drizzle-customer-notification.repository.js';
+import { CustomerNotifier } from './modules/commerce/messaging/application/customer-notifier.js';
 import { DrizzleNotificationSubjectReader } from './modules/commerce/messaging/infrastructure/drizzle-notification-subject.reader.js';
 import { BotRuntime } from './surfaces/telegram/bot-runtime.js';
 import { I18nTemplateCatalogue } from './modules/control/templates/infrastructure/i18n-template-catalogue.js';
@@ -958,8 +959,37 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    */
   const paymentRepository = new DrizzlePaymentRepository(database.db);
 
+  /**
+   * The one way any producer queues a customer notification.
+   *
+   * Built here rather than per-producer so that the three parts that are easy to get
+   * wrong — the id existing before the insert, the bot being the customer's OWN, and
+   * the write landing inside the caller's transaction — have one implementation.
+   *
+   * The repository is constructed here too and shared with the dispatcher below, so a
+   * producer and the lane that drains it cannot disagree about the table.
+   */
+  const customerNotificationRepository = new DrizzleCustomerNotificationRepository(database.db);
+  const customerNotifier = new CustomerNotifier({
+    notifications: customerNotificationRepository,
+    bots: {
+      /*
+       * The bot the customer FIRST wrote to, which is the only durable link this
+       * release records. `OQ-PROV-02` carries the column that would let a purchase name
+       * the bot it came through; until then this is the honest answer rather than an
+       * invented one, and it is the same value `DeliveryService` uses.
+       */
+      botFor: async (scope, customerId, tx) => {
+        const found = await customerRepository.findById(scope, customerId, tx);
+        return found?.firstBotInstanceId ?? null;
+      },
+    },
+    ids,
+  });
+
   const paymentService = new PaymentService({
     repository: paymentRepository,
+    notifier: customerNotifier,
     orders: orderRepository,
     provisioning: provisioningService,
     /*
@@ -999,6 +1029,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const paymentExpiryLoop = new PaymentExpiryLoop(
     new PaymentExpiryService({
       payments: paymentRepository,
+      notifier: customerNotifier,
       orders: orderRepository,
       uow,
       audit,
@@ -1290,7 +1321,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * rendering and the 429 classification cannot diverge between the reply path and the
    * background one.
    */
-  const customerNotificationRepository = new DrizzleCustomerNotificationRepository(database.db);
   const customerNotificationLoop = new CustomerNotificationLoop(
     new CustomerNotificationService({
       notifications: customerNotificationRepository,

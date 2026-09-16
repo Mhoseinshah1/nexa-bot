@@ -11,6 +11,7 @@ import {
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { OrderRepository } from '../../orders/application/ports.js';
+import type { CustomerNotifier } from '../../messaging/application/customer-notifier.js';
 import type { PaymentRepository } from './ports.js';
 
 /**
@@ -34,6 +35,18 @@ export interface PaymentExpiryServiceDeps {
   readonly orders: OrderRepository;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly audit: AuditWriter;
+  /**
+   * The lane that tells the customer.
+   *
+   * `OQ-4G-01`'s answer. 4G made three outcomes reachable and a customer was told about
+   * exactly one of them — the withdrawal they performed themselves. An expiry happens
+   * while they are not looking, and before this the only way they found out was tapping
+   * a dead button.
+   *
+   * Enqueued INSIDE this transaction, so a notification cannot exist without the expiry
+   * that caused it, nor the expiry without the notification.
+   */
+  readonly notifier: CustomerNotifier;
   readonly scopeActivity: ScopeActivityReader;
   readonly clock: Clock;
   readonly ids: IdGenerator;
@@ -189,6 +202,14 @@ export class PaymentExpiryService {
           },
           tx,
         );
+        await this.deps.notifier.notify(
+          scope,
+          payment.customerId,
+          'PAYMENT_EXPIRED',
+          payment.id,
+          now,
+          tx,
+        );
       }
 
       const orders = await this.deps.orders.expireDue(scope, now, PAYMENT_EXPIRY_SWEEP_LIMIT, tx);
@@ -207,6 +228,14 @@ export class PaymentExpiryService {
             after: { state: order.state },
             result: 'SUCCESS',
           },
+          tx,
+        );
+        await this.deps.notifier.notify(
+          scope,
+          order.customerId,
+          'ORDER_EXPIRED',
+          order.id,
+          now,
           tx,
         );
       }

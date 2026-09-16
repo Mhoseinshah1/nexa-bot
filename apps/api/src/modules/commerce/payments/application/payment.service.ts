@@ -25,6 +25,7 @@ import {
   type UnitOfWork,
   type UserId,
 } from '@nexa/contracts';
+import type { CustomerNotifier } from '../../messaging/application/customer-notifier.js';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
 import type { CommercialActionRepository } from '../../commercial/application/ports.js';
@@ -125,6 +126,13 @@ export interface PaymentServiceDeps {
   readonly settings: SettingsResolver;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly audit: AuditWriter;
+  /**
+   * The lane that tells a customer their transfer was not accepted.
+   *
+   * `OQ-4G-01`: 4G made the rejection reachable and nothing told the customer, so they
+   * met it by tapping a dead button. Enqueued inside the rejection's own transaction.
+   */
+  readonly notifier: CustomerNotifier;
   readonly opsLog: OperationalEventRecorder;
   readonly sessions: SessionRepository;
   readonly idempotency: IdempotencyStore;
@@ -985,6 +993,24 @@ export class PaymentService {
             },
             result: 'SUCCESS',
           },
+          tx,
+        );
+
+        /*
+         * The customer learns of it. `OQ-4G-01`'s other half.
+         *
+         * Inside this transaction, so a rejection cannot commit without the notification
+         * nor the notification without the rejection. The answer is not checked: a
+         * customer with no durable bot link has nobody to tell, and refusing the whole
+         * rejection because a messaging concern could not be addressed would let the
+         * lane veto an operator's decision about money.
+         */
+        await this.deps.notifier.notify(
+          scope,
+          payment.customerId,
+          'PAYMENT_REJECTED',
+          paymentId,
+          now,
           tx,
         );
 

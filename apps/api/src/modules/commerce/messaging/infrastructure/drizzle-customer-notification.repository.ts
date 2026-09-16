@@ -49,7 +49,7 @@ export class DrizzleCustomerNotificationRepository implements CustomerNotificati
   constructor(private readonly db: Database) {}
 
   private exec(tx?: unknown): Executor {
-    return (tx as Executor | undefined) ?? this.db;
+    return (tx as TransactionScope | undefined)?.tx ?? this.db;
   }
 
   /**

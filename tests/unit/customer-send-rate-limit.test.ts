@@ -1,9 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TelegramCustomerMessenger } from '../../apps/api/src/modules/commerce/messaging/infrastructure/telegram-customer-messenger';
-import {
-  deliveryStateAfter,
-  DELIVERY_MAX_ATTEMPTS,
-} from '../../apps/api/src/modules/commerce/provisioning/application/delivery.service';
+import { DELIVERY_MAX_ATTEMPTS } from '@nexa/contracts';
+import { deliveryStateAfter } from '../../apps/api/src/modules/commerce/provisioning/application/delivery.service';
 import type { CustomerMessage } from '../../apps/api/src/modules/commerce/messaging/application/ports';
 
 /**
