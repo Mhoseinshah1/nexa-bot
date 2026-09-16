@@ -15,38 +15,38 @@ a deeper guard catches first.
 
 ## The two decisions a person makes
 
-| #      | Rule                                                                       | Mutation                                                         | Named test                                                                                       | Result |
-| ------ | -------------------------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ------ |
-| F4G-01 | `resolve` moves a payment only from `PENDING`, and reports whether it moved | the `WHERE state = 'PENDING'` in `resolve` → `sql\`true\``        | `payments.test.ts` › resolves only from PENDING, and tells the loser it lost                     | KILLED |
-| F4G-03 | A withdrawal re-reads the OWNER from the row, not from the tap             | `payment.customerId !== customerId` removed from the guard        | `payments.test.ts` › answers another customer’s payment id as not found                          | KILLED |
-| F4G-04 | A rejection is refused unless the payment is `PENDING`                     | the state check → `if (false)`                                    | `payments.test.ts` › refuses to reject a payment that was confirmed                              | SURVIVED |
-| F4G-07 | A rejection records WHO made it                                            | `resolvedByAdminId: adminIdOf(actor)` → `null`                    | `payments.test.ts` › records who, when and why, and leaves the order awaiting payment            | KILLED |
-| F4G-11 | A withdrawal records NO administrator                                      | `resolvedByAdminId: null` → `adminIdOf(actor)`                    | `payments.test.ts` › closes the payment and leaves the order open                                | SURVIVED |
+| #      | Rule                                                                        | Mutation                                                   | Named test                                                                            | Result   |
+| ------ | --------------------------------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------- | -------- |
+| F4G-01 | `resolve` moves a payment only from `PENDING`, and reports whether it moved | the `WHERE state = 'PENDING'` in `resolve` → `sql\`true\`` | `payments.test.ts` › resolves only from PENDING, and tells the loser it lost          | KILLED   |
+| F4G-03 | A withdrawal re-reads the OWNER from the row, not from the tap              | `payment.customerId !== customerId` removed from the guard | `payments.test.ts` › answers another customer’s payment id as not found               | KILLED   |
+| F4G-04 | A rejection is refused unless the payment is `PENDING`                      | the state check → `if (false)`                             | `payments.test.ts` › refuses to reject a payment that was confirmed                   | SURVIVED |
+| F4G-07 | A rejection records WHO made it                                             | `resolvedByAdminId: adminIdOf(actor)` → `null`             | `payments.test.ts` › records who, when and why, and leaves the order awaiting payment | KILLED   |
+| F4G-11 | A withdrawal records NO administrator                                       | `resolvedByAdminId: null` → `adminIdOf(actor)`             | `payments.test.ts` › closes the payment and leaves the order open                     | SURVIVED |
 
 ## The sweep
 
-| #      | Rule                                                                      | Mutation                                                       | Named test                                                                            | Result   |
-| ------ | ------------------------------------------------------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------- | -------- |
-| F4G-02 | A stopped tenant's rows are not swept, checked inside the transaction     | the `scopeIsActive` guard → `if (false)`                       | `payments.test.ts` › refuses to expire anything for a tenant that has stopped accepting work | KILLED   |
-| F4G-08 | Every expired payment leaves an audit row under its own action name       | `action: 'payment.expire'` → `'payment.expired'`               | `payments.test.ts` › expires a stale payment and the order it was against, in one pass | KILLED   |
-| F4G-09 | Every expired order leaves an audit row under its own action name         | `action: 'order.expire'` → `'order.expired'`                   | `payments.test.ts` › expires a stale payment and the order it was against, in one pass | KILLED   |
-| F4G-14 | The order sweep's candidate query excludes anything not awaiting payment  | the sub-select's state and confirmed-payment predicates removed | `payments.test.ts` › never touches a confirmed payment or the order it settled        | SURVIVED |
-| F4G-15 | The order sweep's UPDATE re-checks the same predicates after the row lock | the UPDATE's state and confirmed-payment predicates removed     | `payments.test.ts` › never touches a confirmed payment or the order it settled        | SURVIVED |
+| #      | Rule                                                                      | Mutation                                                        | Named test                                                                                   | Result   |
+| ------ | ------------------------------------------------------------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | -------- |
+| F4G-02 | A stopped tenant's rows are not swept, checked inside the transaction     | the `scopeIsActive` guard → `if (false)`                        | `payments.test.ts` › refuses to expire anything for a tenant that has stopped accepting work | KILLED   |
+| F4G-08 | Every expired payment leaves an audit row under its own action name       | `action: 'payment.expire'` → `'payment.expired'`                | `payments.test.ts` › expires a stale payment and the order it was against, in one pass       | KILLED   |
+| F4G-09 | Every expired order leaves an audit row under its own action name         | `action: 'order.expire'` → `'order.expired'`                    | `payments.test.ts` › expires a stale payment and the order it was against, in one pass       | KILLED   |
+| F4G-14 | The order sweep's candidate query excludes anything not awaiting payment  | the sub-select's state and confirmed-payment predicates removed | `payments.test.ts` › never touches a confirmed payment or the order it settled               | SURVIVED |
+| F4G-15 | The order sweep's UPDATE re-checks the same predicates after the row lock | the UPDATE's state and confirmed-payment predicates removed     | `payments.test.ts` › never touches a confirmed payment or the order it settled               | SURVIVED |
 
 ## The window
 
-| #      | Rule                                                              | Mutation                                                         | Named test                                                                          | Result |
-| ------ | ------------------------------------------------------------------ | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ------ |
-| F4G-05 | A payment's deadline never outlives the order it names            | `paymentDeadline` → always the configured window                 | `payments.test.ts` › never outlives the order it names                              | KILLED |
-| F4G-06 | A payment's deadline is bounded by the window even on a long order | `paymentDeadline` → always the order's own deadline              | `payments.test.ts` › holds a transfer open for the configured window, not the order’s | KILLED |
+| #      | Rule                                                               | Mutation                                            | Named test                                                                            | Result |
+| ------ | ------------------------------------------------------------------ | --------------------------------------------------- | ------------------------------------------------------------------------------------- | ------ |
+| F4G-05 | A payment's deadline never outlives the order it names             | `paymentDeadline` → always the configured window    | `payments.test.ts` › never outlives the order it names                                | KILLED |
+| F4G-06 | A payment's deadline is bounded by the window even on a long order | `paymentDeadline` → always the order's own deadline | `payments.test.ts` › holds a transfer open for the configured window, not the order’s | KILLED |
 
 ## The surfaces
 
-| #      | Rule                                                                | Mutation                                                          | Named test                                                                     | Result |
-| ------ | -------------------------------------------------------------------- | ----------------------------------------------------------------- | -------------------------------------------------------------------------------- | ------ |
-| F4G-10 | `x:` routes to the withdrawal, and nothing else does                 | the `CANCEL_PAY_CALLBACK_PREFIX` branch deleted from `intentOf`   | `telegram-payment-flow.test.ts` › offers a way out with the instructions, and withdrawing closes the payment | KILLED |
-| F4G-12 | A refused payment answers with the PAYMENT's key, not the order's    | `'bot.payment.not_pending'` → `'bot.order.unavailable'`           | `bot-runtime.test.ts` › sends no copy that promises a flow this head does not have | KILLED |
-| F4G-13 | The reject card is drawn only for an operator holding the permission | the `&& mayReview` removed from the card's condition              | `payments.test.tsx` › offers no rejection to an operator without receipts.review  | KILLED |
+| #      | Rule                                                                 | Mutation                                                        | Named test                                                                                                   | Result |
+| ------ | -------------------------------------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ------ |
+| F4G-10 | `x:` routes to the withdrawal, and nothing else does                 | the `CANCEL_PAY_CALLBACK_PREFIX` branch deleted from `intentOf` | `telegram-payment-flow.test.ts` › offers a way out with the instructions, and withdrawing closes the payment | KILLED |
+| F4G-12 | A refused payment answers with the PAYMENT's key, not the order's    | `'bot.payment.not_pending'` → `'bot.order.unavailable'`         | `bot-runtime.test.ts` › sends no copy that promises a flow this head does not have                           | KILLED |
+| F4G-13 | The reject card is drawn only for an operator holding the permission | the `&& mayReview` removed from the card's condition            | `payments.test.tsx` › offers no rejection to an operator without receipts.review                             | KILLED |
 
 ## Run by hand, because the harness cannot reach what they test
 
@@ -57,11 +57,11 @@ nothing about the database the test runs against. Each was run by the same
 procedure — mutate, run the named test, restore, re-run — with the transcript in
 this session.
 
-| #      | Rule                                                                       | Mutation                                                                       | Named test                                                                             | Result |
-| ------ | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ------ |
-| H4G-1  | A rejection is refused on a non-`PENDING` payment by the application AND the repository | F4G-04 and F4G-01 applied together                                    | `payments.test.ts` › refuses to reject a payment that was confirmed                     | KILLED |
-| H4G-2  | The order sweep states its predicates on BOTH sides of the lock             | F4G-14 and F4G-15 applied together                                              | `payments.test.ts` › never touches a confirmed payment or the order it settled          | KILLED |
-| H4G-3  | Migration 0052 freezes a resolved payment against a raw UPDATE              | the function's resolved-state branch dropped in the live test database, 0033/0035's CONFIRMED branch left intact | `payments.test.ts` › refuses a raw UPDATE that would reopen a rejected payment   | KILLED |
+| #     | Rule                                                                                    | Mutation                                                                                                         | Named test                                                                     | Result |
+| ----- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ------ |
+| H4G-1 | A rejection is refused on a non-`PENDING` payment by the application AND the repository | F4G-04 and F4G-01 applied together                                                                               | `payments.test.ts` › refuses to reject a payment that was confirmed            | KILLED |
+| H4G-2 | The order sweep states its predicates on BOTH sides of the lock                         | F4G-14 and F4G-15 applied together                                                                               | `payments.test.ts` › never touches a confirmed payment or the order it settled | KILLED |
+| H4G-3 | Migration 0052 freezes a resolved payment against a raw UPDATE                          | the function's resolved-state branch dropped in the live test database, 0033/0035's CONFIRMED branch left intact | `payments.test.ts` › refuses a raw UPDATE that would reopen a rejected payment | KILLED |
 
 H4G-3 is the one that matters most and the one a source-file mutation would have
 reported SURVIVED for a rule fully in force. The guard is a `CREATE OR REPLACE`
@@ -85,9 +85,9 @@ evidence the pair is load-bearing and neither half alone is.
 **F4G-14, F4G-15 and H4G-2 — the same predicate on both sides of a row lock.**
 Removing it from the sub-select leaves the UPDATE re-checking it; removing it
 from the UPDATE leaves the sub-select filtering. That is the point of writing it
-twice — `ServiceRepository.expireDue` states the rule this follows: *"the
+twice — `ServiceRepository.expireDue` states the rule this follows: _"the
 sub-select alone is satisfied by a scan that found the row before another writer
-moved it"* — and it is also why neither mutation alone can kill a test. H4G-2
+moved it"_ — and it is also why neither mutation alone can kill a test. H4G-2
 removes both and the test dies.
 
 **F4G-11 — a mutation that was not one.** The intent was to prove that a

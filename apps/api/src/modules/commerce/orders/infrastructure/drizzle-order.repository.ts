@@ -220,6 +220,35 @@ export class DrizzleOrderRepository implements OrderRepository {
          AND settled.state = 'CONFIRMED'
     )`;
 
+    /*
+     * An order with a payment still live is NOT expired, and this is what makes the
+     * sweep's stated ordering true rather than nearly true.
+     *
+     * `PaymentExpiryService` runs the payment half first and says the point of that is
+     * that a tick which hits its bound leaves an order with a live payment — the
+     * harmless half-state — rather than an expired order with a live instruction to
+     * send money for it. The two halves are separately bounded and separately ordered,
+     * so without this predicate that sentence is false exactly when it matters: four
+     * hundred orders due at one midnight, two hundred payments moved by payment id and
+     * two hundred orders moved by order id, and the overlap is chance.
+     *
+     * The customer on the wrong side of that holds bank instructions for an order that
+     * no longer exists, and if they transfer, nobody can record it —
+     * `confirmManualTransfer` requires the order to be AWAITING_PAYMENT and
+     * `OPERATOR_MAY_CONFIRM_LATE` exempts the deadline, not the state.
+     *
+     * It costs nothing in the ordinary case: the payment half has already run in this
+     * transaction and a payment's deadline is never later than its order's, so the only
+     * PENDING payments left on a due order are the ones the bound skipped. This is the
+     * one predicate here that is NOT redundant.
+     */
+    const noLivePayment = sql`NOT EXISTS (
+      SELECT 1 FROM payments live
+       WHERE live.tenant_id = ${orders.tenantId}
+         AND live.order_id = ${orders.id}
+         AND live.state = 'PENDING'
+    )`;
+
     const due = this.exec(tx)
       .select({ id: orders.id })
       .from(orders)
@@ -230,6 +259,7 @@ export class DrizzleOrderRepository implements OrderRepository {
           isNotNull(orders.expiresAt),
           lte(orders.expiresAt, now),
           noConfirmedPayment,
+          noLivePayment,
         ),
       )
       .orderBy(asc(orders.expiresAt), asc(orders.id))
@@ -255,6 +285,7 @@ export class DrizzleOrderRepository implements OrderRepository {
           isNotNull(orders.expiresAt),
           lte(orders.expiresAt, now),
           noConfirmedPayment,
+          noLivePayment,
           sql`${orders.id} IN ${due}`,
         ),
       )

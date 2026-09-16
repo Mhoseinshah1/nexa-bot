@@ -779,7 +779,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     operationId: (key) => operationIdFor('payment', key),
   });
 
-
   // ---------------------------------------------------------------------------
   // Control plane
   // ---------------------------------------------------------------------------

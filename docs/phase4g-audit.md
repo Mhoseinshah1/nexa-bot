@@ -12,22 +12,22 @@ two partial indexes already exist to serve sweeps that were never written.
 
 ## What already exists
 
-| Thing | Where | State |
-| --- | --- | --- |
-| `PAYMENT_STATES` — six | `packages/contracts/src/payment.ts` | Frozen. One reachable |
-| `PAYMENT_MACHINE` — seven transitions | same | Frozen. **One has a caller** |
-| `PAYMENT_EVIDENCE_KINDS` incl. `RECONCILIATION` | same | Frozen; `RECONCILIATION` has no writer |
-| `PAYMENT_METHODS` incl. `GATEWAY` | same | `GATEWAY` refused, never simulated. No adapter |
-| `ORDER_MACHINE` edges `CANCEL` and `EXPIRE` | `packages/contracts/src/commerce.ts` | Frozen. **Neither has a caller** |
-| `receipts.review` — *"Approve or reject a receipt"*, HIGH | `packages/contracts/src/permissions.ts` | Granted to `finance` and `receipt_reviewer`. **Only approve exists** |
-| `PaymentRepository` | `.../payments/application/ports.ts` | `create`, `findById`, `findByReference`, `list`, `confirm`. **No transition method at all** |
-| `PaymentService` | `.../payments/application/payment.service.ts` | `list`, `get`, `settleFromWallet`, `requestManualTransfer`, `confirmManualTransfer` |
-| `OrderRepository.transition` | `.../orders/application/ports.ts` | A conditional UPDATE, but its `stamps` are `confirmedAt` and `settledAt` only |
-| `orders_expiry_idx` | applied schema | `(expires_at) WHERE state = 'AWAITING_PAYMENT'` — **an index with no reader** |
-| `payments_unknown_idx` | applied schema | `(tenant_id, created_at) WHERE state = 'UNKNOWN'`, commented *"the reconciliation queue"* — **no reader and no producer** |
-| `RetentionSweeper` | `.../platform/identity/application/retention-sweeper.ts` | The worked example of a bounded, health-reporting worker sweep |
-| `ProvisionerService.expireDue` | `.../provisioning/application/provisioner.service.ts` | The worked example of a lifecycle sweep inside a tick |
-| `OQ-4C-01` | `docs/open-questions.md` | Records the gap AND the owner's window. See below |
+| Thing                                                     | Where                                                    | State                                                                                                                     |
+| --------------------------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `PAYMENT_STATES` — six                                    | `packages/contracts/src/payment.ts`                      | Frozen. One reachable                                                                                                     |
+| `PAYMENT_MACHINE` — seven transitions                     | same                                                     | Frozen. **One has a caller**                                                                                              |
+| `PAYMENT_EVIDENCE_KINDS` incl. `RECONCILIATION`           | same                                                     | Frozen; `RECONCILIATION` has no writer                                                                                    |
+| `PAYMENT_METHODS` incl. `GATEWAY`                         | same                                                     | `GATEWAY` refused, never simulated. No adapter                                                                            |
+| `ORDER_MACHINE` edges `CANCEL` and `EXPIRE`               | `packages/contracts/src/commerce.ts`                     | Frozen. **Neither has a caller**                                                                                          |
+| `receipts.review` — _"Approve or reject a receipt"_, HIGH | `packages/contracts/src/permissions.ts`                  | Granted to `finance` and `receipt_reviewer`. **Only approve exists**                                                      |
+| `PaymentRepository`                                       | `.../payments/application/ports.ts`                      | `create`, `findById`, `findByReference`, `list`, `confirm`. **No transition method at all**                               |
+| `PaymentService`                                          | `.../payments/application/payment.service.ts`            | `list`, `get`, `settleFromWallet`, `requestManualTransfer`, `confirmManualTransfer`                                       |
+| `OrderRepository.transition`                              | `.../orders/application/ports.ts`                        | A conditional UPDATE, but its `stamps` are `confirmedAt` and `settledAt` only                                             |
+| `orders_expiry_idx`                                       | applied schema                                           | `(expires_at) WHERE state = 'AWAITING_PAYMENT'` — **an index with no reader**                                             |
+| `payments_unknown_idx`                                    | applied schema                                           | `(tenant_id, created_at) WHERE state = 'UNKNOWN'`, commented _"the reconciliation queue"_ — **no reader and no producer** |
+| `RetentionSweeper`                                        | `.../platform/identity/application/retention-sweeper.ts` | The worked example of a bounded, health-reporting worker sweep                                                            |
+| `ProvisionerService.expireDue`                            | `.../provisioning/application/provisioner.service.ts`    | The worked example of a lifecycle sweep inside a tick                                                                     |
+| `OQ-4C-01`                                                | `docs/open-questions.md`                                 | Records the gap AND the owner's window. See below                                                                         |
 
 ## The absences, and what each costs
 
@@ -56,10 +56,10 @@ creating a second one:
 
 ### 2. `receipts.review` promises a decision and delivers half of one
 
-The permission reads *"Approve or reject a receipt"*, is classified HIGH, and is carried
+The permission reads _"Approve or reject a receipt"_, is classified HIGH, and is carried
 by two seeded roles. `POST /payments/:id/confirm` is the only write on the payments
-controller, and `apps/web/src/pages/payments.tsx` says so in terms: *"This page has
-exactly ONE write."*
+controller, and `apps/web/src/pages/payments.tsx` says so in terms: _"This page has
+exactly ONE write."_
 
 An operator looking at a transfer that never arrived has no action. The row stays
 PENDING, the order stays AWAITING_PAYMENT, and the customer keeps a live payment
@@ -120,8 +120,8 @@ them.
 
 So 4G owes a column set, and the reason it owes it is the same reason 0035 exists: the
 research records that the legacy receipt review stores neither reviewer nor time
-(`UNK-PR-010`), so *"was this approved by a human"* is unanswerable there. *"Was this
-REJECTED by a human, and why"* is the same question and currently has the same answer.
+(`UNK-PR-010`), so _"was this approved by a human"_ is unanswerable there. _"Was this
+REJECTED by a human, and why"_ is the same question and currently has the same answer.
 
 ### 6. The confirmation guard freezes CONFIRMED only
 
@@ -155,8 +155,8 @@ credential is available to this session to build one against.
 Writing `reconcile()` now would give the reconciliation queue a consumer and still no
 producer, which is a surface an operator can open and never see anything in — and worse,
 a path whose only exercise would be a test fixture that put a payment into `UNKNOWN` by
-hand. `CLAUDE.md` names that exact failure: *"A fake this repository wrote and an adapter
-this repository wrote can only prove they agree with each other."*
+hand. `CLAUDE.md` names that exact failure: _"A fake this repository wrote and an adapter
+this repository wrote can only prove they agree with each other."_
 
 So 4G builds the four edges that have a real producer — `FAIL`, `CANCEL`, `EXPIRE` and
 the terminal freeze — and records `LOSE_TRACK` / `RECONCILE_CONFIRMED` /
@@ -174,7 +174,7 @@ so.
 
 ## What the owner has already decided, and 4C could not use
 
-`OQ-4C-01` deferred the expiry sweep because *"no contract states that hour"*. It also
+`OQ-4C-01` deferred the expiry sweep because _"no contract states that hour"_. It also
 records the owner's revision 4 verbatim:
 
 > «مهلت پرداخت حداکثر **یک ساعت** است و پس از آن پرداخت و سفارش باید منقضی یا لغو شوند.
@@ -185,7 +185,7 @@ and the rule belongs in the domain and on the server rather than in a browser ti
 
 That is a stated policy, not an invented one. What 4C lacked was a place to put it, and
 saying so is different from saying the number is unknown. 4G states it where a setting
-is stated — bounded by the contract's own constants, with the owner's *"at most"* as the
+is stated — bounded by the contract's own constants, with the owner's _"at most"_ as the
 ceiling rather than as the default, so a tenant may shorten the window and may not
 lengthen it past what the owner fixed.
 
@@ -214,13 +214,13 @@ registry already records the distinction in a comment.
 
 ## What 4G will NOT build, and why
 
-| Not built | Why |
-| --- | --- |
-| A gateway adapter | No credential, no configured gateway, and `payment.ts` says an unconfigured one is refused rather than simulated. Out of the directive's scope and out of this session's means |
-| `LOSE_TRACK` / the two `RECONCILE_*` edges | They have no producer without a gateway. Building the consumer alone would give an operator a queue that is empty by construction |
-| Reversing a CONFIRMED payment | That is a refund. `OQ-4C-02` holds the deferred decision and `refunds.issue` is CRITICAL and unimplemented. A confirmation stays frozen; a rejection is legal only from PENDING |
-| Discounts, cashback, referral on any of these paths | Phase 7, and the directive puts it out of scope by name |
-| A second amount or expiry policy layer | `FBR-008` records the legacy precedence as unresolved. One window, one ceiling, no per-method override |
+| Not built                                           | Why                                                                                                                                                                             |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A gateway adapter                                   | No credential, no configured gateway, and `payment.ts` says an unconfigured one is refused rather than simulated. Out of the directive's scope and out of this session's means  |
+| `LOSE_TRACK` / the two `RECONCILE_*` edges          | They have no producer without a gateway. Building the consumer alone would give an operator a queue that is empty by construction                                               |
+| Reversing a CONFIRMED payment                       | That is a refund. `OQ-4C-02` holds the deferred decision and `refunds.issue` is CRITICAL and unimplemented. A confirmation stays frozen; a rejection is legal only from PENDING |
+| Discounts, cashback, referral on any of these paths | Phase 7, and the directive puts it out of scope by name                                                                                                                         |
+| A second amount or expiry policy layer              | `FBR-008` records the legacy precedence as unresolved. One window, one ceiling, no per-method override                                                                          |
 
 ## Open questions this phase will record rather than answer
 

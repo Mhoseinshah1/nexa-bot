@@ -1,7 +1,5 @@
 import {
-  errors,
   systemJobActor,
-  COMMERCE_ERROR_CODES,
   type ActorContext,
   type AuditWriter,
   type Clock,
@@ -60,17 +58,26 @@ export interface PaymentExpiryServiceDeps {
  *
  * A payment's deadline is the earlier of its own window and its order's, so a payment
  * always expires no later than the order it names. Taking payments first means a tick
- * that hits its bound leaves behind an order that still has a live payment — which is
- * the consistent half-state — rather than an expired order with a live instruction to
- * send money for it, which is the one a customer could act on.
+ * that hits its bound leaves behind an order that still has a live payment — the
+ * harmless half-state — rather than an expired order with a live instruction to send
+ * money for it, which is the one a customer could act on.
+ *
+ * **The ordering alone does not achieve that, and an earlier version of this paragraph
+ * claimed it did.** The two halves are separately bounded and separately ordered, so a
+ * backlog larger than the bound moves two unrelated subsets: four hundred orders due at
+ * one midnight, two hundred payments taken by payment id and two hundred orders by
+ * order id, and the overlap is chance. What makes the sentence true is a predicate —
+ * `DrizzleOrderRepository.expireDue` refuses an order that still has a PENDING payment
+ * — and the ordering is what makes that predicate cost nothing in the ordinary case.
  *
  * ## What this does NOT do
  *
  * **It never touches a CONFIRMED payment or a PAID order.** Both statements name their
- * source state, and the order half carries a redundant `NOT EXISTS` over confirmed
- * payments as well — see `DrizzleOrderRepository.expireDue` for why a redundant
- * predicate is worth its cost when the failure it guards is an order somebody paid for
- * being marked expired.
+ * source state, and the order half carries a `NOT EXISTS` over confirmed payments as
+ * well — redundant today, and kept because the failure it guards is an order somebody
+ * PAID FOR being marked expired. See `DrizzleOrderRepository.expireDue`, which
+ * distinguishes that one from the live-payment predicate beside it, which is not
+ * redundant at all.
  *
  * **It sends nothing.** A customer is not told here, and that is a deliberate boundary
  * rather than an omission: there is no durable per-customer notification lane in this
@@ -87,9 +94,14 @@ export interface PaymentExpiryServiceDeps {
  * receipt that sat in the queue. That exemption still stands and it is now BOUNDED:
  * once this sweep has expired the payment, `confirm` finds it no longer PENDING and
  * refuses. That is the owner's rule applied, not an oversight — and the remedy for
- * money that did arrive is the wallet credit an operator already has
- * (`users.wallet.credit`, `POST /users/:id/wallet/adjust`), which is audited, reversible
- * by a second adjustment and does not require reopening a closed payment.
+ * money that did arrive is a wallet credit (`users.wallet.credit`,
+ * `POST /users/:id/wallet/adjust`), which is audited, reversible by a second adjustment
+ * and does not require reopening a closed payment.
+ *
+ * That key is held by `owner` and `finance`, and NOT by `receipt_reviewer`, whose whole
+ * grant is `receipts.view` and `receipts.review`. So the operator most likely to meet
+ * this case is the one who cannot perform the remedy, and an installation that
+ * separates those roles has to route it. Said here rather than left to be discovered.
  */
 export class PaymentExpiryService {
   constructor(private readonly deps: PaymentExpiryServiceDeps) {}
@@ -114,11 +126,25 @@ export class PaymentExpiryService {
     const actor = this.actor();
 
     return this.deps.uow.run(scope, async (tx) => {
+      /*
+       * A stopped tenant is a pass with nothing to do, NOT a failed one.
+       *
+       * The check stays where it is — inside the transaction, before either write —
+       * because a surface checks on arrival and a stop can commit in between. What
+       * changed is the answer: this used to THROW, and the loop deliberately records no
+       * progress for a pass that threw, so an operator who stopped a tenant made the
+       * worker report itself unhealthy three minutes later. `worker` is in
+       * `NEXA_READY_SERVICES`, so `botctl update` would then fail its readiness wait and
+       * back the release out — after the migration had run — and the error would point
+       * at the release rather than at the stop.
+       *
+       * `ProvisionerService.runOnce` already answers this exact condition with `IDLE`
+       * rather than an exception, and the retention sweepers do not consult activity at
+       * all. A stopped tenant's rows simply wait; nothing about them decays, and the
+       * loop that leaves them alone is doing its job rather than failing at it.
+       */
       if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
-        throw errors.conflict(
-          COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
-          'This installation has stopped accepting work.',
-        );
+        return { payments: 0, orders: 0 };
       }
 
       const payments = await this.deps.payments.expireDue(

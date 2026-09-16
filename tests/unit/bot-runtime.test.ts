@@ -438,6 +438,19 @@ describe('profile metadata, normalised before it is ever stored', () => {
      *                                  customer the reference. It names the PAYMENT, not
      *                                  the order, because an order can have had several
      *                                  and a withdrawal names the one being withdrawn.
+     *                                  It ASKS; it does not withdraw.
+     *   `bot.payment.cancel_confirm`   the question between the two. That message stays
+     *   `bot.payment.cancel_confirm_button`
+     *                                  in the chat for ever, so a customer who has
+     *                                  already transferred the money is otherwise one
+     *                                  mis-touch from closing the payment it was
+     *                                  against, with no edge back out of CANCELLED.
+     *                                  TERMINATE is two taps for the same reason.
+     *   `bot.payment.window_too_short` there is not enough of the order's own window
+     *                                  left to transfer money inside it. Distinct from
+     *                                  `bot.order.expired`: that one has closed, this
+     *                                  one is about to, and the remedy is a new order
+     *                                  rather than hurrying.
      *   `bot.payment.cancelled`        the withdrawal happened. It does NOT say the order
      *                                  is gone, because it is not: the order stays open
      *                                  until its own deadline so the customer can pay
@@ -464,12 +477,15 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.order.summary',
       'bot.order.unavailable',
       'bot.payment.cancel_button',
+      'bot.payment.cancel_confirm',
+      'bot.payment.cancel_confirm_button',
       'bot.payment.cancelled',
       'bot.payment.manual_button',
       'bot.payment.manual_instructions',
       'bot.payment.not_pending',
       'bot.payment.unconfigured',
       'bot.payment.wallet_button',
+      'bot.payment.window_too_short',
       'bot.service.action_confirm_button',
       'bot.service.action_in_progress',
       'bot.service.action_not_allowed',

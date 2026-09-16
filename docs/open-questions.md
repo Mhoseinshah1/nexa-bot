@@ -1255,7 +1255,7 @@ why a month-old order still says it is waiting.
 The hour was never unknown; it had nowhere to live. This question quotes owner revision
 4 in the owner's own words — at most one hour, after which the payment AND the order
 must be expired or cancelled, enforced in the domain and on the server rather than by a
-browser timer — and then says *"no contract states that hour"*. 4G states it.
+browser timer — and then says _"no contract states that hour"_. 4G states it.
 
 - `PAYMENT_WINDOW_MINUTES_MAX` is 60, and it is the CEILING rather than a default with a
   suggestion attached: `sales.payment_window_minutes` may be set lower by a tenant and
@@ -1273,9 +1273,12 @@ browser timer — and then says *"no contract states that hour"*. 4G states it.
 `OPERATOR_MAY_CONFIRM_LATE` exemption described above still stands and is now BOUNDED:
 once the sweep has closed a payment, a late confirmation finds it no longer PENDING and
 is refused. That is the owner's rule applied rather than an oversight. The remedy for
-money that did arrive after the window is the wallet credit an operator already holds
-(`users.wallet.credit`, `POST /users/:id/wallet/adjust`) — audited, reversible by a
-second adjustment, and requiring no closed payment to be reopened.
+money that did arrive after the window is a wallet credit (`users.wallet.credit`,
+`POST /users/:id/wallet/adjust`) — audited, reversible by a second adjustment, and
+requiring no closed payment to be reopened. That key belongs to `owner` and `finance`
+and NOT to `receipt_reviewer`, so the operator most likely to meet this case is the one
+who cannot perform the remedy; an installation that separates those roles has to route
+it.
 
 ## OQ-4G-01 — nothing tells a customer their payment was rejected or expired
 
@@ -1348,9 +1351,9 @@ and a credential.**
 of it, and `payments_unknown_idx` describes itself as the reconciliation queue. 4G built
 the four edges that have a real producer and left these three alone.
 
-They need a gateway. `payment.ts` is explicit — *"A gateway is reached through
+They need a gateway. `payment.ts` is explicit — _"A gateway is reached through
 `PaymentGatewayPort` and there is no adapter in this release. An unconfigured gateway is
-REFUSED, not simulated"* — and `SELF_CONTAINED_PAYMENT_METHODS` is wallet and manual
+REFUSED, not simulated"_ — and `SELF_CONTAINED_PAYMENT_METHODS` is wallet and manual
 transfer, neither of which can lose track of anything: a wallet debit commits or rolls
 back with its own confirmation, and a manual transfer's outcome is an operator's
 assertion.

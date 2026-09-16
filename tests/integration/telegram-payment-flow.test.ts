@@ -564,16 +564,32 @@ describe('the customer payment flow over Telegram', () => {
      * have to go and find a menu.
      */
     const keyboard = lastMessage()?.body['reply_markup'] as
-      | { inline_keyboard: { text: string; callback_data: string }[][] }
-      | undefined;
+      { inline_keyboard: { text: string; callback_data: string }[][] } | undefined;
     const buttons = (keyboard?.inline_keyboard ?? []).flat();
     expect(buttons).toHaveLength(1);
     // It names the PAYMENT, not the order — the only id that identifies what a
     // withdrawal would close.
     expect(buttons[0]?.callback_data).toBe(`x:${String(payment?.['id'])}`);
 
+    /*
+     * The first tap ASKS. It must not close anything: this message stays in the chat
+     * for ever, and a customer who has already transferred the money is one mis-touch
+     * away from closing the payment it was against — permanently, since there is no
+     * edge out of CANCELLED. The service TERMINATE flow is two taps for the same
+     * reason and this follows it.
+     */
     sent = [];
     await tap(String(buttons[0]?.callback_data));
+
+    expect((await payments())[0]?.['state']).toBe('PENDING');
+    const question = lastMessage()?.body['reply_markup'] as
+      { inline_keyboard: { text: string; callback_data: string }[][] } | undefined;
+    const confirm = (question?.inline_keyboard ?? []).flat();
+    expect(String(lastMessage()?.body['text'])).toContain('برگشت‌پذیر نیست');
+    expect(confirm[0]?.callback_data).toBe(`z:${String(payment?.['id'])}`);
+
+    sent = [];
+    await tap(String(confirm[0]?.callback_data));
 
     expect((await payments())[0]?.['state']).toBe('CANCELLED');
     // The ORDER is still open, which is what the reply says too.
@@ -586,11 +602,17 @@ describe('the customer payment flow over Telegram', () => {
     await tap(`m:${orderId}`);
     const payment = (await payments())[0];
     await tap(`x:${String(payment?.['id'])}`);
+    await tap(`z:${String(payment?.['id'])}`);
     sent = [];
 
     // The message lives in the chat for ever. A tap on it a week later must not read as
-    // a fault in the product, and must not produce a second anything.
+    // a fault in the product, and must not produce a second anything. The ASK answers
+    // `bot.payment.not_pending` rather than offering a question about a closed payment.
     await tap(`x:${String(payment?.['id'])}`);
+    expect(String(lastMessage()?.body['text'])).toContain('در انتظار نیست');
+
+    sent = [];
+    await tap(`z:${String(payment?.['id'])}`);
 
     expect(await payments()).toHaveLength(1);
     expect((await payments())[0]?.['state']).toBe('CANCELLED');
@@ -602,9 +624,13 @@ describe('the customer payment flow over Telegram', () => {
     const payment = (await payments())[0];
     sent = [];
 
-    // A different Telegram user, which resolves to a different customer.
+    // A different Telegram user, which resolves to a different customer. Both taps are
+    // driven: the ASK must not even show them the question, and the destructive prefix
+    // must refuse if they reach it by typing it.
     await tap(`x:${String(payment?.['id'])}`, { from: 900_999 });
+    expect(String(lastMessage()?.body['text'])).toContain('در انتظار نیست');
 
+    await tap(`z:${String(payment?.['id'])}`, { from: 900_999 });
     expect((await payments())[0]?.['state']).toBe('PENDING');
   });
 

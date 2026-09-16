@@ -2671,7 +2671,10 @@ export const payments = pgTable(
       sql`resolved_by_admin_id IS NULL OR state = 'FAILED'`,
     ),
     /** A note about a resolution that did not happen is not evidence of anything. */
-    check('payments_resolution_note_check', sql`resolution_note IS NULL OR resolved_at IS NOT NULL`),
+    check(
+      'payments_resolution_note_check',
+      sql`resolution_note IS NULL OR resolved_at IS NOT NULL`,
+    ),
     unique('payments_tenant_id_key').on(table.tenantId, table.id),
   ],
 );

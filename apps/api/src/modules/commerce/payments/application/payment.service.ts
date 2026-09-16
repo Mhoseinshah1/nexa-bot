@@ -1,5 +1,6 @@
 import {
   COMMERCE_ERROR_CODES,
+  PAYMENT_WINDOW_MINUTES_MIN,
   orderPurposeNeedsService,
   ORDER_MACHINE,
   PAYMENT_PAGE_DEFAULT,
@@ -557,6 +558,31 @@ export class PaymentService {
          * so the NEXT redelivery of this very update would take the create path again —
          * which is the defect this block exists to close, reintroduced one line above it.
          */
+        /*
+         * A window too short to transfer money in is refused, not issued.
+         *
+         * Only on the CREATE path. A customer who already holds a reference for this
+         * order gets it back whatever the clock says — refusing them would take away
+         * the instruction they are looking at, which is strictly worse than letting a
+         * short window run out.
+         *
+         * `PAYMENT_WINDOW_MINUTES_MIN` bounded only the SETTING until now, and the
+         * order's own remaining time could be shorter than any configured window: the
+         * customer passes `REFUSE_AFTER_DEADLINE` with thirty seconds left, is handed
+         * bank details, and the sweep closes both rows before they reach the app.
+         * `PAYMENT_WINDOW_TOO_SHORT` says that in the one place it is still fixable.
+         */
+        const deadline = paymentDeadline(order.expiresAt, now, windowMinutes);
+        if (
+          already === undefined &&
+          deadline.getTime() - now.getTime() < PAYMENT_WINDOW_MINUTES_MIN * 60_000
+        ) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_WINDOW_TOO_SHORT,
+            'There is not enough time left on this order to pay for it out of band.',
+          );
+        }
+
         const payment =
           already ??
           (await this.deps.repository.create(
@@ -586,7 +612,7 @@ export class PaymentService {
                * payment created near the end of an order's window inherits the little
                * that is left of it rather than a fresh hour past the order's own death.
                */
-              expiresAt: paymentDeadline(order.expiresAt, now, windowMinutes),
+              expiresAt: deadline,
               now,
             },
             tx,
@@ -655,7 +681,20 @@ export class PaymentService {
     const denial = { action: 'payment.confirm', entityType: 'Payment', entityId: paymentId };
     await this.authorize(scope, actor, PAYMENT_REVIEW_PERMISSION, denial);
 
-    const requestHash = hashRequest({ paymentId, note: input.note });
+    /*
+     * The DECISION is part of the identity, not only the payment and the note.
+     *
+     * Approve and reject share this namespace and would otherwise share a hash: same
+     * payment, same note shape. A caller deriving its key from the payment — which is
+     * the obvious thing for an API client or the Telegram admin surface OQ-4C-03
+     * contemplates to do — could then reject a receipt and later "confirm" it with the
+     * same key, and the store would answer from its record: HTTP 200, no state change,
+     * no audit row, and a caller told the order settled when it did not. The mismatch
+     * guard cannot catch it because the payload really is identical; only the command
+     * differs. `requestManualTransfer` discriminates itself from `settleFromWallet` the
+     * same way, with `method` in the hash.
+     */
+    const requestHash = hashRequest({ paymentId, note: input.note, decision: 'CONFIRM' });
     const replayed = await this.deps.idempotency.find<{ paymentId: string }>(
       scope,
       OPERATOR_NAMESPACE,
@@ -783,7 +822,9 @@ export class PaymentService {
     const denial = { action: 'payment.reject', entityType: 'Payment', entityId: paymentId };
     await this.authorize(scope, actor, PAYMENT_REVIEW_PERMISSION, denial);
 
-    const requestHash = hashRequest({ paymentId, note: input.note });
+    // The decision is part of the identity — see `confirmManualTransfer`, where the
+    // same line carries the reasoning and the other half of this pair.
+    const requestHash = hashRequest({ paymentId, note: input.note, decision: 'REJECT' });
     const replayed = await this.deps.idempotency.find<{ paymentId: string }>(
       scope,
       OPERATOR_NAMESPACE,
@@ -905,6 +946,34 @@ export class PaymentService {
         return rejected;
       },
     );
+  }
+
+  /**
+   * One of a customer's OWN pending transfers, for a surface about to ask them a
+   * question about it.
+   *
+   * Ownership is the authorization and there is no permission charged, which is the
+   * shape `ProvisioningService.getForCustomer` already uses and states the reason for:
+   * a customer asking for an id they do not own gets the same answer as one that does
+   * not exist, because telling those apart lets somebody enumerate ids by watching
+   * which refusal comes back. Here the answer is simply `null`, because the caller is
+   * deciding whether to draw a question rather than performing anything.
+   *
+   * It returns only a PENDING one. A surface that asked "are you sure you want to
+   * withdraw this?" about a payment already closed would be offering a question whose
+   * answer is refused — the failure `serviceTerminateAsk` re-reads the service to
+   * avoid.
+   */
+  async pendingTransferForCustomer(
+    scope: TenantContext,
+    customerId: UserId,
+    id: string,
+  ): Promise<PaymentRecord | null> {
+    const parsed = paymentIdSchema.safeParse(id);
+    if (!parsed.success) return null;
+    const payment = await this.deps.repository.findById(scope, parsed.data);
+    if (payment === null || payment.customerId !== customerId) return null;
+    return payment.state === 'PENDING' ? payment : null;
   }
 
   /**

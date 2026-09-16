@@ -512,6 +512,16 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.payment.window_too_short',
+    description:
+      'Shown when a customer chooses to pay out of band with too little of the order\u2019s ' +
+      'own window left to do it in. It does NOT invite them to hurry: the remedy is a new ' +
+      'order, because the one they are looking at is minutes from expiring and a transfer ' +
+      'against it could not be confirmed afterwards.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.payment.cancel_button',
     description:
       'The label on the button a customer presses to withdraw a pending out-of-band ' +
@@ -519,6 +529,28 @@ export const TEMPLATES = [
       'the reason `bot.payment.wallet_button` gives. It exists because until this ' +
       'release a customer who changed their mind had exactly one option \u2014 never ' +
       'pay \u2014 and the payment stayed PENDING for ever with its reference live.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.cancel_confirm',
+    description:
+      'The question between the cancel button and the withdrawal itself. It must say the ' +
+      'two things the customer cannot take back: the quoted reference stops being valid, ' +
+      'and there is no way to undo it \u2014 a transfer sent against that reference ' +
+      'afterwards cannot be matched to anything. The service detail\u2019s termination ' +
+      'question is the same shape and exists for the same reason: a destructive tap that ' +
+      'is one mis-touch away from a message the customer reads every time they open the ' +
+      'chat is not a decision they have made.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.cancel_confirm_button',
+    description:
+      'The one button that carries the destructive prefix, answering ' +
+      '`bot.payment.cancel_confirm`. A key rather than a literal, for the reason ' +
+      '`bot.payment.wallet_button` gives.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },

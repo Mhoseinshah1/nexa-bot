@@ -52,6 +52,7 @@ export const BOT_INTENTS = [
   'PAY_WALLET',
   'PAY_MANUAL',
   'PAY_GATEWAY',
+  'PAY_CANCEL_ASK',
   'PAY_CANCEL',
   'SERVICES',
   'SERVICE',
@@ -180,7 +181,22 @@ export const GATEWAY_PAY_CALLBACK_PREFIX = 'g:';
  * the money are all re-read inside the transaction, which is what makes a guessed id
  * useless rather than dangerous.
  */
-export const CANCEL_PAY_CALLBACK_PREFIX = 'x:';
+export const CANCEL_PAY_ASK_CALLBACK_PREFIX = 'x:';
+
+/**
+ * The second tap, and the only prefix that actually withdraws anything.
+ *
+ * TWO taps, because the first one sits on the message that told the customer to go and
+ * transfer money and that message stays in their chat for ever. A customer who has
+ * already paid and mis-touches it would otherwise have closed the payment their
+ * transfer was against — permanently, since `PAYMENT_MACHINE` has no edge out of
+ * `CANCELLED` and migration 0052 freezes the row — and nothing would tell the operator.
+ *
+ * `SERVICE_TERMINATE_ASK_CALLBACK_PREFIX` and its partner are the same pair for the
+ * same reason, and that precedent is why this is not an invention: a destructive tap a
+ * customer can reach by scrolling is asked about, not performed.
+ */
+export const CANCEL_PAY_CALLBACK_PREFIX = 'z:';
 /**
  * A tap on one of the customer's own services, and a request to send its link again.
  *
@@ -300,6 +316,20 @@ export function intentOf(update: unknown): BotCommand {
     }
     if (data.startsWith(GATEWAY_PAY_CALLBACK_PREFIX)) {
       return callbackCommand('PAY_GATEWAY', data.slice(GATEWAY_PAY_CALLBACK_PREFIX.length), id);
+    }
+    /*
+     * ASK before the destructive prefix, and they are different letters so the order
+     * cannot matter today. Fixed anyway for the reason the resend/service pair states:
+     * if one ever became a prefix of the other every tap would route to whichever
+     * branch came first, and here that is the difference between showing a customer a
+     * question and closing the payment their money is against.
+     */
+    if (data.startsWith(CANCEL_PAY_ASK_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'PAY_CANCEL_ASK',
+        data.slice(CANCEL_PAY_ASK_CALLBACK_PREFIX.length),
+        id,
+      );
     }
     if (data.startsWith(CANCEL_PAY_CALLBACK_PREFIX)) {
       return callbackCommand('PAY_CANCEL', data.slice(CANCEL_PAY_CALLBACK_PREFIX.length), id);
@@ -557,6 +587,16 @@ const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
    * what happened instead of "unknown command".
    */
   [COMMERCE_ERROR_CODES.PAYMENT_METHOD_UNAVAILABLE]: 'bot.payment.unconfigured',
+  /*
+   * The order is still live and this rail cannot be used inside what is left of it.
+   *
+   * Its own key rather than `bot.order.expired`, because the two say different things
+   * to the same customer: that one means the window has closed, this one means it is
+   * about to and a transfer started now could not be confirmed afterwards. The remedy
+   * is the same — order again — and saying which is which is what stops a customer
+   * transferring money against a reference that dies before it arrives.
+   */
+  [COMMERCE_ERROR_CODES.PAYMENT_WINDOW_TOO_SHORT]: 'bot.payment.window_too_short',
   [COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND]: 'bot.order.unavailable',
   /*
    * The payment, not the order. Its own key since 4G made the state reachable.
@@ -818,6 +858,9 @@ export class BotRuntime {
      */
     if (command.intent === 'PAY_GATEWAY') {
       return { key: 'bot.payment.unconfigured', values: {}, buttons: [], orderId: null };
+    }
+    if (command.intent === 'PAY_CANCEL_ASK' && command.targetId !== null) {
+      return this.cancelPaymentAsk(scope, command.targetId, customer);
     }
     if (command.intent === 'PAY_CANCEL' && command.targetId !== null) {
       return this.cancelPayment(scope, actor, command.targetId, customer, input.idempotencyKey);
@@ -1633,13 +1676,17 @@ export class BotRuntime {
          *
          * It names the PAYMENT rather than the order, which is the only id here that
          * identifies what a withdrawal would close: an order can have had several
-         * payments, and a second tap on this very button answers with the payment that
-         * is already open rather than a new one — see `requestManualTransfer`.
+         * payments over its life, and this message is about one of them.
+         *
+         * It carries the ASK prefix. Tapping it closes nothing — it answers with a
+         * question and one further button — because this message stays in the chat for
+         * ever and a customer who has already transferred the money is one mis-touch
+         * away from closing the payment it was against.
          */
         buttons: [
           {
             label: { kind: 'TEMPLATE', key: 'bot.payment.cancel_button' },
-            data: `${CANCEL_PAY_CALLBACK_PREFIX}${payment.id}`,
+            data: `${CANCEL_PAY_ASK_CALLBACK_PREFIX}${payment.id}`,
           },
         ],
         orderId,
@@ -1662,6 +1709,44 @@ export class BotRuntime {
    * payment and leaves the order open until its own deadline, so the customer may pay
    * from their wallet instead. `bot.payment.cancelled` says so.
    */
+  /**
+   * The question between the cancel button and the withdrawal.
+   *
+   * It writes nothing and closes nothing. Its only job is to say what is about to
+   * happen and offer the ONE button that carries the destructive prefix —
+   * `serviceTerminateAsk` is the same shape one aggregate over.
+   *
+   * The payment is re-read here rather than trusted from whichever message was tapped:
+   * a customer whose payment an operator has since rejected, or the sweep has expired,
+   * is told it is no longer pending instead of being shown a question whose answer
+   * would be refused.
+   */
+  private async cancelPaymentAsk(
+    scope: TenantContext,
+    paymentId: string,
+    customer: CustomerRecord,
+  ): Promise<PendingReply> {
+    const payment = await this.deps.payments.pendingTransferForCustomer(
+      scope,
+      customer.id,
+      paymentId,
+    );
+    if (payment === null) {
+      return { key: 'bot.payment.not_pending', values: {}, buttons: [], orderId: null };
+    }
+    return {
+      key: 'bot.payment.cancel_confirm',
+      values: {},
+      buttons: [
+        {
+          label: { kind: 'TEMPLATE', key: 'bot.payment.cancel_confirm_button' },
+          data: `${CANCEL_PAY_CALLBACK_PREFIX}${payment.id}`,
+        },
+      ],
+      orderId: null,
+    };
+  }
+
   private async cancelPayment(
     scope: TenantContext,
     actor: ActorContext,
