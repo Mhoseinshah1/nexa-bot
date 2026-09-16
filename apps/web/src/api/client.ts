@@ -766,6 +766,22 @@ export function confirmPayment(input: {
   return post(PAYMENT_ROUTES.confirm(id), body, paymentResponseSchema);
 }
 
+/**
+ * Rejecting a receipt: the other half of `receipts.review`.
+ *
+ * A NOTE and nothing else, exactly as the confirmation. There is no amount, no state
+ * and no un-reject: `PAYMENT_MACHINE` has no edge out of FAILED, migration 0052 freezes
+ * the row, and a confirmed payment is reversed by a refund rather than by an edit.
+ */
+export function rejectPayment(input: {
+  id: string;
+  idempotencyKey: string;
+  resolutionNote: string;
+}): Promise<PaymentResponse> {
+  const { id, ...body } = input;
+  return post(PAYMENT_ROUTES.reject(id), body, paymentResponseSchema);
+}
+
 export function fetchPanels(
   query: { limit?: number; cursor?: string; archived?: PanelListArchivedMode } = {},
 ): Promise<PanelListResponse> {

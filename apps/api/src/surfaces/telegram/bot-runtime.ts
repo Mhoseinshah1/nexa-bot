@@ -52,6 +52,7 @@ export const BOT_INTENTS = [
   'PAY_WALLET',
   'PAY_MANUAL',
   'PAY_GATEWAY',
+  'PAY_CANCEL',
   'SERVICES',
   'SERVICE',
   'SERVICE_RESEND',
@@ -169,6 +170,17 @@ export const MANUAL_PAY_CALLBACK_PREFIX = 'm:';
  * through to `bot.unknown_command` would tell them they typed something wrong.
  */
 export const GATEWAY_PAY_CALLBACK_PREFIX = 'g:';
+
+/**
+ * Withdrawing a pending out-of-band payment. It names the PAYMENT, not the order.
+ *
+ * The only customer callback in this file that carries a payment id, and it has to: a
+ * withdrawal names the thing being withdrawn, and an order can have had several
+ * payments over its life. The id is still only an IDENTIFIER — the owner, the state and
+ * the money are all re-read inside the transaction, which is what makes a guessed id
+ * useless rather than dangerous.
+ */
+export const CANCEL_PAY_CALLBACK_PREFIX = 'x:';
 /**
  * A tap on one of the customer's own services, and a request to send its link again.
  *
@@ -288,6 +300,9 @@ export function intentOf(update: unknown): BotCommand {
     }
     if (data.startsWith(GATEWAY_PAY_CALLBACK_PREFIX)) {
       return callbackCommand('PAY_GATEWAY', data.slice(GATEWAY_PAY_CALLBACK_PREFIX.length), id);
+    }
+    if (data.startsWith(CANCEL_PAY_CALLBACK_PREFIX)) {
+      return callbackCommand('PAY_CANCEL', data.slice(CANCEL_PAY_CALLBACK_PREFIX.length), id);
     }
     /*
      * The resend prefix is tested BEFORE the service prefix.
@@ -543,7 +558,16 @@ const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
    */
   [COMMERCE_ERROR_CODES.PAYMENT_METHOD_UNAVAILABLE]: 'bot.payment.unconfigured',
   [COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND]: 'bot.order.unavailable',
-  [COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID]: 'bot.order.unavailable',
+  /*
+   * The payment, not the order. Its own key since 4G made the state reachable.
+   *
+   * A customer meets this by scrolling back to a message that was live when it was
+   * sent and pressing the button on it — after the sweep expired the payment, after an
+   * operator rejected it, or after they withdrew it themselves. Answering "this service
+   * is not available" reads as a fault in the product; saying the payment is no longer
+   * pending says what happened.
+   */
+  [COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID]: 'bot.payment.not_pending',
   /*
    * The guard refused. ONE sentence for every reason it gives, exactly as the product
    * refusals collapse: the customer can act on none of "the amount does not match", "the
@@ -794,6 +818,9 @@ export class BotRuntime {
      */
     if (command.intent === 'PAY_GATEWAY') {
       return { key: 'bot.payment.unconfigured', values: {}, buttons: [], orderId: null };
+    }
+    if (command.intent === 'PAY_CANCEL' && command.targetId !== null) {
+      return this.cancelPayment(scope, actor, command.targetId, customer, input.idempotencyKey);
     }
     if (command.intent === 'SERVICE_RENEW' && command.targetId !== null) {
       return this.commercialQuote(scope, actor, customer, command.targetId, 'RENEW', null, input);
@@ -1601,9 +1628,53 @@ export class BotRuntime {
       return {
         key: 'bot.payment.manual_instructions',
         values: { total: payment.amount, reference: payment.reference },
-        buttons: [],
+        /*
+         * The way out, beside the instructions that created the obligation.
+         *
+         * It names the PAYMENT rather than the order, which is the only id here that
+         * identifies what a withdrawal would close: an order can have had several
+         * payments, and a second tap on this very button answers with the payment that
+         * is already open rather than a new one — see `requestManualTransfer`.
+         */
+        buttons: [
+          {
+            label: { kind: 'TEMPLATE', key: 'bot.payment.cancel_button' },
+            data: `${CANCEL_PAY_CALLBACK_PREFIX}${payment.id}`,
+          },
+        ],
         orderId,
       };
+    } catch (error) {
+      return refusal(error);
+    }
+  }
+
+  /**
+   * Withdrawing a pending transfer the customer decided not to make.
+   *
+   * The button that reaches this is attached to `bot.payment.manual_instructions` — the
+   * message that gave them the reference — so it sits beside the thing it undoes. That
+   * message lives in the chat for ever, which is exactly why the service re-reads the
+   * state rather than trusting the tap: a customer scrolling back to it a week later
+   * gets `bot.payment.not_pending`, not a second withdrawal of something already closed.
+   *
+   * The reply does NOT say the order is gone, because it is not: a withdrawal closes the
+   * payment and leaves the order open until its own deadline, so the customer may pay
+   * from their wallet instead. `bot.payment.cancelled` says so.
+   */
+  private async cancelPayment(
+    scope: TenantContext,
+    actor: ActorContext,
+    paymentId: string,
+    customer: CustomerRecord,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    try {
+      await this.deps.payments.withdrawPending(scope, actor, customer.id, {
+        idempotencyKey: `${idempotencyKey}:cancel-pay`,
+        paymentId,
+      });
+      return { key: 'bot.payment.cancelled', values: {}, buttons: [], orderId: null };
     } catch (error) {
       return refusal(error);
     }

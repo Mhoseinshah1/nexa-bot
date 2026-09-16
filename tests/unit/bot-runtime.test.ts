@@ -434,6 +434,20 @@ describe('profile metadata, normalised before it is ever stored', () => {
      *                                  telling somebody that would send them to support
      *                                  over ten seconds.
      *
+     *   `bot.payment.cancel_button`  the way out, attached to the message that gave the
+     *                                  customer the reference. It names the PAYMENT, not
+     *                                  the order, because an order can have had several
+     *                                  and a withdrawal names the one being withdrawn.
+     *   `bot.payment.cancelled`        the withdrawal happened. It does NOT say the order
+     *                                  is gone, because it is not: the order stays open
+     *                                  until its own deadline so the customer can pay
+     *                                  another way.
+     *   `bot.payment.not_pending`      the payment has already ended — swept, rejected or
+     *                                  withdrawn. Reached by scrolling back to a message
+     *                                  that was live when it was sent, which is why it is
+     *                                  its own key rather than `bot.order.unavailable`:
+     *                                  "not available" reads as a fault in the product.
+     *
      * None of them instructs a customer to do something that can only answer
      * `bot.unknown_command` either — `/services` is a real command in `intentOf`, and
      * every callback prefix is parsed.
@@ -449,8 +463,11 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.order.settled',
       'bot.order.summary',
       'bot.order.unavailable',
+      'bot.payment.cancel_button',
+      'bot.payment.cancelled',
       'bot.payment.manual_button',
       'bot.payment.manual_instructions',
+      'bot.payment.not_pending',
       'bot.payment.unconfigured',
       'bot.payment.wallet_button',
       'bot.service.action_confirm_button',

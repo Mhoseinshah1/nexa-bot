@@ -41,6 +41,8 @@ function payment(overrides: Record<string, unknown> = {}): Record<string, unknow
     evidenceKind: null,
     confirmedAt: null,
     confirmedByAdminId: null,
+    resolvedAt: null,
+    resolvedByAdminId: null,
     expiresAt: null,
     createdAt: '2026-09-10T12:30:00.000Z',
     updatedAt: '2026-09-10T12:30:00.000Z',
@@ -49,7 +51,10 @@ function payment(overrides: Record<string, unknown> = {}): Record<string, unknow
 }
 
 const detail = (overrides: Record<string, unknown> = {}) => [
-  { url: `/payments/${ROW_ID}`, body: { payment: { ...payment(overrides), evidenceNote: null } } },
+  {
+    url: `/payments/${ROW_ID}`,
+    body: { payment: { ...payment(overrides), evidenceNote: null, resolutionNote: null } },
+  },
 ];
 
 const list = (payments: unknown[], nextCursor: string | null = null) => [
@@ -284,16 +289,72 @@ describe('the payment detail', () => {
     }
   });
 
-  it('draws no control that could fail, cancel, retry or refund a payment', async () => {
+  /*
+   * TWO controls now, and the list is still exhaustive.
+   *
+   * 4G gave `receipts.review` the reject half it has promised since the permission
+   * catalogue was frozen, so a rejection is no longer among the things this page must
+   * not offer. Everything else in the original list still is: there is no cancel here
+   * (a withdrawal is the CUSTOMER's act and arrives through the bot), no retry
+   * (`payments.retry` is a permission for a gateway that does not ship) and no refund
+   * (`refunds.issue` is CRITICAL and unimplemented — OQ-4C-02).
+   */
+  it('draws no control that could cancel, retry or refund a payment', async () => {
     const view = render();
     await screen.findAllByText('a1b2c3d4e5f60718:manual');
     const labels = [...view.container.querySelectorAll('button')].map((b) => b.textContent?.trim());
     for (const label of labels) {
       expect(
-        label === 'تأیید دریافت' || label === '',
+        label === 'تأیید دریافت' || label === 'رد رسید' || label === '',
         `the payment page draws an unexpected control: ${String(label)}`,
       ).toBe(true);
     }
+  });
+
+  it('sends a REASON and nothing else when rejecting, and leaves the order alone', async () => {
+    const api = stubApi([
+      ...detail(payment({ state: 'PENDING', method: 'MANUAL_TRANSFER' })),
+      {
+        url: `/payments/${ROW_ID}/reject`,
+        body: {
+          payment: {
+            ...payment({
+              state: 'FAILED',
+              resolvedAt: '2026-09-10T13:05:00.000Z',
+              resolvedByAdminId: '019200ab-cdef-7012-8345-6789abcdef01',
+            }),
+            evidenceNote: null,
+            resolutionNote: 'هیچ واریزی با این کد پیدا نشد',
+          },
+        },
+      },
+    ]);
+    const view = renderPage(<PaymentDetailPage id={ROW_ID} mayReview denied={false} />);
+    await screen.findAllByText('a1b2c3d4e5f60718:manual');
+
+    const reason = view.container.querySelector('#payment-reason') as HTMLInputElement;
+    fireEvent.change(reason, { target: { value: 'هیچ واریزی با این کد پیدا نشد' } });
+    fireEvent.click(screen.getByRole('button', { name: 'رد رسید' }));
+
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.url.endsWith('/reject'))).toBe(true);
+    });
+    const sent = api.calls.find((call) => call.url.endsWith('/reject'));
+    const body = (sent?.body ?? {}) as Record<string, unknown>;
+    // The reason and the key. No amount, no state, no order — the whole point of the
+    // endpoint's shape, asserted where a later convenience field would break it.
+    expect(Object.keys(body).sort()).toEqual(['idempotencyKey', 'resolutionNote']);
+    expect(body.resolutionNote).toBe('هیچ واریزی با این کد پیدا نشد');
+  });
+
+  it('offers no rejection to an operator without receipts.review', async () => {
+    stubApi(detail(payment({ state: 'PENDING', method: 'MANUAL_TRANSFER' })));
+    const view = renderPage(<PaymentDetailPage id={ROW_ID} mayReview={false} denied={false} />);
+    await screen.findAllByText('a1b2c3d4e5f60718:manual');
+    // Not a disabled button and not a hidden one behind a visible card: the whole
+    // card is absent, so there is nothing to press and nothing to imply they could.
+    expect(view.container.querySelector('#payment-reason')).toBeNull();
+    expect(view.container.textContent).not.toContain('رد رسید');
   });
 });
 
