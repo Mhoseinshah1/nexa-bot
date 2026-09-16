@@ -1533,6 +1533,35 @@ describe('payments and settlement', () => {
       expect((await paymentRow(payment.id)).state).toBe('FAILED');
     });
 
+    it('refuses an administrator on a withdrawal, at the schema', async () => {
+      const { payment } = await pendingTransfer('frz-3');
+
+      /*
+       * `payments_resolution_reviewer_check` in isolation, which needs a PENDING row.
+       *
+       * On an already-resolved payment 0052's trigger fires first and raises before any
+       * CHECK is evaluated, so a test written that way proves the trigger twice and the
+       * constraint never. Moving a PENDING row straight to CANCELLED with an admin id
+       * is the one statement that reaches the constraint: the trigger's resolved-state
+       * branch does not apply, and the check does.
+       *
+       * The rule it holds: nobody decides a withdrawal — the customer performs it — so
+       * an operator id on one would answer "who decided this" with somebody who did not.
+       * `withdrawPending` passes null, and this is the half that stays true if a later
+       * edit to that file does not.
+       */
+      await expect(
+        ctx.container.database.db.execute(
+          sql`UPDATE payments
+                 SET state = 'CANCELLED', resolved_at = now(), resolved_by_admin_id = ${owner.id}
+               WHERE id = ${payment.id}` as never,
+        ),
+      ).rejects.toMatchObject({
+        cause: { constraint: 'payments_resolution_reviewer_check' },
+      });
+      expect((await paymentRow(payment.id)).state).toBe('PENDING');
+    });
+
     it('refuses a raw UPDATE that would rewrite why it was rejected', async () => {
       const { payment } = await pendingTransfer('frz-2');
       await ctx.container.payments.rejectManualTransfer(tenantA, owner, payment.id, {
