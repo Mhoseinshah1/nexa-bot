@@ -823,6 +823,19 @@ export const WEB_FA = {
   'web.payment_confirmed_at': 'زمان تأیید',
   'web.payment_created_at': 'زمان ثبت',
   'web.payment_expires_at': 'اعتبار تا',
+  /*
+   * The customer's CLAIM, and the copy never lets it read as evidence.
+   *
+   * `paymentSummarySchema` puts it on the summary precisely so a pending list is
+   * triageable — `docs/phase4h-audit.md` §4 measured that an operator learns of a
+   * transfer from their bank rather than from the product. It is not a state: a
+   * signalled payment is still PENDING and still needs a human, which is the
+   * distinction the legacy receipt review does not have (`PRBR-004`).
+   */
+  'web.payment_customer_signalled': 'مشتری گفته پرداخت کرده',
+  'web.payment_customer_signalled_none': 'مشتری چیزی نگفته است.',
+  'web.payment_customer_signalled_hint':
+    'این فقط گفتهٔ مشتری است، نه رسید و نه تأیید. پرداخت همچنان در انتظار بررسی شماست.',
   'web.payments_filter_customer_hint': 'شناسهٔ مشتری را کامل وارد کنید.',
   'web.payments_filter_order_hint': 'شناسهٔ سفارش را کامل وارد کنید.',
   'web.payments_filter_reference_hint': 'کد پیگیری دقیقاً همان چیزی است که مشتری می‌خواند.',

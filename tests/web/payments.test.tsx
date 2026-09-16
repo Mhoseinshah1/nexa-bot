@@ -3,6 +3,7 @@ import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/re
 import type { ReactElement } from 'react';
 import { PaymentDetailPage, PaymentsPage } from '../../apps/web/src/pages/payments';
 import { resolve } from '../../apps/web/src/app';
+import { formatTimestamp } from '../../apps/web/src/format';
 import { renderPage, stubApi } from './harness';
 
 /**
@@ -43,6 +44,9 @@ function payment(overrides: Record<string, unknown> = {}): Record<string, unknow
     confirmedByAdminId: null,
     resolvedAt: null,
     resolvedByAdminId: null,
+    // REQUIRED by `paymentSummarySchema` since 4H. A fixture without it is not the
+    // shape the server returns, and every case in this file failed on the parse.
+    customerSignalledAt: null,
     expiresAt: null,
     createdAt: '2026-09-10T12:30:00.000Z',
     updatedAt: '2026-09-10T12:30:00.000Z',
@@ -158,6 +162,66 @@ describe('the payment list', () => {
     const { container } = renderPage(<PaymentsPage route={LIST_ROUTE} denied={false} />);
     await screen.findByText('a1b2c3d4e5f60718:manual');
     expect(container.textContent).not.toContain('یادداشت بررسی');
+  });
+
+  /**
+   * The customer's claim, on the list, and never as a state.
+   *
+   * `paymentSummarySchema` carries `customerSignalledAt` so a pending list is
+   * triageable, and until this case the Web Admin dropped it on the floor: every
+   * PENDING manual transfer looked alike, which is the measurement in
+   * `docs/phase4h-audit.md` §4 that 4H set out to fix.
+   *
+   * The second half is the one that matters. A signalled payment is still PENDING —
+   * a customer saying they paid is not a receipt and not a confirmation — so the
+   * state badge must not move. The legacy system's defect is that "receipt" and
+   * "payment" name one record (`PRBR-004`), and a surface that let a claim look like
+   * a settlement would be that defect rebuilt.
+   */
+  /*
+   * Reads the CELL under the header, not the header.
+   *
+   * The first version asserted that the header existed and that not every cell was a
+   * dash, and it survived a mutation that replaced the column's renderer with a
+   * constant dash — the header comes from the column definition, so a column that
+   * renders nothing still has one. This finds the header's INDEX and reads the body
+   * cell beneath it, which is the only place a customer's claim can actually appear.
+   */
+  const signalCell = (): string => {
+    const table = screen.getByRole('table');
+    const headers = within(table)
+      .getAllByRole('columnheader')
+      .map((cell) => cell.textContent ?? '');
+    const index = headers.indexOf('مشتری گفته پرداخت کرده');
+    expect(index, 'no customer-signal column').toBeGreaterThanOrEqual(0);
+    const cells = within(table)
+      .getAllByRole('cell')
+      .map((cell) => cell.textContent ?? '');
+    return cells[index] ?? '';
+  };
+
+  it('shows that a customer said they paid, and still calls the payment pending', async () => {
+    stubApi(list([payment({ customerSignalledAt: '2026-09-10T13:00:00.000Z' })]));
+    renderPage(<PaymentsPage route={LIST_ROUTE} denied={false} />);
+    await screen.findByText('a1b2c3d4e5f60718:manual');
+
+    // A real instant in the cell — the SAME text `formatTimestamp` renders elsewhere,
+    // which is how this knows a time was drawn and not a label or a placeholder.
+    expect(signalCell()).toBe(formatTimestamp('2026-09-10T13:00:00.000Z'));
+    // And the state has NOT moved. A customer's claim is not a receipt and not a
+    // confirmation; the legacy defect is that "receipt" and "payment" name one record
+    // (`PRBR-004`), and a surface where a claim looked settled would rebuild it.
+    expect(within(screen.getByRole('table')).getByText('در انتظار')).toBeInTheDocument();
+  });
+
+  it('leaves the signal column empty for a payment no customer has claimed', async () => {
+    stubApi(list([payment()]));
+    renderPage(<PaymentsPage route={LIST_ROUTE} denied={false} />);
+    await screen.findByText('a1b2c3d4e5f60718:manual');
+
+    // The dash, in the same cell — so the case above cannot pass by rendering a
+    // constant, and this one cannot pass by rendering nothing at all.
+    expect(signalCell()).toBe('—');
   });
 });
 
