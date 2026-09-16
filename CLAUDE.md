@@ -13,9 +13,23 @@ that keeps panel health up to date on a schedule; 3D the Web Admin. **Telegram
 Backup V1 is done** — the disaster-recovery pipeline, ADR-0025 and
 `docs/backup.md`. **Web Admin Disaster Recovery is done** — one operational
 section, a fourth `recovery` process role, and a real cutover by database rename
-(ADR-0028). There are still no product features: no purchases, payments,
-wallet, resellers or customer-facing Telegram operations, and nothing consumes a
-panel yet. Do not add them without an explicit instruction.
+(ADR-0028).
+
+**Phase 4 is the product, and it is done.** 4A customers; 4B catalogue and
+orders; 4C wallet, payments and settlement; 4D the `provisioner` process role
+that turns a paid order into an account on a panel; 4E suspend, resume,
+terminate and usage; 4F renew, add traffic and add time; 4G the payment
+outcomes an operator or a deadline produces; 4H the customer notification lane
+(ADR-0030) and the two actions a customer can take on their own order; 4I the
+Telegram bootstrap surface; 4J the final hardening pass
+(`docs/phase4j-audit.md`).
+
+**Marzban is the supported mutable provider.** 3X-UI keeps the five
+capabilities it has — of which only `CREATE_USER` mutates anything — and gains
+no new mutable scope: the owner's correction, recorded in
+`docs/phase4e-audit.md`. What remains unbuilt is Phase 7: discounts,
+referral, cashback, affiliate, resellers and promotions. Do not add them
+without an explicit instruction.
 
 **The deployment checkpoint after Phase 2 is done too**: an immutable image,
 a production Compose topology behind Caddy, an Ubuntu installer, and `botctl`
@@ -67,6 +81,27 @@ Four more from Phase 3C:
 - Nothing about a probe is decided in a process. The per-panel claim and the
   budget are conditional writes; **two monitor replicas are the normal case**,
   briefly, on every rolling update.
+
+Four Phase 4 rules that are easy to break by accident:
+
+- A customer is told a fact through the **notification lane**, never a string.
+  `CUSTOMER_NOTIFICATION_KINDS` is a closed set pinned by a CHECK constraint,
+  each kind renders one frozen template, and none of them carries a payload. A
+  reply that RENDERS state does not belong there — it would need the
+  parameterised payload ADR-0030 §1 refuses, and the lane would become "send
+  this customer some text".
+- A terminal operation is **answered exactly once**, and `announced_at` is what
+  says so. NULL means unanswered, never "no answer was owed", so four of the
+  five exits from `announce` stamp — including the three that decide nothing is
+  owed. The fifth, a state that is not terminal, must not.
+- An outcome that is **UNKNOWN is never retried and never queued again**. A
+  429 is not an unknown outcome and a timeout is not a rate limit; the three
+  are kept apart at every layer, because every collapse of them costs a
+  customer either a duplicate charge or a message they cannot reconcile.
+- The announcer is **the one write path that does not check scope activity**,
+  and that is a stated exception with a bound and a test — see
+  `docs/conventions.md`. Everything else reads `ScopeActivityReader` inside its
+  transaction.
 
 Three Phase 2 rules that are easy to break by accident:
 
