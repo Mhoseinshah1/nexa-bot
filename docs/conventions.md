@@ -314,6 +314,71 @@ consulted for it; an integration test asserts the denial is recorded.
 
 ---
 
+## A widened enum is write-compatible, not reader-compatible
+
+**Rule.** Adding a value to an enum that a CHECK constraint pins — a
+notification kind, an operation type, a state — makes the database accept it
+immediately and does not make older code able to READ it. A release that both
+widens the constraint and produces the new value assumes every reader is on that
+release. Either stage it (readers first, producer next) or make the reader
+refuse what it cannot handle.
+
+**Why.** `botctl rollback` never restores the database, so rows a newer release
+wrote outlive it. The customer notification lane is the worked example: an older
+dispatcher looked a new kind up in `CUSTOMER_NOTIFICATION_TEMPLATES`, got
+`undefined`, and had already stamped `send_started_at` — so the throw left the
+stranded-send reaper to resolve a message that was never sent. Permanently lost,
+no Telegram request, nothing saying so. Raised by the Codex review of PR #32.
+
+**Enforced by.** `CustomerNotificationService.deliverOne` refuses a kind with no
+template BEFORE the stamp, deferring the row with no attempt spent, so a replica
+that knows the kind claims it later.
+`tests/integration/customer-notifications.test.ts` › defers a kind this build
+cannot render instead of spending it. The same shape is owed by any other lane
+that dispatches on a pinned enum.
+
+---
+
+## A stopped scope accepts no new business work — with one stated exception
+
+**Rule.** Every write path reads `ScopeActivityReader` **inside its
+transaction** and refuses a scope that has stopped accepting work. A surface
+checks on arrival as well, because a stop can commit between the request and
+the write.
+
+**The exception, bounded:** two producers on the customer notification lane do
+not check. `OperationOutcomeAnnouncer` queues the outcome of work that has
+ALREADY been done — a renewal that succeeded, a provision nothing could
+resolve. `queueRateLimitedFact`, the container function `BotRuntime` calls when
+Telegram answers 429, queues the answer to a command that has ALREADY
+committed; that command checked activity inside its own transaction, so the
+scope was accepting work when it ran, and a stop landing between the commit and
+the send must not turn a recorded transfer into silence.
+
+Telling a customer what became of work already done is not new business work.
+Suppressing it leaves somebody who paid in silence, which is the gap Phase 4H
+existed to close, and an operator stopping a tenant is not asking for its
+existing customers to be abandoned mid-provision.
+
+What the exception does NOT license: both may ENQUEUE, and nothing else.
+Neither may create an order, a payment, a service or an operation for a stopped
+tenant, and neither holds a dependency that could — the announcer's reader is
+read-only by construction and `queueRateLimitedFact` takes a kind and a subject
+id. The bound is what makes this an exception rather than a hole.
+
+**Why it is written down at all.** An unstated exemption is indistinguishable
+from an oversight — Phase 4I's self-review found precisely this omission in
+fresh code and fixed it by reflex, correctly, and `docs/phase4j-audit.md`
+records the pass that asked the whole tree the same question. The next reader
+must be able to tell which of the two this is without re-deriving the argument.
+
+**Enforced by.** `tests/integration/provisioning.test.ts`, "still answers a
+customer after an operator has STOPPED the tenant". Adding the check —
+`scopeActivity` on the announcer's deps and a refusal at the top of `announce`,
+which is exactly the shape a well-meaning fix takes — fails that test.
+
+---
+
 ## Idempotency keys are namespaced per surface
 
 **Rule.** A key is unique within `(scope, surface)`, never within scope alone.

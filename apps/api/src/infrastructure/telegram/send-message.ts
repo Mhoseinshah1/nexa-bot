@@ -185,6 +185,18 @@ export function textMessageBody(input: {
    * is a visible artefact for every reply that happens to have no buttons.
    */
   readonly buttons?: readonly { readonly text: string; readonly data: string }[];
+  /**
+   * A persistent keyboard under the chat, as rows of plain labels.
+   *
+   * `ReplyKeyboardMarkup`, not an inline keyboard: no `callback_data`, so a tap arrives
+   * as an ordinary text message whose body is the label. `is_persistent` keeps it shown
+   * on clients that support it; `resize_keyboard` stops Telegram reserving a full-height
+   * keyboard for two rows; `one_time_keyboard` is FALSE because this is the customer's
+   * navigation and hiding it after one tap is what made the bot feel command-driven.
+   *
+   * Supplied instead of `buttons`, never beside it — `reply_markup` holds one markup.
+   */
+  readonly keyboard?: readonly (readonly string[])[];
 }): Record<string, unknown> {
   const body: Record<string, unknown> = {
     chat_id: input.chatId,
@@ -197,6 +209,14 @@ export function textMessageBody(input: {
       inline_keyboard: input.buttons.map((button) => [
         { text: button.text, callback_data: button.data },
       ]),
+    };
+  } else if (input.keyboard !== undefined && input.keyboard.length > 0) {
+    body.reply_markup = {
+      keyboard: input.keyboard.map((row) => row.map((text) => ({ text }))),
+      resize_keyboard: true,
+      is_persistent: true,
+      one_time_keyboard: false,
+      selective: false,
     };
   }
   return body;

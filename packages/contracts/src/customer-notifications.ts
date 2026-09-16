@@ -42,6 +42,33 @@ export const CUSTOMER_NOTIFICATION_KINDS = [
   'SERVICE_ACTION_FAILED',
   /** Provisioning has not finished and is no longer prompt. `services.id` is the subject. */
   'SERVICE_PROVISION_DELAYED',
+  /**
+   * The customer's claim that they sent the transfer was recorded. `payments.id`
+   * is the subject.
+   *
+   * ## Why an INTERACTIVE reply has a kind here at all
+   *
+   * `OQ-4H-01`: the durable write commits, the synchronous Telegram reply gets a
+   * 429, and the customer is left believing nothing happened — so they send the
+   * money twice, or they do not send it at all. Everything else in this lane is
+   * something the customer did NOT ask for; these last two are the answer to
+   * something they did.
+   *
+   * That does not make the lane a message queue, and this is the line that keeps
+   * it from becoming one. The reply these stand in for carries `values: {}` and
+   * `buttons: []` — it is a FACT about an entity with an id, which is exactly
+   * what every other member of this list is. A reply that RENDERS state (a menu,
+   * a catalogue, a service list) has no subject and no fact, and putting one here
+   * would need a parameterised payload, which `ADR 0030` §1 refuses and which
+   * would turn each of these into "send this customer some text".
+   *
+   * So the rule, stated once: a reply that is a fact about an entity the customer
+   * just changed may fall back to this lane; a reply that renders state may not,
+   * and is reproduced by the customer's next tap.
+   */
+  'PAYMENT_TRANSFER_RECORDED',
+  /** The customer withdrew their own unpaid order. `orders.id` is the subject. */
+  'ORDER_CANCELLED',
 ] as const;
 export type CustomerNotificationKind = (typeof CUSTOMER_NOTIFICATION_KINDS)[number];
 export const customerNotificationKindSchema = z.enum(CUSTOMER_NOTIFICATION_KINDS);
@@ -71,6 +98,22 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
   SERVICE_ACTION_SUCCEEDED: false,
   SERVICE_ACTION_FAILED: false,
   SERVICE_PROVISION_DELAYED: true,
+  /*
+   * Both `false`, and both TERMINAL facts rather than claims about a transient
+   * state. A recorded transfer stays recorded; a cancelled order stays cancelled.
+   * An hour-late copy of either is still true and still worth reading, which is
+   * the whole test this column applies.
+   *
+   * `DrizzleNotificationSubjectReader.stillHolds` REFUSES any kind declaring no
+   * precondition, so neither of these ever reaches it. It also refuses any kind it
+   * cannot ANSWER — it reads the `services` table and nothing else, so without that
+   * second refusal, marking either of these `true` would have read `services` with a
+   * payment or order id, found no row, and SUPERSEDED the message: the customer never
+   * told, silently. Both refusals are asserted in
+   * `tests/integration/customer-notifications.test.ts`.
+   */
+  PAYMENT_TRANSFER_RECORDED: false,
+  ORDER_CANCELLED: false,
 };
 
 /**
@@ -81,7 +124,7 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
  * string in the catalogue from a background loop, and the audit trail would say only
  * that "a notification" was sent.
  *
- * Two of the six are keys that have existed with no producer since the phase that
+ * Two of the first six are keys that have existed with no producer since the phase that
  * declared them — `bot.order.expired` since 4B and `bot.service.provision_delayed`
  * since 4D. They were the right sentences all along and had no lane to travel on.
  */
@@ -94,6 +137,15 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
   SERVICE_ACTION_SUCCEEDED: 'bot.service.action_succeeded',
   SERVICE_ACTION_FAILED: 'bot.service.action_failed',
   SERVICE_PROVISION_DELAYED: 'bot.service.provision_delayed',
+  /*
+   * The SAME keys the interactive path already renders.
+   *
+   * No new template, and that is the point: this lane is not saying something new,
+   * it is delivering the sentence a 429 stopped. A second wording would mean a
+   * customer who hit the rate limit read different words from one who did not.
+   */
+  PAYMENT_TRANSFER_RECORDED: 'bot.payment.received_for_review',
+  ORDER_CANCELLED: 'bot.order.cancelled',
 };
 
 /**

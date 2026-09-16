@@ -254,6 +254,29 @@ describe('the customer payment flow over Telegram', () => {
       )
     ).rows as Record<string, unknown>[];
 
+  const notifications = async () =>
+    (
+      await api.container.database.db.execute(
+        sql`SELECT kind, subject_id, state, customer_id FROM customer_notifications
+            ORDER BY created_at ASC` as never,
+      )
+    ).rows as Record<string, unknown>[];
+
+  /** Telegram declining to look at the message yet — a real 429, not a stubbed outcome. */
+  const telegramIsRateLimiting = () => {
+    reply = (_request, response) => {
+      response.writeHead(429, { 'content-type': 'application/json' });
+      response.end(
+        JSON.stringify({
+          ok: false,
+          error_code: 429,
+          description: 'Too Many Requests: retry after 3',
+          parameters: { retry_after: 3 },
+        }),
+      );
+    };
+  };
+
   const eventTypes = async () =>
     (
       (
@@ -776,5 +799,208 @@ describe('the customer payment flow over Telegram', () => {
     expect((await orders())[0]?.['state']).toBe('PAID');
     expect((await entries()).filter((e) => e['reason'] === 'PURCHASE')).toHaveLength(1);
     expect((await payments())[0]?.['state']).toBe('CONFIRMED');
+  });
+
+  // -------------------------------------------------------------------------
+  // The persistent main menu
+  // -------------------------------------------------------------------------
+
+  it('answers a main-menu tap exactly as it answers the slash command', async () => {
+    /*
+     * The equivalence real v0.2.0 staging acceptance asked for, proved end to end
+     * through the real webhook, the real runtime and the real socket rather than
+     * against `intentOf` alone: a tap is ORDINARY TEXT, and what must match is the
+     * message the customer ends up reading.
+     *
+     * `/wallet` is the pair driven here because its answer contains a figure derived
+     * from the ledger — so an assertion that the two texts are equal is an assertion
+     * that the same application path produced both, not merely that both replied.
+     */
+    // The customer row first: every other case here reaches one through a tap, and a
+    // wallet cannot be credited for somebody the bot has never met.
+    await command('/start');
+    await creditWallet(CUSTOMER_TELEGRAM_ID, 500_000n);
+
+    sent = [];
+    await command('/wallet');
+    const viaCommand = String(lastMessage()?.body['text']);
+
+    sent = [];
+    await command(CATALOGUE_FA['bot.menu.wallet']);
+    const viaMenu = String(lastMessage()?.body['text']);
+
+    expect(viaMenu, 'the menu button reached a different path').toBe(viaCommand);
+    expect(viaMenu).toContain(formatMoney(money(500_000n, 'IRT')));
+  });
+
+  it('answers the catalogue button with the catalogue, and its buttons still work', async () => {
+    // The other half of the requirement: the menu is navigation and the CONTEXTUAL
+    // actions stay on `callback_data`. So the tap must produce the same inline keyboard
+    // the command produces, and a tap on one of those must still buy.
+    const product = await sellableProduct();
+    sent = [];
+
+    await command(CATALOGUE_FA['bot.menu.catalog']);
+
+    const buttons = buttonsOf(lastMessage());
+    expect(buttons.map((b) => b.callback_data)).toContain(`p:${product.id}`);
+
+    sent = [];
+    await tap(`p:${product.id}`);
+    const rows = await orders();
+    expect(rows, 'the inline flow stopped working under the reply keyboard').toHaveLength(1);
+  });
+
+  it('answers an unknown message as an unknown command, menu or no menu', async () => {
+    sent = [];
+    await command('چطور می‌توانم اشتراک بخرم؟');
+    expect(String(lastMessage()?.body['text'])).toBe(CATALOGUE_FA['bot.unknown_command']);
+  });
+
+  // -------------------------------------------------------------------------
+  // A reply lost to a rate limit
+  // -------------------------------------------------------------------------
+
+  /*
+   * `OQ-4H-01`, closed here.
+   *
+   * The turn commits its durable write and then answers Telegram. A 429 between the two
+   * loses the answer for good: Telegram does not redeliver an update it accepted, and
+   * nothing rescheduled the reply. The customer is left believing nothing happened —
+   * which, for a transfer they have just claimed to have sent, means sending it again.
+   *
+   * The fix is one line at the send site, and the tests below are what stop it becoming
+   * a general "send this customer some text": a fact about an entity falls back to the
+   * lane, a RENDER does not, and an UNKNOWN outcome never does.
+   */
+
+  it('puts a rate-limited transfer CLAIM on the notification lane', async () => {
+    const orderId = await awaitingPayment();
+    await tap(`m:${orderId}`);
+    const payment = (await payments())[0];
+    const paymentId = String(payment?.['id']);
+    sent = [];
+    telegramIsRateLimiting();
+
+    const response = await tap(`i:${paymentId}`);
+
+    // The turn did not fail, and the claim is on record — the durable write committed
+    // before the send, which is the ordering that creates this window in the first place.
+    expect(response.statusCode).toBe(201);
+    expect(messages(), 'the reply was attempted').toHaveLength(1);
+    const claimed = (
+      await api.container.database.db.execute(
+        sql`SELECT customer_signalled_at FROM payments WHERE id = ${paymentId}` as never,
+      )
+    ).rows as Record<string, unknown>[];
+    expect(claimed[0]?.['customer_signalled_at']).not.toBeNull();
+
+    const queued = await notifications();
+    expect(queued).toHaveLength(1);
+    expect(queued[0]?.['kind']).toBe('PAYMENT_TRANSFER_RECORDED');
+    // The PAYMENT, not the order. The kind decides which table `subject_id` names.
+    expect(String(queued[0]?.['subject_id'])).toBe(paymentId);
+    expect(queued[0]?.['state']).toBe('PENDING');
+  });
+
+  it('puts a rate-limited order CANCELLATION on the notification lane', async () => {
+    const orderId = await awaitingPayment();
+    sent = [];
+    telegramIsRateLimiting();
+
+    await tap(`f:${orderId}`);
+
+    expect((await orders())[0]?.['state']).toBe('CANCELLED');
+    const queued = await notifications();
+    expect(queued).toHaveLength(1);
+    expect(queued[0]?.['kind']).toBe('ORDER_CANCELLED');
+    expect(String(queued[0]?.['subject_id'])).toBe(orderId);
+  });
+
+  it('queues NOTHING for a rate-limited reply that only renders state', async () => {
+    /*
+     * The line that keeps the lane from becoming a message queue.
+     *
+     * `m:` writes a PENDING payment and its reply is the bank details and the reference
+     * — state, not a fact about an entity, and reproduced in full by the customer's next
+     * tap on the same button. Putting it on the lane would need a parameterised payload
+     * (which bank, which reference), and `ADR 0030` §1 refuses one; the kinds would stop
+     * being a closed set of facts and become "send this customer some text".
+     *
+     * `/wallet` is the same case with no write at all. Both are driven, because a
+     * fallback added to `PendingReply` without this rule would quietly grow to cover
+     * every reply that felt important.
+     */
+    const orderId = await awaitingPayment();
+    sent = [];
+    telegramIsRateLimiting();
+
+    await tap(`m:${orderId}`);
+    await command('/wallet');
+
+    expect(messages(), 'both replies were attempted').toHaveLength(2);
+    expect((await payments())[0]?.['state'], 'the write still committed').toBe('PENDING');
+    expect(await notifications()).toHaveLength(0);
+  });
+
+  it('queues nothing when the outcome is UNKNOWN, because the reply may have arrived', async () => {
+    /*
+     * The narrowness is the design. A 5xx is `UNKNOWN`: Telegram may have processed the
+     * send. Queueing a second copy of a message that probably arrived is the mistake the
+     * lane's own `UNCONFIRMED` state exists to avoid — a customer reading two answers and
+     * wondering which is true — committed one layer up.
+     */
+    const orderId = await awaitingPayment();
+    await tap(`m:${orderId}`);
+    const payment = (await payments())[0];
+    sent = [];
+    reply = (_request, response) => {
+      response.writeHead(500, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: false, description: 'Internal Server Error' }));
+    };
+
+    await tap(`i:${String(payment?.['id'])}`);
+
+    const claimed = (
+      await api.container.database.db.execute(
+        sql`SELECT customer_signalled_at FROM payments WHERE id = ${String(payment?.['id'])}` as never,
+      )
+    ).rows as Record<string, unknown>[];
+    expect(claimed[0]?.['customer_signalled_at'], 'the claim committed').not.toBeNull();
+    expect(await notifications()).toHaveLength(0);
+  });
+
+  it('tells a customer once however many rate-limited taps they make', async () => {
+    /*
+     * `customer_notifications_subject_key` is `(tenant, kind, subject)`, so the second
+     * enqueue loses on the constraint rather than on a check in the surface. A customer
+     * tapping a button that appears to have done nothing taps it again, which is exactly
+     * the behaviour a rate limit produces.
+     */
+    const orderId = await awaitingPayment();
+    await tap(`m:${orderId}`);
+    const payment = (await payments())[0];
+    sent = [];
+    telegramIsRateLimiting();
+
+    await tap(`i:${String(payment?.['id'])}`);
+    await tap(`i:${String(payment?.['id'])}`);
+
+    expect(messages(), 'both taps were answered').toHaveLength(2);
+    expect(await notifications()).toHaveLength(1);
+  });
+
+  it('never queues a fallback for a customer whose reply went out', async () => {
+    // The whole mechanism is conditional on the 429. A DELIVERED reply needs nothing,
+    // and a lane row for one is a second copy of a message the customer already read.
+    const orderId = await awaitingPayment();
+    await tap(`m:${orderId}`);
+    const payment = (await payments())[0];
+    sent = [];
+
+    await tap(`i:${String(payment?.['id'])}`);
+
+    expect(messages()).toHaveLength(1);
+    expect(await notifications()).toHaveLength(0);
   });
 });

@@ -75,6 +75,18 @@ export interface CustomerMessage {
    * attachment.
    */
   readonly buttons?: readonly CustomerButton[];
+  /**
+   * Attach the persistent main-menu keyboard, under the chat rather than on the message.
+   *
+   * A `ReplyKeyboardMarkup`, which is a different thing from `buttons`: it carries no
+   * `callback_data` and therefore no identifier and no authority, it stays visible until
+   * something replaces it, and a tap on it arrives as an ordinary text message. Only the
+   * answer to `/start` sets it — see `PendingReply.keyboard`.
+   *
+   * Mutually exclusive with `buttons` in practice rather than by type: no reply carries
+   * both today, and Telegram's `reply_markup` holds one or the other.
+   */
+  readonly keyboard?: 'MAIN_MENU';
 }
 
 /**
@@ -189,6 +201,21 @@ export interface CustomerNotificationEnqueue {
   readonly botInstanceId: BotInstanceId;
   readonly kind: CustomerNotificationKind;
   readonly subjectId: string;
+  /**
+   * The earliest the dispatcher may try, when the PRODUCER already knows one.
+   *
+   * Absent or null means now, which is right for every background producer: the
+   * fact became true and nobody has spoken to Telegram about it.
+   *
+   * The rate-limit fallback is the one that knows better. It exists because
+   * Telegram answered the interactive reply 429 with a `retry_after`, and
+   * queueing that fact with no floor lets the very next sweep — up to a minute
+   * later, or immediately if one is already due — walk into the same refusal.
+   * That costs a request Telegram already declined and lengthens the throttle
+   * for every other message to that chat. The deadline it was given is the one
+   * piece of knowledge the interactive path has and the lane does not.
+   */
+  readonly nextAttemptAt?: Date | null;
 }
 
 export interface CustomerNotificationRepository {

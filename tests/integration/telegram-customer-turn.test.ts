@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { TELEGRAM_SECRET_TOKEN_HEADER } from '@nexa/contracts';
+import { MAIN_MENU_BUTTONS, TELEGRAM_SECRET_TOKEN_HEADER } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import {
@@ -190,6 +190,62 @@ describe('the customer Telegram turn', () => {
       sql`SELECT event_type FROM outbox_messages WHERE event_type = 'CustomerRegistered'`,
     );
     expect(events.rows).toHaveLength(1);
+  });
+
+  it('attaches the persistent main menu to the welcome, and nothing else to it', async () => {
+    /*
+     * Real v0.2.0 staging acceptance found the gap this closes: five commands were
+     * registered with Telegram and an ordinary customer still had to know to type a
+     * slash. The keyboard is what a customer meets instead.
+     *
+     * Asserted on the WIRE, because everything between the runtime and Telegram is a
+     * place the markup can be dropped: this is the payload the real `textMessageBody`
+     * built and the real messenger sent.
+     */
+    await start();
+
+    const markup = sent[0]?.body['reply_markup'] as
+      | {
+          keyboard?: { text: string }[][];
+          resize_keyboard?: boolean;
+          is_persistent?: boolean;
+          one_time_keyboard?: boolean;
+          inline_keyboard?: unknown;
+        }
+      | undefined;
+    expect(markup, 'the welcome carried no keyboard at all').toBeDefined();
+    expect(markup?.keyboard?.map((row) => row.map((button) => button.text))).toEqual([
+      [CATALOGUE_FA['bot.menu.catalog'], CATALOGUE_FA['bot.menu.services']],
+      [CATALOGUE_FA['bot.menu.wallet'], CATALOGUE_FA['bot.menu.help']],
+    ]);
+    // A REPLY keyboard, not an inline one: it carries no `callback_data`, which is why
+    // it grants no authority and why a tap arrives as ordinary text.
+    expect(markup?.inline_keyboard, 'the menu was drawn as an inline keyboard').toBeUndefined();
+    expect(markup?.resize_keyboard).toBe(true);
+    expect(markup?.is_persistent).toBe(true);
+    // Never one-shot. Hiding the menu after a single tap is what made the bot feel
+    // command-driven, which is the thing staging acceptance objected to.
+    expect(markup?.one_time_keyboard).toBe(false);
+
+    // Exactly the four this release can perform. A Phase 7 button here would be a
+    // promise the product cannot keep.
+    expect(MAIN_MENU_BUTTONS).toHaveLength(4);
+  });
+
+  it('draws no menu for a BLOCKED customer', async () => {
+    // `bot.blocked` returns before the menu is attached. Drawing a customer a menu they
+    // may not use is the untruthful surface this codebase keeps refusing.
+    await start();
+    await api.container.database.db.execute(
+      sql`UPDATE customers SET status = 'BLOCKED', blocked_at = now()
+          WHERE telegram_user_id = '5551234567'`,
+    );
+    sent = [];
+
+    await start();
+
+    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.blocked']);
+    expect(sent[0]?.body['reply_markup']).toBeUndefined();
   });
 
   it('greets a RETURNING customer differently, and creates no second row', async () => {

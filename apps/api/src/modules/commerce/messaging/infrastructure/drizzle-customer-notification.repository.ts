@@ -79,7 +79,7 @@ export class DrizzleCustomerNotificationRepository implements CustomerNotificati
         subjectId: input.subjectId,
         state: 'PENDING',
         attempts: 0,
-        nextAttemptAt: null,
+        nextAttemptAt: input.nextAttemptAt ?? null,
         createdAt: now,
         updatedAt: now,
       })

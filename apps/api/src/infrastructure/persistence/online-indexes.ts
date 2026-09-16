@@ -99,6 +99,41 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
     name: 'backup_runs_started_page_idx',
     definition: 'ON "backup_runs" USING btree ("started_at","id")',
   },
+  {
+    /*
+     * The unanswered-operation sweep: `(tenant_id, completed_at)` filtered to
+     * terminal rows nobody has spoken for.
+     *
+     * `dueForAnnouncement` runs on EVERY provisioner tick, and the rows it wants
+     * are the rarest in the table — an operation is unanswered only between its
+     * terminal transition and the announcement, which is milliseconds unless a
+     * process died. Without a partial index that is a scan of every terminal
+     * operation an installation has ever completed, every tick, to find none.
+     *
+     * PARTIAL on the two states plus `announced_at IS NULL`, so the index holds
+     * only the crash cases and stays close to empty on a healthy installation:
+     * a row leaves it the moment it is answered. The ordering column is
+     * `completed_at` because the sweep answers the customer who has been waiting
+     * longest first.
+     *
+     * CONCURRENTLY, for the reason this whole file exists: `botctl update`
+     * migrates while the outgoing release is still serving, and an ordinary
+     * `CREATE INDEX` on `provisioning_operations` would block every operation
+     * transition for the length of the build.
+     */
+    name: 'provisioning_operations_unannounced_idx',
+    /*
+     * The predicate is written in POSTGRESQL's own canonical form — parenthesised
+     * conjuncts and `= ANY (ARRAY[...])` rather than `IN (...)` — because
+     * `online-indexes.test.ts` compares the declaration against `pg_indexes`
+     * TEXTUALLY. An `IN` list is stored as `= ANY (ARRAY[...])` and the comparison
+     * then fails on an index that is correct. Writing what the server stores keeps
+     * that check able to catch a declaration that has actually drifted.
+     */
+    definition:
+      'ON "provisioning_operations" USING btree ("tenant_id","completed_at") ' +
+      "WHERE (announced_at IS NULL) AND (state = ANY (ARRAY['SUCCEEDED','ABANDONED']))",
+  },
 ];
 
 /** Index names are code constants; this refuses one that stopped being one. */

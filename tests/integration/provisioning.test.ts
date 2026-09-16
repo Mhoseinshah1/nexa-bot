@@ -802,4 +802,265 @@ describe('provisioning invariants', () => {
     const far = new Date(now.getTime() + 86_400_000);
     expect(await services.claimDeliveryDue(tenantA, far, far, 10)).toHaveLength(0);
   });
+
+  /*
+   * The crash window between terminalising an operation and answering for it.
+   *
+   * `ProvisionerLoop` terminalises inside `executor.runOnce` and announces on the
+   * NEXT line, in a second transaction. A process that dies in that gap leaves an
+   * operation that is terminal, un-announced, and that nothing will ever call
+   * `announce` for again — `docs/phase4j-audit.md` measures it, and these prove the
+   * sweep that closes it against real rows rather than against a stub.
+   *
+   * Against the DATABASE and not a mock, because every property here is held by a
+   * predicate: `announced_at IS NULL`, the `completed_at` grace, and the conditional
+   * UPDATE that makes two replicas safe. A mock would assert the shape of a call.
+   */
+  describe('an operation a crash left terminal and unanswered', () => {
+    async function terminalOperation(
+      key: string,
+      opts: { readonly completedAt: Date },
+    ): Promise<string> {
+      const order = await awaitingPayment(key);
+      await settle(key, order);
+      const service = await services.findByOrderId(tenantA, order.id);
+      const serviceId = service?.id ?? '';
+      const planned = await operations.listForService(tenantA, serviceId, 10);
+      const id = planned[0]?.id ?? '';
+      // PLANNED -> IN_FLIGHT -> SUCCEEDED, the real path, so `completed_at` is
+      // written by the same statement production uses rather than by the test.
+      await ctx.container.uow.run(tenantA, async (tx) => {
+        await operations.transition(tenantA, id, 'PLANNED', 'IN_FLIGHT', {}, opts.completedAt, tx);
+        await operations.transition(
+          tenantA,
+          id,
+          'IN_FLIGHT',
+          'SUCCEEDED',
+          { completedAt: opts.completedAt },
+          opts.completedAt,
+          tx,
+        );
+      });
+      return id;
+    }
+
+    /** A PROVISION nothing could resolve, which is what a customer is told about. */
+    async function abandonedProvision(
+      key: string,
+      opts: { readonly completedAt: Date },
+    ): Promise<{ readonly operationId: string; readonly serviceId: string }> {
+      const order = await awaitingPayment(key);
+      await settle(key, order);
+      const service = await services.findByOrderId(tenantA, order.id);
+      const serviceId = service?.id ?? '';
+      const planned = await operations.listForService(tenantA, serviceId, 10);
+      const operationId = planned[0]?.id ?? '';
+      await ctx.container.uow.run(tenantA, async (tx) => {
+        await operations.transition(
+          tenantA,
+          operationId,
+          'PLANNED',
+          'ABANDONED',
+          { completedAt: opts.completedAt },
+          opts.completedAt,
+          tx,
+        );
+      });
+      return { operationId, serviceId };
+    }
+
+    const GRACE_MS = 5 * 60 * 1000;
+
+    it('is found by the sweep once it is past the grace, and not before', async () => {
+      const now = ctx.container.clock.now();
+      const justNow = await terminalOperation('sweep-fresh', { completedAt: now });
+      const longAgo = await terminalOperation('sweep-stale', {
+        completedAt: new Date(now.getTime() - GRACE_MS - 60_000),
+      });
+
+      const due = await ctx.container.uow.run(tenantA, async (tx) =>
+        operations.dueForAnnouncement(tenantA, new Date(now.getTime() - GRACE_MS), 10, tx),
+      );
+      expect(due, 'the stale operation is swept').toContain(longAgo);
+      expect(
+        due,
+        'the fresh one is left to the loop, which answers it within milliseconds',
+      ).not.toContain(justNow);
+    });
+
+    it('stops being found once it has been answered', async () => {
+      const now = ctx.container.clock.now();
+      const before = new Date(now.getTime() - GRACE_MS);
+      const id = await terminalOperation('sweep-once', {
+        completedAt: new Date(now.getTime() - GRACE_MS - 60_000),
+      });
+
+      const first = await ctx.container.uow.run(tenantA, async (tx) =>
+        operations.dueForAnnouncement(tenantA, before, 10, tx),
+      );
+      expect(first).toContain(id);
+
+      await ctx.container.uow.run(tenantA, async (tx) =>
+        operations.markAnnounced(tenantA, id, now, tx),
+      );
+
+      const second = await ctx.container.uow.run(tenantA, async (tx) =>
+        operations.dueForAnnouncement(tenantA, before, 10, tx),
+      );
+      expect(second, 'a stamped operation is never swept again').not.toContain(id);
+    });
+
+    it('keeps the FIRST answer when two replicas stamp the same operation', async () => {
+      /*
+       * Two sweepers is the normal case on every rolling update. `markAnnounced`
+       * carries `announced_at IS NULL` in its predicate, so the second writer
+       * changes nothing — which is what makes the sweep safe WITHOUT a lease, and
+       * a lease is machinery this would otherwise need.
+       */
+      const now = ctx.container.clock.now();
+      const id = await terminalOperation('sweep-race', {
+        completedAt: new Date(now.getTime() - GRACE_MS - 60_000),
+      });
+
+      const firstAt = new Date(now.getTime() - 1000);
+      await ctx.container.uow.run(tenantA, async (tx) =>
+        operations.markAnnounced(tenantA, id, firstAt, tx),
+      );
+      await ctx.container.uow.run(tenantA, async (tx) =>
+        operations.markAnnounced(tenantA, id, now, tx),
+      );
+
+      const result = await ctx.container.database.db.execute(
+        sql`select announced_at from provisioning_operations where id = ${id}`,
+      );
+      const row = result.rows[0] as { announced_at: Date | string } | undefined;
+      expect(row, 'the operation row could not be read; this check is vacuous').toBeDefined();
+      expect(
+        new Date(row?.announced_at ?? 0).getTime(),
+        'the second stamp overwrote the first',
+      ).toBe(firstAt.getTime());
+    });
+
+    it('still answers a customer after an operator has STOPPED the tenant', async () => {
+      /*
+       * The one stated exception to "every write path refuses a stopped scope".
+       *
+       * `docs/phase4j-audit.md` and `docs/conventions.md` both record it, and this is
+       * the test that fails if somebody "fixes" the announcer by adding the check every
+       * other write path has. Telling a customer the outcome of work ALREADY DONE is not
+       * new business work; suppressing it leaves somebody who paid in silence, which is
+       * the gap Phase 4H existed to close. An operator stopping a tenant is not asking
+       * for its existing customers to be abandoned mid-provision.
+       *
+       * The bound matters as much as the exception: the announcer may ENQUEUE. It may
+       * not create an order, a payment, a service or an operation for a stopped tenant,
+       * and nothing here gives it the means to.
+       */
+      const now = ctx.container.clock.now();
+      const { operationId, serviceId } = await abandonedProvision('sweep-stopped', {
+        completedAt: new Date(now.getTime() - GRACE_MS - 60_000),
+      });
+      ctx.container.setInstallationTenant(tenantA.tenantId);
+      await ctx.container.database.db.execute(
+        sql`UPDATE tenants SET status = 'STOPPED' WHERE id = ${tenantA.tenantId}`,
+      );
+
+      await ctx.container.provisionerLoop.tick();
+
+      const queued = await ctx.container.database.db.execute(
+        sql`SELECT kind FROM customer_notifications
+            WHERE tenant_id = ${tenantA.tenantId} AND subject_id = ${serviceId}`,
+      );
+      expect(queued.rows, 'a stopped tenant swallowed an answer somebody was owed').toHaveLength(1);
+      expect((queued.rows[0] as { kind: string }).kind).toBe('SERVICE_PROVISION_DELAYED');
+
+      const stamped = await ctx.container.database.db.execute(
+        sql`SELECT announced_at FROM provisioning_operations WHERE id = ${operationId}`,
+      );
+      expect(
+        (stamped.rows[0] as { announced_at: Date | null }).announced_at,
+        'the operation was left unanswered, so the sweep will re-read it for ever',
+      ).not.toBeNull();
+    });
+
+    it('finds the unanswered one without walking the history behind it', async () => {
+      /*
+       * `dueForAnnouncement` runs on EVERY provisioner tick, and the rows it wants are
+       * the rarest in the table: an operation is unanswered only between its terminal
+       * transition and the announcement. Without the partial index that is a scan of
+       * every terminal operation an installation has ever completed, every tick, to
+       * find none. Raised by the Codex review of PR #32.
+       *
+       * An index is a CLAIM until the planner is asked the question a CALLER asks, so
+       * this asks it. Measured on THIS fixture, by deleting the declaration from
+       * `ONLINE_INDEXES`, dropping the index and reading the failure: 67 buffers and a
+       * `Seq Scan on provisioning_operations` without it. With it the assertion below
+       * passes under 25. Both figures come from this file rather than from a
+       * standalone probe, which is a distinction this repository has got wrong before.
+       */
+      const now = ctx.container.clock.now();
+      const id = await terminalOperation('sweep-plan', {
+        completedAt: new Date(now.getTime() - GRACE_MS - 60_000),
+      });
+      const seed = await operations.findById(tenantA, id);
+      if (seed === null) throw new Error('no seed operation');
+
+      // 3,000 operations this installation has already answered for, which is what the
+      // sweep must NOT walk. Straight into the table: this is about the planner.
+      await ctx.container.database.db.execute(sql`
+        INSERT INTO provisioning_operations
+          (id, tenant_id, operation_id, service_id, panel_id, type, state, attempts,
+           completed_at, announced_at, created_at, updated_at)
+        SELECT gen_random_uuid(), ${tenantA.tenantId}, lpad(to_hex(g + 4096), 16, '0'),
+               ${seed.serviceId}, ${seed.panelId}, 'SYNC_USAGE', 'SUCCEEDED', 1,
+               now() - ((g + 3600) || ' seconds')::interval,
+               now() - ((g + 3000) || ' seconds')::interval,
+               now() - ((g + 7200) || ' seconds')::interval,
+               now() - ((g + 3000) || ' seconds')::interval
+          FROM generate_series(1, 3000) AS g`);
+      await ctx.container.database.db.execute(sql`ANALYZE provisioning_operations`);
+
+      const explained = await ctx.container.database.db.execute(sql`
+        EXPLAIN (ANALYZE, BUFFERS, COSTS OFF, TIMING OFF, SUMMARY OFF)
+        SELECT id FROM provisioning_operations
+         WHERE tenant_id = ${tenantA.tenantId}
+           AND state IN ('SUCCEEDED', 'ABANDONED')
+           AND announced_at IS NULL
+           AND completed_at < ${new Date(now.getTime() - GRACE_MS)}
+         ORDER BY completed_at ASC
+         LIMIT 25`);
+      const plan = (explained.rows as { 'QUERY PLAN': string }[])
+        .map((row) => row['QUERY PLAN'])
+        .join('\n');
+
+      expect(plan, `the sweep is not served by its index:\n${plan}`).toContain(
+        'provisioning_operations_unannounced_idx',
+      );
+      const buffers = /Buffers: shared( hit=(\d+))?( read=(\d+))?/.exec(plan);
+      expect(buffers, `no buffer accounting in:\n${plan}`).not.toBeNull();
+      expect(
+        Number(buffers?.[2] ?? 0) + Number(buffers?.[4] ?? 0),
+        `the sweep walked the answered history:\n${plan}`,
+      ).toBeLessThan(25);
+
+      // And it still returns the right row, so the index is not merely fast.
+      const due = await ctx.container.uow.run(tenantA, async (tx) =>
+        operations.dueForAnnouncement(tenantA, new Date(now.getTime() - GRACE_MS), 25, tx),
+      );
+      expect(due).toEqual([id]);
+    });
+
+    it('never sweeps an operation belonging to another tenant', async () => {
+      const now = ctx.container.clock.now();
+      const before = new Date(now.getTime() - GRACE_MS);
+      const id = await terminalOperation('sweep-tenant', {
+        completedAt: new Date(now.getTime() - GRACE_MS - 60_000),
+      });
+
+      const otherTenant = await ctx.container.uow.run(tenantB, async (tx) =>
+        operations.dueForAnnouncement(tenantB, before, 10, tx),
+      );
+      expect(otherTenant, 'tenant B cannot see tenant A operations').not.toContain(id);
+    });
+  });
 });

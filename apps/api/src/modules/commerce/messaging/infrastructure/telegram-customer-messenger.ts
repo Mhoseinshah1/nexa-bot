@@ -6,8 +6,8 @@ import type {
   TemplateValues,
   TenantContext,
 } from '@nexa/contracts';
-import { templateDefinition } from '@nexa/contracts';
-import { formatMoney } from '@nexa/i18n';
+import { MAIN_MENU_ROWS, templateDefinition } from '@nexa/contracts';
+import { CATALOGUE_FA, formatMoney } from '@nexa/i18n';
 import {
   callbackAnswerBody,
   telegramSend,
@@ -156,11 +156,31 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
      * belongs to cannot be written two different ways.
      */
     const buttons = await this.labelButtons(scope, message.buttons ?? []);
+    /*
+     * The main menu's labels come from the SHARED catalogue, not this tenant's.
+     *
+     * Every other string this messenger sends is the tenant's, and this is the one
+     * departure. The four labels are ROUTES: `intentOf` matches a tap against exactly
+     * these strings, so the constant that draws the keyboard has to be the constant
+     * that matches it. A per-tenant label would let a tenant rename a button into a
+     * string nothing routes, and the customer would press it and be told the bot did
+     * not understand — with nothing anywhere recording why.
+     */
+    const keyboard =
+      message.keyboard === 'MAIN_MENU'
+        ? MAIN_MENU_ROWS.map((row) => row.map((button) => CATALOGUE_FA[button.label]))
+        : undefined;
     const result = await telegramSend({
       token,
       apiBaseUrl: this.apiBaseUrl,
       timeoutMs: this.timeoutMs,
-      body: textMessageBody({ chatId: message.chatId, text, html, buttons }),
+      body: textMessageBody({
+        chatId: message.chatId,
+        text,
+        html,
+        buttons,
+        ...(keyboard === undefined ? {} : { keyboard }),
+      }),
     });
 
     if (result.outcome === 'SUCCEEDED') {

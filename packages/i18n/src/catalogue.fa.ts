@@ -79,6 +79,15 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.command.wallet': 'کیف پول',
   'bot.command.help': 'راهنما',
 
+  // The persistent main menu, as the owner specified it after v0.2.0 staging
+  // acceptance. These four are ROUTES as well as labels: `intentOf` matches the
+  // text a tap sends against exactly these strings, so an edit here changes what
+  // the bot answers and not merely what it shows.
+  'bot.menu.catalog': '🛒 خرید اشتراک',
+  'bot.menu.services': '📱 سرویس‌های من',
+  'bot.menu.wallet': '💰 کیف پول',
+  'bot.menu.help': '📚 راهنما',
+
   'bot.catalog.empty': 'در حال حاضر سرویسی برای فروش تنظیم نشده است.',
   'bot.catalog.heading': 'سرویس‌های قابل خرید:',
 

@@ -9,12 +9,14 @@ import type {
   ActorContext,
   BotInstanceId,
   CustomerArrival,
+  CustomerNotificationKind,
   Money,
   OrderId,
   OrderPurpose,
   TemplateKey,
   TemplateValues,
   TenantContext,
+  UserId,
 } from '@nexa/contracts';
 import type { CustomerService } from '../../modules/commerce/customers/application/customer.service.js';
 import type {
@@ -319,7 +321,30 @@ export const CATALOG_PAGE_SIZE = 20;
  * The payload itself is deliberately NOT returned here: nothing in 4A consumes it, and a
  * field nothing consumes is a field that gets logged.
  */
-export function intentOf(update: unknown): BotCommand {
+/**
+ * What a tap on the persistent main menu sends, and the command it means.
+ *
+ * Telegram delivers a `ReplyKeyboardMarkup` tap as an ORDINARY TEXT MESSAGE whose body
+ * is the button's label. There is no `callback_data`, no signature and no id — which is
+ * why the menu carries no authority and every contextual action stays on the callback
+ * architecture with its validated identifier and its ownership check.
+ *
+ * PASSED IN rather than read here, because a surface may not reach the catalogue: the
+ * boundary check refuses `@nexa/i18n` in `surfaces/`, and its reason is this exact
+ * shape — a surface that renders text itself is a second renderer beside the template
+ * resolver. The composition root builds this map from the same catalogue the messenger
+ * draws the keyboard from, so the string that is drawn and the string that is matched
+ * come from one place and cannot disagree.
+ *
+ * Matched on the EXACT string. No case folding and no fuzzy match: an unknown text is
+ * `UNSUPPORTED` exactly as it was before this existed.
+ */
+export type MainMenuRoutes = ReadonlyMap<string, string>;
+
+/** No menu configured. The slash commands still answer; nothing else changes. */
+const NO_MENU: MainMenuRoutes = new Map();
+
+export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCommand {
   const callback = (update as { callback_query?: { id?: unknown; data?: unknown } } | null)
     ?.callback_query;
   if (callback !== undefined && callback !== null) {
@@ -487,7 +512,15 @@ export function intentOf(update: unknown): BotCommand {
 
   const text = (update as { message?: { text?: unknown } } | null)?.message?.text;
   if (typeof text !== 'string') return UNSUPPORTED;
-  const first = text.trim().split(/\s+/)[0]?.toLowerCase();
+  /*
+   * A menu tap first, and it is matched on the WHOLE message rather than its first
+   * word: the labels contain spaces, and `خرید اشتراک` split on whitespace is not a
+   * command. Resolving to the slash command it stands for is what makes the button and
+   * the command literally the same path rather than two that agree today.
+   */
+  const trimmed = text.trim();
+  const asCommand = menu.get(trimmed) ?? trimmed;
+  const first = asCommand.split(/\s+/)[0]?.toLowerCase();
   // `/start@somebot` is what Telegram sends in a group. Stripped, because the bot it
   // names is the bot that received it.
   const command = first?.split('@')[0];
@@ -554,6 +587,44 @@ export interface BotRuntimeDeps {
   readonly services: ProvisioningService;
   readonly delivery: DeliveryService;
   /**
+   * Puts a rate-limited FACT on the customer notification lane.
+   *
+   * A narrow function and not the notifier itself, because `CustomerNotifier.notify`
+   * takes a transaction and a SURFACE must not open one — `CLAUDE.md`: "Surfaces
+   * call application services and never touch the database." The container owns
+   * the unit of work and the clock; this hands over the two values only the turn
+   * knows.
+   *
+   * Returns nothing. The turn's own outcome is already `RATE_LIMITED` and stays
+   * that way: the operational log records what happened to the REPLY, and
+   * reporting a successful enqueue as a successful send is the kind of
+   * cheerfulness this codebase removes.
+   */
+  /**
+   * The persistent main menu's label-to-command map.
+   *
+   * Supplied by the composition root, which is the only place allowed to read the
+   * catalogue on this path — see `MainMenuRoutes`. An empty map is a bot with no
+   * keyboard and unchanged slash commands, which is what every test that does not care
+   * about the menu gets.
+   */
+  readonly mainMenu: MainMenuRoutes;
+  readonly queueRateLimitedFact: (
+    scope: TenantContext,
+    customerId: UserId,
+    kind: CustomerNotificationKind,
+    subjectId: string,
+    /**
+     * Telegram's own `retry_after`, when it supplied one.
+     *
+     * Passed through rather than dropped, because it is the one thing this path
+     * knows and the lane does not. Without it the row is due immediately and the
+     * next sweep walks into the same refusal — a request Telegram already
+     * declined, and a longer throttle for every other message to that chat.
+     */
+    retryAfterMs: number | undefined,
+  ) => Promise<void>;
+  /**
    * The plan a service was SOLD as, from the order's frozen snapshot.
    *
    * A narrow port rather than `OrderService`, for the reason the provisioner's
@@ -616,6 +687,40 @@ interface PendingReply {
    * turn still has ONE answer, with a note after it.
    */
   readonly followUpKey?: TemplateKey;
+  /**
+   * The lane kind this reply falls back to when Telegram rate-limits it.
+   *
+   * `OQ-4H-01`: the durable write commits, the synchronous reply gets a 429, and
+   * the customer sees nothing — so they send the transfer twice, or conclude the
+   * cancellation did not happen. The background lanes already handle a 429 by
+   * requeueing at Telegram's own `retryAfterMs` with no attempt spent; the
+   * interactive path had nowhere to put it.
+   *
+   * Set on exactly the replies that are a FACT about an entity the customer just
+   * changed — a recorded transfer, a cancelled order. Those carry `values: {}`
+   * and `buttons: []`, which is what makes them expressible as a lane kind at
+   * all.
+   *
+   * DELIBERATELY absent on every reply that RENDERS state. A menu, a catalogue
+   * and a service list have no subject and no fact; queueing one would deliver a
+   * stale screen minutes later against state that has moved, and would need the
+   * parameterised payload `ADR 0030` §1 refuses. The customer's next tap
+   * reproduces those, which is why they need no fallback.
+   */
+  readonly fallback?: {
+    readonly kind: CustomerNotificationKind;
+    readonly subjectId: string;
+  };
+  /**
+   * Attach the persistent main-menu keyboard to this reply.
+   *
+   * ONE reply sets it — the answer to `/start` — because Telegram keeps a
+   * `ReplyKeyboardMarkup` shown until something replaces or removes it, and nothing in
+   * this product removes it. Re-sending it on every reply would be a second copy of a
+   * keyboard the customer already has, and would fight with the inline keyboards the
+   * contextual flows attach.
+   */
+  readonly keyboard?: 'MAIN_MENU';
 }
 
 /**
@@ -802,7 +907,7 @@ export class BotRuntime {
       readonly from: unknown;
     },
   ): Promise<BotTurnResult> {
-    const command = intentOf(input.update);
+    const command = intentOf(input.update, this.deps.mainMenu);
     const { intent } = command;
 
     /*
@@ -881,6 +986,7 @@ export class BotRuntime {
       values: reply.values,
       botInstanceId: input.botInstanceId,
       ...(reply.buttons.length === 0 ? {} : { buttons: reply.buttons }),
+      ...(reply.keyboard === undefined ? {} : { keyboard: reply.keyboard }),
     });
 
     /*
@@ -903,6 +1009,41 @@ export class BotRuntime {
         values: {},
         botInstanceId: input.botInstanceId,
       });
+    }
+
+    /*
+     * A rate-limited FACT goes on the lane rather than being lost.
+     *
+     * `OQ-4H-01`. The durable write has already committed by the time this runs —
+     * the transfer claim is recorded, the order is cancelled — and Telegram
+     * answered 429. Telegram does not redeliver the update and nothing here
+     * rescheduled the reply, so the customer was left believing nothing happened.
+     * For a transfer that means sending the money twice.
+     *
+     * ONLY on `RATE_LIMITED`, and the narrowness is the design:
+     *
+     * - `DELIVERED` needs nothing.
+     * - `REFUSED` is Telegram saying it will never accept this — a blocked bot, a
+     *   dead chat — and queueing a second copy would produce a row the dispatcher
+     *   burns attempts on for a destination that is gone.
+     * - `UNKNOWN` is the one this must not touch. The send may have arrived; the
+     *   lane's own `UNCONFIRMED` state exists because a retried "your payment was
+     *   rejected" is a customer wondering which message is true, and this would
+     *   be that mistake one layer up.
+     *
+     * The enqueue is idempotent by `customer_notifications_subject_key`, so a
+     * customer who taps twice and is limited twice still hears once. It is also
+     * the only write here and it happens AFTER the business transaction closed,
+     * so nothing is held open across a Telegram call.
+     */
+    if (sent.outcome === 'RATE_LIMITED' && reply.fallback !== undefined) {
+      await this.deps.queueRateLimitedFact(
+        scope,
+        customer.id,
+        reply.fallback.kind,
+        reply.fallback.subjectId,
+        sent.retryAfterMs,
+      );
     }
 
     // After the real answer, not before it. The spinner is cosmetic and its failure is
@@ -1065,7 +1206,23 @@ export class BotRuntime {
         input.idempotencyKey,
       );
     }
-    return { key: replyFor(command.intent, arrival), values: {}, buttons: [], orderId: null };
+    /*
+     * The main menu rides on `/start`, and on nothing else.
+     *
+     * Real v0.2.0 staging acceptance is what put it here: the bot registered five
+     * commands with Telegram and an ordinary customer still had to know to type a
+     * slash. Telegram keeps a `ReplyKeyboardMarkup` shown until something replaces it,
+     * so attaching it once — to the first message anybody ever receives — is enough,
+     * and attaching it to every reply would fight the inline keyboards the contextual
+     * flows use.
+     *
+     * A BLOCKED customer gets `bot.blocked` and NO keyboard: the reply above returns
+     * before this, and drawing a menu for somebody who may not use it is the untruthful
+     * surface this codebase keeps refusing.
+     */
+    const key = replyFor(command.intent, arrival);
+    const menu = command.intent === 'START' ? ({ keyboard: 'MAIN_MENU' } as const) : {};
+    return { key, values: {}, buttons: [], orderId: null, ...menu };
   }
 
   /**
@@ -1934,7 +2091,15 @@ export class BotRuntime {
         idempotencyKey: `${idempotencyKey}:pay-sent`,
         paymentId,
       });
-      return { key: 'bot.payment.received_for_review', values: {}, buttons: [], orderId: null };
+      return {
+        key: 'bot.payment.received_for_review',
+        values: {},
+        buttons: [],
+        orderId: null,
+        // The claim is recorded and an operator will review it. A customer who
+        // does not learn that sends the money again.
+        fallback: { kind: 'PAYMENT_TRANSFER_RECORDED', subjectId: paymentId },
+      };
     } catch (error) {
       return refusal(error);
     }
@@ -2013,7 +2178,15 @@ export class BotRuntime {
         customerId: customer.id,
         orderId,
       });
-      return { key: 'bot.order.cancelled', values: {}, buttons: [], orderId: null };
+      return {
+        key: 'bot.order.cancelled',
+        values: {},
+        buttons: [],
+        orderId: null,
+        // The order is gone. A customer who does not learn that keeps waiting for
+        // a service that will never be made.
+        fallback: { kind: 'ORDER_CANCELLED', subjectId: orderId },
+      };
     } catch (error) {
       return refusal(error);
     }

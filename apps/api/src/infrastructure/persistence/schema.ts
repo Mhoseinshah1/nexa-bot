@@ -3261,6 +3261,33 @@ export const provisioningOperations = pgTable(
     /** Bounded, redacted diagnostic. Never a raw provider response. */
     failureMessage: text('failure_message'),
     completedAt: timestamptz('completed_at'),
+    /**
+     * When the customer was answered about this operation — or NULL, meaning
+     * nobody has answered for it yet.
+     *
+     * This is the claim surface for the sweep that closes the crash window
+     * `docs/phase4j-audit.md` names: the executor terminalises an operation in
+     * one transaction and `OperationOutcomeAnnouncer.announce` enqueues the
+     * message in the NEXT one, and a process that dies between them leaves an
+     * operation that is terminal, un-announced, and that nothing will ever call
+     * `announce` for again. The loop has moved on and there is exactly one call
+     * site.
+     *
+     * NULL means UNANSWERED, never "no answer was owed". The announcer stamps
+     * this even when it decides the operation says nothing — a `SYNC_USAGE`, a
+     * `PROVISION` whose link goes out through `DeliveryService` — because a row
+     * left NULL is a row the sweep re-reads for ever. The one exit that must NOT
+     * stamp is a state that is not terminal: a `FAILED` with attempts left goes
+     * back to `PLANNED`, and marking it answered before it has finished is the
+     * same silence from the other direction.
+     *
+     * Deliberately NOT part of `provisioning_operations_completed_check`. That
+     * constraint binds the terminal states to `completed_at`; binding this one
+     * too would make the stamp a property of the STATE rather than of whether
+     * anybody has spoken, and the whole point is that those are different facts
+     * that a crash can separate.
+     */
+    announcedAt: timestamptz('announced_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -3674,7 +3701,7 @@ export const resellers = pgTable(
  * freezes their content, and a customer message is an EFFECT of an event.
  *
  * There is no `values` column, and its absence is a decision rather than an omission.
- * Every one of the six kinds renders a template that declares NO placeholders, so there
+ * Every one of the eight kinds renders a template that declares NO placeholders, so there
  * is nothing to carry; a jsonb column with no producer is the empty table this
  * repository refuses elsewhere. The first kind that needs one adds it, in the migration
  * that needs it.

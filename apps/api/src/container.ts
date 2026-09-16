@@ -1,5 +1,9 @@
 import { fileURLToPath } from 'node:url';
-import { MAX_REQUESTS_PER_PROBE, OPERATION_LEASE_SECONDS_MIN } from '@nexa/contracts';
+import {
+  MAIN_MENU_BUTTONS,
+  MAX_REQUESTS_PER_PROBE,
+  OPERATION_LEASE_SECONDS_MIN,
+} from '@nexa/contracts';
 import type {
   AuditWriter,
   Clock,
@@ -11,7 +15,7 @@ import type {
   SecretCipher,
   TenantId,
 } from '@nexa/contracts';
-import { createTranslator } from '@nexa/i18n';
+import { CATALOGUE_FA, createTranslator } from '@nexa/i18n';
 import type { OperationType, TenantContext, Translator } from '@nexa/contracts';
 
 import { acceptsV1, type AppConfig } from './infrastructure/config/config.schema.js';
@@ -1489,6 +1493,26 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
           customerId: service.customerId,
         };
       },
+      /*
+       * Delegated straight through, unlike `subjectFor` above.
+       *
+       * That one composes two narrow reads so the loop never holds a repository;
+       * this is a single bounded query over one table and there is nothing to
+       * compose. Passing it through keeps the predicate — terminal, unannounced,
+       * past the grace — in the repository where the columns are, rather than
+       * splitting it across a layer that would then need the schema.
+       */
+      dueForAnnouncement: async (scope, before, limit, tx) =>
+        operationRepository.dueForAnnouncement(scope, before, limit, tx),
+    },
+    /*
+     * The write, in its own dependency because the reader promises it cannot
+     * mutate. `OperationOutcomeReader`'s docblock is that promise, and the
+     * arrangement here is what keeps it true rather than aspirational.
+     */
+    announcements: {
+      markAnnounced: async (scope, operationId, now, tx) =>
+        operationRepository.markAnnounced(scope, operationId, now, tx),
     },
     notifier: customerNotifier,
     uow,
@@ -1970,6 +1994,42 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     delivery: deliveryService,
     orders: orderService,
     botRuntime: new BotRuntime({
+      /*
+       * The main menu's routing table, built HERE because this is the only layer
+       * that may read the catalogue on this path: the boundary check refuses
+       * `@nexa/i18n` in a surface, and `TelegramCustomerMessenger` draws the same
+       * keyboard from the same constant. One source, two consumers, no drift.
+       */
+      mainMenu: new Map(
+        MAIN_MENU_BUTTONS.map((button) => [CATALOGUE_FA[button.label], `/${button.command}`]),
+      ),
+      /*
+       * The one write the turn makes after its Telegram send, and the transaction
+       * it needs, kept OUT of the surface.
+       *
+       * `OQ-4H-01`. A surface must not open a transaction — the runtime has no
+       * unit of work and gets none here — so the composition root supplies a
+       * function that opens one and calls the same notifier the background lanes
+       * use. Nothing about the enqueue is different because the caller is
+       * interactive; only the decision to make it is.
+       *
+       * No activity check, and it is the SAME stated exception
+       * `OperationOutcomeAnnouncer` takes — `docs/conventions.md` names both.
+       * The command this stands in for already checked activity inside its own
+       * transaction and committed, so the scope was accepting work when it ran;
+       * a stop landing between that commit and Telegram's 429 must not turn a
+       * recorded transfer into silence. It may enqueue and nothing else.
+       */
+      queueRateLimitedFact: async (scope, customerId, kind, subjectId, retryAfterMs) => {
+        await uow.run(scope, async (tx) => {
+          const now = clock.now();
+          // Telegram's own deadline becomes the row's floor. `undefined` means it
+          // sent no `retry_after`, and then the row is due now like every other.
+          const notBefore =
+            retryAfterMs === undefined ? null : new Date(now.getTime() + retryAfterMs);
+          return customerNotifier.notify(scope, customerId, kind, subjectId, now, tx, notBefore);
+        });
+      },
       customers: customerService,
       payments: paymentService,
       wallet: walletService,

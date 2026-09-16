@@ -7,6 +7,7 @@ import type {
   UserId,
 } from '@nexa/contracts';
 import {
+  ANNOUNCE_GRACE_MS,
   CUSTOMER_INITIATED_OPERATIONS,
   OperationOutcomeAnnouncer,
 } from '../../apps/api/src/modules/commerce/messaging/application/operation-outcome-announcer';
@@ -53,9 +54,21 @@ describe('announcing how an operation turned out', () => {
    */
   function announcerFor(type: OperationType, state: OperationState = 'SUCCEEDED') {
     const queued: Queued[] = [];
+    /*
+     * Every `markAnnounced` call, in order.
+     *
+     * Recorded rather than counted, because the rule 4J-1 turns on is WHICH exits
+     * stamp: four of the five, and the non-terminal one deliberately not. A count
+     * alone would pass with the stamp on the wrong branch.
+     */
+    const stamped: string[] = [];
     const announcer = new OperationOutcomeAnnouncer({
       reader: {
         subjectFor: async () => ({ type, state, serviceId: SERVICE, customerId: CUSTOMER }),
+        dueForAnnouncement: async () => [],
+      },
+      announcements: {
+        markAnnounced: async (_scope, operationId) => void stamped.push(operationId),
       },
       notifier: {
         notify: async (
@@ -71,7 +84,7 @@ describe('announcing how an operation turned out', () => {
       uow: passthroughUow,
       clock: { now: () => NOW },
     });
-    return { announcer, queued };
+    return { announcer, queued, stamped };
   }
 
   /*
@@ -190,6 +203,120 @@ describe('announcing how an operation turned out', () => {
     expect(queued).toEqual([]);
   });
 
+  /*
+   * The sweep that closes the crash window `docs/phase4j-audit.md` measures.
+   *
+   * `ProvisionerLoop` terminalises in one transaction and announces in the next,
+   * and a process that dies between them leaves an operation nothing will ever
+   * announce again. These assert the three properties that make the sweep a fix
+   * rather than a second announcer racing the first.
+   */
+  describe('sweeping the operations a crash left unanswered', () => {
+    function sweeperFor(due: readonly string[]) {
+      const asked: { before: Date; limit: number }[] = [];
+      const queued: Queued[] = [];
+      const stamped: string[] = [];
+      const announcer = new OperationOutcomeAnnouncer({
+        reader: {
+          subjectFor: async () => ({
+            type: 'RENEW' as OperationType,
+            state: 'SUCCEEDED' as OperationState,
+            serviceId: SERVICE,
+            customerId: CUSTOMER,
+          }),
+          dueForAnnouncement: async (_scope, before, limit) => {
+            asked.push({ before, limit });
+            return due;
+          },
+        },
+        announcements: {
+          markAnnounced: async (_scope, operationId) => void stamped.push(operationId),
+        },
+        notifier: {
+          notify: async (
+            _scope: TenantContext,
+            customerId: UserId,
+            kind: string,
+            subjectId: string,
+          ) => {
+            queued.push({ customerId, kind, subjectId });
+            return true;
+          },
+        } as unknown as CustomerNotifier,
+        uow: passthroughUow,
+        clock: { now: () => NOW },
+      });
+      return { announcer, asked, queued, stamped };
+    }
+
+    it('asks only for operations that finished before the grace cutoff', async () => {
+      /*
+       * Without the grace this fires for EVERY operation, and the loop's own
+       * synchronous call becomes dead code — code nothing would notice breaking.
+       * The cutoff is what makes this the crash path rather than a second
+       * announcer.
+       */
+      const { announcer, asked } = sweeperFor([]);
+      await announcer.announceDue(scope, 25);
+      expect(asked).toHaveLength(1);
+      expect(asked[0]?.before.getTime()).toBe(NOW.getTime() - ANNOUNCE_GRACE_MS);
+      expect(asked[0]?.before.getTime()).toBeLessThan(NOW.getTime());
+    });
+
+    it('passes the bound it was given through rather than draining', async () => {
+      const { announcer, asked } = sweeperFor([]);
+      await announcer.announceDue(scope, 7);
+      expect(asked[0]?.limit).toBe(7);
+    });
+
+    it('announces and stamps every operation it was handed', async () => {
+      const { announcer, queued, stamped } = sweeperFor(['op-a', 'op-b']);
+      const swept = await announcer.announceDue(scope, 25);
+      expect(swept).toBe(2);
+      expect(queued.map((q) => q.subjectId)).toEqual(['op-a', 'op-b']);
+      expect(stamped).toEqual(['op-a', 'op-b']);
+    });
+
+    it('announces the rest of the batch when one operation throws', async () => {
+      /*
+       * `dueForAnnouncement` orders OLDEST FIRST, so an operation that throws is
+       * first again on the next tick and on every tick after it. Without this,
+       * one poisoned row stops the sweep for ever and everybody behind it is
+       * never told — the head-of-line block the sweep exists to avoid, one level
+       * up from the transaction boundary that avoids it.
+       *
+       * The error is re-thrown after the batch rather than swallowed: a broken
+       * sweep must not look like an idle one, and `ProvisionerLoop.tick` logs it.
+       */
+      const { announcer, queued, stamped } = sweeperFor(['op-bad', 'op-good']);
+      const reader = (
+        announcer as unknown as {
+          deps: { reader: { subjectFor: (...args: unknown[]) => Promise<unknown> } };
+        }
+      ).deps.reader;
+      const real = reader.subjectFor.bind(reader);
+      reader.subjectFor = async (...args: unknown[]) => {
+        if (args[1] === 'op-bad') throw new Error('the subject read failed');
+        return real(...args);
+      };
+
+      await expect(announcer.announceDue(scope, 25)).rejects.toThrow('the subject read failed');
+
+      expect(
+        queued.map((q) => q.subjectId),
+        'the good operation was skipped',
+      ).toEqual(['op-good']);
+      expect(stamped).toEqual(['op-good']);
+    });
+
+    it('does nothing when no operation is stranded', async () => {
+      const { announcer, queued, stamped } = sweeperFor([]);
+      expect(await announcer.announceDue(scope, 25)).toBe(0);
+      expect(queued).toEqual([]);
+      expect(stamped).toEqual([]);
+    });
+  });
+
   it('keys the notification on the operation, not the service', async () => {
     /*
      * `customer_notifications_subject_key` is (tenant, kind, subject). Keying on the
@@ -204,8 +331,12 @@ describe('announcing how an operation turned out', () => {
 
   it('says nothing when the operation or the service is gone', async () => {
     const queued: Queued[] = [];
+    const stamped: string[] = [];
     const announcer = new OperationOutcomeAnnouncer({
-      reader: { subjectFor: async () => null },
+      reader: { subjectFor: async () => null, dueForAnnouncement: async () => [] },
+      announcements: {
+        markAnnounced: async (_scope, operationId) => void stamped.push(operationId),
+      },
       notifier: {
         notify: async () => {
           queued.push({ customerId: CUSTOMER, kind: 'x', subjectId: 'x' });
@@ -217,6 +348,63 @@ describe('announcing how an operation turned out', () => {
     });
     await announcer.announce(scope, 'operation-1');
     expect(queued).toEqual([]);
+    /*
+     * And it IS answered, even though it said nothing.
+     *
+     * `announced_at` means "nobody has answered for this", not "a message went
+     * out". A subject that cannot be found never will be, so leaving the row NULL
+     * would make `announceDue` re-read it on every tick for the life of the
+     * installation.
+     */
+    expect(stamped).toEqual(['operation-1']);
+  });
+
+  /*
+   * The five ways out of `announce`, and which of them mark the operation answered.
+   *
+   * This is the rule 4J-1 turns on and it is silent in BOTH directions: a missing
+   * stamp makes the sweep re-read a row for ever, and a stamp on the non-terminal
+   * exit marks a `FAILED`-with-attempts-left as answered before it has reached the
+   * state anyone would announce. Neither shows up as a failure anywhere else, so
+   * each exit gets its own assertion.
+   */
+  describe('which exits mark the operation answered', () => {
+    it('stamps a terminal operation it announced', async () => {
+      const { announcer, queued, stamped } = announcerFor('RENEW', 'SUCCEEDED');
+      await announcer.announce(scope, 'operation-1');
+      expect(queued).toHaveLength(1);
+      expect(stamped).toEqual(['operation-1']);
+    });
+
+    it('stamps a terminal operation nobody is owed a message about', async () => {
+      // `SYNC_USAGE` is a background read the customer never asked for. It says
+      // nothing — and saying nothing is an answer, so the sweep must not keep
+      // asking.
+      const { announcer, queued, stamped } = announcerFor('SYNC_USAGE', 'SUCCEEDED');
+      await announcer.announce(scope, 'operation-1');
+      expect(queued).toEqual([]);
+      expect(stamped).toEqual(['operation-1']);
+    });
+
+    it('stamps an abandoned provision after queueing the delay notice', async () => {
+      const { announcer, queued, stamped } = announcerFor('PROVISION', 'ABANDONED');
+      await announcer.announce(scope, 'operation-1');
+      expect(queued.map((q) => q.kind)).toEqual(['SERVICE_PROVISION_DELAYED']);
+      expect(stamped).toEqual(['operation-1']);
+    });
+
+    it('does NOT stamp an operation that has not finished', async () => {
+      /*
+       * The one exit that must not stamp. A `FAILED` with attempts left goes back
+       * to `PLANNED` and is tried again; marking it answered here would mean the
+       * sweep skips it for ever once it DOES terminalise, and the customer who
+       * paid for the renewal is never told how it went.
+       */
+      const { announcer, queued, stamped } = announcerFor('RENEW', 'FAILED');
+      await announcer.announce(scope, 'operation-1');
+      expect(queued).toEqual([]);
+      expect(stamped).toEqual([]);
+    });
   });
 
   /**

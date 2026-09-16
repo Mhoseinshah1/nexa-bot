@@ -28,6 +28,7 @@ describe('the customer notification loop', () => {
     unconfirmed: 0,
     superseded: 0,
     rateLimited: 0,
+    unsupported: 0,
     blocked: 0,
     unreachable: 0,
     errored: 0,

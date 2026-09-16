@@ -9,12 +9,26 @@ import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-
 import { services } from '../../../../infrastructure/persistence/schema.js';
 import type { NotificationSubjectReader } from '../application/customer-notification.service.js';
 
+/** The kinds this reader has a branch for. Naming them is the second guard below. */
+const ANSWERABLE_KINDS: readonly CustomerNotificationKind[] = ['SERVICE_PROVISION_DELAYED'];
+
 /**
  * Whether a kind's fact is still true, read from the subject.
+ *
+ * TWO guards, and they close opposite directions of the same hole.
  *
  * Only the kinds `CUSTOMER_NOTIFICATION_PRECONDITIONS` marks `true` are ever asked, and
  * this asserts that rather than trusting it: a kind reaching here that the table says
  * needs no precondition is a caller bug, and answering `true` would hide it.
+ *
+ * The second is `ANSWERABLE_KINDS`, and it exists because the first one alone made a
+ * false promise. This reader interrogates the `services` table and nothing else, so
+ * before the list existed, marking a PAYMENT or ORDER kind `true` did not fail loudly:
+ * it read `services` with a payment id, found no row, and returned `false` — and the
+ * customer's message was SUPERSEDED and never sent, silently, which is the outcome this
+ * whole lane exists to prevent. Naming the kinds this reader can actually answer makes
+ * that a refusal instead, and `tests/integration/customer-notifications.test.ts`
+ * requires every kind declaring a precondition to appear here.
  *
  * Today that is one kind. `SERVICE_PROVISION_DELAYED` says "your service is taking
  * longer than expected", which stops being true the moment the service is `ACTIVE` —
@@ -35,6 +49,12 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
     if (!CUSTOMER_NOTIFICATION_PRECONDITIONS[kind]) {
       throw new Error(
         `stillHolds asked about ${kind}, which declares no precondition. The dispatcher must not ask.`,
+      );
+    }
+    if (!ANSWERABLE_KINDS.includes(kind)) {
+      throw new Error(
+        `stillHolds asked about ${kind}, which declares a precondition this reader cannot answer. ` +
+          'Give it a branch, or declare no precondition.',
       );
     }
 
