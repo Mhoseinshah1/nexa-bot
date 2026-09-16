@@ -378,3 +378,111 @@ The `announceDue` sweep lands inside `ProvisionerLoop`, which runs in the
 | 4J-2 | OQ-4H-01: lane fallback for replies that follow a committed write; a stated non-retry for the rest                                                                                                                                                                                                                 | crash windows | medium                |
 | 4J-3 | the announcer's activity-check exception: comment, convention entry, and a test that fails if it is "fixed"                                                                                                                                                                                                        | tenancy       | small                 |
 | 4J-4 | the FOUR scans committed under `scripts/audit/` so the next phase re-runs them rather than re-deriving them. Four, not eight: money, secrets and provider correctness were measured with one-line greps whose output is quoted in full above, and a script that wraps a grep is a script that has to be maintained | all           | small                 |
+
+---
+
+# After the work: the same measurements, re-taken
+
+Everything above was measured against `40f13d3`, the merge of Phase 4I. This
+section is the re-take against the finished phase, so the numbers a later reader
+inherits describe the code they are reading rather than the code that was
+audited. Where a number moved, what moved it is named.
+
+## The four committed scans, re-run
+
+```
+tenancy          49 statement(s) flagged across 22 repositories
+idempotency       9 transactional method(s) with no idempotency key
+crash-window      0 commit-then-reach-outside sequence(s)
+migration-journal 62 on disk, 62 in journal, when monotonic, idx contiguous
+```
+
+`crash-window` moved from 1 to 0, and that single number is the phase's main
+result: the terminalise-then-announce sequence it flagged is now one transaction
+plus a state-keyed sweep, so there is no commit followed by a reach outside left
+for it to find.
+
+`tenancy` at 49 is unchanged and is not a finding. Every flagged statement is a
+repository projection or conditional UPDATE whose `where` the scan cannot read
+through — the two new ones this phase adds, `dueForAnnouncement` and
+`markAnnounced`, both lead with `eq(provisioningOperations.tenantId, tenantId)`
+from `requireTenantId(scope)`, and `provisioning.test.ts` › never sweeps an
+operation belonging to another tenant asserts the first of them across two real
+tenants.
+
+`idempotency` at 9 is unchanged, and the announcer is deliberately NOT among
+them: the scan reads `*.service.ts`, and `operation-outcome-announcer.ts` is not
+one. Its idempotency is the lane's own — `customer_notifications_subject_key`
+plus `onConflictDoNothing` — and `announced_at` is a conditional UPDATE naming
+`IS NULL`. A key would add a third mechanism to a method that already has two.
+
+`migration-journal` at 62 counts the two this phase adds, `0060` (`announced_at`)
+and `0061` (the widened `kind` CHECK). Both were applied to an EMPTY database and
+read back — the column as `timestamp with time zone`, the constraint listing all
+eight kinds — because a migration that only ever runs on a database that already
+has the schema is a migration whose fresh-install path nothing has executed.
+
+## Items 4 to 12, against the finished phase
+
+**4 — tenancy.** No new surface. The two new repository methods take a
+`TenantContext` and lead their predicates with it; the notification enqueue the
+bot runtime now makes goes through `CustomerNotifier`, which resolves the bot
+instance from the customer inside the same transaction rather than trusting the
+turn. Proved across two tenants by the sweep isolation case; the lane's own
+two-tenant case (`customer-notifications.test.ts` › a sweep in one tenant leaves
+the other's rows alone) already covered the dispatcher.
+
+**5 — idempotency.** Three mechanisms, all pre-existing and all re-used rather
+than re-implemented: the update's idempotency key namespaces the turn, the lane's
+`(tenant, kind, subject)` unique key makes a second enqueue a no-op, and
+`announced_at IS NULL` makes a second stamp one. `telegram-payment-flow.test.ts` ›
+tells a customer once however many rate-limited taps they make is the end-to-end
+proof of the middle one, through a real webhook and a real 429.
+
+**6 — concurrency.** Two replicas is the normal case on every rolling update and
+is what the sweep is designed around: it takes no lease, because `markAnnounced`
+is a conditional UPDATE whose predicate the loser re-evaluates after the winner
+commits. Proved by a real interleaving on real rows — two `markAnnounced` calls
+in separate transactions, the second asserted not to have moved the timestamp —
+rather than by `Promise.all` over a mock.
+
+**7 — crash windows.** The phase's subject. The remaining windows this audit
+enumerated are each answered by a durable state a sweep re-reads, and the new one
+follows that pattern rather than adding a mechanism: intent before the provider
+call is the operation row, provider success before local completion is
+`UNKNOWN` + `RECONCILE`, local success before Telegram delivery is the delivery
+lane, a notification send before its stamp is `reapStranded`, a payment callback
+before settlement is the payment row, a worker claim before execution is the
+lease — and terminal-before-announcement is now `announced_at`.
+
+**8 — financial correctness.** Untouched by this phase and re-checked: nothing
+here reads, writes or renders an amount. `ORDER_CANCELLED` and
+`PAYMENT_TRANSFER_RECORDED` both render templates declaring no placeholders,
+which is why neither needed a `values` column — the decision `schema.ts` records
+next to the table.
+
+**9 — provider correctness.** No adapter changed and no capability was declared.
+The matrix in the addendum above stands: Marzban declares ten capabilities
+covering every operation this phase's announcements can be about, 3X-UI keeps the
+five it had, and reading a user back is `READ_USAGE` rather than a `LOOKUP`
+member that would have no producer.
+
+**10 — secrets.** Nothing this phase adds carries one. The lane stores a kind and
+a subject id; the fallback carries the same two values and no payload, which is
+the second reason the render/fact line is drawn where it is — a parameterised
+payload is a place for a bank reference to end up in a table with a different
+retention from the payment it belongs to.
+
+**11 — migrations, update and rollback.** Two forward-only migrations, both
+additive. `0060` adds a nullable column; `0061` drops and re-adds a CHECK over a
+strict superset of its old vocabulary, so an older writer cannot produce a value
+the new constraint rejects. Neither is destructive and neither needs
+expand/contract. A rollback to the previous release leaves `announced_at`
+populated and unread, and leaves the widened CHECK accepting values that release
+never writes — which is the direction that is safe.
+
+**12 — process readiness.** No new process role, so nothing changes. The five
+roles remain `api`, `worker`, `monitor`, `recovery` and `provisioner`, all five
+are compose services, and all five are in `NEXA_READY_SERVICES`. The sweep runs
+inside `ProvisionerLoop.tick`, which the `provisioner` role already owns and
+whose readiness already depends on the loop having ticked.
