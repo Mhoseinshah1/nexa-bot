@@ -99,7 +99,7 @@ export function bootstrapRemedy(code: string): string | null {
         'This is a SECRETS problem and nothing needs reissuing in BotFather: the ciphertext did ' +
         'not authenticate. A wrong key, a modified byte, a truncated copy and a value moved ' +
         'between rows or tenants are indistinguishable at that boundary and deliberately stay ' +
-        'that way, so no code names which. If this installation\'s key material was recently ' +
+        "that way, so no code names which. If this installation's key material was recently " +
         'restored or edited, restoring the original is worth trying first — it is one of the ' +
         'causes above and the only one an operator can undo.'
       );
