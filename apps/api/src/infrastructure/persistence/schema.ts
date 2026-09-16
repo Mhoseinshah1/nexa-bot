@@ -3701,7 +3701,7 @@ export const resellers = pgTable(
  * freezes their content, and a customer message is an EFFECT of an event.
  *
  * There is no `values` column, and its absence is a decision rather than an omission.
- * Every one of the six kinds renders a template that declares NO placeholders, so there
+ * Every one of the eight kinds renders a template that declares NO placeholders, so there
  * is nothing to carry; a jsonb column with no producer is the empty table this
  * repository refuses elsewhere. The first kind that needs one adds it, in the migration
  * that needs it.

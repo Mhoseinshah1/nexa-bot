@@ -182,10 +182,10 @@ export class CustomerNotificationService {
       /*
        * The precondition, re-checked AFTER the claim and before the send.
        *
-       * ADR 0030 §3: staleness is per-kind, not a TTL column. Five of the six kinds are
-       * terminal facts and are never asked; the sixth — "your service is taking longer
-       * than expected" — is false the moment the service is ACTIVE, and arriving a
-       * second after the subscription link would be worse than not arriving.
+       * ADR 0030 §3: staleness is per-kind, not a TTL column. Seven of the eight kinds
+       * are terminal facts and are never asked; the eighth — "your service is taking
+       * longer than expected" — is false the moment the service is ACTIVE, and arriving
+       * a second after the subscription link would be worse than not arriving.
        *
        * `SUPERSEDED` rather than `DELIVERED` or `FAILED`, because it is neither: nothing
        * was sent and nothing went wrong.
