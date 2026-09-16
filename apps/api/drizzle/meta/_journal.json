@@ -400,6 +400,20 @@
       "when": 1789534876953,
       "tag": "0056_customer_notifications",
       "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "7",
+      "when": 1789543681056,
+      "tag": "0057_customer_transfer_signal",
+      "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1789543681057,
+      "tag": "0058_freeze_the_customer_signal_too",
+      "breakpoints": true
     }
   ]
 }

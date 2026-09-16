@@ -2563,6 +2563,24 @@ export const payments = pgTable(
      * customer's own message text and never a gateway response body.
      */
     resolutionNote: text('resolution_note'),
+    /**
+     * When the customer said they had sent the transfer. Their CLAIM, never evidence.
+     *
+     * `docs/phase4h-audit.md` §4 measured the gap: the bot hands out a reference and
+     * bank details and the flow is then silent in both directions, so an operator
+     * learns of a transfer from their bank rather than from the product.
+     *
+     * A separate column rather than a state, and that is the load-bearing decision.
+     * `PAYMENT_STATES` classifies what this installation KNOWS about the money, and a
+     * customer saying they paid is not knowledge — `PAYMENT_EVIDENCE_KINDS` stays
+     * `OPERATOR_REVIEW` and confirmation is unchanged. A `SIGNALLED` state would put a
+     * customer's assertion on the same axis as a reviewed one, which is the legacy
+     * receipt review's defect (`PRBR-004`) with a new name.
+     *
+     * Stamped ONCE. The conditional UPDATE that writes it requires it to be null, so a
+     * customer tapping twice does not move the moment they first claimed to have paid.
+     */
+    customerSignalledAt: timestamptz('customer_signalled_at'),
     expiresAt: timestamptz('expires_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
@@ -2676,6 +2694,18 @@ export const payments = pgTable(
     check(
       'payments_resolution_note_check',
       sql`resolution_note IS NULL OR resolved_at IS NOT NULL`,
+    ),
+    /**
+     * Only an out-of-band transfer can be claimed as sent.
+     *
+     * A wallet settlement commits its debit in the same transaction and a gateway is
+     * reached over the wire; in neither case is there anything for a customer to assert
+     * that this installation does not already know. The constraint says so where a
+     * later surface cannot disagree with it.
+     */
+    check(
+      'payments_customer_signal_check',
+      sql`customer_signalled_at IS NULL OR method = 'MANUAL_TRANSFER'`,
     ),
     unique('payments_tenant_id_key').on(table.tenantId, table.id),
   ],

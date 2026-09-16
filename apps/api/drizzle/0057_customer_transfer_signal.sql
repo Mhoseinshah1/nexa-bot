@@ -1,0 +1,2 @@
+ALTER TABLE "payments" ADD COLUMN "customer_signalled_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "payments" ADD CONSTRAINT "payments_customer_signal_check" CHECK (customer_signalled_at IS NULL OR method = 'MANUAL_TRANSFER');
