@@ -135,6 +135,7 @@ import { DrizzleServiceRepository } from './modules/commerce/provisioning/infras
 import { serviceSecrets } from './infrastructure/crypto/service-secrets.js';
 import { DrizzleOperationRepository } from './modules/commerce/provisioning/infrastructure/drizzle-operation.repository.js';
 import { ProvisioningService } from './modules/commerce/provisioning/application/provisioning.service.js';
+import { ServiceAdminService } from './modules/commerce/provisioning/application/service-admin.service.js';
 import { decideOperability } from './modules/commerce/provisioning/application/panel-operability.js';
 import { ProvisionerService } from './modules/commerce/provisioning/application/provisioner.service.js';
 import { ProvisionerLoop } from './modules/commerce/provisioning/application/provisioner-loop.js';
@@ -309,6 +310,14 @@ export interface Container {
   readonly panelMonitor: PanelMonitorService;
   /** Plans the service a settled order is owed. Held by payments, exposed for surfaces. */
   readonly provisioning: ProvisioningService;
+  /**
+   * Services as an OPERATOR reads them. Read-only, `services.view`.
+   *
+   * Separate from `provisioning` rather than a method on it, because that one plans
+   * work: a read path that held it would be one call away from planning a provider
+   * operation from a GET.
+   */
+  readonly serviceAdmin: ServiceAdminService;
   /** The lane that creates services on panels. Driven by the `provisioner` role. */
   readonly provisioner: ProvisionerService;
   /**
@@ -1943,6 +1952,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     wallet: walletService,
     payments: paymentService,
     provisioning: provisioningService,
+    serviceAdmin: new ServiceAdminService({
+      services: serviceRepository,
+      operations: operationRepository,
+      guard,
+    }),
     provisioner,
     provisionerLoop,
     delivery: deliveryService,

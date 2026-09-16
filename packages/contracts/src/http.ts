@@ -23,6 +23,12 @@ import {
   SERVICE_ADDON_TITLE_MAX_LENGTH,
 } from './catalog.js';
 import { ORDER_STATES } from './commerce.js';
+import {
+  OPERATION_STATES,
+  OPERATION_TYPES,
+  SERVICE_DELIVERY_STATES,
+  SERVICE_STATES,
+} from './provisioning.js';
 import { LEDGER_DIRECTIONS, LEDGER_REASONS } from './ledger.js';
 import {
   PAYMENT_AMOUNT_MAX_MINOR,
@@ -2073,6 +2079,165 @@ export const PAYMENT_ROUTES = {
   detail: (id: string) => `/payments/${encodeURIComponent(id)}`,
   confirm: (id: string) => `/payments/${encodeURIComponent(id)}/confirm`,
   reject: (id: string) => `/payments/${encodeURIComponent(id)}/reject`,
+} as const;
+
+// --- Services ----------------------------------------------------------------
+
+export const SERVICE_PAGE_MAX = 100;
+
+/**
+ * One provisioned service, as the Web Admin renders it.
+ *
+ * `docs/phase4h-audit.md` §7 measured why this shape did not exist: `permissions.ts`
+ * has declared `services.view`, `services.edit`, `services.terminate` and
+ * `services.transfer` since Phase 2, three seeded roles carry the first two, services
+ * have been real rows since 4D — and there was no `SERVICE_ROUTES` and no screen. The
+ * same defect class as Codex C5 on PR #29, where `receipt_reviewer` could not open the
+ * payment its own name refers to.
+ *
+ * ## Three fields are deliberately ABSENT, and that is the design
+ *
+ * `subscriptionRef`, `providerClientId` and `subscriptionUrl` are NOT here. All three
+ * are bearer capabilities: the ref and the URL fetch a working configuration, and the
+ * client id is what a customer's configuration authenticates with. `ADR-0023`'s panel
+ * rule is the same rule one aggregate over — a credential travels ONE way — and an
+ * operator list is the worst possible place to break it, because it would hand every
+ * customer's live configuration to anybody with `services.view`, in bulk, over a
+ * single request.
+ *
+ * `hasSubscription` is a boolean for the reason `archiveAvailable` is one on a backup
+ * run: the surface needs to know whether the thing exists, and nothing about the
+ * operator's job needs its value. A masked stand-in is refused for the reason ADR-0023
+ * gives about passwords — `********` is a value somebody can try to resubmit.
+ *
+ * `providerUsername` IS here. It is not a secret: it is the handle an operator types
+ * into a panel to find the account, which is the whole point of having this screen,
+ * and it is already visible to any operator with panel access.
+ *
+ * ## Delivery is its own axis and stays separate
+ *
+ * `state` and `deliveryState` are two fields because they are two facts, and 4D's
+ * `recordDelivery` exists precisely so a failed Telegram send cannot move a service out
+ * of `ACTIVE`. Collapsing them into one status would make a provisioned account whose
+ * message bounced look unprovisioned, and the obvious remedy for that is to provision
+ * it again — a second paid-for account on somebody's panel.
+ */
+export const serviceSummarySchema = z.object({
+  id: z.string(),
+  customerId: z.string(),
+  orderId: z.string(),
+  panelId: z.string(),
+  productId: z.string(),
+  state: z.enum(SERVICE_STATES),
+  /** The handle an operator types into the panel. Not a credential. */
+  providerUsername: z.string(),
+  /** The panel's own id for the account, once a create has succeeded. */
+  providerUserId: z.string().nullable(),
+  /**
+   * WHETHER a subscription exists, never what it is.
+   *
+   * A boolean rather than the URL, because the URL is a bearer capability and this is
+   * a list an operator can page through. See the docblock.
+   */
+  hasSubscription: z.boolean(),
+  expiresAt: z.iso.datetime().nullable(),
+  /** Minor-unit-style text: a byte count passes 2^53 and JSON has one number type. */
+  trafficLimitBytes: z.string(),
+  trafficUsedBytes: z.string(),
+  /** When usage was last read BACK from the panel. Null means never. */
+  usageSyncedAt: z.iso.datetime().nullable(),
+  deliveryState: z.enum(SERVICE_DELIVERY_STATES),
+  deliveredAt: z.iso.datetime().nullable(),
+  provisionedAt: z.iso.datetime().nullable(),
+  terminatedAt: z.iso.datetime().nullable(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+export type ServiceSummaryResponse = z.infer<typeof serviceSummarySchema>;
+
+/**
+ * The detail, which adds only what a LIST has no business carrying.
+ *
+ * `deliveryAttempts` and `deliveryNextAttemptAt` answer "why has this customer not had
+ * their link", which is the question that brings an operator to one service. They are
+ * not on the summary because a column of attempt counters invites reading the list as
+ * a queue, and the queue is the worker's.
+ *
+ * It adds NO credential. The absence in the summary is not a paging optimisation.
+ */
+export const serviceDetailSchema = serviceSummarySchema.extend({
+  deliveryAttempts: z.number().int(),
+  deliveryNextAttemptAt: z.iso.datetime().nullable(),
+});
+export type ServiceDetailResponse = z.infer<typeof serviceDetailSchema>;
+
+export const serviceListQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(SERVICE_PAGE_MAX).optional(),
+  cursor: z.string().min(1).max(255).optional(),
+  state: z.enum(SERVICE_STATES).optional(),
+  deliveryState: z.enum(SERVICE_DELIVERY_STATES).optional(),
+  /* Ids, validated HERE: these reach `uuid` columns. See `orderListQuerySchema`. */
+  customerId: uuidV7Schema.optional(),
+  panelId: uuidV7Schema.optional(),
+});
+export type ServiceListQuery = z.infer<typeof serviceListQuerySchema>;
+
+export const serviceListResponseSchema = z.object({
+  services: z.array(serviceSummarySchema),
+  nextCursor: z.string().nullable(),
+});
+export type ServiceListResponse = z.infer<typeof serviceListResponseSchema>;
+
+export const serviceResponseSchema = z.object({ service: serviceDetailSchema });
+export type ServiceResponse = z.infer<typeof serviceResponseSchema>;
+
+/**
+ * One operation against a service, as the Web Admin renders it.
+ *
+ * The answer to "what has been attempted on this service and how did it go", which is
+ * the other half of the question that brings an operator to a service detail. Without
+ * it the screen can say a service is `UNRECONCILED` and nothing about why.
+ *
+ * `failureMessage` is the ADAPTER's own text and is included: it is what distinguishes
+ * a panel refusing a duplicate from a panel that was unreachable, and an operator can
+ * act on that difference. It is not a credential and the adapters do not put response
+ * bodies in it.
+ */
+export const serviceOperationSchema = z.object({
+  id: z.string(),
+  type: z.enum(OPERATION_TYPES),
+  state: z.enum(OPERATION_STATES),
+  attempts: z.number().int(),
+  failureMessage: z.string().nullable(),
+  scheduledAt: z.iso.datetime().nullable(),
+  startedAt: z.iso.datetime().nullable(),
+  completedAt: z.iso.datetime().nullable(),
+  createdAt: z.iso.datetime(),
+});
+export type ServiceOperationResponse = z.infer<typeof serviceOperationSchema>;
+
+export const serviceOperationsResponseSchema = z.object({
+  operations: z.array(serviceOperationSchema),
+});
+export type ServiceOperationsResponse = z.infer<typeof serviceOperationsResponseSchema>;
+
+/**
+ * The routes.
+ *
+ * Read-only in this phase, and the omission is the point rather than an unfinished
+ * edge. `services.terminate` and `services.transfer` are declared permissions with no
+ * endpoint here: terminating from the Web Admin would need the operator-initiated half
+ * of a flow whose customer half 4E built and whose outcome announcement 4H just added,
+ * and a transfer has no stated rule at all for what happens to the order, the payment
+ * and the subscription the previous owner is holding. `docs/open-questions.md` carries
+ * that one; inventing it here is exactly the kind of guess this repository refuses.
+ *
+ * What ships is what `services.view` already promises an operator and could not do.
+ */
+export const SERVICE_ROUTES = {
+  list: '/services',
+  detail: (id: string) => `/services/${encodeURIComponent(id)}`,
+  operations: (id: string) => `/services/${encodeURIComponent(id)}/operations`,
 } as const;
 
 // --- Backup and disaster recovery -------------------------------------------

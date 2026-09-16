@@ -106,7 +106,25 @@ export interface ServiceSecretSource {
 }
 
 export interface ServiceCursor {
-  readonly createdAt: Date;
+  /**
+   * The stored `created_at`, as PostgreSQL's OWN text, NEVER as a `Date`.
+   *
+   * This was a `Date` until 4H exposed the list over HTTP, and it was the defect
+   * `CustomerCursor` and `PanelCursor` already carry the measurement for:
+   * `timestamptz` keeps microseconds, a JavaScript `Date` keeps milliseconds, and the
+   * driver TRUNCATES rather than rounds. A cursor built from a `Date` is therefore
+   * strictly BELOW the row it was built from whenever that row's microseconds are
+   * non-zero, so the tuple comparison lets that row back in — one duplicate at every
+   * page boundary, and at `limit=1` a traversal that never ends because each page
+   * hands back the same cursor.
+   *
+   * It was latent rather than harmless: nothing paged services from outside this
+   * process, so the only caller was a test that read one page. `services.created_at` is
+   * written from a millisecond `Clock.now()` today, so the rows with microseconds are
+   * the ones a restore, an import or an ops script created — exactly the set nobody
+   * would think to test.
+   */
+  readonly createdAt: string;
   readonly id: string;
 }
 

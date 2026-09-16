@@ -134,6 +134,41 @@ reading `services.state`. Keyed on the operation, that lookup finds nothing,
 answers `false`, and every delay notification is SUPERSEDED instead of sent — a
 lane that works perfectly and delivers none of them.
 
+## The Services surface
+
+| #      | Rule                                                        | Mutation                                               | Named test                                                                       | Result |
+| ------ | ----------------------------------------------------------- | ------------------------------------------------------ | -------------------------------------------------------------------------------- | ------ |
+| F4H-21 | no credential appears in a service response                 | `subscriptionUrl` added to the projection              | `services-http.test.ts` › lists a service without any of the three credentials   | KILLED |
+| F4H-22 | the page cursor carries PostgreSQL's own microsecond text   | the cursor rebuilt from the row's `Date`               | `services-http.test.ts` › pages without repeating a row whose created_at carries microseconds | KILLED |
+| F4H-23 | `services.view` is checked in the SERVICE, not the surface  | both `guard.check` calls removed                       | `services-http.test.ts` › refuses an authenticated operator who does not hold services.view | KILLED |
+
+F4H-22 is a latent defect this surface would have shipped rather than a rule this
+phase invented. `ServiceCursor.createdAt` was a `Date`, and `timestamptz` keeps
+microseconds while a JavaScript `Date` keeps milliseconds — the driver truncates
+rather than rounds, so the cursor lands strictly BELOW the row it was built from
+and the tuple comparison lets that row back in. One duplicate at every page
+boundary, and at `limit=1` a traversal that never ends.
+
+`CustomerCursor` and `PanelCursor` already carry the measurement and the fix; the
+service list had simply never been paged from outside the process, so nothing
+could see it. The test writes the microseconds by hand, because a settled order
+stamps a millisecond `Clock.now()` — the rows that trigger it are the ones a
+restore, an import or an ops script created, which is exactly the set nobody
+thinks to test.
+
+Two more things the tests had to be corrected for, both recorded because a case
+that asserts nothing reads as coverage:
+
+- the negative authorization case first used the `technical` role, which is one
+  of the THREE seeded roles that DO hold `services.view`. It passed with a 200
+  and proved nothing. `receipt_reviewer` is the role that genuinely lacks it.
+- the tenancy cases first re-homed a tenant A service with an `UPDATE`, which the
+  database refused in both orderings —
+  `provisioning_operations_service_fk` is composite on `(tenant_id, service_id)`.
+  They now build a service tenant B genuinely owns, through a settled order, for
+  the reason `docs/real-panel-acceptance.md` gives one layer down: a row in a
+  state the product cannot produce proves less than it appears to.
+
 ## The defect a button assertion could not see
 
 Not a mutation — a real bug, found by reading the diff after the tests were green,

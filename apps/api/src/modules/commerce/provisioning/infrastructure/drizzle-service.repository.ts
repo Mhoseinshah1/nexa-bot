@@ -1,4 +1,15 @@
-import { and, asc, eq, isNotNull, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  eq,
+  getTableColumns,
+  isNotNull,
+  isNull,
+  lte,
+  or,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
 import type {
   OrderId,
   PanelId,
@@ -187,25 +198,40 @@ export class DrizzleServiceRepository implements ServiceRepository {
        * `created_at` alone is not unique, so an offset would skip or repeat a row
        * whenever two services were created in the same millisecond — which is exactly
        * what a batch settlement produces.
+       *
+       * The instant is PostgreSQL's own microsecond TEXT and is cast back explicitly,
+       * so the value that came out is the value that goes in. It was a `Date` until 4H
+       * put this list behind an endpoint; `ServiceCursor.createdAt` records what that
+       * cost and why nothing had noticed.
        */
       filters.push(
-        sql`(${services.createdAt}, ${services.id}) > (${cursor.createdAt}, ${cursor.id})`,
+        sql`(${services.createdAt}, ${services.id}) > (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`,
       );
     }
     const rows = await this.exec(tx)
-      .select()
+      .select({
+        ...getTableColumns(services),
+        /**
+         * The cursor's own half of the key, in the one spelling the cursor carries.
+         *
+         * `to_char` rather than the driver's parse, and explicit rather than `::text`,
+         * because `::text` follows the session's `DateStyle` and this has to be the
+         * same string on every connection.
+         */
+        createdAtText: sql<string>`to_char(${services.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+      })
       .from(services)
       .where(and(...filters))
       .orderBy(asc(services.createdAt), asc(services.id))
       .limit(limit + 1);
 
     const page = rows.slice(0, limit).map(toRecord);
-    const last = page.at(-1);
+    const lastRow = rows[limit - 1];
     return {
       items: page,
       nextCursor:
-        rows.length > limit && last !== undefined
-          ? { createdAt: last.createdAt, id: last.id }
+        rows.length > limit && lastRow !== undefined
+          ? { createdAt: lastRow.createdAtText, id: lastRow.id }
           : null,
     };
   }
