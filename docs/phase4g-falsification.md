@@ -5,11 +5,14 @@ that fails as a result. `scripts/falsify.sh` applies the mutation, runs the name
 file, restores the tree and refuses to report anything if the restore is not
 byte-identical.
 
-**Nineteen KILLED, three recorded as SURVIVED with the reading that makes each
-one a finding rather than a gap, and four run by hand because the harness cannot
-reach what they test.** Six of the nineteen are rules the self-review of the
-whole diff added; two of the original SURVIVED rows became KILLED in that round,
-by a better mutation rather than a new test.
+**Twenty-three KILLED, three recorded as SURVIVED with the reading that makes
+each one a finding rather than a gap, and five run by hand because the harness
+cannot reach what they test.** Six of the twenty-three are rules the self-review
+of the whole diff added and four more are the Codex review's; two of the
+original SURVIVED rows became KILLED in the self-review round, by a better
+mutation rather than a new test, and one of the Codex rows survived its first
+mutation and was answered with the test it actually needed rather than by
+relabelling it.
 
 The three survivors are each a finding in their own right and none is a missing
 test: one is an application check a deeper guard catches first, one is a mutation
@@ -58,6 +61,22 @@ belong with.
 | F4G-18 | Approve and reject are different commands under one idempotency key | `decision: 'REJECT'` → `'CONFIRM'` in the hash | `payments.test.ts` › will not honour a confirmation under the key a rejection already used                   | KILLED |
 | F4G-19 | A window too short to transfer money in is refused, not issued      | the floor comparison → `false`                 | `payments.test.ts` › refuses to issue bank instructions that would die before the customer acts              | KILLED |
 | F4G-20 | The first tap ASKS; only the second withdraws                       | the ASK dispatch → the withdrawal directly     | `telegram-payment-flow.test.ts` › offers a way out with the instructions, and withdrawing closes the payment | KILLED |
+
+## Four rules the single Codex review of PR #29 added
+
+| #      | Rule                                                              | Mutation                                            | Named test                                                                                      | Result |
+| ------ | ----------------------------------------------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ------ |
+| F4G-21 | A PENDING payment past its own deadline is closed, never reissued | the staleness comparison → `false`                  | `payments.test.ts` › closes a stale reference instead of handing it back, and issues a live one | KILLED |
+| F4G-22 | The seeded `receipt_reviewer` can read the payment it reviews     | `payments.view` removed from the seed               | `payments.test.ts` › is reachable by the seeded receipt_reviewer role, end to end               | KILLED |
+| F4G-23 | Either decision in flight disables BOTH controls                  | `reject.isPending` removed from the confirm button  | `payments.test.tsx` › disables the confirmation while a rejection is in flight, the mirror case | KILLED |
+| F4G-24 | A shutdown waits for an expiry pass already in its transaction    | the `while (this.running)` wait removed from `stop` | `payment-expiry-loop.test.ts` › waits for a pass already in flight before it reports stopped    | KILLED |
+
+**F4G-23 survived its first mutation, and the fix was a test rather than a
+label.** The first version of the test clicked confirm and asserted reject was
+disabled — so removing `reject.isPending` from the CONFIRM button's own
+expression changed nothing it could observe. Each control carries its own
+expression, so each direction needs its own click. The mirror case was written
+and the mutation died against it; the row cites that one.
 
 ## The surfaces
 
