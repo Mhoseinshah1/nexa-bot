@@ -34,6 +34,19 @@ export interface PaymentRecord {
   readonly externalReference: string | null;
   readonly confirmedAt: Date | null;
   readonly confirmedByAdminId: string | null;
+  /**
+   * When it ended WITHOUT money — rejected, withdrawn or expired.
+   *
+   * The mirror of `confirmedAt`, and a second field rather than a reused one because
+   * `payments_confirmed_check` binds that one to CONFIRMED. A record carrying both
+   * meanings in one field would be read by asking `state`, which is how a rejection
+   * comes to be displayed as an approval.
+   */
+  readonly resolvedAt: Date | null;
+  /** The administrator who rejected it. Null for an expiry and for a withdrawal. */
+  readonly resolvedByAdminId: string | null;
+  /** Why, in the operator's own words. Null unless a person rejected it. */
+  readonly resolutionNote: string | null;
   readonly expiresAt: Date | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;

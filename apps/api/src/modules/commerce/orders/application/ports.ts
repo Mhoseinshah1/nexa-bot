@@ -133,19 +133,34 @@ export interface OrderRepository {
    * There is no `setState` that takes only a target — that convenience is exactly what
    * would remove the guarantee from all three at once.
    *
-   * `confirmedAt` and `settledAt` are written by the same statement, because
-   * `orders_settled_at_check` and its siblings bind each timestamp to its state: a
-   * transition that set one without the other would be refused by the database, which
-   * is the point of having the constraint. `settled_at` is the one 4C adds a writer
-   * for — `(state = 'PAID' OR state = 'REFUNDED') = (settled_at IS NOT NULL)`, so a
-   * SETTLE that moved the state alone could not commit.
+   * `confirmedAt`, `settledAt` and `cancelledAt` are written by the same statement,
+   * because `orders_settled_at_check` and its siblings bind each timestamp to its
+   * state: a transition that set one without the other would be refused by the
+   * database, which is the point of having the constraint. `settled_at` is the one 4C
+   * adds a writer for — `(state = 'PAID' OR state = 'REFUNDED') = (settled_at IS NOT
+   * NULL)`, so a SETTLE that moved the state alone could not commit.
+   *
+   * `cancelledAt` is 4G's, and until this release its absence made the `CANCEL` edge
+   * of `ORDER_MACHINE` not merely uncalled but UNCALLABLE: `orders_cancelled_at_check`
+   * is `(state = 'CANCELLED') = (cancelled_at IS NOT NULL)`, so the old signature could
+   * name CANCELLED as its target and the statement would be refused every time.
+   * `docs/phase4g-audit.md` records the measurement.
+   *
+   * There is deliberately no `expiredAt`. `orders` has no such column, so `EXPIRE` has
+   * always been representable through this method unchanged — an asymmetry the schema
+   * chose, and one this phase leaves alone rather than tidying a column into existence
+   * that no constraint asks for.
    */
   transition(
     scope: TenantContext,
     id: OrderId,
     from: OrderState,
     to: OrderState,
-    stamps: { readonly confirmedAt?: Date; readonly settledAt?: Date },
+    stamps: {
+      readonly confirmedAt?: Date;
+      readonly settledAt?: Date;
+      readonly cancelledAt?: Date;
+    },
     now: Date,
     tx?: unknown,
   ): Promise<boolean>;

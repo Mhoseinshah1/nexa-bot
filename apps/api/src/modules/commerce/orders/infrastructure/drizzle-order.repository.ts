@@ -166,7 +166,11 @@ export class DrizzleOrderRepository implements OrderRepository {
     id: OrderId,
     from: OrderState,
     to: OrderState,
-    stamps: { readonly confirmedAt?: Date; readonly settledAt?: Date },
+    stamps: {
+      readonly confirmedAt?: Date;
+      readonly settledAt?: Date;
+      readonly cancelledAt?: Date;
+    },
     now: Date,
     tx?: unknown,
   ): Promise<boolean> {
@@ -177,6 +181,7 @@ export class DrizzleOrderRepository implements OrderRepository {
         state: to,
         ...(stamps.confirmedAt === undefined ? {} : { confirmedAt: stamps.confirmedAt }),
         ...(stamps.settledAt === undefined ? {} : { settledAt: stamps.settledAt }),
+        ...(stamps.cancelledAt === undefined ? {} : { cancelledAt: stamps.cancelledAt }),
         updatedAt: now,
       })
       .where(and(eq(orders.tenantId, tenantId), eq(orders.id, id), eq(orders.state, from)))

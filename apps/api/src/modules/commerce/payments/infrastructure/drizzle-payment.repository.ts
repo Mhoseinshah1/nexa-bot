@@ -212,6 +212,9 @@ type Row = {
   externalReference: string | null;
   confirmedAt: Date | null;
   confirmedByAdminId: string | null;
+  resolvedAt: Date | null;
+  resolvedByAdminId: string | null;
+  resolutionNote: string | null;
   expiresAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
@@ -232,6 +235,9 @@ function toRecord(row: Row): PaymentRecord {
     externalReference: row.externalReference,
     confirmedAt: row.confirmedAt,
     confirmedByAdminId: row.confirmedByAdminId,
+    resolvedAt: row.resolvedAt,
+    resolvedByAdminId: row.resolvedByAdminId,
+    resolutionNote: row.resolutionNote,
     expiresAt: row.expiresAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,

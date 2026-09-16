@@ -60,6 +60,7 @@ import {
   PAYMENT_STATES,
   PAYMENT_METHODS,
   PAYMENT_EVIDENCE_KINDS,
+  PAYMENT_RESOLVED_STATES,
   LEDGER_DIRECTIONS,
   LEDGER_REASONS,
   SERVICE_DELIVERY_STATES,
@@ -2536,6 +2537,30 @@ export const payments = pgTable(
     confirmedAt: timestamptz('confirmed_at'),
     /** Which administrator confirmed it, for an `OPERATOR_REVIEW`. */
     confirmedByAdminId: uuid('confirmed_by_admin_id').references(() => admins.id),
+    /**
+     * When the payment ended WITHOUT money: rejected, withdrawn or expired.
+     *
+     * The mirror of `confirmed_at` and deliberately a SECOND column rather than a
+     * reuse of it. `payments_confirmed_check` binds `confirmed_at` to CONFIRMED, so a
+     * rejection written there could not commit — and a schema that made it commit
+     * would be one where a query for "when did the money arrive" answers with the
+     * moment somebody decided it never would.
+     */
+    resolvedAt: timestamptz('resolved_at'),
+    /**
+     * Which administrator resolved it, when a person did.
+     *
+     * Null for an expiry, because nobody decided that — a deadline did — and null for
+     * a customer's own withdrawal. `payments_resolution_reviewer_check` holds the
+     * narrower half of that: an admin id may appear only on a FAILED payment, which is
+     * the only human-made resolution this release can produce.
+     */
+    resolvedByAdminId: uuid('resolved_by_admin_id').references(() => admins.id),
+    /**
+     * Why, in the operator's own words. Same rules as `evidence_note`: never the
+     * customer's own message text and never a gateway response body.
+     */
+    resolutionNote: text('resolution_note'),
     expiresAt: timestamptz('expires_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
@@ -2578,6 +2603,20 @@ export const payments = pgTable(
     index('payments_unknown_idx')
       .on(table.tenantId, table.createdAt)
       .where(sql`state = 'UNKNOWN'`),
+    /**
+     * The expiry sweep's own index, and the counterpart of `orders_expiry_idx`.
+     *
+     * That one has existed since 0032 with NO reader — a partial index is a statement
+     * about a query somebody meant to write, and `docs/phase4g-audit.md` records that
+     * nothing was ever written against it. This one arrives WITH its reader.
+     *
+     * Leading with `tenant_id` where the orders index does not, because this sweep is
+     * tenant-scoped like every other write path here and a scan ordered by deadline
+     * across all tenants would be one tenant's backlog delaying another's.
+     */
+    index('payments_pending_expiry_idx')
+      .on(table.tenantId, table.expiresAt)
+      .where(sql`state = 'PENDING'`),
     check('payments_state_check', enumCheck('state', PAYMENT_STATES)),
     check('payments_method_check', enumCheck('method', PAYMENT_METHODS)),
     check('payments_currency_check', enumCheck('currency', CURRENCY_CODES)),
@@ -2597,6 +2636,42 @@ export const payments = pgTable(
       'payments_confirmed_check',
       sql`(state = 'CONFIRMED') = (confirmed_at IS NOT NULL AND evidence_kind IS NOT NULL)`,
     ),
+    /**
+     * A payment that ended without money has a time. The mirror of the check above.
+     *
+     * Both halves, as an equality rather than an implication, for the reason that one
+     * gives: an implication lets a CONFIRMED payment also carry a resolution time, and
+     * then "was this rejected" is answered by two columns that can disagree.
+     *
+     * The state list is `PAYMENT_RESOLVED_STATES` rendered by the same helper every
+     * other status check here uses, so adding a state to the contract and forgetting
+     * this constraint is a drift the generator catches rather than a silent hole.
+     */
+    check(
+      'payments_resolved_check',
+      sql`(state IN (${sql.join(
+        PAYMENT_RESOLVED_STATES.map((state) => sql.raw(`'${state}'`)),
+        sql`, `,
+      )})) = (resolved_at IS NOT NULL)`,
+    ),
+    /**
+     * An administrator may appear only on a rejection.
+     *
+     * `FAILED` is the only resolution a person makes in this release: an expiry is a
+     * deadline and a cancellation is the customer's own. Writing an admin id onto
+     * either would make "who decided this" answerable with somebody who did not, which
+     * is the failure 0035 exists to prevent one state later.
+     *
+     * The release that adds a gateway keeps this constraint unchanged and relies on
+     * its other half: a gateway-driven FAILED carries a null admin id, which is how the
+     * two are told apart without a parallel enum.
+     */
+    check(
+      'payments_resolution_reviewer_check',
+      sql`resolved_by_admin_id IS NULL OR state = 'FAILED'`,
+    ),
+    /** A note about a resolution that did not happen is not evidence of anything. */
+    check('payments_resolution_note_check', sql`resolution_note IS NULL OR resolved_at IS NOT NULL`),
     unique('payments_tenant_id_key').on(table.tenantId, table.id),
   ],
 );

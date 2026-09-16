@@ -358,6 +358,20 @@
       "when": 1789515236452,
       "tag": "0050_commercial_orders_survive_a_rollback",
       "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1789522515838,
+      "tag": "0051_payment_resolution",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1789522516838,
+      "tag": "0052_freeze_a_resolved_payment",
+      "breakpoints": true
     }
   ]
 }

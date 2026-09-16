@@ -141,6 +141,8 @@ function toSummary(record: PaymentRecord): PaymentSummaryResponse {
     evidenceKind: record.evidenceKind,
     confirmedAt: record.confirmedAt === null ? null : record.confirmedAt.toISOString(),
     confirmedByAdminId: record.confirmedByAdminId,
+    resolvedAt: record.resolvedAt === null ? null : record.resolvedAt.toISOString(),
+    resolvedByAdminId: record.resolvedByAdminId,
     expiresAt: record.expiresAt === null ? null : record.expiresAt.toISOString(),
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
@@ -148,5 +150,9 @@ function toSummary(record: PaymentRecord): PaymentSummaryResponse {
 }
 
 function toDetail(record: PaymentRecord): PaymentDetailResponse {
-  return { ...toSummary(record), evidenceNote: record.evidenceNote };
+  return {
+    ...toSummary(record),
+    evidenceNote: record.evidenceNote,
+    resolutionNote: record.resolutionNote,
+  };
 }
