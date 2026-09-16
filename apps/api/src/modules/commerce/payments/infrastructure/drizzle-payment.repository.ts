@@ -6,6 +6,7 @@ import type {
   PaymentEvidenceKind,
   PaymentId,
   PaymentMethod,
+  PaymentResolvedState,
   PaymentState,
   TenantContext,
   UserId,
@@ -23,6 +24,7 @@ import type {
   PaymentPage,
   PaymentRecord,
   PaymentRepository,
+  PaymentResolution,
   PaymentSearch,
 } from '../application/ports.js';
 
@@ -188,6 +190,43 @@ export class DrizzlePaymentRepository implements PaymentRepository {
         evidenceNote: confirmation.evidenceNote,
         confirmedByAdminId: confirmation.confirmedByAdminId,
         confirmedAt: confirmation.confirmedAt,
+        updatedAt: now,
+      })
+      .where(
+        and(eq(payments.tenantId, tenantId), eq(payments.id, id), eq(payments.state, 'PENDING')),
+      )
+      .returning({ id: payments.id });
+    return rows.length > 0;
+  }
+
+  /**
+   * The `FAIL`, `CANCEL` and `EXPIRE` edges, as one conditional UPDATE.
+   *
+   * `WHERE state = 'PENDING'` is the same mechanism `confirm` uses one method above and
+   * carries the same guarantee across a wider set of racers: an operator rejecting
+   * while the sweep expires, a customer withdrawing while an operator confirms, a
+   * replayed command and two worker replicas all produce one transition and one `true`.
+   *
+   * Every column in one statement, because `payments_resolved_check` is an equality:
+   * a statement that moved the state without stamping `resolved_at` would leave the row
+   * violating its own constraint, and the database refuses it rather than storing it.
+   */
+  async resolve(
+    scope: TenantContext,
+    id: PaymentId,
+    to: PaymentResolvedState,
+    resolution: PaymentResolution,
+    now: Date,
+    tx?: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(payments)
+      .set({
+        state: to,
+        resolvedAt: resolution.resolvedAt,
+        resolvedByAdminId: resolution.resolvedByAdminId,
+        resolutionNote: resolution.resolutionNote,
         updatedAt: now,
       })
       .where(

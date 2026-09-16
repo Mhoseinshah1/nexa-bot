@@ -4,6 +4,7 @@ import type {
   PaymentEvidenceKind,
   PaymentId,
   PaymentMethod,
+  PaymentResolvedState,
   PaymentState,
   TenantContext,
   UserId,
@@ -81,6 +82,25 @@ export interface PaymentConfirmation {
   readonly confirmedAt: Date;
 }
 
+/**
+ * What a resolution records: a payment that ended WITHOUT money.
+ *
+ * The mirror of `PaymentConfirmation`, and like it there is no `amount` and no
+ * `state` beyond the target the caller names. A rejection asserts that the money the
+ * payment already says was owed did not arrive; it never restates the figure.
+ *
+ * `resolvedByAdminId` is null for everything but an operator's rejection — nobody
+ * decides an expiry and a withdrawal is the customer's own — and
+ * `payments_resolution_reviewer_check` refuses the write if a caller gets that wrong.
+ */
+export interface PaymentResolution {
+  /** The administrator who rejected it. Null for an expiry and for a withdrawal. */
+  readonly resolvedByAdminId: string | null;
+  /** Why, in the operator's own words. Null when no person decided it. */
+  readonly resolutionNote: string | null;
+  readonly resolvedAt: Date;
+}
+
 /** `(createdAt, id)`, both immutable. The same keyset every other list here uses. */
 export interface PaymentCursor {
   /** PostgreSQL's own microsecond text, never a `Date`. See `CustomerCursor`. */
@@ -155,6 +175,38 @@ export interface PaymentRepository {
     scope: TenantContext,
     id: PaymentId,
     confirmation: PaymentConfirmation,
+    now: Date,
+    tx?: unknown,
+  ): Promise<boolean>;
+
+  /**
+   * The three edges that end a payment WITHOUT money, as one conditional UPDATE each.
+   *
+   * `FAIL`, `CANCEL` and `EXPIRE` — `PAYMENT_MACHINE`'s remaining transitions out of
+   * `PENDING`. They share a method because they are the same statement with a
+   * different target and a different set of resolution fields; splitting them into
+   * three would be three places for `WHERE state = 'PENDING'` to be got wrong.
+   *
+   * The `from` state is NOT a parameter and is hard-bound to `PENDING`. Every edge in
+   * the machine that reaches one of these three leaves `PENDING`, so a parameter would
+   * only ever carry one value — and the one it could carry WRONG is `UNKNOWN`, whose
+   * two reconcile edges have no producer in this release and must not be reachable by
+   * passing an argument.
+   *
+   * It reports whether the row actually moved, and that is the whole concurrency
+   * story: an operator rejecting while the sweep expires, a customer withdrawing while
+   * an operator confirms, a replayed command and two worker replicas all produce ONE
+   * transition and one `true`. There is no `setState`.
+   *
+   * Both resolution columns are set by the SAME statement as the state, because
+   * `payments_resolved_check` binds them: `(state IN ('FAILED','CANCELLED','EXPIRED'))
+   * = (resolved_at IS NOT NULL)`, so moving the state alone could not commit.
+   */
+  resolve(
+    scope: TenantContext,
+    id: PaymentId,
+    to: PaymentResolvedState,
+    resolution: PaymentResolution,
     now: Date,
     tx?: unknown,
   ): Promise<boolean>;

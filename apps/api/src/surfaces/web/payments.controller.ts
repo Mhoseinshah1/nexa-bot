@@ -4,6 +4,7 @@ import {
   API_PREFIX,
   PAYMENT_ROUTES,
   confirmPaymentRequestSchema,
+  rejectPaymentRequestSchema,
   paymentListQuerySchema,
   type OrderId,
   type PaymentDetailResponse,
@@ -25,20 +26,28 @@ import type {
 } from '../../modules/commerce/payments/application/ports.js';
 
 /**
- * Payments over HTTP, at `/payments`. Two reads and ONE write.
+ * Payments over HTTP, at `/payments`. Two reads and TWO writes.
  *
- * The write is a confirmation, and it carries a NOTE and nothing else. There is no
- * amount on this route, no currency, no customer and no order: a confirmation records
- * that money the payment already names arrived, and an operator able to restate the
- * figure at approval time is an operator able to approve a different payment from the
- * one the customer made. `confirmPaymentRequestSchema` has no such field,
- * `PaymentRepository.confirm` takes no such parameter, and
+ * The writes are the two halves of one decision — a confirmation and a rejection —
+ * which is what `receipts.review` has said since the permission catalogue was frozen
+ * and what this controller could do half of until 4G. Each carries a NOTE and nothing
+ * else. There is no amount on either route, no currency, no customer and no order: a
+ * confirmation records that money the payment already names arrived, and an operator
+ * able to restate the figure at approval time is an operator able to approve a
+ * different payment from the one the customer made. `confirmPaymentRequestSchema` has
+ * no such field, `PaymentRepository.confirm` takes no such parameter, and
  * `nexa_payments_confirmation_guard` would refuse the write.
  *
+ * A rejection is the mirror and moves nothing: no money, and not the ORDER, which stays
+ * awaiting payment until its own deadline so the customer may pay another way inside
+ * the window they were given.
+ *
  * What is deliberately absent: no `POST /payments` (a payment is created by a customer
- * choosing how to pay, never by an operator typing one), no fail, no cancel, no refund
- * and no retry. `payments.retry` exists as a permission for a gateway that does not
- * ship; a retry button with nothing behind it is the legacy silent-success pattern.
+ * choosing how to pay, never by an operator typing one), no cancel (a withdrawal is the
+ * CUSTOMER's act and arrives through the bot, not through an operator's browser), no
+ * un-reject, no refund and no retry. `payments.retry` exists as a permission for a
+ * gateway that does not ship; a retry button with nothing behind it is the legacy
+ * silent-success pattern.
  *
  * Authentication happens here; AUTHORIZATION does not — `PaymentService` charges
  * `payments.view` and `receipts.review` itself.
@@ -101,6 +110,21 @@ export class PaymentsController {
     const { payment } = await this.container.payments.confirmManualTransfer(scope, actor, id, {
       idempotencyKey: input.idempotencyKey,
       note: input.evidenceNote,
+    });
+    return { payment: toDetail(payment) };
+  }
+
+  @Post('payments/:id/reject')
+  async reject(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<PaymentResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const input = rejectPaymentRequestSchema.parse(body);
+    const payment = await this.container.payments.rejectManualTransfer(scope, actor, id, {
+      idempotencyKey: input.idempotencyKey,
+      note: input.resolutionNote,
     });
     return { payment: toDetail(payment) };
   }

@@ -934,6 +934,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     wallet: walletRepository,
     customers: customerRepository,
     guard,
+    // Reads `sales.payment_window_minutes` and nothing else — see `PaymentServiceDeps`.
+    settings: settingsResolver,
     audit,
     opsLog,
     outbox,
