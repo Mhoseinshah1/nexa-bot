@@ -20,6 +20,7 @@ import { PlannedPage, PLANNED_SURFACES, type PlannedKey } from './pages/planned'
 import { PaymentsPage, PaymentDetailPage } from './pages/payments';
 import { ProductDetailPage, ProductsPage } from './pages/products';
 import { OrderDetailPage, OrdersPage } from './pages/orders';
+import { ServiceDetailPage, ServicesPage } from './pages/services';
 import { UsersPage, UserDetailPage } from './pages/users';
 
 /**
@@ -458,6 +459,33 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
       element: <OrdersPage route={route} denied={!may('orders.view')} />,
       crumbs: [{ label: t('web.orders_title') }],
       title: t('web.orders_title'),
+    };
+  }
+
+  if (route.path === '/services') {
+    return {
+      element: <ServicesPage route={route} denied={!may('services.view')} />,
+      crumbs: [{ label: t('web.services_title') }],
+      title: t('web.services_title'),
+    };
+  }
+
+  const service = match('/services/:id', route.path);
+  if (service !== null) {
+    return {
+      element: (
+        // KEYED BY THE SERVICE ID, for the reason the panel, user and product details
+        // give in full: React reconciles by position and type, so navigating between
+        // two service URLs would keep one instance mounted and every `useState`
+        // initialiser would hold the previous service's values.
+        <ServiceDetailPage
+          key={service['id'] ?? ''}
+          id={service['id'] ?? ''}
+          denied={!may('services.view')}
+        />
+      ),
+      crumbs: [nav('services'), { label: t('web.service_detail') }],
+      title: t('web.service_detail'),
     };
   }
 

@@ -27,7 +27,7 @@ import type { TemplateKey } from '@nexa/contracts';
  */
 export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.ping.reply': 'سلام. ربات فعال است. شناسه پیگیری: {correlationId}',
-  'bot.unknown_command': 'این دستور شناخته نشد.',
+  'bot.unknown_command': 'این دستور شناخته نشد. برای دیدن فهرست دستورها /help را بفرستید.',
   'error.internal': 'خطایی رخ داد. لطفاً بعداً دوباره تلاش کنید.',
   'error.permission_denied': 'شما به این بخش دسترسی ندارید.',
 
@@ -68,6 +68,17 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.start.welcome_back': 'خوش آمدید. برای دیدن سرویس‌های قابل خرید دستور /catalog را بفرستید.',
   'bot.blocked': 'دسترسی این حساب به ربات بسته شده است.',
 
+  // What this bot can do, and the descriptions Telegram shows in its own command menu.
+  // One list in `BOT_COMMANDS` feeds both, so a command cannot be registered and
+  // undocumented, or documented and unregistered.
+  'bot.help':
+    'دستورهای این ربات:\n/catalog — دیدن و خرید سرویس‌ها\n/services — سرویس‌های من و مدیریت آن‌ها\n/wallet — موجودی کیف پول\n/help — همین راهنما',
+  'bot.command.start': 'شروع',
+  'bot.command.catalog': 'خرید سرویس',
+  'bot.command.services': 'سرویس‌های من',
+  'bot.command.wallet': 'کیف پول',
+  'bot.command.help': 'راهنما',
+
   'bot.catalog.empty': 'در حال حاضر سرویسی برای فروش تنظیم نشده است.',
   'bot.catalog.heading': 'سرویس‌های قابل خرید:',
 
@@ -95,16 +106,50 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    */
   'bot.order.settled': 'پرداخت با موفقیت تأیید شد و سفارش شما پرداخت‌شده است.',
   'bot.order.cancelled': 'سفارش لغو شد.',
+  'bot.order.cancel_button': 'لغو سفارش',
+  /*
+   * The two things the customer cannot take back, said before the destructive tap.
+   *
+   * `ORDER_MACHINE` has no edge out of CANCELLED, so the quoted price is gone with the
+   * order: a new order is priced at whatever the plan costs today. Saying so is what
+   * makes this a decision rather than a mis-touch on a message they scrolled past.
+   */
+  'bot.order.cancel_confirm':
+    'آیا از لغو این سفارش مطمئن هستید؟ این کار برگشت‌پذیر نیست و قیمت فعلی شما از بین می‌رود؛ سفارش بعدی با قیمت روز ثبت می‌شود.',
+  'bot.order.cancel_confirm_button': 'بله، سفارش را لغو کن',
+  /*
+   * NOT a refusal to argue with. The customer said they had paid, and money already
+   * sent cannot be unsent by cancelling the order it was for.
+   */
+  'bot.order.transfer_under_review':
+    'شما اعلام کرده‌اید که مبلغ این سفارش را واریز کرده‌اید، بنابراین تا پایان بررسی نمی‌توان آن را لغو کرد. نتیجهٔ بررسی به شما اطلاع داده می‌شود.',
 
   'bot.wallet.balance': 'موجودی کیف پول شما: {balance}',
   'bot.wallet.insufficient': 'موجودی کیف پول کافی نیست. کمبود: {shortfall}',
 
+  /*
+   * It used to end «سپس رسید را ارسال نمایید» — "then send the receipt" — and no
+   * surface in this product accepts one. Owner revision 17 says no receipt is stored,
+   * archived or displayed, so the instruction described a step the customer could
+   * attempt for ever without anything happening. 4H gives them the step that exists.
+   */
   'bot.payment.manual_instructions':
-    'برای پرداخت مبلغ {total} طبق راهنمای فروشنده اقدام کنید و سپس رسید را ارسال نمایید.\nکد پیگیری این پرداخت: {reference}',
+    'برای پرداخت مبلغ {total} طبق راهنمای فروشنده اقدام کنید و سپس دکمهٔ «پرداخت را انجام دادم» را بزنید.\nکد پیگیری این پرداخت: {reference}',
   'bot.payment.wallet_button': 'پرداخت از کیف پول',
   'bot.payment.manual_button': 'پرداخت کارت به کارت',
   'bot.payment.unconfigured': 'این روش پرداخت در حال حاضر فعال نیست.',
-  'bot.payment.received_for_review': 'رسید شما دریافت شد و برای بررسی در نوبت قرار گرفت.',
+  'bot.payment.sent_button': 'پرداخت را انجام دادم',
+  /*
+   * Whose claim this repeats is the whole of the wording.
+   *
+   * It used to read «رسید شما دریافت شد» — "your receipt has been received" — which is
+   * two untruths at once: no receipt is accepted anywhere in this product, and nothing
+   * has been received. What is true is that the CUSTOMER's claim is recorded and a
+   * person will check it against a bank statement. A sentence that blurred the two
+   * would be `PRBR-004` in a message.
+   */
+  'bot.payment.received_for_review':
+    'اعلام شما ثبت شد. هنوز مبلغی دریافت یا تأیید نشده است؛ پس از بررسی، نتیجه به شما اطلاع داده می‌شود.',
   'bot.payment.window_too_short':
     'مهلت این سفارش برای پرداخت کارت به کارت کافی نیست. لطفاً دوباره سفارش دهید.',
   'bot.payment.cancel_button': 'انصراف از پرداخت',
@@ -113,6 +158,12 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.cancel_confirm_button': 'بله، انصراف بده',
   'bot.payment.cancelled':
     'پرداخت شما لغو شد و کد پیگیری قبلی دیگر معتبر نیست. سفارش تا پایان مهلت آن باز است و می‌توانید با روش دیگری پرداخت کنید.',
+  // Sent by the customer notification lane, not as a reply. Both say the payment is
+  // closed and neither says the ORDER is: a rejection and an expiry leave the order open
+  // until its own deadline, which is the behaviour OQ-4G-05 records.
+  'bot.payment.rejected':
+    'پرداخت شما بررسی شد و تأیید نشد. سفارش شما همچنان باز است و می‌توانید تا پایان مهلت آن دوباره پرداخت کنید.',
+  'bot.payment.expired': 'مهلت پرداخت شما به پایان رسید و این پرداخت بسته شد.',
   'bot.payment.not_pending': 'این پرداخت دیگر در انتظار نیست.',
 
   'bot.service.list_empty': 'هنوز سرویسی ندارید.',
@@ -153,6 +204,12 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'آیا از حذف «{productTitle}» مطمئن هستید؟ با تأیید، حساب شما روی سرور پاک می‌شود و این کار برگشت‌پذیر نیست.',
   'bot.service.terminate_confirm_button': 'بله، سرویس حذف شود',
   'bot.service.action_requested': 'درخواست شما ثبت شد و در حال اعمال روی سرور است.',
+  // The counterparts to `action_requested`, sent by the notification lane once the
+  // provisioner has an answer. `action_failed` deliberately carries no reason: a
+  // provider failure is operational detail and belongs in the operations log.
+  'bot.service.action_succeeded': 'درخواست شما با موفقیت روی سرور اعمال شد.',
+  'bot.service.action_failed':
+    'درخواست شما اعمال نشد. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.',
   'bot.service.capability_unsupported': 'این قابلیت برای سرویس شما در دسترس نیست.',
 
   'bot.discount.applied': 'کد تخفیف {code} اعمال شد. مبلغ تخفیف: {amount}',

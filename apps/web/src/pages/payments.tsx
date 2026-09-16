@@ -210,6 +210,25 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
         ),
     },
     {
+      /*
+       * The customer's own claim, on the LIST.
+       *
+       * This is the column the field exists for: without it every PENDING manual
+       * transfer looks alike, and an operator has no way to tell the one whose
+       * customer says the money is sent from the one nobody has touched. It is not a
+       * state and it is not evidence — both rows are still PENDING, and confirming
+       * either still needs somebody to look at a bank statement.
+       */
+      key: 'signalled',
+      header: t('web.payment_customer_signalled'),
+      render: (row) =>
+        row.customerSignalledAt === null ? (
+          <Dash />
+        ) : (
+          <span className="nowrap">{formatTimestamp(row.customerSignalledAt)}</span>
+        ),
+    },
+    {
       key: 'created',
       header: t('web.payment_created_at'),
       render: (row) => <span className="nowrap">{formatTimestamp(row.createdAt)}</span>,
@@ -466,8 +485,24 @@ export function PaymentDetailPage({
                     t('web.payment_expires_at'),
                     row.expiresAt === null ? <Dash key="e" /> : formatTimestamp(row.expiresAt),
                   ],
+                  [
+                    t('web.payment_customer_signalled'),
+                    row.customerSignalledAt === null ? (
+                      // A SENTENCE, not a dash. "The customer has said nothing" is the
+                      // answer here rather than a missing value, and it is the half of
+                      // the picture a reviewer weighs before opening their bank.
+                      <span key="cs" className="muted small">
+                        {t('web.payment_customer_signalled_none')}
+                      </span>
+                    ) : (
+                      formatTimestamp(row.customerSignalledAt)
+                    ),
+                  ],
                 ]}
               />
+              {row.customerSignalledAt !== null && (
+                <p className="muted small">{t('web.payment_customer_signalled_hint')}</p>
+              )}
             </Card>
 
             {/*

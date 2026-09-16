@@ -1,6 +1,15 @@
 import {
   IDENTITY_ERROR_CODES,
   PAYMENT_ROUTES,
+  SERVICE_ROUTES,
+  serviceListResponseSchema,
+  serviceOperationsResponseSchema,
+  serviceResponseSchema,
+  type ServiceDeliveryState,
+  type ServiceListResponse,
+  type ServiceOperationsResponse,
+  type ServiceResponse,
+  type ServiceState,
   WALLET_ROUTES,
   paymentListResponseSchema,
   paymentResponseSchema,
@@ -743,6 +752,49 @@ export function fetchPayments(
     suffix ? `${PAYMENT_ROUTES.list}?${suffix}` : PAYMENT_ROUTES.list,
     paymentListResponseSchema,
   );
+}
+
+/**
+ * Services, as an operator reads them.
+ *
+ * The responses carry NO subscription URL, no subscription ref and no provider client
+ * id — the server does not send them, and this client could not surface them if it
+ * wanted to. See `serviceSummarySchema`: a credential travels one way, and a list is
+ * the worst place to break that.
+ */
+export function fetchServices(
+  query: {
+    limit?: number;
+    cursor?: string;
+    state?: ServiceState;
+    deliveryState?: ServiceDeliveryState;
+    customerId?: string;
+    panelId?: string;
+  } = {},
+): Promise<ServiceListResponse> {
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
+  if (query.state !== undefined) params.set('state', query.state);
+  if (query.deliveryState !== undefined) params.set('deliveryState', query.deliveryState);
+  if (query.customerId !== undefined && query.customerId !== '') {
+    params.set('customerId', query.customerId);
+  }
+  if (query.panelId !== undefined && query.panelId !== '') params.set('panelId', query.panelId);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${SERVICE_ROUTES.list}?${suffix}` : SERVICE_ROUTES.list,
+    serviceListResponseSchema,
+  );
+}
+
+export function fetchService(id: string): Promise<ServiceResponse> {
+  return authedGet(SERVICE_ROUTES.detail(id), serviceResponseSchema);
+}
+
+/** What has been attempted on one service. Bounded by the server, newest first. */
+export function fetchServiceOperations(id: string): Promise<ServiceOperationsResponse> {
+  return authedGet(SERVICE_ROUTES.operations(id), serviceOperationsResponseSchema);
 }
 
 export function fetchPayment(id: string): Promise<PaymentResponse> {

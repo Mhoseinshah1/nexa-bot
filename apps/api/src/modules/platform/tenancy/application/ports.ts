@@ -185,6 +185,21 @@ export interface BotBootstrapTelegram {
      */
     readonly dropPendingUpdates: boolean;
   }): Promise<WebhookRegistration>;
+
+  /**
+   * Registers the command menu with Telegram. Answers whether it landed.
+   *
+   * The COMMANDS are not a parameter. `BOT_COMMANDS` is the one list and rendering its
+   * descriptions needs the catalogue, which an application file may not import — so the
+   * adapter does both and this layer decides only whether to call it.
+   *
+   * A BOOLEAN, not a structured outcome, and that is the difference from
+   * `registerWebhook`: a failed webhook makes the install INCOMPLETE because updates do
+   * not arrive, and a failed command menu means a customer types `/help` instead of
+   * tapping it. Two failures of very different weight should not share a shape that
+   * invites the caller to treat them alike.
+   */
+  registerCommands(input: { readonly token: string }): Promise<boolean>;
 }
 
 export const TENANT_REPOSITORY = Symbol('TENANT_REPOSITORY');

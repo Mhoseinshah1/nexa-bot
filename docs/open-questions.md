@@ -1679,3 +1679,60 @@ inferred from a per-unit rate that does not exist for one of the two kinds.
 through a different surface — a Mini App or a Web Admin form, both of which can carry a
 typed quantity safely — and whether add-on prices should be scoped per panel as `PBR-009`
 has them rather than per tenant.
+
+## OQ-4H-01 — an interactive Telegram reply that Telegram rate-limits is lost
+
+**Status: OPEN, and it is a DEFECT rather than an ambiguity.** Found by the Codex
+review of PR #30 and confirmed against the code.
+
+`BotRuntime` answers a webhook turn by sending one reply. When `CustomerMessenger.send`
+returns `RATE_LIMITED` the runtime records that outcome and the webhook still completes
+successfully — and nothing reschedules the message. Telegram will not redeliver the
+update either. So during a burst an order or payment mutation can COMMIT while the
+customer sees no confirmation at all.
+
+The two background callers do better: `CustomerNotificationService` and the delivery
+lane both put the row back on the queue at Telegram's own `retryAfterMs` with no attempt
+spent. The interactive path has nowhere to put it.
+
+**Why it is not fixed in 4H.** Putting an interactive reply on the notification lane
+needs the lane to carry an arbitrary message, and it deliberately does not: a
+`CustomerNotificationKind` is a FACT with one template key and no values, which is what
+lets `CUSTOMER_NOTIFICATION_PRECONDITIONS` ask whether the fact is still true before
+sending. Several interactive replies carry values and an inline keyboard. Carrying one
+through the lane means either storing a rendered string — which
+`docs/conventions.md` forbids outright — or adding a parameterised payload column and
+accepting that a queued reply cannot be re-checked. That is a contracts and schema
+decision about what the lane IS, not a bug fix, and ADR 0030 §1 argues the opposite
+position on purpose.
+
+**What holds meanwhile.** The mutation is committed and durable; the customer's next
+interaction reads real state rather than a cached claim, and `/start` and My Services
+both show it. What they lose is the immediate confirmation, not the effect.
+
+**Trigger to resolve:** Phase 4J, whose subject is exactly this class — crash windows
+and cross-system delivery. Decide there whether the lane grows a parameterised payload,
+or whether the webhook turn gains its own bounded retry before acknowledging.
+
+## OQ-4H-02 — an upgraded installation keeps its old Telegram command menu
+
+**Status: OPEN, and it is a gap in a shipped feature.** Found by the Codex review of
+PR #30 and confirmed against the code.
+
+`registerCommands` runs inside `BotBootstrapService.execute` and nowhere else. A
+`botctl update` does not invoke that CLI, and an already-`ready` bot is not reconciled
+by starting the new image — so an installation that upgrades to the release carrying
+`BOT_COMMANDS` keeps whatever menu it had, which for most installations is none, until
+an operator happens to run `botctl telegram register`. The discoverability 4H item 8
+delivers therefore applies to FRESH INSTALLS only.
+
+**Why it is not fixed in 4H.** The right mechanism is a command REVISION stored beside
+the bot, so an upgrade re-registers exactly once rather than on every boot of every
+replica — a schema column, an upgrade path, and a decision about where the
+reconciliation runs. Registering unconditionally at startup instead would put an
+outbound Telegram call on the readiness path of every process, which is the coupling
+`configure_telegram_bot` was moved out of the critical path to avoid.
+
+**Trigger to resolve:** Phase 4I. Its subject is `OQ-TG-04` — Telegram bootstrap and
+upgrade behaviour — and this is the same surface: what a RERUN reconciles, and what an
+installation that upgrades rather than installs is left holding.

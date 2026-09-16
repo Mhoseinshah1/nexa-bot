@@ -10,10 +10,12 @@ import { Icon } from '../ui/icons';
  * dead path. A planned page still listed for a route that now resolves
  * elsewhere is unreachable prose claiming the capability is unbuilt.
  *
- * Eight of the fifteen areas in the owner's route inventory have no backend at
- * all: there is no service, order, product, payment, wallet,
- * reseller, discount or report endpoint, and no bot-management surface. This page
- * is what those routes render.
+ * Four of the fifteen areas in the owner's route inventory still have no backend
+ * at all: there is no reseller, discount or report endpoint, and no
+ * bot-management surface. This page is what those four routes render. The count
+ * is written out rather than derived because it is a CLAIM — users in 4A,
+ * products and orders in 4B, payments in 4C and services in 4H each had to
+ * change this sentence as well as the list below it.
  *
  * It draws NO control. Not a disabled button, not a greyed table with sample
  * rows, not a search box that returns nothing. A disabled control still says
@@ -40,18 +42,19 @@ export interface PlannedSurface {
 }
 
 export const PLANNED_SURFACES: readonly PlannedSurface[] = [
-  {
-    key: 'services',
-    path: '/services',
-    label: 'web.nav_services',
-    summary: 'web.planned_services_summary',
-    missing: ['web.planned_missing_service', 'web.planned_missing_provisioning'],
-    decisions: [
-      'web.planned_services_no_protocol',
-      'web.planned_services_ordering',
-      'web.planned_services_plan_filter',
-    ],
-  },
+  /*
+   * `services` is no longer here. Phase 4H builds the surface — a real list of real
+   * provisioned services with their operation history — so the placeholder had to go
+   * in the same commit: `planned-and-absent.test.tsx` asserts this list agrees with
+   * what is routed, and a promoted page left here renders its placeholder instead of
+   * itself.
+   *
+   * Owner revisions 12, 13 and 14 were recorded on it, and none was dropped. They are
+   * on the live page's rules card now, where whoever changes the ordering or adds a
+   * filter will read them, and `services.test.tsx` asserts them there. Revision 13 is
+   * no longer only a record: the repository pages `(created_at, id)` DESCENDING
+   * because of it, against the ascending convention every other list here follows.
+   */
   /*
    * `payments` is no longer here. Phase 4C builds the surface, so a placeholder
    * claiming it is planned would be the opposite untruth from the one this file

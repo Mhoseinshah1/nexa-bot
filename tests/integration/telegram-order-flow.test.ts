@@ -370,20 +370,99 @@ describe('the customer purchase flow over Telegram', () => {
     expect(text).toContain(formatMoney(money(250_000n, 'IRT')));
 
     /*
-     * The two rails this installation can actually perform, and ONLY those.
+     * The two rails this installation can actually perform, the way out, and ONLY those.
      *
      * Phase 4B asserted no buttons here and said "there is nothing further a customer
      * can do in this release", which was true of 4B and is not true of 4C. The claim is
      * replaced rather than deleted: what matters now is that a gateway button is NOT
      * drawn, because there is no adapter behind it, and that each button carries the
      * order id and nothing else.
+     *
+     * 4H adds the third. `docs/phase4h-audit.md` §3 measured the gap it closes:
+     * `ORDER_MACHINE`'s CANCEL edge was writable and had no caller, so a customer who
+     * changed their mind had exactly one option — never pay — and the order sat
+     * `AWAITING_PAYMENT` until a sweep expired it.
+     *
+     * It carries the ASK prefix (`d:`), not the destructive one (`f:`), and that is the
+     * assertion rather than a detail: this message stays in the chat for ever and
+     * `ORDER_MACHINE` has no edge out of CANCELLED, so a one-tap cancel reached by
+     * scrolling would take the customer's quoted price with it.
      */
     const buttons = buttonsOf(lastMessage());
-    expect(buttons.map((b) => b.callback_data)).toEqual([`w:${orderId}`, `m:${orderId}`]);
+    expect(buttons.map((b) => b.callback_data)).toEqual([
+      `w:${orderId}`,
+      `m:${orderId}`,
+      `d:${orderId}`,
+    ]);
     expect(buttons.map((b) => b.text)).toEqual([
       CATALOGUE_FA['bot.payment.wallet_button'],
       CATALOGUE_FA['bot.payment.manual_button'],
+      CATALOGUE_FA['bot.order.cancel_button'],
     ]);
+  });
+
+  it('cancels an order over the wire, and asks before it does', async () => {
+    /*
+     * The cancellation END TO END, through the webhook, as a customer performs it.
+     *
+     * This case exists because of what its absence allowed. The assertion above says
+     * the cancel button is DRAWN; the first version of the handler behind it called
+     * `OrderService.get`, which is the operator's read and checks `orders.view` — a
+     * permission a customer-initiated turn does not hold, since
+     * `SYSTEM_JOB_PERMISSIONS` is `['maintenance.run']` and nothing else. So every
+     * customer who tapped it got a refusal, and nothing in the suite noticed, because
+     * nothing tapped it.
+     *
+     * Two taps, and the FIRST must change nothing: this message stays in the chat for
+     * ever and `ORDER_MACHINE` has no edge out of CANCELLED, so a one-tap cancel
+     * reached by scrolling would take the customer's quoted price with it.
+     */
+    const sellable = await product(tenantA, 'ACTIVE');
+    await tap(`p:${sellable.id}`);
+    const orderId = String((await orders())[0]?.['id']);
+    await tap(`c:${orderId}`);
+    sent = [];
+
+    await tap(`d:${orderId}`);
+
+    expect((await orders())[0]?.['state'], 'the ask writes nothing').toBe('AWAITING_PAYMENT');
+    expect(String(lastMessage()?.body['text'])).toBe(CATALOGUE_FA['bot.order.cancel_confirm']);
+    const confirm = buttonsOf(lastMessage());
+    expect(confirm.map((b) => b.callback_data)).toEqual([`f:${orderId}`]);
+    sent = [];
+
+    await tap(`f:${orderId}`);
+
+    expect(String(lastMessage()?.body['text'])).toBe(CATALOGUE_FA['bot.order.cancelled']);
+    const rows = await orders();
+    expect(rows[0]?.['state']).toBe('CANCELLED');
+    /*
+     * And nothing was settled. `orders_settled_at_check` binds that column to PAID, so
+     * this is the schema agreeing rather than the test declining to look.
+     */
+    expect(rows[0]?.['settled_at']).toBeNull();
+  });
+
+  it('answers a cancel tap on an order that is no longer awaiting payment', async () => {
+    /*
+     * The message carrying the button outlives the state it was drawn in. A customer
+     * scrolling back after paying must be told what is true of the ORDER rather than
+     * shown a question whose answer would be refused.
+     */
+    const sellable = await product(tenantA, 'ACTIVE');
+    await tap(`p:${sellable.id}`);
+    const orderId = String((await orders())[0]?.['id']);
+    await tap(`c:${orderId}`);
+    await tap(`d:${orderId}`);
+    await tap(`f:${orderId}`);
+    sent = [];
+
+    await tap(`d:${orderId}`);
+
+    expect(String(lastMessage()?.body['text'])).toBe(
+      CATALOGUE_FA['bot.order.not_awaiting_payment'],
+    );
+    expect(buttonsOf(lastMessage())).toHaveLength(0);
   });
 
   it('lets a double tap of Confirm produce ONE transition and ONE event', async () => {

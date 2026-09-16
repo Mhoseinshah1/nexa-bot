@@ -11,6 +11,7 @@ import type {
   CustomerArrival,
   Money,
   OrderId,
+  OrderPurpose,
   TemplateKey,
   TemplateValues,
   TenantContext,
@@ -18,6 +19,7 @@ import type {
 import type { CustomerService } from '../../modules/commerce/customers/application/customer.service.js';
 import type {
   CustomerButton,
+  CustomerSendOutcome,
   CustomerMessenger,
 } from '../../modules/commerce/messaging/application/ports.js';
 import type { CustomerRecord } from '../../modules/commerce/customers/application/ports.js';
@@ -54,6 +56,9 @@ export const BOT_INTENTS = [
   'PAY_GATEWAY',
   'PAY_CANCEL_ASK',
   'PAY_CANCEL',
+  'PAY_SENT',
+  'ORDER_CANCEL_ASK',
+  'ORDER_CANCEL',
   'SERVICES',
   'SERVICE',
   'SERVICE_RESEND',
@@ -67,6 +72,7 @@ export const BOT_INTENTS = [
   'SERVICE_BUY_TRAFFIC',
   'SERVICE_BUY_TIME',
   'SERVICE_ACTION_CONFIRM',
+  'HELP',
   'UNSUPPORTED',
 ] as const;
 export type BotIntent = (typeof BOT_INTENTS)[number];
@@ -197,6 +203,31 @@ export const CANCEL_PAY_ASK_CALLBACK_PREFIX = 'x:';
  * customer can reach by scrolling is asked about, not performed.
  */
 export const CANCEL_PAY_CALLBACK_PREFIX = 'z:';
+
+/**
+ * The customer saying they have sent the transfer. The opposite of `x:`/`z:`.
+ *
+ * ONE tap, not two, and the asymmetry is deliberate: the withdrawal pair is asked about
+ * because it closes a payment for ever, and this closes nothing. It stamps a claim that
+ * an operator reads, and a claim made by accident is corrected by the operator finding
+ * no transfer — which is the same thing they do for a claim made in good faith about a
+ * transfer their bank later bounces.
+ *
+ * It names the PAYMENT, like the withdrawal pair and for the same reason: an order can
+ * have had several payments over its life and this message is about one of them.
+ */
+export const PAY_SENT_CALLBACK_PREFIX = 'i:';
+
+/**
+ * Withdrawing the ORDER, not one payment. The second destructive pair in this file.
+ *
+ * `x:`/`z:` close one transfer instruction and leave the order open to be paid another
+ * way. These close the order itself, which `ORDER_MACHINE` has no edge out of — so the
+ * quoted price goes with it. Two taps, for the reason `CANCEL_PAY_CALLBACK_PREFIX`
+ * gives at length: the message carrying the first button stays in the chat for ever.
+ */
+export const CANCEL_ORDER_ASK_CALLBACK_PREFIX = 'd:';
+export const CANCEL_ORDER_CALLBACK_PREFIX = 'f:';
 /**
  * A tap on one of the customer's own services, and a request to send its link again.
  *
@@ -334,6 +365,20 @@ export function intentOf(update: unknown): BotCommand {
     if (data.startsWith(CANCEL_PAY_CALLBACK_PREFIX)) {
       return callbackCommand('PAY_CANCEL', data.slice(CANCEL_PAY_CALLBACK_PREFIX.length), id);
     }
+    if (data.startsWith(PAY_SENT_CALLBACK_PREFIX)) {
+      return callbackCommand('PAY_SENT', data.slice(PAY_SENT_CALLBACK_PREFIX.length), id);
+    }
+    /* ASK before the destructive one, exactly as the payment pair above is ordered. */
+    if (data.startsWith(CANCEL_ORDER_ASK_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'ORDER_CANCEL_ASK',
+        data.slice(CANCEL_ORDER_ASK_CALLBACK_PREFIX.length),
+        id,
+      );
+    }
+    if (data.startsWith(CANCEL_ORDER_CALLBACK_PREFIX)) {
+      return callbackCommand('ORDER_CANCEL', data.slice(CANCEL_ORDER_CALLBACK_PREFIX.length), id);
+    }
     /*
      * The resend prefix is tested BEFORE the service prefix.
      *
@@ -452,6 +497,15 @@ export function intentOf(update: unknown): BotCommand {
   if (command === '/services') {
     return { intent: 'SERVICES', targetId: null, callbackQueryId: null };
   }
+  /*
+   * The command that makes the other four findable.
+   *
+   * `docs/phase4h-audit.md` §9: the bot answered four commands, registered none with
+   * Telegram, and `bot.start.welcome` named only `/catalog` — so `/wallet` and
+   * `/services` were reachable only by guessing. `BOT_COMMANDS` is what both this and
+   * `setMyCommands` render, so the menu and the help cannot disagree.
+   */
+  if (command === '/help') return { intent: 'HELP', targetId: null, callbackQueryId: null };
   return UNSUPPORTED;
 }
 
@@ -529,7 +583,7 @@ export interface BotTurnResult {
   readonly replyKey: TemplateKey | null;
   /** The order this turn created or confirmed, when it was one of those. */
   readonly orderId: string | null;
-  readonly sent: 'DELIVERED' | 'REFUSED' | 'UNKNOWN' | 'NOT_ATTEMPTED';
+  readonly sent: CustomerSendOutcome | 'NOT_ATTEMPTED';
 }
 
 /**
@@ -544,6 +598,24 @@ interface PendingReply {
   readonly values: TemplateValues;
   readonly buttons: readonly CustomerButton[];
   readonly orderId: string | null;
+  /**
+   * A SECOND message, sent after the first, about a different fact.
+   *
+   * One handler, two sentences, because they are two facts and merging them would make
+   * one of them false. Settlement is the case it exists for: `bot.order.settled` says
+   * the money arrived and is complete on its own, and `bot.service.provisioning` says
+   * something is now being made — which is not true of a renewal, so it cannot simply
+   * be appended to the settled copy.
+   *
+   * Sent only if the FIRST one was, and its outcome is not the turn's. A follow-up that
+   * failed leaves the customer with the message that mattered; a follow-up that arrived
+   * without its subject would be a sentence about nothing.
+   *
+   * It carries no values and no buttons on purpose. A second message that needed either
+   * would be a second reply, and this is deliberately not a general mechanism — the
+   * turn still has ONE answer, with a note after it.
+   */
+  readonly followUpKey?: TemplateKey;
 }
 
 /**
@@ -608,6 +680,15 @@ const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
    * pending says what happened.
    */
   [COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID]: 'bot.payment.not_pending',
+  /*
+   * The order is LIVE and the customer's own earlier claim is what stops them.
+   *
+   * Its own key rather than `bot.order.not_awaiting_payment`, which says the order can
+   * no longer be acted on — the opposite of what is true here. A customer told the
+   * wrong one of those two taps again, because the sentence they read describes a
+   * situation they can see is false.
+   */
+  [COMMERCE_ERROR_CODES.ORDER_TRANSFER_UNDER_REVIEW]: 'bot.order.transfer_under_review',
   /*
    * The guard refused. ONE sentence for every reason it gives, exactly as the product
    * refusals collapse: the customer can act on none of "the amount does not match", "the
@@ -802,6 +883,28 @@ export class BotRuntime {
       ...(reply.buttons.length === 0 ? {} : { buttons: reply.buttons }),
     });
 
+    /*
+     * The follow-up, after the answer and only if the answer went out.
+     *
+     * `docs/phase4h-audit.md` §5: a customer who had paid saw `bot.order.settled` and
+     * then nothing at all until the subscription link arrived, however long that took.
+     * This is the sentence for that window.
+     *
+     * Its outcome is NOT the turn's, and that asymmetry is the point. The turn reports
+     * whether the customer was told the thing that mattered — that their money arrived
+     * — and a failed note about provisioning must not make a successful settlement look
+     * like a failed send in the operational log. The customer meets the same fact again
+     * when the link arrives, or through `bot.service.provision_delayed` if it does not.
+     */
+    if (reply.followUpKey !== undefined && sent.outcome === 'DELIVERED') {
+      await this.deps.messenger.send(scope, {
+        chatId,
+        templateKey: reply.followUpKey,
+        values: {},
+        botInstanceId: input.botInstanceId,
+      });
+    }
+
     // After the real answer, not before it. The spinner is cosmetic and its failure is
     // silent; putting it first would let a slow acknowledgement delay the message the
     // customer is actually waiting for.
@@ -813,7 +916,7 @@ export class BotRuntime {
       customerId: customer.id,
       replyKey: reply.key,
       orderId: reply.orderId,
-      sent,
+      sent: sent.outcome,
     };
   }
 
@@ -864,6 +967,21 @@ export class BotRuntime {
     }
     if (command.intent === 'PAY_CANCEL' && command.targetId !== null) {
       return this.cancelPayment(scope, actor, command.targetId, customer, input.idempotencyKey);
+    }
+    if (command.intent === 'PAY_SENT' && command.targetId !== null) {
+      return this.signalTransferSent(
+        scope,
+        actor,
+        command.targetId,
+        customer,
+        input.idempotencyKey,
+      );
+    }
+    if (command.intent === 'ORDER_CANCEL_ASK' && command.targetId !== null) {
+      return this.cancelOrderAsk(scope, command.targetId, customer);
+    }
+    if (command.intent === 'ORDER_CANCEL' && command.targetId !== null) {
+      return this.cancelOrder(scope, actor, command.targetId, customer, input.idempotencyKey);
     }
     if (command.intent === 'SERVICE_RENEW' && command.targetId !== null) {
       return this.commercialQuote(scope, actor, customer, command.targetId, 'RENEW', null, input);
@@ -1614,7 +1732,13 @@ export class BotRuntime {
         idempotencyKey: `${idempotencyKey}:wallet-pay`,
         orderId,
       });
-      return { key: 'bot.order.settled', values: {}, buttons: [], orderId: order.id };
+      return {
+        key: 'bot.order.settled',
+        values: {},
+        buttons: [],
+        orderId: order.id,
+        ...followUpForSettlement(order.purpose),
+      };
     } catch (error) {
       /*
        * Insufficient funds is answered HERE rather than through `REFUSAL_REPLIES`,
@@ -1684,6 +1808,22 @@ export class BotRuntime {
          * away from closing the payment it was against.
          */
         buttons: [
+          /*
+           * The step the instructions now tell them to take.
+           *
+           * The Persian used to end «سپس رسید را ارسال نمایید» — send the receipt — and
+           * no surface in this product accepts one (owner revision 17). So a customer
+           * who had transferred the money had nothing to do and nothing to say, and
+           * `bot.payment.received_for_review` was a frozen sentence with no producer.
+           *
+           * FIRST in the list, before the withdrawal: it is what most customers who
+           * come back to this message want, and the destructive one should not be the
+           * nearest thumb.
+           */
+          {
+            label: { kind: 'TEMPLATE', key: 'bot.payment.sent_button' },
+            data: `${PAY_SENT_CALLBACK_PREFIX}${payment.id}`,
+          },
           {
             label: { kind: 'TEMPLATE', key: 'bot.payment.cancel_button' },
             data: `${CANCEL_PAY_ASK_CALLBACK_PREFIX}${payment.id}`,
@@ -1765,6 +1905,120 @@ export class BotRuntime {
     }
   }
 
+  /**
+   * The customer saying they have sent the transfer.
+   *
+   * It moves no money and no state — `PaymentService.signalTransferSent` stamps a claim
+   * and nothing else — so the reply must not imply that anything arrived.
+   * `bot.payment.received_for_review` is written to say exactly what is true: the claim
+   * is recorded and a person will check it.
+   *
+   * ONE tap, deliberately. The withdrawal beside it is asked about first because it
+   * closes a payment for ever; this closes nothing, and a claim made by accident is
+   * resolved by the operator finding no transfer.
+   *
+   * No button on the reply. The instructions message above it still carries both, which
+   * is where a customer who wants to withdraw after all will look — and re-offering
+   * "I have sent it" under a message saying it is recorded invites a second tap that
+   * does nothing.
+   */
+  private async signalTransferSent(
+    scope: TenantContext,
+    actor: ActorContext,
+    paymentId: string,
+    customer: CustomerRecord,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    try {
+      await this.deps.payments.signalTransferSent(scope, actor, customer.id, {
+        idempotencyKey: `${idempotencyKey}:pay-sent`,
+        paymentId,
+      });
+      return { key: 'bot.payment.received_for_review', values: {}, buttons: [], orderId: null };
+    } catch (error) {
+      return refusal(error);
+    }
+  }
+
+  /**
+   * The question between the cancel-order button and the cancellation.
+   *
+   * `cancelPaymentAsk` one aggregate over is the same shape and states the reasons: it
+   * writes nothing, it offers the ONE button carrying the destructive prefix, and it
+   * re-reads rather than trusting whichever message was tapped.
+   *
+   * The re-read goes through `awaitingPaymentForCustomer`, NOT `orders.get`. That one
+   * is the operator's read and checks `orders.view`, which this turn does not hold —
+   * a job actor holds `maintenance.run` and nothing else (see the job permission list
+   * in `packages/contracts/src/permissions.ts`, named there rather than here because
+   * `check:boundaries` refuses a surface that so much as mentions it) — so the first
+   * version of this method refused every customer who tapped the button. Nothing
+   * asserting only that the BUTTON was drawn would have noticed.
+   *
+   * Ownership and state are both compared against the ROW, so a customer holding
+   * somebody else's order id is answered exactly as one holding an id that does not
+   * exist. The cancellation re-checks both inside its own transaction; this check is
+   * about not drawing a question, not about authorization.
+   */
+  private async cancelOrderAsk(
+    scope: TenantContext,
+    orderId: string,
+    customer: CustomerRecord,
+  ): Promise<PendingReply> {
+    try {
+      const order = await this.deps.orders.awaitingPaymentForCustomer(scope, customer.id, orderId);
+      if (order === null) {
+        return { key: 'bot.order.not_awaiting_payment', values: {}, buttons: [], orderId: null };
+      }
+      return {
+        key: 'bot.order.cancel_confirm',
+        values: {},
+        buttons: [
+          {
+            label: { kind: 'TEMPLATE', key: 'bot.order.cancel_confirm_button' },
+            data: `${CANCEL_ORDER_CALLBACK_PREFIX}${order.id}`,
+          },
+        ],
+        orderId: order.id,
+      };
+    } catch (error) {
+      return refusal(error);
+    }
+  }
+
+  /**
+   * The customer withdrawing their own unpaid order.
+   *
+   * `ORDER_MACHINE`'s `CANCEL` edge reaching a surface at last —
+   * `docs/phase4h-audit.md` §3 measured that 4G made it writable and left it with no
+   * caller, and `bot.order.cancelled` a frozen sentence with nowhere to be sent from.
+   *
+   * The reply says the ORDER is gone and says nothing about a payment, although the
+   * service withdrew any pending transfer in the same transaction. That is not an
+   * omission: a customer who reaches this has been told about the order, which is the
+   * thing they acted on, and a second sentence about a reference they were about to
+   * stop using is noise. The refusal when they HAVE claimed to pay is the case where
+   * the payment matters, and it has its own key.
+   */
+  private async cancelOrder(
+    scope: TenantContext,
+    actor: ActorContext,
+    orderId: string,
+    customer: CustomerRecord,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    try {
+      await this.deps.orders.cancelByCustomer(scope, actor, {
+        idempotencyKey: `${idempotencyKey}:cancel-order`,
+        customerId: customer.id,
+        orderId,
+      });
+      return { key: 'bot.order.cancelled', values: {}, buttons: [], orderId: null };
+    } catch (error) {
+      return refusal(error);
+    }
+  }
+
   /** Best effort, after the answer, and never allowed to fail the turn. */
   private async stopSpinner(
     scope: TenantContext,
@@ -1777,6 +2031,33 @@ export class BotRuntime {
       botInstanceId,
     });
   }
+}
+
+/**
+ * What follows `bot.order.settled`, if anything.
+ *
+ * A pure function of the ORDER PURPOSE, exported for the same reason `replyFor` is:
+ * the decision is testable without a database or a Telegram server, and a rule that
+ * can only be reached through a webhook is a rule the suite cannot distinguish from
+ * its absence. It could be: no test in this repository settles a RENEW over Telegram,
+ * so an unconditional follow-up stayed green until this function existed.
+ *
+ * `NEW_SERVICE` is the only purpose that PROVISIONS. `orderPurposeNeedsService` states
+ * the same rule from the other side and `COMMERCIAL_ORDER_PURPOSES` derives itself by
+ * exclusion, so a purpose added without thought lands on the safe side — as one that
+ * does not provision. A renewal settles and CHANGES a service that already exists;
+ * telling that customer their service is being created describes something that is not
+ * happening, and they would then wait for a link that is never coming because they
+ * already have it.
+ *
+ * The three commercial purposes are not silent either: they answer with
+ * `bot.service.action_requested` through their own path, and 4H's outcome announcer
+ * tells them how it turned out.
+ */
+export function followUpForSettlement(purpose: OrderPurpose): {
+  readonly followUpKey?: TemplateKey;
+} {
+  return purpose === 'NEW_SERVICE' ? { followUpKey: 'bot.service.provisioning' } : {};
 }
 
 /**
@@ -1797,6 +2078,7 @@ export function replyFor(intent: BotIntent, arrival: CustomerArrival): TemplateK
   if (intent === 'START') {
     return arrival === 'FIRST_SEEN' ? 'bot.start.welcome' : 'bot.start.welcome_back';
   }
+  if (intent === 'HELP') return 'bot.help';
   return 'bot.unknown_command';
 }
 
@@ -1823,6 +2105,21 @@ function paymentButtons(orderId: string): readonly CustomerButton[] {
     {
       label: { kind: 'TEMPLATE', key: 'bot.payment.manual_button' },
       data: `${MANUAL_PAY_CALLBACK_PREFIX}${orderId}`,
+    },
+    /*
+     * The way out, beside the two ways in.
+     *
+     * Before 4H a customer who changed their mind had exactly one option — never pay —
+     * and the order sat `AWAITING_PAYMENT` until a sweep expired it, which is the state
+     * `docs/phase4h-audit.md` §3 records as the CANCEL edge having no caller at all.
+     *
+     * It carries the ASK prefix. Tapping it closes nothing: this message stays in the
+     * chat for ever and `ORDER_MACHINE` has no edge out of CANCELLED, so a mis-touch
+     * would take the customer's quoted price with it.
+     */
+    {
+      label: { kind: 'TEMPLATE', key: 'bot.order.cancel_button' },
+      data: `${CANCEL_ORDER_ASK_CALLBACK_PREFIX}${orderId}`,
     },
   ];
 }

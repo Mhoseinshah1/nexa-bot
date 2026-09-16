@@ -2,6 +2,7 @@ import { RECOVERY_MACHINE } from './recovery.js';
 import { ORDER_MACHINE } from './commerce.js';
 import { PAYMENT_MACHINE } from './payment.js';
 import { SERVICE_MACHINE, OPERATION_MACHINE } from './provisioning.js';
+import { CUSTOMER_NOTIFICATION_MACHINE } from './customer-notifications.js';
 
 /**
  * State machines as data.
@@ -155,4 +156,11 @@ export const STATE_MACHINES: readonly StateMachineDefinition<string, string>[] =
   PAYMENT_MACHINE as StateMachineDefinition<string, string>,
   SERVICE_MACHINE as StateMachineDefinition<string, string>,
   OPERATION_MACHINE as StateMachineDefinition<string, string>,
+  /*
+   * Phase 4H's. Registered for the same reason as the four above and one more: every
+   * state here is terminal except the initial one, so a typo that dropped an edge would
+   * leave a state unreachable rather than leave a dead end — which is precisely the
+   * failure the validator looks for and the one a reader would not notice.
+   */
+  CUSTOMER_NOTIFICATION_MACHINE as StateMachineDefinition<string, string>,
 ];

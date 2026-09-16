@@ -25,6 +25,7 @@ import {
   type UnitOfWork,
   type UserId,
 } from '@nexa/contracts';
+import type { CustomerNotifier } from '../../messaging/application/customer-notifier.js';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
 import type { CommercialActionRepository } from '../../commercial/application/ports.js';
@@ -125,6 +126,13 @@ export interface PaymentServiceDeps {
   readonly settings: SettingsResolver;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly audit: AuditWriter;
+  /**
+   * The lane that tells a customer their transfer was not accepted.
+   *
+   * `OQ-4G-01`: 4G made the rejection reachable and nothing told the customer, so they
+   * met it by tapping a dead button. Enqueued inside the rejection's own transaction.
+   */
+  readonly notifier: CustomerNotifier;
   readonly opsLog: OperationalEventRecorder;
   readonly sessions: SessionRepository;
   readonly idempotency: IdempotencyStore;
@@ -181,6 +189,18 @@ export interface ManualRejection {
  * no field here a client could use to say anything about any of them.
  */
 export interface PaymentWithdrawal {
+  readonly idempotencyKey: string;
+  readonly paymentId: string;
+}
+
+/**
+ * A customer saying they have sent the transfer. The same two fields, a different verb.
+ *
+ * Its own type rather than a reuse of `PaymentWithdrawal`, because the two commands
+ * mean opposite things and a shared type is one rename away from a surface calling the
+ * wrong one with a name that still reads correctly.
+ */
+export interface PaymentSentSignal {
   readonly idempotencyKey: string;
   readonly paymentId: string;
 }
@@ -988,6 +1008,24 @@ export class PaymentService {
           tx,
         );
 
+        /*
+         * The customer learns of it. `OQ-4G-01`'s other half.
+         *
+         * Inside this transaction, so a rejection cannot commit without the notification
+         * nor the notification without the rejection. The answer is not checked: a
+         * customer with no durable bot link has nobody to tell, and refusing the whole
+         * rejection because a messaging concern could not be addressed would let the
+         * lane veto an operator's decision about money.
+         */
+        await this.deps.notifier.notify(
+          scope,
+          payment.customerId,
+          'PAYMENT_REJECTED',
+          paymentId,
+          now,
+          tx,
+        );
+
         await rememberOnce(
           this.deps.idempotency,
           scope,
@@ -1164,6 +1202,161 @@ export class PaymentService {
           tx,
         );
         return cancelled;
+      },
+    );
+  }
+
+  /**
+   * A customer saying they have sent the transfer they were given a reference for.
+   *
+   * `docs/phase4h-audit.md` §4 measured the gap this closes: the bot hands out bank
+   * details and a reference and the flow is then silent in both directions, so an
+   * operator learns of a transfer from their bank rather than from the product, and
+   * `bot.payment.received_for_review` — the frozen sentence for exactly this moment —
+   * had no producer at all.
+   *
+   * ## It is a CLAIM, and the design turns on that
+   *
+   * Nothing about the money changes. The payment stays `PENDING`, `PAYMENT_MACHINE`
+   * takes no edge, `PAYMENT_EVIDENCE_KINDS` is untouched and an operator with
+   * `receipts.review` still has to confirm it against their bank. What changes is one
+   * timestamp an operator can SEE, which is the whole of what the customer was unable
+   * to communicate.
+   *
+   * A `SIGNALLED` state was the alternative and is rejected: it would put a customer's
+   * assertion on the same axis as a reviewed confirmation, and the legacy receipt
+   * review is what that looks like — `PRBR-004` records that "receipt" and "payment"
+   * name one record there, so nobody can tell what was claimed from what was checked.
+   *
+   * ## Why it does not check for a block
+   *
+   * `withdrawPending` gives the reason and it applies unchanged: `assertCustomerMayPay`
+   * refuses a BLOCKED customer on the two paths that MOVE money, and this moves none.
+   * A blocked customer who has already sent a transfer is precisely somebody an
+   * operator needs to hear from.
+   *
+   * ## What a second tap does
+   *
+   * Nothing, and it is not an error. `signalSent` requires `customer_signalled_at IS
+   * NULL`, so the FIRST claim is the recorded one — the moment an operator compares
+   * against their bank statement must not move when the customer taps again a day
+   * later. A `false` from the repository is treated exactly as a replay is, which is
+   * what makes the button safe to leave in a chat for ever.
+   */
+  async signalTransferSent(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: UserId,
+    signal: PaymentSentSignal,
+  ): Promise<PaymentRecord> {
+    const paymentId = this.paymentId(signal.paymentId);
+    const denial = { action: 'payment.signal_sent', entityType: 'Payment', entityId: paymentId };
+    await this.authorize(scope, actor, PAYMENT_PLACE_PERMISSION, denial);
+
+    const requestHash = hashRequest({ paymentId, customerId });
+    const replayed = await this.deps.idempotency.find<{ paymentId: string }>(
+      scope,
+      CUSTOMER_NAMESPACE,
+      signal.idempotencyKey,
+      requestHash,
+    );
+    if (replayed !== null) {
+      const existing = await this.deps.repository.findById(scope, paymentId);
+      if (existing !== null) return existing;
+    }
+
+    const now = this.deps.clock.now();
+
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      PAYMENT_PLACE_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+
+        const payment = await this.deps.repository.findById(scope, paymentId, tx);
+        if (payment === null || payment.customerId !== customerId) {
+          /*
+           * The same answer a payment that does not exist gets, for the reason
+           * `orderAwaitingPayment` states: a distinct refusal for "not yours" is an
+           * oracle for anybody willing to guess ids.
+           */
+          throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
+        }
+        if (payment.state !== 'PENDING') {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID,
+            'This payment is no longer pending.',
+          );
+        }
+
+        const stamped = await this.deps.repository.signalSent(scope, paymentId, now, tx);
+        /*
+         * `false` does NOT mean the claim is on record, and this used to assume it did.
+         *
+         * Three things produce it: the row was already signalled, it is not a transfer,
+         * or it moved out of `PENDING` between the read above and this statement. The
+         * first is a second tap and the reply is true; the third is a race with an
+         * expiry, a rejection or a cancellation, and there the claim is NOT recorded,
+         * no operator will ever see it, and the bot said "your transfer is on record"
+         * anyway — with the idempotency store remembering that answer. Found by the
+         * Codex review of PR #30.
+         *
+         * So the row is re-read and the reply follows the evidence: a
+         * `customerSignalledAt` that exists is a claim on record whoever stamped it,
+         * and its absence is reported as the terminal state the payment actually
+         * reached. Throwing rolls back the idempotency row with it, so a retry after
+         * the customer's next tap is answered by the state rather than by this reply.
+         *
+         * The audit row is written only when this call is the one that stamped it, so
+         * the log does not grow a row per tap.
+         */
+        if (!stamped) {
+          const settled = await this.deps.repository.findById(scope, paymentId, tx);
+          if (settled === null) {
+            throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
+          }
+          if (settled.customerSignalledAt === null) {
+            throw errors.conflict(
+              COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID,
+              'This payment is no longer pending.',
+            );
+          }
+        }
+        if (stamped) {
+          await this.deps.audit.record(
+            scope,
+            actor,
+            {
+              action: 'payment.signal_sent',
+              entityType: 'Payment',
+              entityId: paymentId,
+              before: { customerSignalledAt: null },
+              after: { customerSignalledAt: now.toISOString(), state: payment.state },
+              result: 'SUCCESS',
+            },
+            tx,
+          );
+        }
+
+        await rememberOnce(
+          this.deps.idempotency,
+          scope,
+          CUSTOMER_NAMESPACE,
+          signal.idempotencyKey,
+          requestHash,
+          { paymentId },
+          tx,
+        );
+
+        const current = await this.deps.repository.findById(scope, paymentId, tx);
+        /* istanbul ignore next -- read inside the same transaction as the read above. */
+        if (current === null) {
+          throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
+        }
+        return current;
       },
     );
   }

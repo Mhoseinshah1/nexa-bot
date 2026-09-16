@@ -283,7 +283,7 @@ describe('the customer payment flow over Telegram', () => {
   // The wallet settlement
   // -------------------------------------------------------------------------
 
-  it('settles from the wallet, debits exactly the order total, and says only that', async () => {
+  it('settles from the wallet, debits exactly the order total, and then says what follows', async () => {
     const orderId = await awaitingPayment();
     await creditWallet(CUSTOMER_TELEGRAM_ID, 1_000_000n);
     sent = [];
@@ -307,19 +307,30 @@ describe('the customer payment flow over Telegram', () => {
     expect(String(ledger[1]?.['amount'])).toBe('250000');
 
     /*
-     * The message says the payment was confirmed and NOTHING about a service.
+     * TWO messages since 4H, and keeping them apart is the point.
      *
-     * The shipped copy used to say «سرویس شما در حال آماده‌سازی است» — "your service is
-     * being prepared" — and this is the phase that first sends this key. Asserted as a
-     * PROHIBITION as well as an equality, so a future re-word that reintroduces the
-     * claim fails here rather than in production.
+     * The first says the money arrived and NOTHING about a service. The shipped copy
+     * used to say «سرویس شما در حال آماده‌سازی است» — "your service is being prepared" —
+     * when 4C provisioned nothing, and the prohibition below is kept verbatim so a
+     * future re-word that folds the two facts back together fails here rather than in
+     * production. It is still the right prohibition: `bot.order.settled` is also sent
+     * for a RENEW, where nothing is being made.
+     *
+     * The second is `bot.service.provisioning`, and `docs/phase4h-audit.md` §5 is the
+     * gap it closes — a customer who had paid saw the settled message and then nothing
+     * at all until the subscription link arrived, however long that took.
      */
-    const text = String(lastMessage()?.body['text']);
-    expect(text).toBe(CATALOGUE_FA['bot.order.settled']);
+    const texts = messages().map((one) => String(one.body['text']));
+    expect(texts).toEqual([
+      CATALOGUE_FA['bot.order.settled'],
+      CATALOGUE_FA['bot.service.provisioning'],
+    ]);
+    const settled = texts[0] ?? '';
     for (const claim of ['آماده‌سازی', 'سرویس شما', 'در حال ساخت']) {
-      expect(text, `the settled message claims "${claim}" and 4C provisions nothing`).not.toContain(
-        claim,
-      );
+      expect(
+        settled,
+        `the settled message claims "${claim}", which is false for a renewal`,
+      ).not.toContain(claim);
     }
   });
 
@@ -363,9 +374,21 @@ describe('the customer payment flow over Telegram', () => {
       'OrderSettled',
       'WalletEntryRecorded',
     ]);
-    // The customer is answered BOTH times. A replay that stayed silent would leave a
-    // customer who never saw the first reply staring at nothing, for ever.
-    expect(messages()).toHaveLength(2);
+    /*
+     * The customer is answered BOTH times, and since 4H each answer is two messages —
+     * the settlement and what follows it — so four in total.
+     *
+     * A replay that stayed silent would leave a customer who never saw the first reply
+     * staring at nothing, for ever. The pairing is asserted rather than the count
+     * alone, so a follow-up that started arriving without its subject, or a subject
+     * that lost its follow-up on the replay path, fails here.
+     */
+    expect(messages().map((one) => String(one.body['text']))).toEqual([
+      CATALOGUE_FA['bot.order.settled'],
+      CATALOGUE_FA['bot.service.provisioning'],
+      CATALOGUE_FA['bot.order.settled'],
+      CATALOGUE_FA['bot.service.provisioning'],
+    ]);
   });
 
   it('converges two concurrent settlement taps on ONE financial effect', async () => {
@@ -566,10 +589,26 @@ describe('the customer payment flow over Telegram', () => {
     const keyboard = lastMessage()?.body['reply_markup'] as
       { inline_keyboard: { text: string; callback_data: string }[][] } | undefined;
     const buttons = (keyboard?.inline_keyboard ?? []).flat();
-    expect(buttons).toHaveLength(1);
-    // It names the PAYMENT, not the order — the only id that identifies what a
-    // withdrawal would close.
-    expect(buttons[0]?.callback_data).toBe(`x:${String(payment?.['id'])}`);
+    /*
+     * TWO buttons since 4H, and their ORDER is the assertion.
+     *
+     * `docs/phase4h-audit.md` §4: the instructions used to end «سپس رسید را ارسال
+     * نمایید» — send the receipt — and no surface in this product accepts one (owner
+     * revision 17), so a customer who had transferred the money had nothing to do and
+     * `bot.payment.received_for_review` was a frozen sentence with no producer.
+     *
+     * The claim comes FIRST and the withdrawal second. It is what most customers
+     * returning to this message want, and the destructive one should not be the nearest
+     * thumb.
+     */
+    expect(buttons).toHaveLength(2);
+    expect(buttons.map((b) => b.callback_data)).toEqual([
+      `i:${String(payment?.['id'])}`,
+      `x:${String(payment?.['id'])}`,
+    ]);
+    // Both name the PAYMENT, not the order — the only id that identifies what either
+    // one is about, since an order can have had several payments over its life.
+    const cancelButton = buttons[1];
 
     /*
      * The first tap ASKS. It must not close anything: this message stays in the chat
@@ -579,7 +618,7 @@ describe('the customer payment flow over Telegram', () => {
      * reason and this follows it.
      */
     sent = [];
-    await tap(String(buttons[0]?.callback_data));
+    await tap(String(cancelButton?.callback_data));
 
     expect((await payments())[0]?.['state']).toBe('PENDING');
     const question = lastMessage()?.body['reply_markup'] as
@@ -664,9 +703,19 @@ describe('the customer payment flow over Telegram', () => {
   it('never offers a gateway, and refuses one tapped from an older message', async () => {
     const orderId = await awaitingPayment();
 
-    // Not drawn: the choice offers only what this installation can perform.
+    /*
+     * Not drawn: the choice offers only what this installation can perform.
+     *
+     * The third entry is 4H's cancel-order ASK, not a payment rail — asserted here
+     * rather than filtered out, so that a gateway button appearing would not be hidden
+     * by a test that had learnt to expect "some extra buttons".
+     */
     const buttons = buttonsOf(lastMessage());
-    expect(buttons.map((b) => b.callback_data)).toEqual([`w:${orderId}`, `m:${orderId}`]);
+    expect(buttons.map((b) => b.callback_data)).toEqual([
+      `w:${orderId}`,
+      `m:${orderId}`,
+      `d:${orderId}`,
+    ]);
     sent = [];
 
     await tap(`g:${orderId}`);

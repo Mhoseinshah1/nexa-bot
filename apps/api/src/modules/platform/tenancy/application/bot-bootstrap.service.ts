@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
+  BOT_COMMANDS,
   errors,
   NexaError,
   PLATFORM_ERROR_CODES,
@@ -418,6 +419,51 @@ export class BotBootstrapService {
         tx,
       );
     });
+
+    /*
+     * The command menu, registered after the webhook and never allowed to fail the run.
+     *
+     * `docs/phase4h-audit.md` §9: the bot answered four commands, registered none, and
+     * the greeting named only `/catalog` — so `/wallet` and `/services` were reachable
+     * by guessing alone. `BOT_COMMANDS` is the one list; `/help` renders the same one,
+     * so the menu and the help text cannot drift.
+     *
+     * Deliberately weaker than the webhook above. A webhook that did not register means
+     * updates do not arrive and `status` must keep answering `incomplete`; a command
+     * menu that did not register means a customer types a command instead of tapping
+     * it, and `/help` still answers. Failing the install for the second would send an
+     * operator hunting a problem they do not have.
+     *
+     * WHICH commands and WHETHER to register is this layer's decision; rendering their
+     * descriptions is not, and the boundary check enforces the difference — an
+     * application file may not import `@nexa/i18n`. So the gateway renders from the same
+     * `BOT_COMMANDS` this service counts, and the catalogue stays on the infrastructure
+     * side of the line where every other piece of customer-facing text is resolved.
+     */
+    const registeredMenu = await this.deps.telegram.registerCommands({ token });
+    /*
+     * Recorded as an AUDIT row rather than thrown or logged into the void.
+     *
+     * An operator who later wonders why the menu is empty has somewhere to look, and a
+     * row is what this repository uses for "something happened that a person may care
+     * about but nothing is broken". `result` is the honest field: the run continues
+     * either way.
+     */
+    await this.deps.uow.run(scope, async (tx) =>
+      this.deps.audit.record(
+        scope,
+        this.systemActor(),
+        {
+          action: 'bot.commands.register',
+          entityType: 'BotInstance',
+          entityId: ensured.view.id,
+          before: {},
+          after: { commands: BOT_COMMANDS.length },
+          result: registeredMenu ? 'SUCCESS' : 'FAILED',
+        },
+        tx,
+      ),
+    );
 
     return {
       kind: ensured.createdNow ? 'CREATED' : 'RECONCILED',

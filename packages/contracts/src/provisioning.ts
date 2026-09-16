@@ -46,6 +46,27 @@ export const serviceStateSchema = z.enum(SERVICE_STATES);
 
 export const SERVICE_TERMINAL_STATES = ['TERMINATED'] as const;
 
+/**
+ * The states in which provisioning is genuinely still unresolved.
+ *
+ * A WHITELIST, and the distinction it draws is the one a delay notice depends on.
+ * "Your service is taking longer than expected" stops being true when the service
+ * becomes `ACTIVE` — and it is equally untrue once the service is `TERMINATED`,
+ * `EXPIRED` or `SUSPENDED`, none of which is a provisioning that is still running.
+ * `TERMINATE` is legal from `PENDING_PROVISION` and from `UNRECONCILED`, so a queued
+ * delay notice CAN be claimed after the customer has ended the service, and a
+ * "not ACTIVE" predicate would tell them their provisioning was slow for a service
+ * they had already terminated.
+ *
+ * Listed rather than derived as "everything except", so a state added to
+ * `SERVICE_STATES` has to be classified here deliberately instead of silently
+ * joining the set that still gets told provisioning is slow.
+ */
+export const SERVICE_UNRESOLVED_PROVISION_STATES = [
+  'PENDING_PROVISION',
+  'UNRECONCILED',
+] as const satisfies readonly ServiceState[];
+
 export const SERVICE_EVENTS = [
   'PROVISIONED',
   'PROVISION_LOST_TRACK',

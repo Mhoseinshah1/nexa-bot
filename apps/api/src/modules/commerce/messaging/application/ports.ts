@@ -1,10 +1,14 @@
 import type {
   BotInstanceId,
+  CustomerNotificationKind,
+  CustomerNotificationState,
   Money,
   TemplateKey,
   TemplateValues,
   TenantContext,
+  UserId,
 } from '@nexa/contracts';
+import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 
 /**
  * What a button says.
@@ -76,13 +80,38 @@ export interface CustomerMessage {
 /**
  * Whether a customer-facing send landed.
  *
- * Three outcomes, not two, and the third is the point — the same shape `backup.ts` and
- * `payment.ts` already use. `UNKNOWN` means Telegram may have delivered it: a timeout,
- * a 5xx, a 429, or a 2xx whose body would not parse. Nothing here retries
- * automatically, because a retried greeting is noise and a retried "your service is
- * ready" is a customer wondering which one is true.
+ * FOUR outcomes, and the two that are not `DELIVERED`/`REFUSED` are each the point.
+ *
+ * `UNKNOWN` means Telegram MAY have delivered it: a timeout, a 5xx, or a 2xx whose body
+ * would not parse. Nothing retries it automatically, because a retried greeting is noise
+ * and a retried "your service is ready" is a customer wondering which one is true. That
+ * is the same third outcome `backup.ts` and `payment.ts` insist on.
+ *
+ * `RATE_LIMITED` used to be folded into `UNKNOWN` and must not be. A 429 is Telegram
+ * DECLINING the request and telling us when to come back; it is not a send whose fate is
+ * unknown. ADR 0030 §2 carries the argument and `docs/phase4h-audit.md` §6b the
+ * consequence of the old grouping: a single rate limit parked a paid customer's
+ * subscription link in `UNCONFIRMED`, which the delivery sweep never re-claims, until a
+ * person noticed — and a 429 is what Telegram sends precisely when the most customers
+ * are waiting.
  */
-export type CustomerSendOutcome = 'DELIVERED' | 'REFUSED' | 'UNKNOWN';
+export type CustomerSendOutcome = 'DELIVERED' | 'REFUSED' | 'UNKNOWN' | 'RATE_LIMITED';
+
+/**
+ * What a send did, and how long to wait when Telegram said so.
+ *
+ * A result rather than a bare outcome, because `RATE_LIMITED` is the one answer that
+ * carries a number nobody else can supply. `telegram-transport.test.ts` already states
+ * the preference it serves: a back-off we invented would be ruder or slower than the
+ * one the server asked for.
+ *
+ * `retryAfterMs` is present only with `RATE_LIMITED`, and even then only when Telegram
+ * sent `parameters.retry_after` — it may omit it, and a caller must have its own floor.
+ */
+export interface CustomerSendResult {
+  readonly outcome: CustomerSendOutcome;
+  readonly retryAfterMs?: number;
+}
 
 export interface CustomerMessenger {
   /**
@@ -94,7 +123,7 @@ export interface CustomerMessenger {
    * RETURNED and the caller decides, which for the webhook is "record it and answer
    * 200".
    */
-  send(scope: TenantContext, message: CustomerMessage): Promise<CustomerSendOutcome>;
+  send(scope: TenantContext, message: CustomerMessage): Promise<CustomerSendResult>;
 
   /**
    * Stops the spinner on a tapped button. Best effort, and the outcome is not returned.
@@ -130,4 +159,127 @@ export interface CustomerMessenger {
  */
 export interface CustomerSendConditionReader {
   conditionIsOpen(scope: TenantContext, dedupeKey: string): Promise<boolean>;
+}
+
+/**
+ * One queued customer notification, as the lane sees it.
+ *
+ * `ADR 0030` decides the lane and `customer_notifications` holds it. The producer's
+ * half is `CustomerNotificationEnqueue`; everything else here belongs to the dispatcher.
+ */
+export interface CustomerNotificationRecord {
+  readonly id: string;
+  readonly tenantId: string;
+  readonly customerId: UserId;
+  readonly botInstanceId: BotInstanceId;
+  readonly kind: CustomerNotificationKind;
+  readonly subjectId: string;
+  readonly state: CustomerNotificationState;
+  readonly attempts: number;
+  readonly nextAttemptAt: Date | null;
+  readonly sendStartedAt: Date | null;
+  readonly resolvedAt: Date | null;
+  readonly createdAt: Date;
+}
+
+/** What a producer supplies. The id is the caller's, so it exists before the insert. */
+export interface CustomerNotificationEnqueue {
+  readonly id: string;
+  readonly customerId: UserId;
+  readonly botInstanceId: BotInstanceId;
+  readonly kind: CustomerNotificationKind;
+  readonly subjectId: string;
+}
+
+export interface CustomerNotificationRepository {
+  /**
+   * Queues one notification, inside the caller's transaction, and says whether it is new.
+   *
+   * `false` means `customer_notifications_subject_key` already holds one for this
+   * (tenant, kind, subject) — a replay, a second worker replica, or a redelivered
+   * outbox message. The caller does NOT treat that as an error: told-once is the
+   * lane's contract and the constraint is what enforces it.
+   *
+   * `tx` is REQUIRED, not optional. A notification enqueued outside the transaction
+   * that produced the fact is a notification that can exist without the fact, or the
+   * fact without it, and both are the failure this lane was built to end.
+   */
+  enqueue(
+    scope: TenantContext,
+    input: CustomerNotificationEnqueue,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean>;
+
+  /**
+   * Takes the notifications due now and leases them to this pass.
+   *
+   * `ServiceRepository.claimDeliveryDue` is the shape, including the part that is easy
+   * to get wrong: a BLOCKED customer is excluded AT THE QUERY rather than skipped
+   * afterwards, so a block pauses the lane and an unblock resumes it with no attempt
+   * spent and nothing to remember.
+   */
+  claimDue(
+    scope: TenantContext,
+    now: Date,
+    leaseUntil: Date,
+    limit: number,
+    tx?: unknown,
+  ): Promise<readonly CustomerNotificationRecord[]>;
+
+  /** Stamps a send as in flight, in its own transaction, before it leaves. */
+  markSendStarted(
+    scope: TenantContext,
+    id: string,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean>;
+
+  /**
+   * Records a resolved outcome. Spends one attempt.
+   *
+   * For a DEFINITE refusal that has not reached the ceiling the state stays `PENDING`
+   * and `nextAttemptAt` carries the backoff; every other call names a terminal state.
+   */
+  record(
+    scope: TenantContext,
+    id: string,
+    to: CustomerNotificationState,
+    stamps: { readonly resolvedAt: Date | null; readonly nextAttemptAt: Date | null },
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean>;
+
+  /**
+   * Puts a claimed row back on the queue at `retryAt`: no attempt spent.
+   *
+   * Its own method rather than a flag on `record`, because the difference is exactly
+   * the one ADR 0030 §2 exists to make and a boolean parameter is how it would be lost.
+   * A 429 is Telegram declining to LOOK at the message, not an outcome about it, so the
+   * attempt counter — which bounds refusals OF THIS MESSAGE — must not move.
+   *
+   * Two callers, and the second is why the name is about the effect rather than the
+   * cause: a customer blocked between the claim and the contact lookup has an outcome
+   * nobody observed either, and `claimDue` already declines to claim such a row at all.
+   */
+  deferUntil(
+    scope: TenantContext,
+    id: string,
+    retryAt: Date,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean>;
+
+  /**
+   * Resolves sends handed to Telegram by a process that then died, to `UNCONFIRMED`.
+   *
+   * `ServiceRepository.reapStrandedSends` for this lane. No attempt is spent either
+   * way: an attempt means an outcome somebody observed, and nobody observed this one.
+   */
+  reapStranded(
+    scope: TenantContext,
+    now: Date,
+    limit: number,
+    tx: TransactionScope,
+  ): Promise<number>;
 }

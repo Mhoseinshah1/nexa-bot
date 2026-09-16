@@ -106,7 +106,25 @@ export interface ServiceSecretSource {
 }
 
 export interface ServiceCursor {
-  readonly createdAt: Date;
+  /**
+   * The stored `created_at`, as PostgreSQL's OWN text, NEVER as a `Date`.
+   *
+   * This was a `Date` until 4H exposed the list over HTTP, and it was the defect
+   * `CustomerCursor` and `PanelCursor` already carry the measurement for:
+   * `timestamptz` keeps microseconds, a JavaScript `Date` keeps milliseconds, and the
+   * driver TRUNCATES rather than rounds. A cursor built from a `Date` is therefore
+   * strictly BELOW the row it was built from whenever that row's microseconds are
+   * non-zero, so the tuple comparison lets that row back in — one duplicate at every
+   * page boundary, and at `limit=1` a traversal that never ends because each page
+   * hands back the same cursor.
+   *
+   * It was latent rather than harmless: nothing paged services from outside this
+   * process, so the only caller was a test that read one page. `services.created_at` is
+   * written from a millisecond `Clock.now()` today, so the rows with microseconds are
+   * the ones a restore, an import or an ops script created — exactly the set nobody
+   * would think to test.
+   */
+  readonly createdAt: string;
   readonly id: string;
 }
 
@@ -233,6 +251,27 @@ export interface ServiceRepository {
     scope: TenantContext,
     id: string,
     from: ServiceDeliveryState,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean>;
+
+  /**
+   * Records that Telegram rate-limited the announcement: still due, no attempt spent.
+   *
+   * Its own method rather than a flag on `recordDelivery`, because that one ALWAYS
+   * advances `delivery_attempts` and here it must not. ADR 0030 §2 carries the
+   * argument: the ceiling bounds definite refusals OF THIS MESSAGE, and a 429 is
+   * Telegram declining to look at it, not an outcome about it.
+   *
+   * `delivery_send_started_at` is cleared, because a 429 means the request was DECLINED
+   * rather than lost — so the row is safely claimable again at `retryAt` instead of
+   * waiting for `reapStrandedSends` to call it unknown.
+   */
+  recordRateLimited(
+    scope: TenantContext,
+    id: string,
+    from: ServiceDeliveryState,
+    retryAt: Date,
     now: Date,
     tx: TransactionScope,
   ): Promise<boolean>;
@@ -546,7 +585,33 @@ export interface OperationRepository {
     tx?: unknown,
   ): Promise<OperationRecord | null>;
 
+  /**
+   * A service's operations, OLDEST first, bounded.
+   *
+   * The order is part of the contract because a caller counts with it:
+   * `ProvisionerService` reads the first 50 to count provisioning cycles against a
+   * ceiling, and a limit applied to the other end of the same list would count a
+   * different set. Anything that wants the RECENT history wants
+   * `listRecentForService`.
+   */
   listForService(
+    scope: TenantContext,
+    serviceId: string,
+    limit: number,
+    tx?: unknown,
+  ): Promise<readonly OperationRecord[]>;
+
+  /**
+   * A service's operations, NEWEST first, bounded.
+   *
+   * Its own method rather than a flag on `listForService`, because the two answer
+   * different questions and one of them bounds a decision. The operator's history is
+   * the newest N attempts — "why has this customer not had their service" is answered
+   * by the last failure, never by the first fifty — and the Codex review of PR #30
+   * found the admin endpoint serving the OLDEST fifty behind a docblock promising the
+   * newest, which is precisely the case where the history is long enough to matter.
+   */
+  listRecentForService(
     scope: TenantContext,
     serviceId: string,
     limit: number,

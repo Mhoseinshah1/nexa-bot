@@ -245,7 +245,7 @@ export class DeliveryService {
       );
     }
 
-    const outcome = await this.deps.messenger.send(scope, {
+    const result = await this.deps.messenger.send(scope, {
       chatId,
       botInstanceId,
       templateKey: 'bot.service.subscription',
@@ -253,6 +253,33 @@ export class DeliveryService {
     });
 
     const now = this.deps.clock.now();
+
+    /*
+     * A RATE LIMIT goes back on the queue, and NO attempt is spent.
+     *
+     * The defect this closes is measured in `docs/phase4h-audit.md` §6b. A 429 used to
+     * arrive here as `UNKNOWN`, `deliveryStateAfter` turned that into `UNCONFIRMED`, and
+     * `claimDeliveryDue` never re-claims `UNCONFIRMED` — so ONE rate limit withheld a
+     * paid customer's subscription link until an operator noticed. Telegram sends a 429
+     * exactly when the most customers are waiting for exactly this message.
+     *
+     * The attempt counter must not move either. It bounds DEFINITE refusals of this
+     * message, and three bursts would otherwise fail a link Telegram never rejected on
+     * its merits. `recordRateLimited` is a separate repository method precisely so that
+     * no boolean can blur the two.
+     *
+     * Telegram's own `retry_after` is preferred over any number we would invent, with
+     * `DELIVERY_BACKOFF_MS` as the floor for the case where it sends none.
+     */
+    if (result.outcome === 'RATE_LIMITED') {
+      const retryAt = new Date(now.getTime() + (result.retryAfterMs ?? DELIVERY_BACKOFF_MS));
+      const held = await this.deps.uow.run(scope, async (tx) =>
+        this.deps.services.recordRateLimited(scope, service.id, from, retryAt, now, tx),
+      );
+      return { state: from, recorded: held };
+    }
+
+    const outcome = result.outcome;
     const attemptsAfter = service.deliveryAttempts + 1;
     const to = deliveryStateAfter(from, outcome, attemptsAfter);
 

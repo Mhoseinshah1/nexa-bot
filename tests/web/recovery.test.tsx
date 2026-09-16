@@ -179,11 +179,11 @@ describe('the recovery page', () => {
     // that is still planned.
     stubApi([]);
     for (const path of [
-      '/services',
-      // `/payments` left this list in 4C, the way `/products` and `/orders` left it in
-      // 4B: the surface is real. Removed from the LIST rather than from the rule —
-      // `planned-and-absent.test.tsx` pins exactly which keys `PLANNED_SURFACES` still
-      // holds, so this cannot silently stop checking a surface that is still planned.
+      // `/payments` left this list in 4C and `/services` left it in 4H, the way
+      // `/products` and `/orders` left it in 4B: the surface is real. Removed from the
+      // LIST rather than from the rule — `planned-and-absent.test.tsx` pins exactly
+      // which keys `PLANNED_SURFACES` still holds, so this cannot silently stop
+      // checking a surface that is still planned.
       '/discounts',
       '/resellers',
       '/reports',

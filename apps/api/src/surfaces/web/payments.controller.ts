@@ -167,6 +167,8 @@ function toSummary(record: PaymentRecord): PaymentSummaryResponse {
     confirmedByAdminId: record.confirmedByAdminId,
     resolvedAt: record.resolvedAt === null ? null : record.resolvedAt.toISOString(),
     resolvedByAdminId: record.resolvedByAdminId,
+    customerSignalledAt:
+      record.customerSignalledAt === null ? null : record.customerSignalledAt.toISOString(),
     expiresAt: record.expiresAt === null ? null : record.expiresAt.toISOString(),
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),

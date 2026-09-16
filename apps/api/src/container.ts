@@ -135,10 +135,20 @@ import { DrizzleServiceRepository } from './modules/commerce/provisioning/infras
 import { serviceSecrets } from './infrastructure/crypto/service-secrets.js';
 import { DrizzleOperationRepository } from './modules/commerce/provisioning/infrastructure/drizzle-operation.repository.js';
 import { ProvisioningService } from './modules/commerce/provisioning/application/provisioning.service.js';
+import { ServiceAdminService } from './modules/commerce/provisioning/application/service-admin.service.js';
 import { decideOperability } from './modules/commerce/provisioning/application/panel-operability.js';
 import { ProvisionerService } from './modules/commerce/provisioning/application/provisioner.service.js';
 import { ProvisionerLoop } from './modules/commerce/provisioning/application/provisioner-loop.js';
 import { DeliveryService } from './modules/commerce/provisioning/application/delivery.service.js';
+import { CustomerNotificationService } from './modules/commerce/messaging/application/customer-notification.service.js';
+import {
+  CustomerNotificationLoop,
+  CUSTOMER_NOTIFICATION_INTERVAL_MS,
+} from './modules/commerce/messaging/application/customer-notification-loop.js';
+import { DrizzleCustomerNotificationRepository } from './modules/commerce/messaging/infrastructure/drizzle-customer-notification.repository.js';
+import { CustomerNotifier } from './modules/commerce/messaging/application/customer-notifier.js';
+import { OperationOutcomeAnnouncer } from './modules/commerce/messaging/application/operation-outcome-announcer.js';
+import { DrizzleNotificationSubjectReader } from './modules/commerce/messaging/infrastructure/drizzle-notification-subject.reader.js';
 import { BotRuntime } from './surfaces/telegram/bot-runtime.js';
 import { I18nTemplateCatalogue } from './modules/control/templates/infrastructure/i18n-template-catalogue.js';
 import { TemplateManagementService } from './modules/control/templates/application/template-management.service.js';
@@ -223,6 +233,16 @@ export interface Container {
    * wedged panel must not delay work that needs no panel.
    */
   readonly paymentExpiryLoop: PaymentExpiryLoop;
+  /**
+   * The customer notification lane's timer.
+   *
+   * In EVERY role's container and started only by `main.worker.ts`, for the reason the
+   * comment above `paymentExpiryLoop` gives: a member that exists in one role's
+   * container and not another's is a member whose absence is discovered at runtime.
+   */
+  readonly customerNotificationLoop: CustomerNotificationLoop;
+  /** The lane's repository, shared so producers enqueue through the same object. */
+  readonly customerNotifications: DrizzleCustomerNotificationRepository;
   readonly audit: AuditWriter;
   readonly opsLog: OperationalEventRecorder;
   /**
@@ -290,6 +310,14 @@ export interface Container {
   readonly panelMonitor: PanelMonitorService;
   /** Plans the service a settled order is owed. Held by payments, exposed for surfaces. */
   readonly provisioning: ProvisioningService;
+  /**
+   * Services as an OPERATOR reads them. Read-only, `services.view`.
+   *
+   * Separate from `provisioning` rather than a method on it, because that one plans
+   * work: a read path that held it would be one call away from planning a provider
+   * operation from a GET.
+   */
+  readonly serviceAdmin: ServiceAdminService;
   /** The lane that creates services on panels. Driven by the `provisioner` role. */
   readonly provisioner: ProvisionerService;
   /**
@@ -795,9 +823,36 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * that can drift. It takes the outbox because `OrderConfirmed` is a declared event
    * with a declared aggregate, which is exactly what products did not have.
    */
+  /*
+   * ONE payment repository for the order service, the payment service and the expiry lane.
+   *
+   * It used to be constructed inline at the payment service. Two instances would work
+   * and would be two places for a later change to reach one of, which is how the probe
+   * core came to have a copy — and this one is the object holding the conditional
+   * UPDATEs that make the whole module's concurrency claims true.
+   *
+   * Constructed HERE, above the order service, because 4H gives a customer's own order
+   * cancellation a narrow lane into it: a cancelled order must not leave a live
+   * transfer instruction behind.
+   */
+  const paymentRepository = new DrizzlePaymentRepository(database.db);
+
   const orderRepository = new DrizzleOrderRepository(database.db);
   const orderService = new OrderService({
     repository: orderRepository,
+    /*
+     * The NARROW payment lane, not the repository.
+     *
+     * Two methods, both scoped to one order. Handing the order service the payment
+     * repository would also hand it `confirm`, and an order command able to mark money
+     * as received is exactly the boundary `OrderPaymentLane` exists to draw.
+     */
+    payments: {
+      claimedPendingFor: (scope, orderId, tx) =>
+        paymentRepository.hasClaimedPendingForOrder(scope, orderId, tx),
+      withdrawPendingFor: (scope, orderId, now, tx) =>
+        paymentRepository.cancelPendingForOrder(scope, orderId, now, tx),
+    },
     products: productRepository,
     customers: customerRepository,
     settings: settingsResolver,
@@ -931,18 +986,37 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
   });
 
-  /*
-   * ONE payment repository for the service and for the expiry lane.
+  /**
+   * The one way any producer queues a customer notification.
    *
-   * It used to be constructed inline here. Two instances would work and would be two
-   * places for a later change to reach one of, which is how the probe core came to have
-   * a copy — and this one is the object holding the conditional UPDATEs that make the
-   * whole module's concurrency claims true.
+   * Built here rather than per-producer so that the three parts that are easy to get
+   * wrong — the id existing before the insert, the bot being the customer's OWN, and
+   * the write landing inside the caller's transaction — have one implementation.
+   *
+   * The repository is constructed here too and shared with the dispatcher below, so a
+   * producer and the lane that drains it cannot disagree about the table.
    */
-  const paymentRepository = new DrizzlePaymentRepository(database.db);
+  const customerNotificationRepository = new DrizzleCustomerNotificationRepository(database.db);
+  const customerNotifier = new CustomerNotifier({
+    notifications: customerNotificationRepository,
+    bots: {
+      /*
+       * The bot the customer FIRST wrote to, which is the only durable link this
+       * release records. `OQ-PROV-02` carries the column that would let a purchase name
+       * the bot it came through; until then this is the honest answer rather than an
+       * invented one, and it is the same value `DeliveryService` uses.
+       */
+      botFor: async (scope, customerId, tx) => {
+        const found = await customerRepository.findById(scope, customerId, tx);
+        return found?.firstBotInstanceId ?? null;
+      },
+    },
+    ids,
+  });
 
   const paymentService = new PaymentService({
     repository: paymentRepository,
+    notifier: customerNotifier,
     orders: orderRepository,
     provisioning: provisioningService,
     /*
@@ -982,6 +1056,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const paymentExpiryLoop = new PaymentExpiryLoop(
     new PaymentExpiryService({
       payments: paymentRepository,
+      notifier: customerNotifier,
       orders: orderRepository,
       uow,
       audit,
@@ -1265,6 +1340,53 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * through, and inventing an answer is worse than using the only recorded one. Carried
    * as `OQ-PROV-02` in `docs/open-questions.md` with the column that would close it.
    */
+  /**
+   * The customer notification lane: repository, dispatcher and timer.
+   *
+   * Built after `customerMessenger` because it shares it — one messenger for every
+   * customer-facing send in the process, so the bot-token resolution, the template
+   * rendering and the 429 classification cannot diverge between the reply path and the
+   * background one.
+   */
+  const customerNotificationLoop = new CustomerNotificationLoop(
+    new CustomerNotificationService({
+      notifications: customerNotificationRepository,
+      contacts: {
+        contactFor: async (scope, customerId, tx) => {
+          const customer = await customerRepository.findById(scope, customerId, tx);
+          if (customer === null) return { kind: 'NONE' };
+          /*
+           * The status of the row just read, not the one the claim matched.
+           *
+           * `claimDue` joins `customers` and requires `ACTIVE`, which settles the
+           * ordinary case and cannot settle the race: an operator blocking a customer
+           * between that claim and this read left a leased row whose customer is now
+           * blocked. Checked here because here is the last read before the send.
+           */
+          if (customer.status !== 'ACTIVE') return { kind: 'BLOCKED' };
+          return { kind: 'CONTACT', contact: { chatId: customer.telegramUserId } };
+        },
+      },
+      subjects: new DrizzleNotificationSubjectReader(database.db),
+      messenger: customerMessenger,
+      uow,
+      clock,
+      // The same tenant kill switch every other path reads. A stopped tenant is a
+      // healthy pass that did nothing, never a throw — see `deliverDue`.
+      scopeIsActive: (scope) => uow.run(scope, async (tx) => tenants.scopeIsActive(scope, tx)),
+      logger,
+    }),
+    {
+      scope: () =>
+        installationTenantId === null
+          ? null
+          : { tenantId: installationTenantId, botInstanceId: null },
+      intervalMs: CUSTOMER_NOTIFICATION_INTERVAL_MS,
+      now: () => clock.now().getTime(),
+      logger,
+    },
+  );
+
   const deliveryService = new DeliveryService({
     services: serviceRepository,
     contacts: {
@@ -1344,7 +1466,36 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     leaseMs: OPERATION_LEASE_SECONDS_MIN * 1000,
   });
 
-  const provisionerLoop = new ProvisionerLoop(provisioner, deliveryService, {
+  /**
+   * How a customer learns that the thing they asked for happened.
+   *
+   * Reads the operation's type and the service's customer with two narrow queries, so
+   * the loop never holds a repository that could mutate either.
+   */
+  const outcomeAnnouncer = new OperationOutcomeAnnouncer({
+    reader: {
+      subjectFor: async (scope, operationId, tx) => {
+        const operation = await operationRepository.findById(scope, operationId, tx);
+        if (operation === null) return null;
+        // The operation's OWN service, not one the caller supplied: an announcement
+        // keyed to a service the operation does not belong to is the mismatch this
+        // signature removes rather than documents.
+        const service = await serviceRepository.findById(scope, operation.serviceId, tx);
+        if (service === null) return null;
+        return {
+          type: operation.type,
+          state: operation.state,
+          serviceId: operation.serviceId,
+          customerId: service.customerId,
+        };
+      },
+    },
+    notifier: customerNotifier,
+    uow,
+    clock,
+  });
+
+  const provisionerLoop = new ProvisionerLoop(provisioner, deliveryService, outcomeAnnouncer, {
     /*
      * The installation's own tenant.
      *
@@ -1772,6 +1923,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     backupRunSweeper,
     recoveryRequestSweeper,
     paymentExpiryLoop,
+    customerNotificationLoop,
+    customerNotifications: customerNotificationRepository,
     audit,
     opsLog,
     opsLogWriter,
@@ -1807,6 +1960,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     wallet: walletService,
     payments: paymentService,
     provisioning: provisioningService,
+    serviceAdmin: new ServiceAdminService({
+      services: serviceRepository,
+      operations: operationRepository,
+      guard,
+    }),
     provisioner,
     provisionerLoop,
     delivery: deliveryService,
@@ -1903,6 +2061,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       await backupRunSweeper.stop();
       await recoveryRequestSweeper.stop();
       await paymentExpiryLoop.stop();
+      await customerNotificationLoop.stop();
       await redis.close();
       await database.close();
     },

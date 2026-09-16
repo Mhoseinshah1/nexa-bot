@@ -414,16 +414,12 @@ export const WEB_FA = {
   'web.planned_status_body':
     'هیچ دکمه‌ای در این صفحه وجود ندارد، چون هیچ کاری از سرور برنمی‌آید. دکمهٔ غیرفعال هم نگذاشته‌ایم: دکمهٔ غیرفعال یعنی «هست ولی دسترسی ندارید»، و این درست نیست.',
 
-  'web.planned_services_summary': 'سرویس‌های تحویل‌شده و مدیریت آنها.',
   'web.planned_discounts_summary': 'کدهای تخفیف و کمپین‌های فروش.',
   'web.planned_resellers_summary': 'نمایندگان فروش و سقف اختیارات آنها.',
   'web.planned_reports_summary': 'گزارش‌های فروش، مشتری و مالی.',
   'web.planned_bots_summary': 'ربات‌های تلگرام و پیکربندی آنها.',
 
   'web.planned_missing_wallet': 'دفتر کیف پول (ledger) هنوز مصرف‌کننده‌ای روی HTTP ندارد.',
-  'web.planned_missing_service': 'موجودیت سرویس تحویل‌شده وجود ندارد.',
-  'web.planned_missing_provisioning':
-    'هیچ عملیات تحویلی روی پنل پیاده نشده است؛ تنها قابلیت ارائه‌دهندگان در این نسخه بررسی سلامت است.',
   'web.planned_missing_order': 'موجودیت سفارش وجود ندارد.',
   'web.planned_missing_catalog': 'کاتالوگ محصول و دسته‌بندی وجود ندارد.',
   'web.planned_missing_pricing': 'قواعد قیمت‌گذاری فقط به صورت قرارداد تعریف شده و اجرا نمی‌شود.',
@@ -445,12 +441,6 @@ export const WEB_FA = {
   'web.planned_missing_bot_runtime':
     'اجرای ربات تلگرام بخشی از فاز بعدی است و در این نسخه ساخته نمی‌شود.',
 
-  'web.planned_services_no_protocol':
-    'پروتکل (VLESS/VMess/…) در رابط عادی سرویس‌ها نمایش داده نمی‌شود؛ انتزاع سرویس، لینک اشتراک است.',
-  'web.planned_services_ordering':
-    'ترتیب پیش‌فرض از سمت سرور است: created_at نزولی و سپس id نزولی. مرتب‌سازی یک صفحهٔ واکشی‌شده در مرورگر مجاز نیست.',
-  'web.planned_services_plan_filter':
-    'فیلتر لوکیشن وجود نخواهد داشت؛ به جای آن فیلتر چندانتخابی «پلن» با پشتیبانی از صفحه‌بندی سمت سرور.',
   'web.planned_reports_no_logs':
     'صفحهٔ لاگ عمومی در پنل وب ساخته نمی‌شود؛ جریان عملیاتی انسانی به گروه گزارش تلگرام می‌رود.',
   'web.planned_bots_add_flow':
@@ -823,6 +813,19 @@ export const WEB_FA = {
   'web.payment_confirmed_at': 'زمان تأیید',
   'web.payment_created_at': 'زمان ثبت',
   'web.payment_expires_at': 'اعتبار تا',
+  /*
+   * The customer's CLAIM, and the copy never lets it read as evidence.
+   *
+   * `paymentSummarySchema` puts it on the summary precisely so a pending list is
+   * triageable — `docs/phase4h-audit.md` §4 measured that an operator learns of a
+   * transfer from their bank rather than from the product. It is not a state: a
+   * signalled payment is still PENDING and still needs a human, which is the
+   * distinction the legacy receipt review does not have (`PRBR-004`).
+   */
+  'web.payment_customer_signalled': 'مشتری گفته پرداخت کرده',
+  'web.payment_customer_signalled_none': 'مشتری چیزی نگفته است.',
+  'web.payment_customer_signalled_hint':
+    'این فقط گفتهٔ مشتری است، نه رسید و نه تأیید. پرداخت همچنان در انتظار بررسی شماست.',
   'web.payments_filter_customer_hint': 'شناسهٔ مشتری را کامل وارد کنید.',
   'web.payments_filter_order_hint': 'شناسهٔ سفارش را کامل وارد کنید.',
   'web.payments_filter_reference_hint': 'کد پیگیری دقیقاً همان چیزی است که مشتری می‌خواند.',
@@ -1037,6 +1040,162 @@ export const WEB_FA = {
     'سفارش عادی «در انتظار پرداخت» جزو «نیازمند توجه» شمرده نمی‌شود؛ این برچسب فقط برای مواردی است که واقعاً دخالت اپراتور لازم است.',
   'web.orders_rule_shared_projection':
     'صفحهٔ سفارش و صفحهٔ پرداخت از یک پروجکشن مشترک استفاده می‌کنند تا هرگز دو وضعیت متناقض نشان ندهند.',
+
+  // --- Services (Phase 4H) -------------------------------------------------
+  /*
+   * A service is what the customer BOUGHT, and this page never hands over what
+   * they bought with.
+   *
+   * There is no subscription link here, no subscription ref and no provider client
+   * id — those are bearer capabilities, and `serviceSummarySchema` leaves all three
+   * out of the response rather than leaving them out of the markup. So there is no
+   * key for any of them either: a string like «لینک اشتراک: ********» would be a
+   * label waiting for somebody to fill it in.
+   *
+   * `web.service_subscription_withheld` says that out loud, because an operator who
+   * cannot find the link needs to know it is withheld rather than missing.
+   */
+  'web.services_title': 'سرویس‌ها',
+  'web.services_intro': 'سرویس‌هایی که ساخته شده‌اند، و آنهایی که هنوز نشده‌اند.',
+  'web.services_empty': 'هنوز سرویسی ساخته نشده است.',
+  'web.services_empty_hint':
+    'سرویس با تسویهٔ یک سفارش ساخته می‌شود؛ تا آن لحظه چیزی برای دیدن نیست.',
+  'web.service_detail': 'جزئیات سرویس',
+
+  'web.service_state': 'وضعیت',
+  'web.service_state_pending_provision': 'در انتظار ساخت',
+  'web.service_state_active': 'فعال',
+  'web.service_state_suspended': 'موقتاً قطع',
+  'web.service_state_expired': 'منقضی',
+  'web.service_state_terminated': 'پایان‌یافته',
+  'web.service_state_unreconciled': 'نامشخص روی پنل',
+
+  /*
+   * Delivery is a SECOND axis, and the labels never borrow the lifecycle's words.
+   *
+   * 4D's `recordDelivery` exists so that a failed Telegram send cannot move a service
+   * out of `ACTIVE`; if this column said «ناموفق» in the same vocabulary the state
+   * column uses, an operator would read a bounced message as a failed service — and
+   * the obvious remedy for that is to build it again, on somebody's panel, a second
+   * time.
+   */
+  'web.service_delivery': 'تحویل به مشتری',
+  'web.service_delivery_pending': 'هنوز اعلام نشده',
+  'web.service_delivery_delivered': 'به مشتری رسید',
+  'web.service_delivery_unconfirmed': 'نامشخص',
+  'web.service_delivery_failed': 'رد شد',
+
+  'web.service_customer': 'مشتری',
+  'web.service_panel': 'پنل',
+  'web.service_product': 'محصول',
+  'web.service_order': 'سفارش',
+  'web.service_username': 'نام کاربری روی پنل',
+  'web.service_username_hint': 'همان چیزی است که در پنل جست‌وجو می‌کنید. این یک اعتبارنامه نیست.',
+  'web.service_provider_user_id': 'شناسهٔ کاربر در پنل',
+  'web.service_subscription': 'لینک اشتراک',
+  'web.service_subscription_present': 'ساخته شده',
+  'web.service_subscription_absent': 'هنوز ساخته نشده',
+  'web.service_subscription_withheld':
+    'لینک اشتراک در این صفحه نشان داده نمی‌شود و از سرور هم برنمی‌گردد: هرکس آن را داشته باشد می‌تواند از سرویس استفاده کند. مشتری آن را در ربات دریافت می‌کند.',
+
+  'web.service_expires_at': 'انقضا',
+  'web.service_traffic_limit': 'سقف حجم',
+  'web.service_traffic_used': 'حجم مصرف‌شده',
+  'web.service_usage_synced_at': 'آخرین خواندن مصرف از پنل',
+  'web.service_usage_never': 'هرگز از پنل خوانده نشده است.',
+  'web.service_provisioned_at': 'زمان ساخت روی پنل',
+  'web.service_delivered_at': 'زمان اعلام به مشتری',
+  'web.service_terminated_at': 'زمان پایان',
+  'web.service_created_at': 'زمان ثبت',
+  'web.service_updated_at': 'آخرین تغییر',
+  'web.service_delivery_attempts': 'تعداد تلاش برای اعلام',
+  'web.service_delivery_next_attempt': 'تلاش بعدی',
+
+  'web.services_filter_all': 'همه',
+  'web.services_filter_customer_hint': 'شناسهٔ مشتری را کامل وارد کنید.',
+  'web.services_filter_panel_hint': 'شناسهٔ پنل را کامل وارد کنید.',
+  'web.services_filter_invalid_id': 'شناسه معتبر نیست.',
+  'web.services_search_apply': 'جست‌وجو',
+
+  /*
+   * Three banners, each naming what an operator should DO.
+   *
+   * `UNRECONCILED` is an absence of knowledge, exactly as `UNKNOWN` is on a payment,
+   * and the copy refuses to suggest building the service again — that is the
+   * duplicate the state exists to prevent.
+   */
+  'web.service_unreconciled_banner':
+    'معلوم نیست روی پنل کاربری برای این سرویس ساخته شده است یا نه. تا وقتی تطبیق انجام نشده، ساختن دوبارهٔ آن یعنی احتمال یک کاربر تکراری روی پنل.',
+  'web.service_delivery_unconfirmed_banner':
+    'نتیجهٔ اعلام به مشتری نامشخص است؛ ممکن است پیام را گرفته باشد. دوباره فرستادن خودکار انجام نمی‌شود، چون دو پیام «سرویس شما آماده است» یعنی مشتری نمی‌داند کدام درست است.',
+  'web.service_delivery_failed_banner':
+    'اعلام به مشتری قطعاً رد شده است. تلاش دوباره آن را درست نمی‌کند: یا مشتری ربات را بلاک کرده، یا توکن ربات کار نمی‌کند.',
+
+  // --- Service operations --------------------------------------------------
+  /*
+   * The other half of "why has this customer not had their service".
+   *
+   * `failureMessage` is the ADAPTER's own text and IS shown: it is what tells a
+   * panel refusing a duplicate apart from a panel that was unreachable, and an
+   * operator can act on the difference.
+   */
+  'web.service_operations_title': 'کارهای انجام‌شده روی این سرویس',
+  'web.service_operations_hint':
+    'تازه‌ترین در بالا. این فهرست صفحه‌بندی نمی‌شود؛ سرویسی که ده‌ها عملیات داشته باشد، خودش همان مسئله است.',
+  'web.service_operations_empty': 'هیچ عملیاتی روی این سرویس ثبت نشده است.',
+  'web.operation_type': 'نوع',
+  'web.operation_state': 'نتیجه',
+  'web.operation_attempts': 'تلاش‌ها',
+  'web.operation_failure': 'پیام پنل',
+  'web.operation_scheduled_at': 'زمان‌بندی',
+  'web.operation_completed_at': 'پایان',
+  'web.operation_created_at': 'ثبت',
+
+  'web.operation_type_provision': 'ساخت',
+  'web.operation_type_renew': 'تمدید',
+  'web.operation_type_add_traffic': 'افزودن حجم',
+  'web.operation_type_add_time': 'افزودن زمان',
+  'web.operation_type_suspend': 'قطع موقت',
+  'web.operation_type_resume': 'وصل دوباره',
+  'web.operation_type_terminate': 'حذف',
+  'web.operation_type_sync_usage': 'خواندن مصرف',
+  'web.operation_type_rotate_subscription': 'تعویض لینک اشتراک',
+  'web.operation_type_reconcile': 'تطبیق با پنل',
+
+  'web.operation_state_planned': 'ثبت‌شده',
+  'web.operation_state_in_flight': 'در حال انجام',
+  'web.operation_state_succeeded': 'موفق',
+  'web.operation_state_failed': 'ناموفق',
+  'web.operation_state_unknown': 'نامشخص',
+  'web.operation_state_abandoned': 'رهاشده',
+
+  // --- Services: what this page deliberately does not do --------------------
+  /*
+   * Owner revisions 12, 13 and 14, moved here from the placeholder this route
+   * replaced.
+   *
+   * Revision 13 is not only a record: `drizzle-service.repository.ts` pages
+   * `(created_at, id)` DESCENDING because of it, against the ascending convention
+   * every other list here follows, and `services-http.test.ts` asserts the rows.
+   * The other two are still absences, and an absence with nowhere to live is an
+   * absence that comes back.
+   */
+  'web.services_rules_title': 'قاعده‌های این صفحه',
+  'web.services_rule_no_protocol':
+    'پروتکل (VLESS/VMess/…) در رابط عادی سرویس‌ها نمایش داده نمی‌شود؛ انتزاع سرویس، لینک اشتراک است.',
+  'web.services_rule_ordering':
+    'ترتیب از سمت سرور است: created_at نزولی و سپس id نزولی. مرتب‌سازی یک صفحهٔ واکشی‌شده در مرورگر مجاز نیست.',
+  'web.services_rule_plan_filter':
+    'فیلتر لوکیشن وجود نخواهد داشت؛ به جای آن فیلتر چندانتخابی «پلن» با پشتیبانی از صفحه‌بندی سمت سرور.',
+  /*
+   * Said in the product's own words, not left for an operator to infer from a
+   * missing button. `services.terminate` and `services.transfer` are declared
+   * permissions with no endpoint: terminating needs the operator half of a flow
+   * this phase did not build, and a transfer has no stated rule at all for what
+   * becomes of the order, the payment and the link the previous owner is holding.
+   */
+  'web.services_read_only':
+    'در این نسخه از این صفحه فقط می‌توان سرویس‌ها را دید. پایان دادن به سرویس و انتقال آن به مشتری دیگر ساخته نشده‌اند؛ دکمهٔ غیرفعال هم نگذاشته‌ایم، چون یعنی «هست ولی دسترسی ندارید».',
 
   // --- Units ---------------------------------------------------------------
   'web.unit_seconds': 'ثانیه',

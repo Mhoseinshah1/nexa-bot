@@ -321,3 +321,33 @@ export async function telegramSetWebhook(
   // would be inventing a fact.
   return { outcome: 'SUCCEEDED', messageId: null };
 }
+
+/**
+ * Registers this bot's command list with Telegram, so the client draws its own menu.
+ *
+ * `docs/phase4h-audit.md` §9 measured the absence: the bot answered four commands,
+ * registered none of them, and the greeting named only one — so two were reachable only
+ * by a customer who guessed. Telegram's command menu is the affordance that exists for
+ * exactly this, and not using it was the whole defect.
+ *
+ * Best-effort at the CALLER, never here. A `setMyCommands` that fails leaves a bot that
+ * works and a menu that is stale, which must not fail an install the way a missing
+ * webhook does — the webhook is how updates ARRIVE, and this is a convenience.
+ */
+export async function telegramSetMyCommands(
+  request: Omit<TelegramSendRequest, 'body' | 'method'> & {
+    readonly commands: readonly { readonly command: string; readonly description: string }[];
+  },
+): Promise<TelegramSendOutcome> {
+  assertOutsideTransaction('A Telegram setMyCommands');
+
+  const { commands, ...rest } = request;
+  const call = await telegramCall({
+    ...rest,
+    method: 'setMyCommands',
+    body: { commands },
+  });
+  if (call.outcome !== 'SUCCEEDED') return call;
+  // Answers `result: true`. No id to carry, and reporting one would invent a fact.
+  return { outcome: 'SUCCEEDED', messageId: null };
+}

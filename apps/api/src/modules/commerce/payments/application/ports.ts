@@ -48,6 +48,17 @@ export interface PaymentRecord {
   readonly resolvedByAdminId: string | null;
   /** Why, in the operator's own words. Null unless a person rejected it. */
   readonly resolutionNote: string | null;
+  /**
+   * When the customer said they had sent the transfer. Their CLAIM, never evidence.
+   *
+   * Deliberately not folded into `state`. `PAYMENT_STATES` classifies what this
+   * installation KNOWS about the money; a customer's assertion is not knowledge, and a
+   * `SIGNALLED` member would put it on the same axis as a reviewed confirmation. The
+   * legacy receipt review does exactly that — `PRBR-004` records that "receipt" and
+   * "payment" name one record there — and the operator can then no longer tell what
+   * was claimed from what was checked.
+   */
+  readonly customerSignalledAt: Date | null;
   readonly expiresAt: Date | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
@@ -238,4 +249,68 @@ export interface PaymentRepository {
     limit: number,
     tx: unknown,
   ): Promise<readonly PaymentRecord[]>;
+
+  /**
+   * Records that the customer says they have sent the transfer.
+   *
+   * It moves NO state, and that is the point of it being its own method rather than a
+   * parameter on `resolve`: `resolve` exists for the three edges that end a payment,
+   * and a claim ends nothing. What the customer taps changes what an operator can see
+   * and changes nothing about the money.
+   *
+   * A conditional UPDATE, and its predicates are the whole contract:
+   *
+   *   - `state = 'PENDING'` — a claim about a payment that is already over is a claim
+   *     nobody can act on, and the schema's guard refuses it in any case (0058).
+   *   - `method = 'MANUAL_TRANSFER'` — `payments_customer_signal_check` says the same
+   *     thing, and stating it here means a wallet payment answers `false` rather than
+   *     raising.
+   *   - `customer_signalled_at IS NULL` — the FIRST claim is the one recorded. A
+   *     customer tapping again a day later must not move the moment they first said
+   *     they had paid, because that moment is what an operator compares against their
+   *     bank statement.
+   *
+   * So `false` means one of three things and the caller treats all of them the same
+   * way it treats a replay, which is what makes a double tap harmless.
+   */
+  signalSent(scope: TenantContext, id: PaymentId, now: Date, tx?: unknown): Promise<boolean>;
+
+  /**
+   * Whether any PENDING payment against this order has been claimed as sent.
+   *
+   * An EXISTS rather than a list, because the caller acts on the answer and never on
+   * the rows: `OrderService.cancelByCustomer` refuses when it is true, and a payment id
+   * would only give it something to leak.
+   *
+   * It takes a REQUIRED transaction. The whole point is that a claim committing between
+   * the read and the cancellation cannot slip past, and an optional handle would make
+   * the read a different snapshot from the write.
+   */
+  hasClaimedPendingForOrder(scope: TenantContext, orderId: OrderId, tx: unknown): Promise<boolean>;
+
+  /**
+   * Withdraws every PENDING payment against one order. The `CANCEL` edge, as a set.
+   *
+   * For `OrderService.cancelByCustomer`, which must not leave a live transfer
+   * instruction behind a cancelled order — the state `PaymentExpiryService`'s docblock
+   * names as the one a customer could act on with their own money.
+   *
+   * `CANCELLED` rather than `EXPIRED`, because a deadline did not do this: the customer
+   * did, and `commerce.ts` records that "the customer changed their mind" and "we
+   * stopped waiting" are different facts about the same row.
+   *
+   * A set rather than one row: at most one PENDING transfer per order is an application
+   * rule, not a schema one, and a statement that closed "the" payment would leave a
+   * second one live if that rule ever loosened. Returns what it moved, so the order's
+   * audit row can say how many.
+   *
+   * Required transaction, for the reason `expireDue` gives: this is a durable write and
+   * ADR-0028's quiesce gate lives in `DrizzleUnitOfWork.run`.
+   */
+  cancelPendingForOrder(
+    scope: TenantContext,
+    orderId: OrderId,
+    now: Date,
+    tx: unknown,
+  ): Promise<readonly PaymentId[]>;
 }
