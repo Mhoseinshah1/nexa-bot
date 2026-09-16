@@ -80,6 +80,13 @@ async function main(): Promise<void> {
         // the line above: it bounds a table that gains rows whenever an operator
         // uploads an archive, which has nothing to do with any schedule.
         ['recovery-request-sweeper', true, () => container.recoveryRequestSweeper.isFresh(now)],
+        // The lane that closes an unpaid payment and the order it was against.
+        // No flag: a payment nothing expires is the defect it exists to close, and an
+        // installation that could switch it off would be one whose orders say they
+        // are awaiting payment for ever. A pass that finds nothing still counts as
+        // progress — see `PaymentExpiryLoop`, where "nothing was due" is the healthy
+        // answer most of the time.
+        ['payment-expiry', true, () => container.paymentExpiryLoop.isFresh(now)],
         [
           'notification-dispatcher',
           config.NOTIFICATION_DISPATCH_ENABLED,
@@ -138,6 +145,10 @@ async function main(): Promise<void> {
   // installation with the schedule switched off too.
   container.backupRunSweeper.start();
   container.recoveryRequestSweeper.start();
+  // And the payment/order expiry lane. OQ-4C-01's answer: until this release the
+  // deadline a customer was shown was only ever a refusal, so a month-old order still
+  // read as awaiting payment and an operator could not tell it from this morning's.
+  container.paymentExpiryLoop.start();
 
   // Notification delivery. A poller rather than an outbox consumer, because the
   // relay runs its consumers inside the claim transaction and a send must not

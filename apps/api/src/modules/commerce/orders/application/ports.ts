@@ -164,4 +164,30 @@ export interface OrderRepository {
     now: Date,
     tx?: unknown,
   ): Promise<boolean>;
+
+  /**
+   * Expires the orders nobody paid for, bounded. The `EXPIRE` edge from
+   * `AWAITING_PAYMENT`.
+   *
+   * `orders_expiry_idx` — `(expires_at) WHERE state = 'AWAITING_PAYMENT'` — has existed
+   * since migration 0032 with no reader at all, and `docs/phase4g-audit.md` records
+   * that as the finding it is: a partial index is a statement about a query somebody
+   * meant to write. This is that query.
+   *
+   * `DRAFT` is deliberately NOT swept, although `ORDER_MACHINE` has that edge too. A
+   * draft is a quote the customer never confirmed, nothing was promised for it and
+   * `OrderService.confirm` already refuses one past its deadline; the index the schema
+   * built covers exactly `AWAITING_PAYMENT`, and the owner's rule is about a payment
+   * and the order it was against. Sweeping drafts is retention rather than correctness
+   * and `docs/open-questions.md` carries it.
+   *
+   * Required transaction, bounded, returns what it moved — see
+   * `PaymentRepository.expireDue` for all three reasons.
+   */
+  expireDue(
+    scope: TenantContext,
+    now: Date,
+    limit: number,
+    tx: unknown,
+  ): Promise<readonly OrderRecord[]>;
 }

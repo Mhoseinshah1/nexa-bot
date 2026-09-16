@@ -1,4 +1,4 @@
-import { and, asc, eq, getTableColumns, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, getTableColumns, isNotNull, lte, sql, type SQL } from 'drizzle-orm';
 import { money, priceQuoteWireSchema, type PriceQuote, type PriceQuoteWire } from '@nexa/contracts';
 import type {
   CurrencyCode,
@@ -187,6 +187,80 @@ export class DrizzleOrderRepository implements OrderRepository {
       .where(and(eq(orders.tenantId, tenantId), eq(orders.id, id), eq(orders.state, from)))
       .returning({ id: orders.id });
     return rows.length > 0;
+  }
+
+  /**
+   * The `EXPIRE` edge from `AWAITING_PAYMENT`, as a bounded set. The sweep's half.
+   *
+   * Two statements and `FOR UPDATE SKIP LOCKED`, exactly as
+   * `PaymentRepository.expireDue` and `ServiceRepository.expireDue`: the sub-select
+   * finds the candidates and the UPDATE re-checks every predicate after the row lock
+   * is granted, because a scan can find a row another writer is about to move.
+   *
+   * `NO_CONFIRMED_PAYMENT` is REDUNDANT and kept deliberately. A confirmation settles
+   * its order to PAID inside the same transaction, so a row that still reads
+   * `AWAITING_PAYMENT` cannot have one — today. What it guards against is the day a
+   * second path confirms a payment, because the failure mode is not a stale row: it is
+   * an order somebody PAID FOR marked expired, and this installation then owing a
+   * service it has no record of owing. A redundant predicate is cheap; that is not.
+   */
+  async expireDue(
+    scope: TenantContext,
+    now: Date,
+    limit: number,
+    tx: unknown,
+  ): Promise<readonly OrderRecord[]> {
+    const tenantId = requireTenantId(scope);
+    if (limit <= 0) return [];
+
+    const noConfirmedPayment = sql`NOT EXISTS (
+      SELECT 1 FROM payments settled
+       WHERE settled.tenant_id = ${orders.tenantId}
+         AND settled.order_id = ${orders.id}
+         AND settled.state = 'CONFIRMED'
+    )`;
+
+    const due = this.exec(tx)
+      .select({ id: orders.id })
+      .from(orders)
+      .where(
+        and(
+          eq(orders.tenantId, tenantId),
+          eq(orders.state, 'AWAITING_PAYMENT'),
+          isNotNull(orders.expiresAt),
+          lte(orders.expiresAt, now),
+          noConfirmedPayment,
+        ),
+      )
+      .orderBy(asc(orders.expiresAt), asc(orders.id))
+      .limit(limit)
+      .for('update', { skipLocked: true });
+
+    const rows = await this.exec(tx)
+      .update(orders)
+      .set({
+        state: 'EXPIRED',
+        /*
+         * No timestamp. `orders` has `cancelled_at`, `settled_at` and `refunded_at` and
+         * deliberately no `expired_at`, so `orders_cancelled_at_check` and its siblings
+         * have nothing to say about this transition — which is why EXPIRE has always
+         * been representable through `transition` while CANCEL was not.
+         */
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(orders.tenantId, tenantId),
+          eq(orders.state, 'AWAITING_PAYMENT'),
+          isNotNull(orders.expiresAt),
+          lte(orders.expiresAt, now),
+          noConfirmedPayment,
+          sql`${orders.id} IN ${due}`,
+        ),
+      )
+      .returning();
+
+    return rows.map(toRecord);
   }
 }
 

@@ -210,4 +210,32 @@ export interface PaymentRepository {
     now: Date,
     tx?: unknown,
   ): Promise<boolean>;
+
+  /**
+   * Expires the PENDING payments whose own deadline has passed, bounded.
+   *
+   * The `EXPIRE` edge as a SET rather than one row at a time, because there is nothing
+   * to decide per row: the deadline is on the row, the target is one state, and no
+   * person is involved. `resolve` exists for the two edges a person takes.
+   *
+   * Bounded by `limit` for the reason `ServiceRepository.expireDue` is: a tenant whose
+   * orders all lapse on one midnight must not turn one tick into ten thousand rows, and
+   * the next tick picks up where this one stopped because the candidates are ordered by
+   * deadline.
+   *
+   * Returns the rows it moved, so the sweep can audit each one. The `before` state is
+   * not returned and does not need to be: there is exactly one source state and the
+   * statement names it, which is what `ServiceRepository.expireDue` needs two UPDATEs
+   * to achieve.
+   *
+   * It takes a REQUIRED transaction. This is a durable write and ADR-0028's quiesce
+   * gate lives in `DrizzleUnitOfWork.run`; an optional handle here would make it
+   * possible to expire a customer's payment in a database that is being replaced.
+   */
+  expireDue(
+    scope: TenantContext,
+    now: Date,
+    limit: number,
+    tx: unknown,
+  ): Promise<readonly PaymentRecord[]>;
 }
