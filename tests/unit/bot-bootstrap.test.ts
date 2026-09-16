@@ -983,6 +983,81 @@ describe('bot bootstrap — the rules the review found untested', () => {
     ).rejects.toThrowError(/not ACTIVE/);
   });
 
+  /*
+   * `OQ-TG-04` item 11, and it is a credential leak rather than a wording bug.
+   *
+   * `scopeIsActive` used to be consulted only inside `unavailableReason`, which
+   * was reached only when a bot row EXISTED. A tenant an operator had stopped,
+   * with no bot yet, therefore answered `none` — and `none` is the one state in
+   * which the installer PROMPTS for a bearer credential, sends it to `getMe`,
+   * and only then has the create transaction refuse. The token need never have
+   * left the host.
+   */
+  it('does not answer none for a stopped tenant that has no bot yet', async () => {
+    const fresh = build({ scopeActivity: { scopeIsActive: async () => false } });
+    expect(fresh.bots.rows).toHaveLength(0);
+
+    expect(await fresh.service.status(scope, ORIGIN)).toBe('unavailable');
+  });
+
+  it('does not answer none when this installation does not serve the webhook route', async () => {
+    const off = build({ webhookEnabled: () => false });
+    expect(off.bots.rows).toHaveLength(0);
+
+    expect(await off.service.status(scope, ORIGIN)).toBe('unavailable');
+  });
+
+  it('still answers none for an ACTIVE tenant with no bot', async () => {
+    // The other side, so `unavailable` cannot become the answer to everything:
+    // a fresh install of a healthy tenant must still reach the path that asks
+    // for a token, or nothing can ever be configured.
+    const { service } = build();
+    expect(await service.status(scope, ORIGIN)).toBe('none');
+  });
+
+  /*
+   * `OQ-TG-04` item 9. `unavailableReason` computes a cause-specific sentence
+   * for each of its three causes and `status` collapsed all three to one word,
+   * so `botctl telegram status` could say a bot was held back and not which of
+   * three things was holding it — while `--skip-telegram` sent operators there
+   * to find out.
+   */
+  it('reports WHICH condition makes a bot unavailable, alongside the state', async () => {
+    const off = build({ webhookEnabled: () => false });
+    await expect(off.service.statusWithReason(scope, ORIGIN)).resolves.toMatchObject({
+      state: 'unavailable',
+      reason: expect.stringContaining('TELEGRAM_WEBHOOK_ENABLED is false'),
+    });
+
+    const stopped = build({ scopeActivity: { scopeIsActive: async () => false } });
+    await expect(stopped.service.statusWithReason(scope, ORIGIN)).resolves.toMatchObject({
+      reason: expect.stringContaining('tenant is not accepting work'),
+    });
+
+    const halted = await installed();
+    halted.bots.rows[0]!.status = 'STOPPED';
+    await expect(halted.service.statusWithReason(scope, ORIGIN)).resolves.toMatchObject({
+      state: 'unavailable',
+      reason: expect.stringContaining('not ACTIVE'),
+    });
+  });
+
+  it('carries no reason for a state that has nothing to explain', async () => {
+    // Otherwise a caller printing `reason` unconditionally would narrate every
+    // healthy run, and `none` in particular is not a problem to diagnose.
+    const { service } = build();
+    await expect(service.statusWithReason(scope, ORIGIN)).resolves.toEqual({
+      state: 'none',
+      reason: null,
+    });
+
+    const ready = await installed();
+    await expect(ready.service.statusWithReason(scope, ORIGIN)).resolves.toEqual({
+      state: 'ready',
+      reason: null,
+    });
+  });
+
   it('refuses a scope that has stopped accepting work, inside the transaction', async () => {
     /*
      * A CLAUDE.md non-negotiable that had no test at all: deleting all three

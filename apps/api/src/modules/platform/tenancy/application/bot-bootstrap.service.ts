@@ -179,16 +179,59 @@ export class BotBootstrapService {
    * version an installer may act on.
    */
   async status(scope: TenantContext, publicBaseUrl: string): Promise<BotBootstrapStatus> {
+    return (await this.statusWithReason(scope, publicBaseUrl)).state;
+  }
+
+  /**
+   * The state, AND the sentence that says why when the state is `unavailable`.
+   *
+   * `OQ-TG-04` item 9. `unavailableReason` has always computed a cause-specific,
+   * actionable sentence for each of its three causes, and `status` collapsed all
+   * three to one word — so `botctl telegram status` could report that a bot is
+   * held back and not which of three things is holding it, and the
+   * `--skip-telegram` text sent operators there to find out.
+   *
+   * Two returns rather than a second lookup: asking twice would run the
+   * activity read again and could answer about a different moment.
+   *
+   * `reason` is NULL for every other state, including `none` — there is nothing
+   * to explain about an installation that has not been configured yet.
+   */
+  async statusWithReason(
+    scope: TenantContext,
+    publicBaseUrl: string,
+  ): Promise<{ readonly state: BotBootstrapStatus; readonly reason: string | null }> {
+    /*
+     * The two SCOPE-level causes are checked before the row is looked up, and
+     * that ordering is `OQ-TG-04` item 11 rather than tidiness.
+     *
+     * `scopeIsActive` used to be consulted only inside `unavailableReason`,
+     * which was reached only when a bot row EXISTED. So a tenant an operator had
+     * stopped, with no bot yet, answered `none` — the installer prompted for a
+     * bearer credential, sent it to `getMe`, and only THEN did the create
+     * transaction refuse. The token need never have left the host.
+     *
+     * `view.status !== 'ACTIVE'` stays below, because it is a fact about a row
+     * and there is no row here to have one.
+     */
+    const scopeReason = await this.unavailableScopeReason(scope);
+    if (scopeReason !== null) return { state: 'unavailable', reason: scopeReason };
+
     const existing = await this.deps.bots.findBootstrapTarget(scope);
-    if (existing === null) return 'none';
+    if (existing === null) return { state: 'none', reason: null };
     // Not a bootstrap state to converge out of — see `unavailableReason`.
-    if ((await this.unavailableReason(scope, existing)) !== null) return 'unavailable';
+    if (existing.status !== 'ACTIVE') {
+      return { state: 'unavailable', reason: this.botNotActiveReason(existing.status) };
+    }
     // Normalised through the SAME function `execute` uses, so a trailing slash
     // in the configured origin cannot make `status` report `incomplete` for a
     // webhook `execute` would then find already registered — an installer that
     // re-registers on every rerun, discarding queued updates each time.
     const url = this.webhookUrlFor(this.requireOrigin(publicBaseUrl), existing.id);
-    return this.registrationIsCurrent(existing, url) ? 'ready' : 'incomplete';
+    return {
+      state: this.registrationIsCurrent(existing, url) ? 'ready' : 'incomplete',
+      reason: null,
+    };
   }
 
   /**
@@ -221,17 +264,27 @@ export class BotBootstrapService {
     scope: TenantContext,
     view: BotBootstrapView,
   ): Promise<string | null> {
+    const scopeReason = await this.unavailableScopeReason(scope);
+    if (scopeReason !== null) return scopeReason;
+    if (view.status !== 'ACTIVE') return this.botNotActiveReason(view.status);
+    return null;
+  }
+
+  /**
+   * The two causes that are true of the INSTALLATION and the TENANT, not a row.
+   *
+   * Split out so `status` can consult them before it has looked for a bot at
+   * all (`OQ-TG-04` item 11). Both are reads that decide what to report rather
+   * than writes that need holding still, which is why `scopeIsActive` is called
+   * without a transaction here; the transactional checks inside `uow.run` are
+   * untouched and they are the ones that make a write safe.
+   */
+  private async unavailableScopeReason(scope: TenantContext): Promise<string | null> {
     if (!this.deps.webhookEnabled()) {
       return (
         'TELEGRAM_WEBHOOK_ENABLED is false, so this installation does not serve the webhook route ' +
         'at all. Telegram would deliver every update to a 404. Set it to true in nexa.env, ' +
         'restart, and run this again.'
-      );
-    }
-    if (view.status !== 'ACTIVE') {
-      return (
-        `The bot instance for this tenant is ${view.status}, not ACTIVE. The webhook route refuses ` +
-        'every update for a bot that is not active. Start the bot and run this again.'
       );
     }
     if (!(await this.deps.scopeActivity.scopeIsActive(scope))) {
@@ -241,6 +294,13 @@ export class BotBootstrapService {
       );
     }
     return null;
+  }
+
+  private botNotActiveReason(status: BotBootstrapView['status']): string {
+    return (
+      `The bot instance for this tenant is ${status}, not ACTIVE. The webhook route refuses ` +
+      'every update for a bot that is not active. Start the bot and run this again.'
+    );
   }
 
   private registrationIsCurrent(view: BotBootstrapView, url: string): boolean {

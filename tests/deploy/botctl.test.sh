@@ -5691,4 +5691,26 @@ assert_contains 'the unattended path does not stream the token on stdin' \
 assert_not_contains 'the installer bind-mounts the token file into the container' \
   "$telegram_calls" '/run/nexa-bot-token'
 
+test_case 'the documented telegram status contract names every value the CLI can print'
+# `OQ-TG-04` item 13. `docs/deployment.md` documented three values and the CLI
+# has returned four since `unavailable` was added, so automation written from
+# that section rejected a legitimate answer exactly when something had been
+# disabled. Read from the TYPE rather than a hard-coded list here: a fifth value
+# added to `BotBootstrapStatus` and not documented fails this, which is the whole
+# point — the doc is a contract callers parse, not prose.
+status_union="$(sed -n "s/^export type BotBootstrapStatus = //p" \
+  "${REPO}/apps/api/src/modules/platform/tenancy/application/bot-bootstrap.service.ts")"
+assert_ok 'the BotBootstrapStatus union could not be read; this check is vacuous' \
+  test -n "$status_union"
+status_line="$(grep -F 'botctl telegram status' "${REPO}/docs/deployment.md" | head -n 1)"
+assert_ok 'the documented status line could not be found' test -n "$status_line"
+for value in $(printf '%s' "$status_union" | tr -d "';" | tr '|' ' '); do
+  assert_contains "docs/deployment.md does not document the status value ${value}" \
+    "$status_line" "$value"
+done
+# And it says where the reason goes, because the reason is on stderr precisely so
+# that `$(botctl telegram status)` keeps returning one word.
+assert_contains 'docs/deployment.md does not say the reason is on stderr' \
+  "$(cat "${REPO}/docs/deployment.md")" 'printed on stderr'
+
 report

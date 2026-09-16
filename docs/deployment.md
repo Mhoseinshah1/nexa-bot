@@ -243,9 +243,19 @@ bootstrap as INCOMPLETE and **exits non-zero**. Nothing needs undoing and
 nothing needs typing again:
 
 ```bash
-botctl telegram status     # none | incomplete | ready
+botctl telegram status     # none | incomplete | ready | unavailable
 botctl telegram register   # resumes from the stored token; never asks for one
 ```
+
+`status` writes **one of those four words to stdout and nothing else**, so a
+script can compare it without parsing prose. `unavailable` is the fourth and this
+section used to document only three, which meant automation written from it
+rejected a legitimate answer exactly when something had been disabled.
+
+It means the bot cannot receive an update for a reason a registration would not
+fix — `TELEGRAM_WEBHOOK_ENABLED` is false, the tenant has stopped accepting work,
+or the bot instance is not ACTIVE — and **which one is printed on stderr**, so it
+is visible to a person and invisible to `$(botctl telegram status)`.
 
 `--skip-telegram` leaves the bot unconfigured in this run and says what to run
 later. It does not report an already-configured bot as unconfigured, and it is

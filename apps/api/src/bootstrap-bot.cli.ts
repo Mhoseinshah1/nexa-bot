@@ -238,9 +238,24 @@ async function main(): Promise<void> {
     const publicBaseUrl = requirePublicBaseUrl(args.publicBaseUrl);
 
     if (args.status) {
+      const { state, reason } = await container.bootstrapBot.statusWithReason(scope, publicBaseUrl);
       // The ONLY thing on stdout, so a shell can read it without parsing prose.
       // Every other line this CLI writes goes to stderr.
-      process.stdout.write(`${await container.bootstrapBot.status(scope, publicBaseUrl)}\n`);
+      process.stdout.write(`${state}\n`);
+      /*
+       * And WHY, on stderr, when there is a why (`OQ-TG-04` item 9).
+       *
+       * `unavailable` used to be the whole answer, while the service had already
+       * computed which of three conditions produced it and thrown the sentence
+       * away. The `--skip-telegram` text sends operators to this command to find
+       * out, and skipping is precisely the path that avoids the `execute` call
+       * that would have told them.
+       *
+       * Stderr keeps the stdout contract exactly as `docs/deployment.md`
+       * documents it: a shell reading this still gets one word. A reason on
+       * stdout would break every caller that compares it.
+       */
+      if (reason !== null) console.warn(reason);
       return;
     }
 
