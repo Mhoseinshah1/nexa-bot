@@ -1999,6 +1999,13 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
        * function that opens one and calls the same notifier the background lanes
        * use. Nothing about the enqueue is different because the caller is
        * interactive; only the decision to make it is.
+       *
+       * No activity check, and it is the SAME stated exception
+       * `OperationOutcomeAnnouncer` takes — `docs/conventions.md` names both.
+       * The command this stands in for already checked activity inside its own
+       * transaction and committed, so the scope was accepting work when it ran;
+       * a stop landing between that commit and Telegram's 429 must not turn a
+       * recorded transfer into silence. It may enqueue and nothing else.
        */
       queueRateLimitedFact: async (scope, customerId, kind, subjectId) => {
         await uow.run(scope, async (tx) =>

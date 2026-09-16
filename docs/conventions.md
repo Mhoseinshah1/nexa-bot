@@ -321,18 +321,25 @@ transaction** and refuses a scope that has stopped accepting work. A surface
 checks on arrival as well, because a stop can commit between the request and
 the write.
 
-**The exception, bounded:** `OperationOutcomeAnnouncer` does not check. It
-queues the outcome of work that has ALREADY been done — a renewal that
-succeeded, a provision nothing could resolve — and telling a customer what
-became of it is not new business work. Suppressing it leaves somebody who paid
-in silence, which is the gap Phase 4H existed to close, and an operator
-stopping a tenant is not asking for its existing customers to be abandoned
-mid-provision.
+**The exception, bounded:** two producers on the customer notification lane do
+not check. `OperationOutcomeAnnouncer` queues the outcome of work that has
+ALREADY been done — a renewal that succeeded, a provision nothing could
+resolve. `queueRateLimitedFact`, the container function `BotRuntime` calls when
+Telegram answers 429, queues the answer to a command that has ALREADY
+committed; that command checked activity inside its own transaction, so the
+scope was accepting work when it ran, and a stop landing between the commit and
+the send must not turn a recorded transfer into silence.
 
-What the exception does NOT license: the announcer may ENQUEUE. It may not
-create an order, a payment, a service or an operation for a stopped tenant, and
-it holds no dependency that could. The bound is what makes this an exception
-rather than a hole.
+Telling a customer what became of work already done is not new business work.
+Suppressing it leaves somebody who paid in silence, which is the gap Phase 4H
+existed to close, and an operator stopping a tenant is not asking for its
+existing customers to be abandoned mid-provision.
+
+What the exception does NOT license: both may ENQUEUE, and nothing else.
+Neither may create an order, a payment, a service or an operation for a stopped
+tenant, and neither holds a dependency that could — the announcer's reader is
+read-only by construction and `queueRateLimitedFact` takes a kind and a subject
+id. The bound is what makes this an exception rather than a hole.
 
 **Why it is written down at all.** An unstated exemption is indistinguishable
 from an oversight — Phase 4I's self-review found precisely this omission in
