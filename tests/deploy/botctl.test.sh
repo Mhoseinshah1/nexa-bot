@@ -5200,11 +5200,17 @@ assert_contains 'the retry state after a first-attempt failure was not none' \
 # retry is the installer rather than a command that cannot create a first row.
 telegram_nothing_summary="$(sed -n '/INCOMPLETE_NOTHING_STORED$/,/^INCOMPLETE_NOTHING_STORED$/p' "${REPO}/deploy/install.sh")"
 assert_contains 'the summary does not distinguish a failure that stored nothing' \
-  "$telegram_nothing_summary" 'The token was NOT stored'
-assert_contains 'the nothing-stored summary does not name the installer retry' \
+  "$telegram_nothing_summary" 'Nothing was stored'
+assert_contains 'the nothing-stored summary does not point at the error above' \
+  "$telegram_nothing_summary" 'the error printed above this summary'
+# `OQ-TG-04` item 2. "Rerun with a token source" is itself a cause-derived
+# remedy, and it is false for an already-bound refusal — whose rolled-back insert
+# leaves the state `none` too, so that rerun refuses identically for ever. This
+# summary states what is stored and stops.
+assert_not_contains 'the nothing-stored summary still prescribes an installer rerun' \
   "$telegram_nothing_summary" '--bot-token-file'
-assert_contains 'the nothing-stored summary does not say why botctl cannot finish it' \
-  "$telegram_nothing_summary" 'supplies no token by design'
+assert_not_contains 'the nothing-stored summary still prescribes a botctl command' \
+  "$telegram_nothing_summary" 'botctl telegram register'
 
 test_case 'an unreadable Telegram state is refused rather than guessed'
 # Both readings are wrong in a way the operator pays for: treating it as `none`
@@ -5318,56 +5324,16 @@ assert_contains 'the supplied token never reached the CLI in the unavailable sta
 # it makes it.
 assert_contains 'an unavailable bot was not given its own retry state' \
   "$telegram_stopped" 'RETRY=unavailable'
-telegram_unavailable_summary="$(sed -n '/INCOMPLETE_UNAVAILABLE$/,/^INCOMPLETE_UNAVAILABLE$/p' "${REPO}/deploy/install.sh")"
-assert_contains 'the unavailable summary does not say the webhook is not the outstanding work' \
-  "$telegram_unavailable_summary" 'NOT the webhook'
-
-test_case 'a revoked stored token is not reported as a registration to retry'
-# The two summaries were not exhaustive, and the state alone cannot make them
-# so: `ready` and `incomplete` are equally true of a webhook that was never
-# registered and of a stored token Telegram has since refused. The old branch
-# sent the second case to `botctl telegram register`, which reads the same
-# stored token and fails identically.
-telegram_revoked="$(bash -c '
-  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
-  telegram_state() { printf "ready"; }
-  nexa_compose() { printf "telegram.bootstrap_token_rejected: Telegram refused it.\n"; return 1; }
-  configure_telegram_bot 2>&1
-  printf "INCOMPLETE=%s RETRY=%s\n" "$TELEGRAM_INCOMPLETE" "$TELEGRAM_RETRY"
-' _ "${REPO}/deploy/install.sh" || printf 'THE_STEP_DIED')"
-assert_not_contains 'a revoked token aborted the install' "$telegram_revoked" 'THE_STEP_DIED'
-assert_contains 'a revoked stored token was not distinguished from a webhook failure' \
-  "$telegram_revoked" 'RETRY=token-rejected'
-# The CLI's own output still reaches the operator: capturing it to classify the
-# failure must not be the same as swallowing it.
-assert_contains 'the CLI output was swallowed by the capture' \
-  "$telegram_revoked" 'telegram.bootstrap_token_rejected'
-telegram_revoked_summary="$(sed -n '/INCOMPLETE_TOKEN_REJECTED$/,/^INCOMPLETE_TOKEN_REJECTED$/p' "${REPO}/deploy/install.sh")"
-assert_contains 'the revoked-token summary does not refuse the retry that cannot work' \
-  "$telegram_revoked_summary" 'NOT'
-assert_contains 'the revoked-token summary does not name the open question' \
-  "$telegram_revoked_summary" 'OQ-TG-01'
-
-test_case 'an already-bound refusal is classified even though nothing was stored'
-# The `none`-outranks-the-code rule, and the one case it got wrong. An
-# already-bound refusal rolls its insert back, so the state after it is
-# NECESSARILY `none` — and the nothing-stored summary then told the operator
-# their token was rejected or Telegram unreachable, and to rerun with a token
-# source, which would refuse identically for ever.
-telegram_bound="$(bash -c '
-  . "$1" --domain admin.example.test --acme-email ops@example.test --bot-token-file "$2" >/dev/null 2>&1
-  telegram_state() { printf "none"; }
-  nexa_compose() { printf "telegram.bootstrap_bot_already_bound: bot 8123456789 is taken.\n"; return 1; }
-  configure_telegram_bot 2>&1
-  printf "RETRY=%s\n" "$TELEGRAM_RETRY"
-' _ "${REPO}/deploy/install.sh" "${NEXA_ROOT}/unavailable-token" || printf 'THE_STEP_DIED')"
-assert_contains 'an already-bound refusal was reported as nothing-stored' \
-  "$telegram_bound" 'RETRY=already-bound'
-telegram_bound_summary="$(sed -n '/INCOMPLETE_ALREADY_BOUND$/,/^INCOMPLETE_ALREADY_BOUND$/p' "${REPO}/deploy/install.sh")"
-assert_contains 'the already-bound summary does not say a second bot is needed' \
-  "$telegram_bound_summary" 'Create a second bot'
-assert_contains 'the already-bound summary does not say the other tenant is untouched' \
-  "$telegram_bound_summary" 'untouched'
+# `unavailable` now reaches the summary that claims NOTHING about a stored
+# credential, because after `OQ-TG-04` item 11 an inactive tenant answers
+# `unavailable` with no bot row at all — so "a token is stored" stopped being
+# provable in this state. What is outstanding comes from the CLI's own error and
+# from `botctl telegram status`, which prints the reason on stderr.
+telegram_unproven_summary="$(sed -n '/INCOMPLETE_UNPROVEN$/,/^INCOMPLETE_UNPROVEN$/p' "${REPO}/deploy/install.sh")"
+assert_contains 'the unproven summary does not admit what it cannot prove' \
+  "$telegram_unproven_summary" 'cannot prove it either way'
+assert_not_contains 'the unproven summary claims a token is stored' \
+  "$telegram_unproven_summary" 'token IS stored'
 
 test_case 'a first install with no terminal and no token records its release'
 # `nexa_die` here exited before the manifest and the `current` pointer were
@@ -5375,6 +5341,9 @@ test_case 'a first install with no terminal and no token records its release'
 # — the failure the owner step records from a real staging host. ADR-0029
 # decision 4 already says what to do instead: finish recording the release,
 # report INCOMPLETE, exit non-zero.
+#
+# Untouched by the 4I collapse, which changes only which SUMMARY is printed
+# afterwards. Cited by `docs/telegram-bootstrap-falsification.md` row F7.
 telegram_no_tty="$(bash -c '
   . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
   telegram_state() { printf "none"; }
@@ -5386,73 +5355,106 @@ assert_not_contains 'a missing token killed the install before the manifest' \
   "$telegram_no_tty" 'THE_STEP_DIED'
 assert_contains 'a missing token did not mark the install incomplete' \
   "$telegram_no_tty" 'INCOMPLETE=yes'
-assert_contains 'a missing token did not reach the nothing-stored summary' \
-  "$telegram_no_tty" 'RETRY=none'
 # And it did not silently run the CLI without a way to read a token.
 assert_not_contains 'the CLI was invoked with no token source and no terminal' \
   "$telegram_no_tty" 'SHOULD_NOT_RUN'
 
-test_case 'a stored token that cannot be DECRYPTED is not a webhook retry either'
-# The round that made this five summaries was not exhaustive either. `execute`
-# resolves the credential before it calls anything, so a missing key, a key id
-# that no longer matches, or v1 acceptance having been turned off fails BEFORE
-# Telegram is reached — and the first classifier knew only the two Telegram
-# codes, so every one of those fell through to the webhook summary and was told
-# to run a command that reads the same unreadable ciphertext.
-telegram_unreadable="$(bash -c '
-  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
-  telegram_state() { printf "incomplete"; }
-  nexa_compose() { printf "platform.secret_key_unknown: no key with that id.\n"; return 1; }
-  configure_telegram_bot 2>&1
-  printf "RETRY=%s\n" "$TELEGRAM_RETRY"
-' _ "${REPO}/deploy/install.sh" || printf 'THE_STEP_DIED')"
-assert_contains 'a decryption failure was not distinguished from a webhook failure' \
-  "$telegram_unreadable" 'RETRY=token-unreadable'
-telegram_unreadable_summary="$(sed -n '/INCOMPLETE_TOKEN_UNREADABLE$/,/^INCOMPLETE_TOKEN_UNREADABLE$/p' "${REPO}/deploy/install.sh")"
-assert_contains 'the unreadable-token summary does not say it is a secrets problem' \
-  "$telegram_unreadable_summary" 'SECRETS problem'
-# It must not promise ONE repair for four codes. `secret_auth_failed` is
-# corruption or a value moved between rows, and `secret_key_id_mismatch` is
-# contradictory metadata — restoring key material fixes neither, and the first
-# version of this summary said it would.
-assert_contains 'the unreadable-token summary does not name the concrete codes' \
-  "$telegram_unreadable_summary" 'platform.secret_key_id_mismatch'
-assert_contains 'the unreadable-token summary still promises one key-shaped repair' \
-  "$telegram_unreadable_summary" 'not recoverable by restoring key material'
-assert_contains 'the unreadable-token summary does not name the secrets command' \
-  "$telegram_unreadable_summary" 'botctl secrets'
-# And it must NOT send them to BotFather: the token is fine and reissuing it
-# would be the one action that makes this unrecoverable.
-assert_not_contains 'the unreadable-token summary sends the operator to BotFather' \
-  "$telegram_unreadable_summary" 'BotFather having'
+test_case 'the CLI error reaches the operator, whatever the state'
+# The classifier is gone (`OQ-TG-04`), so what has to hold is the other half:
+# capturing the CLI's output to PRINT it must never be the same as swallowing it.
+# That output is now the only thing carrying the cause, so every one of these
+# failures is only as visible as this line makes it.
+for cli_error in \
+  'telegram.bootstrap_token_rejected: Telegram refused it.' \
+  'telegram.bootstrap_bot_already_bound: bot 8123456789 is taken.' \
+  'telegram.bootstrap_different_bot: belongs to bot 999.' \
+  'telegram.bootstrap_unreachable: ETIMEDOUT.' \
+  'platform.secret_key_unknown: no key with that id.'; do
+  # `CLI_ERROR` is captured BEFORE the function is defined, for the reason the
+  # READY-rerun case above already records: inside a function `$2` is that
+  # function's own second argument, not the script's.
+  telegram_relay="$(bash -c '
+    CLI_ERROR="$2"
+    . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+    telegram_state() { printf "incomplete"; }
+    nexa_compose() { printf "%s\n" "$CLI_ERROR"; return 1; }
+    configure_telegram_bot 2>&1
+  ' _ "${REPO}/deploy/install.sh" "$cli_error" || printf 'THE_STEP_DIED')"
+  assert_not_contains "a CLI failure aborted the install (${cli_error%%:*})" \
+    "$telegram_relay" 'THE_STEP_DIED'
+  assert_contains "the CLI error was swallowed (${cli_error%%:*})" \
+    "$telegram_relay" "${cli_error%%:*}"
+done
 
-test_case 'the revoked-token summary does not invent a rotation this release cannot do'
-# The summary added for a revoked token told the operator to reissue in BotFather
-# and rerun this installer. That cannot work and the sentence above it said so:
-# `execute` always registers with the credential already in the row, and a
-# supplied token is read only to REFUSE one naming a different bot. A remedy that
-# cannot work is the exact failure this whole step exists to avoid, arrived at
-# from the inside.
-telegram_revoked_summary_2="$(sed -n '/INCOMPLETE_TOKEN_REJECTED$/,/^INCOMPLETE_TOKEN_REJECTED$/p' "${REPO}/deploy/install.sh")"
-assert_contains 'the revoked-token summary does not say a rerun cannot replace the token' \
-  "$telegram_revoked_summary_2" 'rerunning this installer with a'
-assert_not_contains 'the revoked-token summary still calls a rerun the supported route' \
-  "$telegram_revoked_summary_2" 'is the supported
-route'
+test_case 'the summary is chosen by the state alone, never by the CLI output'
+# The rule the collapse installs, asserted as behaviour rather than as prose.
+# The SAME state with five different CLI errors must produce the SAME summary:
+# the installer cannot see which failure it was, and the six summaries it used to
+# choose between are what `OQ-TG-04` records nine false sentences from.
+# The summaries live in `main`, after the release manifest is written — which is
+# ADR-0029 decision 4 and is why a failed Telegram step still records a release.
+# So this drives the BLOCK rather than the step: the state and the captured error
+# are the two inputs, and the `state` line of whichever summary is chosen is the
+# output.
+telegram_summary_for() {
+  bash -c '
+    CLI_ERROR="$2"
+    CLI_STATE="$3"
+    . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+    telegram_state() { printf "%s" "$CLI_STATE"; }
+    nexa_compose() { printf "%s\n" "$CLI_ERROR"; return 1; }
+    configure_telegram_bot >/dev/null 2>&1
+    VERSION="v0.0.0-test"
+    DOMAIN="admin.example.test"
+    if [ -n "$TELEGRAM_INCOMPLETE" ]; then
+      TELEGRAM_RETRY="$(telegram_state)"
+      telegram_incomplete_summary 2>&1 | grep -F "  state "
+    fi
+  ' _ "${REPO}/deploy/install.sh" "$1" "$2"
+}
+summary_a="$(telegram_summary_for 'telegram.bootstrap_token_rejected: no.' 'incomplete')"
+summary_b="$(telegram_summary_for 'platform.secret_key_unknown: no key.' 'incomplete')"
+summary_c="$(telegram_summary_for 'telegram.bootstrap_unreachable: nope.' 'incomplete')"
+assert_ok 'the state line could not be read; this check is vacuous' test -n "$summary_a"
+assert_equals 'a different CLI error changed the summary for one state' "$summary_a" "$summary_b"
+assert_equals 'a different CLI error changed the summary for one state' "$summary_a" "$summary_c"
+# And a DIFFERENT state does change it, or the check above would pass on a
+# constant.
+summary_none="$(telegram_summary_for 'telegram.bootstrap_token_rejected: no.' 'none')"
+assert_ok 'the summary did not change with the state' test "$summary_a" != "$summary_none"
 
-test_case 'a token naming another bot is reported as that, not as a failed install'
-telegram_other_bot="$(bash -c '
-  . "$1" --domain admin.example.test --acme-email ops@example.test --bot-token-file "$2" >/dev/null 2>&1
-  telegram_state() { printf "ready"; }
-  nexa_compose() { printf "telegram.bootstrap_different_bot: belongs to bot 999.\n"; return 1; }
-  configure_telegram_bot 2>&1
-  printf "INCOMPLETE=%s RETRY=%s\n" "$TELEGRAM_INCOMPLETE" "$TELEGRAM_RETRY"
-' _ "${REPO}/deploy/install.sh" "${NEXA_ROOT}/unavailable-token" || printf 'THE_STEP_DIED')"
-assert_contains 'a different-bot refusal was not distinguished' \
-  "$telegram_other_bot" 'RETRY=different-bot'
-telegram_other_summary="$(sed -n '/INCOMPLETE_DIFFERENT_BOT$/,/^INCOMPLETE_DIFFERENT_BOT$/p' "${REPO}/deploy/install.sh")"
-assert_contains 'the different-bot summary does not say nothing was changed' \
-  "$telegram_other_summary" 'Nothing was changed'
+test_case 'the token-stored summary names no cause it cannot see'
+telegram_stored_summary="$(sed -n '/INCOMPLETE_TOKEN_STORED$/,/^INCOMPLETE_TOKEN_STORED$/p' "${REPO}/deploy/install.sh")"
+assert_contains 'the token-stored summary does not say the token was not changed' \
+  "$telegram_stored_summary" 'was not changed by this run'
+assert_contains 'the token-stored summary does not point at the error above' \
+  "$telegram_stored_summary" 'the error printed above this summary'
+# Every one of these was a cause-specific remedy in one of the six deleted
+# heredocs, and each was false in at least one state reachable with it. The CLI
+# says them now, where the cause is known: `bootstrapRemedy` carries the secrets
+# ones and `BotBootstrapService` carries the rest.
+for forbidden in 'BotFather' 'botctl secrets' 'DNS' 'certificate' 'Create a second bot'; do
+  assert_not_contains "the token-stored summary still diagnoses a cause (${forbidden})" \
+    "$telegram_stored_summary" "$forbidden"
+done
+
+test_case 'the installer no longer classifies a failure from captured CLI output'
+# The rule, not a sentence. Every `case "$out"` arm that set `TELEGRAM_RETRY` was
+# a cause the installer INFERRED rather than knew, and the interactive path is
+# deliberately not captured, so none of them could run on a first install at a
+# terminal. `TELEGRAM_RETRY` may now be assigned from `telegram_state` and
+# nothing else.
+# Two assignments and no more: the declaration at the top of the file, and the
+# state read. Any third is a cause the installer inferred.
+telegram_retry_writes="$(grep -c 'TELEGRAM_RETRY=' "${REPO}/deploy/install.sh")"
+assert_equals 'TELEGRAM_RETRY is assigned somewhere other than its declaration and the state read' \
+  '2' "$telegram_retry_writes"
+assert_contains 'TELEGRAM_RETRY is not assigned from telegram_state' \
+  "$(grep 'TELEGRAM_RETRY=' "${REPO}/deploy/install.sh")" 'telegram_state'
+for inferred in 'already-bound' 'different-bot' 'token-rejected' 'token-unreadable'; do
+  assert_not_contains "the installer still classifies a cause from CLI output (${inferred})" \
+    "$(cat "${REPO}/deploy/install.sh")" "TELEGRAM_RETRY=\"${inferred}\""
+done
 
 test_case 'a first attempt that stored nothing outranks the error code'
 # Order matters and is easy to get backwards. A rejected token on a FIRST

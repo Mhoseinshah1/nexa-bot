@@ -722,10 +722,28 @@ export class BotBootstrapService {
       );
     }
     if (probe.outcome !== 'IDENTIFIED') {
+      /*
+       * OUTBOUND, and the message says so because the installer used to guess
+       * inbound (`OQ-TG-04` item 12).
+       *
+       * This is a call FROM this host TO Telegram, made before `setWebhook` is
+       * reached at all. The installer's classifier had no arm for this code, so
+       * the failure fell through to a summary about DNS for the operator's own
+       * domain and a certificate not yet issued — the opposite network boundary,
+       * and an afternoon spent looking at a webhook that was never attempted.
+       *
+       * "Rerun the installer" is kept, because for a timeout or a 5xx that IS
+       * the remedy; what it now says is where to look first if rerunning does
+       * not help.
+       */
       throw new NexaError({
         kind: 'UPSTREAM_UNAVAILABLE',
         code: PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_UNREACHABLE,
-        message: `Telegram could not be reached: ${probe.detail}. Rerun the installer.`,
+        message:
+          `Telegram could not be reached: ${probe.detail}. This is OUTBOUND: a call from this ` +
+          'host to the Telegram API, made before any webhook is registered — so DNS for your own ' +
+          'domain and your certificate are not involved and nothing was asked of them. Rerun the ' +
+          'installer; if it keeps failing, check egress from this host to the Telegram API.',
       });
     }
 

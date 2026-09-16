@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { stdin, stdout } from 'node:process';
 import { isNexaError, type TenantContext } from '@nexa/contracts';
 import type { BotBootstrapStatus } from './modules/platform/tenancy/application/bot-bootstrap.service.js';
+import { bootstrapRemedy } from './telegram-bootstrap-remedy.js';
 import { Prompter, PromptInputError } from './infrastructure/tty/prompt.js';
 import { createContainer } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
@@ -346,8 +347,19 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
   main().catch((error: unknown) => {
     // A NexaError's message is written for an operator; anything else is a bug
     // and keeps its stack.
-    if (isNexaError(error)) console.error(`${error.code}: ${error.message}`);
-    else if (error instanceof PromptInputError) console.error(error.message);
+    if (isNexaError(error)) {
+      console.error(`${error.code}: ${error.message}`);
+      /*
+       * And the bootstrap context, for the codes whose message cannot carry it.
+       *
+       * `bootstrapRemedy` answers for the four `platform.secret_*` codes and
+       * nothing else, because every `telegram.bootstrap_*` code is raised by a
+       * service that knows its own path and already says the right thing. See
+       * that function for why a bigger table would be worse than none.
+       */
+      const remedy = bootstrapRemedy(error.code);
+      if (remedy !== null) console.error(remedy);
+    } else if (error instanceof PromptInputError) console.error(error.message);
     else console.error(error);
     // Non-zero, always. ADR-0029 decision 4: an installation whose bot cannot
     // receive updates is not a completed installation, and the row surviving is

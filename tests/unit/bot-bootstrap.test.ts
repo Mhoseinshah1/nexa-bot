@@ -583,6 +583,27 @@ describe('bot bootstrap — a webhook failure is recoverable and is not success'
   });
 
   /*
+   * `OQ-TG-04` item 12. The installer's classifier had no arm for this code, so
+   * an outbound failure during `getMe` fell through to a summary about inbound
+   * DNS and certificates — the opposite network boundary, for a call that never
+   * reached `setWebhook`. The classifier is gone; the code still has to say
+   * which direction it is, because that is what the operator acts on.
+   */
+  it('names the OUTBOUND boundary when Telegram cannot be reached', async () => {
+    const { service, telegram } = build();
+    telegram.probe = { outcome: 'UNREACHABLE', detail: 'ETIMEDOUT' };
+
+    const message = await messageThrownBy(() =>
+      service.execute(scope, { token: TOKEN, publicBaseUrl: ORIGIN }),
+    );
+
+    expect(message).toContain('OUTBOUND');
+    expect(message).toContain('before any webhook is registered');
+    // And it rules out the two things the webhook summary sent people to.
+    expect(message).toContain('your certificate are not involved');
+  });
+
+  /*
    * `OQ-TG-04` item 1. The rejection message is a statement about a STORED
    * credential, and on a first bootstrap there is none: `getMe` runs before
    * `createFromBootstrap` precisely so a rejected token writes nothing, and
