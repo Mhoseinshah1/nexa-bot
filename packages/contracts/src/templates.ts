@@ -565,6 +565,27 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.payment.rejected',
+    description:
+      'Tells a customer an operator reviewed their manual transfer and did not accept ' +
+      'it. Sent by the customer notification lane, not as a reply \u2014 the rejection ' +
+      'happens while the customer is not looking. Says the payment is closed and the ' +
+      'order is not: a rejection leaves the order open until its own deadline, so the ' +
+      'customer may transfer again or pay from their wallet within the window.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.expired',
+    description:
+      'Tells a customer the payment window closed with nothing confirmed. Sent by the ' +
+      'customer notification lane. Distinct from `bot.payment.rejected` because no ' +
+      'person judged anything \u2014 a deadline passed \u2014 and a customer told ' +
+      '"rejected" for a lapsed window would reasonably think somebody looked at it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.payment.not_pending',
     description:
       'Shown when a customer acts on a payment that has already ended \u2014 confirmed, ' +
@@ -940,6 +961,27 @@ export const TEMPLATES = [
       'the provisioner, seconds later, and can fail. Claiming completion here would ' +
       'be the fabricated success this codebase refuses \u2014 the same reason ' +
       '`bot.service.provisioning` says a service is being made rather than made.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.action_succeeded',
+    description:
+      'Tells a customer the pause, resume, end, renewal or allowance they asked for ' +
+      'reached the panel. The counterpart to `bot.service.action_requested`, which ' +
+      'deliberately claims only that the request was recorded \u2014 this is the ' +
+      'message that says it actually happened, and without it the customer is never ' +
+      'told, which for a renewal they have paid for is the gap this key closes.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.action_failed',
+    description:
+      'Tells a customer the action they asked for will not happen, so they can ask ' +
+      'again or contact support rather than waiting for something that has stopped ' +
+      'coming. Says nothing about WHY: a provider failure reason is operational detail ' +
+      'and belongs in the operations log, not in a customer message.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },

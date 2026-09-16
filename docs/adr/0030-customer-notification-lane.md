@@ -65,8 +65,20 @@ ready" is a customer wondering which of two links is real, and a retried "your p
 was rejected" is worse. This is the same third outcome ADR 0025 insists on for backup
 delivery and for the same reason.
 
-**The correction.** A 429 is currently folded into `UNKNOWN`, and it must not be. The
-chain, verifiable by reading:
+**The correction.** A 429 is currently folded into `UNKNOWN`, and it must not be.
+
+This is a DELIBERATE, documented classification rather than an oversight, and saying so
+is the point of putting it in an ADR instead of a bug fix. `provisioning.ts:443` defines
+`UNCONFIRMED` as _"the send outcome was `UNKNOWN`: a timeout, a 5xx, a 429, or a 2xx whose
+body would not parse. The customer MAY have it."_ The 429 is named there explicitly.
+
+It is nonetheless wrong on the facts, and listing it beside three genuinely ambiguous
+cases is how it survived. A timeout, a 5xx and an unreadable 2xx all mean the request may
+have been processed and the customer may be holding the message. A 429 means Telegram
+DECLINED that request and told us when to come back. There is no ambiguity about delivery
+in a 429; there is only a delay.
+
+The chain, verifiable by reading:
 
 1. `apps/api/src/infrastructure/telegram/send-message.ts:135` — a 429 returns
    `FAILED_RETRYABLE` with `errorCode: 'telegram.rate_limited'` and Telegram's own

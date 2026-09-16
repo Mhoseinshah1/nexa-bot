@@ -113,6 +113,12 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.cancel_confirm_button': 'بله، انصراف بده',
   'bot.payment.cancelled':
     'پرداخت شما لغو شد و کد پیگیری قبلی دیگر معتبر نیست. سفارش تا پایان مهلت آن باز است و می‌توانید با روش دیگری پرداخت کنید.',
+  // Sent by the customer notification lane, not as a reply. Both say the payment is
+  // closed and neither says the ORDER is: a rejection and an expiry leave the order open
+  // until its own deadline, which is the behaviour OQ-4G-05 records.
+  'bot.payment.rejected':
+    'پرداخت شما بررسی شد و تأیید نشد. سفارش شما همچنان باز است و می‌توانید تا پایان مهلت آن دوباره پرداخت کنید.',
+  'bot.payment.expired': 'مهلت پرداخت شما به پایان رسید و این پرداخت بسته شد.',
   'bot.payment.not_pending': 'این پرداخت دیگر در انتظار نیست.',
 
   'bot.service.list_empty': 'هنوز سرویسی ندارید.',
@@ -153,6 +159,12 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'آیا از حذف «{productTitle}» مطمئن هستید؟ با تأیید، حساب شما روی سرور پاک می‌شود و این کار برگشت‌پذیر نیست.',
   'bot.service.terminate_confirm_button': 'بله، سرویس حذف شود',
   'bot.service.action_requested': 'درخواست شما ثبت شد و در حال اعمال روی سرور است.',
+  // The counterparts to `action_requested`, sent by the notification lane once the
+  // provisioner has an answer. `action_failed` deliberately carries no reason: a
+  // provider failure is operational detail and belongs in the operations log.
+  'bot.service.action_succeeded': 'درخواست شما با موفقیت روی سرور اعمال شد.',
+  'bot.service.action_failed':
+    'درخواست شما اعمال نشد. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.',
   'bot.service.capability_unsupported': 'این قابلیت برای سرویس شما در دسترس نیست.',
 
   'bot.discount.applied': 'کد تخفیف {code} اعمال شد. مبلغ تخفیف: {amount}',

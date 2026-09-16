@@ -142,9 +142,13 @@ than an absence. The chain is four links, each checkable by reading:
 
 So a single 429 parks a paid customer's subscription link out of the automatic lane until
 a person notices — and a 429 is what Telegram sends precisely when many customers are
-being served at once. `UNKNOWN` is the right answer for a timeout, a 5xx and an unreadable
-2xx, all of which may have been delivered; a 429 is Telegram declining the request and is
-not ambiguous about delivery.
+being served at once.
+
+The classification is deliberate, not an oversight: `provisioning.ts:443` names the 429
+explicitly among `UNCONFIRMED`'s causes. It is still wrong, and being listed beside three
+genuinely ambiguous cases is how it survived. A timeout, a 5xx and an unreadable 2xx may
+all have been delivered; a 429 is Telegram declining the request and telling us when to
+return.
 
 No committed test asserts either the current behaviour or the corrected one. ADR 0030 §2
 decides the correction and 4H-2 implements it, with its regression test, for the lane and
