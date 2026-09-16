@@ -200,8 +200,19 @@ separate times in a row.
 | F5  | A legacy row still refuses a token naming a different bot    | drop the second `refuseRepointing`                     | `bot-bootstrap.test.ts` › refuses a different bot on a row that predates the identity column               | KILLED                |
 | F6  | BOTH writers of `telegram_bot_id` name the collision         | rethrow raw from `recordTelegramIdentity`              | `bot-bootstrap-identity.test.ts` › names the collision when a LEGACY row learns an id another row holds    | KILLED                |
 | F7  | A missing token records the release instead of dying         | restore the `nexa_die`                                 | `botctl.test.sh` › a first install with no terminal and no token records its release                       | KILLED                |
-| F8  | The decryption summary names each code, not one repair       | restore "restoring the key material makes it readable" | `telegram-bootstrap-remedy.test.ts` › does not promise key material fixes the two it cannot fix            | KILLED                |
+| F8  | The decryption summary names each code, not one repair       | restore "restoring the key material makes it readable" | `telegram-bootstrap-remedy.test.ts` › gives each of the four a DIFFERENT sentence                          | KILLED, re-run in 4I  |
 | F9  | The rejected-token MESSAGE invents no recovery either        | restore "restore it in BotFather"                      | `bot-bootstrap.test.ts` › validates the token with getMe BEFORE it writes anything                         | KILLED                |
+
+F8 was re-run in Phase 4I and cites a different test than it did when it was
+written. The one it named — "does not promise key material fixes the two it
+cannot fix" — was RENAMED, because the Codex review of PR 31 established that the
+claim was true of only ONE of those two codes: restoring key material is exactly
+the recovery when `SECRET_AUTH_FAILED` comes from a right key id holding wrong
+material. F8's rule is unchanged — four codes, four sentences, not one repair —
+and collapsing them to one repair still kills four tests, of which "gives each of
+the four a DIFFERENT sentence" is the one that pins the rule as stated. Re-run
+here rather than left pointing at a name that no longer exists, which
+`check:citations` would have caught anyway and did.
 
 F9 is E1 again, one layer down: the installer summary was corrected and the CLI
 error printed immediately before it still told the operator to restore a revoked

@@ -263,3 +263,79 @@ The check is unreachable today — `execute` refuses an inactive tenant before i
 can reach ALREADY_COMPLETE — and that is not an argument against it. The refusal
 is one reordering away from moving, and this write is now reached by every
 `botctl update` of every installation.
+
+## What the one Codex review of PR 31 found
+
+Five findings on `0cea848`, all real, and four of them in code this phase wrote.
+Three are the same shape — a claim the code cannot support — which is the shape
+this phase exists to remove, twice inside the module built to remove it.
+
+| #      | Rule                                                                        | Mutation                                                                   | Named test                                                                                                       | Result |
+| ------ | --------------------------------------------------------------------------- | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ------ |
+| F4I-19 | botctl reads a booleanish setting with the vocabulary the schema accepts    | `nexa_boolean_word` narrowed to `true) printf 'on' ;; *) printf 'invalid'`  | botctl.test.sh › the booleanish vocabulary botctl reads is the one the schema accepts                             | KILLED |
+| F4I-20 | the menu reconcile asks the state before it invokes the CLI                 | the `case "$state" in none \| unavailable` skip deleted                     | botctl.test.sh › the command menu is reconciled only where there is a menu to reconcile                           | KILLED |
+| F4I-21 | a rollback reconciles the command menu too                                  | `telegram_reconcile_menu "${previous}"` deleted from `cmd_rollback`         | botctl.test.sh › a rollback reconciles the command menu too                                                       | KILLED |
+| F4I-22 | the version-unsupported remedy names no cause the code cannot separate      | the old `Re-enable acceptance, or upgrade.` text restored                   | telegram-bootstrap-remedy.test.ts › does not name a configuration remedy for an envelope that may be truncated    | KILLED |
+| F4I-23 | the auth-failed remedy does not rule out the one cause an operator can undo | the old `restoring key material does NOT fix it` clause restored            | telegram-bootstrap-remedy.test.ts › does not tell an operator a wrong key cannot be the cause of an auth failure  | KILLED |
+
+### F4I-19, and a rule that was already written down
+
+`nexa_listing_boolean` in `nexa-lib.sh` carried the reasoning verbatim before
+this phase started: _"a reader accepting only `true` would report a monitor an
+operator enabled with `yes` as disabled"_. The command-menu reconciliation was
+written one file away and compared against the literal `true` anyway. So the
+defect is not that the rule was unknown; it is that the rule lived in a function
+nobody had to call. `nexa_boolean_word` is that vocabulary extracted, and
+`nexa_listing_boolean` now calls it — one list, two readers.
+
+The test reads the spellings out of `config.schema.ts` rather than restating
+them, for the same reason: a list copied into a test agrees with the copy.
+
+### F4I-20 — the claimed mechanism was wrong and the defect was real
+
+Codex described `botctl update` HANGING on an invisible token prompt. It does
+not: `promptForToken` refuses when `stdin.isTTY !== true`, and `-T` is exactly
+what guarantees that — `cmd_telegram`'s own comment says so, one screen below.
+
+What actually happened is worse to read and easier to miss. The refusal went to
+`/dev/null`, and this printed _"the Telegram command menu could not be
+reconciled; run 'botctl telegram register'"_ — a command that fails in exactly
+the same way, because it supplies no token by design and the installation has no
+bot row. That is a fix telling an operator to run a command that cannot work,
+which `CLAUDE.md` records happening three times on the deployment branch, and
+`OQ-TG-04` item 2 is its general form. Validating a finding means checking the
+mechanism, not just the verdict; here the verdict was right and the mechanism was
+not.
+
+### F4I-22 and F4I-23 — the module's own argument, used against it
+
+`telegram-bootstrap-remedy.ts` opens by arguing that a remedy keyed on a code
+alone cannot separate two situations that share one code, and cites `OQ-TG-04`
+item 5 as the example. Both findings are that same defect inside that same file:
+
+- `SECRET_VERSION_UNSUPPORTED` has two producers in `secret-cipher.ts` — a v1
+  envelope with acceptance off, and an envelope that is not a recognised format
+  at all. The remedy named only the first pair and recommended a configuration
+  change, while the cipher's message printed one line above it says _"newer
+  release, or truncated"_. It contradicted the error it was annotating.
+- `SECRET_AUTH_FAILED` said _"restoring key material does NOT fix it"_ and _"A
+  key is not the problem"_ while listing a wrong key among the causes it cannot
+  distinguish. The right key id holding the wrong key material fails exactly
+  this way, and restoring the material is the one recovery an operator can
+  perform. The clause is true of `SECRET_KEY_ID_MISMATCH` and was copied one
+  case too far.
+
+### What the re-read found that Codex did not
+
+The comment 4I wrote above the reconciliation said the update _"released"_ the
+lock before it and that _"the CLI's own registration path takes the installation
+lock"_. Neither is true: `nexa_acquire_lock` holds a `flock` on a descriptor
+belonging to the calling shell and there is no release function, so the lock is
+held until botctl exits; and the CLI takes no lock at all — botctl takes it
+around the CLI. The arrangement is correct and the explanation was backwards,
+which is the version that survives a review, because a reader checking the claim
+finds the behaviour they were promised.
+
+No mutation is recorded for a comment. It is listed here because this document
+is the record of what this phase's own re-reads found, and a false comment found
+by re-reading is worth as much as a rule found by mutating.
