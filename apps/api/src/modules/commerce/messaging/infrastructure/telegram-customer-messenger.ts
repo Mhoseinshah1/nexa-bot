@@ -18,7 +18,7 @@ import type {
   CustomerMessage,
   CustomerMessenger,
   CustomerSendConditionReader,
-  CustomerSendOutcome,
+  CustomerSendResult,
 } from '../application/ports.js';
 
 /**
@@ -127,14 +127,14 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     private readonly timeoutMs: number,
   ) {}
 
-  async send(scope: TenantContext, message: CustomerMessage): Promise<CustomerSendOutcome> {
+  async send(scope: TenantContext, message: CustomerMessage): Promise<CustomerSendResult> {
     const token = await this.bots.tokenForBotInstance(scope, message.botInstanceId);
     if (token === null) {
       // Not an exception: a bot an operator disabled between the update arriving and
       // the reply being sent is an ordinary race, and the customer's arrival is already
       // committed. Recorded so the operator can see that replies are going nowhere.
       await this.recordFailure(scope, message, 'NO_BOT', null);
-      return 'REFUSED';
+      return { outcome: 'REFUSED' };
     }
 
     const text = await this.templates.render(scope, message.templateKey, message.values);
@@ -165,22 +165,47 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
 
     if (result.outcome === 'SUCCEEDED') {
       await this.recordRecovery(scope, message.botInstanceId);
-      return 'DELIVERED';
+      return { outcome: 'DELIVERED' };
+    }
+
+    /*
+     * A RATE LIMIT is its own answer, and separating it is the fix ADR 0030 §2 decides.
+     *
+     * `telegramSend` groups a 429 with a timeout and a 5xx as `FAILED_RETRYABLE`, and
+     * this file used to collapse all three into `UNKNOWN`. For a timeout and a 5xx that
+     * is right: Telegram may have processed the request. For a 429 it is not — the
+     * request was DECLINED, nothing was sent, and the response says when to return.
+     *
+     * The consequence of the old grouping is measured in `docs/phase4h-audit.md` §6b:
+     * `UNKNOWN` becomes `UNCONFIRMED`, which the delivery sweep never re-claims, so one
+     * rate limit withheld a paid customer's subscription link until a person noticed.
+     *
+     * NOT recorded as a failure condition. A rate limit is this installation being
+     * asked to slow down, not a bot whose replies are going nowhere, and opening the
+     * operator condition for it would cry wolf on every busy minute.
+     */
+    if (result.outcome === 'FAILED_RETRYABLE' && result.errorCode === 'telegram.rate_limited') {
+      return {
+        outcome: 'RATE_LIMITED',
+        ...(result.retryAfterMs === undefined ? {} : { retryAfterMs: result.retryAfterMs }),
+      };
     }
 
     /*
      * A retryable failure is UNCERTAIN, not REFUSED.
      *
-     * `telegramSend` calls a timeout, a 5xx, a 429 and an unreadable 2xx retryable,
-     * and every one of those means Telegram may have delivered the message. For a
-     * queue that is a reason to try again; for a customer reply it is a reason NOT to,
-     * because the customer would see it twice. So the distinction is preserved — in the
-     * returned outcome and in the event's context — and the decision is "tell an
-     * operator", which is what the event is.
+     * `telegramSend` calls a timeout, a 5xx and an unreadable 2xx retryable, and every
+     * one of those means Telegram may have delivered the message. For a queue that is a
+     * reason to try again; for a customer reply it is a reason NOT to, because the
+     * customer would see it twice. So the distinction is preserved — in the returned
+     * outcome and in the event's context — and the decision is "tell an operator",
+     * which is what the event is.
+     *
+     * The 429 that used to be in that list is handled above and never reaches here.
      */
     const unknown = result.outcome === 'FAILED_RETRYABLE';
     await this.recordFailure(scope, message, unknown ? 'UNCERTAIN' : 'REFUSED', result.errorCode);
-    return unknown ? 'UNKNOWN' : 'REFUSED';
+    return { outcome: unknown ? 'UNKNOWN' : 'REFUSED' };
   }
 
   /**

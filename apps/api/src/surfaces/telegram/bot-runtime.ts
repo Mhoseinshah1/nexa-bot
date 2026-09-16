@@ -18,6 +18,7 @@ import type {
 import type { CustomerService } from '../../modules/commerce/customers/application/customer.service.js';
 import type {
   CustomerButton,
+  CustomerSendOutcome,
   CustomerMessenger,
 } from '../../modules/commerce/messaging/application/ports.js';
 import type { CustomerRecord } from '../../modules/commerce/customers/application/ports.js';
@@ -529,7 +530,7 @@ export interface BotTurnResult {
   readonly replyKey: TemplateKey | null;
   /** The order this turn created or confirmed, when it was one of those. */
   readonly orderId: string | null;
-  readonly sent: 'DELIVERED' | 'REFUSED' | 'UNKNOWN' | 'NOT_ATTEMPTED';
+  readonly sent: CustomerSendOutcome | 'NOT_ATTEMPTED';
 }
 
 /**
@@ -813,7 +814,7 @@ export class BotRuntime {
       customerId: customer.id,
       replyKey: reply.key,
       orderId: reply.orderId,
-      sent,
+      sent: sent.outcome,
     };
   }
 

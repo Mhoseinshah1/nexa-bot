@@ -331,6 +331,32 @@ export class DrizzleServiceRepository implements ServiceRepository {
   }
 
   /**
+   * Rate-limited: back on the queue at Telegram's own time, with no attempt spent.
+   *
+   * The one delivery write that does NOT touch `delivery_attempts`. See
+   * `ServiceRepository.recordRateLimited` and ADR 0030 §2 for why that separation is
+   * the point rather than an optimisation.
+   */
+  async recordRateLimited(
+    scope: TenantContext,
+    id: string,
+    from: ServiceDeliveryState,
+    retryAt: Date,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(services)
+      .set({ deliveryNextAttemptAt: retryAt, deliverySendStartedAt: null, updatedAt: now })
+      .where(
+        and(eq(services.tenantId, tenantId), eq(services.id, id), eq(services.deliveryState, from)),
+      )
+      .returning({ id: services.id });
+    return rows.length > 0;
+  }
+
+  /**
    * Resolves sends that were handed to Telegram by a process that then died.
    *
    * A stamped row whose lease has run out is a message that MAY have arrived, and the

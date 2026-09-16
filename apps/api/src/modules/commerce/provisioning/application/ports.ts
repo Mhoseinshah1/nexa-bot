@@ -238,6 +238,27 @@ export interface ServiceRepository {
   ): Promise<boolean>;
 
   /**
+   * Records that Telegram rate-limited the announcement: still due, no attempt spent.
+   *
+   * Its own method rather than a flag on `recordDelivery`, because that one ALWAYS
+   * advances `delivery_attempts` and here it must not. ADR 0030 §2 carries the
+   * argument: the ceiling bounds definite refusals OF THIS MESSAGE, and a 429 is
+   * Telegram declining to look at it, not an outcome about it.
+   *
+   * `delivery_send_started_at` is cleared, because a 429 means the request was DECLINED
+   * rather than lost — so the row is safely claimable again at `retryAt` instead of
+   * waiting for `reapStrandedSends` to call it unknown.
+   */
+  recordRateLimited(
+    scope: TenantContext,
+    id: string,
+    from: ServiceDeliveryState,
+    retryAt: Date,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean>;
+
+  /**
    * Resolves sends whose sender died, so the automatic lane never repeats one.
    *
    * A stamped row past its lease becomes `UNCONFIRMED` if it was `PENDING`, and simply

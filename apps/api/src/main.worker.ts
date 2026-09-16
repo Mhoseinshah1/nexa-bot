@@ -87,6 +87,14 @@ async function main(): Promise<void> {
         // progress — see `PaymentExpiryLoop`, where "nothing was due" is the healthy
         // answer most of the time.
         ['payment-expiry', true, () => container.paymentExpiryLoop.isFresh(now)],
+        // The lane that tells a customer something they did not ask for. No flag, for
+        // the same reason as the line above: before Phase 4H an operator's rejection and
+        // the expiry sweep both happened while the customer was not looking and nothing
+        // told them, and an installation that could switch this off would be one that
+        // silently went back to that. Its failure mode is the dispatcher's — silence
+        // that looks exactly like nothing being wrong — so it is health-checked rather
+        // than trusted.
+        ['customer-notifications', true, () => container.customerNotificationLoop.isFresh(now)],
         [
           'notification-dispatcher',
           config.NOTIFICATION_DISPATCH_ENABLED,
@@ -149,6 +157,9 @@ async function main(): Promise<void> {
   // deadline a customer was shown was only ever a refusal, so a month-old order still
   // read as awaiting payment and an operator could not tell it from this morning's.
   container.paymentExpiryLoop.start();
+  // And the customer notification lane. `docs/phase4h-audit.md` §1 measured what it
+  // replaces: exactly one thing could be said to a customer who was not looking.
+  container.customerNotificationLoop.start();
 
   // Notification delivery. A poller rather than an outbox consumer, because the
   // relay runs its consumers inside the claim transaction and a send must not

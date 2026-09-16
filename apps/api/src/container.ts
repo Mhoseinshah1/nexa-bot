@@ -139,6 +139,13 @@ import { decideOperability } from './modules/commerce/provisioning/application/p
 import { ProvisionerService } from './modules/commerce/provisioning/application/provisioner.service.js';
 import { ProvisionerLoop } from './modules/commerce/provisioning/application/provisioner-loop.js';
 import { DeliveryService } from './modules/commerce/provisioning/application/delivery.service.js';
+import { CustomerNotificationService } from './modules/commerce/messaging/application/customer-notification.service.js';
+import {
+  CustomerNotificationLoop,
+  CUSTOMER_NOTIFICATION_INTERVAL_MS,
+} from './modules/commerce/messaging/application/customer-notification-loop.js';
+import { DrizzleCustomerNotificationRepository } from './modules/commerce/messaging/infrastructure/drizzle-customer-notification.repository.js';
+import { DrizzleNotificationSubjectReader } from './modules/commerce/messaging/infrastructure/drizzle-notification-subject.reader.js';
 import { BotRuntime } from './surfaces/telegram/bot-runtime.js';
 import { I18nTemplateCatalogue } from './modules/control/templates/infrastructure/i18n-template-catalogue.js';
 import { TemplateManagementService } from './modules/control/templates/application/template-management.service.js';
@@ -223,6 +230,16 @@ export interface Container {
    * wedged panel must not delay work that needs no panel.
    */
   readonly paymentExpiryLoop: PaymentExpiryLoop;
+  /**
+   * The customer notification lane's timer.
+   *
+   * In EVERY role's container and started only by `main.worker.ts`, for the reason the
+   * comment above `paymentExpiryLoop` gives: a member that exists in one role's
+   * container and not another's is a member whose absence is discovered at runtime.
+   */
+  readonly customerNotificationLoop: CustomerNotificationLoop;
+  /** The lane's repository, shared so producers enqueue through the same object. */
+  readonly customerNotifications: DrizzleCustomerNotificationRepository;
   readonly audit: AuditWriter;
   readonly opsLog: OperationalEventRecorder;
   /**
@@ -1265,6 +1282,54 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * through, and inventing an answer is worse than using the only recorded one. Carried
    * as `OQ-PROV-02` in `docs/open-questions.md` with the column that would close it.
    */
+  /**
+   * The customer notification lane: repository, dispatcher and timer.
+   *
+   * Built after `customerMessenger` because it shares it — one messenger for every
+   * customer-facing send in the process, so the bot-token resolution, the template
+   * rendering and the 429 classification cannot diverge between the reply path and the
+   * background one.
+   */
+  const customerNotificationRepository = new DrizzleCustomerNotificationRepository(database.db);
+  const customerNotificationLoop = new CustomerNotificationLoop(
+    new CustomerNotificationService({
+      notifications: customerNotificationRepository,
+      contacts: {
+        contactFor: async (scope, customerId, tx) => {
+          const customer = await customerRepository.findById(scope, customerId, tx);
+          if (customer === null) return { kind: 'NONE' };
+          /*
+           * The status of the row just read, not the one the claim matched.
+           *
+           * `claimDue` joins `customers` and requires `ACTIVE`, which settles the
+           * ordinary case and cannot settle the race: an operator blocking a customer
+           * between that claim and this read left a leased row whose customer is now
+           * blocked. Checked here because here is the last read before the send.
+           */
+          if (customer.status !== 'ACTIVE') return { kind: 'BLOCKED' };
+          return { kind: 'CONTACT', contact: { chatId: customer.telegramUserId } };
+        },
+      },
+      subjects: new DrizzleNotificationSubjectReader(database.db),
+      messenger: customerMessenger,
+      uow,
+      clock,
+      // The same tenant kill switch every other path reads. A stopped tenant is a
+      // healthy pass that did nothing, never a throw — see `deliverDue`.
+      scopeIsActive: (scope) => uow.run(scope, async (tx) => tenants.scopeIsActive(scope, tx)),
+      logger,
+    }),
+    {
+      scope: () =>
+        installationTenantId === null
+          ? null
+          : { tenantId: installationTenantId, botInstanceId: null },
+      intervalMs: CUSTOMER_NOTIFICATION_INTERVAL_MS,
+      now: () => clock.now().getTime(),
+      logger,
+    },
+  );
+
   const deliveryService = new DeliveryService({
     services: serviceRepository,
     contacts: {
@@ -1772,6 +1837,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     backupRunSweeper,
     recoveryRequestSweeper,
     paymentExpiryLoop,
+    customerNotificationLoop,
+    customerNotifications: customerNotificationRepository,
     audit,
     opsLog,
     opsLogWriter,
@@ -1903,6 +1970,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       await backupRunSweeper.stop();
       await recoveryRequestSweeper.stop();
       await paymentExpiryLoop.stop();
+      await customerNotificationLoop.stop();
       await redis.close();
       await database.close();
     },
