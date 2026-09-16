@@ -1946,6 +1946,25 @@ export const paymentSummarySchema = z.object({
   confirmedAt: z.iso.datetime().nullable(),
   /** Which administrator confirmed it. Frozen once set — migration 0035. */
   confirmedByAdminId: z.string().nullable(),
+  /**
+   * When the payment ended WITHOUT money — rejected, withdrawn or expired.
+   *
+   * The mirror of `confirmedAt`, and separate from it because they are different
+   * facts and `payments_confirmed_check` binds the confirmation's own fields to
+   * CONFIRMED. A surface that showed one field for both would have to decide which
+   * meaning it carried by reading `state`, which is how a rejection comes to be
+   * displayed as an approval.
+   */
+  resolvedAt: z.iso.datetime().nullable(),
+  /**
+   * Which administrator resolved it, when a person did.
+   *
+   * Null for an expiry — nobody decided that, a deadline did — and null for a
+   * customer's own withdrawal. The distinction is the point: "who rejected this and
+   * when" is the question `UNK-PR-010` records the legacy system as unable to answer
+   * about an approval, and a rejection deserves the same answer.
+   */
+  resolvedByAdminId: z.string().nullable(),
   expiresAt: z.iso.datetime().nullable(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
@@ -1955,6 +1974,12 @@ export type PaymentSummaryResponse = z.infer<typeof paymentSummarySchema>;
 export const paymentDetailSchema = paymentSummarySchema.extend({
   /** The operator's note about the evidence. Detail only. */
   evidenceNote: z.string().nullable(),
+  /**
+   * Why it was rejected, in the operator's own words. Detail only, same as the
+   * evidence note and for the same reason — it is one person's text about another
+   * person's bank transfer.
+   */
+  resolutionNote: z.string().nullable(),
 });
 export type PaymentDetailResponse = z.infer<typeof paymentDetailSchema>;
 
@@ -2000,6 +2025,29 @@ export const confirmPaymentRequestSchema = z.object({
 });
 export type ConfirmPaymentRequest = z.infer<typeof confirmPaymentRequestSchema>;
 
+/**
+ * An operator recording that the money did NOT arrive.
+ *
+ * The other half of `receipts.review`, which has read *"Approve or reject a receipt"*
+ * since the permission catalogue was frozen and has had only the approve half behind it
+ * until now. The note is REQUIRED for the same reason it is required on a confirmation:
+ * a decision about somebody's money with no recorded basis is the legacy receipt review,
+ * which records neither reviewer nor reason.
+ *
+ * There is no `reason` ENUM beside it. A closed list here would be this schema inventing
+ * a taxonomy of why transfers fail, and the operator is the one who just looked at the
+ * bank statement.
+ *
+ * It takes no amount and no state, and there is no matching "unreject": a rejection is
+ * legal only from PENDING, and a payment that was CONFIRMED is reversed by a refund
+ * rather than by an edit (`OQ-4C-02`).
+ */
+export const rejectPaymentRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  resolutionNote: z.string().trim().min(1).max(500),
+});
+export type RejectPaymentRequest = z.infer<typeof rejectPaymentRequestSchema>;
+
 export const WALLET_ROUTES = {
   balance: (customerId: string) => `/users/${encodeURIComponent(customerId)}/wallet`,
   entries: (customerId: string) => `/users/${encodeURIComponent(customerId)}/wallet/entries`,
@@ -2010,6 +2058,7 @@ export const PAYMENT_ROUTES = {
   list: '/payments',
   detail: (id: string) => `/payments/${encodeURIComponent(id)}`,
   confirm: (id: string) => `/payments/${encodeURIComponent(id)}/confirm`,
+  reject: (id: string) => `/payments/${encodeURIComponent(id)}/reject`,
 } as const;
 
 // --- Backup and disaster recovery -------------------------------------------

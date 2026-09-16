@@ -512,6 +512,39 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.payment.cancel_button',
+    description:
+      'The label on the button a customer presses to withdraw a pending out-of-band ' +
+      'payment they started and decided not to make. A key rather than a literal, for ' +
+      'the reason `bot.payment.wallet_button` gives. It exists because until this ' +
+      'release a customer who changed their mind had exactly one option \u2014 never ' +
+      'pay \u2014 and the payment stayed PENDING for ever with its reference live.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.cancelled',
+    description:
+      'Confirms that a pending payment was withdrawn and that the quoted reference is ' +
+      'no longer good. It does NOT say the order is gone: a withdrawal closes the ' +
+      'payment and leaves the order open until its own deadline, so the customer may ' +
+      'still pay by another method within the window.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.not_pending',
+    description:
+      'Shown when a customer acts on a payment that has already ended \u2014 confirmed, ' +
+      'withdrawn, rejected or expired. Its own key rather than the generic ' +
+      '`bot.order.unavailable`, because this is the one refusal a customer reaches by ' +
+      'scrolling back to an old message and pressing a button that was live when it was ' +
+      'sent; telling them the thing is unavailable reads as a fault, and telling them it ' +
+      'is no longer pending reads as what happened.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.service.list_empty',
     description: 'Shown when the customer has no services.',
     format: 'PLAIN_TEXT',

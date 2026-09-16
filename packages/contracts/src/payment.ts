@@ -53,6 +53,57 @@ export const paymentStateSchema = z.enum(PAYMENT_STATES);
 
 export const PAYMENT_TERMINAL_STATES = ['CONFIRMED', 'FAILED', 'CANCELLED', 'EXPIRED'] as const;
 
+/**
+ * The terminal states a payment reaches WITHOUT money having moved.
+ *
+ * `PAYMENT_TERMINAL_STATES` minus `CONFIRMED`, named rather than derived because three
+ * separate things need the same list and a derived one would be re-derived differently
+ * in at least one of them: the schema's `payments_resolved_check`, the repository's
+ * `from` guards, and the surfaces deciding whether anything can still be done to a row.
+ *
+ * What they share is the fact `payments_confirmed_check` states from the other side —
+ * `confirmed_at` and `evidence_kind` belong to a confirmation, so a payment that ended
+ * without one has nothing to put in them. It needs its own three: WHEN it was resolved,
+ * WHO resolved it if a person did, and WHY. The legacy receipt review records none of
+ * that for an approval (`UNK-PR-010`), and the question about a rejection is the same
+ * question.
+ *
+ * Deliberately NOT a parallel `resolution_kind` enum. The state is the classification
+ * already — `commerce.ts` argues exactly this for orders, that *"the customer changed
+ * their mind" and "we stopped waiting" are different facts about the same row* and must
+ * not be merged — so a kind column would today be derivable from `state` by a rule, and
+ * a second source of truth that can disagree with the first. A gateway-driven or
+ * reconciled failure, when one exists, is distinguished by `resolved_by_admin_id` being
+ * null, not by a member added here in advance of its producer.
+ */
+export const PAYMENT_RESOLVED_STATES = ['FAILED', 'CANCELLED', 'EXPIRED'] as const;
+export type PaymentResolvedState = (typeof PAYMENT_RESOLVED_STATES)[number];
+
+/**
+ * The bounds on how long a PENDING payment is held open.
+ *
+ * The maximum is the owner's, stated in owner revision 4 and recorded in
+ * `docs/open-questions.md` under `OQ-4C-01`:
+ *
+ * > «مهلت پرداخت حداکثر **یک ساعت** است و پس از آن پرداخت و سفارش باید منقضی یا لغو
+ * > شوند. این قاعده باید در دامنه و سرور اجرا شود، نه با یک تایمر در مرورگر.»
+ *
+ * At most one hour; after it, the payment AND the order must be expired or cancelled;
+ * and the rule belongs in the domain and on the server rather than in a browser timer.
+ * So the hour is the CEILING, not the default-and-suggestion: a tenant may hold a
+ * transfer open for less time than the owner fixed and may not hold one for longer.
+ *
+ * The floor is five minutes, matching `ORDER_EXPIRY_MINUTES_MIN`, and for the reason
+ * that setting gives: a window shorter than the time it takes a customer to open their
+ * banking app expires the payment underneath them.
+ *
+ * This is NOT `sales.order_expiry_minutes`. That one bounds a DRAFT's price hold, and
+ * its own registry entry already records the distinction — a customer holding a quote
+ * and a customer holding bank details and an amount are in different situations.
+ */
+export const PAYMENT_WINDOW_MINUTES_MIN = 5;
+export const PAYMENT_WINDOW_MINUTES_MAX = 60;
+
 export const PAYMENT_EVENTS = [
   'CONFIRM',
   'FAIL',

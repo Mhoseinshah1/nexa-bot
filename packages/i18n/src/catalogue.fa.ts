@@ -105,6 +105,10 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.manual_button': 'پرداخت کارت به کارت',
   'bot.payment.unconfigured': 'این روش پرداخت در حال حاضر فعال نیست.',
   'bot.payment.received_for_review': 'رسید شما دریافت شد و برای بررسی در نوبت قرار گرفت.',
+  'bot.payment.cancel_button': 'انصراف از پرداخت',
+  'bot.payment.cancelled':
+    'پرداخت شما لغو شد و کد پیگیری قبلی دیگر معتبر نیست. سفارش تا پایان مهلت آن باز است و می‌توانید با روش دیگری پرداخت کنید.',
+  'bot.payment.not_pending': 'این پرداخت دیگر در انتظار نیست.',
 
   'bot.service.list_empty': 'هنوز سرویسی ندارید.',
   'bot.service.list_heading': 'سرویس‌های شما:',
