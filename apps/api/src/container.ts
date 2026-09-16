@@ -1,5 +1,9 @@
 import { fileURLToPath } from 'node:url';
-import { MAX_REQUESTS_PER_PROBE, OPERATION_LEASE_SECONDS_MIN } from '@nexa/contracts';
+import {
+  MAIN_MENU_BUTTONS,
+  MAX_REQUESTS_PER_PROBE,
+  OPERATION_LEASE_SECONDS_MIN,
+} from '@nexa/contracts';
 import type {
   AuditWriter,
   Clock,
@@ -11,7 +15,7 @@ import type {
   SecretCipher,
   TenantId,
 } from '@nexa/contracts';
-import { createTranslator } from '@nexa/i18n';
+import { CATALOGUE_FA, createTranslator } from '@nexa/i18n';
 import type { OperationType, TenantContext, Translator } from '@nexa/contracts';
 
 import { acceptsV1, type AppConfig } from './infrastructure/config/config.schema.js';
@@ -1990,6 +1994,15 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     delivery: deliveryService,
     orders: orderService,
     botRuntime: new BotRuntime({
+      /*
+       * The main menu's routing table, built HERE because this is the only layer
+       * that may read the catalogue on this path: the boundary check refuses
+       * `@nexa/i18n` in a surface, and `TelegramCustomerMessenger` draws the same
+       * keyboard from the same constant. One source, two consumers, no drift.
+       */
+      mainMenu: new Map(
+        MAIN_MENU_BUTTONS.map((button) => [CATALOGUE_FA[button.label], `/${button.command}`]),
+      ),
       /*
        * The one write the turn makes after its Telegram send, and the transaction
        * it needs, kept OUT of the surface.

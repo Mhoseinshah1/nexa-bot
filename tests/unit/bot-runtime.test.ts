@@ -21,6 +21,7 @@ import {
   clampDiscount,
   normaliseDiscountCode,
 } from '@nexa/contracts';
+import { MAIN_MENU_BUTTONS, MAIN_MENU_ROWS } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
 import {
   BOT_INTENTS,
@@ -66,6 +67,82 @@ describe('a Telegram turn, decided before any I/O', () => {
     // In a group Telegram sends `/start@thebot`. The bot it names is the bot that got it.
     expect(intentOf({ message: { text: '/start@nexa_bot' } }).intent).toBe('START');
     expect(intentOf({ message: { text: '  /START  ' } }).intent).toBe('START');
+  });
+
+  it('routes every main-menu button to the command it stands for', () => {
+    /*
+     * Real v0.2.0 staging acceptance is why this exists: the bot answered five commands
+     * and an ordinary customer still had to type a slash. The keyboard is the fix, and
+     * the rule that makes it safe is that a tap is NOT a second handler — it resolves to
+     * the slash command and re-enters the branch that already existed.
+     *
+     * The map is built the way the composition root builds it, from the same two
+     * constants, so a label edited in the catalogue without the routing table moving
+     * with it fails here.
+     */
+    const menu = new Map(
+      MAIN_MENU_BUTTONS.map((button) => [CATALOGUE_FA[button.label], `/${button.command}`]),
+    );
+
+    expect(intentOf({ message: { text: CATALOGUE_FA['bot.menu.catalog'] } }, menu)).toEqual(
+      intentOf({ message: { text: '/catalog' } }),
+    );
+    expect(intentOf({ message: { text: CATALOGUE_FA['bot.menu.services'] } }, menu)).toEqual(
+      intentOf({ message: { text: '/services' } }),
+    );
+    expect(intentOf({ message: { text: CATALOGUE_FA['bot.menu.wallet'] } }, menu)).toEqual(
+      intentOf({ message: { text: '/wallet' } }),
+    );
+    expect(intentOf({ message: { text: CATALOGUE_FA['bot.menu.help'] } }, menu)).toEqual(
+      intentOf({ message: { text: '/help' } }),
+    );
+  });
+
+  it('answers a menu label it was not given as an unknown command', () => {
+    // The map is the whole authority. Without it — a bot with no keyboard configured —
+    // the label is ordinary text and gets the answer ordinary text has always got.
+    expect(intentOf({ message: { text: CATALOGUE_FA['bot.menu.catalog'] } }).intent).toBe(
+      'UNSUPPORTED',
+    );
+  });
+
+  it('still answers arbitrary text as an unknown command', () => {
+    const menu = new Map(
+      MAIN_MENU_BUTTONS.map((button) => [CATALOGUE_FA[button.label], `/${button.command}`]),
+    );
+    // No fuzzy matching, no prefix matching, no case folding: the menu is a closed set
+    // of exact strings and everything else is what it was before the menu existed.
+    expect(intentOf({ message: { text: 'سلام' } }, menu).intent).toBe('UNSUPPORTED');
+    expect(intentOf({ message: { text: 'خرید' } }, menu).intent).toBe('UNSUPPORTED');
+    expect(
+      intentOf({ message: { text: `${CATALOGUE_FA['bot.menu.catalog']} extra` } }, menu).intent,
+    ).toBe('UNSUPPORTED');
+  });
+
+  it('offers exactly the four top-level actions this release can perform', () => {
+    /*
+     * A keyboard is a PROMISE. The legacy system's menu described a product that did
+     * not exist, and `docs/research/` records what that cost; a button answering "not
+     * available" would be that defect reproduced deliberately.
+     *
+     * So the set is pinned against `BOT_COMMANDS` minus `start` — every command the bot
+     * answers that is a place a customer can go — and a Phase 7 button cannot be added
+     * here without a command to carry it.
+     */
+    expect(MAIN_MENU_ROWS.map((row) => row.map((button) => button.command))).toEqual([
+      ['catalog', 'services'],
+      ['wallet', 'help'],
+    ]);
+    expect(MAIN_MENU_BUTTONS.map((button) => button.label)).toEqual([
+      'bot.menu.catalog',
+      'bot.menu.services',
+      'bot.menu.wallet',
+      'bot.menu.help',
+    ]);
+    // And every label renders. A key with no catalogue entry is a blank button.
+    for (const button of MAIN_MENU_BUTTONS) {
+      expect(CATALOGUE_FA[button.label], `${button.label} has no text`).toBeTruthy();
+    }
   });
 
   it('reads /catalog the same way, and carries no target for it', () => {

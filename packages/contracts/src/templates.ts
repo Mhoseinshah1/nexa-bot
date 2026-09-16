@@ -187,6 +187,42 @@ export const TEMPLATES = [
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
+  /*
+   * The four labels on the persistent main-menu keyboard.
+   *
+   * They are template keys for the reason every other customer-facing string is one —
+   * `nexa-conventions` admits no literal in a surface, and the i18n missing-key check
+   * covers what is declared here. What is DIFFERENT about them is stated where they are
+   * used: `MAIN_MENU_ROWS` is a ROUTING table, and the surface reads these four from the
+   * shared catalogue rather than from a tenant's overrides, because a label a tenant can
+   * rename is a route a tenant can break.
+   */
+  {
+    key: 'bot.menu.catalog',
+    description: 'The main-menu button that opens the catalogue. Routes exactly as /catalog.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.menu.services',
+    description:
+      "The main-menu button that lists the customer's services. Routes exactly as /services.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.menu.wallet',
+    description: 'The main-menu button that shows the wallet balance. Routes exactly as /wallet.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.menu.help',
+    description:
+      'The main-menu button that answers with the command list. Routes exactly as /help.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
   {
     key: 'bot.help',
     description:

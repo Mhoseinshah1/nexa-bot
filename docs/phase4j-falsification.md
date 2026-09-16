@@ -118,3 +118,42 @@ that DOES know it claims it later. That pays off on every future kind addition,
 including the direction Codex named, and it is what makes the rule enforceable
 rather than a note somebody has to remember. `docs/conventions.md` carries the
 staging rule beside it.
+
+## 4J-5 — the persistent main menu, after real v0.2.0 staging acceptance
+
+Staging acceptance is what found this: the bot registered five commands with
+Telegram and an ordinary customer still had to know to type a slash. The
+keyboard is navigation only — it carries no identifier and therefore no
+authority, and every contextual action stays on `callback_data`.
+
+| #      | Rule                                                              | Mutation                                                    | Named test                                                                                                  | Result |
+| ------ | ----------------------------------------------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ------ |
+| F4J-13 | each menu label routes to the command it stands for               | the container's `mainMenu` map replaced with an empty one   | `telegram-payment-flow.test.ts` › answers a main-menu tap exactly as it answers the slash command           | KILLED |
+| F4J-14 | `/start` attaches the persistent keyboard                         | the `keyboard: 'MAIN_MENU'` the START reply carries removed | `telegram-customer-turn.test.ts` › attaches the persistent main menu to the welcome, and nothing else to it | KILLED |
+| F4J-15 | the menu offers exactly the four actions this release can perform | the wallet button deleted from `MAIN_MENU_ROWS`             | `bot-runtime.test.ts` › offers exactly the four top-level actions this release can perform                  | KILLED |
+| F4J-16 | the string drawn is the string matched                            | the messenger draws each label with a trailing space        | `telegram-customer-turn.test.ts` › attaches the persistent main menu to the welcome, and nothing else to it | KILLED |
+
+F4J-13 kills two tests; the table cites one. The other is
+`telegram-payment-flow.test.ts` › answers the catalogue button with the
+catalogue, and its buttons still work. F4J-15 also kills
+`bot-runtime.test.ts` › routes every main-menu button to the command it stands
+for and `telegram-customer-turn.test.ts` › attaches the persistent main menu to
+the welcome, and nothing else to it.
+
+### One more mutation, deliberately left out of the table
+
+Rewording `bot.menu.wallet` in the catalogue without touching the routing table
+breaks nothing, and it has no row above because it has no test to cite and never
+should: it is a survivor by construction rather than for want of coverage.
+
+Rewording a label breaks nothing, because the keyboard is DRAWN from the
+catalogue entry and the route is DERIVED from the same entry. The two cannot
+disagree, so a rename changes what the customer reads and not what the button
+does — which is what the single source of truth was for.
+
+The mutation that WOULD be a defect is desynchronising them, and it has two
+shapes, both killed above: drawing a string the router does not match (F4J-16)
+and moving the routing table without the label (F4J-15). Recording F4J-17 as a
+survivor without that distinction would read as missing coverage; recording it
+at all is the point, because the next reader asking "why is nothing asserting
+the Persian text" deserves the answer.

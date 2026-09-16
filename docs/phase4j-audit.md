@@ -486,3 +486,39 @@ roles remain `api`, `worker`, `monitor`, `recovery` and `provisioner`, all five
 are compose services, and all five are in `NEXA_READY_SERVICES`. The sweep runs
 inside `ProvisionerLoop.tick`, which the `provisioner` role already owns and
 whose readiness already depends on the loop having ticked.
+
+---
+
+# What real v0.2.0 staging acceptance added to this phase
+
+Everything above was measured from the repository. This one came from running
+the product: a staging acceptance pass on v0.2.0 found that the bot exposed its
+five commands through `setMyCommands` and nothing else, so an ordinary customer
+had to know to type a slash — or to find Telegram's own command menu — before
+they could do anything at all.
+
+That is not a defect any scan in this phase would have found, because nothing is
+broken: every command answers, the menu is registered, and the audit's eight axes
+are about correctness rather than reachability. It is the kind of finding only
+use produces, which is why it is recorded here rather than folded into the work
+list above as though the audit had predicted it.
+
+**4J-5** is the fix: a persistent `ReplyKeyboardMarkup` carrying the four
+top-level actions this release can perform, attached to the `/start` reply and
+routed through the EXISTING closed command set rather than a second dispatch
+table. `setMyCommands` stays — it is the client's own menu and the fallback.
+
+Three rules bound it, and each is a way the keyboard could have become something
+this codebase refuses:
+
+- **It carries no identifier and therefore no authority.** A tap arrives as
+  ordinary text with no `callback_data`. Every contextual action — a product, a
+  payment, a service, a confirmation — stays on the callback architecture with
+  its validated id, its ownership check and its tenant scope.
+- **It promises nothing the release cannot do.** No referral, reseller,
+  affiliate, cashback, promotion, wheel or trial button. `docs/research/` records
+  what a menu describing a product that does not exist cost the legacy system.
+- **Routing is closed and exact.** Four known strings map to four known commands;
+  everything else is the unsupported answer it was before. No fuzzy matching, no
+  conversational FSM, no stateful prompt capture — `INCIDENT-FIN-001` is what the
+  last of those did when it outlived the question it was asked for.

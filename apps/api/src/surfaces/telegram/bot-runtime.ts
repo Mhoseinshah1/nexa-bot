@@ -321,7 +321,30 @@ export const CATALOG_PAGE_SIZE = 20;
  * The payload itself is deliberately NOT returned here: nothing in 4A consumes it, and a
  * field nothing consumes is a field that gets logged.
  */
-export function intentOf(update: unknown): BotCommand {
+/**
+ * What a tap on the persistent main menu sends, and the command it means.
+ *
+ * Telegram delivers a `ReplyKeyboardMarkup` tap as an ORDINARY TEXT MESSAGE whose body
+ * is the button's label. There is no `callback_data`, no signature and no id — which is
+ * why the menu carries no authority and every contextual action stays on the callback
+ * architecture with its validated identifier and its ownership check.
+ *
+ * PASSED IN rather than read here, because a surface may not reach the catalogue: the
+ * boundary check refuses `@nexa/i18n` in `surfaces/`, and its reason is this exact
+ * shape — a surface that renders text itself is a second renderer beside the template
+ * resolver. The composition root builds this map from the same catalogue the messenger
+ * draws the keyboard from, so the string that is drawn and the string that is matched
+ * come from one place and cannot disagree.
+ *
+ * Matched on the EXACT string. No case folding and no fuzzy match: an unknown text is
+ * `UNSUPPORTED` exactly as it was before this existed.
+ */
+export type MainMenuRoutes = ReadonlyMap<string, string>;
+
+/** No menu configured. The slash commands still answer; nothing else changes. */
+const NO_MENU: MainMenuRoutes = new Map();
+
+export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCommand {
   const callback = (update as { callback_query?: { id?: unknown; data?: unknown } } | null)
     ?.callback_query;
   if (callback !== undefined && callback !== null) {
@@ -489,7 +512,15 @@ export function intentOf(update: unknown): BotCommand {
 
   const text = (update as { message?: { text?: unknown } } | null)?.message?.text;
   if (typeof text !== 'string') return UNSUPPORTED;
-  const first = text.trim().split(/\s+/)[0]?.toLowerCase();
+  /*
+   * A menu tap first, and it is matched on the WHOLE message rather than its first
+   * word: the labels contain spaces, and `خرید اشتراک` split on whitespace is not a
+   * command. Resolving to the slash command it stands for is what makes the button and
+   * the command literally the same path rather than two that agree today.
+   */
+  const trimmed = text.trim();
+  const asCommand = menu.get(trimmed) ?? trimmed;
+  const first = asCommand.split(/\s+/)[0]?.toLowerCase();
   // `/start@somebot` is what Telegram sends in a group. Stripped, because the bot it
   // names is the bot that received it.
   const command = first?.split('@')[0];
@@ -569,6 +600,15 @@ export interface BotRuntimeDeps {
    * reporting a successful enqueue as a successful send is the kind of
    * cheerfulness this codebase removes.
    */
+  /**
+   * The persistent main menu's label-to-command map.
+   *
+   * Supplied by the composition root, which is the only place allowed to read the
+   * catalogue on this path — see `MainMenuRoutes`. An empty map is a bot with no
+   * keyboard and unchanged slash commands, which is what every test that does not care
+   * about the menu gets.
+   */
+  readonly mainMenu: MainMenuRoutes;
   readonly queueRateLimitedFact: (
     scope: TenantContext,
     customerId: UserId,
@@ -671,6 +711,16 @@ interface PendingReply {
     readonly kind: CustomerNotificationKind;
     readonly subjectId: string;
   };
+  /**
+   * Attach the persistent main-menu keyboard to this reply.
+   *
+   * ONE reply sets it — the answer to `/start` — because Telegram keeps a
+   * `ReplyKeyboardMarkup` shown until something replaces or removes it, and nothing in
+   * this product removes it. Re-sending it on every reply would be a second copy of a
+   * keyboard the customer already has, and would fight with the inline keyboards the
+   * contextual flows attach.
+   */
+  readonly keyboard?: 'MAIN_MENU';
 }
 
 /**
@@ -857,7 +907,7 @@ export class BotRuntime {
       readonly from: unknown;
     },
   ): Promise<BotTurnResult> {
-    const command = intentOf(input.update);
+    const command = intentOf(input.update, this.deps.mainMenu);
     const { intent } = command;
 
     /*
@@ -936,6 +986,7 @@ export class BotRuntime {
       values: reply.values,
       botInstanceId: input.botInstanceId,
       ...(reply.buttons.length === 0 ? {} : { buttons: reply.buttons }),
+      ...(reply.keyboard === undefined ? {} : { keyboard: reply.keyboard }),
     });
 
     /*
@@ -1155,7 +1206,23 @@ export class BotRuntime {
         input.idempotencyKey,
       );
     }
-    return { key: replyFor(command.intent, arrival), values: {}, buttons: [], orderId: null };
+    /*
+     * The main menu rides on `/start`, and on nothing else.
+     *
+     * Real v0.2.0 staging acceptance is what put it here: the bot registered five
+     * commands with Telegram and an ordinary customer still had to know to type a
+     * slash. Telegram keeps a `ReplyKeyboardMarkup` shown until something replaces it,
+     * so attaching it once — to the first message anybody ever receives — is enough,
+     * and attaching it to every reply would fight the inline keyboards the contextual
+     * flows use.
+     *
+     * A BLOCKED customer gets `bot.blocked` and NO keyboard: the reply above returns
+     * before this, and drawing a menu for somebody who may not use it is the untruthful
+     * surface this codebase keeps refusing.
+     */
+    const key = replyFor(command.intent, arrival);
+    const menu = command.intent === 'START' ? ({ keyboard: 'MAIN_MENU' } as const) : {};
+    return { key, values: {}, buttons: [], orderId: null, ...menu };
   }
 
   /**

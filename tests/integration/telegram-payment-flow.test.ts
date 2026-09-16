@@ -802,6 +802,62 @@ describe('the customer payment flow over Telegram', () => {
   });
 
   // -------------------------------------------------------------------------
+  // The persistent main menu
+  // -------------------------------------------------------------------------
+
+  it('answers a main-menu tap exactly as it answers the slash command', async () => {
+    /*
+     * The equivalence real v0.2.0 staging acceptance asked for, proved end to end
+     * through the real webhook, the real runtime and the real socket rather than
+     * against `intentOf` alone: a tap is ORDINARY TEXT, and what must match is the
+     * message the customer ends up reading.
+     *
+     * `/wallet` is the pair driven here because its answer contains a figure derived
+     * from the ledger — so an assertion that the two texts are equal is an assertion
+     * that the same application path produced both, not merely that both replied.
+     */
+    // The customer row first: every other case here reaches one through a tap, and a
+    // wallet cannot be credited for somebody the bot has never met.
+    await command('/start');
+    await creditWallet(CUSTOMER_TELEGRAM_ID, 500_000n);
+
+    sent = [];
+    await command('/wallet');
+    const viaCommand = String(lastMessage()?.body['text']);
+
+    sent = [];
+    await command(CATALOGUE_FA['bot.menu.wallet']);
+    const viaMenu = String(lastMessage()?.body['text']);
+
+    expect(viaMenu, 'the menu button reached a different path').toBe(viaCommand);
+    expect(viaMenu).toContain(formatMoney(money(500_000n, 'IRT')));
+  });
+
+  it('answers the catalogue button with the catalogue, and its buttons still work', async () => {
+    // The other half of the requirement: the menu is navigation and the CONTEXTUAL
+    // actions stay on `callback_data`. So the tap must produce the same inline keyboard
+    // the command produces, and a tap on one of those must still buy.
+    const product = await sellableProduct();
+    sent = [];
+
+    await command(CATALOGUE_FA['bot.menu.catalog']);
+
+    const buttons = buttonsOf(lastMessage());
+    expect(buttons.map((b) => b.callback_data)).toContain(`p:${product.id}`);
+
+    sent = [];
+    await tap(`p:${product.id}`);
+    const rows = await orders();
+    expect(rows, 'the inline flow stopped working under the reply keyboard').toHaveLength(1);
+  });
+
+  it('answers an unknown message as an unknown command, menu or no menu', async () => {
+    sent = [];
+    await command('چطور می‌توانم اشتراک بخرم؟');
+    expect(String(lastMessage()?.body['text'])).toBe(CATALOGUE_FA['bot.unknown_command']);
+  });
+
+  // -------------------------------------------------------------------------
   // A reply lost to a rate limit
   // -------------------------------------------------------------------------
 

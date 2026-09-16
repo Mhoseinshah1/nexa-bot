@@ -75,6 +75,18 @@ export interface CustomerMessage {
    * attachment.
    */
   readonly buttons?: readonly CustomerButton[];
+  /**
+   * Attach the persistent main-menu keyboard, under the chat rather than on the message.
+   *
+   * A `ReplyKeyboardMarkup`, which is a different thing from `buttons`: it carries no
+   * `callback_data` and therefore no identifier and no authority, it stays visible until
+   * something replaces it, and a tap on it arrives as an ordinary text message. Only the
+   * answer to `/start` sets it — see `PendingReply.keyboard`.
+   *
+   * Mutually exclusive with `buttons` in practice rather than by type: no reply carries
+   * both today, and Telegram's `reply_markup` holds one or the other.
+   */
+  readonly keyboard?: 'MAIN_MENU';
 }
 
 /**
