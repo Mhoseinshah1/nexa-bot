@@ -5,9 +5,19 @@ model is trusted with a customer. CI proves the pieces work; this proves the
 whole thing works on a real host with real DNS and a real certificate — the two
 things CI cannot have.
 
-**Nothing in this repository has been run against a real server.** No code in
-this checkpoint accesses one, and none should be run against a production
-installation until this checklist has passed on staging.
+**Status, as of the Phase 4J merge.** This sentence used to read "nothing in
+this repository has been run against a real server", and it is no longer true:
+fifteen `v0.1.0-staging.*` tags and `v0.2.0` exist, and a real v0.2.0 staging
+acceptance ran against a deployed installation — it is what found the missing
+Telegram main menu that 4J-5 then built.
+
+What is still true is that **this checklist's recorded results are not in the
+repository**. So it remains the thing to run, and the honest position is: the
+deployment model has been exercised on staging, nobody can read here which of
+these steps passed, and a production installation should not be trusted until
+the answers are recorded somewhere a later reader can check. Record them as you
+go — a checklist with no recorded output is a checklist somebody remembers
+passing.
 
 ## Before you start
 
