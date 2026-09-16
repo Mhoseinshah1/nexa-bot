@@ -12,6 +12,7 @@ import {
   type ProductId,
   type UserId,
 } from '@nexa/contracts';
+import { encodeIdPair } from '../../apps/api/src/surfaces/telegram/bot-runtime';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
 import { DrizzleOperationRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-operation.repository';
@@ -1452,6 +1453,56 @@ describe('a customer manages the service they bought', () => {
            WHERE service_id = ${spent.id} AND type = 'RENEW'`,
     );
     expect((await operationOf(spent.id, 'RENEW'))?.state).toBe('ABANDONED');
+  });
+
+  it('tells the customer HOW MUCH before the confirm button, not just what it costs', async () => {
+    /*
+     * A title is free text an operator wrote, and «بسته ویژه» encodes no allowance at
+     * all. Before this the quote screen rendered a title and a price, so a customer could
+     * reach the payment buttons without ever being told how many bytes they were buying.
+     * The frozen order line already carried both figures.
+     */
+    const service = await activeService('quantity-shown');
+    const addon = await offeredAddon(
+      'ADD_TRAFFIC',
+      { trafficBytes: 10_000_000_000n },
+      'quantity-shown',
+    );
+    await fund('quantity-shown');
+
+    const quoted = await runtime().handle(
+      tenantA,
+      systemActor('bot'),
+      tapUpdate(`a:${encodeIdPair(service.id, addon)}`),
+    );
+
+    expect(quoted.replyKey).toBe('bot.service.action_quote');
+    // The amount the order was written with, on the screen carrying the confirm button.
+    expect(lastMessage()).toContain('10000000000');
+  });
+
+  it('answers a stale commercial button when the panel can no longer do it', async () => {
+    /*
+     * The callback outlives the message. `PANEL_NOT_OPERABLE` had no entry in the
+     * commercial refusal map, so `refusal` rethrew it and the customer who tapped a
+     * renewal drawn before the operator disabled the panel got NO reply at all — not a
+     * refusal, nothing. 4E answers the same code inside `serviceAction`, which the
+     * commercial handlers never pass through.
+     */
+    const service = await activeService('stale-button');
+    await ctx.container.database.db.execute(
+      sql`UPDATE panels SET status = 'DISABLED'
+           WHERE id = (SELECT panel_id FROM services WHERE id = ${service.id})`,
+    );
+
+    const tapped = await runtime().handle(
+      tenantA,
+      systemActor('bot'),
+      tapUpdate(`n:${service.id}`),
+    );
+
+    expect(tapped.intent).toBe('SERVICE_RENEW');
+    expect(tapped.replyKey).toBe('bot.service.capability_unsupported');
   });
 
   it('refuses a package of the wrong kind on the extra-traffic path', async () => {
