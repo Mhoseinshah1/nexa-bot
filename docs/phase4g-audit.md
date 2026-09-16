@@ -201,7 +201,9 @@ registry already records the distinction in a comment.
    setting bounded by the owner's hour. Its own commit, as `packages/contracts` requires.
 2. **Schema** — the resolution columns with a CHECK binding them to the non-CONFIRMED
    terminal states; the guard widened to freeze every terminal state; `cancelled_at`
-   reachable through `OrderRepository.transition`.
+   reachable through `OrderRepository.transition`. (Migrations 0051, 0052 and — after
+   the self-review found 0052's resolved branch narrower than its own message — 0053,
+   which adds the three evidence columns it left writable.)
 3. **Rejection and cancellation** — `PaymentRepository.transition` as a conditional
    UPDATE naming its `from` states, and the two service methods over it, each
    idempotent, audited, permission-checked and scope-activity-checked inside its
@@ -234,3 +236,25 @@ registry already records the distinction in a comment.
 - **Whether the review decision belongs in Telegram.** `OQ-4C-03` is already open on
   exactly this for approval. Rejection inherits it unchanged and must not be taken as
   settling it.
+
+## What the phase found about itself
+
+Two things worth recording beside the audit that opened it, because both changed the
+shipped design after the code was written and the tests were green.
+
+**The falsification pass found no untested rule and could not have found what came
+next.** A mutation proves a rule is enforced; it cannot tell you the rule should have
+been a different rule. The sweep's ordering invariant had a passing test and a docblock
+that was false for any backlog larger than one pass's bound. The two halves of
+`receipts.review` shared an idempotency identity, and every test of each half passed.
+
+**A stopped tenant took the worker's health down.** The sweep threw for an inactive
+scope, the loop records no progress for a pass that threw, and three minutes later the
+worker container is unhealthy — so `botctl update` fails its readiness wait and backs
+the release out after the migration has run, naming the release rather than the stop an
+operator made deliberately. The existing worked example (`ProvisionerService.runOnce`)
+answers the same condition with `IDLE`, and this now returns a zero report.
+
+Both are in `docs/phase4g-falsification.md` with the rows that hold them, and both
+argue the same thing: the deliberate review of the whole diff is not a formality after
+the tests go green — on this phase it was where the two worst defects were found.
