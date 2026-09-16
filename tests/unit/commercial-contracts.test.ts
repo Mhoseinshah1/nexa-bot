@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { CommercialActionService } from '../../apps/api/src/modules/commerce/commercial/application/commercial-action.service.js';
 import {
   COMMERCIAL_ORDER_PURPOSES,
   extendedAllowance,
@@ -241,5 +242,57 @@ describe('the machine the renewal finally uses', () => {
   it('has no other renewal edge', () => {
     const renewals = SERVICE_MACHINE.transitions.filter((t) => t.on === 'RENEW');
     expect(renewals).toEqual([{ from: 'EXPIRED', to: 'ACTIVE', on: 'RENEW' }]);
+  });
+});
+
+/**
+ * `availableFor` must tell an OUTAGE apart from a withdrawn plan.
+ *
+ * A unit test with a fault-injected repository, because the integration suite has no way
+ * to make a real one throw: every failure it can produce is a business refusal, which is
+ * exactly the half that must be swallowed. F4F-38 measured the gap — the narrowed catch
+ * survived the whole suite — and this is what kills it.
+ *
+ * The deps are the five members this path touches. Cast rather than faked in full: a
+ * complete double would be forty members of which thirty-five are never called, and the
+ * cast is where a future dependency on this path shows up as a crash in this test rather
+ * than as a silent pass.
+ */
+describe('availableFor separates an outage from a refusal', () => {
+  const scope = { tenantId: '01900000-0000-7000-8000-000000000001' } as never;
+  const actor = { kind: 'SYSTEM_JOB' } as never;
+  const service = {
+    id: '0191f4a0-2d3c-7c2b-9a41-6f2b0c7e51aa',
+    productId: '0191f4a0-9e77-7d18-8c03-2b9d4e5a1f60',
+    panelId: '0191f4a0-9e77-7d18-8c03-2b9d4e5a1f61',
+    state: 'ACTIVE',
+    expiresAt: null,
+    trafficLimitBytes: 0n,
+  } as never;
+
+  function serviceWith(findById: () => Promise<unknown>): CommercialActionService {
+    return new CommercialActionService({
+      guard: { check: async () => undefined },
+      panels: { operability: async () => ({ ok: true, reason: null }) },
+      products: { findById },
+      addons: { listOfferable: async () => ({ items: [], hasMore: false }) },
+      settings: { valueOf: async () => 'IRT' },
+    } as never);
+  }
+
+  it('rethrows an infrastructure failure instead of hiding the button', async () => {
+    const broken = serviceWith(async () => {
+      throw new Error('connection terminated unexpectedly');
+    });
+    await expect(broken.availableFor(scope, actor, service)).rejects.toThrow(
+      /connection terminated/,
+    );
+  });
+
+  it('still swallows the business refusal, which is what the catch is for', async () => {
+    // A withdrawn plan: `renewableProduct` raises SERVICE_ACTION_UNAVAILABLE, and a
+    // renewal simply is not offered. No throw, no button.
+    const withdrawn = serviceWith(async () => null);
+    await expect(withdrawn.availableFor(scope, actor, service)).resolves.not.toContain('RENEW');
   });
 });
