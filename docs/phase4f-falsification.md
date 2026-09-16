@@ -133,6 +133,60 @@ id PAIR, and asserts the payload still fits in Telegram's 64 bytes.
 | F4F-28 | The 43-character shape check on an id pair                       | Two later rules reject every payload that reaches them: `Buffer.from(…, 'base64url')` is lenient and drops invalid characters, so a malformed payload decodes to something that is not 32 bytes — and anything that IS 32 bytes still has to parse as two UUIDv7s. Defence in depth, and the composite refusal IS tested.               | the 32-byte length check and `uuidV7Schema`, proved by the malformed-pair case above       |
 | F4F-31 | `planCommercialAction`'s "this purchase changes nothing" refusal | Unreachable from any surface. `quoteRenewal`'s shape check refuses an unlimited-in-both-directions renewal before an order exists, so no test can construct the state. Reached only by a direct call with a hand-built order.                                                                                                           | `provisioning_operations_target_present_check`, a CHECK constraint that rejects such a row |
 
+## The Codex review of PR #28 — ten findings, ten rules, ten rows
+
+Every fix made for the review, reverted. Seven needed a test written first: the
+review found rules this phase's own falsification pass had not thought to
+mutate, which is the case for a second pair of eyes stated as a measurement.
+
+| #      | Rule                                                           | Mutation                                                                | Named test                                                                                                     | Result |
+| ------ | -------------------------------------------------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------ |
+| F4F-33 | ONE outstanding commercial action per service                  | `findOpenCommercial` → `null`                                           | `service-management.test.ts` › refuses a second purchase while the first has not reached the panel             | KILLED |
+| F4F-34 | Settlement re-checks the PANEL, not only the service           | `panels.operability` → `{ ok: true }`                                   | `service-management.test.ts` › refuses at settlement when the panel stopped being able to do it                | KILLED |
+| F4F-35 | Expiry spares a service with a PAID action waiting             | the `NOT EXISTS` subquery's state predicate → `AND false`               | `service-management.test.ts` › does not expire a service out from under an action it has already been paid for | KILLED |
+| F4F-36 | A cumulative allowance stays inside `MAX_TRAFFIC_BYTES`        | the bound → `if (false as boolean)`                                     | `service-management.test.ts` › refuses an allowance larger than this system can put on a wire                  | KILLED |
+| F4F-37 | Offers are filtered by `sales.currency`                        | `eq(priceCurrency, currency)` → `sql\`TRUE\``                           | `service-management.test.ts` › stops offering a package the store no longer has the currency for               | KILLED |
+| F4F-38 | An outage rethrows; only a business refusal hides a button     | `if (!isOfferRefusal(error)) throw error` → `if (false as boolean)`     | `commercial-contracts.test.ts` › rethrows an infrastructure failure instead of hiding the button               | KILLED |
+| F4F-39 | Every commercial refusal has a customer-facing sentence        | the `PANEL_NOT_OPERABLE` entry removed from `REFUSAL_REPLIES`           | `service-management.test.ts` › answers a stale commercial button when the panel can no longer do it            | KILLED |
+| F4F-40 | The quote says HOW MUCH, not only what it costs                | the two quantity values removed from `bot.service.action_quote`         | `service-management.test.ts` › tells the customer HOW MUCH before the confirm button, not just what it costs   | KILLED |
+| F4F-41 | No service may be created for an order that is not a purchase  | `nexa_services_require_purchase_order` DROPPED in the test database     | `service-management.test.ts` › will not let a renewal order produce a second service, whatever settles it      | KILLED |
+| F4F-42 | No commercial operation is ABANDONED below the attempt ceiling | `nexa_commercial_abandon_needs_exhaustion` DROPPED in the test database | `service-management.test.ts` › will not let an older worker kill a paid action it does not understand          | KILLED |
+
+F4F-41 and F4F-42 are TRIGGERS, and a trigger cannot be falsified by editing the
+migration that created it — the migration has already been applied, so
+`scripts/falsify.sh` reports SURVIVED for a rule that is fully in force. Measured
+by DROPPING each trigger in `nexa_test`, running the file, and recreating it;
+both were verified present afterwards. That is the one measurement in this record
+the harness could not make, and it is recorded as a hand-run rather than dressed
+up as one it did.
+
+### Two rules whose SECOND copy is what held them
+
+F4F-35's predicate appears twice — in `expireDue`'s sub-select and again in the
+UPDATE that follows it, which is the same deliberate redundancy the unlimited-plan
+predicate beside it carries. Removing the SUB-SELECT copy alone **SURVIVED**: the
+second copy caught it. The row above mutates the shared predicate itself, which is
+the only mutation that removes the rule rather than one of its two statements.
+
+A first attempt at that mutation — `NOT EXISTS (` → `TRUE OR EXISTS (` — broke
+twenty unrelated cases and is recorded here because the KILLED it produced would
+have been false evidence. Drizzle's `and()` emits `a AND b AND <chunk>`, and `OR`
+binds looser than `AND`, so the tautology did not disable the predicate; it turned
+the whole WHERE clause into `(a AND b) OR EXISTS(...)` and expired rows the query
+was never meant to see.
+
+### A process note, because it produced 172 false failures
+
+Part of this round was first run against a database a full `pnpm test:integration`
+was using at the same time. Both suites `TRUNCATE` between tests, so each was
+deleting the other's fixtures: 172 failures, four falsification verdicts, and a
+`service-management.test.ts` baseline that failed on a clean tree. Every affected
+measurement in this section was re-run serially, on an idle database, and the rows
+above are those runs. `CLAUDE.md` names this exact hazard — "Agents that share
+PostgreSQL are serialised or given separate databases" — and it is written down
+again here because the failures are indistinguishable from real ones by
+inspection.
+
 ## Held by a mechanism rather than by a mutation
 
 Rules whose enforcement is a SQL constraint or a trigger. A mutation here would
