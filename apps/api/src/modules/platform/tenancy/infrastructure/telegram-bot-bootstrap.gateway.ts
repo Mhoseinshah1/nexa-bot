@@ -1,7 +1,10 @@
 import {
   telegramGetMe,
   telegramSetWebhook,
+  telegramSetMyCommands,
 } from '../../../../infrastructure/telegram/send-message.js';
+import { BOT_COMMANDS } from '@nexa/contracts';
+import { CATALOGUE_FA } from '@nexa/i18n';
 import type {
   BotBootstrapTelegram,
   BotIdentityProbe,
@@ -93,5 +96,34 @@ export class TelegramBotBootstrapGateway implements BotBootstrapTelegram {
       default:
         return { outcome: 'UNREACHABLE', detail: outcome.errorMessage };
     }
+  }
+
+  /**
+   * Registers the command menu. Answers whether it landed; never throws.
+   *
+   * Separate from `registerWebhook` and deliberately weaker: a failed webhook means
+   * updates do not arrive and the install is INCOMPLETE, while a failed command menu
+   * means a customer types `/help` instead of tapping it. Reporting the second as
+   * gravely as the first would send an operator to look for a problem they do not have.
+   */
+  async registerCommands(input: { readonly token: string }): Promise<boolean> {
+    /*
+     * Rendered HERE, from the frozen list and the shared catalogue.
+     *
+     * The application layer decides whether to register and this decides what the text
+     * says, which is the split `check:boundaries` enforces: a domain or application file
+     * importing `@nexa/i18n` is refused by name. The defaults are the right source —
+     * this runs while the tenant is being created, so there is no override to read.
+     */
+    const outcome = await telegramSetMyCommands({
+      token: input.token,
+      apiBaseUrl: this.apiBaseUrl,
+      timeoutMs: this.timeoutMs,
+      commands: BOT_COMMANDS.map((entry) => ({
+        command: entry.command,
+        description: CATALOGUE_FA[entry.description],
+      })),
+    });
+    return outcome.outcome === 'SUCCEEDED';
   }
 }

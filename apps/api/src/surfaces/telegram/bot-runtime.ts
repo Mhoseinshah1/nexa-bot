@@ -68,6 +68,7 @@ export const BOT_INTENTS = [
   'SERVICE_BUY_TRAFFIC',
   'SERVICE_BUY_TIME',
   'SERVICE_ACTION_CONFIRM',
+  'HELP',
   'UNSUPPORTED',
 ] as const;
 export type BotIntent = (typeof BOT_INTENTS)[number];
@@ -453,6 +454,15 @@ export function intentOf(update: unknown): BotCommand {
   if (command === '/services') {
     return { intent: 'SERVICES', targetId: null, callbackQueryId: null };
   }
+  /*
+   * The command that makes the other four findable.
+   *
+   * `docs/phase4h-audit.md` §9: the bot answered four commands, registered none with
+   * Telegram, and `bot.start.welcome` named only `/catalog` — so `/wallet` and
+   * `/services` were reachable only by guessing. `BOT_COMMANDS` is what both this and
+   * `setMyCommands` render, so the menu and the help cannot disagree.
+   */
+  if (command === '/help') return { intent: 'HELP', targetId: null, callbackQueryId: null };
   return UNSUPPORTED;
 }
 
@@ -1798,6 +1808,7 @@ export function replyFor(intent: BotIntent, arrival: CustomerArrival): TemplateK
   if (intent === 'START') {
     return arrival === 'FIRST_SEEN' ? 'bot.start.welcome' : 'bot.start.welcome_back';
   }
+  if (intent === 'HELP') return 'bot.help';
   return 'bot.unknown_command';
 }
 

@@ -165,6 +165,10 @@ class FakeTelegram implements BotBootstrapTelegram {
   registration: WebhookRegistration = { outcome: 'REGISTERED' };
   /** Thrown instead of answering, to simulate the process dying mid-call. */
   crashOnWebhook: Error | null = null;
+  /** How many times a command menu was registered, and with which token. */
+  commandCalls: string[] = [];
+  /** What `registerCommands` answers. FALSE is the case the install must survive. */
+  commandsRegister = true;
 
   async identify(token: string): Promise<BotIdentityProbe> {
     // The rule the whole design rests on: never inside a transaction. A fake
@@ -172,6 +176,13 @@ class FakeTelegram implements BotBootstrapTelegram {
     expect(currentTransactionLabel()).toBeUndefined();
     this.identifyCalls.push(token);
     return this.probe;
+  }
+
+  async registerCommands(input: { readonly token: string }): Promise<boolean> {
+    // Same rule as every other call here: never inside a transaction.
+    expect(currentTransactionLabel()).toBeUndefined();
+    this.commandCalls.push(input.token);
+    return this.commandsRegister;
   }
 
   async registerWebhook(input: {
@@ -356,7 +367,39 @@ describe('bot bootstrap — a fresh install', () => {
     expect(audit.map((entry) => entry.action)).toEqual([
       'bot_instance.bootstrap',
       'bot_instance.webhook_registered',
+      /*
+       * The command menu, LAST and deliberately so.
+       *
+       * It is registered after the webhook marker is durable, because the two failures
+       * are of very different weight: a webhook that did not register means updates do
+       * not arrive and `status` must keep answering `incomplete`, while a menu that did
+       * not register means a customer types `/help` instead of tapping it. Ordering the
+       * weaker one first would put a convenience between the install and the one fact
+       * that makes it usable.
+       */
+      'bot.commands.register',
     ]);
+    // Registered once, with the bot's own token. WHICH commands is the gateway's, and
+    // `telegram-command-menu.test.ts` is where that list is pinned — an application
+    // file may not import the catalogue, so it cannot be asserted from here.
+    expect(telegram.commandCalls).toEqual([TOKEN]);
+  });
+
+  it('completes the install when Telegram refuses the command menu', async () => {
+    /*
+     * The asymmetry, asserted rather than assumed. A failed `setMyCommands` is recorded
+     * and the run CONTINUES: the bot works, `/help` answers, and only the tap-to-pick
+     * menu is missing. Failing the install here would send an operator hunting a
+     * problem they do not have — and the audit row is where the real answer lives.
+     */
+    const { service, telegram, audit, bots } = build();
+    telegram.commandsRegister = false;
+
+    const result = await service.execute(scope, { token: TOKEN, publicBaseUrl: ORIGIN });
+
+    expect(result.kind).toBe('CREATED');
+    expect(bots.webhookMarks).toHaveLength(1);
+    expect(audit.find((entry) => entry.action === 'bot.commands.register')?.result).toBe('FAILED');
   });
 
   it('never puts the token in an audit payload', async () => {

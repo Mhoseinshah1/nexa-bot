@@ -158,6 +158,47 @@ export const TEMPLATES = [
     ],
   },
   {
+    key: 'bot.command.start',
+    description: 'The one-line description Telegram shows beside /start in its command menu.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.command.catalog',
+    description: 'The one-line description Telegram shows beside /catalog in its command menu.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.command.services',
+    description: 'The one-line description Telegram shows beside /services in its command menu.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.command.wallet',
+    description: 'The one-line description Telegram shows beside /wallet in its command menu.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.command.help',
+    description: 'The one-line description Telegram shows beside /help in its command menu.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.help',
+    description:
+      'The list of what this bot can do, answered by /help. Exists because two of the ' +
+      'four commands were discoverable only by guessing: `bot.start.welcome` names ' +
+      '/catalog and nothing ever named /wallet or /services. Rendered from ' +
+      '`BOT_COMMANDS`, which is also what `setMyCommands` registers, so the help text ' +
+      'and Telegram\u2019s own command menu cannot drift apart.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.unknown_command',
     description: 'Shown when the bot receives a command it does not handle.',
     format: 'PLAIN_TEXT',

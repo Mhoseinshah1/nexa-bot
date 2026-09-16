@@ -27,7 +27,7 @@ import type { TemplateKey } from '@nexa/contracts';
  */
 export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.ping.reply': 'سلام. ربات فعال است. شناسه پیگیری: {correlationId}',
-  'bot.unknown_command': 'این دستور شناخته نشد.',
+  'bot.unknown_command': 'این دستور شناخته نشد. برای دیدن فهرست دستورها /help را بفرستید.',
   'error.internal': 'خطایی رخ داد. لطفاً بعداً دوباره تلاش کنید.',
   'error.permission_denied': 'شما به این بخش دسترسی ندارید.',
 
@@ -67,6 +67,17 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'خوش آمدید. حساب شما در این ربات ساخته شد. برای دیدن سرویس‌ها دستور /catalog را بفرستید.',
   'bot.start.welcome_back': 'خوش آمدید. برای دیدن سرویس‌های قابل خرید دستور /catalog را بفرستید.',
   'bot.blocked': 'دسترسی این حساب به ربات بسته شده است.',
+
+  // What this bot can do, and the descriptions Telegram shows in its own command menu.
+  // One list in `BOT_COMMANDS` feeds both, so a command cannot be registered and
+  // undocumented, or documented and unregistered.
+  'bot.help':
+    'دستورهای این ربات:\n/catalog — دیدن و خرید سرویس‌ها\n/services — سرویس‌های من و مدیریت آن‌ها\n/wallet — موجودی کیف پول\n/help — همین راهنما',
+  'bot.command.start': 'شروع',
+  'bot.command.catalog': 'خرید سرویس',
+  'bot.command.services': 'سرویس‌های من',
+  'bot.command.wallet': 'کیف پول',
+  'bot.command.help': 'راهنما',
 
   'bot.catalog.empty': 'در حال حاضر سرویسی برای فروش تنظیم نشده است.',
   'bot.catalog.heading': 'سرویس‌های قابل خرید:',

@@ -271,6 +271,19 @@ describe('profile metadata, normalised before it is ever stored', () => {
     }
     expect([...reachable].sort()).toEqual([
       'bot.blocked',
+      /*
+       * `bot.help` joined the set in Phase 4H, and its copy was reviewed against the
+       * rule this case exists for: it names four commands and every one of them
+       * ANSWERS on this head. `/catalog`, `/services` and `/wallet` are the three the
+       * runtime already parsed, and `/help` is itself.
+       *
+       * It is the fix for the defect measured in `docs/phase4h-audit.md` §9, which is
+       * the same shape as the one this test was written about: the greeting named only
+       * `/catalog`, so two of the four commands were reachable only by guessing. The
+       * old failure was copy promising what did not exist; this was the mirror —
+       * something that existed and no copy named.
+       */
+      'bot.help',
       'bot.start.welcome',
       'bot.start.welcome_back',
       'bot.unknown_command',
@@ -469,6 +482,14 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.blocked',
       'bot.catalog.empty',
       'bot.catalog.heading',
+      /*
+       * `bot.help` is 4H's, and it is the one key here that exists to make the OTHERS
+       * findable. `docs/phase4h-audit.md` §9: four commands answered, none registered
+       * with Telegram, and the greeting named only `/catalog` — so `/wallet` and
+       * `/services` were reachable by guessing alone. Reviewed against this case's own
+       * rule: every command its copy names answers on this head.
+       */
+      'bot.help',
       'bot.order.awaiting_payment',
       'bot.order.confirm_button',
       'bot.order.expired',
