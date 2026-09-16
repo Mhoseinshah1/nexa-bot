@@ -844,6 +844,31 @@ describe('provisioning invariants', () => {
       return id;
     }
 
+    /** A PROVISION nothing could resolve, which is what a customer is told about. */
+    async function abandonedProvision(
+      key: string,
+      opts: { readonly completedAt: Date },
+    ): Promise<{ readonly operationId: string; readonly serviceId: string }> {
+      const order = await awaitingPayment(key);
+      await settle(key, order);
+      const service = await services.findByOrderId(tenantA, order.id);
+      const serviceId = service?.id ?? '';
+      const planned = await operations.listForService(tenantA, serviceId, 10);
+      const operationId = planned[0]?.id ?? '';
+      await ctx.container.uow.run(tenantA, async (tx) => {
+        await operations.transition(
+          tenantA,
+          operationId,
+          'PLANNED',
+          'ABANDONED',
+          { completedAt: opts.completedAt },
+          opts.completedAt,
+          tx,
+        );
+      });
+      return { operationId, serviceId };
+    }
+
     const GRACE_MS = 5 * 60 * 1000;
 
     it('is found by the sweep once it is past the grace, and not before', async () => {
@@ -914,6 +939,48 @@ describe('provisioning invariants', () => {
         new Date(row?.announced_at ?? 0).getTime(),
         'the second stamp overwrote the first',
       ).toBe(firstAt.getTime());
+    });
+
+    it('still answers a customer after an operator has STOPPED the tenant', async () => {
+      /*
+       * The one stated exception to "every write path refuses a stopped scope".
+       *
+       * `docs/phase4j-audit.md` and `docs/conventions.md` both record it, and this is
+       * the test that fails if somebody "fixes" the announcer by adding the check every
+       * other write path has. Telling a customer the outcome of work ALREADY DONE is not
+       * new business work; suppressing it leaves somebody who paid in silence, which is
+       * the gap Phase 4H existed to close. An operator stopping a tenant is not asking
+       * for its existing customers to be abandoned mid-provision.
+       *
+       * The bound matters as much as the exception: the announcer may ENQUEUE. It may
+       * not create an order, a payment, a service or an operation for a stopped tenant,
+       * and nothing here gives it the means to.
+       */
+      const now = ctx.container.clock.now();
+      const { operationId, serviceId } = await abandonedProvision('sweep-stopped', {
+        completedAt: new Date(now.getTime() - GRACE_MS - 60_000),
+      });
+      ctx.container.setInstallationTenant(tenantA.tenantId);
+      await ctx.container.database.db.execute(
+        sql`UPDATE tenants SET status = 'STOPPED' WHERE id = ${tenantA.tenantId}`,
+      );
+
+      await ctx.container.provisionerLoop.tick();
+
+      const queued = await ctx.container.database.db.execute(
+        sql`SELECT kind FROM customer_notifications
+            WHERE tenant_id = ${tenantA.tenantId} AND subject_id = ${serviceId}`,
+      );
+      expect(queued.rows, 'a stopped tenant swallowed an answer somebody was owed').toHaveLength(1);
+      expect((queued.rows[0] as { kind: string }).kind).toBe('SERVICE_PROVISION_DELAYED');
+
+      const stamped = await ctx.container.database.db.execute(
+        sql`SELECT announced_at FROM provisioning_operations WHERE id = ${operationId}`,
+      );
+      expect(
+        (stamped.rows[0] as { announced_at: Date | null }).announced_at,
+        'the operation was left unanswered, so the sweep will re-read it for ever',
+      ).not.toBeNull();
     });
 
     it('never sweeps an operation belonging to another tenant', async () => {

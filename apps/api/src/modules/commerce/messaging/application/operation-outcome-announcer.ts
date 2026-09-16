@@ -162,6 +162,29 @@ export class OperationOutcomeAnnouncer {
    *
    * `UNKNOWN` says nothing either: the request may have taken effect, and this
    * repository's standing answer to "we do not know" is never to claim we do.
+   *
+   * ## No activity check, deliberately
+   *
+   * Every other write path in this codebase reads `ScopeActivityReader` inside its
+   * transaction and refuses a scope that has stopped accepting work. This one does not,
+   * and the omission is a DECISION rather than the oversight it looks like — which is
+   * why it is written here and in `docs/conventions.md` rather than left as an absent
+   * line of code.
+   *
+   * What this queues is the outcome of work that has ALREADY been done. A renewal that
+   * reached the panel, a provision nothing could resolve: the money moved and the
+   * request happened before the operator stopped the tenant. Telling the customer what
+   * became of it is not new business work, and suppressing it leaves somebody who paid
+   * in silence — the gap `docs/phase4h-audit.md` measured and Phase 4H existed to close.
+   * An operator stopping a tenant is not asking for its existing customers to be
+   * abandoned mid-provision.
+   *
+   * The BOUND is what makes this an exception rather than a hole: this class may
+   * enqueue a message and stamp `announced_at`. It may not create an order, a payment,
+   * a service or an operation, and it holds no dependency that could — `reader` is
+   * read-only by construction and `announcements` writes one timestamp.
+   *
+   * `tests/integration/provisioning.test.ts` fails if somebody adds the check.
    */
   async announce(scope: TenantContext, operationId: string): Promise<void> {
     await this.deps.uow.run(scope, async (tx) => {

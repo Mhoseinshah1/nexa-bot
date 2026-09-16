@@ -314,6 +314,39 @@ consulted for it; an integration test asserts the denial is recorded.
 
 ---
 
+## A stopped scope accepts no new business work — with one stated exception
+
+**Rule.** Every write path reads `ScopeActivityReader` **inside its
+transaction** and refuses a scope that has stopped accepting work. A surface
+checks on arrival as well, because a stop can commit between the request and
+the write.
+
+**The exception, bounded:** `OperationOutcomeAnnouncer` does not check. It
+queues the outcome of work that has ALREADY been done — a renewal that
+succeeded, a provision nothing could resolve — and telling a customer what
+became of it is not new business work. Suppressing it leaves somebody who paid
+in silence, which is the gap Phase 4H existed to close, and an operator
+stopping a tenant is not asking for its existing customers to be abandoned
+mid-provision.
+
+What the exception does NOT license: the announcer may ENQUEUE. It may not
+create an order, a payment, a service or an operation for a stopped tenant, and
+it holds no dependency that could. The bound is what makes this an exception
+rather than a hole.
+
+**Why it is written down at all.** An unstated exemption is indistinguishable
+from an oversight — Phase 4I's self-review found precisely this omission in
+fresh code and fixed it by reflex, correctly, and `docs/phase4j-audit.md`
+records the pass that asked the whole tree the same question. The next reader
+must be able to tell which of the two this is without re-deriving the argument.
+
+**Enforced by.** `tests/integration/provisioning.test.ts`, "still answers a
+customer after an operator has STOPPED the tenant". Adding the check —
+`scopeActivity` on the announcer's deps and a refusal at the top of `announce`,
+which is exactly the shape a well-meaning fix takes — fails that test.
+
+---
+
 ## Idempotency keys are namespaced per surface
 
 **Rule.** A key is unique within `(scope, surface)`, never within scope alone.
