@@ -3,6 +3,7 @@ import { OPERATIONAL_SEVERITIES } from './ports.js';
 import { ORDER_EXPIRY_MINUTES_MAX, ORDER_EXPIRY_MINUTES_MIN } from './commerce.js';
 import { USAGE_SYNC_MINUTES_MAX, USAGE_SYNC_MINUTES_MIN } from './provisioning.js';
 import { moneySchema, salesCurrencyCodeSchema } from './money.js';
+import { PAYMENT_WINDOW_MINUTES_MAX, PAYMENT_WINDOW_MINUTES_MIN } from './payment.js';
 
 /**
  * The settings registry.
@@ -346,6 +347,33 @@ export const SETTINGS = [
     defaultValue: 60,
     // Zero is outside the schema entirely — the minimum is five — so it can never be
     // stored and does not need a meaning.
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'sales.payment_window_minutes',
+    description:
+      'How long a PENDING payment is held open before the sweep expires it, together with ' +
+      'the order it was against. Separate from sales.order_expiry_minutes, which bounds a ' +
+      'DRAFT\u2019s price hold: a customer holding a quote and a customer holding bank details ' +
+      'and an amount are in different situations, and only the second one has been told to go ' +
+      'and transfer money. PAYMENT_WINDOW_MINUTES_MIN and _MAX in payment.ts are the bounds a ' +
+      'configured value is checked against, and the maximum is the owner\u2019s: at most one ' +
+      'hour, after which the payment and the order must be expired or cancelled.',
+    // Bounded by the CONTRACT's own constants rather than by numbers retyped here,
+    // for the reason `sales.order_expiry_minutes` gives: two copies of a bound drift.
+    schema: z.number().int().min(PAYMENT_WINDOW_MINUTES_MIN).max(PAYMENT_WINDOW_MINUTES_MAX),
+    // The ceiling, as the default. The owner fixed an hour as the MAXIMUM, so a shorter
+    // window is a tenant's choice to make and a longer one is not available to them;
+    // defaulting below the ceiling would be this file inventing a policy under it.
+    defaultValue: 60,
+    // Zero is outside the schema entirely \u2014 the minimum is five \u2014 so it can never
+    // be stored and does not need a meaning. Turning expiry OFF is deliberately not
+    // expressible: a payment nothing closes is the defect this key exists to close, and
+    // `payments.expires_at` is already carried onto every manual transfer.
     zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',

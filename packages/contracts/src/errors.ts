@@ -682,6 +682,27 @@ export const COMMERCE_ERROR_CODES = {
    * check alone.
    */
   SERVICE_ACTION_IN_PROGRESS: 'commerce.service_action_in_progress',
+
+  /**
+   * There is not enough of the order's own window left to pay out of band inside it.
+   *
+   * Before Phase 4G a short window was survivable: nothing expired, and an operator
+   * confirming a transfer that arrived after the deadline was deliberately exempt so
+   * that money already in the bank was not stranded by a slow review queue. 4G's sweep
+   * closes the payment AND the order, and a confirmation is then refused for good — so
+   * handing a customer bank instructions thirty seconds before their order dies is
+   * handing them a reference nobody will ever be able to honour.
+   *
+   * The floor is `PAYMENT_WINDOW_MINUTES_MIN`, whose own docblock states the rule this
+   * enforces: a window shorter than the time it takes to open a banking app expires the
+   * payment underneath the customer. That bound used to constrain only the SETTING; the
+   * order's own remaining time could still be shorter than any of it.
+   *
+   * Distinct from `ORDER_EXPIRED`, which says the window has already closed. This one
+   * says it is about to, and the customer's next step is different: place the order
+   * again rather than wonder what went wrong.
+   */
+  PAYMENT_WINDOW_TOO_SHORT: 'commerce.payment_window_too_short',
 } as const;
 
 /*

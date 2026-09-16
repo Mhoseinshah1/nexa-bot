@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { PaymentDetailPage, PaymentsPage } from '../../apps/web/src/pages/payments';
@@ -41,6 +41,8 @@ function payment(overrides: Record<string, unknown> = {}): Record<string, unknow
     evidenceKind: null,
     confirmedAt: null,
     confirmedByAdminId: null,
+    resolvedAt: null,
+    resolvedByAdminId: null,
     expiresAt: null,
     createdAt: '2026-09-10T12:30:00.000Z',
     updatedAt: '2026-09-10T12:30:00.000Z',
@@ -49,7 +51,10 @@ function payment(overrides: Record<string, unknown> = {}): Record<string, unknow
 }
 
 const detail = (overrides: Record<string, unknown> = {}) => [
-  { url: `/payments/${ROW_ID}`, body: { payment: { ...payment(overrides), evidenceNote: null } } },
+  {
+    url: `/payments/${ROW_ID}`,
+    body: { payment: { ...payment(overrides), evidenceNote: null, resolutionNote: null } },
+  },
 ];
 
 const list = (payments: unknown[], nextCursor: string | null = null) => [
@@ -284,16 +289,150 @@ describe('the payment detail', () => {
     }
   });
 
-  it('draws no control that could fail, cancel, retry or refund a payment', async () => {
+  /*
+   * TWO controls now, and the list is still exhaustive.
+   *
+   * 4G gave `receipts.review` the reject half it has promised since the permission
+   * catalogue was frozen, so a rejection is no longer among the things this page must
+   * not offer. Everything else in the original list still is: there is no cancel here
+   * (a withdrawal is the CUSTOMER's act and arrives through the bot), no retry
+   * (`payments.retry` is a permission for a gateway that does not ship) and no refund
+   * (`refunds.issue` is CRITICAL and unimplemented — OQ-4C-02).
+   */
+  it('draws no control that could cancel, retry or refund a payment', async () => {
     const view = render();
     await screen.findAllByText('a1b2c3d4e5f60718:manual');
     const labels = [...view.container.querySelectorAll('button')].map((b) => b.textContent?.trim());
     for (const label of labels) {
       expect(
-        label === 'تأیید دریافت' || label === '',
+        label === 'تأیید دریافت' || label === 'رد رسید' || label === '',
         `the payment page draws an unexpected control: ${String(label)}`,
       ).toBe(true);
     }
+  });
+
+  it('sends a REASON and nothing else when rejecting, and leaves the order alone', async () => {
+    const api = stubApi([
+      ...detail(payment({ state: 'PENDING', method: 'MANUAL_TRANSFER' })),
+      {
+        url: `/payments/${ROW_ID}/reject`,
+        body: {
+          payment: {
+            ...payment({
+              state: 'FAILED',
+              resolvedAt: '2026-09-10T13:05:00.000Z',
+              resolvedByAdminId: '019200ab-cdef-7012-8345-6789abcdef01',
+            }),
+            evidenceNote: null,
+            resolutionNote: 'هیچ واریزی با این کد پیدا نشد',
+          },
+        },
+      },
+    ]);
+    const view = renderPage(<PaymentDetailPage id={ROW_ID} mayReview denied={false} />);
+    await screen.findAllByText('a1b2c3d4e5f60718:manual');
+
+    const reason = view.container.querySelector('#payment-reason') as HTMLInputElement;
+    fireEvent.change(reason, { target: { value: 'هیچ واریزی با این کد پیدا نشد' } });
+    fireEvent.click(screen.getByRole('button', { name: 'رد رسید' }));
+
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.url.endsWith('/reject'))).toBe(true);
+    });
+    const sent = api.calls.find((call) => call.url.endsWith('/reject'));
+    const body = (sent?.body ?? {}) as Record<string, unknown>;
+    // The reason and the key. No amount, no state, no order — the whole point of the
+    // endpoint's shape, asserted where a later convenience field would break it.
+    expect(Object.keys(body).sort()).toEqual(['idempotencyKey', 'resolutionNote']);
+    expect(body.resolutionNote).toBe('هیچ واریزی با این کد پیدا نشد');
+  });
+
+  it('disables BOTH decisions while either is in flight', async () => {
+    /*
+     * The two commands race the same PENDING row with different idempotency keys, so an
+     * operator who clicks confirm and then reject before the first returns gets whichever
+     * request the database serves second — and one of the two cannot be undone. The
+     * conditional UPDATE keeps the DATA consistent; it cannot make the outcome the one
+     * the operator meant.
+     *
+     * The confirm route is left unrouted deliberately, so the mutation stays pending for
+     * the length of the assertion rather than racing it.
+     */
+    stubApi(detail(payment({ state: 'PENDING', method: 'MANUAL_TRANSFER' })));
+    /*
+     * The confirmation is held OPEN rather than answered.
+     *
+     * An unrouted or errored POST settles immediately, so the pending window closes
+     * before an assertion can see it and the test would pass or fail on timing. A
+     * never-resolving response makes the window permanent, which is the state being
+     * asserted: not "the request finished" but "while it is in flight".
+     */
+    const answered = globalThis.fetch;
+    vi.stubGlobal('fetch', (input: unknown, init?: RequestInit) =>
+      String(input).endsWith('/confirm')
+        ? new Promise<Response>(() => {})
+        : (answered as typeof fetch)(input as RequestInfo, init),
+    );
+
+    const view = renderPage(<PaymentDetailPage id={ROW_ID} mayReview denied={false} />);
+    await screen.findAllByText('a1b2c3d4e5f60718:manual');
+
+    const note = view.container.querySelector('#payment-note') as HTMLInputElement;
+    const reason = view.container.querySelector('#payment-reason') as HTMLInputElement;
+    fireEvent.change(note, { target: { value: 'money arrived' } });
+    fireEvent.change(reason, { target: { value: 'no transfer arrived' } });
+
+    expect(screen.getByRole('button', { name: 'تأیید دریافت' })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'رد رسید' })).not.toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'تأیید دریافت' }));
+
+    // Re-queried, not held: the buttons re-render when the mutation's state changes.
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'رد رسید' })).toBeDisabled();
+    });
+    expect(screen.getByRole('button', { name: 'تأیید دریافت' })).toBeDisabled();
+  });
+
+  it('disables the confirmation while a rejection is in flight, the mirror case', async () => {
+    /*
+     * The OTHER direction, and it needs its own test rather than a second assertion in
+     * the one above. Each button carries its own expression, so a test that only clicks
+     * confirm leaves the confirm button's mention of `reject.isPending` unexercised:
+     * removing it was measured to survive that test (F4G-23) and to die against this one.
+     */
+    stubApi(detail(payment({ state: 'PENDING', method: 'MANUAL_TRANSFER' })));
+    const answered = globalThis.fetch;
+    vi.stubGlobal('fetch', (input: unknown, init?: RequestInit) =>
+      String(input).endsWith('/reject')
+        ? new Promise<Response>(() => {})
+        : (answered as typeof fetch)(input as RequestInfo, init),
+    );
+
+    const view = renderPage(<PaymentDetailPage id={ROW_ID} mayReview denied={false} />);
+    await screen.findAllByText('a1b2c3d4e5f60718:manual');
+
+    const note = view.container.querySelector('#payment-note') as HTMLInputElement;
+    const reason = view.container.querySelector('#payment-reason') as HTMLInputElement;
+    fireEvent.change(note, { target: { value: 'money arrived' } });
+    fireEvent.change(reason, { target: { value: 'no transfer arrived' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'رد رسید' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'تأیید دریافت' })).toBeDisabled();
+    });
+    expect(screen.getByRole('button', { name: 'رد رسید' })).toBeDisabled();
+  });
+
+  it('offers no rejection to an operator without receipts.review', async () => {
+    stubApi(detail(payment({ state: 'PENDING', method: 'MANUAL_TRANSFER' })));
+    const view = renderPage(<PaymentDetailPage id={ROW_ID} mayReview={false} denied={false} />);
+    await screen.findAllByText('a1b2c3d4e5f60718:manual');
+    // Not a disabled button and not a hidden one behind a visible card: the whole
+    // card is absent, so there is nothing to press and nothing to imply they could.
+    expect(view.container.querySelector('#payment-reason')).toBeNull();
+    expect(view.container.textContent).not.toContain('رد رسید');
   });
 });
 

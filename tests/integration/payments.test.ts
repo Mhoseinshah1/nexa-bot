@@ -15,6 +15,7 @@ import type { ProductDraft } from '../../apps/api/src/modules/commerce/catalog/a
 import type { OrderRecord } from '../../apps/api/src/modules/commerce/orders/application/ports';
 import { DrizzleOrderRepository } from '../../apps/api/src/modules/commerce/orders/infrastructure/drizzle-order.repository';
 import { DrizzlePaymentRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-payment.repository';
+import { PaymentExpiryService } from '../../apps/api/src/modules/commerce/payments/application/payment-expiry.service';
 import {
   adminActorFor,
   createAdmin,
@@ -680,6 +681,115 @@ describe('payments and settlement', () => {
    * not the call site" shape recorded on the Phase 4B branch, inverted.
    */
   describe('the payment repository', () => {
+    /*
+     * The repository's OWN guard, exercised without the service in front of it.
+     *
+     * `rejectManualTransfer` and `withdrawPending` both check the state before calling
+     * `resolve`, so every case driven through them is refused one layer higher and says
+     * nothing about this one. The layer that matters is the one that survives a race:
+     * two operators, a customer and the sweep, and a replayed command all reach the
+     * same row, and it is `WHERE state = 'PENDING'` that makes one of them win rather
+     * than the last writer.
+     */
+    it('resolves only from PENDING, and tells the loser it lost', async () => {
+      const order = await awaitingPayment(tenantA, customerA, panelA, 'r0');
+      const pending = await ctx.container.payments.requestManualTransfer(
+        tenantA,
+        systemActor('manual-r0'),
+        customerA,
+        { idempotencyKey: 'manual-r0-0001', orderId: order.id },
+      );
+      const repository = new DrizzlePaymentRepository(ctx.container.database.db);
+      const now = ctx.container.clock.now();
+
+      const first = await repository.resolve(
+        tenantA,
+        pending.id,
+        'FAILED',
+        { resolvedByAdminId: null, resolutionNote: 'first', resolvedAt: now },
+        now,
+      );
+      // The SAME target, which is the case a state check in the service never sees:
+      // both callers believed the row was PENDING when they read it.
+      const second = await repository.resolve(
+        tenantA,
+        pending.id,
+        'FAILED',
+        { resolvedByAdminId: null, resolutionNote: 'second', resolvedAt: now },
+        now,
+      );
+
+      expect(first).toBe(true);
+      expect(second).toBe(false);
+      expect((await paymentRow(pending.id)).resolution_note).toBe('first');
+    });
+
+    it('will not resolve a payment that was confirmed', async () => {
+      const order = await awaitingPayment(tenantA, customerA, panelA, 'r0b');
+      const pending = await ctx.container.payments.requestManualTransfer(
+        tenantA,
+        systemActor('manual-r0b'),
+        customerA,
+        { idempotencyKey: 'manual-r0b-0001', orderId: order.id },
+      );
+      await ctx.container.payments.confirmManualTransfer(tenantA, owner, pending.id, {
+        idempotencyKey: 'manual-r0b-confirm-0001',
+        note: 'money arrived',
+      });
+      const repository = new DrizzlePaymentRepository(ctx.container.database.db);
+      const now = ctx.container.clock.now();
+
+      // Money moved. Nothing below the service may take it back, and the guard that
+      // stops it is the same one that settles the race above.
+      const moved = await repository.resolve(
+        tenantA,
+        pending.id,
+        'FAILED',
+        { resolvedByAdminId: null, resolutionNote: 'too late', resolvedAt: now },
+        now,
+      );
+
+      expect(moved).toBe(false);
+      expect((await paymentRow(pending.id)).state).toBe('CONFIRMED');
+    });
+
+    /*
+     * The `cancelled_at` stamp, which is what makes `ORDER_MACHINE`'s CANCEL edge
+     * callable at all.
+     *
+     * `orders_cancelled_at_check` is `(state = 'CANCELLED') = (cancelled_at IS NOT
+     * NULL)`, so before 4G the repository could name CANCELLED as its target and be
+     * refused by the database every time. There is no caller yet — whether an operator
+     * may end an order is OQ-4G-02 — and a parameter with no caller and no test is the
+     * shape CLAUDE.md says gets silently reverted, so the mechanism is proved here
+     * rather than asserted in a docblock.
+     */
+    it('cancels an order only when the statement carries the stamp the schema requires', async () => {
+      const order = await awaitingPayment(tenantA, customerA, panelA, 'cx');
+      const orders = new DrizzleOrderRepository(ctx.container.database.db);
+      const now = ctx.container.clock.now();
+
+      // Without it, the database refuses — the measurement `docs/phase4g-audit.md`
+      // records, run against the real constraint rather than a temp table.
+      await expect(
+        orders.transition(tenantA, order.id, 'AWAITING_PAYMENT', 'CANCELLED', {}, now),
+      ).rejects.toMatchObject({
+        cause: { constraint: 'orders_cancelled_at_check' },
+      });
+      expect((await stateOf(order.id)).state).toBe('AWAITING_PAYMENT');
+
+      const moved = await orders.transition(
+        tenantA,
+        order.id,
+        'AWAITING_PAYMENT',
+        'CANCELLED',
+        { cancelledAt: now },
+        now,
+      );
+      expect(moved).toBe(true);
+      expect((await stateOf(order.id)).state).toBe('CANCELLED');
+    });
+
     it('confirms only from PENDING, and tells the loser it lost', async () => {
       const order = await awaitingPayment(tenantA, customerA, panelA, 'r1');
       const pending = await ctx.container.payments.requestManualTransfer(
@@ -1030,6 +1140,778 @@ describe('payments and settlement', () => {
         (rows as unknown as { rows: unknown[] }).rows,
         'a second code was issued',
       ).toHaveLength(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Phase 4G — the four outcomes that were declared and unreachable
+  // -------------------------------------------------------------------------
+
+  /**
+   * The sweep, built here rather than taken off the container.
+   *
+   * `container.paymentExpiryLoop` resolves its scope from the INSTALLATION's tenant,
+   * and this suite drives two tenants deliberately. Constructing the service directly
+   * is what lets a test expire tenant A's rows and assert that tenant B's are untouched
+   * — which is the isolation claim, and a loop that can only ever see one tenant could
+   * not make it.
+   */
+  const expirySweep = () =>
+    new PaymentExpiryService({
+      payments: new DrizzlePaymentRepository(ctx.container.database.db),
+      orders: new DrizzleOrderRepository(ctx.container.database.db),
+      uow: ctx.container.uow,
+      audit: ctx.container.audit,
+      scopeActivity: ctx.container.tenants,
+      clock: ctx.container.clock,
+      ids: ctx.container.ids,
+    });
+
+  const paymentRow = async (
+    id: string,
+  ): Promise<{
+    state: string;
+    resolved_at: string | null;
+    resolved_by_admin_id: string | null;
+    resolution_note: string | null;
+  }> => {
+    const rows = (await ctx.container.database.db.execute(
+      sql`SELECT state, resolved_at, resolved_by_admin_id, resolution_note
+            FROM payments WHERE id = ${id}` as never,
+    )) as unknown as {
+      rows: {
+        state: string;
+        resolved_at: string | null;
+        resolved_by_admin_id: string | null;
+        resolution_note: string | null;
+      }[];
+    };
+    const row = rows.rows[0];
+    if (row === undefined) throw new Error('payment vanished');
+    return row;
+  };
+
+  const auditCount = async (action: string): Promise<number> => {
+    const rows = (await ctx.container.database.db.execute(
+      sql`SELECT count(*)::int AS n FROM audit_logs WHERE action = ${action}` as never,
+    )) as unknown as { rows: { n: number }[] };
+    return rows.rows[0]?.n ?? 0;
+  };
+
+  const pendingTransfer = async (key: string) => {
+    const order = await awaitingPayment(tenantA, customerA, panelA, key);
+    const payment = await ctx.container.payments.requestManualTransfer(
+      tenantA,
+      systemActor(key),
+      customerA,
+      { idempotencyKey: `${key}-request-0001`, orderId: order.id },
+    );
+    return { order, payment };
+  };
+
+  describe('an operator rejecting a receipt', () => {
+    it('records who, when and why, and leaves the order awaiting payment', async () => {
+      const { order, payment } = await pendingTransfer('rej-1');
+
+      const rejected = await ctx.container.payments.rejectManualTransfer(
+        tenantA,
+        owner,
+        payment.id,
+        { idempotencyKey: 'rej-1-reject-0001', note: 'هیچ واریزی با این کد پیدا نشد' },
+      );
+
+      expect(rejected.state).toBe('FAILED');
+      const row = await paymentRow(payment.id);
+      expect(row.state).toBe('FAILED');
+      // All three, because the state alone is what the legacy receipt review records
+      // and `UNK-PR-010` is the question that cannot be answered from it.
+      expect(row.resolved_at).not.toBeNull();
+      expect(row.resolved_by_admin_id).toBe(owner.id);
+      expect(row.resolution_note).toBe('هیچ واریزی با این کد پیدا نشد');
+      // The confirmation's own columns stay empty: a rejection is not a confirmation
+      // with a different label, and `payments_confirmed_check` is what makes that true.
+      expect(rejected.confirmedAt).toBeNull();
+      expect(rejected.evidenceKind).toBeNull();
+
+      // THE ORDER IS UNTOUCHED. The customer may still pay another way inside their
+      // window, which is the whole reason this is not a cancellation.
+      expect((await stateOf(order.id)).state).toBe('AWAITING_PAYMENT');
+    });
+
+    it('answers a replay with the same payment and writes one audit row', async () => {
+      const { payment } = await pendingTransfer('rej-2');
+      const input = { idempotencyKey: 'rej-2-reject-0001', note: 'no transfer arrived' };
+
+      const first = await ctx.container.payments.rejectManualTransfer(
+        tenantA,
+        owner,
+        payment.id,
+        input,
+      );
+      const replay = await ctx.container.payments.rejectManualTransfer(
+        tenantA,
+        owner,
+        payment.id,
+        input,
+      );
+
+      expect(replay.id).toBe(first.id);
+      expect(replay.resolvedAt?.toISOString()).toBe(first.resolvedAt?.toISOString());
+      expect(await auditCount('payment.reject')).toBe(1);
+    });
+
+    it('answers a second operator with the end state rather than an error', async () => {
+      const { payment } = await pendingTransfer('rej-3');
+      await ctx.container.payments.rejectManualTransfer(tenantA, owner, payment.id, {
+        idempotencyKey: 'rej-3-reject-0001',
+        note: 'first',
+      });
+
+      // A DIFFERENT key and a different note: a second operator pressing reject, not a
+      // replay. They get the payment as it stands, and the first reviewer's note is
+      // NOT overwritten — 0052 would refuse the write in any case.
+      const second = await ctx.container.payments.rejectManualTransfer(tenantA, owner, payment.id, {
+        idempotencyKey: 'rej-3-reject-0002',
+        note: 'second',
+      });
+      expect(second.state).toBe('FAILED');
+      expect((await paymentRow(payment.id)).resolution_note).toBe('first');
+    });
+
+    it('refuses to reject a payment that was confirmed', async () => {
+      const { payment } = await pendingTransfer('rej-4');
+      await ctx.container.payments.confirmManualTransfer(tenantA, owner, payment.id, {
+        idempotencyKey: 'rej-4-confirm-0001',
+        note: 'money arrived',
+      });
+
+      await expect(
+        ctx.container.payments.rejectManualTransfer(tenantA, owner, payment.id, {
+          idempotencyKey: 'rej-4-reject-0001',
+          note: 'changed my mind',
+        }),
+      ).rejects.toMatchObject({ code: 'commerce.payment_state_invalid' });
+      expect((await paymentRow(payment.id)).state).toBe('CONFIRMED');
+    });
+
+    it('is reachable by the seeded receipt_reviewer role, end to end', async () => {
+      const { payment } = await pendingTransfer('rej-7');
+      const reviewer = adminActorFor(
+        await createAdmin(ctx.container, tenantA, {
+          username: 'receipt-reviewer-only',
+          roleKeys: ['receipt_reviewer'],
+        }),
+      );
+
+      /*
+       * The role named for reviewing receipts, holding nothing else.
+       *
+       * It could not do this before: `receipt_reviewer` was seeded with `receipts.view`
+       * and `receipts.review`, and BOTH the payment read and the Web Admin route that
+       * renders the detail charge `payments.view`. So the approve form had been
+       * unreachable for it since 4C and the reject form would have shipped the same way
+       * — a catalogue promising something the seeded role cannot do.
+       *
+       * The READ is asserted first and deliberately: the write alone would pass with the
+       * old seed, because `rejectManualTransfer` charges `receipts.review`. What was
+       * broken is getting to the screen.
+       */
+      const seen = await ctx.container.payments.get(tenantA, reviewer, payment.id);
+      expect(seen.id).toBe(payment.id);
+
+      const rejected = await ctx.container.payments.rejectManualTransfer(
+        tenantA,
+        reviewer,
+        payment.id,
+        { idempotencyKey: 'rej-7-reject-0001', note: 'no transfer arrived' },
+      );
+      expect(rejected.state).toBe('FAILED');
+      expect((await paymentRow(payment.id)).resolved_by_admin_id).toBe(reviewer.id);
+    });
+
+    it('refuses an operator who does not hold receipts.review', async () => {
+      const { payment } = await pendingTransfer('rej-5');
+      const observer = adminActorFor(
+        await createAdmin(ctx.container, tenantA, {
+          username: 'observer-rejects',
+          roleKeys: ['observer'],
+        }),
+      );
+
+      await expect(
+        ctx.container.payments.rejectManualTransfer(tenantA, observer, payment.id, {
+          idempotencyKey: 'rej-5-reject-0001',
+          note: 'not mine to make',
+        }),
+      ).rejects.toMatchObject({ kind: 'PERMISSION_DENIED' });
+      expect((await paymentRow(payment.id)).state).toBe('PENDING');
+    });
+
+    it('cannot reach another tenant’s payment', async () => {
+      const { payment } = await pendingTransfer('rej-6');
+      const ownerB = adminActorFor(
+        await createAdmin(ctx.container, tenantB, {
+          username: 'owner-other-tenant',
+          roleKeys: ['owner'],
+        }),
+      );
+
+      // NOT_FOUND rather than FORBIDDEN: a distinct refusal answers "does this payment
+      // exist" for anybody willing to guess ids.
+      await expect(
+        ctx.container.payments.rejectManualTransfer(tenantB, ownerB, payment.id, {
+          idempotencyKey: 'rej-6-reject-0001',
+          note: 'across the boundary',
+        }),
+      ).rejects.toMatchObject({ code: 'commerce.payment_not_found' });
+      expect((await paymentRow(payment.id)).state).toBe('PENDING');
+    });
+  });
+
+  describe('a customer withdrawing a pending transfer', () => {
+    it('closes the payment and leaves the order open', async () => {
+      const { order, payment } = await pendingTransfer('wd-1');
+
+      const withdrawn = await ctx.container.payments.withdrawPending(
+        tenantA,
+        systemActor('wd-1'),
+        customerA,
+        { idempotencyKey: 'wd-1-cancel-0001', paymentId: payment.id },
+      );
+
+      expect(withdrawn.state).toBe('CANCELLED');
+      const row = await paymentRow(payment.id);
+      expect(row.resolved_at).not.toBeNull();
+      // No administrator and no note. Nobody reviewed this, and
+      // `payments_resolution_reviewer_check` would refuse an admin id here anyway.
+      expect(row.resolved_by_admin_id).toBeNull();
+      expect(row.resolution_note).toBeNull();
+      expect((await stateOf(order.id)).state).toBe('AWAITING_PAYMENT');
+    });
+
+    it('lets the customer start a new transfer afterwards', async () => {
+      const { order, payment } = await pendingTransfer('wd-2');
+      await ctx.container.payments.withdrawPending(tenantA, systemActor('wd-2'), customerA, {
+        idempotencyKey: 'wd-2-cancel-0001',
+        paymentId: payment.id,
+      });
+
+      /*
+       * The point of leaving the order open, proved rather than asserted in a comment.
+       * `requestManualTransfer` answers a second tap with the PENDING payment already
+       * open; once that one is withdrawn there is none, so this issues a new code.
+       */
+      const second = await ctx.container.payments.requestManualTransfer(
+        tenantA,
+        systemActor('wd-2b'),
+        customerA,
+        { idempotencyKey: 'wd-2-request-0002', orderId: order.id },
+      );
+      expect(second.id).not.toBe(payment.id);
+      expect(second.state).toBe('PENDING');
+    });
+
+    it('answers another customer’s payment id as not found', async () => {
+      const { payment } = await pendingTransfer('wd-3');
+      const otherCustomer = await customer(tenantA, BOT_A, '900701');
+
+      await expect(
+        ctx.container.payments.withdrawPending(tenantA, systemActor('wd-3'), otherCustomer, {
+          idempotencyKey: 'wd-3-cancel-0001',
+          paymentId: payment.id,
+        }),
+      ).rejects.toMatchObject({ code: 'commerce.payment_not_found' });
+      expect((await paymentRow(payment.id)).state).toBe('PENDING');
+    });
+
+    it('refuses to withdraw a payment that was already confirmed', async () => {
+      const { payment } = await pendingTransfer('wd-4');
+      await ctx.container.payments.confirmManualTransfer(tenantA, owner, payment.id, {
+        idempotencyKey: 'wd-4-confirm-0001',
+        note: 'money arrived',
+      });
+
+      await expect(
+        ctx.container.payments.withdrawPending(tenantA, systemActor('wd-4'), customerA, {
+          idempotencyKey: 'wd-4-cancel-0001',
+          paymentId: payment.id,
+        }),
+      ).rejects.toMatchObject({ code: 'commerce.payment_state_invalid' });
+    });
+  });
+
+  describe('the expiry sweep', () => {
+    /*
+     * Two statements, not one with a semicolon: `pg` refuses multiple commands in a
+     * prepared statement, and a single `execute` carrying both fails with 42601 rather
+     * than backdating anything.
+     */
+    const backdate = async (paymentId: string, orderId: string): Promise<void> => {
+      await ctx.container.database.db.execute(
+        sql`UPDATE payments SET expires_at = now() - interval '1 hour' WHERE id = ${paymentId}` as never,
+      );
+      await ctx.container.database.db.execute(
+        sql`UPDATE orders SET expires_at = now() - interval '1 hour' WHERE id = ${orderId}` as never,
+      );
+    };
+
+    it('expires a stale payment and the order it was against, in one pass', async () => {
+      const { order, payment } = await pendingTransfer('sw-1');
+      await backdate(payment.id, order.id);
+
+      const report = await expirySweep().runOnce(tenantA);
+
+      expect(report).toEqual({ payments: 1, orders: 1 });
+      expect((await paymentRow(payment.id)).state).toBe('EXPIRED');
+      expect((await stateOf(order.id)).state).toBe('EXPIRED');
+      // An audit row for each, and no operational event: the passage of time is the
+      // product working, not a condition an operator has to act on.
+      expect(await auditCount('payment.expire')).toBe(1);
+      expect(await auditCount('order.expire')).toBe(1);
+    });
+
+    it('leaves a payment whose deadline has not passed', async () => {
+      const { order, payment } = await pendingTransfer('sw-2');
+
+      const report = await expirySweep().runOnce(tenantA);
+
+      expect(report).toEqual({ payments: 0, orders: 0 });
+      expect((await paymentRow(payment.id)).state).toBe('PENDING');
+      expect((await stateOf(order.id)).state).toBe('AWAITING_PAYMENT');
+    });
+
+    it('never touches a confirmed payment or the order it settled', async () => {
+      const { order, payment } = await pendingTransfer('sw-3');
+      await ctx.container.payments.confirmManualTransfer(tenantA, owner, payment.id, {
+        idempotencyKey: 'sw-3-confirm-0001',
+        note: 'money arrived',
+      });
+      /*
+       * Backdated AFTER the confirmation, so the deadline is genuinely in the past and
+       * the only thing standing between this row and the sweep is the state predicate.
+       * A test that left the deadline in the future would pass with every predicate
+       * removed.
+       */
+      await backdate(payment.id, order.id);
+
+      const report = await expirySweep().runOnce(tenantA);
+
+      expect(report).toEqual({ payments: 0, orders: 0 });
+      expect((await paymentRow(payment.id)).state).toBe('CONFIRMED');
+      expect((await stateOf(order.id)).state).toBe('PAID');
+    });
+
+    it('expires one tenant’s rows and not the other’s', async () => {
+      const { order: orderA, payment: paymentA } = await pendingTransfer('sw-4');
+      const customerB = await customer(tenantB, BOT_B, '900800');
+      const orderB = await awaitingPayment(tenantB, customerB, panelB, 'sw-4b');
+      const paymentB = await ctx.container.payments.requestManualTransfer(
+        tenantB,
+        systemActor('sw-4b'),
+        customerB,
+        { idempotencyKey: 'sw-4b-request-0001', orderId: orderB.id },
+      );
+      await backdate(paymentA.id, orderA.id);
+      await backdate(paymentB.id, orderB.id);
+
+      // Tenant A's scope only. Both tenants' rows are due; one tenant's sweep must move
+      // exactly its own.
+      const report = await expirySweep().runOnce(tenantA);
+
+      expect(report).toEqual({ payments: 1, orders: 1 });
+      expect((await paymentRow(paymentA.id)).state).toBe('EXPIRED');
+      expect((await paymentRow(paymentB.id)).state).toBe('PENDING');
+      expect((await stateOf(orderB.id)).state).toBe('AWAITING_PAYMENT');
+    });
+
+    it('moves each row once when two passes run concurrently', async () => {
+      const { order, payment } = await pendingTransfer('sw-5');
+      await backdate(payment.id, order.id);
+
+      /*
+       * Two worker replicas, which is the normal case on every rolling update. The
+       * claim is not that one pass wins — it is that the TOTAL is one, which is what
+       * `FOR UPDATE SKIP LOCKED` plus the state predicate in the UPDATE buys.
+       */
+      const [first, second] = await Promise.all([
+        expirySweep().runOnce(tenantA),
+        expirySweep().runOnce(tenantA),
+      ]);
+
+      expect(first.payments + second.payments).toBe(1);
+      expect(first.orders + second.orders).toBe(1);
+      expect(await auditCount('payment.expire')).toBe(1);
+      expect(await auditCount('order.expire')).toBe(1);
+    });
+
+    it('expires nothing for a tenant that has stopped, and does not call that a failure', async () => {
+      const { order, payment } = await pendingTransfer('sw-6');
+      await backdate(payment.id, order.id);
+      await ctx.container.database.db.execute(
+        sql`UPDATE tenants SET status = 'STOPPED' WHERE id = ${tenantA.tenantId}` as never,
+      );
+
+      /*
+       * A zero report, NOT a throw, and the distinction is the worker's health.
+       *
+       * `PaymentExpiryLoop` records progress only for a pass that completed, so a pass
+       * that threw would take the loop stale in three minutes — and `worker` is in
+       * `NEXA_READY_SERVICES`, so `botctl update` would then fail its readiness wait and
+       * back the release out after the migration had already run. An operator who
+       * stopped a tenant would have caused that, and the error would have named the
+       * release.
+       */
+      const report = await expirySweep().runOnce(tenantA);
+
+      expect(report).toEqual({ payments: 0, orders: 0 });
+      // Nothing decayed while the tenant was stopped; the rows simply wait.
+      expect((await paymentRow(payment.id)).state).toBe('PENDING');
+      expect((await stateOf(order.id)).state).toBe('AWAITING_PAYMENT');
+    });
+
+    it('never expires an order while a payment against it is still pending', async () => {
+      const { order, payment } = await pendingTransfer('sw-8');
+      await backdate(payment.id, order.id);
+      /*
+       * The bound, reached without three hundred fixtures.
+       *
+       * The two halves are separately bounded and separately ordered, so the state this
+       * guards against is "the payment half ran out of budget before it reached this
+       * row". Expiring the payment out from under the sweep is not possible, so the
+       * equivalent is a payment the payment half cannot take: its deadline has not
+       * passed, while its order's has.
+       *
+       * That is the shape a backlog produces, and the outcome the sweep must not have:
+       * an order marked EXPIRED while the customer holds live bank instructions for it,
+       * against which a transfer could never be confirmed.
+       */
+      await ctx.container.database.db.execute(
+        sql`UPDATE payments SET expires_at = now() + interval '1 hour' WHERE id = ${payment.id}` as never,
+      );
+
+      const report = await expirySweep().runOnce(tenantA);
+
+      expect(report).toEqual({ payments: 0, orders: 0 });
+      expect((await stateOf(order.id)).state).toBe('AWAITING_PAYMENT');
+      expect((await paymentRow(payment.id)).state).toBe('PENDING');
+    });
+
+    it('closes the door on a late confirmation, which is the owner’s rule applied', async () => {
+      const { order, payment } = await pendingTransfer('sw-7');
+      await backdate(payment.id, order.id);
+      await expirySweep().runOnce(tenantA);
+
+      /*
+       * `OPERATOR_MAY_CONFIRM_LATE` exempts an operator from the ORDER's deadline, and
+       * it still does. What it never did was exempt them from the PAYMENT's state, and
+       * once the sweep has closed the payment there is nothing left to confirm. Asserted
+       * because it is a real behaviour change: before 4G this confirmation succeeded.
+       */
+      await expect(
+        ctx.container.payments.confirmManualTransfer(tenantA, owner, payment.id, {
+          idempotencyKey: 'sw-7-confirm-0001',
+          note: 'it arrived, late',
+        }),
+      ).rejects.toMatchObject({ code: 'commerce.payment_state_invalid' });
+      expect((await stateOf(order.id)).state).toBe('EXPIRED');
+    });
+  });
+
+  describe('the review decision is part of a command\u2019s identity', () => {
+    it('will not honour a confirmation under the key a rejection already used', async () => {
+      const { order, payment } = await pendingTransfer('key-1');
+      const key = 'review-collision-0001';
+
+      await ctx.container.payments.rejectManualTransfer(tenantA, owner, payment.id, {
+        idempotencyKey: key,
+        note: 'no transfer arrived',
+      });
+
+      /*
+       * The SAME key and the SAME note, a different command.
+       *
+       * Both halves of `receipts.review` act in one namespace, and a client deriving its
+       * key from the payment — the obvious thing to do — would otherwise be answered
+       * from the rejection's own record: HTTP 200, no state change, no audit row, and a
+       * caller told the order settled when it did not. The store's payload guard cannot
+       * see it, because the payload really is identical; only the decision differs, so
+       * the decision is in the hash.
+       */
+      await expect(
+        ctx.container.payments.confirmManualTransfer(tenantA, owner, payment.id, {
+          idempotencyKey: key,
+          note: 'no transfer arrived',
+        }),
+      ).rejects.toMatchObject({ code: 'platform.idempotency_payload_mismatch' });
+
+      expect((await paymentRow(payment.id)).state).toBe('FAILED');
+      expect((await stateOf(order.id)).state).toBe('AWAITING_PAYMENT');
+    });
+  });
+
+  describe('a window too short to pay in', () => {
+    it('refuses to issue bank instructions that would die before the customer acts', async () => {
+      const order = await awaitingPayment(tenantA, customerA, panelA, 'short-1');
+      // Half a minute left. The customer passes the order's own deadline check and
+      // would be handed a reference the sweep closes within the minute.
+      await ctx.container.database.db.execute(
+        sql`UPDATE orders SET expires_at = now() + interval '30 seconds' WHERE id = ${order.id}` as never,
+      );
+
+      await expect(
+        ctx.container.payments.requestManualTransfer(tenantA, systemActor('short-1'), customerA, {
+          idempotencyKey: 'short-1-request-0001',
+          orderId: order.id,
+        }),
+      ).rejects.toMatchObject({ code: 'commerce.payment_window_too_short' });
+
+      expect(await countOf('payments')).toBe(0);
+    });
+
+    it('closes a stale reference instead of handing it back, and issues a live one', async () => {
+      const { order, payment } = await pendingTransfer('stale-1');
+      /*
+       * The window between a payment's own deadline and the sweep reaching it. The row
+       * still reads PENDING and is already dead; before this fix the reissue path
+       * exempted every existing payment from the deadline check and handed it straight
+       * back, so the customer got bank instructions for a reference that becomes
+       * permanently unconfirmable the moment the sweep catches up.
+       */
+      await ctx.container.database.db.execute(
+        sql`UPDATE payments SET expires_at = now() - interval '1 minute' WHERE id = ${payment.id}` as never,
+      );
+
+      const fresh = await ctx.container.payments.requestManualTransfer(
+        tenantA,
+        systemActor('stale-1b'),
+        customerA,
+        { idempotencyKey: 'stale-1-request-0002', orderId: order.id },
+      );
+
+      expect(fresh.id).not.toBe(payment.id);
+      expect(fresh.state).toBe('PENDING');
+      // The stale one is closed rather than left behind: two PENDING transfers for one
+      // order is the state `requestManualTransfer` exists to prevent.
+      expect((await paymentRow(payment.id)).state).toBe('EXPIRED');
+      expect(await auditCount('payment.expire')).toBe(1);
+    });
+
+    it('refuses rather than reissuing when the order itself has no window left', async () => {
+      const { order, payment } = await pendingTransfer('stale-2');
+      await ctx.container.database.db.execute(
+        sql`UPDATE payments SET expires_at = now() - interval '1 minute' WHERE id = ${payment.id}` as never,
+      );
+      // There is not enough ORDER left to mint a new reference against, so the customer
+      // is told rather than handed a second dead code. The two rules compose: closing
+      // the stale one does not skip the floor, and the floor does not skip the close.
+      await ctx.container.database.db.execute(
+        sql`UPDATE orders SET expires_at = now() + interval '30 seconds' WHERE id = ${order.id}` as never,
+      );
+
+      await expect(
+        ctx.container.payments.requestManualTransfer(tenantA, systemActor('stale-2b'), customerA, {
+          idempotencyKey: 'stale-2-request-0002',
+          orderId: order.id,
+        }),
+      ).rejects.toMatchObject({ code: 'commerce.payment_window_too_short' });
+
+      /*
+       * The stale payment is still PENDING, and that is correct rather than a gap: the
+       * refusal throws, so the whole transaction rolls back and the inline close goes
+       * with it. A refused command leaves NOTHING behind — no half-closed payment, no
+       * audit row for a decision nobody made — and the sweep closes the row on its next
+       * pass regardless. Asserted rather than assumed, because the tempting "fix" is to
+       * commit the close before refusing, which would make a refusal a partial write.
+       */
+      expect((await paymentRow(payment.id)).state).toBe('PENDING');
+      expect(await auditCount('payment.expire')).toBe(0);
+    });
+
+    it('still answers a customer who already holds a reference for that order', async () => {
+      const { order, payment } = await pendingTransfer('short-2');
+      // The window closes in on them AFTER they were given the code.
+      await ctx.container.database.db.execute(
+        sql`UPDATE orders SET expires_at = now() + interval '30 seconds' WHERE id = ${order.id}` as never,
+      );
+
+      /*
+       * Refusing here would take away the instruction the customer is looking at, which
+       * is strictly worse than letting a short window run out. The refusal is on the
+       * CREATE path only.
+       */
+      const again = await ctx.container.payments.requestManualTransfer(
+        tenantA,
+        systemActor('short-2b'),
+        customerA,
+        { idempotencyKey: 'short-2-request-0002', orderId: order.id },
+      );
+      expect(again.id).toBe(payment.id);
+      expect(again.reference).toBe(payment.reference);
+    });
+  });
+
+  describe('a resolved payment stays resolved', () => {
+    it('refuses a raw UPDATE that would reopen a rejected payment', async () => {
+      const { payment } = await pendingTransfer('frz-1');
+      await ctx.container.payments.rejectManualTransfer(tenantA, owner, payment.id, {
+        idempotencyKey: 'frz-1-reject-0001',
+        note: 'no transfer arrived',
+      });
+
+      /*
+       * The write an OLD BINARY could make. `botctl rollback` never restores the
+       * database, so the guard in the schema is the only one a rolled-back image cannot
+       * be missing — migration 0052's whole argument, exercised.
+       *
+       * The driver wraps the error, so the trigger's own message is on `cause`.
+       */
+      await expect(
+        ctx.container.database.db.execute(
+          sql`UPDATE payments SET state = 'PENDING' WHERE id = ${payment.id}` as never,
+        ),
+      ).rejects.toMatchObject({
+        cause: { message: expect.stringContaining('cannot be reopened') },
+      });
+      expect((await paymentRow(payment.id)).state).toBe('FAILED');
+    });
+
+    it('refuses a raw UPDATE that would stamp a confirmation time on a rejection', async () => {
+      const { payment } = await pendingTransfer('frz-5');
+      await ctx.container.payments.rejectManualTransfer(tenantA, owner, payment.id, {
+        idempotencyKey: 'frz-5-reject-0001',
+        note: 'no transfer arrived',
+      });
+
+      /*
+       * The column 0053 missed and 0054 closed. `payments_confirmed_check` cannot catch
+       * it either: with `evidence_kind` still NULL, the right-hand side of that equality
+       * stays false for a resolved row however the timestamp moves — leaving a rejected
+       * payment reading as though somebody confirmed it at a moment somebody chose.
+       */
+      await expect(
+        ctx.container.database.db.execute(
+          sql`UPDATE payments SET confirmed_at = now() WHERE id = ${payment.id}` as never,
+        ),
+      ).rejects.toMatchObject({
+        cause: { message: expect.stringContaining('cannot be reopened') },
+      });
+      expect((await paymentRow(payment.id)).state).toBe('FAILED');
+    });
+
+    it('refuses a raw UPDATE that would dress a rejection up as a review', async () => {
+      const { payment } = await pendingTransfer('frz-4');
+      await ctx.container.payments.rejectManualTransfer(tenantA, owner, payment.id, {
+        idempotencyKey: 'frz-4-reject-0001',
+        note: 'no transfer arrived',
+      });
+
+      /*
+       * The three columns 0052 left writable, closed by 0053.
+       *
+       * `payments_confirmed_check` does not catch this: it is an equality between
+       * `state = 'CONFIRMED'` and `confirmed_at IS NOT NULL AND evidence_kind IS NOT
+       * NULL`, so setting `evidence_kind` ALONE on a resolved row leaves both sides
+       * false and satisfies it — while the row acquires the appearance of a review that
+       * never happened. A rejected payment reading `OPERATOR_REVIEW` is what an operator
+       * would read as an approval.
+       */
+      await expect(
+        ctx.container.database.db.execute(
+          sql`UPDATE payments SET evidence_kind = 'OPERATOR_REVIEW' WHERE id = ${payment.id}` as never,
+        ),
+      ).rejects.toMatchObject({
+        cause: { message: expect.stringContaining('cannot be reopened') },
+      });
+      expect((await paymentRow(payment.id)).state).toBe('FAILED');
+    });
+
+    it('refuses an administrator on a withdrawal, at the schema', async () => {
+      const { payment } = await pendingTransfer('frz-3');
+
+      /*
+       * `payments_resolution_reviewer_check` in isolation, which needs a PENDING row.
+       *
+       * On an already-resolved payment 0052's trigger fires first and raises before any
+       * CHECK is evaluated, so a test written that way proves the trigger twice and the
+       * constraint never. Moving a PENDING row straight to CANCELLED with an admin id
+       * is the one statement that reaches the constraint: the trigger's resolved-state
+       * branch does not apply, and the check does.
+       *
+       * The rule it holds: nobody decides a withdrawal — the customer performs it — so
+       * an operator id on one would answer "who decided this" with somebody who did not.
+       * `withdrawPending` passes null, and this is the half that stays true if a later
+       * edit to that file does not.
+       */
+      await expect(
+        ctx.container.database.db.execute(
+          sql`UPDATE payments
+                 SET state = 'CANCELLED', resolved_at = now(), resolved_by_admin_id = ${owner.id}
+               WHERE id = ${payment.id}` as never,
+        ),
+      ).rejects.toMatchObject({
+        cause: { constraint: 'payments_resolution_reviewer_check' },
+      });
+      expect((await paymentRow(payment.id)).state).toBe('PENDING');
+    });
+
+    it('refuses a raw UPDATE that would rewrite why it was rejected', async () => {
+      const { payment } = await pendingTransfer('frz-2');
+      await ctx.container.payments.rejectManualTransfer(tenantA, owner, payment.id, {
+        idempotencyKey: 'frz-2-reject-0001',
+        note: 'no transfer arrived',
+      });
+
+      await expect(
+        ctx.container.database.db.execute(
+          sql`UPDATE payments SET resolution_note = 'something else' WHERE id = ${payment.id}` as never,
+        ),
+      ).rejects.toMatchObject({
+        cause: { message: expect.stringContaining('immutable') },
+      });
+      expect((await paymentRow(payment.id)).resolution_note).toBe('no transfer arrived');
+    });
+  });
+
+  describe('the payment window', () => {
+    it('holds a transfer open for the configured window, not the order’s', async () => {
+      const order = await awaitingPayment(tenantA, customerA, panelA, 'win-1');
+      // The order's own window at its ceiling: fourteen days. Before 4G the payment
+      // inherited it, so bank instructions stayed live for a fortnight.
+      await ctx.container.database.db.execute(
+        sql`UPDATE orders SET expires_at = now() + interval '14 days' WHERE id = ${order.id}` as never,
+      );
+
+      const payment = await ctx.container.payments.requestManualTransfer(
+        tenantA,
+        systemActor('win-1'),
+        customerA,
+        { idempotencyKey: 'win-1-request-0001', orderId: order.id },
+      );
+
+      // The default window is the owner's ceiling, sixty minutes. Two hours is the
+      // slack that keeps this from being a clock-skew test rather than a rule test.
+      const held = (payment.expiresAt?.getTime() ?? 0) - ctx.container.clock.now().getTime();
+      expect(held).toBeGreaterThan(0);
+      expect(held).toBeLessThan(2 * 3_600_000);
+    });
+
+    it('never outlives the order it names', async () => {
+      const order = await awaitingPayment(tenantA, customerA, panelA, 'win-2');
+      // An order with only ten minutes left. The payment takes the EARLIER of the two,
+      // so it must not be handed a fresh hour past the order's own death.
+      await ctx.container.database.db.execute(
+        sql`UPDATE orders SET expires_at = now() + interval '10 minutes' WHERE id = ${order.id}` as never,
+      );
+
+      const payment = await ctx.container.payments.requestManualTransfer(
+        tenantA,
+        systemActor('win-2'),
+        customerA,
+        { idempotencyKey: 'win-2-request-0001', orderId: order.id },
+      );
+
+      const orderRow = await ctx.container.orders.get(tenantA, owner, order.id);
+      expect(payment.expiresAt?.getTime()).toBe(orderRow.expiresAt?.getTime());
     });
   });
 });

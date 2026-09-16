@@ -358,6 +358,41 @@
       "when": 1789515236452,
       "tag": "0050_commercial_orders_survive_a_rollback",
       "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1789522515838,
+      "tag": "0051_payment_resolution",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1789522516838,
+      "tag": "0052_freeze_a_resolved_payment",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1789522517838,
+      "tag": "0053_freeze_the_evidence_columns_too",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1789522518838,
+      "tag": "0054_freeze_confirmed_at_on_a_resolved_payment",
+      "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1789522519838,
+      "tag": "0055_receipt_reviewer_payments_view",
+      "breakpoints": true
     }
   ]
 }

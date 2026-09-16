@@ -133,20 +133,61 @@ export interface OrderRepository {
    * There is no `setState` that takes only a target — that convenience is exactly what
    * would remove the guarantee from all three at once.
    *
-   * `confirmedAt` and `settledAt` are written by the same statement, because
-   * `orders_settled_at_check` and its siblings bind each timestamp to its state: a
-   * transition that set one without the other would be refused by the database, which
-   * is the point of having the constraint. `settled_at` is the one 4C adds a writer
-   * for — `(state = 'PAID' OR state = 'REFUNDED') = (settled_at IS NOT NULL)`, so a
-   * SETTLE that moved the state alone could not commit.
+   * `confirmedAt`, `settledAt` and `cancelledAt` are written by the same statement,
+   * because `orders_settled_at_check` and its siblings bind each timestamp to its
+   * state: a transition that set one without the other would be refused by the
+   * database, which is the point of having the constraint. `settled_at` is the one 4C
+   * adds a writer for — `(state = 'PAID' OR state = 'REFUNDED') = (settled_at IS NOT
+   * NULL)`, so a SETTLE that moved the state alone could not commit.
+   *
+   * `cancelledAt` is 4G's, and until this release its absence made the `CANCEL` edge
+   * of `ORDER_MACHINE` not merely uncalled but UNCALLABLE: `orders_cancelled_at_check`
+   * is `(state = 'CANCELLED') = (cancelled_at IS NOT NULL)`, so the old signature could
+   * name CANCELLED as its target and the statement would be refused every time.
+   * `docs/phase4g-audit.md` records the measurement.
+   *
+   * There is deliberately no `expiredAt`. `orders` has no such column, so `EXPIRE` has
+   * always been representable through this method unchanged — an asymmetry the schema
+   * chose, and one this phase leaves alone rather than tidying a column into existence
+   * that no constraint asks for.
    */
   transition(
     scope: TenantContext,
     id: OrderId,
     from: OrderState,
     to: OrderState,
-    stamps: { readonly confirmedAt?: Date; readonly settledAt?: Date },
+    stamps: {
+      readonly confirmedAt?: Date;
+      readonly settledAt?: Date;
+      readonly cancelledAt?: Date;
+    },
     now: Date,
     tx?: unknown,
   ): Promise<boolean>;
+
+  /**
+   * Expires the orders nobody paid for, bounded. The `EXPIRE` edge from
+   * `AWAITING_PAYMENT`.
+   *
+   * `orders_expiry_idx` — `(expires_at) WHERE state = 'AWAITING_PAYMENT'` — has existed
+   * since migration 0032 with no reader at all, and `docs/phase4g-audit.md` records
+   * that as the finding it is: a partial index is a statement about a query somebody
+   * meant to write. This is that query.
+   *
+   * `DRAFT` is deliberately NOT swept, although `ORDER_MACHINE` has that edge too. A
+   * draft is a quote the customer never confirmed, nothing was promised for it and
+   * `OrderService.confirm` already refuses one past its deadline; the index the schema
+   * built covers exactly `AWAITING_PAYMENT`, and the owner's rule is about a payment
+   * and the order it was against. Sweeping drafts is retention rather than correctness
+   * and `docs/open-questions.md` carries it.
+   *
+   * Required transaction, bounded, returns what it moved — see
+   * `PaymentRepository.expireDue` for all three reasons.
+   */
+  expireDue(
+    scope: TenantContext,
+    now: Date,
+    limit: number,
+    tx: unknown,
+  ): Promise<readonly OrderRecord[]>;
 }

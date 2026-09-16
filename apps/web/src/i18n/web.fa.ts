@@ -836,6 +836,18 @@ export const WEB_FA = {
   'web.payment_confirm': 'تأیید دریافت',
   'web.payment_confirm_done': 'پرداخت تأیید شد و سفارش پرداخت‌شده است.',
   'web.payment_confirm_denied': 'برای تأیید پرداخت دسترسی receipts.review لازم است.',
+  'web.payment_reject_title': 'رد رسید',
+  // Says the two things an operator has to know before pressing it: the order is NOT
+  // cancelled, and the decision cannot be undone.
+  'web.payment_reject_hint':
+    'با رد این رسید، پرداخت بسته می‌شود و سفارش تا پایان مهلت خود باز می‌ماند تا مشتری بتواند با روش دیگری پرداخت کند. این تصمیم برگشت‌پذیر نیست.',
+  'web.payment_reject_note': 'دلیل رد',
+  'web.payment_reject': 'رد رسید',
+  'web.payment_reject_done': 'رسید رد شد. سفارش همچنان در انتظار پرداخت است.',
+  'web.payment_resolution': 'نتیجهٔ بدون دریافت وجه',
+  'web.payment_resolved_at': 'زمان بسته شدن',
+  'web.payment_resolver': 'بسته‌شده توسط',
+  'web.payment_resolution_note': 'دلیل',
   /*
    * `UNKNOWN` is an ABSENCE of an outcome, not an outcome. `payment.ts` makes it
    * non-terminal for that reason, and this copy says what an operator must do

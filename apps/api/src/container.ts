@@ -124,6 +124,11 @@ import { DrizzleWalletRepository } from './modules/commerce/wallet/infrastructur
 import { WalletService } from './modules/commerce/wallet/application/wallet.service.js';
 import { DrizzlePaymentRepository } from './modules/commerce/payments/infrastructure/drizzle-payment.repository.js';
 import { PaymentService } from './modules/commerce/payments/application/payment.service.js';
+import { PaymentExpiryService } from './modules/commerce/payments/application/payment-expiry.service.js';
+import {
+  PaymentExpiryLoop,
+  PAYMENT_EXPIRY_INTERVAL_MS,
+} from './modules/commerce/payments/application/payment-expiry-loop.js';
 import { OrderService } from './modules/commerce/orders/application/order.service.js';
 import { DrizzleOrderRepository } from './modules/commerce/orders/infrastructure/drizzle-order.repository.js';
 import { DrizzleServiceRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service.repository.js';
@@ -210,6 +215,14 @@ export interface Container {
   readonly sessionSweeper: RetentionSweeper;
   readonly backupRunSweeper: RetentionSweeper;
   readonly recoveryRequestSweeper: RetentionSweeper;
+  /**
+   * The lane that expires unpaid payments and the orders they were against.
+   *
+   * Started by the WORKER only. Nothing here dials anything, so it does not belong
+   * beside the provisioner, whose whole reason for being a separate role is that a
+   * wedged panel must not delay work that needs no panel.
+   */
+  readonly paymentExpiryLoop: PaymentExpiryLoop;
   readonly audit: AuditWriter;
   readonly opsLog: OperationalEventRecorder;
   /**
@@ -918,8 +931,18 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
   });
 
+  /*
+   * ONE payment repository for the service and for the expiry lane.
+   *
+   * It used to be constructed inline here. Two instances would work and would be two
+   * places for a later change to reach one of, which is how the probe core came to have
+   * a copy — and this one is the object holding the conditional UPDATEs that make the
+   * whole module's concurrency claims true.
+   */
+  const paymentRepository = new DrizzlePaymentRepository(database.db);
+
   const paymentService = new PaymentService({
-    repository: new DrizzlePaymentRepository(database.db),
+    repository: paymentRepository,
     orders: orderRepository,
     provisioning: provisioningService,
     /*
@@ -934,6 +957,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     wallet: walletRepository,
     customers: customerRepository,
     guard,
+    // Reads `sales.payment_window_minutes` and nothing else — see `PaymentServiceDeps`.
+    settings: settingsResolver,
     audit,
     opsLog,
     outbox,
@@ -945,6 +970,39 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
     operationId: (key) => operationIdFor('payment', key),
   });
+
+  /*
+   * The expiry lane, built in every role and STARTED only by the worker.
+   *
+   * Built everywhere for the reason the recovery executor is: construction is cheap
+   * and a member that exists in one role's container and not another's is a member
+   * whose absence is discovered at runtime. Starting is the role's decision, and
+   * `main.worker.ts` is the only file that calls `start()`.
+   */
+  const paymentExpiryLoop = new PaymentExpiryLoop(
+    new PaymentExpiryService({
+      payments: paymentRepository,
+      orders: orderRepository,
+      uow,
+      audit,
+      scopeActivity: tenants,
+      clock,
+      ids,
+    }),
+    {
+      // Resolved per pass: the installation's tenant is a row, so it is not known
+      // while this object is being built. The same closure the backup scheduler and
+      // the recovery executor use, and `PaymentExpiryLoop.tick` treats a null as a
+      // healthy pass that had nothing to do.
+      scope: () =>
+        installationTenantId === null
+          ? null
+          : { tenantId: installationTenantId, botInstanceId: null },
+      intervalMs: PAYMENT_EXPIRY_INTERVAL_MS,
+      now: () => clock.now().getTime(),
+      logger,
+    },
+  );
 
   /**
    * One HTTP client for every provider call this process makes.
@@ -1713,6 +1771,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     sessionSweeper,
     backupRunSweeper,
     recoveryRequestSweeper,
+    paymentExpiryLoop,
     audit,
     opsLog,
     opsLogWriter,
@@ -1843,6 +1902,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       await sessionSweeper.stop();
       await backupRunSweeper.stop();
       await recoveryRequestSweeper.stop();
+      await paymentExpiryLoop.stop();
       await redis.close();
       await database.close();
     },

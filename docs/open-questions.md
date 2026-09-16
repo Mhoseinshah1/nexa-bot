@@ -1211,6 +1211,9 @@ items individually.
 
 ## OQ-4C-01 — when an unpaid order and its pending payment expire
 
+**Status: RESOLVED in Phase 4G.** See the closing section below; the account of what
+4C left is kept intact because it is the evidence the resolution rests on.
+
 Phase 4C creates orders that reach `AWAITING_PAYMENT` and `MANUAL_TRANSFER` payments
 that sit `PENDING`, and **nothing expires either of them**. `orders.expires_at` is
 written at DRAFT and re-read at confirmation; `payments.expires_at` carries the order's
@@ -1246,6 +1249,160 @@ nobody has stated.
 
 **Trigger to resolve:** the phase that adds a sweeper, or the first operator who asks
 why a month-old order still says it is waiting.
+
+### How 4G resolved it
+
+The hour was never unknown; it had nowhere to live. This question quotes owner revision
+4 in the owner's own words — at most one hour, after which the payment AND the order
+must be expired or cancelled, enforced in the domain and on the server rather than by a
+browser timer — and then says _"no contract states that hour"_. 4G states it.
+
+- `PAYMENT_WINDOW_MINUTES_MAX` is 60, and it is the CEILING rather than a default with a
+  suggestion attached: `sales.payment_window_minutes` may be set lower by a tenant and
+  cannot be set higher. `sales.order_expiry_minutes` is untouched and still bounds a
+  DRAFT's price hold, which is the distinction its own registry entry already recorded.
+- `requestManualTransfer` takes the EARLIER of the order's deadline and that window, so
+  neither bound can be escaped by configuring the other. It used to take the order's
+  alone, whose ceiling is fourteen days.
+- `PaymentExpiryService`, in the worker, expires stale payments and then the orders they
+  were against, in one transaction, bounded and tenant-scoped, with the scope-activity
+  check inside the transaction. `orders_expiry_idx` — an index that had existed since
+  0032 with no reader — is finally what it was built for.
+
+**One consequence, stated because it is a real behaviour change.** The
+`OPERATOR_MAY_CONFIRM_LATE` exemption described above still stands and is now BOUNDED:
+once the sweep has closed a payment, a late confirmation finds it no longer PENDING and
+is refused. That is the owner's rule applied rather than an oversight. The remedy for
+money that did arrive after the window is a wallet credit (`users.wallet.credit`,
+`POST /users/:id/wallet/adjust`) — audited, reversible by a second adjustment, and
+requiring no closed payment to be reopened. That key belongs to `owner` and `finance`
+and NOT to `receipt_reviewer`, so the operator most likely to meet this case is the one
+who cannot perform the remedy; an installation that separates those roles has to route
+it.
+
+## OQ-4G-01 — nothing tells a customer their payment was rejected or expired
+
+**Status: UNRESOLVED. Carried into 4H, which is the Telegram UX phase.**
+
+4G makes three outcomes reachable and a customer is told about exactly one of them: the
+withdrawal they performed themselves, synchronously. An operator's rejection and the
+sweep's expiry both happen while the customer is not looking, and nothing sends them
+anything. They meet the outcome the next time they press a button on the old message,
+where `bot.payment.not_pending` says what happened.
+
+**Why 4G did not simply send one.** There is no durable per-customer notification lane
+in this release. `DeliveryService` is service delivery's own — its state lives on a
+`services` column, its retries and its `UNCONFIRMED` outcome are about a subscription
+link — and the Phase 2 notification dispatcher's destinations are operator channels.
+A best-effort `CustomerMessenger.send` from inside the sweep would be a message whose
+failure nobody records, which is the shape `DeliveryService` exists because of.
+
+Building the lane is real work with a real design question attached (what a failed
+send to a customer who has blocked the bot means), and it belongs with the rest of the
+Telegram UX rather than bolted to a sweep.
+
+**Trigger to resolve:** Phase 4H.
+
+## OQ-4G-02 — may an operator reject a receipt AND end the order in one action?
+
+**Status: UNRESOLVED. Recorded rather than guessed, and the narrow behaviour shipped.**
+
+4G's rejection closes the payment and leaves the order `AWAITING_PAYMENT` until its own
+deadline. The reasoning is that a rejected transfer is not a withdrawn purchase: the
+customer still wants the thing and may pay from their wallet or transfer again inside
+the window they were given, and `commerce.ts` keeps `CANCELLED` and `EXPIRED` apart
+precisely because "the customer changed their mind" and "we stopped waiting" are
+different facts.
+
+What is genuinely unresolved is whether an operator who knows the transfer was
+fraudulent — not merely absent — should be able to end the order in the same action.
+That is a policy about what a failed attempt means, it needs a second confirmation step
+to be safe, and nobody has stated it. `ORDER_MACHINE`'s `CANCEL` edge is now callable
+(4G gave `OrderRepository.transition` its `cancelled_at` stamp), so the mechanism exists
+and only the decision is missing.
+
+**Trigger to resolve:** the owner, or the first operator who asks for it.
+
+## OQ-4G-03 — a DRAFT order nothing ever confirms is never swept
+
+**Status: UNRESOLVED, and deliberately out of 4G. Retention, not correctness.**
+
+`ORDER_MACHINE` has `DRAFT → EXPIRED` and 4G gave it no caller either. A draft is a
+quote the customer never confirmed: nothing was promised for it, no payment instruction
+was issued, and `OrderService.confirm` already refuses one past its deadline. So it is
+wrong in the way an unbounded table is wrong, not in the way a stale obligation is.
+
+Two things point the same way. `orders_expiry_idx` is partial on `AWAITING_PAYMENT`
+alone, so the schema's own author scoped the sweep there; and the owner's rule is about
+a payment and the order it was against, which a draft has never had.
+
+The decision it needs is a retention policy — ADR-0027's shape, like the backup-run and
+recovery-request sweepers — rather than a lifecycle transition.
+
+**Trigger to resolve:** the phase that revisits retention, or an installation whose
+`orders` table is mostly abandoned drafts.
+
+## OQ-4G-04 — `UNKNOWN` and the two reconciliation edges still have no producer
+
+**Status: UNRESOLVED. Blocked on a gateway rail that is itself blocked on a decision
+and a credential.**
+
+`PAYMENT_MACHINE` has `PENDING → UNKNOWN on LOSE_TRACK` and two `RECONCILE_*` edges out
+of it, and `payments_unknown_idx` describes itself as the reconciliation queue. 4G built
+the four edges that have a real producer and left these three alone.
+
+They need a gateway. `payment.ts` is explicit — _"A gateway is reached through
+`PaymentGatewayPort` and there is no adapter in this release. An unconfigured gateway is
+REFUSED, not simulated"_ — and `SELF_CONTAINED_PAYMENT_METHODS` is wallet and manual
+transfer, neither of which can lose track of anything: a wallet debit commits or rolls
+back with its own confirmation, and a manual transfer's outcome is an operator's
+assertion.
+
+Building the reconciliation consumer alone would give an operator a queue that is empty
+by construction, and the only way to exercise it would be a fixture that put a payment
+into `UNKNOWN` by hand — which is the failure `CLAUDE.md` names: a fake this repository
+wrote and an adapter this repository wrote can only prove they agree with each other.
+
+**Trigger to resolve:** the phase that adds a real gateway adapter, with a disposable
+instance of it to accept against.
+
+## OQ-4G-05 — does a payment's window closing end its ORDER, or only the payment?
+
+**Status: UNRESOLVED. The narrow reading shipped; the owner's sentence admits both.**
+
+`OQ-4C-01` quotes owner revision 4: «مهلت پرداخت حداکثر **یک ساعت** است و پس از آن پرداخت
+و سفارش باید منقضی یا لغو شوند» — at most one hour, after which the payment **and** the
+order must be expired or cancelled.
+
+4G implements two windows. A payment's deadline is the earlier of `sales.payment_window_minutes`
+and the order's own `sales.order_expiry_minutes`, and each row is expired by its own
+deadline. Under the DEFAULTS — both sixty minutes — those coincide and the owner's
+sentence holds exactly: the payment and its order expire in the same sweep pass. They
+diverge only when a tenant deliberately sets a longer order window, and then a lapsed
+manual transfer closes while its order stays `AWAITING_PAYMENT` for the rest of its own
+window.
+
+**The two readings.** One window (the checkout gives you an hour; after it both die), or
+two (the payment attempt has a deadline, the order has its own). The Persian is
+compatible with either, and the owner was describing a flow that has one.
+
+**Why the narrow one shipped.** Nothing is stranded under it. A customer whose transfer
+lapsed can start another, or pay from their wallet at the price they were quoted, inside
+the deadline they were shown — that is the product working, not a hole. The wide reading
+would take an order away from a customer who still had days of the window they were
+given, on the strength of one clause. `CLAUDE.md`'s instruction for exactly this is to
+choose the narrowest rule and record the ambiguity rather than invent policy.
+
+It is also consistent with the rest of the phase: a rejection and a withdrawal both leave
+the order open on purpose (`OQ-4G-02`), and making an expiry the one outcome that ends
+the order would need the same decision this question is waiting for.
+
+**Raised by** the Codex review of PR #29, which read the same sentence the other way.
+Recorded rather than argued: both readings are defensible and only the owner can say
+which they meant.
+
+**Trigger to resolve:** the owner, on reading this — or the first operator who asks why
+an order outlived the transfer instructions it issued.
 
 ## OQ-4C-02 — what a refund is, as a state
 
@@ -1293,6 +1450,13 @@ application layer already takes an `ActorContext` and `ACTOR_TYPES` includes
 
 **Trigger to resolve:** the owner, on reading this. Nothing blocks on it: the
 confirmation is audited, permission-checked and idempotent wherever it is invoked from.
+
+**4G addendum.** The REJECTION shipped in the same place, for the same reason and with
+the same caveat: `receipts.review` and `payments.resolved_by_admin_id` are both
+web-admin-shaped, and putting the decision anywhere else would mean inventing a
+mechanism no contract states. If the owner's intent was a Telegram admin chat, both
+halves move together — the application layer takes an `ActorContext` and `ACTOR_TYPES`
+already includes `TELEGRAM_ADMIN`, so it is an addition rather than a rewrite.
 
 ## OQ-4C-04 — what happens to wallet funds in a currency the installation stopped selling
 

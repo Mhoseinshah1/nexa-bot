@@ -4,6 +4,7 @@ import type {
   PaymentEvidenceKind,
   PaymentId,
   PaymentMethod,
+  PaymentResolvedState,
   PaymentState,
   TenantContext,
   UserId,
@@ -34,6 +35,19 @@ export interface PaymentRecord {
   readonly externalReference: string | null;
   readonly confirmedAt: Date | null;
   readonly confirmedByAdminId: string | null;
+  /**
+   * When it ended WITHOUT money — rejected, withdrawn or expired.
+   *
+   * The mirror of `confirmedAt`, and a second field rather than a reused one because
+   * `payments_confirmed_check` binds that one to CONFIRMED. A record carrying both
+   * meanings in one field would be read by asking `state`, which is how a rejection
+   * comes to be displayed as an approval.
+   */
+  readonly resolvedAt: Date | null;
+  /** The administrator who rejected it. Null for an expiry and for a withdrawal. */
+  readonly resolvedByAdminId: string | null;
+  /** Why, in the operator's own words. Null unless a person rejected it. */
+  readonly resolutionNote: string | null;
   readonly expiresAt: Date | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
@@ -66,6 +80,25 @@ export interface PaymentConfirmation {
   /** The administrator who approved it, for an `OPERATOR_REVIEW`. Null for a flow. */
   readonly confirmedByAdminId: string | null;
   readonly confirmedAt: Date;
+}
+
+/**
+ * What a resolution records: a payment that ended WITHOUT money.
+ *
+ * The mirror of `PaymentConfirmation`, and like it there is no `amount` and no
+ * `state` beyond the target the caller names. A rejection asserts that the money the
+ * payment already says was owed did not arrive; it never restates the figure.
+ *
+ * `resolvedByAdminId` is null for everything but an operator's rejection — nobody
+ * decides an expiry and a withdrawal is the customer's own — and
+ * `payments_resolution_reviewer_check` refuses the write if a caller gets that wrong.
+ */
+export interface PaymentResolution {
+  /** The administrator who rejected it. Null for an expiry and for a withdrawal. */
+  readonly resolvedByAdminId: string | null;
+  /** Why, in the operator's own words. Null when no person decided it. */
+  readonly resolutionNote: string | null;
+  readonly resolvedAt: Date;
 }
 
 /** `(createdAt, id)`, both immutable. The same keyset every other list here uses. */
@@ -145,4 +178,64 @@ export interface PaymentRepository {
     now: Date,
     tx?: unknown,
   ): Promise<boolean>;
+
+  /**
+   * The three edges that end a payment WITHOUT money, as one conditional UPDATE each.
+   *
+   * `FAIL`, `CANCEL` and `EXPIRE` — `PAYMENT_MACHINE`'s remaining transitions out of
+   * `PENDING`. They share a method because they are the same statement with a
+   * different target and a different set of resolution fields; splitting them into
+   * three would be three places for `WHERE state = 'PENDING'` to be got wrong.
+   *
+   * The `from` state is NOT a parameter and is hard-bound to `PENDING`. Every edge in
+   * the machine that reaches one of these three leaves `PENDING`, so a parameter would
+   * only ever carry one value — and the one it could carry WRONG is `UNKNOWN`, whose
+   * two reconcile edges have no producer in this release and must not be reachable by
+   * passing an argument.
+   *
+   * It reports whether the row actually moved, and that is the whole concurrency
+   * story: an operator rejecting while the sweep expires, a customer withdrawing while
+   * an operator confirms, a replayed command and two worker replicas all produce ONE
+   * transition and one `true`. There is no `setState`.
+   *
+   * Both resolution columns are set by the SAME statement as the state, because
+   * `payments_resolved_check` binds them: `(state IN ('FAILED','CANCELLED','EXPIRED'))
+   * = (resolved_at IS NOT NULL)`, so moving the state alone could not commit.
+   */
+  resolve(
+    scope: TenantContext,
+    id: PaymentId,
+    to: PaymentResolvedState,
+    resolution: PaymentResolution,
+    now: Date,
+    tx?: unknown,
+  ): Promise<boolean>;
+
+  /**
+   * Expires the PENDING payments whose own deadline has passed, bounded.
+   *
+   * The `EXPIRE` edge as a SET rather than one row at a time, because there is nothing
+   * to decide per row: the deadline is on the row, the target is one state, and no
+   * person is involved. `resolve` exists for the two edges a person takes.
+   *
+   * Bounded by `limit` for the reason `ServiceRepository.expireDue` is: a tenant whose
+   * orders all lapse on one midnight must not turn one tick into ten thousand rows, and
+   * the next tick picks up where this one stopped because the candidates are ordered by
+   * deadline.
+   *
+   * Returns the rows it moved, so the sweep can audit each one. The `before` state is
+   * not returned and does not need to be: there is exactly one source state and the
+   * statement names it, which is what `ServiceRepository.expireDue` needs two UPDATEs
+   * to achieve.
+   *
+   * It takes a REQUIRED transaction. This is a durable write and ADR-0028's quiesce
+   * gate lives in `DrizzleUnitOfWork.run`; an optional handle here would make it
+   * possible to expire a customer's payment in a database that is being replaced.
+   */
+  expireDue(
+    scope: TenantContext,
+    now: Date,
+    limit: number,
+    tx: unknown,
+  ): Promise<readonly PaymentRecord[]>;
 }

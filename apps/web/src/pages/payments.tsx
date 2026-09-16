@@ -8,7 +8,7 @@ import {
   type PaymentState,
   type PaymentSummaryResponse,
 } from '@nexa/contracts';
-import { confirmPayment, fetchPayment, fetchPayments } from '../api/client';
+import { confirmPayment, fetchPayment, fetchPayments, rejectPayment } from '../api/client';
 import { formatTimestamp } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { mayRequest, queryState } from '../view-state';
@@ -347,7 +347,16 @@ export function PaymentDetailPage({
   const notify = useToast();
   const queries = useQueryClient();
   const submission = useSubmissionKey();
+  /*
+   * A SECOND submission key, not a shared one.
+   *
+   * The two decisions are different commands with different payloads, and one key
+   * would make a rejection typed after an approval failed look to the idempotency
+   * store like a replay of that approval with a mismatched payload.
+   */
+  const rejection = useSubmissionKey();
   const [note, setNote] = useState('');
+  const [reason, setReason] = useState('');
 
   const payment = useQuery({
     queryKey: ['payment', id],
@@ -378,6 +387,29 @@ export function PaymentDetailPage({
     // A 5xx may have committed, and a fresh key on the retry would be a second
     // confirmation of somebody's money.
     onError: (error) => submission.settleOn(error),
+  });
+
+  const reject = useMutation({
+    mutationFn: () =>
+      rejectPayment({
+        id,
+        idempotencyKey: rejection.current({ id, reason }),
+        resolutionNote: reason.trim(),
+      }),
+    onSuccess: (response) => {
+      rejection.settle();
+      notify({ tone: 'ok', message: t('web.payment_reject_done') });
+      setReason('');
+      queries.setQueryData(['payment', id], response);
+      void queries.invalidateQueries({ queryKey: ['payments'] });
+      /*
+       * The payments list only. The ORDER is deliberately NOT invalidated, because a
+       * rejection does not touch it: it stays awaiting payment until its own deadline
+       * so the customer can pay another way. Invalidating it would be this page
+       * implying a change that did not happen.
+       */
+    },
+    onError: (error) => rejection.settleOn(error),
   });
 
   return (
@@ -472,6 +504,37 @@ export function PaymentDetailPage({
             </Card>
 
             {/*
+              How it ended WITHOUT money, when it did.
+              Its own card rather than three more rows in the evidence one, because
+              the two are mutually exclusive by constraint — `payments_confirmed_check`
+              and `payments_resolved_check` are both equalities — and a screen showing
+              both sets side by side invites reading a rejection as an approval.
+            */}
+            {row.resolvedAt !== null && (
+              <Card title={t('web.payment_resolution')}>
+                <KV
+                  items={[
+                    [t('web.payment_resolved_at'), formatTimestamp(row.resolvedAt)],
+                    [
+                      t('web.payment_resolver'),
+                      row.resolvedByAdminId === null ? (
+                        // Null is the ANSWER, not a missing value: nobody decided an
+                        // expiry and a withdrawal is the customer's own.
+                        <Dash key="rw" />
+                      ) : (
+                        <Copyable key="rw" value={row.resolvedByAdminId} />
+                      ),
+                    ],
+                    [
+                      t('web.payment_resolution_note'),
+                      row.resolutionNote === null ? <Dash key="rn" /> : row.resolutionNote,
+                    ],
+                  ]}
+                />
+              </Card>
+            )}
+
+            {/*
               The ONE write, and only where it can legally apply: a PENDING
               MANUAL_TRANSFER. A wallet payment is confirmed by its own debit in the
               same transaction and has nothing for an operator to approve; every other
@@ -494,7 +557,17 @@ export function PaymentDetailPage({
                       <button
                         type="button"
                         className="btn primary sm"
-                        disabled={confirm.isPending || note.trim() === ''}
+                        /*
+                         * Either decision in flight disables BOTH controls.
+                         *
+                         * The two commands race the same PENDING row with different
+                         * idempotency keys, so an operator who clicks confirm and then
+                         * reject before the first returns gets whichever request the
+                         * database serves second — and one of the two outcomes cannot be
+                         * undone. The conditional UPDATE keeps the DATA consistent; it
+                         * cannot make the result the one the operator meant.
+                         */
+                        disabled={confirm.isPending || reject.isPending || note.trim() === ''}
                         onClick={() => confirm.mutate()}
                       >
                         {t('web.payment_confirm')}
@@ -509,6 +582,44 @@ export function PaymentDetailPage({
                   // same claim, and only one of them names the permission.
                   <Banner tone="info">{t('web.payment_confirm_denied')}</Banner>
                 )}
+              </Card>
+            )}
+
+            {/*
+              The other half of the same decision, in its own card.
+              `receipts.review` has read "Approve or reject a receipt" since the
+              permission catalogue was frozen and only the approve half existed until
+              4G. Same permission, same states — a PENDING MANUAL_TRANSFER — and a
+              REASON rather than an evidence note, because the two answer different
+              questions and `payments.resolution_note` is a different column.
+
+              Separate from the confirm card on purpose: one card with two buttons is a
+              card where the wrong one is a mis-click away, and this one is not
+              reversible. `PAYMENT_MACHINE` has no edge out of FAILED.
+            */}
+            {row.state === 'PENDING' && row.method === 'MANUAL_TRANSFER' && mayReview && (
+              <Card title={t('web.payment_reject_title')}>
+                <p className="muted">{t('web.payment_reject_hint')}</p>
+                <Field label={t('web.payment_reject_note')} htmlFor="payment-reason">
+                  <input
+                    id="payment-reason"
+                    value={reason}
+                    maxLength={500}
+                    onChange={(event) => setReason(event.target.value)}
+                  />
+                </Field>
+                <div className="toolbar">
+                  <button
+                    type="button"
+                    className="btn danger sm"
+                    // Both, for the reason the confirm button carries.
+                    disabled={reject.isPending || confirm.isPending || reason.trim() === ''}
+                    onClick={() => reject.mutate()}
+                  >
+                    {t('web.payment_reject')}
+                  </button>
+                </div>
+                {reject.error !== null && <Banner tone="danger">{messageFor(reject.error)}</Banner>}
               </Card>
             )}
 

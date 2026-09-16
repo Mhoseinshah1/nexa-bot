@@ -1,4 +1,4 @@
-import { and, asc, eq, getTableColumns, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, getTableColumns, isNotNull, lte, sql, type SQL } from 'drizzle-orm';
 import { money } from '@nexa/contracts';
 import type {
   CurrencyCode,
@@ -6,6 +6,7 @@ import type {
   PaymentEvidenceKind,
   PaymentId,
   PaymentMethod,
+  PaymentResolvedState,
   PaymentState,
   TenantContext,
   UserId,
@@ -23,6 +24,7 @@ import type {
   PaymentPage,
   PaymentRecord,
   PaymentRepository,
+  PaymentResolution,
   PaymentSearch,
 } from '../application/ports.js';
 
@@ -196,6 +198,119 @@ export class DrizzlePaymentRepository implements PaymentRepository {
       .returning({ id: payments.id });
     return rows.length > 0;
   }
+
+  /**
+   * The `FAIL`, `CANCEL` and `EXPIRE` edges, as one conditional UPDATE.
+   *
+   * `WHERE state = 'PENDING'` is the same mechanism `confirm` uses one method above and
+   * carries the same guarantee across a wider set of racers: an operator rejecting
+   * while the sweep expires, a customer withdrawing while an operator confirms, a
+   * replayed command and two worker replicas all produce one transition and one `true`.
+   *
+   * Every column in one statement, because `payments_resolved_check` is an equality:
+   * a statement that moved the state without stamping `resolved_at` would leave the row
+   * violating its own constraint, and the database refuses it rather than storing it.
+   */
+  async resolve(
+    scope: TenantContext,
+    id: PaymentId,
+    to: PaymentResolvedState,
+    resolution: PaymentResolution,
+    now: Date,
+    tx?: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(payments)
+      .set({
+        state: to,
+        resolvedAt: resolution.resolvedAt,
+        resolvedByAdminId: resolution.resolvedByAdminId,
+        resolutionNote: resolution.resolutionNote,
+        updatedAt: now,
+      })
+      .where(
+        and(eq(payments.tenantId, tenantId), eq(payments.id, id), eq(payments.state, 'PENDING')),
+      )
+      .returning({ id: payments.id });
+    return rows.length > 0;
+  }
+
+  /**
+   * The `EXPIRE` edge as a bounded set, for the sweep.
+   *
+   * Two statements rather than one, and the sub-select is not decoration: the UPDATE's
+   * own predicates are re-checked AFTER the row lock is granted, because a sub-select
+   * alone is satisfied by a scan that found the row before another writer moved it.
+   * `ServiceRepository.expireDue` states the same rule and this follows it.
+   *
+   * `FOR UPDATE SKIP LOCKED` on the candidates is what makes two worker replicas —
+   * the normal case on every rolling update — take DIFFERENT rows rather than one
+   * blocking on the other's lock for the length of a tick.
+   *
+   * `expires_at IS NOT NULL` is redundant beside `<=` and kept for the reason
+   * `ServiceRepository.expireDue` keeps its copy: it is the one place the intent is
+   * written down, and a later `COALESCE(expires_at, ...)` would expire every payment
+   * that has no deadline with nothing else in the query objecting. A wallet payment has
+   * no deadline and is never PENDING either, so this predicate is the second of two
+   * independent reasons it is never touched here.
+   */
+  async expireDue(
+    scope: TenantContext,
+    now: Date,
+    limit: number,
+    tx: unknown,
+  ): Promise<readonly PaymentRecord[]> {
+    const tenantId = requireTenantId(scope);
+    if (limit <= 0) return [];
+
+    const due = this.exec(tx)
+      .select({ id: payments.id })
+      .from(payments)
+      .where(
+        and(
+          eq(payments.tenantId, tenantId),
+          eq(payments.state, 'PENDING'),
+          isNotNull(payments.expiresAt),
+          lte(payments.expiresAt, now),
+        ),
+      )
+      .orderBy(asc(payments.expiresAt), asc(payments.id))
+      .limit(limit)
+      .for('update', { skipLocked: true });
+
+    const rows = await this.exec(tx)
+      .update(payments)
+      .set({
+        state: 'EXPIRED',
+        /*
+         * `resolved_at` is the CLOCK's now, not the deadline that passed.
+         *
+         * When the window closed and when this installation noticed are different
+         * facts, and `expires_at` already records the first. Writing the deadline here
+         * would make a sweep that ran an hour late look like one that ran on time.
+         */
+        resolvedAt: now,
+        // Nobody decided this; `payments_resolution_reviewer_check` refuses an admin
+        // id on anything but a FAILED payment, so these two are the schema's rule
+        // restated where a caller can read it.
+        resolvedByAdminId: null,
+        resolutionNote: null,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(payments.tenantId, tenantId),
+          eq(payments.state, 'PENDING'),
+          isNotNull(payments.expiresAt),
+          lte(payments.expiresAt, now),
+          sql`${payments.id} IN ${due}`,
+        ),
+      )
+      .returning();
+
+    return rows.map((row) => toRecord(row as Row));
+  }
 }
 
 type Row = {
@@ -212,6 +327,9 @@ type Row = {
   externalReference: string | null;
   confirmedAt: Date | null;
   confirmedByAdminId: string | null;
+  resolvedAt: Date | null;
+  resolvedByAdminId: string | null;
+  resolutionNote: string | null;
   expiresAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
@@ -232,6 +350,9 @@ function toRecord(row: Row): PaymentRecord {
     externalReference: row.externalReference,
     confirmedAt: row.confirmedAt,
     confirmedByAdminId: row.confirmedByAdminId,
+    resolvedAt: row.resolvedAt,
+    resolvedByAdminId: row.resolvedByAdminId,
+    resolutionNote: row.resolutionNote,
     expiresAt: row.expiresAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,

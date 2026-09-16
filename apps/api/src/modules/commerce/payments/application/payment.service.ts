@@ -1,5 +1,6 @@
 import {
   COMMERCE_ERROR_CODES,
+  PAYMENT_WINDOW_MINUTES_MIN,
   orderPurposeNeedsService,
   ORDER_MACHINE,
   PAYMENT_PAGE_DEFAULT,
@@ -25,6 +26,7 @@ import {
   type UserId,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
+import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
 import type { CommercialActionRepository } from '../../commercial/application/ports.js';
 import type { ProvisioningService } from '../../provisioning/application/provisioning.service.js';
 import {
@@ -112,6 +114,15 @@ export interface PaymentServiceDeps {
    */
   readonly commercialActions: Pick<CommercialActionRepository, 'findByOrderId'>;
   readonly guard: PermissionGuard;
+  /**
+   * Reads `sales.payment_window_minutes`, and nothing else.
+   *
+   * The window a manual transfer is held open for. Here rather than as a constant
+   * because the owner fixed a CEILING rather than a value — at most one hour — so a
+   * tenant selling into a market where bank transfers clear slowly may shorten it and
+   * nobody may lengthen it past what the owner set.
+   */
+  readonly settings: SettingsResolver;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly audit: AuditWriter;
   readonly opsLog: OperationalEventRecorder;
@@ -148,10 +159,55 @@ export interface ManualConfirmation {
   readonly note: string;
 }
 
+/**
+ * What an operator's REJECTION carries. A note, and nothing else.
+ *
+ * No amount for the reason a confirmation carries none, and no reason CODE: a closed
+ * list would be this module inventing a taxonomy of why bank transfers fail, and the
+ * operator is the one who just read the statement. `rejectPaymentRequestSchema` states
+ * the same on the wire.
+ */
+export interface ManualRejection {
+  readonly idempotencyKey: string;
+  readonly note: string;
+}
+
+/**
+ * What a customer's WITHDRAWAL carries: a payment id and an idempotency key.
+ *
+ * A payment id rather than an order id, unlike `PaymentIntent`, because a withdrawal
+ * names the thing being withdrawn. It is still only an IDENTIFIER — the ownership, the
+ * state and the money are all re-read from the row inside the transaction, and there is
+ * no field here a client could use to say anything about any of them.
+ */
+export interface PaymentWithdrawal {
+  readonly idempotencyKey: string;
+  readonly paymentId: string;
+}
+
 export interface PaymentListQuery {
   readonly limit?: number;
   readonly cursor?: PaymentCursor;
   readonly search: PaymentSearch;
+}
+
+/**
+ * The deadline a manual transfer carries: the EARLIER of the order's and the window's.
+ *
+ * Pure and module-level so it can be tested without a service, and so the rule is one
+ * expression rather than two branches at the call site. A null order deadline means the
+ * order has none, in which case the payment window is the only bound there is — and it
+ * is still a bound, which is the difference between this and the `order.expiresAt` this
+ * replaced.
+ */
+export function paymentDeadline(
+  orderExpiresAt: Date | null,
+  now: Date,
+  windowMinutes: number,
+): Date {
+  const window = new Date(now.getTime() + windowMinutes * 60_000);
+  if (orderExpiresAt === null) return window;
+  return orderExpiresAt.getTime() < window.getTime() ? orderExpiresAt : window;
 }
 
 /** The administrator behind an actor, or null for a flow. `confirmed_by_admin_id` is an FK. */
@@ -485,6 +541,8 @@ export class PaymentService {
          * second tap useful: the customer gets the same reference and the same amount
          * back, which is what they were reaching for.
          */
+        const windowMinutes = await this.paymentWindowMinutes(scope, tx);
+
         const pending = await this.deps.repository.list(
           scope,
           { orderId, state: 'PENDING', method: 'MANUAL_TRANSFER' },
@@ -492,7 +550,61 @@ export class PaymentService {
           null,
           tx,
         );
-        const already = pending.items[0];
+        const found = pending.items[0];
+
+        /*
+         * A PENDING payment whose own deadline has passed is NOT one to hand back.
+         *
+         * The sweep closes these, and the sweep runs on a timer: between a payment's
+         * deadline and the next pass there is a window — a minute normally, longer if
+         * the sweep is working through a backlog or the tenant is stopped — in which the
+         * row still reads PENDING and is stale. Answering a tap with it prints bank
+         * instructions for a reference that is already dead and becomes permanently
+         * unconfirmable the moment the sweep catches up, which is the exact failure
+         * `PAYMENT_WINDOW_TOO_SHORT` was added to prevent one step earlier.
+         *
+         * It is closed HERE rather than refused, because that is what the sweep would
+         * have done a moment later and doing it now lets the customer walk away with a
+         * live reference instead of an error. The same conditional UPDATE, so a sweep
+         * running concurrently and this path produce one transition between them; the
+         * audit row carries the CUSTOMER as its actor, which is truthful — their tap is
+         * what made this installation notice.
+         */
+        const stale =
+          found !== undefined &&
+          found.expiresAt !== null &&
+          found.expiresAt.getTime() <= now.getTime();
+        if (found !== undefined && stale) {
+          const closed = await this.deps.repository.resolve(
+            scope,
+            found.id,
+            'EXPIRED',
+            { resolvedByAdminId: null, resolutionNote: null, resolvedAt: now },
+            now,
+            tx,
+          );
+          if (closed) {
+            await this.deps.audit.record(
+              scope,
+              actor,
+              {
+                action: 'payment.expire',
+                entityType: 'Payment',
+                entityId: found.id,
+                before: { state: 'PENDING', expiresAt: found.expiresAt?.toISOString() ?? null },
+                after: { state: 'EXPIRED', orderId, noticedBy: 'CUSTOMER_REQUEST' },
+                result: 'SUCCESS',
+              },
+              tx,
+            );
+          }
+        }
+        /*
+         * Only a payment still inside its own window is reissued. A stale one has just
+         * been closed above, so this path creates a fresh reference — and the window
+         * floor below decides whether there is enough of the ORDER left to be worth one.
+         */
+        const already = stale ? undefined : found;
         /*
          * NOT an early return: the audit row and the idempotency row below are the point.
          *
@@ -500,6 +612,31 @@ export class PaymentService {
          * so the NEXT redelivery of this very update would take the create path again —
          * which is the defect this block exists to close, reintroduced one line above it.
          */
+        /*
+         * A window too short to transfer money in is refused, not issued.
+         *
+         * Only on the CREATE path. A customer who already holds a reference for this
+         * order gets it back whatever the clock says — refusing them would take away
+         * the instruction they are looking at, which is strictly worse than letting a
+         * short window run out.
+         *
+         * `PAYMENT_WINDOW_MINUTES_MIN` bounded only the SETTING until now, and the
+         * order's own remaining time could be shorter than any configured window: the
+         * customer passes `REFUSE_AFTER_DEADLINE` with thirty seconds left, is handed
+         * bank details, and the sweep closes both rows before they reach the app.
+         * `PAYMENT_WINDOW_TOO_SHORT` says that in the one place it is still fixable.
+         */
+        const deadline = paymentDeadline(order.expiresAt, now, windowMinutes);
+        if (
+          already === undefined &&
+          deadline.getTime() - now.getTime() < PAYMENT_WINDOW_MINUTES_MIN * 60_000
+        ) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_WINDOW_TOO_SHORT,
+            'There is not enough time left on this order to pay for it out of band.',
+          );
+        }
+
         const payment =
           already ??
           (await this.deps.repository.create(
@@ -513,13 +650,23 @@ export class PaymentService {
               amount: order.totals.total,
               reference,
               /*
-               * The order's own deadline, carried onto the payment.
+               * The EARLIER of the order's own deadline and the payment window.
                *
-               * Not a new window invented here: the order already has one and a payment
-               * that outlived it would be an instruction to send money for something
-               * that can no longer be bought.
+               * It used to be `order.expiresAt` alone, with the comment that the order
+               * already has a deadline and a payment outliving it would be an
+               * instruction to send money for something that can no longer be bought.
+               * Both halves of that are still true and it was never the whole rule: the
+               * order's window is `sales.order_expiry_minutes`, whose ceiling is
+               * fourteen days, so a tenant who lengthened it was handing out bank
+               * instructions that stayed live for a fortnight.
+               *
+               * The owner fixed the other bound — at most one hour for a PAYMENT — and
+               * `sales.payment_window_minutes` is where it now lives. Taking the earlier
+               * of the two means neither can be escaped by configuring the other, and a
+               * payment created near the end of an order's window inherits the little
+               * that is left of it rather than a fresh hour past the order's own death.
                */
-              expiresAt: order.expiresAt,
+              expiresAt: deadline,
               now,
             },
             tx,
@@ -588,7 +735,20 @@ export class PaymentService {
     const denial = { action: 'payment.confirm', entityType: 'Payment', entityId: paymentId };
     await this.authorize(scope, actor, PAYMENT_REVIEW_PERMISSION, denial);
 
-    const requestHash = hashRequest({ paymentId, note: input.note });
+    /*
+     * The DECISION is part of the identity, not only the payment and the note.
+     *
+     * Approve and reject share this namespace and would otherwise share a hash: same
+     * payment, same note shape. A caller deriving its key from the payment — which is
+     * the obvious thing for an API client or the Telegram admin surface OQ-4C-03
+     * contemplates to do — could then reject a receipt and later "confirm" it with the
+     * same key, and the store would answer from its record: HTTP 200, no state change,
+     * no audit row, and a caller told the order settled when it did not. The mismatch
+     * guard cannot catch it because the payload really is identical; only the command
+     * differs. `requestManualTransfer` discriminates itself from `settleFromWallet` the
+     * same way, with `method` in the hash.
+     */
+    const requestHash = hashRequest({ paymentId, note: input.note, decision: 'CONFIRM' });
     const replayed = await this.deps.idempotency.find<{ paymentId: string }>(
       scope,
       OPERATOR_NAMESPACE,
@@ -671,6 +831,339 @@ export class PaymentService {
           denial.action,
           { idempotencyKey: input.idempotencyKey, requestHash, namespace: OPERATOR_NAMESPACE },
         );
+      },
+    );
+  }
+
+  /**
+   * An operator recording that the money did NOT arrive.
+   *
+   * The other half of `receipts.review`, which has read *"Approve or reject a receipt"*
+   * since the permission catalogue was frozen and had only the approve half behind it
+   * until this release. `docs/phase4g-audit.md` records what that cost: a transfer that
+   * never came left its payment PENDING for ever, its reference live, and its order
+   * sitting in the admin as awaiting payment with nothing an operator could do to it.
+   *
+   * It is the exact mirror of `confirmManualTransfer` and deliberately so — same
+   * permission, same namespace, same replay, same conditional UPDATE — with one
+   * difference that matters: **no money moves and no order changes.** There is no
+   * settlement to perform, because a rejection is the assertion that there was never
+   * anything to settle.
+   *
+   * ## What it deliberately does NOT do to the order
+   *
+   * The order stays `AWAITING_PAYMENT` until its own deadline. A rejected transfer is
+   * not a withdrawn purchase: the customer still wants the thing and may pay for it
+   * from their wallet, or transfer again with a new reference, inside the window they
+   * were given. Cancelling the order here would be this method deciding that a failed
+   * attempt ends the intent, which is a policy nobody has stated —
+   * `docs/open-questions.md` carries it rather than this code inventing it.
+   *
+   * ## Why there is no un-reject
+   *
+   * `PAYMENT_MACHINE` has no edge out of `FAILED`, migration 0052 freezes the row, and
+   * the remedy for a rejection that was wrong is a new payment rather than an edited
+   * one — the same shape `commerce.ts` fixes for orders, where a settlement that turns
+   * out to be wrong is a refund plus a new order and never a reopened one.
+   */
+  async rejectManualTransfer(
+    scope: TenantContext,
+    actor: ActorContext,
+    id: string,
+    input: ManualRejection,
+  ): Promise<PaymentRecord> {
+    const paymentId = this.paymentId(id);
+    const denial = { action: 'payment.reject', entityType: 'Payment', entityId: paymentId };
+    await this.authorize(scope, actor, PAYMENT_REVIEW_PERMISSION, denial);
+
+    // The decision is part of the identity — see `confirmManualTransfer`, where the
+    // same line carries the reasoning and the other half of this pair.
+    const requestHash = hashRequest({ paymentId, note: input.note, decision: 'REJECT' });
+    const replayed = await this.deps.idempotency.find<{ paymentId: string }>(
+      scope,
+      OPERATOR_NAMESPACE,
+      input.idempotencyKey,
+      requestHash,
+    );
+    if (replayed !== null) {
+      const existing = await this.deps.repository.findById(scope, paymentId);
+      if (existing !== null) return existing;
+    }
+
+    const now = this.deps.clock.now();
+
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      PAYMENT_REVIEW_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+
+        const payment = await this.deps.repository.findById(scope, paymentId, tx);
+        if (payment === null) {
+          throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
+        }
+
+        /*
+         * Already FAILED is the end state the caller asked for, not an error.
+         *
+         * Two operators pressing reject, or one pressing it twice, must not be told the
+         * payment is broken — the same rule `confirmManualTransfer` states for its own
+         * end state. What they cannot get is a second rejection, and they cannot:
+         * `resolve` is a conditional UPDATE on `state = 'PENDING'`.
+         */
+        if (payment.state === 'FAILED') return payment;
+        /*
+         * Every other non-PENDING state is a real refusal, and CONFIRMED is the one
+         * that matters: a confirmed payment is rejected by a REFUND, not by an edit.
+         * There is deliberately no check that the method is `MANUAL_TRANSFER` — a
+         * wallet payment is created and confirmed in the same transaction and is
+         * therefore never PENDING, so this check already covers it without a second
+         * rule that could disagree with the first.
+         */
+        if (payment.state !== 'PENDING') {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID,
+            'This payment can no longer be rejected.',
+          );
+        }
+
+        const moved = await this.deps.repository.resolve(
+          scope,
+          paymentId,
+          'FAILED',
+          {
+            resolvedByAdminId: adminIdOf(actor),
+            resolutionNote: input.note,
+            resolvedAt: now,
+          },
+          now,
+          tx,
+        );
+        /*
+         * The row was PENDING a moment ago and is not now, so somebody else moved it —
+         * the other operator's confirmation, or the expiry sweep. Refusing rather than
+         * reporting success is the whole reason `resolve` returns a boolean: a caller
+         * that ignored it would audit a rejection that did not happen.
+         */
+        if (!moved) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID,
+            'This payment can no longer be rejected.',
+          );
+        }
+
+        const rejected = await this.deps.repository.findById(scope, paymentId, tx);
+        /* istanbul ignore next -- the UPDATE above reported one row; this cannot be null. */
+        if (rejected === null) {
+          throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
+        }
+
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action: 'payment.reject',
+            entityType: 'Payment',
+            entityId: paymentId,
+            before: { state: payment.state },
+            after: {
+              state: rejected.state,
+              /*
+               * The NOTE is not repeated here. It is on the row, frozen by 0052, and an
+               * audit payload is not a second place to keep an operator's text about
+               * somebody's bank transfer — `docs/conventions.md` keeps audit payloads to
+               * what changed.
+               */
+              resolvedByAdminId: rejected.resolvedByAdminId,
+              orderId: payment.orderId,
+              /* Stated because it is the surprising part: a rejection leaves the order
+               * open, and an operator reading this row should not have to infer it. */
+              orderLeftAwaitingPayment: true,
+            },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+
+        await rememberOnce(
+          this.deps.idempotency,
+          scope,
+          OPERATOR_NAMESPACE,
+          input.idempotencyKey,
+          requestHash,
+          { paymentId },
+          tx,
+        );
+        return rejected;
+      },
+    );
+  }
+
+  /**
+   * One of a customer's OWN pending transfers, for a surface about to ask them a
+   * question about it.
+   *
+   * Ownership is the authorization and there is no permission charged, which is the
+   * shape `ProvisioningService.getForCustomer` already uses and states the reason for:
+   * a customer asking for an id they do not own gets the same answer as one that does
+   * not exist, because telling those apart lets somebody enumerate ids by watching
+   * which refusal comes back. Here the answer is simply `null`, because the caller is
+   * deciding whether to draw a question rather than performing anything.
+   *
+   * It returns only a PENDING one. A surface that asked "are you sure you want to
+   * withdraw this?" about a payment already closed would be offering a question whose
+   * answer is refused — the failure `serviceTerminateAsk` re-reads the service to
+   * avoid.
+   */
+  async pendingTransferForCustomer(
+    scope: TenantContext,
+    customerId: UserId,
+    id: string,
+  ): Promise<PaymentRecord | null> {
+    const parsed = paymentIdSchema.safeParse(id);
+    if (!parsed.success) return null;
+    const payment = await this.deps.repository.findById(scope, parsed.data);
+    if (payment === null || payment.customerId !== customerId) return null;
+    return payment.state === 'PENDING' ? payment : null;
+  }
+
+  /**
+   * A customer withdrawing a pending transfer they started and decided not to make.
+   *
+   * `PAYMENT_MACHINE`'s `CANCEL` edge, which had no caller. Until this release the only
+   * way out of a manual transfer a customer changed their mind about was to never pay:
+   * the row stayed PENDING with its reference live, and `requestManualTransfer`'s own
+   * docblock records the consequence — one pending transfer per order exists precisely
+   * because a second one could not be got rid of.
+   *
+   * ## What it names, and what it re-reads
+   *
+   * The command carries a payment id and an idempotency key. The OWNER is re-read from
+   * the row and compared to the customer the surface authenticated, which is what makes
+   * a guessed id useless; a payment that is not theirs answers exactly as one that does
+   * not exist, for the reason `orderAwaitingPayment` gives — a distinct refusal is an
+   * oracle for anybody willing to guess.
+   *
+   * ## Why it does not check for a block
+   *
+   * `assertCustomerMayPay` refuses a BLOCKED customer on the two paths that MOVE money.
+   * A withdrawal moves none and reduces what is owed, so refusing it would leave a
+   * blocked customer's payment live with no way for them to close it. The bot refuses a
+   * blocked customer at the surface in any case.
+   *
+   * ## What it does NOT do to the order
+   *
+   * The same as a rejection: the order stays `AWAITING_PAYMENT` until its own deadline,
+   * so a customer who withdrew a transfer can still pay from their wallet. Cancelling
+   * the order would make "I would rather pay another way" mean "I do not want this",
+   * and those are different facts about the same row — the distinction `commerce.ts`
+   * keeps `CANCELLED` and `EXPIRED` apart for.
+   */
+  async withdrawPending(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: UserId,
+    withdrawal: PaymentWithdrawal,
+  ): Promise<PaymentRecord> {
+    const paymentId = this.paymentId(withdrawal.paymentId);
+    const denial = { action: 'payment.withdraw', entityType: 'Payment', entityId: paymentId };
+    await this.authorize(scope, actor, PAYMENT_PLACE_PERMISSION, denial);
+
+    const requestHash = hashRequest({ paymentId, customerId });
+    const replayed = await this.deps.idempotency.find<{ paymentId: string }>(
+      scope,
+      CUSTOMER_NAMESPACE,
+      withdrawal.idempotencyKey,
+      requestHash,
+    );
+    if (replayed !== null) {
+      const existing = await this.deps.repository.findById(scope, paymentId);
+      if (existing !== null) return existing;
+    }
+
+    const now = this.deps.clock.now();
+
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      PAYMENT_PLACE_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+
+        const payment = await this.deps.repository.findById(scope, paymentId, tx);
+        if (payment === null || payment.customerId !== customerId) {
+          throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
+        }
+
+        /* The end state the caller asked for. A second tap is not an error. */
+        if (payment.state === 'CANCELLED') return payment;
+        if (payment.state !== 'PENDING') {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID,
+            'This payment is no longer pending.',
+          );
+        }
+
+        const moved = await this.deps.repository.resolve(
+          scope,
+          paymentId,
+          'CANCELLED',
+          /*
+           * No administrator and no note. Nobody reviewed this and nothing was decided
+           * about the money — `payments_resolution_reviewer_check` would refuse an
+           * admin id here anyway, which is the schema saying the same thing where a
+           * later edit to this file cannot disagree with it.
+           */
+          { resolvedByAdminId: null, resolutionNote: null, resolvedAt: now },
+          now,
+          tx,
+        );
+        if (!moved) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID,
+            'This payment is no longer pending.',
+          );
+        }
+
+        const cancelled = await this.deps.repository.findById(scope, paymentId, tx);
+        /* istanbul ignore next -- the UPDATE above reported one row; this cannot be null. */
+        if (cancelled === null) {
+          throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
+        }
+
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action: 'payment.withdraw',
+            entityType: 'Payment',
+            entityId: paymentId,
+            before: { state: payment.state },
+            after: {
+              state: cancelled.state,
+              orderId: payment.orderId,
+              orderLeftAwaitingPayment: true,
+            },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+
+        await rememberOnce(
+          this.deps.idempotency,
+          scope,
+          CUSTOMER_NAMESPACE,
+          withdrawal.idempotencyKey,
+          requestHash,
+          { paymentId },
+          tx,
+        );
+        return cancelled;
       },
     );
   }
@@ -1113,6 +1606,11 @@ export class PaymentService {
       sessions: this.deps.sessions,
       clock: this.deps.clock,
     };
+  }
+
+  /** The configured payment window, read inside the transaction that uses it. */
+  private async paymentWindowMinutes(scope: TenantContext, tx: TransactionScope): Promise<number> {
+    return this.deps.settings.valueOf<number>(scope, 'sales.payment_window_minutes', tx);
   }
 
   private orderId(candidate: string): OrderId {
