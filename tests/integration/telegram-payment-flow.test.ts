@@ -566,10 +566,26 @@ describe('the customer payment flow over Telegram', () => {
     const keyboard = lastMessage()?.body['reply_markup'] as
       { inline_keyboard: { text: string; callback_data: string }[][] } | undefined;
     const buttons = (keyboard?.inline_keyboard ?? []).flat();
-    expect(buttons).toHaveLength(1);
-    // It names the PAYMENT, not the order — the only id that identifies what a
-    // withdrawal would close.
-    expect(buttons[0]?.callback_data).toBe(`x:${String(payment?.['id'])}`);
+    /*
+     * TWO buttons since 4H, and their ORDER is the assertion.
+     *
+     * `docs/phase4h-audit.md` §4: the instructions used to end «سپس رسید را ارسال
+     * نمایید» — send the receipt — and no surface in this product accepts one (owner
+     * revision 17), so a customer who had transferred the money had nothing to do and
+     * `bot.payment.received_for_review` was a frozen sentence with no producer.
+     *
+     * The claim comes FIRST and the withdrawal second. It is what most customers
+     * returning to this message want, and the destructive one should not be the nearest
+     * thumb.
+     */
+    expect(buttons).toHaveLength(2);
+    expect(buttons.map((b) => b.callback_data)).toEqual([
+      `i:${String(payment?.['id'])}`,
+      `x:${String(payment?.['id'])}`,
+    ]);
+    // Both name the PAYMENT, not the order — the only id that identifies what either
+    // one is about, since an order can have had several payments over its life.
+    const cancelButton = buttons[1];
 
     /*
      * The first tap ASKS. It must not close anything: this message stays in the chat
@@ -579,7 +595,7 @@ describe('the customer payment flow over Telegram', () => {
      * reason and this follows it.
      */
     sent = [];
-    await tap(String(buttons[0]?.callback_data));
+    await tap(String(cancelButton?.callback_data));
 
     expect((await payments())[0]?.['state']).toBe('PENDING');
     const question = lastMessage()?.body['reply_markup'] as
@@ -664,9 +680,19 @@ describe('the customer payment flow over Telegram', () => {
   it('never offers a gateway, and refuses one tapped from an older message', async () => {
     const orderId = await awaitingPayment();
 
-    // Not drawn: the choice offers only what this installation can perform.
+    /*
+     * Not drawn: the choice offers only what this installation can perform.
+     *
+     * The third entry is 4H's cancel-order ASK, not a payment rail — asserted here
+     * rather than filtered out, so that a gateway button appearing would not be hidden
+     * by a test that had learnt to expect "some extra buttons".
+     */
     const buttons = buttonsOf(lastMessage());
-    expect(buttons.map((b) => b.callback_data)).toEqual([`w:${orderId}`, `m:${orderId}`]);
+    expect(buttons.map((b) => b.callback_data)).toEqual([
+      `w:${orderId}`,
+      `m:${orderId}`,
+      `d:${orderId}`,
+    ]);
     sent = [];
 
     await tap(`g:${orderId}`);

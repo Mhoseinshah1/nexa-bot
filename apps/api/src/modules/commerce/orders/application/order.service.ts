@@ -68,8 +68,49 @@ export const ORDER_PLACE_PERMISSION: PermissionKey = 'maintenance.run';
  */
 const ORDER_NAMESPACE = 'TELEGRAM' as const;
 
+/**
+ * What an order cancellation needs to know and do about the payments against it.
+ *
+ * A NARROW port rather than `PaymentRepository`, for the reason `CustomerBotReader`
+ * gives one module over: handing the order service the payment repository would also
+ * hand it `confirm`, and therefore the ability to mark money as received from inside an
+ * order command.
+ *
+ * Both methods are scoped to ONE order and take the caller's transaction, because the
+ * order's cancellation and the payment's withdrawal are the same fact: an order
+ * cancelled while a transfer instruction is still live is an instruction to send money
+ * for something that no longer exists, which is the half-state
+ * `PaymentExpiryService`'s docblock names as the dangerous one.
+ */
+export interface OrderPaymentLane {
+  /**
+   * Whether any PENDING payment against this order has been claimed as sent.
+   *
+   * The one combination 4H must not perform. A customer who has said they transferred
+   * the money may have money in flight, and cancelling would close the payment it was
+   * against while the transfer is on its way to a reference nobody is holding open.
+   */
+  claimedPendingFor(scope: TenantContext, orderId: OrderId, tx: TransactionScope): Promise<boolean>;
+
+  /**
+   * Withdraws every PENDING payment against this order. Returns the ids it moved.
+   *
+   * A set rather than one row, because `requestManualTransfer` allows at most one
+   * PENDING transfer per order but nothing in the schema says the set is a singleton,
+   * and a cancellation that closed "the" payment would leave the second one live.
+   */
+  withdrawPendingFor(
+    scope: TenantContext,
+    orderId: OrderId,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<readonly string[]>;
+}
+
 export interface OrderServiceDeps {
   readonly repository: OrderRepository;
+  /** How a cancellation reaches the payments against the order. See `OrderPaymentLane`. */
+  readonly payments: OrderPaymentLane;
   readonly products: ProductRepository;
   readonly customers: CustomerRepository;
   readonly settings: SettingsResolver;
@@ -425,6 +466,218 @@ export class OrderService {
             },
           });
         }
+
+        await rememberOnce(
+          this.deps.idempotency,
+          scope,
+          ORDER_NAMESPACE,
+          input.idempotencyKey,
+          requestHash,
+          { orderId: after.id },
+          tx,
+        );
+        return after;
+      },
+    );
+  }
+
+  /**
+   * The customer's OWN order, read for a surface that is about to offer a question.
+   *
+   * `OrderService.get` is the operator's read and checks `orders.view`, which a
+   * customer-initiated turn does not hold — `SYSTEM_JOB_PERMISSIONS` is
+   * `['maintenance.run']` and nothing else. Calling it from the bot would refuse every
+   * customer with a permission error, which is a defect a surface test that only
+   * asserted the BUTTON existed would not have caught.
+   *
+   * `PaymentService.pendingTransferForCustomer` is the same method one aggregate over
+   * and states the rest of the reasoning: it returns only a row in the state the
+   * question is about, so a surface cannot ask "are you sure?" about something whose
+   * answer would be refused. Ownership is compared to the customer the surface
+   * authenticated, so a guessed id answers exactly as one that does not exist.
+   *
+   * It writes nothing and takes no permission. The cancellation itself re-reads both
+   * facts inside its own transaction; this is about not DRAWING a question.
+   */
+  async awaitingPaymentForCustomer(
+    scope: TenantContext,
+    customerId: UserId,
+    id: string,
+  ): Promise<OrderRecord | null> {
+    const parsed = orderIdSchema.safeParse(id);
+    if (!parsed.success) return null;
+    const order = await this.deps.repository.findById(scope, parsed.data);
+    if (order === null || order.customerId !== customerId) return null;
+    return order.state === 'AWAITING_PAYMENT' ? order : null;
+  }
+
+  /**
+   * A customer withdrawing an order they have not paid for.
+   *
+   * `ORDER_MACHINE`'s `CANCEL` edge, which 4G made WRITABLE — by adding `cancelledAt`
+   * to the transition stamps — and left with no caller at all. `docs/phase4h-audit.md`
+   * §3 is the measurement: two comments about the constraint, no producer, and
+   * `bot.order.cancelled` a frozen sentence with nowhere to be sent from.
+   *
+   * ## AWAITING_PAYMENT only
+   *
+   * `ORDER_MACHINE` also allows CANCEL from `DRAFT`, and this does not take it. A draft
+   * is a quote the customer has not answered; nothing is owed for it, no payment names
+   * it, and no surface shows one after the summary. Adding the edge here would be a
+   * second path with no caller, which is the defect this method exists to close.
+   *
+   * ## The payment goes with it
+   *
+   * Both in ONE transaction, and the ordering is the opposite of the expiry sweep's for
+   * a reason: the sweep takes payments first because it is bounded and may stop between
+   * the halves, and this touches exactly one order and cannot. What matters here is
+   * that neither commits without the other.
+   *
+   * A cancellation that left a PENDING transfer alive would leave the customer holding
+   * a reference for an order that no longer exists — the state `PaymentExpiryService`
+   * names as the one a customer could act on, with their own money.
+   *
+   * ## Unless they said they already paid
+   *
+   * `ORDER_TRANSFER_UNDER_REVIEW`. The claim says money may be in flight, and there is
+   * no version of cancelling that is safe once it is: the transfer arrives against a
+   * reference belonging to a closed payment on a cancelled order, and the remedy
+   * becomes a manual wallet credit. So the order stays live until an operator has
+   * looked. The customer is told why, which is what stops them tapping again.
+   *
+   * Read INSIDE the transaction, so a claim that commits between the read and the
+   * write cannot slip past it.
+   *
+   * ## What it does not do
+   *
+   * No refund and no service. An `AWAITING_PAYMENT` order has taken no money and
+   * provisioned nothing — `ORDER_MACHINE` reaches `REFUNDED` only from `PAID` — so
+   * there is nothing to reverse and nothing to tear down.
+   */
+  async cancelByCustomer(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly idempotencyKey: string;
+      readonly customerId: string;
+      readonly orderId: string;
+    },
+  ): Promise<OrderRecord> {
+    const customerId = this.customerId(input.customerId);
+    const orderId = this.orderId(input.orderId);
+    const requestHash = hashRequest({ customerId, orderId, action: 'cancel' });
+
+    /** Before the replay, for the reason `createDraft` states: a replay returns a row. */
+    await this.authorize(scope, actor, {
+      action: 'order.cancel',
+      entityType: 'Order',
+      entityId: orderId,
+    });
+
+    const replay = await this.replay(scope, input.idempotencyKey, requestHash);
+    if (replay !== null) return replay;
+
+    const now = this.deps.clock.now();
+
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      ORDER_PLACE_PERMISSION,
+      { action: 'order.cancel', entityType: 'Order', entityId: orderId },
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+
+        const before = await this.deps.repository.findById(scope, orderId, tx);
+        /* Another customer's order is UNKNOWN, not FORBIDDEN — `confirm` states why. */
+        if (before === null || before.customerId !== customerId) {
+          throw errors.notFound(COMMERCE_ERROR_CODES.ORDER_NOT_FOUND, 'Unknown order.');
+        }
+
+        /*
+         * Already cancelled is the end state the caller asked for, and a second tap is
+         * not an error. `confirm` answers a repeated confirmation the same way, and the
+         * message carrying this button stays in the chat for ever.
+         */
+        if (before.state === 'CANCELLED') {
+          await rememberOnce(
+            this.deps.idempotency,
+            scope,
+            ORDER_NAMESPACE,
+            input.idempotencyKey,
+            requestHash,
+            { orderId: before.id },
+            tx,
+          );
+          return before;
+        }
+        if (before.state !== 'AWAITING_PAYMENT') {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.ORDER_STATE_INVALID,
+            'This order can no longer be cancelled.',
+          );
+        }
+
+        if (await this.deps.payments.claimedPendingFor(scope, orderId, tx)) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.ORDER_TRANSFER_UNDER_REVIEW,
+            'A transfer for this order is waiting to be reviewed.',
+          );
+        }
+
+        /*
+         * The target comes from the FROZEN machine, exactly as `confirm` takes its own.
+         * A literal here would let the machine and this service disagree silently.
+         */
+        const to = nextState(ORDER_MACHINE, 'AWAITING_PAYMENT', 'CANCEL');
+        if (to === null) {
+          throw new Error('ORDER_MACHINE no longer allows CANCEL from AWAITING_PAYMENT.');
+        }
+
+        const withdrawn = await this.deps.payments.withdrawPendingFor(scope, orderId, now, tx);
+
+        const changed = await this.deps.repository.transition(
+          scope,
+          orderId,
+          'AWAITING_PAYMENT',
+          to,
+          /*
+           * `cancelledAt` is written by the SAME statement as the state, because
+           * `orders_cancelled_at_check` is `(state = 'CANCELLED') = (cancelled_at IS NOT
+           * NULL)` — a transition that moved one without the other could not commit.
+           */
+          { cancelledAt: now },
+          now,
+          tx,
+        );
+
+        const after = await this.deps.repository.findById(scope, orderId, tx);
+        /* istanbul ignore next -- read in the same transaction as the read above. */
+        if (after === null) {
+          throw errors.notFound(COMMERCE_ERROR_CODES.ORDER_NOT_FOUND, 'Unknown order.');
+        }
+
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action: 'order.cancel',
+            entityType: 'Order',
+            entityId: orderId,
+            before: { state: before.state },
+            after: {
+              state: after.state,
+              changed,
+              /*
+               * How many transfer instructions this closed, so the log distinguishes a
+               * customer abandoning a quote from one abandoning a payment in progress.
+               */
+              paymentsWithdrawn: withdrawn.length,
+            },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
 
         await rememberOnce(
           this.deps.idempotency,

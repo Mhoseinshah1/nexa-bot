@@ -282,3 +282,29 @@ policy, so 4H answers them rather than recording them.
 Items 2–4 are one mechanism applied three times; item 1 is that mechanism, and item 9 is
 a correction that mechanism has to carry. Items 5, 6, 7 and 8 are independent and can
 land in any order.
+
+---
+
+## What has landed, and where
+
+Kept current as the phase proceeds, because a work list nobody ticks is a work list
+that gets re-done or silently dropped. Each row names the commit's own subject line.
+
+| #   | Item                                    | Landed in                                                                          |
+| --- | --------------------------------------- | ---------------------------------------------------------------------------------- |
+| 1   | The durable customer notification lane  | contracts / schema / repository / dispatcher — four commits, ADR 0030              |
+| 2   | Payment rejected and expired reach them | «producers: a rejected or expired payment now reaches the customer»                |
+| 3   | Operation outcome reaches them          | «producers: a customer learns how the thing they asked for turned out»             |
+| 4   | Provisioning progress and delay         | **not yet** — `bot.service.provisioning` and `…provision_delayed` have no producer |
+| 5   | The "I have sent the transfer" signal   | «a customer can say they have paid, and withdraw an order they have not»           |
+| 6   | A customer may cancel their own order   | same commit as item 5                                                              |
+| 7   | Web Admin Services surface              | **not yet**                                                                        |
+| 8   | Telegram command discovery              | «telegram: the commands exist, so the client should offer them»                    |
+| 9   | A rate limit must not park a message    | «lane: the dispatcher, its loop, and the 429 that used to strand a paid customer»  |
+
+Item 9's fix went in with the lane rather than after it, because the lane's own
+`CustomerSendOutcome` is where `RATE_LIMITED` has to exist: adding it afterwards would
+have meant two shapes of the same enum in one release.
+
+Item 4 and item 7 are the two still open, and they are independent of each other and of
+everything above.

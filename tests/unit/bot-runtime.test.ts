@@ -491,11 +491,38 @@ describe('profile metadata, normalised before it is ever stored', () => {
        */
       'bot.help',
       'bot.order.awaiting_payment',
+      /*
+       * The 4H order-cancellation trio, reviewed against this case's own rule.
+       *
+       * `docs/phase4h-audit.md` §3: `ORDER_MACHINE`'s CANCEL edge became WRITABLE in 4G
+       * and still had no caller, so `bot.order.cancelled` was a frozen sentence with
+       * nowhere to be sent from. The button now sits beside the two pay buttons, the
+       * confirm question stands between it and the cancellation, and the third is the
+       * answer to the question — the same three-key shape the payment withdrawal and
+       * the service termination already use, for the reason both record: a destructive
+       * tap a customer can reach by scrolling is not a decision they have made.
+       *
+       * None of the three instructs the customer to do anything: they describe what the
+       * tap does and what cannot be taken back.
+       */
+      'bot.order.cancel_button',
+      'bot.order.cancel_confirm',
+      'bot.order.cancel_confirm_button',
+      'bot.order.cancelled',
       'bot.order.confirm_button',
       'bot.order.expired',
       'bot.order.not_awaiting_payment',
       'bot.order.settled',
       'bot.order.summary',
+      /*
+       * The refusal when the customer has already said they paid.
+       *
+       * Its Persian tells them to WAIT for a review they asked for, which is the one
+       * instruction in this set — and it is an instruction to do nothing, not one to
+       * send a command. It is a distinct key because `bot.order.not_awaiting_payment`
+       * would say the order can no longer be acted on, and here it is perfectly live.
+       */
+      'bot.order.transfer_under_review',
       'bot.order.unavailable',
       'bot.payment.cancel_button',
       'bot.payment.cancel_confirm',
@@ -504,6 +531,23 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.manual_button',
       'bot.payment.manual_instructions',
       'bot.payment.not_pending',
+      /*
+       * The answer to the new button below, and the wording is the load-bearing part.
+       *
+       * Its Persian used to read «رسید شما دریافت شد» — "your receipt has been
+       * received" — for a key with no producer at all. Both halves were untrue: this
+       * product accepts no receipt (owner revision 17) and nothing has been received.
+       * 4H rewrote it to say what IS true — the customer's claim is recorded and a
+       * person will check it — which is the distinction `PRBR-004` records the legacy
+       * system as unable to make.
+       */
+      'bot.payment.received_for_review',
+      /*
+       * The button that produces it. `bot.payment.manual_instructions` used to end
+       * «سپس رسید را ارسال نمایید» and there was no surface to send one to; the
+       * instruction now names this button, which exists.
+       */
+      'bot.payment.sent_button',
       'bot.payment.unconfigured',
       'bot.payment.wallet_button',
       'bot.payment.window_too_short',

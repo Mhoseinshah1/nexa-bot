@@ -328,6 +328,60 @@ describe('a provisioned service announces itself', () => {
     expect(ops[0]?.state).toBe('SUCCEEDED');
   });
 
+  it('does not spend an attempt when Telegram rate-limits the announcement', async () => {
+    /*
+     * The defect `docs/phase4h-audit.md` §6b measured, against a real 429.
+     *
+     * Every link was individually defensible: `send-message.ts` returns
+     * `FAILED_RETRYABLE`, the messenger collapsed every retryable failure into
+     * `UNKNOWN`, `deliveryStateAfter(PENDING, 'UNKNOWN', n)` is `UNCONFIRMED`, and the
+     * claim takes `PENDING` only. Composed, one 429 withheld a PAID customer's
+     * subscription link until a person noticed — and Telegram sends a 429 exactly when
+     * the most customers are waiting for that message.
+     *
+     * Three assertions, because the rule has three halves and mutating any one of them
+     * away must fail this case:
+     *   - the state stays PENDING, so the next sweep re-claims it;
+     *   - the attempt counter does NOT move, because it bounds definite refusals and
+     *     three bursts would otherwise fail a link Telegram never rejected on its
+     *     merits;
+     *   - the backoff honours Telegram's own `retry_after`.
+     */
+    reply = (_request, response) => {
+      response.writeHead(429, { 'content-type': 'application/json' });
+      response.end(
+        JSON.stringify({
+          ok: false,
+          error_code: 429,
+          description: 'Too Many Requests: retry after 900',
+          /*
+           * Deliberately LONGER than `DELIVERY_BACKOFF_MS` (five minutes).
+           *
+           * With a shorter value the assertion below cannot tell "honoured Telegram's
+           * number" from "fell back to our floor" — and a first version of this test
+           * used thirty seconds, so replacing `result.retryAfterMs ?? BACKOFF` with a
+           * bare `BACKOFF` left it green. A test that cannot distinguish the rule from
+           * its absence is not a test.
+           */
+          parameters: { retry_after: 900 },
+        }),
+      );
+    };
+    const before = ctx.container.clock.now().getTime();
+    const orderId = await paidOrder('deliver-rate-limited');
+
+    await ctx.container.provisionerLoop.tick();
+
+    const service = await services.findByOrderId(tenantA, orderId);
+    expect(service?.state, 'a rate limit does not unprovision a service').toBe('ACTIVE');
+    expect(service?.deliveryState, 'and it stays re-claimable').toBe('PENDING');
+    expect(service?.deliveryAttempts, 'a rate limit is not a refusal of this message').toBe(0);
+    expect(service?.deliveredAt).toBeNull();
+    /* Telegram said fifteen minutes. Anything sooner is us inventing a number. */
+    const retryAt = service?.deliveryNextAttemptAt?.getTime() ?? 0;
+    expect(retryAt).toBeGreaterThanOrEqual(before + 900_000);
+  });
+
   it('retries the announcement without calling the provider again', async () => {
     reply = (_request, response) => {
       response.writeHead(403, { 'content-type': 'application/json' });

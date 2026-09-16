@@ -72,22 +72,41 @@ describe('announcing how an operation turned out', () => {
    * outcomes are announced. `UNKNOWN` says nothing for the older reason: the request may
    * have taken effect, and this repository never claims to know what it does not.
    */
-  const terminal: readonly [OperationState, string | null][] = [
-    ['SUCCEEDED', 'SERVICE_ACTION_SUCCEEDED'],
-    ['ABANDONED', 'SERVICE_ACTION_FAILED'],
-    ['FAILED', null],
-    ['UNKNOWN', null],
-    ['IN_FLIGHT', null],
-    ['PLANNED', null],
-  ];
-
-  for (const [outcome, kind] of terminal) {
-    it(`${kind === null ? 'says nothing about' : 'announces'} a ${outcome} operation`, async () => {
+  /*
+   * Only the two TERMINAL outcomes are announced.
+   *
+   * A `FAILED` with attempts left goes back to PLANNED and is tried again, so "your
+   * renewal failed" would be a statement the next attempt contradicts. `UNKNOWN` says
+   * nothing for the older reason: the request may have taken effect, and this
+   * repository never claims to know what it does not.
+   *
+   * Written as two named cases rather than a loop with a computed title, because
+   * `scripts/check-falsification-citations.mjs` reads test names statically: a rule
+   * cited against a title it cannot find is a citation nobody can check.
+   */
+  it('announces a SUCCEEDED and an ABANDONED operation', async () => {
+    const announced: [OperationState, string][] = [
+      ['SUCCEEDED', 'SERVICE_ACTION_SUCCEEDED'],
+      ['ABANDONED', 'SERVICE_ACTION_FAILED'],
+    ];
+    for (const [outcome, kind] of announced) {
       const { announcer, queued } = announcerFor('RENEW');
       await announcer.announce(scope, 'operation-1', 'service-1', outcome);
-      expect(queued.map((q) => q.kind)).toEqual(kind === null ? [] : [kind]);
-    });
-  }
+      expect(
+        queued.map((q) => q.kind),
+        `${outcome} must be announced`,
+      ).toEqual([kind]);
+    }
+  });
+
+  it('says nothing about a FAILED operation', async () => {
+    const silent: OperationState[] = ['FAILED', 'UNKNOWN', 'IN_FLIGHT', 'PLANNED'];
+    for (const outcome of silent) {
+      const { announcer, queued } = announcerFor('RENEW');
+      await announcer.announce(scope, 'operation-1', 'service-1', outcome);
+      expect(queued, `${outcome} must say nothing`).toEqual([]);
+    }
+  });
 
   it('says nothing about an operation no customer asked for', async () => {
     /*

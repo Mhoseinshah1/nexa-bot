@@ -44,11 +44,23 @@ describe('a Telegram bot belongs to one tenant', () => {
       audit: ctx.container.audit,
       clock: ctx.container.clock,
       ids: ctx.container.ids,
+      /*
+       * The stub is cast, so the COMPILER does not keep it in step with the port.
+       *
+       * 4H added `registerCommands` and this object went on typechecking and started
+       * throwing `is not a function` at run time in three cases here. The cast is kept
+       * because the real gateway reaches Telegram and these tests must not, but every
+       * method the port declares is now present — an `as never` stub is a promise the
+       * test makes on its own behalf and has to keep by hand.
+       */
       telegram: {
         // `identify` answers with the SAME numeric id and a DIFFERENT username —
         // the post-rename state, which is what slips past the username index.
         identify: async () => ({ outcome: 'IDENTIFIED', botId: SAME_BOT, username }) as never,
         registerWebhook: async () => ({ outcome: 'REGISTERED' }) as never,
+        // The command menu. Answering `true` is the ordinary case; the bootstrap
+        // service's own unit test covers a refusal, which must not fail an install.
+        registerCommands: async () => true,
       } as never,
       // A value of Telegram's own alphabet and past the schema's minimum. The test
       // config does not set one, and the service refuses a short secret on purpose.

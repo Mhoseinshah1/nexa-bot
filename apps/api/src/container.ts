@@ -814,9 +814,36 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * that can drift. It takes the outbox because `OrderConfirmed` is a declared event
    * with a declared aggregate, which is exactly what products did not have.
    */
+  /*
+   * ONE payment repository for the order service, the payment service and the expiry lane.
+   *
+   * It used to be constructed inline at the payment service. Two instances would work
+   * and would be two places for a later change to reach one of, which is how the probe
+   * core came to have a copy — and this one is the object holding the conditional
+   * UPDATEs that make the whole module's concurrency claims true.
+   *
+   * Constructed HERE, above the order service, because 4H gives a customer's own order
+   * cancellation a narrow lane into it: a cancelled order must not leave a live
+   * transfer instruction behind.
+   */
+  const paymentRepository = new DrizzlePaymentRepository(database.db);
+
   const orderRepository = new DrizzleOrderRepository(database.db);
   const orderService = new OrderService({
     repository: orderRepository,
+    /*
+     * The NARROW payment lane, not the repository.
+     *
+     * Two methods, both scoped to one order. Handing the order service the payment
+     * repository would also hand it `confirm`, and an order command able to mark money
+     * as received is exactly the boundary `OrderPaymentLane` exists to draw.
+     */
+    payments: {
+      claimedPendingFor: (scope, orderId, tx) =>
+        paymentRepository.hasClaimedPendingForOrder(scope, orderId, tx),
+      withdrawPendingFor: (scope, orderId, now, tx) =>
+        paymentRepository.cancelPendingForOrder(scope, orderId, now, tx),
+    },
     products: productRepository,
     customers: customerRepository,
     settings: settingsResolver,
@@ -949,16 +976,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
   });
-
-  /*
-   * ONE payment repository for the service and for the expiry lane.
-   *
-   * It used to be constructed inline here. Two instances would work and would be two
-   * places for a later change to reach one of, which is how the probe core came to have
-   * a copy — and this one is the object holding the conditional UPDATEs that make the
-   * whole module's concurrency claims true.
-   */
-  const paymentRepository = new DrizzlePaymentRepository(database.db);
 
   /**
    * The one way any producer queues a customer notification.

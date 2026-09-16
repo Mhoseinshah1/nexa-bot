@@ -1,4 +1,4 @@
-import { and, asc, eq, getTableColumns, isNotNull, lte, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, getTableColumns, isNotNull, isNull, lte, sql, type SQL } from 'drizzle-orm';
 import { money } from '@nexa/contracts';
 import type {
   CurrencyCode,
@@ -237,6 +237,108 @@ export class DrizzlePaymentRepository implements PaymentRepository {
   }
 
   /**
+   * The customer's claim to have sent the transfer, as one conditional UPDATE.
+   *
+   * Three predicates beside the tenant and the id, and each of them is a rule stated
+   * where a later caller cannot skip it. `state = 'PENDING'` — a claim about a payment
+   * that is over is a claim nobody can act on. `method = 'MANUAL_TRANSFER'` —
+   * `payments_customer_signal_check` says so too, and having it here means a wallet
+   * payment answers `false` rather than raising an integrity error at the surface.
+   * `customer_signalled_at IS NULL` — the FIRST claim is the recorded one, because the
+   * moment an operator compares against their bank statement must not move when the
+   * customer taps again.
+   *
+   * It sets `updated_at` and nothing else beyond the stamp. No state moves here: this
+   * is the one write in this repository that changes what an operator can SEE without
+   * changing anything about the money.
+   */
+  async signalSent(scope: TenantContext, id: PaymentId, now: Date, tx?: unknown): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(payments)
+      .set({ customerSignalledAt: now, updatedAt: now })
+      .where(
+        and(
+          eq(payments.tenantId, tenantId),
+          eq(payments.id, id),
+          eq(payments.state, 'PENDING'),
+          eq(payments.method, 'MANUAL_TRANSFER'),
+          isNull(payments.customerSignalledAt),
+        ),
+      )
+      .returning({ id: payments.id });
+    return rows.length > 0;
+  }
+
+  /**
+   * Whether a PENDING payment against this order carries the customer's claim.
+   *
+   * `LIMIT 1` over the three predicates, because the caller acts on the answer alone.
+   * `customer_signalled_at IS NOT NULL` is the claim; `state = 'PENDING'` is what makes
+   * it still open; the order is the scope. A payment an operator already resolved is
+   * not a reason to refuse a cancellation, which is why the state is in the predicate
+   * rather than assumed.
+   */
+  async hasClaimedPendingForOrder(
+    scope: TenantContext,
+    orderId: OrderId,
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ id: payments.id })
+      .from(payments)
+      .where(
+        and(
+          eq(payments.tenantId, tenantId),
+          eq(payments.orderId, orderId),
+          eq(payments.state, 'PENDING'),
+          isNotNull(payments.customerSignalledAt),
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
+  }
+
+  /**
+   * The `CANCEL` edge over every PENDING payment against one order.
+   *
+   * One statement rather than a read and a loop: the set is small, it is scoped to a
+   * single order, and the UPDATE's own `state = 'PENDING'` is what makes it safe
+   * against an operator confirming or the sweep expiring concurrently — whichever
+   * commits first, the other matches nothing.
+   *
+   * `resolved_at` is set by the SAME statement, because `payments_resolved_check` binds
+   * them: moving the state alone could not commit. No administrator and no note, for
+   * the reason `PaymentService.withdrawPending` gives — nobody reviewed this, and
+   * `payments_resolution_reviewer_check` would refuse an admin id in any case.
+   *
+   * It deliberately does NOT exclude a signalled payment. That refusal belongs to
+   * `OrderService.cancelByCustomer`, which must answer the customer with a sentence
+   * about their claim rather than silently cancelling one payment and not another.
+   */
+  async cancelPendingForOrder(
+    scope: TenantContext,
+    orderId: OrderId,
+    now: Date,
+    tx: unknown,
+  ): Promise<readonly PaymentId[]> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(payments)
+      .set({ state: 'CANCELLED', resolvedAt: now, updatedAt: now })
+      .where(
+        and(
+          eq(payments.tenantId, tenantId),
+          eq(payments.orderId, orderId),
+          eq(payments.state, 'PENDING'),
+        ),
+      )
+      .returning({ id: payments.id });
+    return rows.map((row) => row.id as PaymentId);
+  }
+
+  /**
    * The `EXPIRE` edge as a bounded set, for the sweep.
    *
    * Two statements rather than one, and the sub-select is not decoration: the UPDATE's
@@ -330,6 +432,7 @@ type Row = {
   resolvedAt: Date | null;
   resolvedByAdminId: string | null;
   resolutionNote: string | null;
+  customerSignalledAt: Date | null;
   expiresAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
@@ -353,6 +456,7 @@ function toRecord(row: Row): PaymentRecord {
     resolvedAt: row.resolvedAt,
     resolvedByAdminId: row.resolvedByAdminId,
     resolutionNote: row.resolutionNote,
+    customerSignalledAt: row.customerSignalledAt,
     expiresAt: row.expiresAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
