@@ -5343,22 +5343,153 @@ test_case 'a completed update reconciles the Telegram command menu'
 update_body="$(sed -n '/^cmd_update() {/,/^}/p' "${REPO}/deploy/bin/botctl")"
 assert_ok 'the cmd_update body could not be read; this check is vacuous' test -n "$update_body"
 assert_contains 'a completed update does not reconcile the command menu' \
-  "$update_body" 'dist/bootstrap-bot.cli.js'
+  "$update_body" 'telegram_reconcile_menu'
 # AFTER the release is committed, never before. Everything that can fail the
 # update has already succeeded by then, and a menu is not a reason to fail a
 # healthy committed release.
 update_tail="${update_body#*nexa_prune_releases}"
 assert_contains 'the menu reconcile does not run after the release is committed' \
-  "$update_tail" 'dist/bootstrap-bot.cli.js'
-# And it cannot fail the update: the invocation is guarded and the failure
-# branch warns rather than dying.
+  "$update_tail" 'telegram_reconcile_menu'
+# And it cannot fail the update: the failure branch warns rather than dying.
 assert_not_contains 'a failed menu reconcile kills a completed update' \
   "$update_tail" 'nexa_die'
+# The invocation itself moved into `telegram_reconcile_menu` when `rollback`
+# needed the same thing, so the rules about WHAT it does are asserted against
+# that body rather than against this one.
+reconcile_body="$(sed -n '/^telegram_reconcile_menu() {/,/^}/p' "${REPO}/deploy/bin/botctl")"
+assert_ok 'the reconcile body could not be read; this check is vacuous' \
+  test -n "$reconcile_body"
+assert_contains 'the reconcile does not invoke the bootstrap CLI' \
+  "$reconcile_body" 'dist/bootstrap-bot.cli.js'
+assert_not_contains 'a failed menu reconcile kills its caller' "$reconcile_body" 'nexa_die'
 assert_contains 'a failed menu reconcile says nothing to the operator' \
-  "$update_tail" "run 'botctl telegram register'"
+  "$reconcile_body" "run 'botctl telegram register'"
+
+test_case 'the booleanish vocabulary botctl reads is the one the schema accepts'
+# Read from `config.schema.ts` rather than restated here. A list copied into a
+# test is a list that agrees with the copy rather than with the schema, and this
+# check exists BECAUSE a copied vocabulary was already wrong once: the command
+# menu reconciliation compared against the literal `true`, so an installation
+# configured with `1` — which `booleanish` accepts and the API boots on — skipped
+# the reconciliation on every update, silently. Found by the Codex review of
+# PR 31.
+schema_booleanish="$(sed -n "/^const booleanish = z$/,/;/p" "${REPO}/apps/api/src/infrastructure/config/config.schema.ts")"
+assert_ok 'the booleanish schema could not be read; this check is vacuous' \
+  test -n "$schema_booleanish"
+# Every spelling the enum lists, in the order it lists them, classified by the
+# shell helper both botctl readers now share.
+# `[^]]*` rather than `.*`: sed is greedy and has no lazy quantifier, so `.*`
+# ran to the LAST bracket on the line and carried `])` into the final value.
+booleanish_values="$(printf '%s' "$schema_booleanish" | sed -n "s/.*z\.enum(\[\([^]]*\)\]).*/\1/p" | tr -d "' " | tr ',' ' ')"
+assert_ok 'no booleanish values were parsed; this check is vacuous' \
+  test -n "$booleanish_values"
+for value in $booleanish_values; do
+  assert_ok "nexa_boolean_word calls ${value} invalid, and the schema accepts it" \
+    test "$(nexa_boolean_word "$value")" != invalid
+done
+# And the other side, so the loop above cannot pass on a function that says `on`
+# to everything: a spelling the schema REFUSES must not be classified either.
+assert_equals 'nexa_boolean_word accepted a spelling the schema refuses' \
+  invalid "$(nexa_boolean_word 'TRUE')"
+assert_equals 'nexa_boolean_word accepted an empty value' invalid "$(nexa_boolean_word '')"
+
+test_case 'the command menu is reconciled only where there is a menu to reconcile'
+# Drives the real `telegram_reconcile_menu` with its three seams stubbed: what
+# nexa.env says about the webhook, what the CLI answers for `--status`, and what
+# the register invocation does. `main` is never reached, so the function is
+# exercised rather than the whole command.
+reconcile_calls_for() {
+  bash -c '
+    ENABLED="$2"; STATE="$3"; CALLS="$4"
+    # shellcheck source=/dev/null
+    . "$5"
+    eval "$(sed -n "/^telegram_reconcile_menu() {/,/^}/p" "$1")"
+    nexa_env_value() { printf "%s" "$ENABLED"; }
+    telegram_origin() { printf "https://admin.example.test"; }
+    nexa_ok() { printf "OK %s\n" "$*"; }
+    nexa_warn() { printf "WARN %s\n" "$*"; }
+    nexa_compose() {
+      printf "%s\n" "$*" >>"$CALLS"
+      case "$*" in *--status*) printf "%s\n" "$STATE" ;; esac
+      return 0
+    }
+    telegram_reconcile_menu "v9.9.9"
+  ' _ "$BOTCTL" "$1" "$2" "$3" "$NEXA_LIB"
+}
+
+: >"${NEXA_ROOT}/menu-ready-calls"
+menu_ready_out="$(reconcile_calls_for '1' 'ready' "${NEXA_ROOT}/menu-ready-calls")"
+menu_ready_calls="$(cat "${NEXA_ROOT}/menu-ready-calls")"
+# `1`, not `true`. This is the spelling the old comparison dropped.
+assert_contains 'a webhook enabled with 1 did not reconcile the menu' \
+  "$menu_ready_calls" 'dist/bootstrap-bot.cli.js --public-base-url'
+# It asks FIRST and registers second, so a state that cannot be reconciled never
+# reaches the CLI at all.
+assert_contains 'the state was not read before the CLI was invoked' \
+  "$menu_ready_calls" '--status'
+# What it says. It can prove the release was asked; it cannot prove the menu
+# matches, because a rollback targets an image that may have no reconciliation to
+# perform and exits 0 regardless.
+assert_contains 'the reconcile reported nothing at all' "$menu_ready_out" 'OK '
+assert_not_contains 'the reconcile claimed the menu IS the release menu' \
+  "$menu_ready_out" 'command menu is v9.9.9'
+
+: >"${NEXA_ROOT}/menu-yes-calls"
+reconcile_calls_for 'yes' 'ready' "${NEXA_ROOT}/menu-yes-calls" >/dev/null
+assert_contains 'a webhook enabled with yes did not reconcile the menu' \
+  "$(cat "${NEXA_ROOT}/menu-yes-calls")" 'dist/bootstrap-bot.cli.js --public-base-url'
+
+: >"${NEXA_ROOT}/menu-none-calls"
+menu_none_out="$(reconcile_calls_for 'true' 'none' "${NEXA_ROOT}/menu-none-calls")"
+menu_none_calls="$(cat "${NEXA_ROOT}/menu-none-calls")"
+# An installation that took `--skip-telegram` has no bot row. Invoking the CLI
+# here reached `promptForToken`, which refuses without a terminal — and the
+# refusal went to /dev/null, after which this printed "run
+# 'botctl telegram register'": a command that fails in exactly the same way for
+# exactly the same reason. Telling an operator to run a command that cannot work
+# is the defect `OQ-TG-04` item 2 generalises.
+assert_contains 'the state was not read at all in the none state' "$menu_none_calls" '--status'
+assert_not_contains 'a bot-less installation was sent to the bootstrap CLI' \
+  "$menu_none_calls" '--public-base-url "https://admin.example.test"
+'
+assert_equals 'a bot-less installation produced more than the status call' \
+  1 "$(printf '%s\n' "$menu_none_calls" | grep -c 'bootstrap-bot.cli.js')"
+assert_equals 'a bot-less installation was reported as a failure' '' "$menu_none_out"
+
+: >"${NEXA_ROOT}/menu-unavailable-calls"
+reconcile_calls_for '1' 'unavailable' "${NEXA_ROOT}/menu-unavailable-calls" >/dev/null
+assert_equals 'a stopped tenant produced more than the status call' \
+  1 "$(grep -c 'bootstrap-bot.cli.js' "${NEXA_ROOT}/menu-unavailable-calls")"
+
+: >"${NEXA_ROOT}/menu-off-calls"
+reconcile_calls_for 'false' 'ready' "${NEXA_ROOT}/menu-off-calls" >/dev/null
+assert_equals 'a disabled webhook called the CLI' \
+  0 "$(grep -c 'bootstrap-bot.cli.js' "${NEXA_ROOT}/menu-off-calls")"
+
+test_case 'a rollback reconciles the command menu too'
+# 4I gave `update` the reconciliation and left `rollback` without it, so a release
+# that adds or renames a command and is then rolled back left Telegram
+# advertising commands the running release no longer has. Found by the Codex
+# review of PR 31.
+rollback_body="$(sed -n '/^cmd_rollback() {/,/^}/p' "${REPO}/deploy/bin/botctl")"
+assert_ok 'the cmd_rollback body could not be read; this check is vacuous' \
+  test -n "$rollback_body"
+assert_contains 'a completed rollback does not reconcile the command menu' \
+  "$rollback_body" 'telegram_reconcile_menu'
+# LAST, after the three lines that report the rollback itself — those describe
+# what happened, and this describes something afterwards that cannot fail it.
+rollback_tail="${rollback_body#*the database was not touched}"
+assert_contains 'the menu reconcile does not run after the rollback is reported' \
+  "$rollback_tail" 'telegram_reconcile_menu'
+assert_not_contains 'a failed menu reconcile kills a completed rollback' \
+  "$rollback_tail" 'nexa_die'
+
 # No token, ever, from this path: it reconciles from the stored credential.
-assert_not_contains 'the update passes a token to the bootstrap CLI' \
-  "$update_tail" '--bot-token'
+# Asserted against the body that HOLDS the invocation. Left pointing at
+# `$update_tail` it would have passed on the absence of any CLI call at all,
+# which is a check that cannot fail.
+assert_not_contains 'the reconcile passes a token to the bootstrap CLI' \
+  "$reconcile_body" '--bot-token'
 
 test_case 'a first install with no terminal and no token records its release'
 # `nexa_die` here exited before the manifest and the `current` pointer were

@@ -1350,28 +1350,12 @@ cmd_update() {
   #    which for most is none, until somebody happened to run `botctl telegram
   #    register`. The discoverability 4H shipped applied to fresh installs only.
   #
-  #    BEST EFFORT, and the placement is what makes that honest. Everything that
-  #    can fail the update has already succeeded; this is an outbound Telegram
-  #    call about a MENU, and a customer whose client shows no command list types
-  #    `/help` instead. Failing a completed, healthy, committed update for that
-  #    would be a far worse outcome than the gap it closes.
-  #
-  #    The CLI itself is what decides whether to call Telegram at all: it
-  #    compares a stored digest of the rendered menu against the current one and
-  #    returns without a call when they match. So this is one extra invocation
-  #    per update, and at most one extra Telegram request per release that
-  #    actually changes the menu.
-  #
-  #    No lock is taken and none is needed: the CLI's own registration path takes
-  #    the installation lock, and this runs after the update released it.
-  if [ "$(nexa_env_value "${NEXA_CONFIG_DIR}/nexa.env" TELEGRAM_WEBHOOK_ENABLED 2>/dev/null || true)" = "true" ]; then
-    if nexa_compose run --rm --no-deps -T --entrypoint node api \
-      dist/bootstrap-bot.cli.js --public-base-url "$(telegram_origin)" >/dev/null 2>&1; then
-      nexa_ok "the Telegram command menu is ${target}'s"
-    else
-      nexa_warn "the Telegram command menu could not be reconciled; run 'botctl telegram register'. The update itself is complete."
-    fi
-  fi
+  #    THE PLACEMENT is this call site's own decision and the reason it is
+  #    best-effort rather than a step: everything that can fail the update has
+  #    already succeeded by here. `telegram_reconcile_menu` holds the rest —
+  #    what it refuses to claim, the two gates it applies before calling
+  #    anything, and why holding the lock across it is the point.
+  telegram_reconcile_menu "${target}"
 }
 
 # ---------------------------------------------------------------------------
@@ -1551,6 +1535,29 @@ cmd_rollback() {
   nexa_ok "rolled back to ${previous}"
   nexa_ok "the edge serves ${previous}'s configuration (${previous_edge#sha256:})"
   nexa_ok "the database was not touched"
+
+  # And the command menu, for the same reason the update reconciles it.
+  #
+  # `botctl update` gained this in Phase 4I and `cmd_rollback` did not, which
+  # left the pair ASYMMETRIC: a release that adds or renames a command and is
+  # then rolled back leaves Telegram advertising a menu whose commands the
+  # running release no longer has, and a customer tapping one gets the
+  # unrecognised-command reply. Found by the Codex review of PR #31.
+  #
+  # LAST, after all three lines above, because those report the rollback itself
+  # and this reports something that happens afterwards and cannot fail it.
+  #
+  # ## The case this deliberately does not claim to fix
+  #
+  # A rollback targets an OLDER image. One that predates `commands_revision`
+  # has no reconciliation to perform: it runs, finds the webhook already
+  # current, returns early, and exits 0 — so this would print a success having
+  # changed nothing. That is why `telegram_reconcile_menu` reports that the
+  # release was ASKED rather than that the menu matches. Rolling back ACROSS the
+  # release that introduced the mechanism has no repair from here, and the
+  # repair is a forward update; rolling back between two releases that both
+  # carry it works exactly as the update path does.
+  telegram_reconcile_menu "${previous}"
 }
 
 # ---------------------------------------------------------------------------
@@ -1862,6 +1869,86 @@ telegram_origin() {
   [ -n "$domain" ] ||
     nexa_die "deploy.env names no NEXA_DOMAIN, so there is no origin to register a webhook against."
   printf 'https://%s' "$domain"
+}
+
+# Bring Telegram's command menu into line with the release now running.
+#
+# Used by `update` and by `rollback`, and best effort in both: everything that
+# could fail the operation has already succeeded by the time this runs, and a
+# menu is not a reason to fail a healthy, committed release. A customer whose
+# client shows no command list types `/help` instead.
+#
+# ## Two gates, and each is a defect this had
+#
+# The FIRST is the configured vocabulary. This compared against the literal
+# `true` and nothing else, while `booleanish` in `config.schema.ts` accepts
+# `true`, `1` and `yes` — so an installation configured with `1` served the
+# webhook normally and skipped this reconciliation on every update, silently,
+# for ever. `nexa_listing_boolean` had recorded that exact hazard about a
+# different key; `nexa_boolean_word` is now the one list both read.
+#
+# The SECOND is whether there is anything to reconcile. This invoked the CLI
+# unconditionally, and on an installation that took `--skip-telegram` there is
+# no bot row: the CLI reaches `promptForToken`, refuses because `-T` leaves it
+# without a terminal, and the refusal goes to `/dev/null` — after which this
+# printed "run 'botctl telegram register'", a command that fails in exactly the
+# same way for exactly the same reason. Telling an operator to run a command
+# that cannot work is a defect this repository has shipped three times, and
+# `OQ-TG-04` item 2 is the general form: do not claim a cause the caller cannot
+# prove. So the state is ASKED FIRST, and `none` and `unavailable` are not
+# failures to report — they are installations with no bot to give a menu to.
+#
+# `telegram_origin` is the one thing here that can `nexa_die` rather than return,
+# which would make "best effort" false. It is not reachable from either caller:
+# both fingerprint the edge configuration and bring it up long before this point,
+# and both of those need `NEXA_DOMAIN` too — so an installation that reaches here
+# has one. Said rather than guarded, because a guard would be dead code and this
+# is the fact that makes the claim above true.
+#
+# `$1` is the release this is reconciling TOWARDS, for the message only.
+telegram_reconcile_menu() {
+  local release="$1" state
+  [ "$(nexa_boolean_word "$(nexa_env_value "${NEXA_CONFIG_DIR}/nexa.env" TELEGRAM_WEBHOOK_ENABLED 2>/dev/null || true)")" = on ] || return 0
+
+  # Read-only, and its stdout is the one word `docs/deployment.md` documents.
+  # A failure to read it is treated as `none`: this is best-effort work, and a
+  # state nobody could determine is not a state to act on.
+  state="$(nexa_compose run --rm --no-deps -T --entrypoint node api \
+    dist/bootstrap-bot.cli.js --status --public-base-url "$(telegram_origin)" 2>/dev/null |
+    tr -d '[:space:]')" || state=''
+  case "$state" in
+    none | unavailable | '') return 0 ;;
+  esac
+
+  # THE INSTALLATION LOCK IS HELD, by the caller, and that is what makes this
+  # safe rather than an omission.
+  #
+  # `nexa_acquire_lock` holds a `flock` on a file descriptor belonging to the
+  # calling shell and there is no release function: `cmd_update` and
+  # `cmd_rollback` each take it at their first statement and hold it until
+  # botctl exits. So this runs inside it, and a concurrent `botctl telegram
+  # register` — which takes the same lock for the reason its own comment
+  # gives — queues behind it rather than racing it to `setWebhook`.
+  #
+  # Stated because the comment this replaces said the opposite: that the caller
+  # "released" the lock before this point and that the CLI takes one itself.
+  # Neither is true. The CLI takes no lock; botctl takes it around the CLI.
+  #
+  # The CLI decides whether to call Telegram at all — it compares a stored digest
+  # of the rendered menu against the current one and returns without a call when
+  # they match. So this is one extra invocation per operation, and at most one
+  # extra Telegram request per release that actually changes the menu.
+  if nexa_compose run --rm --no-deps -T --entrypoint node api \
+    dist/bootstrap-bot.cli.js --public-base-url "$(telegram_origin)" >/dev/null 2>&1; then
+    # What this can prove is that the release now running was ASKED. It cannot
+    # prove the menu matches: a rollback targets an OLDER image, and one that
+    # predates `commands_revision` has no reconciliation to perform and exits 0
+    # regardless. Claiming the menu is that release's would be a fake success in
+    # precisely the case an operator is least able to check.
+    nexa_ok "${release} reconciled the Telegram command menu"
+  else
+    nexa_warn "the Telegram command menu could not be reconciled; run 'botctl telegram register'. The ${release} release itself is complete."
+  fi
 }
 
 cmd_telegram() {
