@@ -18,9 +18,13 @@ describe('the payment expiry loop', () => {
   const scope: TenantContext = { tenantId: 'tenant-1', botInstanceId: null } as TenantContext;
   const silent = { info: () => {}, error: () => {} };
 
-  function loopOver(runOnce: PaymentExpiryService['runOnce'], now: () => number) {
+  function loopOver(
+    runOnce: PaymentExpiryService['runOnce'],
+    now: () => number,
+    scopeOf: () => TenantContext | null = () => scope,
+  ) {
     return new PaymentExpiryLoop({ runOnce } as PaymentExpiryService, {
-      scope: () => scope,
+      scope: scopeOf,
       intervalMs: PAYMENT_EXPIRY_INTERVAL_MS,
       now,
       logger: silent,
@@ -100,19 +104,13 @@ describe('the payment expiry loop', () => {
      * operator cannot act on — the "different lie" `LoopProgress` names.
      */
     let called = 0;
-    const loop = new PaymentExpiryLoop(
-      {
-        runOnce: async () => {
-          called += 1;
-          return { payments: 0, orders: 0 };
-        },
-      } as PaymentExpiryService,
-      {
-        scope: () => null,
-        intervalMs: PAYMENT_EXPIRY_INTERVAL_MS,
-        now: () => 0,
-        logger: silent,
+    const loop = loopOver(
+      async () => {
+        called += 1;
+        return { payments: 0, orders: 0 };
       },
+      () => 0,
+      () => null,
     );
 
     loop.start();
