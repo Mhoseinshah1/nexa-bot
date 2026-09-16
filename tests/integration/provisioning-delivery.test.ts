@@ -1253,27 +1253,52 @@ describe('a provisioned service announces itself', () => {
      * gives: `refusalIsPermanent` says CAPABILITY_UNSUPPORTED cannot be fixed without a
      * new release, so the row stops instead of being claimed on every tick.
      */
-    const orderId = await paidOrder('sanaei-commercial');
-    await ctx.container.provisionerLoop.tick();
-    const service = await services.findByOrderId(tenantA, orderId);
-    const before = panel.requests.length;
-
+    /*
+     * ONE SERVICE PER TYPE, not three operations against one.
+     *
+     * `provisioning_operations_open_commercial_key` admits one open commercial action
+     * per service across all three types, so planning three for one service is a state
+     * the database refuses — correctly, and for a reason this case is not about: two
+     * absolute targets computed from one reading of a service charge twice and apply
+     * once. Three services keeps this case testing the capability refusal it is named
+     * for rather than colliding with the serialisation rule.
+     */
+    const planned: {
+      readonly type: 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME';
+      readonly serviceId: string;
+      readonly orderId: OrderId;
+    }[] = [];
     for (const type of ['RENEW', 'ADD_TRAFFIC', 'ADD_TIME'] as const) {
-      await planByHand(service?.id ?? '', orderId, type, `sanaei-${type.toLowerCase()}`);
+      const orderId = await paidOrder(`sanaei-${type.toLowerCase()}`);
+      await ctx.container.provisionerLoop.tick();
+      const service = await services.findByOrderId(tenantA, orderId);
+      planned.push({ type, serviceId: service?.id ?? '', orderId });
+    }
+    /*
+     * The creates AND their subscription deliveries are drained before the baseline is
+     * taken. A delivery landing after it would be counted as this case's, and the
+     * assertion below would fail for a reason that has nothing to do with capabilities.
+     */
+    await ctx.container.provisionerLoop.tick();
+    const before = panel.requests.length;
+    expect(before, 'the three creates did contact the panel').toBeGreaterThan(0);
+
+    for (const { type, serviceId, orderId } of planned) {
+      await planByHand(serviceId, orderId, type, `sanaei-${type.toLowerCase()}`);
     }
     await ctx.container.provisionerLoop.tick();
     await ctx.container.provisionerLoop.tick();
     await ctx.container.provisionerLoop.tick();
 
-    expect(panel.requests.length, 'the panel was not contacted at all').toBe(before);
-    const planned = await operations.listForService(tenantA, service?.id ?? '', 20);
-    for (const type of ['RENEW', 'ADD_TRAFFIC', 'ADD_TIME'] as const) {
-      const operation = planned.find((one) => one.type === type);
+    expect(panel.requests.length, 'no commercial operation contacted the panel').toBe(before);
+    for (const { type, serviceId } of planned) {
+      const rows = await operations.listForService(tenantA, serviceId, 20);
+      const operation = rows.find((one) => one.type === type);
       expect(operation?.state, type).toBe('FAILED');
       expect(operation?.failureMessage, type).toBe('CAPABILITY_UNSUPPORTED');
+      // And the customer's service is exactly as it was.
+      expect((await services.findById(tenantA, serviceId))?.state).toBe('ACTIVE');
     }
-    // And the customer's service is exactly as it was.
-    expect((await services.findByOrderId(tenantA, orderId))?.state).toBe('ACTIVE');
   });
 
   // =========================================================================

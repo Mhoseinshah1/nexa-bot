@@ -5,6 +5,9 @@ import {
   OPERATION_MAX_ATTEMPTS,
   OPERATION_TYPES,
   TARGETED_OPERATION_TYPES,
+  COMMERCE_ERROR_CODES,
+  errors,
+  operationTypeCarriesTarget,
 } from '@nexa/contracts';
 import type {
   OperationId,
@@ -183,6 +186,33 @@ export class DrizzleOperationRepository implements OperationRepository {
        * tell whether it or somebody else planned the attempt, and does not need to.
        */
       (await this.findOpen(scope, draft.serviceId, draft.type, tx));
+
+    /*
+     * The THIRD index this insert can lose on, and the only one whose loss is a
+     * refusal rather than an idempotent win.
+     *
+     * `provisioning_operations_open_commercial_key` admits one open commercial action
+     * per service across all three types, so a `RENEW` planned while an `ADD_TRAFFIC`
+     * is still open conflicts here — and neither read above finds it, because the
+     * derived id is different and `findOpen` is asked for the wrong type.
+     *
+     * Returning the operation that won would be wrong in a way the other two are not:
+     * the caller asked for a renewal and would be handed somebody else's top-up. So
+     * this is the NAMED refusal `planCommercialAction` raises from its own read, raised
+     * again from the one place that is proof against two replicas settling at once. The
+     * application check is the fast path; this is the correct one.
+     */
+    if (existing === null && operationTypeCarriesTarget(draft.type)) {
+      const open = await this.findOpenCommercial(scope, draft.serviceId, tx);
+      if (open !== null) {
+        throw errors.conflict(
+          COMMERCE_ERROR_CODES.SERVICE_ACTION_IN_PROGRESS,
+          'This service already has an action waiting to be applied.',
+          { operationId: open.operationId },
+        );
+      }
+    }
+
     if (existing === null) {
       /*
        * The insert conflicted and the row is not there.
