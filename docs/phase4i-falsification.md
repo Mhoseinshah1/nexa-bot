@@ -274,9 +274,37 @@ this phase exists to remove, twice inside the module built to remove it.
 | ------ | --------------------------------------------------------------------------- | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ------ |
 | F4I-19 | botctl reads a booleanish setting with the vocabulary the schema accepts    | `nexa_boolean_word` narrowed to `true) printf 'on' ;; *) printf 'invalid'`  | botctl.test.sh › the booleanish vocabulary botctl reads is the one the schema accepts                             | KILLED |
 | F4I-20 | the menu reconcile asks the state before it invokes the CLI                 | the `case "$state" in none \| unavailable` skip deleted                     | botctl.test.sh › the command menu is reconciled only where there is a menu to reconcile                           | KILLED |
-| F4I-21 | a rollback reconciles the command menu too                                  | `telegram_reconcile_menu "${previous}"` deleted from `cmd_rollback`         | botctl.test.sh › a rollback reconciles the command menu too                                                       | KILLED |
+| F4I-21 | a rollback reconciles the command menu too                                  | `telegram_reconcile_menu "${previous}"` deleted from `cmd_rollback`         | botctl.test.sh › a rollback reconciles the command menu too                                                       | SURVIVED, then KILLED |
 | F4I-22 | the version-unsupported remedy names no cause the code cannot separate      | the old `Re-enable acceptance, or upgrade.` text restored                   | telegram-bootstrap-remedy.test.ts › does not name a configuration remedy for an envelope that may be truncated    | KILLED |
 | F4I-23 | the auth-failed remedy does not rule out the one cause an operator can undo | the old `restoring key material does NOT fix it` clause restored            | telegram-bootstrap-remedy.test.ts › does not tell an operator a wrong key cannot be the cause of an auth failure  | KILLED |
+
+### F4I-21 SURVIVED, and the test was the defect
+
+The first run of this mutation left all **267 checks passing**. The rollback's
+reconciliation was deleted and the test written to pin it did not notice.
+
+The reason is worth stating exactly, because it is a shape this repository has a
+name for. The assertion was
+
+```sh
+assert_contains '...' "$rollback_body" 'telegram_reconcile_menu'
+```
+
+and the COMMENT above the call names the function too — it has to, because it
+explains why that call reports what it reports. So the assertion passed on prose
+after the code it was about had been deleted. `CLAUDE.md` calls this class "tests
+that cannot fail", and a previous phase has a whole task about finding them;
+this one was written fresh, in the commit that added the rule, by someone who had
+just read the argument for not doing it.
+
+Both sides now strip comments and assert the CALL with its argument —
+`telegram_reconcile_menu "${target}"` and `telegram_reconcile_menu
+"${previous}"`. The update side had the identical defect and its mutation had
+never been run against that assertion, because F4I-20 killed three OTHER tests
+(the ones that drive the function) and the suite went red for those. A mutation
+that kills something is not a mutation that proves everything it touched.
+
+Re-run afterwards, the same deletion fails the rollback assertion.
 
 ### F4I-19, and a rule that was already written down
 

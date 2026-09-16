@@ -5342,14 +5342,21 @@ test_case 'a completed update reconciles the Telegram command menu'
 # run `botctl telegram register`.
 update_body="$(sed -n '/^cmd_update() {/,/^}/p' "${REPO}/deploy/bin/botctl")"
 assert_ok 'the cmd_update body could not be read; this check is vacuous' test -n "$update_body"
+# COMMENTS STRIPPED, and the CALL asserted with its argument.
+#
+# Searching the whole body for the function's NAME is a check that cannot fail:
+# the comment above the call names it too, so deleting the call leaves the
+# assertion passing on prose. That is not hypothetical — it is how the first
+# version of this pair let F4I-21 survive its mutation with 267 checks green.
+update_code="$(printf '%s\n' "$update_body" | grep -vE '^[[:space:]]*#')"
 assert_contains 'a completed update does not reconcile the command menu' \
-  "$update_body" 'telegram_reconcile_menu'
+  "$update_code" 'telegram_reconcile_menu "${target}"'
 # AFTER the release is committed, never before. Everything that can fail the
 # update has already succeeded by then, and a menu is not a reason to fail a
 # healthy committed release.
-update_tail="${update_body#*nexa_prune_releases}"
+update_tail="${update_code#*nexa_prune_releases}"
 assert_contains 'the menu reconcile does not run after the release is committed' \
-  "$update_tail" 'telegram_reconcile_menu'
+  "$update_tail" 'telegram_reconcile_menu "${target}"'
 # And it cannot fail the update: the failure branch warns rather than dying.
 assert_not_contains 'a failed menu reconcile kills a completed update' \
   "$update_tail" 'nexa_die'
@@ -5474,13 +5481,18 @@ test_case 'a rollback reconciles the command menu too'
 rollback_body="$(sed -n '/^cmd_rollback() {/,/^}/p' "${REPO}/deploy/bin/botctl")"
 assert_ok 'the cmd_rollback body could not be read; this check is vacuous' \
   test -n "$rollback_body"
+# Comments stripped, for the reason the update side gives at length: the comment
+# above this call explains why it reports what it reports, and NAMES the
+# function while doing so. Asserting on the name alone passed with the call
+# deleted.
+rollback_code="$(printf '%s\n' "$rollback_body" | grep -vE '^[[:space:]]*#')"
 assert_contains 'a completed rollback does not reconcile the command menu' \
-  "$rollback_body" 'telegram_reconcile_menu'
+  "$rollback_code" 'telegram_reconcile_menu "${previous}"'
 # LAST, after the three lines that report the rollback itself — those describe
 # what happened, and this describes something afterwards that cannot fail it.
-rollback_tail="${rollback_body#*the database was not touched}"
+rollback_tail="${rollback_code#*the database was not touched}"
 assert_contains 'the menu reconcile does not run after the rollback is reported' \
-  "$rollback_tail" 'telegram_reconcile_menu'
+  "$rollback_tail" 'telegram_reconcile_menu "${previous}"'
 assert_not_contains 'a failed menu reconcile kills a completed rollback' \
   "$rollback_tail" 'nexa_die'
 
