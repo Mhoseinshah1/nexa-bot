@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { PaymentDetailPage, PaymentsPage } from '../../apps/web/src/pages/payments';
@@ -345,6 +345,53 @@ describe('the payment detail', () => {
     // endpoint's shape, asserted where a later convenience field would break it.
     expect(Object.keys(body).sort()).toEqual(['idempotencyKey', 'resolutionNote']);
     expect(body.resolutionNote).toBe('هیچ واریزی با این کد پیدا نشد');
+  });
+
+  it('disables BOTH decisions while either is in flight', async () => {
+    /*
+     * The two commands race the same PENDING row with different idempotency keys, so an
+     * operator who clicks confirm and then reject before the first returns gets whichever
+     * request the database serves second — and one of the two cannot be undone. The
+     * conditional UPDATE keeps the DATA consistent; it cannot make the outcome the one
+     * the operator meant.
+     *
+     * The confirm route is left unrouted deliberately, so the mutation stays pending for
+     * the length of the assertion rather than racing it.
+     */
+    stubApi(detail(payment({ state: 'PENDING', method: 'MANUAL_TRANSFER' })));
+    /*
+     * The confirmation is held OPEN rather than answered.
+     *
+     * An unrouted or errored POST settles immediately, so the pending window closes
+     * before an assertion can see it and the test would pass or fail on timing. A
+     * never-resolving response makes the window permanent, which is the state being
+     * asserted: not "the request finished" but "while it is in flight".
+     */
+    const answered = globalThis.fetch;
+    vi.stubGlobal('fetch', (input: unknown, init?: RequestInit) =>
+      String(input).endsWith('/confirm')
+        ? new Promise<Response>(() => {})
+        : (answered as typeof fetch)(input as RequestInfo, init),
+    );
+
+    const view = renderPage(<PaymentDetailPage id={ROW_ID} mayReview denied={false} />);
+    await screen.findAllByText('a1b2c3d4e5f60718:manual');
+
+    const note = view.container.querySelector('#payment-note') as HTMLInputElement;
+    const reason = view.container.querySelector('#payment-reason') as HTMLInputElement;
+    fireEvent.change(note, { target: { value: 'money arrived' } });
+    fireEvent.change(reason, { target: { value: 'no transfer arrived' } });
+
+    expect(screen.getByRole('button', { name: 'تأیید دریافت' })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'رد رسید' })).not.toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'تأیید دریافت' }));
+
+    // Re-queried, not held: the buttons re-render when the mutation's state changes.
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'رد رسید' })).toBeDisabled();
+    });
+    expect(screen.getByRole('button', { name: 'تأیید دریافت' })).toBeDisabled();
   });
 
   it('offers no rejection to an operator without receipts.review', async () => {

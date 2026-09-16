@@ -1294,6 +1294,41 @@ describe('payments and settlement', () => {
       expect((await paymentRow(payment.id)).state).toBe('CONFIRMED');
     });
 
+    it('is reachable by the seeded receipt_reviewer role, end to end', async () => {
+      const { payment } = await pendingTransfer('rej-7');
+      const reviewer = adminActorFor(
+        await createAdmin(ctx.container, tenantA, {
+          username: 'receipt-reviewer-only',
+          roleKeys: ['receipt_reviewer'],
+        }),
+      );
+
+      /*
+       * The role named for reviewing receipts, holding nothing else.
+       *
+       * It could not do this before: `receipt_reviewer` was seeded with `receipts.view`
+       * and `receipts.review`, and BOTH the payment read and the Web Admin route that
+       * renders the detail charge `payments.view`. So the approve form had been
+       * unreachable for it since 4C and the reject form would have shipped the same way
+       * — a catalogue promising something the seeded role cannot do.
+       *
+       * The READ is asserted first and deliberately: the write alone would pass with the
+       * old seed, because `rejectManualTransfer` charges `receipts.review`. What was
+       * broken is getting to the screen.
+       */
+      const seen = await ctx.container.payments.get(tenantA, reviewer, payment.id);
+      expect(seen.id).toBe(payment.id);
+
+      const rejected = await ctx.container.payments.rejectManualTransfer(
+        tenantA,
+        reviewer,
+        payment.id,
+        { idempotencyKey: 'rej-7-reject-0001', note: 'no transfer arrived' },
+      );
+      expect(rejected.state).toBe('FAILED');
+      expect((await paymentRow(payment.id)).resolved_by_admin_id).toBe(reviewer.id);
+    });
+
     it('refuses an operator who does not hold receipts.review', async () => {
       const { payment } = await pendingTransfer('rej-5');
       const observer = adminActorFor(
@@ -1633,6 +1668,65 @@ describe('payments and settlement', () => {
       expect(await countOf('payments')).toBe(0);
     });
 
+    it('closes a stale reference instead of handing it back, and issues a live one', async () => {
+      const { order, payment } = await pendingTransfer('stale-1');
+      /*
+       * The window between a payment's own deadline and the sweep reaching it. The row
+       * still reads PENDING and is already dead; before this fix the reissue path
+       * exempted every existing payment from the deadline check and handed it straight
+       * back, so the customer got bank instructions for a reference that becomes
+       * permanently unconfirmable the moment the sweep catches up.
+       */
+      await ctx.container.database.db.execute(
+        sql`UPDATE payments SET expires_at = now() - interval '1 minute' WHERE id = ${payment.id}` as never,
+      );
+
+      const fresh = await ctx.container.payments.requestManualTransfer(
+        tenantA,
+        systemActor('stale-1b'),
+        customerA,
+        { idempotencyKey: 'stale-1-request-0002', orderId: order.id },
+      );
+
+      expect(fresh.id).not.toBe(payment.id);
+      expect(fresh.state).toBe('PENDING');
+      // The stale one is closed rather than left behind: two PENDING transfers for one
+      // order is the state `requestManualTransfer` exists to prevent.
+      expect((await paymentRow(payment.id)).state).toBe('EXPIRED');
+      expect(await auditCount('payment.expire')).toBe(1);
+    });
+
+    it('refuses rather than reissuing when the order itself has no window left', async () => {
+      const { order, payment } = await pendingTransfer('stale-2');
+      await ctx.container.database.db.execute(
+        sql`UPDATE payments SET expires_at = now() - interval '1 minute' WHERE id = ${payment.id}` as never,
+      );
+      // There is not enough ORDER left to mint a new reference against, so the customer
+      // is told rather than handed a second dead code. The two rules compose: closing
+      // the stale one does not skip the floor, and the floor does not skip the close.
+      await ctx.container.database.db.execute(
+        sql`UPDATE orders SET expires_at = now() + interval '30 seconds' WHERE id = ${order.id}` as never,
+      );
+
+      await expect(
+        ctx.container.payments.requestManualTransfer(tenantA, systemActor('stale-2b'), customerA, {
+          idempotencyKey: 'stale-2-request-0002',
+          orderId: order.id,
+        }),
+      ).rejects.toMatchObject({ code: 'commerce.payment_window_too_short' });
+
+      /*
+       * The stale payment is still PENDING, and that is correct rather than a gap: the
+       * refusal throws, so the whole transaction rolls back and the inline close goes
+       * with it. A refused command leaves NOTHING behind — no half-closed payment, no
+       * audit row for a decision nobody made — and the sweep closes the row on its next
+       * pass regardless. Asserted rather than assumed, because the tempting "fix" is to
+       * commit the close before refusing, which would make a refusal a partial write.
+       */
+      expect((await paymentRow(payment.id)).state).toBe('PENDING');
+      expect(await auditCount('payment.expire')).toBe(0);
+    });
+
     it('still answers a customer who already holds a reference for that order', async () => {
       const { order, payment } = await pendingTransfer('short-2');
       // The window closes in on them AFTER they were given the code.
@@ -1674,6 +1768,29 @@ describe('payments and settlement', () => {
       await expect(
         ctx.container.database.db.execute(
           sql`UPDATE payments SET state = 'PENDING' WHERE id = ${payment.id}` as never,
+        ),
+      ).rejects.toMatchObject({
+        cause: { message: expect.stringContaining('cannot be reopened') },
+      });
+      expect((await paymentRow(payment.id)).state).toBe('FAILED');
+    });
+
+    it('refuses a raw UPDATE that would stamp a confirmation time on a rejection', async () => {
+      const { payment } = await pendingTransfer('frz-5');
+      await ctx.container.payments.rejectManualTransfer(tenantA, owner, payment.id, {
+        idempotencyKey: 'frz-5-reject-0001',
+        note: 'no transfer arrived',
+      });
+
+      /*
+       * The column 0053 missed and 0054 closed. `payments_confirmed_check` cannot catch
+       * it either: with `evidence_kind` still NULL, the right-hand side of that equality
+       * stays false for a resolved row however the timestamp moves — leaving a rejected
+       * payment reading as though somebody confirmed it at a moment somebody chose.
+       */
+      await expect(
+        ctx.container.database.db.execute(
+          sql`UPDATE payments SET confirmed_at = now() WHERE id = ${payment.id}` as never,
         ),
       ).rejects.toMatchObject({
         cause: { message: expect.stringContaining('cannot be reopened') },

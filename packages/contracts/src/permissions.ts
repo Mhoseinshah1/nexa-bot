@@ -277,7 +277,28 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
   {
     key: 'receipt_reviewer',
     name: 'Receipt reviewer',
-    permissions: ['receipts.view', 'receipts.review'],
+    /*
+     * `payments.view` is here because the decision is made ON a payment.
+     *
+     * The role held `receipts.view` and `receipts.review` and could not open a single
+     * payment: `PaymentService.get` charges `payments.view`, and so does the Web Admin
+     * route that renders the detail. So the role named for reviewing receipts could
+     * reach neither the approve form (since 4C) nor the reject form (4G) — a permission
+     * catalogue promising something the seeded role cannot do, which is the legacy
+     * defect this catalogue exists to end.
+     *
+     * `receipts.view` is not a substitute and is not being widened into one: this
+     * release has no receipt ENTITY — `OQ-4C-03` records that no receipt file is
+     * stored, archived or displayed anywhere — so the thing a reviewer reads is the
+     * payment. Granting the LOW read that names it is narrower than teaching the
+     * payment read a second permission, and it leaves the two keys meaning what they
+     * say.
+     *
+     * Found by the Codex review of PR #29. Migration 0055 carries it to installations
+     * whose roles already exist, because `ensureSystemRoles` writes a seed's
+     * permissions only when the role is created.
+     */
+    permissions: ['payments.view', 'receipts.view', 'receipts.review'],
   },
   { key: 'observer', name: 'Observer', permissions: READ_ONLY },
 ];

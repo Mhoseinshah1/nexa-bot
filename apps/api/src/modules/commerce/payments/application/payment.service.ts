@@ -550,7 +550,61 @@ export class PaymentService {
           null,
           tx,
         );
-        const already = pending.items[0];
+        const found = pending.items[0];
+
+        /*
+         * A PENDING payment whose own deadline has passed is NOT one to hand back.
+         *
+         * The sweep closes these, and the sweep runs on a timer: between a payment's
+         * deadline and the next pass there is a window — a minute normally, longer if
+         * the sweep is working through a backlog or the tenant is stopped — in which the
+         * row still reads PENDING and is stale. Answering a tap with it prints bank
+         * instructions for a reference that is already dead and becomes permanently
+         * unconfirmable the moment the sweep catches up, which is the exact failure
+         * `PAYMENT_WINDOW_TOO_SHORT` was added to prevent one step earlier.
+         *
+         * It is closed HERE rather than refused, because that is what the sweep would
+         * have done a moment later and doing it now lets the customer walk away with a
+         * live reference instead of an error. The same conditional UPDATE, so a sweep
+         * running concurrently and this path produce one transition between them; the
+         * audit row carries the CUSTOMER as its actor, which is truthful — their tap is
+         * what made this installation notice.
+         */
+        const stale =
+          found !== undefined &&
+          found.expiresAt !== null &&
+          found.expiresAt.getTime() <= now.getTime();
+        if (found !== undefined && stale) {
+          const closed = await this.deps.repository.resolve(
+            scope,
+            found.id,
+            'EXPIRED',
+            { resolvedByAdminId: null, resolutionNote: null, resolvedAt: now },
+            now,
+            tx,
+          );
+          if (closed) {
+            await this.deps.audit.record(
+              scope,
+              actor,
+              {
+                action: 'payment.expire',
+                entityType: 'Payment',
+                entityId: found.id,
+                before: { state: 'PENDING', expiresAt: found.expiresAt?.toISOString() ?? null },
+                after: { state: 'EXPIRED', orderId, noticedBy: 'CUSTOMER_REQUEST' },
+                result: 'SUCCESS',
+              },
+              tx,
+            );
+          }
+        }
+        /*
+         * Only a payment still inside its own window is reissued. A stale one has just
+         * been closed above, so this path creates a fresh reference — and the window
+         * floor below decides whether there is enough of the ORDER left to be worth one.
+         */
+        const already = stale ? undefined : found;
         /*
          * NOT an early return: the audit row and the idempotency row below are the point.
          *

@@ -1366,6 +1366,44 @@ wrote and an adapter this repository wrote can only prove they agree with each o
 **Trigger to resolve:** the phase that adds a real gateway adapter, with a disposable
 instance of it to accept against.
 
+## OQ-4G-05 — does a payment's window closing end its ORDER, or only the payment?
+
+**Status: UNRESOLVED. The narrow reading shipped; the owner's sentence admits both.**
+
+`OQ-4C-01` quotes owner revision 4: «مهلت پرداخت حداکثر **یک ساعت** است و پس از آن پرداخت
+و سفارش باید منقضی یا لغو شوند» — at most one hour, after which the payment **and** the
+order must be expired or cancelled.
+
+4G implements two windows. A payment's deadline is the earlier of `sales.payment_window_minutes`
+and the order's own `sales.order_expiry_minutes`, and each row is expired by its own
+deadline. Under the DEFAULTS — both sixty minutes — those coincide and the owner's
+sentence holds exactly: the payment and its order expire in the same sweep pass. They
+diverge only when a tenant deliberately sets a longer order window, and then a lapsed
+manual transfer closes while its order stays `AWAITING_PAYMENT` for the rest of its own
+window.
+
+**The two readings.** One window (the checkout gives you an hour; after it both die), or
+two (the payment attempt has a deadline, the order has its own). The Persian is
+compatible with either, and the owner was describing a flow that has one.
+
+**Why the narrow one shipped.** Nothing is stranded under it. A customer whose transfer
+lapsed can start another, or pay from their wallet at the price they were quoted, inside
+the deadline they were shown — that is the product working, not a hole. The wide reading
+would take an order away from a customer who still had days of the window they were
+given, on the strength of one clause. `CLAUDE.md`'s instruction for exactly this is to
+choose the narrowest rule and record the ambiguity rather than invent policy.
+
+It is also consistent with the rest of the phase: a rejection and a withdrawal both leave
+the order open on purpose (`OQ-4G-02`), and making an expiry the one outcome that ends
+the order would need the same decision this question is waiting for.
+
+**Raised by** the Codex review of PR #29, which read the same sentence the other way.
+Recorded rather than argued: both readings are defensible and only the owner can say
+which they meant.
+
+**Trigger to resolve:** the owner, on reading this — or the first operator who asks why
+an order outlived the transfer instructions it issued.
+
 ## OQ-4C-02 — what a refund is, as a state
 
 Refunds are out of scope for 4C and `REFUNDED` is in `ORDER_STATES` with no producer.

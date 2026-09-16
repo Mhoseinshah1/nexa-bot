@@ -557,7 +557,17 @@ export function PaymentDetailPage({
                       <button
                         type="button"
                         className="btn primary sm"
-                        disabled={confirm.isPending || note.trim() === ''}
+                        /*
+                         * Either decision in flight disables BOTH controls.
+                         *
+                         * The two commands race the same PENDING row with different
+                         * idempotency keys, so an operator who clicks confirm and then
+                         * reject before the first returns gets whichever request the
+                         * database serves second — and one of the two outcomes cannot be
+                         * undone. The conditional UPDATE keeps the DATA consistent; it
+                         * cannot make the result the one the operator meant.
+                         */
+                        disabled={confirm.isPending || reject.isPending || note.trim() === ''}
                         onClick={() => confirm.mutate()}
                       >
                         {t('web.payment_confirm')}
@@ -602,7 +612,8 @@ export function PaymentDetailPage({
                   <button
                     type="button"
                     className="btn danger sm"
-                    disabled={reject.isPending || reason.trim() === ''}
+                    // Both, for the reason the confirm button carries.
+                    disabled={reject.isPending || confirm.isPending || reason.trim() === ''}
                     onClick={() => reject.mutate()}
                   >
                     {t('web.payment_reject')}

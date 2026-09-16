@@ -75,10 +75,29 @@ export class PaymentExpiryLoop {
     this.timer.unref?.();
   }
 
-  stop(): void {
-    if (this.timer === null) return;
-    clearInterval(this.timer);
-    this.timer = null;
+  /**
+   * Stops the timer and waits for a pass already inside its transaction.
+   *
+   * ASYNC, and the await is the point. SIGTERM arrives, the shutdown coordinator calls
+   * this and then `container.shutdown()` closes the pool — so a synchronous stop leaves
+   * an expiry transaction holding a connection that is about to be pulled out from
+   * under it. The transaction is atomic, so nothing half-writes; what happens is that a
+   * pass which had already moved rows loses them, logs an error on the way out, and the
+   * work waits for the next boot. On every rolling deploy.
+   *
+   * `RetentionSweeper.stop` is the same shape for the same reason, and the container
+   * awaits it. The provisioner's loop is synchronous, which is a difference this file
+   * is not the place to resolve: that process is structured around a provider call that
+   * may outlive any shutdown budget, and this one is two statements against the
+   * database.
+   */
+  async stop(): Promise<void> {
+    if (this.timer !== null) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+    // Let an in-flight pass commit rather than having its connection closed under it.
+    while (this.running) await new Promise((resolve) => setTimeout(resolve, 10));
     // A stopped loop makes no claim. `LoopProgress.end` is what stops a draining
     // worker looking like a working one for a whole slack window.
     this.progress.end();

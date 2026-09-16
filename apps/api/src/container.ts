@@ -1902,7 +1902,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       await sessionSweeper.stop();
       await backupRunSweeper.stop();
       await recoveryRequestSweeper.stop();
-      paymentExpiryLoop.stop();
+      await paymentExpiryLoop.stop();
       await redis.close();
       await database.close();
     },

@@ -70,6 +70,21 @@ export interface PaymentExpiryServiceDeps {
  * `DrizzleOrderRepository.expireDue` refuses an order that still has a PENDING payment
  * — and the ordering is what makes that predicate cost nothing in the ordinary case.
  *
+ * ## Each row is expired by its OWN deadline
+ *
+ * A payment's is the earlier of `sales.payment_window_minutes` and its order's, so under
+ * the defaults — both sixty minutes — the two coincide and a lapsed transfer takes its
+ * order with it in the same pass. They diverge only when a tenant sets a longer order
+ * window, and then the payment closes while the order stays `AWAITING_PAYMENT` for the
+ * rest of the window the customer was shown.
+ *
+ * That is the NARROW reading of the owner's rule, which says the payment and the order
+ * must both be expired or cancelled after the payment deadline. `OQ-4G-05` records the
+ * other reading and why this one shipped: nothing is stranded under it — the customer
+ * can start another transfer or pay from their wallet at the quoted price, inside the
+ * deadline they were given — and the wide reading would take an order away from somebody
+ * who still had days of it left, on the strength of one clause nobody has disambiguated.
+ *
  * ## What this does NOT do
  *
  * **It never touches a CONFIRMED payment or a PAID order.** Both statements name their
