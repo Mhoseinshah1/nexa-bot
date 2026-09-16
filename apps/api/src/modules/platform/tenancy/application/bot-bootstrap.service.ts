@@ -278,6 +278,16 @@ export class BotBootstrapService {
    * than writes that need holding still, which is why `scopeIsActive` is called
    * without a transaction here; the transactional checks inside `uow.run` are
    * untouched and they are the ones that make a write safe.
+   *
+   * This MOVED the precedence, and the move is deliberate rather than a
+   * side-effect of the split. The three causes used to be ordered webhook
+   * route, then bot status, then tenant activity; they are now webhook route,
+   * then tenant activity, then bot status. A tenant that has stopped accepting
+   * work makes its bot's own status moot — starting the bot changes nothing
+   * while the tenant refuses every update — so naming the bot first would send
+   * an operator to fix the thing that is not in the way. `reports the tenant
+   * before the bot when BOTH are in the way` pins it; without that test the two
+   * orders are indistinguishable, which is how this was nearly a silent change.
    */
   private async unavailableScopeReason(scope: TenantContext): Promise<string | null> {
     if (!this.deps.webhookEnabled()) {
@@ -671,6 +681,25 @@ export class BotBootstrapService {
      * the run continues either way.
      */
     await this.deps.uow.run(scope, async (tx) => {
+      /*
+       * The lock FIRST, then the activity check, exactly as every other write in
+       * this service does it — and for the reason CLAUDE.md states as a
+       * non-negotiable: "Every write path also reads `ScopeActivityReader`
+       * INSIDE its transaction". `execute` checks activity earlier, but that
+       * check is outside this transaction and a stop can commit in between.
+       *
+       * Found by the self-review of this phase's own diff: the first version of
+       * this method wrote `commands_revision` and an audit row with neither, on
+       * a path that is now reached by every `botctl update` of every
+       * installation. The check being unreachable today (an inactive tenant is
+       * refused before ALREADY_COMPLETE) is not the same as it being unnecessary
+       * — that refusal is one reordering away from moving.
+       *
+       * The shared-lock-then-upgrade deadlock is why the order is this way round
+       * and not the other.
+       */
+      await this.deps.bots.lockTenantForBotChange(scope, tx);
+      await this.requireActiveScope(scope, tx);
       if (registered) {
         // Written only on success. A digest stored after a FAILED call would
         // make the next reconcile skip it, and the menu would stay wrong until

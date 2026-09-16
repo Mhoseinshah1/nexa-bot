@@ -211,3 +211,55 @@ re-register an UNCHANGED menu on every rerun`: without it, the cheapest passing
 implementation is to call `setMyCommands` unconditionally, which is an outbound
 Telegram request on every `botctl update` of every installation for a menu that
 has not moved.
+
+## What the self-review of this phase's own diff found
+
+Two defects, both in code 4I itself wrote, and one of them SURVIVED its first
+mutation. Recorded here rather than folded silently into the work, because
+CLAUDE.md is explicit that a fix is reviewed as hard as the bug and that the
+interesting question is _"what does this fix now do that it did not do before,
+and in which state is that wrong?"_
+
+| #      | Rule                                                                       | Mutation                                                    | Named test                                                                                   | Result                             |
+| ------ | -------------------------------------------------------------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ---------------------------------- |
+| F4I-17 | a stopped TENANT is reported before a stopped BOT                          | the scope-level check moved back after the row's own status | `bot-bootstrap.test.ts` › reports the tenant before the bot when BOTH are in the way         | KILLED                             |
+| F4I-18 | the menu write takes the lock and re-reads activity INSIDE its transaction | both lines deleted                                          | `bot-bootstrap.test.ts` › refuses to record a menu revision for a scope that stopped mid-run | **SURVIVED at first**, then KILLED |
+
+### F4I-17 — a precedence this phase moved and nothing pinned
+
+Item 11's fix splits the three unavailability causes into a scope-level pair and
+a row-level one, so `status` can consult the pair before looking for a bot at
+all. That REORDERED them: webhook route, bot status, tenant activity became
+webhook route, tenant activity, bot status.
+
+Every existing test builds one cause at a time, so both orders passed
+identically. The new order is the right one — a tenant that has stopped accepting
+work makes its bot's own status moot, and naming the bot first sends an operator
+to fix what is not in the way — but "right and untested" is how three successive
+inversions of the readiness parser passed a green suite on the deployment branch.
+Two tests now pin the full precedence.
+
+### F4I-18 — the check was added by the review and had nothing asserting it
+
+`reconcileCommands` is a WRITE, and its first version took neither the
+bot-change lock nor the in-transaction activity re-read that CLAUDE.md names as a
+non-negotiable: _"Every write path also reads `ScopeActivityReader` INSIDE its
+transaction"_. The self-review caught it and added both.
+
+**The first falsification of that addition survived.** Deleting the two lines
+again left all 54 tests green, because a check added during a review has, by
+construction, nothing asserting it — the suite was written against the version
+without it. That is the same shape this document's F4I-01 note describes from the
+other direction, and it is why the mutation was run at all rather than assumed.
+
+Two tests followed. One drives the exact race the rule exists for, with a reader
+that answers TRUE outside a transaction and FALSE inside — a constant `false`
+would be caught by the readiness read long before this write and would prove
+nothing. The other counts the lock, because the ordering (lock, then activity) is
+what stops two writers deadlocking rather than queueing. Re-run afterwards, the
+same mutation kills both.
+
+The check is unreachable today — `execute` refuses an inactive tenant before it
+can reach ALREADY_COMPLETE — and that is not an argument against it. The refusal
+is one reordering away from moving, and this write is now reached by every
+`botctl update` of every installation.

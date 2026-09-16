@@ -800,6 +800,50 @@ describe('bot bootstrap — a rerun reconciles and never rotates', () => {
     expect(bots.rows[0]?.commandsRevision).toBe(telegram.revision);
   });
 
+  /*
+   * The menu write is a WRITE, and CLAUDE.md's non-negotiable applies to it:
+   * "Every write path also reads `ScopeActivityReader` INSIDE its transaction".
+   *
+   * `execute` checks activity earlier, but outside this transaction, and a stop
+   * can commit in between — which is the whole reason the rule says "inside".
+   * The reader answers TRUE outside a transaction and FALSE inside one, which is
+   * not a contrivance: it is the exact race, and a constant `false` would be
+   * caught by the readiness read long before this write.
+   *
+   * This test exists because the first falsification of the check SURVIVED. The
+   * check was added by the self-review of this phase's diff and had nothing
+   * asserting it, so removing it again left the suite green — recorded as
+   * F4I-18 in `docs/phase4i-falsification.md`.
+   */
+  it('refuses to record a menu revision for a scope that stopped mid-run', async () => {
+    const built = await installed();
+    built.telegram.revision = 'rev-2';
+    const refusing = new BotBootstrapService({
+      ...serviceDeps(built),
+      scopeActivity: { scopeIsActive: async (_scope: unknown, tx?: unknown) => tx === undefined },
+    });
+
+    expect(
+      await codeThrownBy(() => refusing.execute(scope, { token: null, publicBaseUrl: ORIGIN })),
+    ).toBe(PLATFORM_ERROR_CODES.TENANT_NOT_FOUND);
+    // Telegram WAS asked — the call happens outside the transaction, as it must
+    // — and the durable record of it was refused, so the next run tries again.
+    expect(built.bots.rows[0]?.commandsRevision).not.toBe('rev-2');
+  });
+
+  it('takes the bot-change lock before recording a menu revision', async () => {
+    // The same lock every other write here takes, and in the same order: the
+    // activity check takes a SHARE lock on the tenant row, so taking the shared
+    // one first and upgrading is how two writers deadlock instead of queueing.
+    const built = await installed();
+    const before = built.bots.locks;
+    built.telegram.revision = 'rev-2';
+
+    await built.service.execute(scope, { token: null, publicBaseUrl: ORIGIN });
+
+    expect(built.bots.locks).toBe(before + 1);
+  });
+
   it('does not rewrite the token when the same one is supplied again', async () => {
     const { service, bots } = await installed();
     await service.execute(scope, { token: TOKEN, publicBaseUrl: ORIGIN });
@@ -1154,6 +1198,48 @@ describe('bot bootstrap — the rules the review found untested', () => {
     await expect(halted.service.statusWithReason(scope, ORIGIN)).resolves.toMatchObject({
       state: 'unavailable',
       reason: expect.stringContaining('not ACTIVE'),
+    });
+  });
+
+  /*
+   * The PRECEDENCE, which 4I moved and which nothing pinned.
+   *
+   * The three causes used to be ordered webhook route, bot status, tenant
+   * activity; splitting the scope-level pair out for item 11 made it webhook
+   * route, tenant activity, bot status. Every existing test builds one cause at
+   * a time, so both orders passed identically — found by the self-review of this
+   * phase's own diff, and pinned here rather than left as a comment.
+   */
+  it('reports the tenant before the bot when BOTH are in the way', async () => {
+    const stopped = await installed();
+    stopped.bots.rows[0]!.status = 'STOPPED';
+    const both = new BotBootstrapService({
+      ...serviceDeps(stopped),
+      scopeActivity: { scopeIsActive: async () => false },
+    });
+
+    // Starting the bot changes nothing while the tenant refuses every update,
+    // so naming the bot first would send an operator to fix what is not in the
+    // way.
+    await expect(both.statusWithReason(scope, ORIGIN)).resolves.toMatchObject({
+      state: 'unavailable',
+      reason: expect.stringContaining('tenant is not accepting work'),
+    });
+  });
+
+  it('reports the webhook route being off before either of those', async () => {
+    const stopped = await installed();
+    stopped.bots.rows[0]!.status = 'STOPPED';
+    const all3 = new BotBootstrapService({
+      ...serviceDeps(stopped),
+      scopeActivity: { scopeIsActive: async () => false },
+      webhookEnabled: () => false,
+    });
+
+    // It is the widest of the three: with the route unserved, nothing this
+    // installation does with a tenant or a bot makes an update arrive.
+    await expect(all3.statusWithReason(scope, ORIGIN)).resolves.toMatchObject({
+      reason: expect.stringContaining('TELEGRAM_WEBHOOK_ENABLED is false'),
     });
   });
 
