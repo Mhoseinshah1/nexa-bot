@@ -306,7 +306,11 @@ Item 9's fix went in with the lane rather than after it, because the lane's own
 `CustomerSendOutcome` is where `RATE_LIMITED` has to exist: adding it afterwards would
 have meant two shapes of the same enum in one release.
 
-Item 7 is the one still open, and it is independent of everything above.
+Item 7 landed last, in three commits: the endpoint («services: the endpoint four
+declared permissions have had no way to reach»), the correction its consumer exposed
+(«services: the operator's list is ordered newest first, and the dead reads are gone»)
+and the page itself («services: the Web Admin surface, and the placeholder it
+replaces»).
 
 Item 4 landed in two halves that are deliberately NOT the same mechanism. The progress
 sentence is synchronous — the customer is right there, having just paid, so it is a
@@ -314,3 +318,60 @@ second message in the same turn rather than a queued one; a lane that sent it up
 minute later could deliver "your service is being made" after the link had arrived. The
 delay sentence goes through the lane, because by definition nobody is looking when it
 becomes true.
+
+## The self-review of the complete phase diff
+
+One pass over `953b555..HEAD`, read against the invariants the phase is accountable
+for rather than against the diff's own story. Four things it found, all of them in
+work this branch had already called finished.
+
+**A recorded owner decision that nothing in code obeyed.** The `/services` placeholder
+has said since Phase 3D that services are ordered `created_at` descending — owner
+revision 13 — and the repository paged ascending, copied from the three lists that
+legitimately do. Promoting the page would have printed the sentence above a list whose
+first page was the oldest service the installation ever sold. Fixed with the keyset,
+the pager labels and a test that asserts the ROW ORDER rather than the copy; recorded
+as F4H-24.
+
+**Three authorized read methods with no callers.** `ProvisioningService.list`, `.get`
+and `.operationsFor` were written in 4D and never wired to anything — which is how §7
+above could measure a declared permission with no way to exercise it while three
+readers of the same rows sat in that file. Removed, leaving `ServiceAdminService` as
+the one implementation. `SERVICE_PAGE_MAX` was also declared twice with the same
+literal and is now imported from the contract the HTTP layer validates against.
+
+**A contract field the Web Admin never rendered, and the red suite that hid it.**
+`customerSignalledAt` has been required by `paymentSummarySchema` since `7b934a5`, and
+`payments.tsx` showed it nowhere — while `tests/web/payments.test.tsx` carried a
+fixture without it, so all nineteen cases in that file failed the zod parse and the
+branch head had a RED web suite no gate run in this session had reported. Both halves
+fixed, recorded as F4H-25. The general lesson is narrow and worth keeping: a contracts
+commit whose own tests live in another package can turn a suite red without any commit
+in that package changing, and «the gate was green» is a claim about when it was last
+run.
+
+**A first falsification that survived.** F4H-25's original test asserted the column
+HEADER and that not every cell was a dash, and survived a mutation replacing the
+column's renderer with a constant — the header comes from the column definition, not
+from the data. The rewritten case reads the body cell by index. Recorded in
+`docs/phase4h-falsification.md` rather than quietly repaired, because a test that
+survives its own mutation once is evidence about how the rest were written.
+
+What the pass checked and found sound: every new write path authorizes before its
+replay, reads `ScopeActivityReader` inside its own transaction, re-reads the subject
+server-side and compares ownership against the row rather than against anything a
+client sent; the three new Telegram callbacks carry an identifier and nothing else, no
+amount and no state; the dispatcher holds no transaction across a send, and its three
+durable writes are separate `uow.run` calls with the send between them; `UNKNOWN` is
+never inferred into a success or a failure and is never retried automatically; and no
+service response, on any of the three routes, carries a subscription URL, a
+subscription ref or a provider client id — asserted against the RAW body, and again in
+the page against a hostile fixture that volunteers all three.
+
+Two things the pass deliberately did not change. `ORDER_PLACE_PERMISSION` is
+`'maintenance.run'`, which is what a customer-initiated turn holds as `SYSTEM_JOB`; the
+constant's NAME reads like a permission that does not exist, and renaming it is churn
+across three services for no behavioural gain. `@Get('services/:id')` hardcodes its
+path while the list uses `SERVICE_ROUTES.list` — the same split `payments.controller.ts`
+and `orders.controller.ts` have, and the integration tests drive the route CONSTANTS
+against the real app, so a divergence fails the suite rather than shipping.
