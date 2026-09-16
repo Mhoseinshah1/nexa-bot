@@ -456,27 +456,28 @@ describe('service HTTP surface', () => {
      *
      * `ServiceCursor.createdAt` was a `Date` until 4H, and `timestamptz` keeps
      * microseconds while a JavaScript `Date` keeps milliseconds — the driver truncates
-     * rather than rounds, so the cursor lands strictly BELOW the row it was built from
-     * and the tuple comparison lets that row back in. `CustomerCursor` carries the same
-     * measurement; this is the first caller that could see it.
+     * rather than rounds, so the cursor lands strictly OUTSIDE the row it was built
+     * from and the tuple comparison lets that row back in. `CustomerCursor` carries the
+     * same measurement; this is the first caller that could see it.
      *
      * The microseconds are written by hand because a settled order stamps a millisecond
      * `Clock.now()`. That is the point: the rows that trigger it are the ones a restore,
      * an import or an ops script created, which is exactly the set nobody tests.
      */
-    const first = await serviceFor('svc-page-1');
-    const second = await serviceFor('svc-page-2');
+    const older = await serviceFor('svc-page-1');
+    const newer = await serviceFor('svc-page-2');
     await api.container.database.db.execute(sql`
       UPDATE services SET created_at = '2026-01-01T00:00:00.000123Z'::timestamptz
-       WHERE id = ${first.serviceId}`);
+       WHERE id = ${older.serviceId}`);
     await api.container.database.db.execute(sql`
       UPDATE services SET created_at = '2026-01-01T00:00:01.000456Z'::timestamptz
-       WHERE id = ${second.serviceId}`);
+       WHERE id = ${newer.serviceId}`);
 
     const pageOne = serviceListResponseSchema.parse(
       JSON.parse((await get(`${SERVICE_ROUTES.list}?limit=1`, viewerCookie)).body),
     );
-    expect(pageOne.services.map((s) => s.id)).toEqual([first.serviceId]);
+    /* NEWEST first — owner revision 13, and the sentence `/services` prints. */
+    expect(pageOne.services.map((s) => s.id)).toEqual([newer.serviceId]);
     expect(pageOne.nextCursor).not.toBeNull();
 
     const pageTwo = serviceListResponseSchema.parse(
@@ -489,8 +490,52 @@ describe('service HTTP surface', () => {
         ).body,
       ),
     );
-    /* The SECOND service, not the first one again. */
-    expect(pageTwo.services.map((s) => s.id)).toEqual([second.serviceId]);
+    /* The OLDER service, not the newer one again. */
+    expect(pageTwo.services.map((s) => s.id)).toEqual([older.serviceId]);
+
+    /*
+     * And the traversal TERMINATES.
+     *
+     * `limit=1` is the shape that turns a truncated cursor into an endless list: every
+     * page re-serves the row the cursor was built from, `nextCursor` is never null, and
+     * an operator pages for ever through two services. Asserted rather than assumed,
+     * because the two assertions above would both pass on a cursor that was one
+     * microsecond wide in the other direction.
+     */
+    expect(pageTwo.nextCursor).toBeNull();
+  });
+
+  /**
+   * Owner revision 13, asserted against the ROWS rather than against the copy.
+   *
+   * `/users`, `/orders` and `/products` page ASCENDING, and this list deliberately does
+   * not: the owner fixed `created_at` descending for services before the surface was
+   * built, and `/services` prints that rule in words on the page. A test that only
+   * checked the sentence would let the sentence and the data disagree, which is the
+   * exact failure mode `docs/conventions.md` calls a truthful-UI defect.
+   */
+  it('serves the newest service first', async () => {
+    const first = await serviceFor('svc-order-1');
+    const second = await serviceFor('svc-order-2');
+    const third = await serviceFor('svc-order-3');
+    await api.container.database.db.execute(sql`
+      UPDATE services SET created_at = '2026-02-01T00:00:00Z'::timestamptz
+       WHERE id = ${first.serviceId}`);
+    await api.container.database.db.execute(sql`
+      UPDATE services SET created_at = '2026-02-02T00:00:00Z'::timestamptz
+       WHERE id = ${second.serviceId}`);
+    await api.container.database.db.execute(sql`
+      UPDATE services SET created_at = '2026-02-03T00:00:00Z'::timestamptz
+       WHERE id = ${third.serviceId}`);
+
+    const page = serviceListResponseSchema.parse(
+      JSON.parse((await get(SERVICE_ROUTES.list, viewerCookie)).body),
+    );
+    expect(page.services.map((s) => s.id)).toEqual([
+      third.serviceId,
+      second.serviceId,
+      first.serviceId,
+    ]);
   });
 
   it('filters by state and by customer', async () => {

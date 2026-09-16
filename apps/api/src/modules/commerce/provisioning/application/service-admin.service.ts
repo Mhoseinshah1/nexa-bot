@@ -1,12 +1,14 @@
 import {
   COMMERCE_ERROR_CODES,
   errors,
+  SERVICE_PAGE_MAX,
   uuidV7Schema,
   type ActorContext,
   type PermissionKey,
   type TenantContext,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
+import { SERVICE_PAGE_DEFAULT } from './provisioning.service.js';
 import type {
   OperationRecord,
   OperationRepository,
@@ -18,9 +20,6 @@ import type {
 
 /** What an operator needs to read the service list and a service's detail. */
 export const SERVICE_VIEW_PERMISSION: PermissionKey = 'services.view';
-
-export const SERVICE_PAGE_DEFAULT = 25;
-export const SERVICE_PAGE_MAX = 100;
 
 /**
  * How many operations a service's history returns.

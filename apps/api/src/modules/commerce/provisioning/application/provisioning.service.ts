@@ -6,6 +6,7 @@ import {
   MAX_TRAFFIC_BYTES,
   SUBSCRIPTION_REF_BYTES,
   providerUsernameFor,
+  SERVICE_PAGE_MAX,
   UNLIMITED_TRAFFIC_BYTES,
   type ActorContext,
   type AuditWriter,
@@ -31,18 +32,22 @@ import type {
   ServiceRecord,
   ServiceSecretSource,
   ServiceRepository,
-  ServiceSearch,
   OperationRepository,
   PanelOperabilityReader,
 } from './ports.js';
 
-/** Reading a service is `services.view`. Reading somebody's config is not a list right. */
-const SERVICE_VIEW_PERMISSION = 'services.view';
 /** Asking for a provider call to be made again is `services.edit`, not `services.view`. */
 const SERVICE_EDIT_PERMISSION = 'services.edit';
 
+/**
+ * The default page size, shared with `ServiceAdminService` rather than copied.
+ *
+ * The MAXIMUM is not declared here at all: `SERVICE_PAGE_MAX` is the contract's, it is
+ * what `serviceListQuerySchema` validates against, and a second copy of that number in
+ * an application service is a bound that can disagree with the one the HTTP layer
+ * enforces.
+ */
 export const SERVICE_PAGE_DEFAULT = 25;
-export const SERVICE_PAGE_MAX = 100;
 
 export interface ProvisioningServiceDeps {
   readonly services: ServiceRepository;
@@ -59,12 +64,6 @@ export interface ProvisioningServiceDeps {
   readonly scopeActivity: ScopeActivityReader;
   /** Unguessable values for the two identities that are capabilities, not ids. */
   readonly secrets: ServiceSecretSource;
-}
-
-export interface ServiceListQuery {
-  readonly search: ServiceSearch;
-  readonly limit?: number;
-  readonly cursor?: ServiceCursor | null;
 }
 
 /**
@@ -381,36 +380,20 @@ export class ProvisioningService {
     });
   }
 
-  /** A page of services for an operator. */
-  async list(
-    scope: TenantContext,
-    actor: ActorContext,
-    query: ServiceListQuery,
-  ): Promise<ServicePage> {
-    await this.deps.guard.check(scope, actor, SERVICE_VIEW_PERMISSION);
-    const limit = Math.min(Math.max(query.limit ?? SERVICE_PAGE_DEFAULT, 1), SERVICE_PAGE_MAX);
-    return this.deps.services.list(scope, query.search, limit, query.cursor ?? null);
-  }
-
-  async get(scope: TenantContext, actor: ActorContext, id: string): Promise<ServiceRecord> {
-    await this.deps.guard.check(scope, actor, SERVICE_VIEW_PERMISSION);
-    const service = await this.deps.services.findById(scope, id);
-    if (service === null) {
-      throw errors.notFound(COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND, 'Unknown service.');
-    }
-    return service;
-  }
-
-  /** The operations behind one service, for an operator's detail view. */
-  async operationsFor(
-    scope: TenantContext,
-    actor: ActorContext,
-    serviceId: string,
-    limit = 20,
-  ): Promise<readonly OperationRecord[]> {
-    await this.deps.guard.check(scope, actor, SERVICE_VIEW_PERMISSION);
-    return this.deps.operations.listForService(scope, serviceId, limit);
-  }
+  /*
+   * The operator's own `list`, `get` and `operationsFor` were HERE, and are gone.
+   *
+   * They were written in 4D against `services.view`, and nothing ever called them:
+   * there was no controller, no CLI and no test, which is how `docs/phase4h-audit.md`
+   * §7 could measure a declared permission with no way to exercise it while three
+   * authorized read methods sat in this file. 4H gave the operator a real surface, and
+   * `ServiceAdminService` is that one implementation. Leaving these behind would be the
+   * shape `probe-core.ts` warns about one layer up — two readers of the same rows, one
+   * of them the copy nobody notices has drifted.
+   *
+   * `listForCustomer` and `getForCustomer` below are NOT that. They take a customer id
+   * rather than a permission, and the scoping IS the authorisation.
+   */
 
   /**
    * A customer's own services, for the Telegram surface.

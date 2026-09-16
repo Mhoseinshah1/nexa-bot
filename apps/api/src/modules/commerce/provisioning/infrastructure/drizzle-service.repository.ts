@@ -1,6 +1,7 @@
 import {
   and,
   asc,
+  desc,
   eq,
   getTableColumns,
   isNotNull,
@@ -192,12 +193,21 @@ export class DrizzleServiceRepository implements ServiceRepository {
     }
     if (cursor !== null) {
       /*
-       * Keyset, on `(created_at, id)`.
+       * Keyset, on `(created_at, id)`, DESCENDING.
        *
-       * The same shape `/panels` and `/users` already use, and for the same reason:
        * `created_at` alone is not unique, so an offset would skip or repeat a row
        * whenever two services were created in the same millisecond — which is exactly
-       * what a batch settlement produces.
+       * what a batch settlement produces. The tuple form rather than the spelled-out
+       * `created_at < x OR (created_at = x AND id < y)` is what the btree can use as an
+       * index condition; `backup_runs.page` carries the same note.
+       *
+       * The DIRECTION is the owner's, recorded as revision 13 and rendered on
+       * `/services` in words: newest first, decided by the server. `/users`,
+       * `/orders` and `/products` page the other way, so this is a deliberate
+       * divergence rather than a copy that drifted — a services list whose first page
+       * is the oldest service the installation ever sold answers nobody's question.
+       * The page the operator sees and the sentence the page prints have to agree, and
+       * the sentence is the one the owner wrote.
        *
        * The instant is PostgreSQL's own microsecond TEXT and is cast back explicitly,
        * so the value that came out is the value that goes in. It was a `Date` until 4H
@@ -205,7 +215,7 @@ export class DrizzleServiceRepository implements ServiceRepository {
        * cost and why nothing had noticed.
        */
       filters.push(
-        sql`(${services.createdAt}, ${services.id}) > (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`,
+        sql`(${services.createdAt}, ${services.id}) < (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`,
       );
     }
     const rows = await this.exec(tx)
@@ -222,7 +232,7 @@ export class DrizzleServiceRepository implements ServiceRepository {
       })
       .from(services)
       .where(and(...filters))
-      .orderBy(asc(services.createdAt), asc(services.id))
+      .orderBy(desc(services.createdAt), desc(services.id))
       .limit(limit + 1);
 
     const page = rows.slice(0, limit).map(toRecord);
