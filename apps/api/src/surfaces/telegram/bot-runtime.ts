@@ -34,7 +34,10 @@ import type { CustomerRecord } from '../../modules/commerce/customers/applicatio
 import type { ProductService } from '../../modules/commerce/catalog/application/product.service.js';
 import type { CommercialActionService } from '../../modules/commerce/commercial/application/commercial-action.service.js';
 import type { OrderService } from '../../modules/commerce/orders/application/order.service.js';
-import type { PaymentService } from '../../modules/commerce/payments/application/payment.service.js';
+import type {
+  ManualTransferInstruction,
+  PaymentService,
+} from '../../modules/commerce/payments/application/payment.service.js';
 import type { WalletService } from '../../modules/commerce/wallet/application/wallet.service.js';
 import { ProvisioningService } from '../../modules/commerce/provisioning/application/provisioning.service.js';
 import type { CustomerServiceOperation } from '../../modules/commerce/provisioning/application/provisioning.service.js';
@@ -65,6 +68,8 @@ export const BOT_INTENTS = [
   'PAY_CANCEL_ASK',
   'PAY_CANCEL',
   'PAY_SENT',
+  'TOPUP_MENU',
+  'TOPUP_PICK',
   'ORDER_CANCEL_ASK',
   'ORDER_CANCEL',
   'SERVICES',
@@ -260,6 +265,21 @@ export const CANCEL_ORDER_CALLBACK_PREFIX = 'f:';
  * `getForCustomer`, against the row, with the same answer an id that does not exist
  * gets.
  */
+/**
+ * Starting a wallet top-up, and choosing one of the offered amounts.
+ *
+ * `o:` carries NOTHING — it is the button under the balance, and the amounts it shows are
+ * read from `wallet.topup.presets` when the tap arrives rather than baked into the data.
+ *
+ * `y:` carries the chosen amount in MINOR UNITS, and it is the one callback in this file
+ * that carries a figure. `WalletTopupIntent` states why at length: there is no order to
+ * read an amount from, the service MATCHES this against the configured presets rather
+ * than believing it, and an index into the list would be silently honoured as a different
+ * amount when an operator edits the presets between the keyboard and the tap.
+ */
+export const TOPUP_MENU_CALLBACK_PREFIX = 'o:';
+export const TOPUP_PICK_CALLBACK_PREFIX = 'y:';
+
 export const SERVICE_CALLBACK_PREFIX = 's:';
 export const SERVICE_RESEND_CALLBACK_PREFIX = 'r:';
 
@@ -412,6 +432,29 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
     }
     if (data.startsWith(PAY_SENT_CALLBACK_PREFIX)) {
       return callbackCommand('PAY_SENT', data.slice(PAY_SENT_CALLBACK_PREFIX.length), id);
+    }
+    /*
+     * The menu carries no target, so it is matched on the WHOLE string. `callbackCommand`
+     * validates its slice as a uuid and would refuse an empty one, which is right for
+     * every other prefix here and wrong for this: the tap means "show me the amounts".
+     */
+    if (data === TOPUP_MENU_CALLBACK_PREFIX) {
+      return { intent: 'TOPUP_MENU', targetId: null, callbackQueryId: id };
+    }
+    if (data.startsWith(TOPUP_PICK_CALLBACK_PREFIX)) {
+      /*
+       * DIGITS, and the shape is validated here rather than parsed in the handler: the
+       * data is client-supplied, so anything that is not a plain positive integer is
+       * UNSUPPORTED — which answers the customer — instead of reaching `BigInt()` and
+       * throwing a SyntaxError inside a transaction. The length bound stops a
+       * megabyte-long number being converted at all; `PAYMENT_AMOUNT_MAX_MINOR` is
+       * thirteen digits, and the service refuses anything not on the preset list anyway.
+       */
+      const raw = data.slice(TOPUP_PICK_CALLBACK_PREFIX.length);
+      if (!/^[1-9]\d{0,19}$/.test(raw)) {
+        return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      }
+      return { intent: 'TOPUP_PICK', targetId: raw, callbackQueryId: id };
     }
     /* ASK before the destructive one, exactly as the payment pair above is ordered. */
     if (data.startsWith(CANCEL_ORDER_ASK_CALLBACK_PREFIX)) {
@@ -962,6 +1005,15 @@ export const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
   [COMMERCE_ERROR_CODES.PAYMENT_WINDOW_TOO_SHORT]: 'bot.payment.window_too_short',
   [COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND]: 'bot.order.unavailable',
   /*
+   * The three top-up refusals. Every code a customer path can throw MUST be here: an
+   * unmapped one makes `refusal` rethrow, the webhook swallows it by design, and the
+   * customer is answered with silence while a durable write may have committed. That is
+   * F5R-12 on this branch and it cost a whole debugging session.
+   */
+  [COMMERCE_ERROR_CODES.TOPUP_UNAVAILABLE]: 'bot.wallet.topup_unavailable',
+  [COMMERCE_ERROR_CODES.TOPUP_NOT_OFFERED]: 'bot.wallet.topup_refused',
+  [COMMERCE_ERROR_CODES.TOPUP_BELOW_MINIMUM]: 'bot.wallet.topup_refused',
+  /*
    * The four receipt refusals, and they are four SENTENCES because the remedy differs.
    *
    * Collapsing them into one would be the legacy system's "unknown command" for a
@@ -1307,6 +1359,10 @@ export class BotRuntime {
       return this.confirm(scope, actor, command.targetId, customer, input.idempotencyKey);
     }
     if (command.intent === 'WALLET') return this.walletBalance(scope, actor, customer);
+    if (command.intent === 'TOPUP_MENU') return this.topupMenu(scope);
+    if (command.intent === 'TOPUP_PICK' && command.targetId !== null) {
+      return this.topupPick(scope, actor, command.targetId, customer, input.idempotencyKey);
+    }
     if (command.intent === 'PAY_WALLET' && command.targetId !== null) {
       return this.walletPayment(scope, actor, command.targetId, customer, input.idempotencyKey);
     }
@@ -2083,12 +2139,90 @@ export class BotRuntime {
     customer: CustomerRecord,
   ): Promise<PendingReply> {
     const balance = await this.deps.wallet.balanceForCustomer(scope, actor, customer.id);
+    /*
+     * The top-up button is drawn only when a top-up could actually be performed: at
+     * least one preset amount in the selling currency, AND an enabled account to
+     * transfer to. `paymentButtons` applies the same rule to the manual-transfer button
+     * and for the same reason — a button that leads to a refusal is worse than no button.
+     *
+     * Both reads can be a moment stale, which is why the service checks again inside the
+     * transaction. This decides what to DRAW; that decides what may happen.
+     */
+    const offered = await this.deps.payments.topupPresets(scope);
+    const fundable = offered.length > 0 && (await this.deps.accounts.hasEnabled(scope));
     return {
       key: 'bot.wallet.balance',
       values: { balance: money(balance.amountMinor, balance.currency) },
-      buttons: [],
+      buttons: fundable
+        ? [
+            {
+              label: { kind: 'TEMPLATE', key: 'bot.wallet.topup_button' },
+              data: TOPUP_MENU_CALLBACK_PREFIX,
+            },
+          ]
+        : [],
       orderId: null,
     };
+  }
+
+  /**
+   * The offered amounts, one button each, read when the tap arrives.
+   *
+   * No amount is baked into the message that drew this: a customer scrolling back to an
+   * old balance and tapping gets today's presets, not the ones that were configured when
+   * it was sent. The refusal when nothing is offered is the same one the service gives,
+   * so a customer who taps a button that has since become unfundable is told the same
+   * thing either way.
+   */
+  private async topupMenu(scope: TenantContext): Promise<PendingReply> {
+    const presets = await this.deps.payments.topupPresets(scope);
+    if (presets.length === 0 || !(await this.deps.accounts.hasEnabled(scope))) {
+      return { key: 'bot.wallet.topup_unavailable', values: {}, buttons: [], orderId: null };
+    }
+    return {
+      key: 'bot.wallet.topup_choose',
+      values: {},
+      /*
+       * The label is the AMOUNT and nothing else, formatted by the messenger from the
+       * money value — so the digits a customer reads on a button and the digits in the
+       * invoice that follows come from one formatter. A surface may not import the
+       * catalogue to format money itself; `check:boundaries` enforces that.
+       */
+      buttons: presets.map((preset) => ({
+        label: { kind: 'AMOUNT' as const, amount: preset },
+        data: `${TOPUP_PICK_CALLBACK_PREFIX}${preset.amountMinor.toString()}`,
+      })),
+      orderId: null,
+    };
+  }
+
+  /**
+   * A chosen amount becomes an invoice — the SAME invoice an order's transfer produces.
+   *
+   * `renderTransferInstruction` is shared, so the customer gets the structured
+   * card-to-card destination, the two copy buttons and the combined
+   * «پرداخت را انجام دادم | ارسال رسید» button that 5A and 5R built. A top-up has no
+   * order, so nothing here names one.
+   */
+  private async topupPick(
+    scope: TenantContext,
+    actor: ActorContext,
+    amountMinor: string,
+    customer: CustomerRecord,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    try {
+      const instruction = await this.deps.payments.requestWalletTopup(scope, actor, customer.id, {
+        // Suffixed within the update's own key, the shape every other callback here uses:
+        // a REDELIVERED update recomputes the same suffix, which is what makes the replay
+        // answer with the payment it already created rather than a second one.
+        idempotencyKey: `${idempotencyKey}:topup`,
+        amountMinor: BigInt(amountMinor),
+      });
+      return this.transferInstruction(scope, instruction, null);
+    } catch (error) {
+      return refusal(error);
+    }
   }
 
   /**
@@ -2184,104 +2318,124 @@ export class BotRuntime {
     idempotencyKey: string,
   ): Promise<PendingReply> {
     try {
-      const { payment, destination } = await this.deps.payments.requestManualTransfer(
+      const instruction = await this.deps.payments.requestManualTransfer(
         scope,
         actor,
         customer.id,
         { idempotencyKey: `${idempotencyKey}:manual-pay`, orderId },
       );
-
-      /*
-       * The two copy controls, and they exist only when there is a snapshot to copy from.
-       *
-       * `copy_text` is Telegram's own clipboard button: no callback data, no handler,
-       * nothing reaches this server when one is tapped. The amount is copied as BARE
-       * digits — `plainAmount`, not `formatMoney` — because a banking app rejects
-       * «۱٬۵۰۰٬۰۰۰ تومان` and accepts `1500000`.
-       *
-       * `row: 0` puts them side by side above the actions, which is the layout the owner
-       * specified after staging acceptance.
-       */
-      const copies: CustomerButton[] =
-        destination === null
-          ? []
-          : [
-              {
-                label: { kind: 'TEMPLATE', key: 'bot.payment.copy_card_button' },
-                copyText: destination.cardNumber,
-                row: 0,
-              },
-              {
-                label: { kind: 'TEMPLATE', key: 'bot.payment.copy_amount_button' },
-                copyText: plainAmount(payment.amount),
-                row: 0,
-              },
-            ];
-
-      return {
-        key:
-          destination === null
-            ? 'bot.payment.manual_instructions'
-            : 'bot.payment.transfer_instructions',
-        values: {
-          total: payment.amount,
-          reference: payment.reference,
-          /*
-           * Composed behind the application layer, by the renderer this surface is
-           * handed. A surface may not resolve the catalogue — `check-boundaries.sh`
-           * refuses an `@nexa/i18n` import here — and the four destination lines are
-           * catalogue text like any other.
-           */
-          ...(destination === null
-            ? {}
-            : { destination: await this.deps.destinations.render(scope, destination) }),
-        },
-        /*
-         * The way out, beside the instructions that created the obligation.
-         *
-         * It names the PAYMENT rather than the order, which is the only id here that
-         * identifies what a withdrawal would close: an order can have had several
-         * payments over its life, and this message is about one of them.
-         *
-         * It carries the ASK prefix. Tapping it closes nothing — it answers with a
-         * question and one further button — because this message stays in the chat for
-         * ever and a customer who has already transferred the money is one mis-touch
-         * away from closing the payment it was against.
-         */
-        buttons: [
-          ...copies,
-          /*
-           * The step the instructions now tell them to take.
-           *
-           * The Persian used to end «سپس رسید را ارسال نمایید» — send the receipt — and
-           * no surface in this product accepts one (owner revision 17). So a customer
-           * who had transferred the money had nothing to do and nothing to say, and
-           * `bot.payment.received_for_review` was a frozen sentence with no producer.
-           *
-           * The owner's 5A addendum reverses that revision and asks for this label to
-           * become «✅ پرداخت را انجام دادم | ارسال رسید». It is deliberately still the
-           * old label here: the receipt flow lands in 5R, and a button promising a
-           * capability that does not exist is the defect rather than a step towards
-           * fixing it.
-           *
-           * First among the actions, before the withdrawal: it is what most customers
-           * who come back to this message want, and the destructive one should not be
-           * the nearest thumb.
-           */
-          {
-            label: { kind: 'TEMPLATE', key: 'bot.payment.sent_button' },
-            data: `${PAY_SENT_CALLBACK_PREFIX}${payment.id}`,
-          },
-          {
-            label: { kind: 'TEMPLATE', key: 'bot.payment.cancel_button' },
-            data: `${CANCEL_PAY_ASK_CALLBACK_PREFIX}${payment.id}`,
-          },
-        ],
-        orderId,
-      };
+      return this.transferInstruction(scope, instruction, orderId);
     } catch (error) {
       return refusal(error);
     }
+  }
+
+  /**
+   * The transfer invoice, rendered once for every payment that needs one.
+   *
+   * Shared by the order path and the wallet top-up path — the owner's 5B instruction is
+   * to reuse this UX rather than build a second one, and sharing the FUNCTION is what
+   * makes that structural: a change to the destination block, the copy buttons or the
+   * receipt button reaches both, and neither can drift into telling a customer something
+   * the other does not.
+   *
+   * `orderId` is null for a top-up. It travels on the reply rather than being read off
+   * the payment because the messenger uses it for correlation, and a top-up correlates
+   * to no order.
+   */
+  private async transferInstruction(
+    scope: TenantContext,
+    { payment, destination }: ManualTransferInstruction,
+    orderId: string | null,
+  ): Promise<PendingReply> {
+    /*
+     * The two copy controls, and they exist only when there is a snapshot to copy from.
+     *
+     * `copy_text` is Telegram's own clipboard button: no callback data, no handler,
+     * nothing reaches this server when one is tapped. The amount is copied as BARE
+     * digits — `plainAmount`, not `formatMoney` — because a banking app rejects
+     * «۱٬۵۰۰٬۰۰۰ تومان` and accepts `1500000`.
+     *
+     * `row: 0` puts them side by side above the actions, which is the layout the owner
+     * specified after staging acceptance.
+     */
+    const copies: CustomerButton[] =
+      destination === null
+        ? []
+        : [
+            {
+              label: { kind: 'TEMPLATE', key: 'bot.payment.copy_card_button' },
+              copyText: destination.cardNumber,
+              row: 0,
+            },
+            {
+              label: { kind: 'TEMPLATE', key: 'bot.payment.copy_amount_button' },
+              copyText: plainAmount(payment.amount),
+              row: 0,
+            },
+          ];
+
+    return {
+      key:
+        destination === null
+          ? 'bot.payment.manual_instructions'
+          : 'bot.payment.transfer_instructions',
+      values: {
+        total: payment.amount,
+        reference: payment.reference,
+        /*
+         * Composed behind the application layer, by the renderer this surface is
+         * handed. A surface may not resolve the catalogue — `check-boundaries.sh`
+         * refuses an `@nexa/i18n` import here — and the four destination lines are
+         * catalogue text like any other.
+         */
+        ...(destination === null
+          ? {}
+          : { destination: await this.deps.destinations.render(scope, destination) }),
+      },
+      /*
+       * The way out, beside the instructions that created the obligation.
+       *
+       * It names the PAYMENT rather than the order, which is the only id here that
+       * identifies what a withdrawal would close: an order can have had several
+       * payments over its life, and this message is about one of them.
+       *
+       * It carries the ASK prefix. Tapping it closes nothing — it answers with a
+       * question and one further button — because this message stays in the chat for
+       * ever and a customer who has already transferred the money is one mis-touch
+       * away from closing the payment it was against.
+       */
+      buttons: [
+        ...copies,
+        /*
+         * The step the instructions now tell them to take.
+         *
+         * The Persian used to end «سپس رسید را ارسال نمایید» — send the receipt — and
+         * no surface in this product accepts one (owner revision 17). So a customer
+         * who had transferred the money had nothing to do and nothing to say, and
+         * `bot.payment.received_for_review` was a frozen sentence with no producer.
+         *
+         * The owner's 5A addendum reverses that revision and asks for this label to
+         * become «✅ پرداخت را انجام دادم | ارسال رسید», which is what 5R made it: one
+         * button whose tap records the claim AND opens the upload window. The label is
+         * a template key, so the catalogue carries the wording and this carries the
+         * intent.
+         *
+         * First among the actions, before the withdrawal: it is what most customers
+         * who come back to this message want, and the destructive one should not be
+         * the nearest thumb.
+         */
+        {
+          label: { kind: 'TEMPLATE', key: 'bot.payment.sent_button' },
+          data: `${PAY_SENT_CALLBACK_PREFIX}${payment.id}`,
+        },
+        {
+          label: { kind: 'TEMPLATE', key: 'bot.payment.cancel_button' },
+          data: `${CANCEL_PAY_ASK_CALLBACK_PREFIX}${payment.id}`,
+        },
+      ],
+      orderId,
+    };
   }
 
   /**

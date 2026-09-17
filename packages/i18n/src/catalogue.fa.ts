@@ -137,6 +137,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.wallet.insufficient': 'موجودی کیف پول کافی نیست. کمبود: {shortfall}',
   'bot.wallet.topup_button': '➕ شارژ کیف پول',
   'bot.wallet.topup_choose': 'مبلغ شارژ را انتخاب کنید:',
+  'bot.wallet.topup_refused': 'این مبلغ قابل شارژ نیست. لطفاً مبلغ دیگری را از فهرست انتخاب کنید.',
   'bot.wallet.topup_unavailable':
     'شارژ کیف پول در حال حاضر فعال نیست. لطفاً با پشتیبانی تماس بگیرید.',
   /*

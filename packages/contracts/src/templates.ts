@@ -591,6 +591,16 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.wallet.topup_refused',
+    description:
+      'Shown when a chosen top-up amount cannot be used — it is no longer offered, or it ' +
+      'is below the configured minimum. One sentence for both, because the customer’s ' +
+      'action is the same: choose another amount. The two cases stay distinct as ERROR ' +
+      'CODES, which is where an operator reads them.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.wallet.topup_credited',
     description:
       'Sent when an operator confirms a wallet top-up. Carries NO amount: the customer ' +

@@ -16,6 +16,7 @@ import {
 } from '../../../../infrastructure/telegram/send-message.js';
 import type {
   CustomerButton,
+  CustomerButtonLabel,
   CustomerButtonRow,
   CustomerMessage,
   CustomerMessenger,
@@ -289,6 +290,18 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     });
   }
 
+  /**
+   * One button's text. The ONE place money on a button is formatted.
+   *
+   * `formatMoney` is the same function the message body uses, so an amount on a button
+   * and the same amount in the text it sits under cannot be written two different ways.
+   */
+  private async labelText(scope: ScopeContext, label: CustomerButtonLabel): Promise<string> {
+    if (label.kind === 'TEMPLATE') return this.templates.render(scope, label.key, {});
+    if (label.kind === 'AMOUNT') return formatMoney(label.amount);
+    return label.amount === undefined ? label.text : `${label.text} — ${formatMoney(label.amount)}`;
+  }
+
   /** A label is either a catalogue key or tenant data. One place that knows which. */
   private async labelButtons(
     scope: TenantContext,
@@ -296,12 +309,7 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
   ): Promise<TelegramButton[]> {
     const labelled: TelegramButton[] = [];
     for (const button of buttons) {
-      const text =
-        button.label.kind === 'TEMPLATE'
-          ? await this.templates.render(scope, button.label.key, {})
-          : button.label.amount === undefined
-            ? button.label.text
-            : `${button.label.text} — ${formatMoney(button.label.amount)}`;
+      const text = await this.labelText(scope, button.label);
       /*
        * The union is discriminated by the field that IS the difference, not by a `kind`
        * tag beside it. A copy button carries a string for the clipboard and no route; a
