@@ -141,7 +141,13 @@ import {
   DrizzleReceiptCaptureRepository,
 } from './modules/commerce/payments/infrastructure/drizzle-receipt.repository.js';
 import { PaymentDestinationRenderer } from './modules/commerce/payments/infrastructure/destination-renderer.js';
+import {
+  DrizzleGatewayAudienceReader,
+  DrizzlePaymentGatewayRepository,
+} from './modules/commerce/payments/infrastructure/drizzle-payment-gateway.repository.js';
 import { PaymentAccountService } from './modules/commerce/payments/application/payment-account.service.js';
+import { PaymentGatewayService } from './modules/commerce/payments/application/payment-gateway.service.js';
+import type { PaymentGatewayRepository } from './modules/commerce/payments/application/gateway-ports.js';
 import { ReceiptService } from './modules/commerce/payments/application/receipt.service.js';
 import { TelegramReceiptFiles } from './modules/commerce/payments/infrastructure/telegram-receipt-files.js';
 import { PaymentService } from './modules/commerce/payments/application/payment.service.js';
@@ -322,6 +328,21 @@ export interface Container {
   readonly wallet: WalletService;
   readonly payments: PaymentService;
   readonly paymentAccounts: PaymentAccountService;
+  /**
+   * The payment ROUTES an operator offers (Phase 5C).
+   *
+   * Configuration, not settlement: a route names the `PaymentMethod` it settles through
+   * and `PaymentService` still does the settling.
+   */
+  readonly paymentGateways: PaymentGatewayService;
+  /**
+   * The route repository, exposed for ONE caller: the boot-time reconcile.
+   *
+   * `resolveInstallationTenant` creates a tenant's routes in the same transaction as
+   * `ensureSystemRoles`, and it does so through the repository because there is no actor
+   * at boot — see the comment there. Nothing else may reach past the service.
+   */
+  readonly paymentGatewayProvisioning: PaymentGatewayRepository;
   readonly receipts: ReceiptService;
   readonly receiptFiles: TelegramReceiptFiles;
   readonly orders: OrderService;
@@ -1074,8 +1095,30 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
   });
 
+  const paymentGatewayRepository = new DrizzlePaymentGatewayRepository(database.db);
+
+  const paymentGatewayService = new PaymentGatewayService({
+    repository: paymentGatewayRepository,
+    audience: new DrizzleGatewayAudienceReader(database.db),
+    guard,
+    uow,
+    audit,
+    opsLog: opsLogWriter,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+    settings: settingsResolver,
+  });
+
   const paymentService = new PaymentService({
     repository: paymentRepository,
+    /*
+     * The two READ methods only. This module consults a route and cannot configure one
+     * — `payments.gateways.edit` is Finance's, and a customer-initiated command must
+     * not reach the tenant's own eligibility rules.
+     */
+    gateways: paymentGatewayService,
     notifier: customerNotifier,
     orders: orderRepository,
     provisioning: provisioningService,
@@ -2169,6 +2212,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     wallet: walletService,
     payments: paymentService,
     paymentAccounts: paymentAccountService,
+    paymentGateways: paymentGatewayService,
+    paymentGatewayProvisioning: paymentGatewayRepository,
     receipts: receiptService,
     receiptFiles,
     provisioning: provisioningService,

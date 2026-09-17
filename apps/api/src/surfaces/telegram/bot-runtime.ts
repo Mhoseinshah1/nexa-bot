@@ -1229,6 +1229,28 @@ export const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
   [COMMERCE_ERROR_CODES.TOPUP_NOT_OFFERED]: 'bot.wallet.topup_refused',
   [COMMERCE_ERROR_CODES.TOPUP_BELOW_MINIMUM]: 'bot.wallet.topup_refused',
   /*
+   * And the two the payment ROUTE can throw (Phase 5C), mapped to the same two
+   * sentences rather than to new ones — because they are the same two facts.
+   *
+   * `PAYMENT_GATEWAY_UNAVAILABLE` means no route can carry this payment right now, for
+   * any of four reasons the customer cannot act on and must not be told apart: three
+   * are the operator's thresholds and naming which one refused would tell whoever holds
+   * this chat how the installation's payment gating is configured. "This is not
+   * available at the moment" is the whole of what the customer can use.
+   *
+   * `PAYMENT_GATEWAY_AMOUNT_REJECTED` means a preset falls outside what the route
+   * accepts, which is a MISCONFIGURATION — the same class as `TOPUP_BELOW_MINIMUM`, and
+   * it shares that key's copy for the reason that key exists: telling a customer an
+   * amount is "unavailable" while the button sits on their screen sends them looking
+   * for it again.
+   *
+   * Both are here rather than left unmapped, which is not a formality: an unmapped code
+   * makes `refusal` RETHROW, the webhook swallows it by design, and the customer is
+   * answered with silence. That is F5R-12, and it cost a whole debugging session.
+   */
+  [COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE]: 'bot.wallet.topup_unavailable',
+  [COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_AMOUNT_REJECTED]: 'bot.wallet.topup_refused',
+  /*
    * The four receipt refusals, and they are four SENTENCES because the remedy differs.
    *
    * Collapsing them into one would be the legacy system's "unknown command" for a

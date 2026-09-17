@@ -1,0 +1,471 @@
+import { useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { PaymentGatewayView, SalesCurrencyCode } from '@nexa/contracts';
+import { fetchPaymentGateways, setPaymentGatewayStatus, updatePaymentGateway } from '../api/client';
+import { formatMoneyText, formatTimestamp } from '../format';
+import { useSubmissionKey } from '../submission-key';
+import { queryState } from '../view-state';
+import { t } from '../i18n/web.fa';
+import { messageFor } from './settings';
+import {
+  Badge,
+  Banner,
+  Card,
+  DataTable,
+  Empty,
+  Field,
+  PageHead,
+  StateSwitch,
+  useToast,
+  type Column,
+} from '../ui/kit';
+
+/**
+ * Payment routes — which ways a customer may pay, and under what conditions.
+ *
+ * Not the same screen as Payment accounts, and the distinction is the whole point: an
+ * account is WHERE the money goes, a route is WHETHER this way of paying is offered to
+ * this customer at all. The legacy system keeps both under `💎 مالی` and this product
+ * keeps them apart, because `payments.accounts.edit` and `payments.gateways.edit` are
+ * different authorities with different blast radii.
+ *
+ * **No Add, and no Delete.** A route is `(tenant, provider)` where the provider comes
+ * from a closed catalogue of what this release can actually operate, so the roster is
+ * fixed by construction — the shape `WEB-BR-012` reads off the legacy panel, a fixed
+ * eleven with no Add Gateway. `web.payment_gateways_hint` says so on the screen, because
+ * a missing button an operator cannot explain is a defect report.
+ *
+ * **Two writes, two buttons, two audit rows.** Change the configuration, or switch the
+ * route on and off. Separate because switching off a payment route is the one change a
+ * customer notices immediately, and folding it into the form would make "who stopped
+ * accepting card-to-card, and when" answerable only by diffing two payloads.
+ *
+ * **Nothing here is a credential.** No route in this release holds one, so there is no
+ * field to mask and none to omit — unlike the accounts screen, which masks a card number
+ * for the shared-office reason and shows it in full in the form.
+ *
+ * **`0` means "no condition", everywhere.** It is the legacy form's own semantics
+ * (`WEB-BR-014`) and it is kept consistent across the amount bounds and the three
+ * eligibility counters so an operator holds one convention rather than two.
+ */
+
+const EMPTY_FORM = {
+  displayName: '',
+  instructions: '',
+  minAmountMinor: '0',
+  maxAmountMinor: '0',
+  activateAfterPayments: '0',
+  deactivateAfterPayments: '0',
+  activateAfterAccountDays: '0',
+  sortOrder: '0',
+};
+
+type FormState = typeof EMPTY_FORM;
+
+function formOf(gateway: PaymentGatewayView): FormState {
+  return {
+    displayName: gateway.displayName ?? '',
+    instructions: gateway.instructions ?? '',
+    minAmountMinor: gateway.minAmountMinor,
+    maxAmountMinor: gateway.maxAmountMinor,
+    activateAfterPayments: String(gateway.eligibility.activateAfterPayments),
+    deactivateAfterPayments: String(gateway.eligibility.deactivateAfterPayments),
+    activateAfterAccountDays: String(gateway.eligibility.activateAfterAccountDays),
+    sortOrder: String(gateway.sortOrder),
+  };
+}
+
+/**
+ * The route's name for an operator: what they called it, or the product's own name.
+ *
+ * A null `displayName` is not blank — it means the installation has not renamed the
+ * route — so the table says which of the two it is looking at rather than showing an
+ * empty cell an operator would try to fill.
+ */
+function nameOf(gateway: PaymentGatewayView): string {
+  if (gateway.displayName !== null) return gateway.displayName;
+  return gateway.provider === 'MANUAL_TRANSFER'
+    ? t('web.payment_gateway_provider_manual_transfer')
+    : gateway.provider;
+}
+
+/**
+ * A bound, or the words for "no bound". `0` is off, on both sides.
+ *
+ * `formatMoneyText` rather than `formatMoney`, because this is a table cell and the
+ * amount and its unit belong together in one string here. Never abbreviated and never
+ * rounded — a limit an operator reads as 5,000,000 and typed as 500,000 is the wrong
+ * kind of surprise.
+ */
+function boundOf(minor: string, currency: SalesCurrencyCode): string {
+  return minor === '0'
+    ? t('web.payment_gateway_unbounded')
+    : formatMoneyText({ amountMinor: minor, currency });
+}
+
+/** Digits only, and anything else becomes zero — which is this form's "no condition". */
+function counted(value: string): number {
+  const parsed = Number(value.trim());
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+/**
+ * A minor-unit amount as a decimal STRING, never a number.
+ *
+ * The browser must not compute it: JSON has no bigint and a `number` is the float the
+ * money model refuses, silently, above 2^53. Non-digits collapse to `'0'`, which this
+ * form reads as "no bound" rather than as an error, because the server's own schema is
+ * what refuses a genuinely contradictory window.
+ */
+function minorOf(value: string): string {
+  const digits = value.trim().replace(/[^0-9]/gu, '');
+  return digits === '' ? '0' : digits.replace(/^0+(?=\d)/u, '');
+}
+
+/**
+ * `mayEdit` is passed, never derived from `denied`.
+ *
+ * The rule the Codex review of PR #34 established on the accounts screen, applied here
+ * from the start: the nav admits either `payments.gateways.view` or
+ * `payments.gateways.edit`, the service authorizes every write with `edit` alone, so
+ * deriving the page from `view` would hand the seeded view-only roles (operator,
+ * observer) every control and teach them about the refusal by pressing one. Drawing a
+ * control nobody may use is `UNK-ADM-001` from the other end.
+ */
+export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayEdit: boolean }) {
+  const queries = useQueryClient();
+  const notify = useToast();
+  const submission = useSubmissionKey();
+
+  const gateways = useQuery({
+    queryKey: ['payment-gateways'],
+    queryFn: () => fetchPaymentGateways(),
+    enabled: !denied,
+  });
+
+  /** Null while nothing is open; a provider while one route is being configured. */
+  const [editing, setEditing] = useState<string | null>(null);
+  const [form, setForm] = useState<FormState>(EMPTY_FORM);
+
+  const rows = gateways.data?.gateways ?? [];
+
+  const reset = () => {
+    setEditing(null);
+    setForm(EMPTY_FORM);
+  };
+
+  const refresh = () => {
+    void queries.invalidateQueries({ queryKey: ['payment-gateways'] });
+  };
+
+  const save = useMutation({
+    mutationFn: () => {
+      if (editing === null) throw new Error('nothing is being edited');
+      const body = {
+        provider: editing,
+        displayName: form.displayName.trim() === '' ? null : form.displayName.trim(),
+        instructions: form.instructions.trim() === '' ? null : form.instructions.trim(),
+        minAmountMinor: minorOf(form.minAmountMinor),
+        maxAmountMinor: minorOf(form.maxAmountMinor),
+        eligibility: {
+          activateAfterPayments: counted(form.activateAfterPayments),
+          deactivateAfterPayments: counted(form.deactivateAfterPayments),
+          activateAfterAccountDays: counted(form.activateAfterAccountDays),
+        },
+        sortOrder: counted(form.sortOrder),
+      };
+      /*
+       * The key is bound to the whole payload AND to which route is being written, so
+       * correcting a value and pressing save again is a NEW command rather than a replay
+       * the store refuses as a payload mismatch.
+       */
+      return updatePaymentGateway({
+        ...body,
+        idempotencyKey: submission.current(body),
+      });
+    },
+    onSuccess: () => {
+      submission.settle();
+      notify({ tone: 'ok', message: t('web.payment_gateway_saved') });
+      reset();
+      refresh();
+    },
+    // A 5xx may have committed. A fresh key on the retry would be a second command.
+    onError: (error) => submission.settleOn(error),
+  });
+
+  const toggle = useMutation({
+    mutationFn: (input: { provider: string; status: 'ACTIVE' | 'DISABLED' }) =>
+      setPaymentGatewayStatus({
+        ...input,
+        idempotencyKey: submission.current({ status: input.status, provider: input.provider }),
+      }),
+    onSuccess: () => {
+      submission.settle();
+      notify({ tone: 'ok', message: t('web.payment_gateway_status_done') });
+      refresh();
+    },
+    onError: (error) => submission.settleOn(error),
+  });
+
+  const busy = save.isPending || toggle.isPending;
+  const failure = save.error ?? toggle.error;
+
+  const columns: readonly Column<PaymentGatewayView>[] = [
+    {
+      key: 'name',
+      header: t('web.payment_gateway_provider'),
+      render: (row) => (
+        <>
+          {nameOf(row)}
+          {row.displayName === null && (
+            <>
+              {' '}
+              <Badge tone="neutral">{t('web.payment_gateway_name_default')}</Badge>
+            </>
+          )}
+        </>
+      ),
+    },
+    {
+      key: 'state',
+      header: t('web.payment_gateway_state'),
+      render: (row) => (
+        <Badge tone={row.status === 'ACTIVE' ? 'ok' : 'neutral'}>
+          {t(
+            row.status === 'ACTIVE' ? 'web.payment_gateway_active' : 'web.payment_gateway_disabled',
+          )}
+        </Badge>
+      ),
+    },
+    {
+      key: 'min',
+      header: t('web.payment_gateway_min'),
+      render: (row) => boundOf(row.minAmountMinor, row.currency),
+    },
+    {
+      key: 'max',
+      header: t('web.payment_gateway_max'),
+      render: (row) => boundOf(row.maxAmountMinor, row.currency),
+    },
+    {
+      key: 'eligibility',
+      header: t('web.payment_gateway_eligibility'),
+      /*
+       * The thresholds as they are, and a dash when every one of them is off. Rendering
+       * "0" three times would read as three conditions the operator has set to zero,
+       * which is the opposite of what a zero means here.
+       */
+      render: (row) => {
+        const parts = [
+          row.eligibility.activateAfterPayments > 0
+            ? `${t('web.payment_gateway_after_payments')}: ${row.eligibility.activateAfterPayments}`
+            : null,
+          row.eligibility.deactivateAfterPayments > 0
+            ? `${t('web.payment_gateway_until_payments')}: ${row.eligibility.deactivateAfterPayments}`
+            : null,
+          row.eligibility.activateAfterAccountDays > 0
+            ? `${t('web.payment_gateway_after_days')}: ${row.eligibility.activateAfterAccountDays}`
+            : null,
+        ].filter((part): part is string => part !== null);
+        return parts.length === 0 ? '—' : parts.join(' · ');
+      },
+    },
+    {
+      key: 'updated',
+      header: t('web.payment_gateway_updated'),
+      render: (row) => formatTimestamp(row.updatedAt),
+    },
+    {
+      key: 'actions',
+      header: t('web.payment_gateway_actions'),
+      align: 'end',
+      // Nothing at all for a view-only role. The column header stays, because a table
+      // whose columns depend on the reader is a table two operators describe differently.
+      render: (row) =>
+        !mayEdit ? null : (
+          <div className="toolbar">
+            <button
+              type="button"
+              className="btn sm"
+              disabled={busy}
+              onClick={() => {
+                setEditing(row.provider);
+                setForm(formOf(row));
+              }}
+            >
+              {t('web.payment_gateway_edit')}
+            </button>
+            <button
+              type="button"
+              className="btn sm"
+              disabled={busy}
+              onClick={() =>
+                toggle.mutate({
+                  provider: row.provider,
+                  status: row.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE',
+                })
+              }
+            >
+              {t(
+                row.status === 'ACTIVE'
+                  ? 'web.payment_gateway_disable'
+                  : 'web.payment_gateway_enable',
+              )}
+            </button>
+          </div>
+        ),
+    },
+  ];
+
+  return (
+    <>
+      <PageHead
+        title={t('web.payment_gateways_title')}
+        subtitle={t('web.payment_gateways_subtitle')}
+        maturity="now"
+      />
+
+      <StateSwitch
+        query={gateways}
+        denied={denied}
+        isEmpty={queryState(gateways) === 'ready' && rows.length === 0}
+        empty={
+          <Empty
+            title={t('web.payment_gateways_empty')}
+            hint={t('web.payment_gateways_empty_hint')}
+          />
+        }
+      >
+        <Card title={t('web.payment_gateways_title')} hint={t('web.payment_gateways_hint')}>
+          <DataTable
+            columns={columns}
+            rows={rows}
+            rowKey={(row) => row.provider}
+            caption={t('web.payment_gateways_title')}
+          />
+        </Card>
+      </StateSwitch>
+
+      {/*
+        Only while a route is open. There is no "new route" form, because there is no
+        create — the roster is what this release can operate.
+      */}
+      {mayEdit && editing !== null && (
+        <Card title={t('web.payment_gateway_editing')} hint={t('web.payment_gateway_form_hint')}>
+          <Field
+            label={t('web.payment_gateway_name')}
+            htmlFor="pg-name"
+            hint={t('web.payment_gateway_name_hint')}
+          >
+            <input
+              id="pg-name"
+              value={form.displayName}
+              maxLength={60}
+              onChange={(event) => setForm({ ...form, displayName: event.target.value })}
+            />
+          </Field>
+
+          <Field
+            label={t('web.payment_gateway_instructions')}
+            htmlFor="pg-instructions"
+            hint={t('web.payment_gateway_instructions_hint')}
+          >
+            <textarea
+              id="pg-instructions"
+              rows={3}
+              value={form.instructions}
+              maxLength={1000}
+              onChange={(event) => setForm({ ...form, instructions: event.target.value })}
+            />
+          </Field>
+
+          <Field
+            label={t('web.payment_gateway_min')}
+            htmlFor="pg-min"
+            hint={t('web.payment_gateway_amount_hint')}
+          >
+            <input
+              id="pg-min"
+              value={form.minAmountMinor}
+              inputMode="numeric"
+              onChange={(event) => setForm({ ...form, minAmountMinor: event.target.value })}
+            />
+          </Field>
+          <Field label={t('web.payment_gateway_max')} htmlFor="pg-max">
+            <input
+              id="pg-max"
+              value={form.maxAmountMinor}
+              inputMode="numeric"
+              onChange={(event) => setForm({ ...form, maxAmountMinor: event.target.value })}
+            />
+          </Field>
+
+          <Field
+            label={t('web.payment_gateway_after_payments')}
+            htmlFor="pg-after-payments"
+            hint={t('web.payment_gateway_eligibility_hint')}
+          >
+            <input
+              id="pg-after-payments"
+              value={form.activateAfterPayments}
+              inputMode="numeric"
+              onChange={(event) => setForm({ ...form, activateAfterPayments: event.target.value })}
+            />
+          </Field>
+          <Field label={t('web.payment_gateway_until_payments')} htmlFor="pg-until-payments">
+            <input
+              id="pg-until-payments"
+              value={form.deactivateAfterPayments}
+              inputMode="numeric"
+              onChange={(event) =>
+                setForm({ ...form, deactivateAfterPayments: event.target.value })
+              }
+            />
+          </Field>
+          <Field label={t('web.payment_gateway_after_days')} htmlFor="pg-after-days">
+            <input
+              id="pg-after-days"
+              value={form.activateAfterAccountDays}
+              inputMode="numeric"
+              onChange={(event) =>
+                setForm({ ...form, activateAfterAccountDays: event.target.value })
+              }
+            />
+          </Field>
+
+          <Field label={t('web.payment_gateway_sort')} htmlFor="pg-sort">
+            <input
+              id="pg-sort"
+              value={form.sortOrder}
+              inputMode="numeric"
+              onChange={(event) => setForm({ ...form, sortOrder: event.target.value })}
+            />
+          </Field>
+
+          <div className="toolbar">
+            <button
+              type="button"
+              className="btn primary sm"
+              disabled={busy}
+              onClick={() => save.mutate()}
+            >
+              {t('web.payment_gateway_save')}
+            </button>
+            <button type="button" className="btn sm" disabled={busy} onClick={reset}>
+              {t('web.payment_gateway_cancel_edit')}
+            </button>
+          </div>
+
+          {/*
+            The server refuses a window that admits nothing — a maximum below the
+            minimum, or payment-count bounds that cross — and the operator is told here.
+            NOT pre-checked in the browser, deliberately: a second opinion about what a
+            valid route is would be the one nobody tests.
+          */}
+          {failure != null && <Banner tone="danger">{messageFor(failure)}</Banner>}
+        </Card>
+      )}
+    </>
+  );
+}

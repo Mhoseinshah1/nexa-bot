@@ -49,6 +49,7 @@ import type {
   PaymentDestinationRecord,
   PaymentDestinationRepository,
 } from './account-ports.js';
+import type { PaymentGatewayService } from './payment-gateway.service.js';
 import type { PaymentReceiptRepository, ReceiptCaptureRepository } from './receipt-ports.js';
 import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
@@ -109,6 +110,22 @@ export interface PaymentServiceDeps {
    * number within reach of a customer-initiated command.
    */
   readonly accounts: Pick<PaymentAccountRepository, 'selectDestination'>;
+  /**
+   * Which payment ROUTE a customer may use, and what amounts it accepts (Phase 5C).
+   *
+   * Two methods, narrowed, so this module can consult a route and cannot configure one:
+   * `payments.gateways.edit` is Finance's, and a payment path holding it would put the
+   * tenant's eligibility rules in reach of a customer-initiated command.
+   *
+   * REQUIRED, not optional. It was written optional first, on the reasoning that several
+   * entrypoints construct a `PaymentService` — and that reasoning was simply wrong:
+   * there is exactly one construction site, in `container.ts`. An optional dependency
+   * would therefore have bought nothing and cost the thing that matters, because the
+   * only way to reach the `undefined` branch is to forget the wiring, and a top-up
+   * issued with no route evaluated is an unbounded invoice this installation never
+   * agreed to. Required makes that a compile error instead.
+   */
+  readonly gateways: Pick<PaymentGatewayService, 'offer' | 'assertAmountAccepted'>;
   /** Freezes that destination onto the payment, in the same transaction. */
   readonly destinations: PaymentDestinationRepository;
   /**
@@ -1044,6 +1061,19 @@ export class PaymentService {
         await this.assertCustomerMayPay(scope, customerId, tx);
 
         const amount = await this.offeredTopup(scope, intent.amountMinor, tx);
+        /*
+         * The ROUTE, resolved inside the transaction that issues the payment.
+         *
+         * Inside, not before, for the reason every other read here is inside: an
+         * operator can disable a route or move a threshold between a check and an
+         * insert, and a top-up issued against a route switched off a moment ago is a
+         * customer holding bank details this installation has stopped honouring.
+         *
+         * Its bounds bind TOGETHER with the installation-wide floor `offeredTopup`
+         * already applied, not after it — most-restrictive-wins on both sides, which is
+         * this product's answer to FBR-008's unresolved precedence.
+         */
+        await this.topupGateway(scope, customerId, amount, tx);
         const windowMinutes = await this.paymentWindowMinutes(scope, tx);
 
         /*
@@ -1296,6 +1326,23 @@ export class PaymentService {
       );
     }
     return chosen;
+  }
+
+  /**
+   * The route this top-up is issued against, and the bounds it imposes.
+   *
+   * Two calls rather than one, because the amount check is the caller's to combine: the
+   * installation-wide floor from `offeredTopup` and the route's own bounds both apply,
+   * and most-restrictive wins on either side.
+   */
+  private async topupGateway(
+    scope: TenantContext,
+    customerId: UserId,
+    amount: Money,
+    tx: TransactionScope,
+  ): Promise<void> {
+    const offered = await this.deps.gateways.offer(scope, customerId, amount, tx);
+    this.deps.gateways.assertAmountAccepted(offered, amount);
   }
 
   /**

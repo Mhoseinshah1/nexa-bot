@@ -76,6 +76,24 @@ export const PERMISSIONS = [
    */
   p('payments.accounts.view', 'View the configured manual-transfer accounts', 'LOW'),
   p('payments.accounts.edit', 'Add, edit, enable or disable a manual-transfer account', 'CRITICAL'),
+  /*
+   * The payment ROUTES, as their own pair rather than reusing the accounts pair.
+   *
+   * They are adjacent and they are not the same authority. `payments.accounts.edit`
+   * changes where money goes; this changes WHETHER a route is offered, to whom, and
+   * within what bounds — and the two have different blast radii in different directions.
+   * A wrong account number misdirects transfers that are made; a wrong eligibility
+   * threshold silently stops them being made at all, which nobody notices because
+   * nothing fails.
+   *
+   * EDIT is HIGH rather than CRITICAL, and that is the one place these differ from the
+   * accounts pair. Nothing here can send a customer's money somewhere else: the worst a
+   * wrong value does is refuse a payment that should have been accepted, which is
+   * recoverable by fixing the value. `payments.accounts.edit` is CRITICAL precisely
+   * because its worst case is not.
+   */
+  p('payments.gateways.view', 'View the configured payment routes', 'LOW'),
+  p('payments.gateways.edit', 'Configure, enable, disable or reorder a payment route', 'HIGH'),
   p('receipts.view', 'View submitted receipts', 'LOW'),
   p('receipts.review', 'Approve or reject a receipt', 'HIGH'),
   p('refunds.view', 'View refunds', 'LOW'),
@@ -226,6 +244,13 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       // reaches it. What is left is the question they actually need answered —
       // which account is a customer being told to pay.
       'payments.accounts.view',
+      /*
+       * Which routes are offered is the other half of the same question an operator
+       * fields all day — "why can this customer not pay" — and the answer is usually
+       * an eligibility threshold rather than a broken card. Read only: changing who may
+       * pay how is Finance's.
+       */
+      'payments.gateways.view',
       'reports.view',
       'opslog.view',
       // Whether this installation's backups are working is an operational
@@ -252,6 +277,14 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       // only account holder able to change a blocked card would be the owner.
       'payments.accounts.view',
       'payments.accounts.edit',
+      /*
+       * And which routes are offered, on the same argument: Finance owns how money
+       * arrives, and a route's amount bounds and eligibility thresholds are that
+       * decision as much as the card number is. Without the edit key the only holder
+       * able to switch a route off — after a bank blocks an account, say — is the owner.
+       */
+      'payments.gateways.view',
+      'payments.gateways.edit',
       'reports.view',
       'reports.export',
       'audit.view',

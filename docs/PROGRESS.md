@@ -807,12 +807,32 @@ because Telegram's command list is per bot and would advertise the panel to ever
 customer. No administrator is created from Telegram: that would need a row with no usable
 password hash.
 
+## Phase 5C — payment routes (done)
+
+`payment_gateways`, keyed on `(tenant, provider)` with no surrogate id: the roster is
+fixed by construction, the way `WEB-BR-012` reads it off the legacy panel. A route is
+configuration — name, ordering, amount bounds, customer instructions, eligibility — and
+NOT a settlement mechanism: it names the `PaymentMethod` it settles through, so `GATEWAY`
+stays as unavailable as `PAYMENT_METHODS` already says.
+
+`PAYMENT_GATEWAY_PROVIDERS` holds one member, `MANUAL_TRANSFER`, and grows in the commit
+that brings an adapter. The eligibility rules are the three the research evidences
+(`FBR-005`) — payment count and account age, never a tier (`FBR-011`) — and they gate the
+wallet top-up path, which is what keeps them from being configuration nothing reads. A
+route's bounds bind together with `wallet.topup.minimum`, most-restrictive either side:
+this product's answer to `FBR-008`, whose precedence the research could not establish.
+
+Three things deliberately absent, each because nothing would honour it: per-gateway
+cashback (Phase 7), customer-facing button colour (no chooser to render it in), and any
+credential column (no route in this release holds one).
+
 ### Next
 
-5C gateway configuration, 5D a real gateway adapter, 5E refunds,
-5F hardening and staging acceptance. The gateway PROVIDER is an owner decision — several
-evidenced, none chosen — so 5A–5C are provider-neutral and the question goes to the owner
-at 5D.
+5D a real gateway adapter, 5E refunds, 5F hardening and staging acceptance. The gateway
+PROVIDER is an owner decision — several evidenced, none chosen — so 5A–5C are
+provider-neutral and the question goes to the owner at 5D. `OQ-5C-01` is the one open
+question 5C leaves: whether a route's bounds and eligibility should apply to an ORDER
+payment as well as a top-up.
 
 ## Phases 6–8
 

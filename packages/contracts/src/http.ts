@@ -8,6 +8,13 @@ import {
 } from './notifications.js';
 import { uuidV7Schema } from './ids.js';
 import { paymentAccountInputSchema } from './payment-accounts.js';
+import {
+  PAYMENT_GATEWAY_SORT_MAX,
+  PAYMENT_GATEWAY_SORT_MIN,
+  PAYMENT_GATEWAY_THRESHOLD_MAX,
+  paymentGatewayProviderSchema,
+  paymentGatewayStatusSchema,
+} from './payment-gateways.js';
 import { PAYMENT_RECEIPT_KINDS } from './payment-receipts.js';
 import { CUSTOMER_STATUSES, telegramUserIdSchema } from './customer.js';
 import {
@@ -38,7 +45,7 @@ import {
   PAYMENT_METHODS,
   PAYMENT_STATES,
 } from './payment.js';
-import { CURRENCY_CODES, MAX_MONEY_AMOUNT_MINOR } from './money.js';
+import { CURRENCY_CODES, MAX_MONEY_AMOUNT_MINOR, salesCurrencyCodeSchema } from './money.js';
 import { OPERATIONAL_SEVERITIES } from './ports.js';
 import {
   SETTING_CLASSIFICATIONS,
@@ -2268,6 +2275,146 @@ export const PAYMENT_ACCOUNT_ROUTES = {
   update: (id: string) => `/payment-accounts/${encodeURIComponent(id)}`,
   enabled: (id: string) => `/payment-accounts/${encodeURIComponent(id)}/enabled`,
   makeDefault: (id: string) => `/payment-accounts/${encodeURIComponent(id)}/default`,
+} as const;
+
+// --- Payment gateways --------------------------------------------------------
+
+/**
+ * One configured payment route, as the Web Admin renders it.
+ *
+ * `provider` is the identity — there is no id, because a route is `(tenant, provider)`
+ * and `payment-gateways.ts` records why. `settlesVia` and `requiresCredentials` are
+ * echoed from the descriptor rather than stored, so the screen can say what a route
+ * actually does without the client holding a copy of the catalogue.
+ *
+ * Nothing sensitive is in here, and nothing can be: this release stores no credential
+ * for any route, and the field does not exist to omit. When one does, it will follow the
+ * panels rule — the projection selects a set-at timestamp and never a ciphertext, and
+ * never a masked stand-in either, because `********` can be resubmitted as a password.
+ *
+ * The amounts are STRINGS. `bigint` has no JSON form, and `MoneyWire` is the shape this
+ * API already uses for every other amount; a `number` here would be the float the money
+ * model refuses, silently, above 2^53.
+ */
+export const paymentGatewaySchema = z.object({
+  provider: paymentGatewayProviderSchema,
+  status: paymentGatewayStatusSchema,
+  /** `null` means the product's own name for this route, which is what a fresh row holds. */
+  displayName: z.string().nullable(),
+  instructions: z.string().nullable(),
+  /**
+   * The bounds, in minor units as decimal STRINGS, with `0` meaning unbounded.
+   *
+   * Strings because JSON has no bigint and a `number` here is the float the money model
+   * refuses, silently, above 2^53. One `currency` for both, because both are in the
+   * installation's `sales.currency` — a route does not carry a denomination of its own,
+   * and `payment-gateways.ts` records why one would be a second denomination with no
+   * conversion to reach it.
+   */
+  minAmountMinor: z.string(),
+  maxAmountMinor: z.string(),
+  /*
+   * `salesCurrencyCodeSchema`, NOT `CURRENCY_CODES`.
+   *
+   * A route's bounds are compared against an amount denominated in `sales.currency`,
+   * which is one of two codes — and `money.ts` records why that constant exists: the
+   * products form once offered all five, three of which the store cannot sell in, and
+   * Codex found it. Widening this field would put the same defect on this screen.
+   */
+  currency: salesCurrencyCodeSchema,
+  eligibility: z.object({
+    activateAfterPayments: z.number().int(),
+    deactivateAfterPayments: z.number().int(),
+    activateAfterAccountDays: z.number().int(),
+  }),
+  sortOrder: z.number().int(),
+  /*
+   * The descriptor's two facts — `settlesVia` and `requiresCredentials` — are NOT here.
+   *
+   * They were, and nothing read them: with one operable route `settlesVia` always says
+   * the same thing and there is no credential field to gate. `PAYMENT_GATEWAY_DESCRIPTORS`
+   * is where they live and a unit test is what consumes them; a response field with no
+   * reader is the placeholder abstraction the conventions refuse, and the i18n checker
+   * found the label for one of them rendering nowhere. They land with the second route,
+   * which is what makes either of them worth showing.
+   */
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+export type PaymentGatewayView = z.infer<typeof paymentGatewaySchema>;
+
+/**
+ * Every route this tenant has, in display order, with no cursor.
+ *
+ * Complete by construction for a stronger reason than the account list's: the roster is
+ * bounded by `PAYMENT_GATEWAY_PROVIDERS`, so it cannot exceed the number of routes this
+ * release can operate. `WEB-BR-012` reads the same shape off the legacy panel — a fixed
+ * roster with no Add Gateway.
+ */
+export const paymentGatewayListResponseSchema = z.object({
+  gateways: z.array(paymentGatewaySchema),
+});
+export type PaymentGatewayListResponse = z.infer<typeof paymentGatewayListResponseSchema>;
+
+export const paymentGatewayResponseSchema = z.object({ gateway: paymentGatewaySchema });
+export type PaymentGatewayResponse = z.infer<typeof paymentGatewayResponseSchema>;
+
+/**
+ * An edit of one route's own configuration.
+ *
+ * Every field is required rather than patchable, for the reason
+ * `updatePaymentAccountRequestSchema` states: the form shows all of them, so the surface
+ * submits what it rendered. A partial write of an eligibility triple is how a route ends
+ * up with a show-after count somebody meant to clear.
+ *
+ * The amounts arrive as decimal STRINGS of minor units, matching every other amount this
+ * API accepts. There is no currency field: a route is denominated in the installation's
+ * `sales.currency`, and `payment-gateways.ts` records why a per-route currency would be
+ * a second denomination with no conversion to reach it.
+ *
+ * It cannot switch the route on or off — that is the endpoint below, so that "I changed
+ * the limits" and "I stopped accepting this route" are two different audit rows.
+ */
+export const updatePaymentGatewayRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  /*
+   * The two text fields carry no length bound HERE, and that is deliberate.
+   *
+   * `paymentGatewayConfigSchema` bounds both, and it is what every caller runs — the
+   * controller parses this shape and then that one, precisely so the RULES live in one
+   * place. Restating a maximum here would be a second number to keep in step, and the
+   * one that drifts is the one nobody tests.
+   */
+  displayName: z.union([z.string(), z.null()]).optional(),
+  instructions: z.union([z.string(), z.null()]).optional(),
+  minAmountMinor: z.string().regex(/^[0-9]{1,19}$/u),
+  maxAmountMinor: z.string().regex(/^[0-9]{1,19}$/u),
+  eligibility: z.object({
+    activateAfterPayments: z.number().int().min(0).max(PAYMENT_GATEWAY_THRESHOLD_MAX),
+    deactivateAfterPayments: z.number().int().min(0).max(PAYMENT_GATEWAY_THRESHOLD_MAX),
+    activateAfterAccountDays: z.number().int().min(0).max(PAYMENT_GATEWAY_THRESHOLD_MAX),
+  }),
+  sortOrder: z.number().int().min(PAYMENT_GATEWAY_SORT_MIN).max(PAYMENT_GATEWAY_SORT_MAX),
+});
+export type UpdatePaymentGatewayRequest = z.infer<typeof updatePaymentGatewayRequestSchema>;
+
+/**
+ * Switching one route on or off.
+ *
+ * `DISABLED` is the operator saying stop using this for now, and it is the one gateway
+ * change a customer notices immediately — so it is its own command with its own audit
+ * row, never a field inside an edit.
+ */
+export const setPaymentGatewayStatusRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  status: paymentGatewayStatusSchema,
+});
+export type SetPaymentGatewayStatusRequest = z.infer<typeof setPaymentGatewayStatusRequestSchema>;
+
+export const PAYMENT_GATEWAY_ROUTES = {
+  list: '/payment-gateways',
+  update: (provider: string) => `/payment-gateways/${encodeURIComponent(provider)}`,
+  status: (provider: string) => `/payment-gateways/${encodeURIComponent(provider)}/status`,
 } as const;
 
 // --- Services ----------------------------------------------------------------

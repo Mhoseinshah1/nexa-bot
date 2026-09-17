@@ -491,6 +491,20 @@
       "when": 1789673626504,
       "tag": "0069_telegram_admin_receipt_notice",
       "breakpoints": true
+    },
+    {
+      "idx": 70,
+      "version": "7",
+      "when": 1789681319948,
+      "tag": "0070_payment_gateways",
+      "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1789681319949,
+      "tag": "0071_payment_gateway_backfill",
+      "breakpoints": true
     }
   ]
 }

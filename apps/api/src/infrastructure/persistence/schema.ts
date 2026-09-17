@@ -57,6 +57,8 @@ import {
   COMMERCIAL_ORDER_PURPOSES,
   ORDER_PURPOSES,
   ORDER_STATES,
+  PAYMENT_GATEWAY_PROVIDERS,
+  PAYMENT_GATEWAY_STATUSES,
   PAYMENT_RECEIPT_KINDS,
   RECEIPT_CAPTURE_CLOSE_REASONS,
   PAYMENT_STATES,
@@ -2840,6 +2842,138 @@ export const paymentAccounts = pgTable(
     check('payment_accounts_holder_name_check', sql`length(btrim(holder_name)) BETWEEN 1 AND 120`),
     check('payment_accounts_sort_order_check', sql`sort_order BETWEEN 0 AND 100000`),
     unique('payment_accounts_tenant_id_key').on(table.tenantId, table.id),
+  ],
+);
+
+/**
+ * The payment ROUTES a tenant offers, one row per route it has configured.
+ *
+ * ## The key is the route, and there is no id
+ *
+ * `(tenant_id, provider)` IS the primary key. That is the legacy roster's own shape —
+ * `WEB-BR-012` counts a fixed eleven with no Add Gateway — expressed as a constraint
+ * rather than as a unique index bolted onto a surrogate key, and it buys two things a
+ * uuid would not. A surface addresses a route with a value from a CLOSED enum, so a
+ * crafted identifier fails at the schema instead of reaching a query that has to
+ * remember its tenant filter. And the audit row's `entity_id` is the provider name, so
+ * "who switched card-to-card off, and when" reads as that.
+ *
+ * ## What is NOT here
+ *
+ * No credential column, no cashback percent, no button colour, and no currency.
+ * `packages/contracts/src/payment-gateways.ts` carries the reason for each; the short
+ * form is that the first has no route that needs it, the next two have nothing that
+ * would honour them, and the fourth would be a second denomination with no conversion
+ * to reach it. A column added here later has to arrive with the thing that reads it.
+ */
+export const paymentGateways = pgTable(
+  'payment_gateways',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    /** From `PAYMENT_GATEWAY_PROVIDERS`. Code, not data — the row cannot invent one. */
+    provider: text('provider').notNull(),
+    status: text('status').notNull(),
+    /**
+     * The label the route is chosen by, or NULL for the product's own name.
+     *
+     * Nullable so that a route can exist before an operator has typed anything — the
+     * upgrade that gives a tenant its manual route writes no copy, because a Persian
+     * label in a SQL file is a customer-facing string in the one place the template
+     * rule cannot reach it.
+     */
+    displayName: text('display_name'),
+    /** The route's own tutorial, stored RAW. NULL means the route adds nothing. */
+    instructions: text('instructions'),
+    /**
+     * The bounds, in minor units, with `0` meaning unbounded on that side.
+     *
+     * `bigint` with `mode: 'bigint'`, never a float and never a `number`: `pg` hands
+     * back `int8` as a string and the parser this codebase installs turns it into a
+     * `bigint`, which is what keeps an amount above 2^53 exact.
+     *
+     * There is no companion `currency` column, and that is the one place this table
+     * departs from the money convention deliberately. A bound is compared against an
+     * amount already denominated in the installation's `sales.currency`; storing a
+     * second denomination here would create a pair that can disagree, with no
+     * conversion in this product able to resolve it. The comparison fails closed on a
+     * currency mismatch instead — see `PaymentGatewayService`.
+     */
+    minAmountMinor: bigint('min_amount_minor', { mode: 'bigint' })
+      .notNull()
+      .default(sql`0`),
+    maxAmountMinor: bigint('max_amount_minor', { mode: 'bigint' })
+      .notNull()
+      .default(sql`0`),
+    /**
+     * The three eligibility thresholds, where `0` is the condition switched OFF.
+     *
+     * `WEB-BR-014` reads that semantics off the legacy form's own instruction text, so
+     * it is evidenced rather than chosen — and it is why these are plain integers
+     * rather than nullable ones. A nullable column would give "off" two spellings, and
+     * the one a migration wrote would be the one nothing tested.
+     */
+    activateAfterPayments: integer('activate_after_payments').notNull().default(0),
+    deactivateAfterPayments: integer('deactivate_after_payments').notNull().default(0),
+    activateAfterAccountDays: integer('activate_after_account_days').notNull().default(0),
+    sortOrder: integer('sort_order').notNull().default(0),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      name: 'payment_gateways_pk',
+      columns: [table.tenantId, table.provider],
+    }),
+    /** The operator's list and the customer's, in the order both render: sort, provider. */
+    index('payment_gateways_tenant_sort_idx').on(table.tenantId, table.sortOrder, table.provider),
+    check('payment_gateways_provider_check', enumCheck('provider', PAYMENT_GATEWAY_PROVIDERS)),
+    check('payment_gateways_status_check', enumCheck('status', PAYMENT_GATEWAY_STATUSES)),
+    /*
+     * The same structural rules the contract applies, restated where a hand-written
+     * UPDATE cannot skip them — the argument `payment_accounts` states: the schema
+     * guards the HTTP boundary and these guard the table, and a repair script run at
+     * 3am only meets the second.
+     *
+     * The window check is the one worth reading twice. A maximum below the minimum
+     * yields a route that is configured, switched on, and impossible to pay through,
+     * and it says so nowhere an operator would look. `FBR-008` could not establish what
+     * a legacy installation does when limits conflict, so this refuses the state rather
+     * than resolving it.
+     */
+    check(
+      'payment_gateways_amount_window_check',
+      sql`max_amount_minor = 0 OR max_amount_minor >= min_amount_minor`,
+    ),
+    check('payment_gateways_min_amount_check', sql`min_amount_minor >= 0`),
+    check('payment_gateways_max_amount_check', sql`max_amount_minor >= 0`),
+    /*
+     * And the same for the payment-count pair. Crossed bounds are a route no customer
+     * is ever eligible for; `0` on either side is the condition off, which is why the
+     * check is written to admit a zero rather than to compare unconditionally.
+     */
+    check(
+      'payment_gateways_payment_window_check',
+      sql`activate_after_payments = 0
+          OR deactivate_after_payments = 0
+          OR deactivate_after_payments > activate_after_payments`,
+    ),
+    check(
+      'payment_gateways_thresholds_check',
+      sql`activate_after_payments BETWEEN 0 AND 100000
+          AND deactivate_after_payments BETWEEN 0 AND 100000
+          AND activate_after_account_days BETWEEN 0 AND 100000`,
+    ),
+    check(
+      'payment_gateways_display_name_check',
+      sql`display_name IS NULL OR length(btrim(display_name)) BETWEEN 1 AND 60`,
+    ),
+    check(
+      'payment_gateways_instructions_check',
+      sql`instructions IS NULL OR length(instructions) BETWEEN 1 AND 1000`,
+    ),
+    check('payment_gateways_sort_order_check', sql`sort_order BETWEEN 0 AND 100000`),
   ],
 );
 

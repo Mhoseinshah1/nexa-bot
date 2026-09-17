@@ -1,10 +1,10 @@
-import type { SecretCipher } from '@nexa/contracts';
+import { PAYMENT_GATEWAY_PROVIDERS, type SecretCipher } from '@nexa/contracts';
 import { AesGcmSecretCipher } from '../crypto/secret-cipher.js';
 import { resolveKeyring } from '../crypto/resolve-keyring.js';
 import { loadConfig } from '../config/load-config.js';
 import { acceptsV1 } from '../config/config.schema.js';
 import { createDatabase, type Database } from './database.js';
-import { botInstances, paymentAccounts, tenants } from './schema.js';
+import { botInstances, paymentAccounts, paymentGateways, tenants } from './schema.js';
 
 /**
  * Deterministic seed data.
@@ -168,6 +168,38 @@ export async function seed(db: Database, cipher: SecretCipher): Promise<void> {
         sortOrder: 0,
       },
     ])
+    .onConflictDoNothing();
+
+  /*
+   * One payment ROUTE per tenant, exactly as provisioning writes it (Phase 5C).
+   *
+   * Seeded for the same reason the destination above is: 5C makes an ACTIVE, eligible
+   * route a PRECONDITION of a wallet top-up, so a seed without one leaves that whole
+   * path unreachable in development and refuses it in the integration suite.
+   *
+   * The ZERO row, and every field of it matters. `status` ACTIVE because the route is
+   * how these tenants take money; no display name, because NULL means the product's own
+   * name and a seed inventing customer-facing copy is the thing the migration's own
+   * comment refuses; no bounds and no thresholds, because "no additional condition" is
+   * what makes the seeded tenants exercise the ordinary path rather than a gated one.
+   * A case that wants a gate sets it and says so.
+   *
+   * Written from `PAYMENT_GATEWAY_PROVIDERS` rather than listed, so a route added to the
+   * catalogue is seeded without anybody remembering to come back here.
+   *
+   * TWO tenants, because a cross-tenant test with one seeded route proves nothing.
+   */
+  await db
+    .insert(paymentGateways)
+    .values(
+      [SEED_IDS.tenantA, SEED_IDS.tenantB].flatMap((tenantId) =>
+        PAYMENT_GATEWAY_PROVIDERS.map((provider) => ({
+          tenantId,
+          provider,
+          status: 'ACTIVE' as const,
+        })),
+      ),
+    )
     .onConflictDoNothing();
 }
 
