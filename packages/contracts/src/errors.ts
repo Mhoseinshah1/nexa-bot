@@ -831,6 +831,48 @@ export const COMMERCE_ERROR_CODES = {
    * so, because a refusal an operator cannot act on is the one they report as a bug.
    */
   PAYMENT_ACCOUNT_DEFAULT_CONFLICT: 'commerce.payment_account_default_conflict',
+
+  /**
+   * A file arrived and no upload window is open for this customer on this bot.
+   *
+   * The refusal that keeps the receipt flow from becoming a prompt capture.
+   * `INCIDENT-FIN-001` is what the legacy system did with an ordinary message that
+   * happened to arrive while a prompt was outstanding: it consumed it and overwrote a
+   * production gateway setting. Here a photo with no window open is refused BY NAME
+   * rather than attached to whatever payment the customer most recently had, and a
+   * customer who sent a screenshot at random is told nothing was expected.
+   */
+  RECEIPT_NOT_EXPECTED: 'commerce.receipt_not_expected',
+  /**
+   * The window was open when the customer tapped and had closed by the time the file
+   * arrived.
+   *
+   * Distinct from `RECEIPT_NOT_EXPECTED` because the remedy differs: here the customer
+   * did exactly what they were asked and took too long, so they are told to tap the
+   * button again. `RECEIPT_CAPTURE_MINUTES` and the payment's own deadline both bound
+   * the window and whichever is sooner wins.
+   */
+  RECEIPT_WINDOW_EXPIRED: 'commerce.receipt_window_expired',
+  /**
+   * The payment already holds `PAYMENT_RECEIPT_MAX_PER_PAYMENT` receipts.
+   *
+   * A rail, and named rather than silent for the reason `PAYMENT_ACCOUNT_LIMIT_REACHED`
+   * is: a customer who keeps sending screenshots has to learn that the ones already
+   * sent are what the reviewer will look at, or they send more.
+   */
+  RECEIPT_LIMIT_REACHED: 'commerce.receipt_limit_reached',
+  /** No receipt with that id for this tenant. */
+  RECEIPT_NOT_FOUND: 'commerce.receipt_not_found',
+  /**
+   * The receipt row exists and Telegram will not produce the bytes.
+   *
+   * The honest name for the limitation `packages/contracts/src/payment-receipts.ts`
+   * states rather than discovers: this installation stores the BINDING and Telegram
+   * stores the file, so a rotated bot token or a file Telegram has aged out leaves a row
+   * whose image cannot be fetched. A reviewer meeting this is told the file is no longer
+   * retrievable — not shown an empty frame, and not told the receipt does not exist.
+   */
+  RECEIPT_UNAVAILABLE: 'commerce.receipt_unavailable',
 } as const;
 
 /*

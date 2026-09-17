@@ -64,8 +64,18 @@ export const PAYMENT_RECEIPT_MAX_PER_PAYMENT = 5;
  * Why a capture window is no longer open.
  *
  * `closed_at` alone would answer "not open" and not "what happened", and the three cases
- * send an operator to different places: a receipt arrived, the customer opened a window
- * on a different payment, or nobody sent anything in time.
+ * send an operator to different places.
+ *
+ * - `RECEIVED` — the window did its job: the payment now holds every receipt it may
+ *   hold. NOT stamped by the first file. A customer who sends a blurred screenshot and
+ *   then a clear one is doing something ordinary, and closing on the first arrival would
+ *   answer the second with "nothing was expected" — which is the refusal for a file
+ *   nobody asked for, and would be a lie here. So the window stays open until
+ *   `PAYMENT_RECEIPT_MAX_PER_PAYMENT` is reached, and the bound is what closes it.
+ * - `SUPERSEDED` — the customer opened a window on a different payment. Their doing,
+ *   which is why it is not `EXPIRED`.
+ * - `EXPIRED` — the deadline passed. Stamped when a late file arrives, so the row says
+ *   what happened rather than merely no longer matching an open-window query.
  */
 export const RECEIPT_CAPTURE_CLOSE_REASONS = ['RECEIVED', 'SUPERSEDED', 'EXPIRED'] as const;
 export type ReceiptCaptureCloseReason = (typeof RECEIPT_CAPTURE_CLOSE_REASONS)[number];

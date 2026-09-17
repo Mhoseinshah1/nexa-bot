@@ -313,12 +313,14 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
      * catalogue promising something the seeded role cannot do, which is the legacy
      * defect this catalogue exists to end.
      *
-     * `receipts.view` is not a substitute and is not being widened into one: this
-     * release has no receipt ENTITY — `OQ-4C-03` records that no receipt file is
-     * stored, archived or displayed anywhere — so the thing a reviewer reads is the
-     * payment. Granting the LOW read that names it is narrower than teaching the
-     * payment read a second permission, and it leaves the two keys meaning what they
-     * say.
+     * `receipts.view` is not a substitute and was not widened into one. When this was
+     * written it had no producer at all — `OQ-4C-03` recorded that no receipt file was
+     * stored, archived or displayed anywhere — so the thing a reviewer read was the
+     * payment, and granting the LOW read that names it was narrower than teaching the
+     * payment read a second permission. 5R gives `receipts.view` its producer: the
+     * routes that list one payment's receipts and stream one receipt's bytes charge it,
+     * and nothing else does. Both keys still mean exactly what they say, and reading a
+     * receipt remains separate from deciding on one.
      *
      * Found by the Codex review of PR #29. Migration 0055 carries it to installations
      * whose roles already exist, because `ensureSystemRoles` writes a seed's
