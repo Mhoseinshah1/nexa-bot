@@ -22,6 +22,8 @@ import type {
 import type { CustomerService } from '../../modules/commerce/customers/application/customer.service.js';
 import type { PaymentDestinationRenderer } from '../../modules/commerce/payments/infrastructure/destination-renderer.js';
 import type { PaymentAccountRepository } from '../../modules/commerce/payments/application/account-ports.js';
+import type { InboundReceiptFile } from '../../modules/commerce/payments/application/receipt-ports.js';
+import type { ReceiptService } from '../../modules/commerce/payments/application/receipt.service.js';
 import type {
   CustomerButton,
   CustomerSendOutcome,
@@ -78,6 +80,7 @@ export const BOT_INTENTS = [
   'SERVICE_BUY_TIME',
   'SERVICE_ACTION_CONFIRM',
   'HELP',
+  'RECEIPT_UPLOAD',
   'UNSUPPORTED',
 ] as const;
 export type BotIntent = (typeof BOT_INTENTS)[number];
@@ -114,6 +117,19 @@ export interface BotCommand {
   readonly secondaryId?: string | null;
   /** Telegram's id for the tapped button, so the spinner can be stopped. */
   readonly callbackQueryId: string | null;
+  /**
+   * The file a `RECEIPT_UPLOAD` carries, and nothing else ever carries one.
+   *
+   * It is not conversation state: everything here came out of the update being handled,
+   * which is what keeps a redelivery a replay rather than a step in a half-finished
+   * dialogue. What the file attaches TO is decided by the capture window in the
+   * database, never by this field — so a client that invents one reaches a payment only
+   * if a window for that customer on that bot is genuinely open.
+   *
+   * The CAPTION is deliberately absent. A Persian caption as an identifier is
+   * `entities-states.md`'s worst finding, and nothing in this flow needs the text.
+   */
+  readonly file?: InboundReceiptFile | null;
 }
 
 /**
@@ -513,6 +529,20 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
     return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
   }
 
+  /*
+   * A FILE before the text, because a photo message has no `text` at all — Telegram
+   * puts any accompanying words in `caption`, which this deliberately ignores.
+   *
+   * Reading through passthrough fields, as the rest of this function does: nothing about
+   * the file is trusted as a fact about money, and an update whose file shape is not one
+   * of the two this installation accepts falls through to the text path and then to
+   * `UNSUPPORTED`, exactly as it did before this existed.
+   */
+  const file = receiptFileOf((update as { message?: unknown } | null)?.message);
+  if (file !== null) {
+    return { intent: 'RECEIPT_UPLOAD', targetId: null, callbackQueryId: null, file };
+  }
+
   const text = (update as { message?: { text?: unknown } } | null)?.message?.text;
   if (typeof text !== 'string') return UNSUPPORTED;
   /*
@@ -546,6 +576,109 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
 }
 
 const UNSUPPORTED: BotCommand = { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: null };
+
+/**
+ * The receipt inside a message, or null when there is not one.
+ *
+ * Two shapes and the list is closed, because `PAYMENT_RECEIPT_KINDS` is: a photo is
+ * what most customers send and a document is what a banking app's PDF export produces.
+ * Everything else a message can carry — a voice note, a location, a contact, a sticker,
+ * a video — is NOT a receipt and is answered exactly as any other message this bot does
+ * not understand.
+ *
+ * The photo arrives as an array of sizes. The LARGEST is chosen by `file_size`, and by
+ * width where a size reports none: Telegram documents the array as ascending and
+ * trusting that means trusting a client to order its own upload, which is the class of
+ * assumption this file exists to avoid. A reviewer looking for a transfer reference
+ * needs the biggest one there is.
+ *
+ * `file_size` is read as a NUMBER from the wire and carried as `bigint`, because it
+ * reaches a `bigint` column and `payment_receipts_size_check` refuses a non-positive
+ * one — so a zero or a negative becomes null here rather than a constraint violation
+ * two layers down.
+ */
+function receiptFileOf(message: unknown): InboundReceiptFile | null {
+  if (typeof message !== 'object' || message === null) return null;
+  const record = message as Record<string, unknown>;
+  const telegramMessageId =
+    typeof record['message_id'] === 'number' && Number.isSafeInteger(record['message_id'])
+      ? BigInt(record['message_id'])
+      : null;
+
+  const photo = record['photo'];
+  if (Array.isArray(photo) && photo.length > 0) {
+    const largest = largestPhoto(photo);
+    if (largest !== null) {
+      return {
+        kind: 'PHOTO',
+        fileId: largest.fileId,
+        fileUniqueId: largest.fileUniqueId,
+        // A photo size carries neither, and Telegram re-encodes it: claiming a type
+        // this installation did not observe would be a fabricated fact about a file.
+        mimeType: null,
+        fileName: null,
+        fileSize: largest.fileSize,
+        telegramMessageId,
+      };
+    }
+  }
+
+  const document = record['document'];
+  if (typeof document === 'object' && document !== null) {
+    const fields = document as Record<string, unknown>;
+    const fileId = fields['file_id'];
+    const fileUniqueId = fields['file_unique_id'];
+    if (typeof fileId === 'string' && typeof fileUniqueId === 'string') {
+      return {
+        kind: 'DOCUMENT',
+        fileId,
+        fileUniqueId,
+        mimeType: typeof fields['mime_type'] === 'string' ? fields['mime_type'] : null,
+        fileName: typeof fields['file_name'] === 'string' ? fields['file_name'] : null,
+        fileSize: positiveSize(fields['file_size']),
+        telegramMessageId,
+      };
+    }
+  }
+  return null;
+}
+
+/** The biggest usable size in a `photo` array, by declared size and then by width. */
+function largestPhoto(sizes: readonly unknown[]): {
+  readonly fileId: string;
+  readonly fileUniqueId: string;
+  readonly fileSize: bigint | null;
+} | null {
+  let best: {
+    fileId: string;
+    fileUniqueId: string;
+    fileSize: bigint | null;
+    rank: number;
+  } | null = null;
+  for (const candidate of sizes) {
+    if (typeof candidate !== 'object' || candidate === null) continue;
+    const fields = candidate as Record<string, unknown>;
+    const fileId = fields['file_id'];
+    const fileUniqueId = fields['file_unique_id'];
+    if (typeof fileId !== 'string' || typeof fileUniqueId !== 'string') continue;
+    const size = positiveSize(fields['file_size']);
+    const width = typeof fields['width'] === 'number' ? fields['width'] : 0;
+    const rank = size !== null ? Number(size) : width;
+    if (best === null || rank > best.rank) {
+      best = { fileId, fileUniqueId, fileSize: size, rank };
+    }
+  }
+  return best === null
+    ? null
+    : { fileId: best.fileId, fileUniqueId: best.fileUniqueId, fileSize: best.fileSize };
+}
+
+/** A declared byte count, or null. Zero and negatives are null: the CHECK refuses them. */
+function positiveSize(value: unknown): bigint | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+    ? BigInt(value)
+    : null;
+}
 
 /** A tap on a button, with its id checked before anything is asked to look it up. */
 function callbackCommand(
@@ -602,6 +735,15 @@ export interface BotRuntimeDeps {
    * holding a card number in order to decide whether to draw a label.
    */
   readonly accounts: Pick<PaymentAccountRepository, 'hasEnabled'>;
+  /**
+   * Files the receipt a customer sends, and refuses the file nobody asked for.
+   *
+   * A separate service from `payments` on purpose: it holds the payment READ alone, so
+   * the path a customer's photo travels cannot confirm, reject or settle anything. The
+   * addendum's own words — *"settlement still requires the existing authorized operator
+   * confirmation"* — are a dependency here rather than only a permission.
+   */
+  readonly receipts: Pick<ReceiptService, 'submit'>;
   readonly wallet: WalletService;
   readonly services: ProvisioningService;
   readonly delivery: DeliveryService;
@@ -794,6 +936,17 @@ const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
    */
   [COMMERCE_ERROR_CODES.PAYMENT_WINDOW_TOO_SHORT]: 'bot.payment.window_too_short',
   [COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND]: 'bot.order.unavailable',
+  /*
+   * The four receipt refusals, and they are four SENTENCES because the remedy differs.
+   *
+   * Collapsing them into one would be the legacy system's "unknown command" for a
+   * customer who did exactly what they were asked: nothing was expected, the window
+   * closed, the payment is full, and the payment is no longer pending are four different
+   * situations and three of them have an action the customer can take.
+   */
+  [COMMERCE_ERROR_CODES.RECEIPT_NOT_EXPECTED]: 'bot.payment.receipt_not_expected',
+  [COMMERCE_ERROR_CODES.RECEIPT_WINDOW_EXPIRED]: 'bot.payment.receipt_expired',
+  [COMMERCE_ERROR_CODES.RECEIPT_LIMIT_REACHED]: 'bot.payment.receipt_limit',
   /*
    * The payment, not the order. Its own key since 4G made the state reachable.
    *
@@ -1127,6 +1280,16 @@ export class BotRuntime {
     }
     if (command.intent === 'PAY_CANCEL' && command.targetId !== null) {
       return this.cancelPayment(scope, actor, command.targetId, customer, input.idempotencyKey);
+    }
+    if (command.intent === 'RECEIPT_UPLOAD' && command.file != null) {
+      return this.submitReceipt(
+        scope,
+        actor,
+        customer,
+        input.botInstanceId,
+        command.file,
+        input.idempotencyKey,
+      );
     }
     if (command.intent === 'PAY_SENT' && command.targetId !== null) {
       return this.signalTransferSent(
@@ -2205,6 +2368,45 @@ export class BotRuntime {
          */
         fallback: { kind: 'PAYMENT_TRANSFER_RECORDED', subjectId: paymentId },
       };
+    } catch (error) {
+      return refusal(error);
+    }
+  }
+
+  /**
+   * A file the customer sent while a window was open for them.
+   *
+   * What it attaches to is decided by the WINDOW, never by anything in the update: the
+   * row names one payment, and `ReceiptService` re-reads that payment's state and owner
+   * inside the transaction that files the row. So a client that invents a file reaches a
+   * payment only if a window for that customer on that bot is genuinely open, and a
+   * customer who sends a screenshot at random is told nothing was expected.
+   *
+   * `filed === false` gets the SAME reply as a new row. That is Telegram redelivering an
+   * update whose file is already on the payment; the customer's situation is identical
+   * either way, and a different sentence for a retry they cannot see would be a
+   * difference they cannot act on.
+   *
+   * No fallback. The notification lane's kinds are a closed set with no payload, and
+   * there is no frozen kind that means "your receipt arrived" — inventing one to cover
+   * a failed interactive send is what ADR-0030 §1 refuses. A customer whose reply was
+   * lost sees their receipt on the invoice thread and may tap the button again.
+   */
+  private async submitReceipt(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    botInstanceId: BotInstanceId,
+    file: InboundReceiptFile,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    try {
+      await this.deps.receipts.submit(scope, actor, customer.id, {
+        idempotencyKey: `${idempotencyKey}:receipt`,
+        botInstanceId,
+        file,
+      });
+      return { key: 'bot.payment.receipt_received', values: {}, buttons: [], orderId: null };
     } catch (error) {
       return refusal(error);
     }

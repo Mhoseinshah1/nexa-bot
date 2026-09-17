@@ -2089,6 +2089,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       ),
       destinations: paymentDestinationRenderer,
       accounts: paymentAccountRepository,
+      receipts: receiptService,
       /*
        * The one write the turn makes after its Telegram send, and the transaction
        * it needs, kept OUT of the surface.
