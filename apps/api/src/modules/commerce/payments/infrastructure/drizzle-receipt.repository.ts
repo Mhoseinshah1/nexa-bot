@@ -270,6 +270,7 @@ export class DrizzlePaymentReceiptRepository implements PaymentReceiptRepository
 const RECEIPT_COLUMNS = {
   id: paymentReceipts.id,
   paymentId: paymentReceipts.paymentId,
+  botInstanceId: paymentReceipts.botInstanceId,
   customerId: paymentReceipts.customerId,
   kind: paymentReceipts.kind,
   fileId: paymentReceipts.fileId,
@@ -283,6 +284,7 @@ const RECEIPT_COLUMNS = {
 interface ReceiptRow {
   readonly id: string;
   readonly paymentId: string;
+  readonly botInstanceId: string;
   readonly customerId: string;
   readonly kind: string;
   readonly fileId: string;
@@ -297,6 +299,7 @@ function toReceipt(row: ReceiptRow): PaymentReceiptRecord {
   return {
     id: row.id as PaymentReceiptId,
     paymentId: row.paymentId as PaymentId,
+    botInstanceId: row.botInstanceId as BotInstanceId,
     customerId: row.customerId as UserId,
     // The CHECK constraint is what makes this cast safe; the column is a closed set.
     kind: row.kind as PaymentReceiptKind,

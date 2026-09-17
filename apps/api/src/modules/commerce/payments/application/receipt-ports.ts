@@ -33,6 +33,15 @@ export interface InboundReceiptFile {
 export interface PaymentReceiptRecord {
   readonly id: PaymentReceiptId;
   readonly paymentId: PaymentId;
+  /**
+   * WHICH bot holds the file, and therefore whose token fetches it.
+   *
+   * A `file_id` is scoped to the bot that received it, so a tenant with two bots has
+   * two token namespaces and fetching with the wrong one answers "file not found" — a
+   * receipt that exists, reported as missing. The row has always had the column; this
+   * is the read that needed it.
+   */
+  readonly botInstanceId: BotInstanceId;
   readonly customerId: UserId;
   readonly kind: PaymentReceiptKind;
   readonly fileId: string;

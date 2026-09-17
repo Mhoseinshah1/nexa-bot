@@ -138,6 +138,7 @@ import {
 import { PaymentDestinationRenderer } from './modules/commerce/payments/infrastructure/destination-renderer.js';
 import { PaymentAccountService } from './modules/commerce/payments/application/payment-account.service.js';
 import { ReceiptService } from './modules/commerce/payments/application/receipt.service.js';
+import { TelegramReceiptFiles } from './modules/commerce/payments/infrastructure/telegram-receipt-files.js';
 import { PaymentService } from './modules/commerce/payments/application/payment.service.js';
 import { PaymentExpiryService } from './modules/commerce/payments/application/payment-expiry.service.js';
 import {
@@ -312,6 +313,7 @@ export interface Container {
   readonly payments: PaymentService;
   readonly paymentAccounts: PaymentAccountService;
   readonly receipts: ReceiptService;
+  readonly receiptFiles: TelegramReceiptFiles;
   readonly orders: OrderService;
   readonly botRuntime: BotRuntime;
 
@@ -1401,6 +1403,28 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   );
 
   /**
+   * The bytes of a receipt, fetched with the token of the bot that received it.
+   *
+   * INFRASTRUCTURE injected into the controller, so the surface holds no network sink
+   * and no token: what it gets back is bytes or `UNAVAILABLE`, and it cannot ask for
+   * anything else.
+   *
+   * `botInstances` is the token lookup for the reason the messenger states two objects
+   * up — a `file_id` is scoped to the bot that received it, and the receipt row records
+   * which one that was. `NOTIFICATION_SEND_TIMEOUT_MS` is reused rather than given a key
+   * of its own: both are one Telegram HTTP call under an operator's or a customer's
+   * nose, and a second knob for the same bound is a second thing to get wrong. The FILE
+   * base is the same configured origin, which is what Telegram itself uses and what lets
+   * a local stand-in serve both in a test.
+   */
+  const receiptFiles = new TelegramReceiptFiles({
+    bots: botInstances,
+    apiBaseUrl: config.TELEGRAM_API_BASE_URL,
+    fileBaseUrl: config.TELEGRAM_API_BASE_URL,
+    timeoutMs: config.NOTIFICATION_SEND_TIMEOUT_MS,
+  });
+
+  /**
    * Telling a customer their service is ready, and nothing else.
    *
    * `contacts` is a NARROW closure over the customer repository for the reason
@@ -2067,6 +2091,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     payments: paymentService,
     paymentAccounts: paymentAccountService,
     receipts: receiptService,
+    receiptFiles,
     provisioning: provisioningService,
     serviceAdmin: new ServiceAdminService({
       services: serviceRepository,
