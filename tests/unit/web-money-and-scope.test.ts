@@ -489,21 +489,24 @@ describe('the settings the owner revisions add', () => {
     ).toBe(true);
   });
 
-  it('marks the three as having no consumer, and everything older as having one', () => {
+  it('marks the two as having no consumer, and everything older as having one', () => {
     const planned = SETTINGS.filter((s) => s.consumer === 'PLANNED').map((s) => s.key);
     /*
-     * THREE since Phase 4B. `sales.currency` left this list because `ProductService`
-     * now refuses a price in any other currency — the Codex review found it declared,
-     * rendered by the admin, and enforced by nothing, which is a setting an operator
-     * believes and the system ignores.
+     * TWO since Phase 5B. `sales.currency` left this list in Phase 4B because
+     * `ProductService` now refuses a price in any other currency — the Codex review
+     * found it declared, rendered by the admin, and enforced by nothing, which is a
+     * setting an operator believes and the system ignores. `wallet.topup.minimum`
+     * left it in 5B, alongside the new `wallet.topup.presets`: `offeredTopup`
+     * refuses a preset below the minimum, and the Telegram wallet keyboard is drawn
+     * from the presets.
      *
      * The list is exact rather than a membership check, so a key that quietly gains or
      * loses a consumer has to say so here.
      */
-    expect(planned.sort()).toEqual(
-      ['support.accounts', 'telegram.channels', 'wallet.topup.minimum'].sort(),
-    );
-    expect(SETTINGS.find((s) => s.key === 'sales.currency')?.consumer).toBe('ACTIVE');
+    expect(planned.sort()).toEqual(['support.accounts', 'telegram.channels'].sort());
+    for (const key of ['sales.currency', 'wallet.topup.minimum', 'wallet.topup.presets']) {
+      expect(SETTINGS.find((s) => s.key === key)?.consumer, key).toBe('ACTIVE');
+    }
     for (const s of SETTINGS.filter((s) => s.key.startsWith('ops.notifications.'))) {
       expect(s.consumer, s.key).toBe('ACTIVE');
     }
