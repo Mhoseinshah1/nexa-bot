@@ -608,7 +608,9 @@ export const TEMPLATES = [
   {
     key: 'bot.payment.transfer_instructions',
     description:
-      'How to pay out of band, with the destination the payment was ISSUED against. ' +
+      'The invoice: heading, invoice id, payable amount, the destination lines, then ' +
+      'the tenant-editable instructions. Carries the destination the payment was ' +
+      'ISSUED against. ' +
       'Supersedes bot.payment.manual_instructions, which is kept for payments created ' +
       'before a destination existed. {destination} is composed from the payment\u2019s ' +
       'frozen snapshot through the four bot.payment.destination.* keys, so a line whose ' +

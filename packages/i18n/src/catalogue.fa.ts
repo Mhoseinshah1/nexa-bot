@@ -145,16 +145,18 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.manual_instructions':
     'برای پرداخت مبلغ {total} طبق راهنمای فروشنده اقدام کنید و سپس دکمهٔ «پرداخت را انجام دادم» را بزنید.\nکد پیگیری این پرداخت: {reference}',
   /*
-   * The message a manual transfer actually needs, and the one that replaces
-   * «طبق راهنمای
-   * فروشنده» — "follow the seller's
-   * instructions", which named instructions that did not exist anywhere in the product.
+   * The invoice layout the owner specified: heading, invoice id, payable amount, then
+   * the destination lines, then the instructions.
    *
-   * {destination} is composed from the payment's FROZEN snapshot, so editing the account
-   * afterwards does not change what this customer was told.
+   * The trailing paragraph is the tenant-editable part of that layout — editable
+   * because the whole body is a tenant-overridable template, which is also why there
+   * is no second key for it.
+   *
+   * {destination} is composed from the payment's FROZEN snapshot, so editing the
+   * account afterwards does not change what this customer was told.
    */
   'bot.payment.transfer_instructions':
-    'مبلغ {total} را به حساب زیر واریز کنید:\n{destination}\n\nکد پیگیری این پرداخت: {reference}\nپس از واریز، دکمهٔ پایین را بزنید و تصویر رسید را ارسال کنید.',
+    '🧾 جزئیات فاکتور پرداخت شما\n\nشناسه فاکتور: {reference}\nمبلغ قابل پرداخت: {total}\n{destination}\n\nپس از واریز، دکمهٔ پایین را بزنید و تصویر یا فایل رسید را ارسال کنید. پرداخت شما پس از بررسی پشتیبانی تأیید می‌شود.',
   'bot.payment.destination.bank': 'بانک: {value}',
   'bot.payment.destination.holder': 'به نام: {value}',
   'bot.payment.destination.card': 'شماره کارت: {value}',
@@ -172,8 +174,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * would be two ways to reach one action — and a customer who pressed only the first
    * would have a window open and no idea it was there.
    */
-  'bot.payment.sent_button':
-    '✅ پرداخت را انجام دادم | ارسال رسید',
+  'bot.payment.sent_button': '✅ پرداخت را انجام دادم | ارسال رسید',
   /*
    * Whose claim this repeats is the whole of the wording.
    *
