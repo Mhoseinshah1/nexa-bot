@@ -57,6 +57,8 @@ import {
   COMMERCIAL_ORDER_PURPOSES,
   ORDER_PURPOSES,
   ORDER_STATES,
+  PAYMENT_RECEIPT_KINDS,
+  RECEIPT_CAPTURE_CLOSE_REASONS,
   PAYMENT_STATES,
   PAYMENT_METHODS,
   PAYMENT_EVIDENCE_KINDS,
@@ -2838,6 +2840,167 @@ export const paymentAccounts = pgTable(
     check('payment_accounts_holder_name_check', sql`length(btrim(holder_name)) BETWEEN 1 AND 120`),
     check('payment_accounts_sort_order_check', sql`sort_order BETWEEN 0 AND 100000`),
     unique('payment_accounts_tenant_id_key').on(table.tenantId, table.id),
+  ],
+);
+
+/**
+ * The window in which a photo from this customer attaches to a payment.
+ *
+ * A ROW rather than a column on `payments`, and that is the load-bearing choice: a
+ * customer may hold several pending payments, so "which payment does this image belong
+ * to" has to be answerable from the CUSTOMER — which is what an inbound Telegram photo
+ * identifies — rather than from a payment somebody guessed.
+ *
+ * ## Why this is not the prompt capture that destroyed a production setting
+ *
+ * `INCIDENT-FIN-001` records an ADMIN prompt that swallowed a typed navigation string
+ * and overwrote a gateway's tutorial text, and earlier directives forbade conversational
+ * prompt capture in its general form. They still do. Four properties make this narrower,
+ * and all four are in the schema rather than in a docstring:
+ *
+ * 1. it names ONE payment, stored here, so there is no "current prompt" a later message
+ *    can land in;
+ * 2. it can attach a PHOTO or a DOCUMENT and nothing else — the routing never consults
+ *    it for a text message, so `/start`, the menu labels and every other typed thing
+ *    route exactly as they do today;
+ * 3. it is customer-side: the only thing it can write is a `payment_receipts` row;
+ * 4. it EXPIRES, and `receipt_captures_expiry_check` refuses a window that outlives its
+ *    own opening.
+ *
+ * One open window per customer per bot is a partial unique index, not a service rule.
+ * Opening a second closes the first as SUPERSEDED in the same transaction.
+ */
+export const receiptCaptures = pgTable(
+  'receipt_captures',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    /**
+     * WHICH bot the customer is talking to.
+     *
+     * A tenant may run a public bot and a reseller bot, and a window opened in one must
+     * not be filled by a photo sent to the other: the customer is a different chat there
+     * and the file id belongs to a different bot.
+     */
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    customerId: uuid('customer_id').notNull(),
+    paymentId: uuid('payment_id').notNull(),
+    openedAt: timestamptz('opened_at').notNull().defaultNow(),
+    expiresAt: timestamptz('expires_at').notNull(),
+    /** Null while open. The partial unique index below is keyed on exactly this. */
+    closedAt: timestamptz('closed_at'),
+    closeReason: text('close_reason'),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'receipt_captures_customer_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.paymentId],
+      foreignColumns: [payments.tenantId, payments.id],
+      name: 'receipt_captures_payment_fk',
+    }),
+    /**
+     * ONE open window per customer per bot, decided by the database.
+     *
+     * Two taps on two different invoices arriving together both read "nothing open". A
+     * service check answers both yes and the second photo attaches to whichever row the
+     * planner returns first, which is a receipt filed against a payment the customer was
+     * not looking at.
+     */
+    uniqueIndex('receipt_captures_open_key')
+      .on(table.tenantId, table.botInstanceId, table.customerId)
+      .where(sql`closed_at IS NULL`),
+    /** The sweep's index: windows past their deadline that nobody has closed. */
+    index('receipt_captures_due_idx')
+      .on(table.tenantId, table.expiresAt)
+      .where(sql`closed_at IS NULL`),
+    check(
+      'receipt_captures_close_reason_check',
+      nullableEnumCheck('close_reason', RECEIPT_CAPTURE_CLOSE_REASONS),
+    ),
+    /** A closed window has a reason, and an open one has neither. Both halves. */
+    check('receipt_captures_closed_check', sql`(closed_at IS NULL) = (close_reason IS NULL)`),
+    check('receipt_captures_expiry_check', sql`expires_at > opened_at`),
+    unique('receipt_captures_tenant_id_key').on(table.tenantId, table.id),
+  ],
+);
+
+/**
+ * One receipt a customer sent, bound to exactly one payment.
+ *
+ * The BINDING lives here; the bytes live at Telegram. This installation stores the two
+ * identifiers Telegram gives it — `file_id`, which `getFile` takes and which is scoped to
+ * one bot, and `file_unique_id`, which is stable and is what the dedupe is keyed on — and
+ * the Web Admin fetches the image through the API, which holds the bot token.
+ *
+ * That is a real limitation written down rather than discovered: a backup carries this
+ * row and not the image, and a revoked bot token makes an old file unfetchable. The
+ * alternative is a blob store this deployment does not have.
+ *
+ * Append-only by trigger. A receipt is evidence somebody will look at when deciding
+ * whether money arrived, and evidence that can be edited afterwards is the legacy
+ * `/admin/logs` with a picture attached.
+ */
+export const paymentReceipts = pgTable(
+  'payment_receipts',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    customerId: uuid('customer_id').notNull(),
+    paymentId: uuid('payment_id').notNull(),
+    kind: text('kind').notNull(),
+    /** What `getFile` takes. Bot-scoped, and never returned to a browser. */
+    fileId: text('file_id').notNull(),
+    /** Stable across re-sends of the same file, and the dedupe key. */
+    fileUniqueId: text('file_unique_id').notNull(),
+    mimeType: text('mime_type'),
+    fileSize: bigint('file_size', { mode: 'bigint' }),
+    fileName: text('file_name'),
+    /** Which message carried it, so an operator can find it in the chat if they must. */
+    telegramMessageId: bigint('telegram_message_id', { mode: 'bigint' }),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'payment_receipts_customer_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.paymentId],
+      foreignColumns: [payments.tenantId, payments.id],
+      name: 'payment_receipts_payment_fk',
+    }),
+    /**
+     * The SAME file attaches once.
+     *
+     * Telegram redelivers an update whose reply this installation did not acknowledge in
+     * time, and a customer who taps forward twice sends the same file twice.
+     * `file_unique_id` is stable across both, so this is what makes an upload
+     * effectively-once without a second idempotency mechanism.
+     */
+    uniqueIndex('payment_receipts_file_key').on(
+      table.tenantId,
+      table.paymentId,
+      table.fileUniqueId,
+    ),
+    /** The reviewer's read: everything filed against one payment, oldest first. */
+    index('payment_receipts_payment_idx').on(table.tenantId, table.paymentId, table.createdAt),
+    check('payment_receipts_kind_check', enumCheck('kind', PAYMENT_RECEIPT_KINDS)),
+    check('payment_receipts_size_check', sql`file_size IS NULL OR file_size > 0`),
+    unique('payment_receipts_tenant_id_key').on(table.tenantId, table.id),
   ],
 );
 
