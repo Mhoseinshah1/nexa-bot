@@ -183,9 +183,9 @@ export class ReceiptService {
     );
     if (replayed !== null) {
       return {
-        paymentId: replayed.paymentId as PaymentId,
-        filed: replayed.filed,
-        total: replayed.total,
+        paymentId: replayed.result.paymentId as PaymentId,
+        filed: replayed.result.filed,
+        total: replayed.result.total,
       };
     }
 
@@ -227,9 +227,14 @@ export class ReceiptService {
          * a customer's behalf without moving money.
          */
         if (customer === null || customer.status === 'BLOCKED') {
-          throw errors.forbidden(
+          /*
+           * A CONFLICT, the same kind `PaymentService` gives it. Not a permission
+           * failure: the customer is authorized and the installation has stopped
+           * accepting work FROM them, which is a state and not a grant.
+           */
+          throw errors.conflict(
             COMMERCE_ERROR_CODES.CUSTOMER_BLOCKED,
-            'This customer cannot act right now.',
+            'This account cannot send a receipt.',
           );
         }
 

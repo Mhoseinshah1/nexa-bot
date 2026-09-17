@@ -131,8 +131,13 @@ import {
   DrizzlePaymentAccountRepository,
   DrizzlePaymentDestinationRepository,
 } from './modules/commerce/payments/infrastructure/drizzle-payment-account.repository.js';
+import {
+  DrizzlePaymentReceiptRepository,
+  DrizzleReceiptCaptureRepository,
+} from './modules/commerce/payments/infrastructure/drizzle-receipt.repository.js';
 import { PaymentDestinationRenderer } from './modules/commerce/payments/infrastructure/destination-renderer.js';
 import { PaymentAccountService } from './modules/commerce/payments/application/payment-account.service.js';
+import { ReceiptService } from './modules/commerce/payments/application/receipt.service.js';
 import { PaymentService } from './modules/commerce/payments/application/payment.service.js';
 import { PaymentExpiryService } from './modules/commerce/payments/application/payment-expiry.service.js';
 import {
@@ -306,6 +311,7 @@ export interface Container {
   readonly wallet: WalletService;
   readonly payments: PaymentService;
   readonly paymentAccounts: PaymentAccountService;
+  readonly receipts: ReceiptService;
   readonly orders: OrderService;
   readonly botRuntime: BotRuntime;
 
@@ -849,6 +855,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const paymentRepository = new DrizzlePaymentRepository(database.db);
   const paymentAccountRepository = new DrizzlePaymentAccountRepository(database.db);
   const paymentDestinationRepository = new DrizzlePaymentDestinationRepository(database.db);
+  const receiptCaptureRepository = new DrizzleReceiptCaptureRepository(database.db);
+  const paymentReceiptRepository = new DrizzlePaymentReceiptRepository(database.db);
 
   const orderRepository = new DrizzleOrderRepository(database.db);
   const orderService = new OrderService({
@@ -1041,6 +1049,15 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
      */
     accounts: paymentAccountRepository,
     destinations: paymentDestinationRepository,
+    /*
+     * The window a customer's "I have sent it" opens, in that tap's own transaction.
+     *
+     * Here rather than in `ReceiptService` because the tap and the window are one fact:
+     * the reply asks for a file, and a reply that asked with no window on record would
+     * be answered with `RECEIPT_NOT_EXPECTED` — the refusal for a file nobody asked
+     * for, given to a customer who was asked.
+     */
+    receiptCaptures: receiptCaptureRepository,
     /*
      * The READ alone, narrowed here rather than by the type.
      *
@@ -1299,6 +1316,30 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
 
   const paymentAccountService = new PaymentAccountService({
     repository: paymentAccountRepository,
+    guard,
+    uow,
+    audit,
+    opsLog: opsLogWriter,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
+
+  /**
+   * The receipt lane.
+   *
+   * It holds the WHOLE capture port, because it closes a window the payment path opens;
+   * the payment READ alone, narrowed by its own type, because nothing here may confirm,
+   * reject or settle anything — the addendum's own words, enforced by the dependency
+   * rather than only by the permission.
+   */
+  const receiptService = new ReceiptService({
+    captures: receiptCaptureRepository,
+    receipts: paymentReceiptRepository,
+    payments: paymentRepository,
+    customers: customerRepository,
     guard,
     uow,
     audit,
@@ -2025,6 +2066,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     wallet: walletService,
     payments: paymentService,
     paymentAccounts: paymentAccountService,
+    receipts: receiptService,
     provisioning: provisioningService,
     serviceAdmin: new ServiceAdminService({
       services: serviceRepository,

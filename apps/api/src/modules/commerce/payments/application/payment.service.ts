@@ -299,12 +299,19 @@ export interface ReceiptWindow {
  * `receipt_captures_expiry_check` refuses `expires_at <= opened_at` one layer down, so
  * this returning null is what keeps that from being a 500.
  *
+ * A NULL payment deadline means the payment has none, and then the cap is the only bound
+ * there is — the same reading `paymentDeadline` gives a null order deadline, and the
+ * reason this takes `Date | null` rather than making the caller decide.
+ *
  * Pure and module-level so the rule is one expression rather than two branches at the
  * call site, exactly as `paymentDeadline` is.
  */
-export function receiptWindowExpiry(now: Date, paymentExpiresAt: Date): Date | null {
+export function receiptWindowExpiry(now: Date, paymentExpiresAt: Date | null): Date | null {
   const capped = new Date(now.getTime() + RECEIPT_CAPTURE_MINUTES * 60_000);
-  const chosen = paymentExpiresAt.getTime() < capped.getTime() ? paymentExpiresAt : capped;
+  const chosen =
+    paymentExpiresAt !== null && paymentExpiresAt.getTime() < capped.getTime()
+      ? paymentExpiresAt
+      : capped;
   return chosen.getTime() > now.getTime() ? chosen : null;
 }
 

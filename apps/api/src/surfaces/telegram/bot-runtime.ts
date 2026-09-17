@@ -1134,6 +1134,7 @@ export class BotRuntime {
         actor,
         command.targetId,
         customer,
+        input.botInstanceId,
         input.idempotencyKey,
       );
     }
@@ -2142,41 +2143,66 @@ export class BotRuntime {
   }
 
   /**
-   * The customer saying they have sent the transfer.
+   * The customer saying they have sent the transfer, AND asking to send its receipt.
    *
-   * It moves no money and no state — `PaymentService.signalTransferSent` stamps a claim
-   * and nothing else — so the reply must not imply that anything arrived.
-   * `bot.payment.received_for_review` is written to say exactly what is true: the claim
-   * is recorded and a person will check it.
+   * ONE tap for both, which is what the Payment UX addendum fixes: the button reads
+   * «✅ پرداخت را انجام دادم | ارسال رسید» and `signalTransferSent` stamps the claim
+   * and opens the upload window in the same transaction. Two buttons would be two ways
+   * to reach one action, and a customer who pressed only the first would have a window
+   * open with no idea it was there.
    *
-   * ONE tap, deliberately. The withdrawal beside it is asked about first because it
-   * closes a payment for ever; this closes nothing, and a claim made by accident is
-   * resolved by the operator finding no transfer.
+   * It still moves no money and no state. `bot.payment.receipt_prompt` says exactly
+   * what is true — the claim is recorded, nothing has been received or verified, and
+   * the file may be sent now — and the caution `bot.payment.received_for_review`
+   * carries applies to it word for word.
    *
-   * No button on the reply. The instructions message above it still carries both, which
-   * is where a customer who wants to withdraw after all will look — and re-offering
-   * "I have sent it" under a message saying it is recorded invites a second tap that
-   * does nothing.
+   * Two replies, because `receiptWindow` is genuinely null in two cases: a redelivered
+   * tap whose window has since closed, and a payment already past its own deadline,
+   * where asking for evidence nobody can act on would be the wrong thing to do. Those
+   * get the older sentence, which is true without promising an upload.
+   *
+   * No button on either. The instructions message above still carries both, which is
+   * where a customer who wants to withdraw after all will look — and re-offering "I
+   * have sent it" under a message saying it is recorded invites a second tap.
    */
   private async signalTransferSent(
     scope: TenantContext,
     actor: ActorContext,
     paymentId: string,
     customer: CustomerRecord,
+    botInstanceId: BotInstanceId,
     idempotencyKey: string,
   ): Promise<PendingReply> {
     try {
-      await this.deps.payments.signalTransferSent(scope, actor, customer.id, {
-        idempotencyKey: `${idempotencyKey}:pay-sent`,
-        paymentId,
-      });
+      const { receiptWindow } = await this.deps.payments.signalTransferSent(
+        scope,
+        actor,
+        customer.id,
+        { idempotencyKey: `${idempotencyKey}:pay-sent`, paymentId, botInstanceId },
+      );
+      if (receiptWindow === null) {
+        return {
+          key: 'bot.payment.received_for_review',
+          values: {},
+          buttons: [],
+          orderId: null,
+          fallback: { kind: 'PAYMENT_TRANSFER_RECORDED', subjectId: paymentId },
+        };
+      }
       return {
-        key: 'bot.payment.received_for_review',
-        values: {},
+        key: 'bot.payment.receipt_prompt',
+        values: { minutes: String(receiptWindow.minutes) },
         buttons: [],
         orderId: null,
-        // The claim is recorded and an operator will review it. A customer who
-        // does not learn that sends the money again.
+        /*
+         * The fallback is the CLAIM, not the prompt.
+         *
+         * `PAYMENT_TRANSFER_RECORDED` is what the notification lane can say, and it is
+         * the half that matters when the interactive reply could not be delivered: a
+         * customer who does not learn their claim is on record sends the money again.
+         * Asking for a receipt through a lane whose messages arrive minutes later
+         * would ask for one after the window it names had closed.
+         */
         fallback: { kind: 'PAYMENT_TRANSFER_RECORDED', subjectId: paymentId },
       };
     } catch (error) {
