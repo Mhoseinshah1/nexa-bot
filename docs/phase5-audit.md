@@ -343,14 +343,39 @@ next reader does not have to reconstruct it from a thread.
 | C9  | The frozen destination reaches no operator surface                      | CONFIRMED | `paymentDestinationViewSchema`                 |
 | C10 | The default race reports `PAYMENT_ACCOUNT_DUPLICATE`                    | CONFIRMED | its own code                                   |
 
-**C8 is answered rather than fixed, and the reason is above `create` in the service.**
-`PAYMENT_ACCOUNT_MAX_PER_TENANT` is a rail that keeps the account list complete by
-construction rather than a policy anybody is buying; two creates racing at the ceiling
-leave fifty-one, and a list of fifty-one returned without pagination is still complete.
-Serialising every create behind a tenant-level lock to hold the number exactly costs more
-than it protects. Codex's counter-argument — that the bound justifies the absent
-pagination — is the right question to ask and does not survive the answer: the bound is
-what makes the list SMALL, and one extra row does not make it large.
+**C8 was answered and is now FIXED, on the owner's ruling.**
+
+The first answer argued the race was acceptable: `PAYMENT_ACCOUNT_MAX_PER_TENANT` is a
+rail that keeps the account list complete rather than a policy anybody buys, two creates
+at the ceiling leave fifty-one, and a list of fifty-one returned without pagination is
+still complete. The owner overruled it, and the ruling is the better one: an invariant
+this codebase states in a constant should hold rather than be recorded as raceable.
+
+The cost of holding it turned out to be one line. `lockForCreate` takes
+`pg_advisory_xact_lock(PAYMENT_ACCOUNT_LOCK_CLASS, hashtext(tenant_id))` at the top of
+the create transaction, before the count. It is:
+
+- **tenant-scoped** — `hashtext` of the tenant id is the object key, so two tenants
+  adding accounts at the same moment do not wait for each other;
+- **transaction-scoped** — released by the commit or the rollback, so there is no unlock
+  path to forget and no lock to leak on a crash;
+- **not a row lock**, and that is the load-bearing choice. `scopeIsActive` takes
+  `FOR SHARE` on the tenant row inside every write transaction in the product, and its
+  own comment calls that "this installation's single busiest row". A `FOR UPDATE` here
+  would have put account creation behind every scope-activity check in the system, and
+  every one of those behind an operator adding a bank card.
+
+Two honest limits, stated rather than hidden. Two tenants whose ids hash to the same
+`int4` would wait for each other — one in 2^32 per pair, costing mutual exclusion on an
+operator action measured in single digits per tenant per year. And the lock serialises
+CREATES only; edits, promotions and disables are untouched, because none of them can
+change the row count.
+
+The test is a controlled interleaving rather than a `Promise.all`, and it is
+deterministic in both directions: a holder connection takes the same advisory key, then
+the suite polls `pg_locks` until each create is provably WAITING on it. That poll is also
+the falsification detector — with the lock removed a create does not wait, it completes,
+and the test says so by name rather than by a count that might happen to be right.
 
 ### Two things this round changed about how 5A is tested
 

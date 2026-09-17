@@ -99,13 +99,42 @@ F5A-19's mutation kills three tests, including the route-level one that proves `
 passes the two permissions separately. A page gated correctly behind a route that derived
 `mayEdit` from the wrong key would still be wrong, and nothing else would have said so.
 
+### C8, reopened and fixed on the owner's ruling
+
+The owner overruled the "answered" verdict below: an invariant this codebase states in a
+constant should hold rather than be recorded as raceable. `lockForCreate` takes a
+tenant-scoped, transaction-scoped advisory lock at the top of the create transaction.
+
+| #      | Rule                                                 | Mutation                                      | Named test                                                                               | Result |
+| ------ | ---------------------------------------------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------- | ------ |
+| F5A-20 | The per-tenant account limit holds under concurrency | Delete the `lockForCreate` call from `create` | `payment-accounts.test.ts` › refuses the second of two concurrent creates at the ceiling | dies   |
+| F5A-21 | The lock is keyed on the TENANT, not on a constant   | Replace `hashtext(tenantId)` with `0`         | `payment-accounts.test.ts` › refuses the second of two concurrent creates at the ceiling | dies   |
+
+**Two rows, one casualty, and that is stated rather than tidied.** F5A-21's mutation kills
+the ceiling test and NOT `lets another tenant create while this tenant holds the lock` —
+because the holder connection takes `(CLASS, hashtext(tenantA))` explicitly, and a
+production lock keyed on a constant stops matching it, so nothing blocks at all. There is
+no one-line mutation that kills only the isolation case. What the two cases pin between
+them is still the whole property: the ceiling test proves the production lock is taken on
+exactly `(CLASS, hashtext(tenantA))` — `awaitWaiters` reads `pg_locks` for that key and
+fails by name otherwise — and the isolation test proves that key does not block tenant B.
+
+Both failures are DIAGNOSTIC rather than a wrong number. F5A-20's is "the first create
+never blocked on the payment-account advisory lock", and the isolation case's is "tenant
+B's create waited on tenant A's advisory key" — because the failure mode there is a hang,
+and a bare `await` would have passed the case by waiting for the holder to release.
+
+Neither is driven by `Promise.all` timing, which the owner's decision ruled out
+explicitly: the holder takes the key, the suite polls `pg_locks` until each create is
+provably waiting, and only then commits.
+
 ### Answered without a code change
 
-- **The per-tenant account limit is not serialised.** `count`-then-insert under READ
-  COMMITTED lets two creates at the ceiling both pass, leaving 51. This is a stated
-  decision with its reason above `create`: the limit is a rail that keeps the list
-  complete rather than a policy anybody buys, and 51 rows is still a complete list
-  returned without pagination. Serialising every create behind a tenant lock to hold the
-  number exactly costs more than it protects.
+- ~~**The per-tenant account limit is not serialised.**~~ SUPERSEDED. This was the
+  argument — the limit is a rail rather than a policy, and 51 rows is still a complete
+  list — and the owner overruled it. The fix and its two mutations are the section
+  above. The reasoning is left here struck through rather than deleted, because a reader
+  who finds the lock and wonders why it exists should be able to see what was argued
+  against it.
 - **Nothing else in the review was left unaddressed.** The other nine are the seven rows
   above plus the two web findings, which are one fix each.

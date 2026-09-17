@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  PAYMENT_ACCOUNT_MAX_PER_TENANT,
   isNexaError,
   type ActorContext,
   type BotInstanceId,
@@ -14,6 +15,7 @@ import {
 } from '@nexa/contracts';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { PaymentDestinationRenderer } from '../../apps/api/src/modules/commerce/payments/infrastructure/destination-renderer';
+import { PAYMENT_ACCOUNT_LOCK_CLASS } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-payment-account.repository';
 import {
   adminActorFor,
   createAdmin,
@@ -58,6 +60,27 @@ const systemActor = (correlationId: string): ActorContext => ({
 const CARD_ONE = '6037991234567893';
 const CARD_TWO = '6037991234567992';
 const CARD_THREE = '6037991234567810';
+
+/**
+ * A distinct sixteen-digit card whose check digit is correct, for filler rows.
+ *
+ * Computed rather than listed, because forty-nine hand-written numbers is forty-nine
+ * chances to get a check digit wrong — and `payment_accounts_card_luhn_check` would
+ * then fail the FIXTURE and report it as the behaviour under test. The prefix is the
+ * same fabricated BIN the other constants use; none of these addresses an account.
+ */
+function luhnCard(seed: number): string {
+  const body = `603799${String(1000000000 + seed).slice(0, 9)}`;
+  let sum = 0;
+  for (let i = 0; i < body.length; i += 1) {
+    const digit = Number(body[body.length - 1 - i]);
+    // The check digit will sit at the far right, so a body digit at even distance from
+    // it is the one that doubles. Getting this backwards is the classic Luhn mistake.
+    const doubled = i % 2 === 0 ? digit * 2 : digit;
+    sum += doubled > 9 ? doubled - 9 : doubled;
+  }
+  return `${body}${String((10 - (sum % 10)) % 10)}`;
+}
 const SHEBA = 'IR429600000001003242000012';
 
 /**
@@ -956,6 +979,201 @@ describe('payment accounts and the destination a payment freezes', () => {
       ).resolves.toBeNull();
     });
   });
+
+  /*
+   * C8, on the owner's ruling. The limit HOLDS under concurrency.
+   *
+   * Driven by the advisory lock itself rather than by `Promise.all` timing, and that is
+   * the difference between this case and a flake: a holder connection takes the same
+   * advisory key, and the suite waits until each create is provably WAITING on it
+   * before releasing. `pg_locks` is the evidence, not a sleep.
+   *
+   * The wait is also the falsification detector. With `lockForCreate` removed a create
+   * does not wait — it runs straight through and settles — so `awaitWaiters` fails by
+   * name instead of leaving the case to a row count that might happen to be right.
+   */
+  it('refuses the second of two concurrent creates at the ceiling', async () => {
+    /*
+     * To ONE BELOW the ceiling, counting what the seed already put there.
+     *
+     * `clearSeededAccounts` disables the seeded account rather than deleting it — it
+     * cannot delete it, because a payment's destination snapshot names the row — so it
+     * still counts towards the limit. Deriving the filler count from the live count is
+     * what keeps this case correct when the seed changes.
+     */
+    await clearSeededAccounts(tenantA.tenantId);
+    const seeded = await accountCount(tenantA.tenantId);
+    await fillToCeiling(tenantA.tenantId, PAYMENT_ACCOUNT_MAX_PER_TENANT - 1 - seeded);
+    expect(await accountCount(tenantA.tenantId)).toBe(PAYMENT_ACCOUNT_MAX_PER_TENANT - 1);
+
+    const settled = await ctx.container.database.withClient(async (holder) => {
+      await holder.query('BEGIN');
+      try {
+        await holder.query('SELECT pg_advisory_xact_lock($1, hashtext($2))', [
+          PAYMENT_ACCOUNT_LOCK_CLASS,
+          tenantA.tenantId,
+        ]);
+
+        const first = outcomeOf(
+          addAccount(tenantA, owner, 'c8-first', { cardNumber: CARD_TWO }, { enabled: false }),
+        );
+        await awaitWaiters(1, 'the first create');
+        const second = outcomeOf(
+          addAccount(tenantA, owner, 'c8-second', { cardNumber: CARD_THREE }, { enabled: false }),
+        );
+        await awaitWaiters(2, 'the second create');
+
+        await holder.query('COMMIT');
+        return Promise.all([first, second]);
+      } catch (error: unknown) {
+        await holder.query('ROLLBACK');
+        throw error;
+      }
+    });
+
+    /*
+     * EXACTLY one of each. Which one wins is the planner's business and the test does
+     * not care; that one wins and one is refused is the invariant.
+     */
+    const won = settled.filter((outcome) => outcome.ok);
+    const lost = settled.filter((outcome) => !outcome.ok);
+    expect(won).toHaveLength(1);
+    expect(lost).toHaveLength(1);
+    const refusal = lost[0];
+    expect(refusal !== undefined && !refusal.ok && isNexaError(refusal.error)).toBe(true);
+    expect(
+      refusal === undefined || refusal.ok || !isNexaError(refusal.error)
+        ? null
+        : refusal.error.code,
+    ).toBe('commerce.payment_account_limit_reached');
+
+    // Fifty, never fifty-one. The number the constant names.
+    expect(await accountCount(tenantA.tenantId)).toBe(PAYMENT_ACCOUNT_MAX_PER_TENANT);
+    // And the other tenant is untouched: the lock is keyed on the tenant.
+    expect(await accountCount(tenantB.tenantId)).toBe(1);
+  });
+
+  /*
+   * The other half of C8's requirement: the lock must not serialise UNRELATED tenants.
+   *
+   * Asserted by holding tenant A's advisory key and then creating an account for tenant
+   * B, which must complete while A's key is held. A lock keyed on a constant rather
+   * than on the tenant would pass every other case in this file and fail only here.
+   *
+   * `withTimeout` rather than a bare await, because the failure mode being tested IS a
+   * wait: without the key in the lock, this would hang until the holder released and the
+   * case would pass for the wrong reason.
+   */
+  it('lets another tenant create while this tenant holds the lock', async () => {
+    const before = await accountCount(tenantB.tenantId);
+
+    const created = await ctx.container.database.withClient(async (holder) => {
+      await holder.query('BEGIN');
+      try {
+        await holder.query('SELECT pg_advisory_xact_lock($1, hashtext($2))', [
+          PAYMENT_ACCOUNT_LOCK_CLASS,
+          tenantA.tenantId,
+        ]);
+        const outcome = await withTimeout(
+          outcomeOf(
+            // CARD_THREE, because tenant B's SEEDED account already holds CARD_TWO and
+            // `payment_accounts_tenant_card_key` would refuse it — a duplicate-card
+            // refusal reported as a lock problem is exactly the false signal this case
+            // must not produce.
+            addAccount(tenantB, ownerB, 'c8-other-tenant', { cardNumber: CARD_THREE }),
+          ),
+          3_000,
+          "tenant B's create waited on tenant A's advisory key",
+        );
+        await holder.query('COMMIT');
+        return outcome;
+      } catch (error: unknown) {
+        await holder.query('ROLLBACK');
+        throw error;
+      }
+    });
+
+    expect(created.ok ? null : created.error, 'another tenant must not be blocked').toBeNull();
+    expect(await accountCount(tenantB.tenantId)).toBe(before + 1);
+  });
+
+  /** Fails with a sentence rather than hanging, because the failure here IS a wait. */
+  async function withTimeout<T>(running: Promise<T>, ms: number, message: string): Promise<T> {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        running,
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error(message)), ms);
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Waits until `expected` transactions are BLOCKED on this tenant's advisory key.
+   *
+   * The deterministic alternative to a sleep, and the only thing in this file that
+   * polls: `pg_locks` reports a row with `granted = false` for each waiter, so the
+   * condition is the thing the test needs rather than an interval somebody guessed.
+   *
+   * The timeout is a FAILURE with a sentence, not a silent give-up. It is the message
+   * that appears when `lockForCreate` is removed — the create never waits because
+   * there is nothing to wait for — which is what makes this case falsifiable.
+   */
+  async function awaitWaiters(expected: number, what: string): Promise<void> {
+    const deadline = Date.now() + 5_000;
+    for (;;) {
+      const rows = (await ctx.container.database.db.execute(
+        sql`SELECT count(*)::int AS n
+              FROM pg_locks
+             WHERE locktype = 'advisory'
+               AND classid = ${PAYMENT_ACCOUNT_LOCK_CLASS}
+               AND objid = (SELECT hashtext(${tenantA.tenantId})::oid)
+               AND NOT granted` as never,
+      )) as unknown as { rows: { n: number }[] };
+      if ((rows.rows[0]?.n ?? 0) >= expected) return;
+      if (Date.now() > deadline) {
+        throw new Error(
+          `${what} never blocked on the payment-account advisory lock. ` +
+            'Either `lockForCreate` is not taken inside the create transaction, or it ' +
+            'is keyed on something other than this tenant.',
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
+  /** A promise turned into an outcome, so two of them can be awaited together. */
+  function outcomeOf(
+    running: Promise<unknown>,
+  ): Promise<{ readonly ok: true } | { readonly ok: false; readonly error: unknown }> {
+    return running.then(
+      () => ({ ok: true }) as const,
+      (error: unknown) => ({ ok: false, error }) as const,
+    );
+  }
+
+  /**
+   * Raw INSERTs up to `wanted` rows, bypassing the service.
+   *
+   * Deliberately not forty-nine `create` calls: those would take the very lock under
+   * test forty-nine times and turn a three-second case into a slow one, and the rows
+   * only need to EXIST for the count to reach the ceiling. Every card satisfies Luhn,
+   * because `payment_accounts_card_luhn_check` refuses anything else — which is the
+   * constraint from C6 proving itself useful one case later.
+   */
+  async function fillToCeiling(tenantId: string, wanted: number): Promise<void> {
+    for (let index = 0; index < wanted; index += 1) {
+      await ctx.container.database.db.execute(sql`
+        INSERT INTO payment_accounts
+          (id, tenant_id, label, bank_name, holder_name, card_number, enabled, is_default)
+        VALUES (${ctx.container.ids.uuid()}, ${tenantId}, ${`filler-${String(index)}`},
+                'b', 'h', ${luhnCard(index)}, false, false)`);
+    }
+  }
 
   async function accountById(id: PaymentAccountId): Promise<{ enabled: boolean }> {
     const rows = (await ctx.container.database.db.execute(

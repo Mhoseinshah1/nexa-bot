@@ -55,6 +55,28 @@ export interface PaymentAccountRepository {
     tx?: unknown,
   ): Promise<PaymentAccountRecord | null>;
 
+  /**
+   * Serialises this tenant's account CREATES against each other, and nothing else.
+   *
+   * `PAYMENT_ACCOUNT_MAX_PER_TENANT` is enforced by counting and then inserting, and
+   * under READ COMMITTED two creates at the ceiling both read the same count and both
+   * commit — the owner's decision on Codex C8 is that the invariant holds rather than
+   * being documented as raceable.
+   *
+   * An ADVISORY lock rather than a row lock, and the choice is not a matter of taste:
+   * `scopeIsActive` takes `FOR SHARE` on the tenant row inside every write transaction
+   * this installation makes, and its own comment calls that "this installation's single
+   * busiest row". A `FOR UPDATE` here would therefore serialise account creation behind
+   * every scope-activity check in the product, and every one of those behind an
+   * operator adding a bank card. The advisory lock touches no row and blocks nothing
+   * but another call to this method.
+   *
+   * Transaction-scoped, so it is released by the commit or the rollback. There is no
+   * unlock path to forget and no lock to leak on a crash, which is the property that
+   * makes this safe to hold across the count and the insert.
+   */
+  lockForCreate(scope: TenantContext, tx: unknown): Promise<void>;
+
   /** How many this tenant holds, read inside the create transaction. */
   count(scope: TenantContext, tx: unknown): Promise<number>;
 
