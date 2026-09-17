@@ -839,6 +839,43 @@ export const WEB_FA = {
   'web.payment_confirm': 'تأیید دریافت',
   'web.payment_confirm_done': 'پرداخت تأیید شد و سفارش پرداخت‌شده است.',
   'web.payment_confirm_denied': 'برای تأیید پرداخت دسترسی receipts.review لازم است.',
+  // Payment accounts — the destination an out-of-band transfer is told to go to.
+  // The screen that replaces editing a message template to change a card number.
+  'web.nav_payment_accounts': 'حساب‌های دریافت',
+  'web.payment_accounts_title': 'حساب‌های دریافت کارت به کارت',
+  'web.payment_accounts_subtitle': 'مقصدی که به مشتری برای واریز نشان داده می‌شود.',
+  'web.payment_accounts_empty': 'هنوز حسابی ثبت نشده است.',
+  'web.payment_accounts_empty_hint':
+    'تا زمانی که حساب فعالی ثبت نشود، دکمهٔ پرداخت کارت به کارت به مشتری نشان داده نمی‌شود.',
+  'web.payment_account_label': 'نام حساب',
+  'web.payment_account_bank': 'بانک',
+  'web.payment_account_holder': 'به نام',
+  'web.payment_account_card': 'شماره کارت',
+  'web.payment_account_card_hint': '۱۶ رقم. فاصله، خط تیره و ارقام فارسی نیز پذیرفته می‌شود.',
+  'web.payment_account_iban': 'شبا',
+  'web.payment_account_iban_hint': 'اختیاری. در صورت خالی بودن، در پیام مشتری نمایش داده نمی‌شود.',
+  'web.payment_account_sort': 'ترتیب نمایش',
+  'web.payment_account_state': 'وضعیت',
+  'web.payment_account_enabled': 'فعال',
+  'web.payment_account_disabled': 'غیرفعال',
+  'web.payment_account_default': 'پیش‌فرض',
+  'web.payment_account_updated': 'آخرین تغییر',
+  'web.payment_account_actions': 'عملیات',
+  'web.payment_account_edit': 'ویرایش',
+  'web.payment_account_enable': 'فعال کردن',
+  'web.payment_account_disable': 'غیرفعال کردن',
+  'web.payment_account_make_default': 'پیش‌فرض کردن',
+  'web.payment_account_new': 'حساب جدید',
+  'web.payment_account_editing': 'ویرایش حساب',
+  // Says the two things an operator cannot see from the form: an edit does not
+  // reach an instruction already sent, and there is no delete.
+  'web.payment_account_form_hint':
+    'ویرایش یک حساب، پرداخت‌هایی که پیش‌تر صادر شده‌اند را تغییر نمی‌دهد. حساب حذف نمی‌شود؛ غیرفعال می‌شود.',
+  'web.payment_account_save': 'ذخیره',
+  'web.payment_account_cancel_edit': 'انصراف',
+  'web.payment_account_saved': 'حساب ذخیره شد.',
+  'web.payment_account_default_done': 'مقصد پرداخت‌های جدید تغییر کرد.',
+  'web.payment_account_limit': 'سقف تعداد حساب‌ها پر شده است. یکی را غیرفعال کنید.',
   'web.payment_reject_title': 'رد رسید',
   // Says the two things an operator has to know before pressing it: the order is NOT
   // cancelled, and the decision cannot be undone.
