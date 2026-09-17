@@ -484,6 +484,13 @@
       "when": 1789667673775,
       "tag": "0068_wallet_topup_credit",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1789673626504,
+      "tag": "0069_telegram_admin_receipt_notice",
+      "breakpoints": true
     }
   ]
 }
