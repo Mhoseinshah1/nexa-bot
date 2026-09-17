@@ -172,6 +172,26 @@ export interface PaymentRepository {
     tx: unknown,
   ): Promise<PaymentRecord | null>;
 
+  /**
+   * The customer's open wallet top-up, if they have one.
+   *
+   * A top-up is a payment with NO order, so `PaymentSearch` cannot express it: every
+   * filter there narrows by a value, and this asks for the absence of one. Its own
+   * method rather than a nullable filter, because "order_id IS NULL" is the definition
+   * of a top-up in this schema and a search flag would let a caller ask for it by
+   * accident.
+   *
+   * ONE per customer is the rule it serves, and it is the order rule with the order
+   * swapped out: two open top-ups are two references for one intention, the customer
+   * transfers once quoting one of them, and the operator cannot tell which. The order
+   * path states the rest of that argument on `requestManualTransfer`.
+   */
+  findOpenTopup(
+    scope: TenantContext,
+    customerId: UserId,
+    tx?: unknown,
+  ): Promise<PaymentRecord | null>;
+
   findByReference(
     scope: TenantContext,
     reference: string,

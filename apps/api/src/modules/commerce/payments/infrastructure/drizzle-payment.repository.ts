@@ -118,6 +118,32 @@ export class DrizzlePaymentRepository implements PaymentRepository {
     return row === undefined ? null : toRecord(row);
   }
 
+  async findOpenTopup(
+    scope: TenantContext,
+    customerId: UserId,
+    tx?: unknown,
+  ): Promise<PaymentRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select()
+      .from(payments)
+      .where(
+        and(
+          eq(payments.tenantId, tenantId),
+          eq(payments.customerId, customerId),
+          isNull(payments.orderId),
+          eq(payments.state, 'PENDING'),
+          eq(payments.method, 'MANUAL_TRANSFER'),
+        ),
+      )
+      // Oldest first, so a tenant that somehow holds two gets the one whose reference
+      // the customer has had longest rather than whichever the planner returned.
+      .orderBy(asc(payments.createdAt), asc(payments.id))
+      .limit(1);
+    const row = rows[0];
+    return row === undefined ? null : toRecord(row);
+  }
+
   async findByReference(
     scope: TenantContext,
     reference: string,

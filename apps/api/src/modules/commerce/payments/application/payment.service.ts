@@ -9,6 +9,7 @@ import {
   RECEIPT_CAPTURE_MINUTES,
   SELF_CONTAINED_PAYMENT_METHODS,
   errors,
+  money,
   nextState,
   orderIdSchema,
   paymentIdSchema,
@@ -18,6 +19,8 @@ import {
   type Clock,
   type IdGenerator,
   type IdempotencyStore,
+  type Money,
+  type MoneyWire,
   type OperationId,
   type OperationalEventRecorder,
   type OrderId,
@@ -26,6 +29,7 @@ import {
   type PaymentMethod,
   type PermissionKey,
   type ReceiptCaptureId,
+  type SalesCurrencyCode,
   type TenantContext,
   type UnitOfWork,
   type UserId,
@@ -202,6 +206,28 @@ export interface PaymentServiceDeps {
 export interface PaymentIntent {
   readonly idempotencyKey: string;
   readonly orderId: string;
+}
+
+/**
+ * What a customer's TOP-UP command carries: an amount, and it is the one exception to
+ * the rule above — so here is why it is not a hole in it.
+ *
+ * A top-up has no order to read a figure off, so the amount has to come from somewhere.
+ * It comes from `wallet.topup.presets`, and this field is MATCHED against that list
+ * rather than believed: `requestWalletTopup` refuses anything the tenant does not
+ * currently offer, in the currency it sells in. So the authority is still server-side
+ * configuration; the tap only says WHICH of the offered amounts the customer pressed.
+ *
+ * An INDEX into the list would have been the smaller field and the worse one: indexes
+ * are positional, so an operator reordering or editing the presets between the keyboard
+ * being drawn and the button being tapped would invoice an amount the customer never
+ * chose. A stale amount is refused with `TOPUP_NOT_OFFERED`; a stale index would be
+ * silently honoured as a different amount.
+ */
+export interface WalletTopupIntent {
+  readonly idempotencyKey: string;
+  /** Minor units. Money is never a float and never a bare number in this codebase. */
+  readonly amountMinor: bigint;
 }
 
 /**
@@ -944,6 +970,335 @@ export class PaymentService {
   }
 
   /**
+   * A customer topping their wallet up, funded by the transfer rail 5A built.
+   *
+   * The whole of 5B's create path, and it is `requestManualTransfer` with the order
+   * removed and the amount moved to configuration. What that costs is stated here rather
+   * than inherited:
+   *
+   * - **There is no order, and nothing is provisioned.** `orderId` is null, which is
+   *   what `confirmAndCredit` dispatches on; no service is created, no panel is
+   *   contacted, and `orderPurposeNeedsService` is never consulted because there is no
+   *   purpose to consult it about.
+   * - **The amount comes from `wallet.topup.presets`**, matched exactly, in the currency
+   *   this installation sells in. The tap's own figure is evidence of which button was
+   *   pressed and authority for nothing.
+   * - **ONE open top-up per customer**, the order rule with the order swapped out. Two
+   *   references for one intention is a transfer the operator cannot attribute.
+   */
+  async requestWalletTopup(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: UserId,
+    intent: WalletTopupIntent,
+  ): Promise<ManualTransferInstruction> {
+    const denial = {
+      action: 'payment.topup_request',
+      entityType: 'Customer',
+      entityId: customerId,
+    };
+    await this.authorize(scope, actor, PAYMENT_PLACE_PERMISSION, denial);
+
+    /*
+     * `purpose` is in the hash, so a top-up and an order payment cannot share a key.
+     *
+     * The same reasoning `confirmManualTransfer` states for its decision field: two
+     * commands whose payloads could be identical must not be able to answer from each
+     * other's record. A customer-side key is derived from the update, and an update that
+     * taps a preset carries no order id to tell the two apart.
+     */
+    const requestHash = hashRequest({
+      customerId,
+      amountMinor: intent.amountMinor.toString(),
+      method: 'MANUAL_TRANSFER',
+      purpose: 'WALLET_TOPUP',
+    });
+    const replayed = await this.deps.idempotency.find<{ paymentId: string }>(
+      scope,
+      CUSTOMER_NAMESPACE,
+      intent.idempotencyKey,
+      requestHash,
+    );
+    if (replayed !== null) {
+      const existing = await this.deps.repository.findById(
+        scope,
+        replayed.result.paymentId as PaymentId,
+      );
+      // The snapshot is READ, for the reason the order path gives: a replay must answer
+      // with the destination its request was issued against.
+      if (existing !== null) return this.instructionFor(scope, existing);
+    }
+
+    const now = this.deps.clock.now();
+    const reference = this.referenceFor(intent.idempotencyKey, 'topup');
+    const paymentId = this.deps.ids.uuid() as PaymentId;
+
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      PAYMENT_PLACE_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        await this.assertCustomerMayPay(scope, customerId, tx);
+
+        const amount = await this.offeredTopup(scope, intent.amountMinor, tx);
+        const windowMinutes = await this.paymentWindowMinutes(scope, tx);
+
+        /*
+         * The customer's existing top-up, and the same staleness rule the order path
+         * applies: a PENDING row past its own deadline is closed here rather than handed
+         * back, because the sweep would have closed it a moment later and printing bank
+         * details for a dead reference is the failure `PAYMENT_WINDOW_TOO_SHORT` exists
+         * to prevent one step earlier.
+         */
+        const found = await this.deps.repository.findOpenTopup(scope, customerId, tx);
+        const stale =
+          found !== null && found.expiresAt !== null && found.expiresAt.getTime() <= now.getTime();
+        if (found !== null && stale) {
+          const closed = await this.deps.repository.resolve(
+            scope,
+            found.id,
+            'EXPIRED',
+            { resolvedByAdminId: null, resolutionNote: null, resolvedAt: now },
+            now,
+            tx,
+          );
+          if (closed) {
+            await this.deps.audit.record(
+              scope,
+              actor,
+              {
+                action: 'payment.expire',
+                entityType: 'Payment',
+                entityId: found.id,
+                before: { state: 'PENDING', expiresAt: found.expiresAt?.toISOString() ?? null },
+                after: { state: 'EXPIRED', orderId: null, noticedBy: 'CUSTOMER_REQUEST' },
+                result: 'SUCCESS',
+              },
+              tx,
+            );
+          }
+        }
+        /*
+         * A live top-up is handed back WHATEVER amount was asked for now, and that is
+         * deliberate: the customer holds one reference and the bank transfer they are
+         * about to make quotes it. Issuing a second reference for a different amount is
+         * the two-pending-rows defect; refusing them is taking away the instruction they
+         * are looking at. So the open one wins, and the reply shows its amount — which is
+         * the amount they will actually be credited.
+         */
+        const already = stale ? null : found;
+
+        const deadline = paymentDeadline(null, now, windowMinutes);
+        /*
+         * No order deadline to be shorter than the window, so the floor here can only be
+         * hit by a configured window below the contract's own minimum — which
+         * `sales.payment_window_minutes` refuses at the schema. Checked anyway, on the
+         * CREATE path only, because the alternative is trusting two settings to agree.
+         */
+        if (
+          already === null &&
+          deadline.getTime() - now.getTime() < PAYMENT_WINDOW_MINUTES_MIN * 60_000
+        ) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_WINDOW_TOO_SHORT,
+            'There is not enough time in the configured window to transfer money.',
+          );
+        }
+
+        /*
+         * The destination is chosen INSIDE the transaction and its absence is a refusal,
+         * exactly as for an order — the surface does not draw the button when there is no
+         * enabled account, but it draws it from a read that can be a moment stale.
+         *
+         * `TOPUP_UNAVAILABLE` rather than `PAYMENT_DESTINATION_UNCONFIGURED`, with the
+         * reason in the detail: to the customer these are one fact — top-up cannot be
+         * done right now — and to an operator reading the log the detail says which half
+         * of the configuration is missing.
+         */
+        const account =
+          already === null ? await this.deps.accounts.selectDestination(scope, tx) : null;
+        if (already === null && account === null) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.TOPUP_UNAVAILABLE,
+            'This installation has no account configured to receive a transfer.',
+            { reason: 'NO_DESTINATION' },
+          );
+        }
+
+        const payment =
+          already ??
+          (await this.deps.repository.create(
+            scope,
+            {
+              id: paymentId,
+              customerId,
+              // NO ORDER. The column is nullable for exactly this, and it is what
+              // `confirmManualTransfer` dispatches on.
+              orderId: null,
+              method: 'MANUAL_TRANSFER',
+              // The matched PRESET, never the figure the request carried.
+              amount,
+              reference,
+              expiresAt: deadline,
+              now,
+            },
+            tx,
+          ));
+
+        const destination =
+          already === null && account !== null
+            ? await this.deps.destinations.capture(
+                scope,
+                { paymentId: payment.id, account, now },
+                tx,
+              )
+            : await this.deps.destinations.findByPayment(scope, payment.id, tx);
+
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action: 'payment.topup_request',
+            entityType: 'Payment',
+            entityId: payment.id,
+            before: null,
+            after: {
+              orderId: null,
+              method: payment.method,
+              state: payment.state,
+              amountMinor: payment.amount.amountMinor.toString(),
+              currency: payment.amount.currency,
+              reference: payment.reference,
+              /** Whether this issued a code or read back the one already open. */
+              reissued: already !== null,
+              /*
+               * What the customer ASKED for, when it differs from what they hold. The
+               * reissue rule above means a second tap on a different preset answers with
+               * the open reference, and an operator reconciling a transfer needs to be
+               * able to see that happened rather than infer it.
+               */
+              requestedMinor:
+                already !== null && already.amount.amountMinor !== amount.amountMinor
+                  ? amount.amountMinor.toString()
+                  : null,
+              destinationAccountId: account?.id ?? destination?.accountId ?? null,
+            },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+
+        await rememberOnce(
+          this.deps.idempotency,
+          scope,
+          CUSTOMER_NAMESPACE,
+          intent.idempotencyKey,
+          requestHash,
+          { paymentId: payment.id },
+          tx,
+        );
+        return { payment, destination };
+      },
+    );
+  }
+
+  /**
+   * The ONE currency this installation sells in, and therefore the only one a wallet can
+   * be credited in. Read inside the caller's transaction, like every other setting here.
+   */
+  private async sellingCurrency(
+    scope: TenantContext,
+    tx?: TransactionScope,
+  ): Promise<SalesCurrencyCode> {
+    return this.deps.settings.valueOf<SalesCurrencyCode>(scope, 'sales.currency', tx);
+  }
+
+  /**
+   * The offered top-up amounts, in the currency this installation sells in.
+   *
+   * The READ the Telegram surface draws its keyboard from, and the same function the
+   * write path matches against — so a button that exists is a button the service will
+   * accept. Two readers of one setting cannot disagree; two derivations of one list can.
+   *
+   * A preset in another currency is DROPPED rather than rendered: `sales.currency` is the
+   * one denomination a wallet can be credited in, no conversion exists anywhere in this
+   * system, and offering an amount that `requestWalletTopup` would refuse is worse than
+   * offering one fewer. The empty list is a real answer — top-up is off.
+   */
+  async topupPresets(scope: TenantContext, tx?: TransactionScope): Promise<readonly Money[]> {
+    const configured = await this.deps.settings.valueOf<readonly MoneyWire[]>(
+      scope,
+      'wallet.topup.presets',
+      tx,
+    );
+    const currency = await this.sellingCurrency(scope, tx);
+    return configured
+      .filter((preset) => preset.currency === currency)
+      .map((preset) => money(BigInt(preset.amountMinor), preset.currency));
+  }
+
+  /**
+   * Matches a requested amount against the offered presets, or refuses it.
+   *
+   * Three refusals, kept apart because they are three different facts and only one of
+   * them is the customer's to act on:
+   *
+   * - nothing is offered at all — `TOPUP_UNAVAILABLE`, an operator has not configured it;
+   * - the amount is not among the presets — `TOPUP_NOT_OFFERED`, a stale keyboard or a
+   *   modified client;
+   * - the amount is below `wallet.topup.minimum` — `TOPUP_BELOW_MINIMUM`, which is a
+   *   MISCONFIGURATION (a preset under the floor) and is why it is not folded into the
+   *   one above: telling a customer an amount is "not offered" while it sits on their
+   *   screen sends them looking for a button that is right there.
+   *
+   * The minimum is compared only in the SAME currency. A floor in another currency is
+   * not a floor this code can evaluate, and converting it would be the FX guess the
+   * whole money model refuses — so it fails closed.
+   */
+  private async offeredTopup(
+    scope: TenantContext,
+    amountMinor: bigint,
+    tx: TransactionScope,
+  ): Promise<Money> {
+    const presets = await this.topupPresets(scope, tx);
+    if (presets.length === 0) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.TOPUP_UNAVAILABLE,
+        'No top-up amount is configured.',
+        { reason: 'NO_PRESETS' },
+      );
+    }
+    const chosen = presets.find((preset) => preset.amountMinor === amountMinor);
+    if (chosen === undefined) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.TOPUP_NOT_OFFERED,
+        'That top-up amount is not offered.',
+      );
+    }
+
+    const minimum = await this.deps.settings.valueOf<MoneyWire>(scope, 'wallet.topup.minimum', tx);
+    const floor = BigInt(minimum.amountMinor);
+    if (floor > 0n && minimum.currency !== chosen.currency) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.TOPUP_UNAVAILABLE,
+        'The configured minimum top-up is in another currency.',
+        { reason: 'MINIMUM_CURRENCY_MISMATCH' },
+      );
+    }
+    if (floor > 0n && chosen.amountMinor < floor) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.TOPUP_BELOW_MINIMUM,
+        'That top-up amount is below the minimum this installation accepts.',
+        { minimumMinor: minimum.amountMinor, currency: minimum.currency },
+      );
+    }
+    return chosen;
+  }
+
+  /**
    * A payment and the destination it was ISSUED against, read rather than recomputed.
    *
    * Null for a payment created before 5A existed. The surface falls back to the old
@@ -1043,14 +1398,40 @@ export class PaymentService {
             'This payment can no longer be confirmed.',
           );
         }
+        /*
+         * NO ORDER means a wallet top-up, and 5B is the phase that answers what it
+         * settles: nothing. It credits.
+         *
+         * The dispatch is the COLUMN, not a purpose field or an inference — a payment
+         * either names an order or it does not, and that is the whole distinction. So a
+         * top-up cannot reach the settlement path and an order payment cannot reach the
+         * credit path, whatever a caller believes it is confirming.
+         */
         if (payment.orderId === null) {
-          // Nothing in this release creates one; the refusal is here so that the phase
-          // which does has to decide what it settles rather than inherit an answer.
-          throw errors.conflict(
-            COMMERCE_ERROR_CODES.SETTLEMENT_NOT_FUNDED,
-            'This payment names no order.',
-            { reason: 'PAYMENT_NAMES_NO_ORDER' },
+          const credited = await this.confirmAndCredit(
+            scope,
+            actor,
+            tx,
+            payment,
+            {
+              evidenceKind: 'OPERATOR_REVIEW',
+              evidenceNote: input.note,
+              confirmedByAdminId: adminIdOf(actor),
+              confirmedAt: now,
+            },
+            now,
+            denial.action,
           );
+          await rememberOnce(
+            this.deps.idempotency,
+            scope,
+            OPERATOR_NAMESPACE,
+            input.idempotencyKey,
+            requestHash,
+            { paymentId },
+            tx,
+          );
+          return { payment: credited, order: null };
         }
 
         const order = await this.orderAwaitingPayment(
@@ -1080,6 +1461,183 @@ export class PaymentService {
         );
       },
     );
+  }
+
+  /**
+   * Confirming a top-up: the money is on record, so the wallet is credited. Once.
+   *
+   * `confirmAndSettle`'s sibling, and the differences are the point.
+   *
+   * ## What makes it exactly one credit
+   *
+   * Two things, and neither is a check this code performs:
+   *
+   * 1. `PaymentRepository.confirm` is a conditional UPDATE on `state = 'PENDING'`, so of
+   *    two operators pressing approve together exactly one moves the row. The loser is
+   *    told the outcome rather than given an error, which is the same courtesy the
+   *    settlement path extends.
+   * 2. The ledger reference is DERIVED FROM THE PAYMENT — `<payment id>:topup` — and
+   *    `wallet_entries_tenant_reference_key` plus `wallet_entries_topup_payment_key`
+   *    (migration 0068) refuse a second row under it. So a retry after a crash between
+   *    the confirm and the append, a redelivered request, and a future gateway callback
+   *    funding the same top-up all land on the row that is already there.
+   *
+   * The reference is deliberately NOT derived from the confirming command's idempotency
+   * key, the way `settleFromWallet`'s debit is. That key belongs to one operator's
+   * request; two operators have two keys, and two keys would have minted two references
+   * for one payment. The payment is the thing that must be credited once, so the payment
+   * is what the reference is made of.
+   *
+   * ## What it deliberately does not do
+   *
+   * No order is read, no order transitions, and nothing is provisioned — there is no
+   * order to settle and no service to create. A top-up that reached
+   * `planForSettledOrder` would be a customer charged for an account nobody bought.
+   *
+   * ## The currency check
+   *
+   * A payment's amount is frozen at request time and `sales.currency` can be changed
+   * afterwards. Crediting the old denomination would put money in a wallet that no order
+   * can be priced against — `WALLET_CURRENCY_UNSUPPORTED`'s own definition — so this
+   * refuses, which rolls the confirmation back. The operator's remedy is to reject the
+   * payment; the tenant's is to stop changing the currency under live payments.
+   */
+  private async confirmAndCredit(
+    scope: TenantContext,
+    actor: ActorContext,
+    tx: TransactionScope,
+    payment: PaymentRecord,
+    confirmation: {
+      readonly evidenceKind: 'WALLET_DEBIT' | 'OPERATOR_REVIEW';
+      readonly evidenceNote: string | null;
+      readonly confirmedByAdminId: string | null;
+      readonly confirmedAt: Date;
+    },
+    now: Date,
+    action: string,
+  ): Promise<PaymentRecord> {
+    const selling = await this.sellingCurrency(scope, tx);
+    if (payment.amount.currency !== selling) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.WALLET_CURRENCY_UNSUPPORTED,
+        'This top-up is denominated in a currency this installation no longer sells in.',
+      );
+    }
+
+    const moved = await this.deps.repository.confirm(scope, payment.id, confirmation, now, tx);
+    if (!moved) {
+      // Another confirmation committed first. Report the row as it now stands, exactly
+      // as `confirmAndSettle` does: the conditional UPDATE made the race safe and this
+      // is only how the winner's result reaches the loser.
+      const current = await this.deps.repository.findById(scope, payment.id, tx);
+      if (current === null) {
+        throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
+      }
+      return current;
+    }
+
+    const confirmed = await this.deps.repository.findById(scope, payment.id, tx);
+    if (confirmed === null) {
+      throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
+    }
+    /*
+     * `payments_confirmed_check` makes this true. Restated as a check rather than a cast
+     * for `confirmAndSettle`'s reason: a type cannot see a database constraint, and this
+     * would fire if the constraint were ever dropped.
+     */
+    if (confirmed.evidenceKind === null) {
+      throw new Error(`payment ${confirmed.id} is CONFIRMED with no evidence kind.`);
+    }
+
+    const { entry, inserted } = await this.deps.wallet.append(
+      scope,
+      {
+        id: this.deps.ids.uuid(),
+        customerId: confirmed.customerId,
+        direction: 'CREDIT',
+        reason: 'TOPUP_RECEIPT',
+        // The payment's OWN frozen amount. Not a figure from the confirmation, which
+        // carries none, and not a re-read of the presets, which may have changed.
+        amount: confirmed.amount,
+        reference: `${confirmed.id}:topup`,
+        orderId: null,
+        paymentId: confirmed.id,
+        note: null,
+        now,
+      },
+      tx,
+    );
+
+    await this.deps.audit.record(
+      scope,
+      actor,
+      {
+        action,
+        entityType: 'Payment',
+        entityId: confirmed.id,
+        before: { state: payment.state },
+        after: {
+          state: confirmed.state,
+          evidenceKind: confirmed.evidenceKind,
+          orderId: null,
+          amountMinor: confirmed.amount.amountMinor.toString(),
+          currency: confirmed.amount.currency,
+          /*
+           * WHICH ledger entry, and whether this transaction wrote it. `inserted` false
+           * means the entry was already there under the derived reference — the second
+           * of two racing confirmations, or a retry — and an audit row that claimed a
+           * credit either way would make the log disagree with the ledger.
+           */
+          walletEntryId: entry.id,
+          credited: inserted,
+        },
+        result: 'SUCCESS',
+      },
+      tx,
+    );
+
+    await this.deps.outbox.write(tx, actor, {
+      eventType: 'PaymentConfirmed',
+      aggregateType: 'Payment',
+      aggregateId: confirmed.id,
+      payload: {
+        customerId: confirmed.customerId,
+        // Null, and the event's shape already allows it. A consumer that assumed an
+        // order here would be assuming every payment buys something.
+        orderId: confirmed.orderId,
+        method: confirmed.method,
+        evidenceKind: confirmed.evidenceKind,
+        amountMinor: confirmed.amount.amountMinor.toString(),
+        currency: confirmed.amount.currency,
+      },
+    });
+
+    /*
+     * The customer is told, in THIS transaction.
+     *
+     * 4J's rule: the announcement is enqueued by the transaction that made the fact true,
+     * so there is no window in which the credit is committed and the queue row is not.
+     * Only when this call is the one that wrote the entry — the loser of a race has
+     * nothing new to announce, and two copies of "your wallet was topped up" for one
+     * transfer is a customer wondering whether they were credited twice.
+     *
+     * A top-up is the only confirmed payment that buys nothing, so this lane is the only
+     * thing that tells them. The answer is not checked, for `rejectManualTransfer`'s
+     * reason: a customer with no durable bot link has nobody to tell, and a messaging
+     * concern may not veto an operator's decision about money.
+     */
+    if (inserted) {
+      await this.deps.notifier.notify(
+        scope,
+        confirmed.customerId,
+        'WALLET_TOPUP_CREDITED',
+        confirmed.id,
+        now,
+        tx,
+      );
+    }
+
+    return confirmed;
   }
 
   /**
