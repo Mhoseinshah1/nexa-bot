@@ -1820,3 +1820,39 @@ The entry's two rejected alternatives stayed rejected. Registering
 unconditionally at startup would put an outbound Telegram call on every process's
 readiness path; a hand-bumped version number is a number somebody forgets to
 increment in exactly the release that changed the list.
+
+## OQ-5R-01 — `support` holds `receipts.view` and cannot reach a receipt
+
+`support` is seeded with `receipts.view` and NOT `payments.view`. Until 5R nothing
+consumed the key, so the grant was inert; the receipt card is now real and it lives on
+the payment detail page, which refuses an actor without `payments.view`. This is the
+shape migration `0055` repaired for `receipt_reviewer`, and both resolutions change what
+an operator role may do:
+
+- grant `payments.view` to `support` (seed plus a `0055`-style backfill) — support then
+  reads every payment's financial detail, not only the evidence;
+- withdraw `receipts.view` from `support` — a customer's bank screenshot becomes
+  finance-and-review-only, and the seeded intent that support reads receipts goes.
+
+Not resolved here: `packages/contracts/src/permissions.ts` is the frozen role vocabulary
+and this is an authority decision, not a defect in the receipt lane. A third option — a
+receipts queue of its own under `receipts.view` — is a surface nobody has asked for.
+
+**Trigger to resolve:** whoever specifies operator staffing for the first production
+installation, or 5F if it arrives first.
+
+## OQ-5R-02 — may an operator's READ use a stopped bot's token?
+
+`tokenForBotInstance` resolves `ACTIVE` rows only, and states why: stopping a bot stops
+it sending, inbound and outbound alike. A receipt's bytes are fetched with the token of
+the bot that received it, so stopping that bot also stops an operator opening evidence
+already filed against a still-pending payment — a reversible loss that reads as
+`RECEIPT_UNAVAILABLE`.
+
+A `getFile` is not a message to a customer, so exempting the operator read is arguable.
+It is still a widening of what a stopped credential may do, and the rule it would carve
+out is stated deliberately. Left in force; the card's hint now names the stopped bot as
+a cause so the operator's remedy is visible.
+
+**Trigger to resolve:** the first operator who cannot read a receipt because a bot was
+stopped, or 5F.

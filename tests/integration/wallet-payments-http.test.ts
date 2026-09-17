@@ -4,6 +4,7 @@ import {
   API_PREFIX,
   AUTH_ROUTES,
   COMMERCE_ERROR_CODES,
+  paymentReceiptListResponseSchema,
   PAYMENT_ROUTES,
   PLATFORM_ERROR_CODES,
   SESSION_COOKIE_NAME,
@@ -641,5 +642,140 @@ describe('wallet and payment HTTP surfaces', () => {
       const response = await post(url, ownerCookie, { idempotencyKey: 'x'.repeat(12) });
       expect(response.statusCode, `POST ${url} exists`).toBe(404);
     }
+  });
+  // -------------------------------------------------------------------------
+  // Receipts, over HTTP
+  // -------------------------------------------------------------------------
+
+  /**
+   * The two routes an operator reads a receipt through.
+   *
+   * What matters at this layer is the RESPONSE: who is refused, and what headers the
+   * bytes arrive under. A customer's «receipt» can be any file they chose to upload, so
+   * the content route must never let them pick the type the admin origin serves.
+   */
+  describe('the receipt routes', () => {
+    async function filed(key: string): Promise<{ paymentId: string; receiptId: string }> {
+      const order = await awaitingPayment(tenantA, customerA, panelA, key);
+      const payment = await api.container.payments
+        .requestManualTransfer(tenantA, systemActor(key), customerA, {
+          idempotencyKey: `${key}-manual`,
+          orderId: order.id,
+        })
+        .then((issued) => issued.payment);
+      await api.container.payments.signalTransferSent(tenantA, systemActor(key), customerA, {
+        idempotencyKey: `${key}-signal`,
+        paymentId: payment.id,
+        botInstanceId: SEED_IDS.botA1 as BotInstanceId,
+      });
+      await api.container.receipts.submit(tenantA, systemActor(key), customerA, {
+        idempotencyKey: `${key}-file`,
+        botInstanceId: SEED_IDS.botA1 as BotInstanceId,
+        file: {
+          kind: 'PHOTO',
+          fileId: `file-${key}`,
+          fileUniqueId: `u-${key}`,
+          mimeType: 'image/jpeg',
+          fileSize: 1_024n,
+          fileName: null,
+          telegramMessageId: 7n,
+        },
+      });
+      const rows = (await api.container.database.db.execute(
+        sql`SELECT id FROM payment_receipts WHERE payment_id = ${payment.id}` as never,
+      )) as unknown as { rows: { id: string }[] };
+      const row = rows.rows[0];
+      if (row === undefined) throw new Error('no receipt was filed');
+      return { paymentId: payment.id, receiptId: row.id };
+    }
+
+    it('lists a payment receipt without ever returning the file id', async () => {
+      const { paymentId } = await filed('http-receipt-1');
+      const response = await get(PAYMENT_ROUTES.receipts(paymentId), financeCookie);
+
+      expect(response.statusCode).toBe(200);
+      const parsed = paymentReceiptListResponseSchema.parse(JSON.parse(response.body));
+      expect(parsed.receipts).toHaveLength(1);
+      expect(parsed.receipts[0]?.kind).toBe('PHOTO');
+      /*
+       * The PROHIBITION, and `fileUniqueId` is NOT it: that one is on the contract on
+       * purpose, because it is what makes two uploads of the same image the same
+       * receipt. What must never appear is `file_id` — the token-scoped handle `getFile`
+       * takes, which would hand a browser the means to fetch the file from Telegram
+       * directly.
+       */
+      expect(response.body).not.toContain('file-http-receipt-1');
+      expect(response.body).not.toContain('fileId');
+    });
+
+    it('refuses the list to an operator holding no receipt permission', async () => {
+      const { paymentId } = await filed('http-receipt-2');
+      const response = await get(PAYMENT_ROUTES.receipts(paymentId), technicalCookie);
+
+      expect(response.statusCode).toBe(403);
+      expect(errorOf(response.body).code).toBe('platform.permission_denied');
+    });
+
+    it('refuses a receipt paired with a payment it does not belong to', async () => {
+      const first = await filed('http-receipt-3');
+      const second = await filed('http-receipt-4');
+      const response = await get(
+        PAYMENT_ROUTES.receiptContent(second.paymentId, first.receiptId),
+        financeCookie,
+      );
+
+      // Both ids are real and both are this tenant's. What is refused is the PAIRING,
+      // which is the only thing stopping an operator walking receipt ids.
+      expect(response.statusCode).toBe(404);
+      expect(errorOf(response.body).code).toBe('commerce.receipt_not_found');
+    });
+
+    it('serves the bytes as an opaque attachment, never as the declared type', async () => {
+      const { paymentId, receiptId } = await filed('http-receipt-5');
+      /*
+       * The Telegram fetch is stubbed because this case is about the RESPONSE, not the
+       * sink: `fetch-file.ts` has its own guard and its own tests, and a real call here
+       * would need Telegram. Everything below the stub is the production path.
+       */
+      const real = api.container.receiptFiles.download.bind(api.container.receiptFiles);
+      (api.container.receiptFiles as { download: unknown }).download = () =>
+        Promise.resolve({ outcome: 'SUCCEEDED', bytes: new Uint8Array([1, 2, 3, 4]) });
+      try {
+        const response = await get(
+          PAYMENT_ROUTES.receiptContent(paymentId, receiptId),
+          financeCookie,
+        );
+
+        expect(response.statusCode).toBe(200);
+        // `image/jpeg` is what the UPLOADER declared. It must not be what is served.
+        expect(response.headers['content-type']).toBe('application/octet-stream');
+        expect(response.headers['x-content-type-options']).toBe('nosniff');
+        expect(response.headers['content-disposition']).toBe(`attachment; filename="${receiptId}"`);
+        expect(response.headers['cache-control']).toBe('no-store');
+        expect(response.headers['content-length']).toBe('4');
+      } finally {
+        (api.container.receiptFiles as { download: unknown }).download = real;
+      }
+    });
+
+    it('answers a receipt whose bytes cannot be fetched with an honest refusal', async () => {
+      const { paymentId, receiptId } = await filed('http-receipt-6');
+      const real = api.container.receiptFiles.download.bind(api.container.receiptFiles);
+      (api.container.receiptFiles as { download: unknown }).download = () =>
+        Promise.resolve({ outcome: 'UNAVAILABLE', reason: 'gone' });
+      try {
+        const response = await get(
+          PAYMENT_ROUTES.receiptContent(paymentId, receiptId),
+          financeCookie,
+        );
+
+        // Not a 404 — the row is intact — and not an empty 200, which would show the
+        // reviewer a blank frame and let them believe they had looked.
+        expect(response.statusCode).toBe(412);
+        expect(errorOf(response.body).code).toBe('commerce.receipt_unavailable');
+      } finally {
+        (api.container.receiptFiles as { download: unknown }).download = real;
+      }
+    });
   });
 });

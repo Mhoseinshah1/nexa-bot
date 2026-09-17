@@ -196,7 +196,7 @@ describe('a customer acting on their own order', () => {
       tenantA,
       systemActor('signal-1-say'),
       customerA,
-      { idempotencyKey: 'signal-1-say', paymentId: payment.id },
+      { idempotencyKey: 'signal-1-say', paymentId: payment.id, botInstanceId: BOT_A },
     );
 
     /*
@@ -204,9 +204,16 @@ describe('a customer acting on their own order', () => {
      * claim is not evidence: `PAYMENT_MACHINE` takes no edge, the evidence kind stays
      * null, and an operator with `receipts.review` still has to confirm it.
      */
-    expect(after.state).toBe('PENDING');
-    expect(after.evidenceKind).toBeNull();
-    expect(after.customerSignalledAt).not.toBeNull();
+    expect(after.payment.state).toBe('PENDING');
+    expect(after.payment.evidenceKind).toBeNull();
+    expect(after.payment.customerSignalledAt).not.toBeNull();
+    /*
+     * And the tap opened the upload window, which is the other half of what the
+     * combined button promises. `minutes` is what the reply tells the customer, so it
+     * must be a real number of minutes rather than zero.
+     */
+    expect(after.receiptWindow).not.toBeNull();
+    expect(after.receiptWindow?.minutes).toBeGreaterThan(0);
 
     const row = await paymentRow(payment.id);
     expect(row.state).toBe('PENDING');
@@ -227,18 +234,24 @@ describe('a customer acting on their own order', () => {
       tenantA,
       systemActor('signal-2-a'),
       customerA,
-      { idempotencyKey: 'signal-2-a', paymentId: payment.id },
+      { idempotencyKey: 'signal-2-a', paymentId: payment.id, botInstanceId: BOT_A },
     );
     const second = await ctx.container.payments.signalTransferSent(
       tenantA,
       systemActor('signal-2-b'),
       customerA,
-      { idempotencyKey: 'signal-2-b', paymentId: payment.id },
+      { idempotencyKey: 'signal-2-b', paymentId: payment.id, botInstanceId: BOT_A },
     );
 
-    expect(second.customerSignalledAt?.toISOString()).toBe(
-      first.customerSignalledAt?.toISOString(),
+    expect(second.payment.customerSignalledAt?.toISOString()).toBe(
+      first.payment.customerSignalledAt?.toISOString(),
     );
+    /*
+     * The second tap gets a window too, and the FIRST one is superseded rather than
+     * left open: a customer tapping again is a customer who wants to send the receipt,
+     * and `receipt_captures_open_key` allows only one open row per customer per bot.
+     */
+    expect(second.receiptWindow).not.toBeNull();
     /* And the audit log grew ONE claim row, not one per tap. */
     const signals = (await auditActions(payment.id)).filter((a) => a === 'payment.signal_sent');
     expect(signals).toHaveLength(1);
@@ -256,6 +269,7 @@ describe('a customer acting on their own order', () => {
       ctx.container.payments.signalTransferSent(tenantA, systemActor('signal-3-s'), customerA, {
         idempotencyKey: 'signal-3-s',
         paymentId: payment.id,
+        botInstanceId: BOT_A,
       }),
     ).rejects.toMatchObject({ code: 'commerce.payment_state_invalid' });
 
@@ -276,6 +290,7 @@ describe('a customer acting on their own order', () => {
       ctx.container.payments.signalTransferSent(tenantA, systemActor('signal-4-s'), customerA, {
         idempotencyKey: 'signal-4-s',
         paymentId: payment.id,
+        botInstanceId: BOT_A,
       }),
     ).rejects.toMatchObject({ code: 'commerce.payment_not_found' });
 
@@ -291,6 +306,7 @@ describe('a customer acting on their own order', () => {
       ctx.container.payments.signalTransferSent(tenantB, systemActor('signal-5-s'), outsider, {
         idempotencyKey: 'signal-5-s',
         paymentId: payment.id,
+        botInstanceId: BOT_A,
       }),
     ).rejects.toMatchObject({ code: 'commerce.payment_not_found' });
 
@@ -466,6 +482,7 @@ describe('a customer acting on their own order', () => {
     await ctx.container.payments.signalTransferSent(tenantA, systemActor('cancel-3-s'), customerA, {
       idempotencyKey: 'cancel-3-s',
       paymentId: payment.id,
+      botInstanceId: BOT_A,
     });
 
     await expect(
@@ -492,6 +509,7 @@ describe('a customer acting on their own order', () => {
     await ctx.container.payments.signalTransferSent(tenantA, systemActor('cancel-4-s'), customerA, {
       idempotencyKey: 'cancel-4-s',
       paymentId: payment.id,
+      botInstanceId: BOT_A,
     });
     await ctx.container.payments.rejectManualTransfer(tenantA, owner, payment.id, {
       idempotencyKey: 'cancel-4-reject',
@@ -629,6 +647,7 @@ describe('a customer acting on their own order', () => {
         ctx.container.payments.signalTransferSent(tenantA, systemActor('race-1-s'), customerA, {
           idempotencyKey: 'race-1-signal',
           paymentId: payment.id,
+          botInstanceId: BOT_A,
         }),
         ctx.container.orders.cancelByCustomer(tenantA, systemActor('race-1-c'), {
           idempotencyKey: 'race-1-cancel',
@@ -771,7 +790,7 @@ describe('a customer acting on their own order', () => {
             tenantA,
             systemActor('race-3-s'),
             customerA,
-            { idempotencyKey: 'race-3-signal', paymentId: payment.id },
+            { idempotencyKey: 'race-3-signal', paymentId: payment.id, botInstanceId: BOT_A },
           );
           const outcome = attempt.then(
             () => ({ ok: true }) as const,

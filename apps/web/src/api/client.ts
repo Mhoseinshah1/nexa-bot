@@ -12,6 +12,7 @@ import {
   type ServiceState,
   WALLET_ROUTES,
   paymentListResponseSchema,
+  paymentReceiptListResponseSchema,
   paymentResponseSchema,
   walletEntryListResponseSchema,
   walletEntryResponseSchema,
@@ -19,6 +20,7 @@ import {
   type LedgerDirection,
   type PaymentListResponse,
   type PaymentMethod,
+  type PaymentReceiptListResponse,
   type PaymentResponse,
   type PaymentState,
   type WalletEntryListResponse,
@@ -804,6 +806,40 @@ export function fetchServiceOperations(id: string): Promise<ServiceOperationsRes
 
 export function fetchPayment(id: string): Promise<PaymentResponse> {
   return authedGet(PAYMENT_ROUTES.detail(id), paymentResponseSchema);
+}
+
+/** What the customer sent against one payment. Behind `receipts.view` on the server. */
+export function fetchPaymentReceipts(id: string): Promise<PaymentReceiptListResponse> {
+  return authedGet(PAYMENT_ROUTES.receipts(id), paymentReceiptListResponseSchema);
+}
+
+/**
+ * One receipt's bytes, as a Blob this tab owns.
+ *
+ * A fetch rather than the anchor a backup archive uses, and the difference is the
+ * response: the API serves these as `application/octet-stream` with `nosniff` and
+ * `attachment`, deliberately, so that a customer's «receipt» that is really an SVG or
+ * an HTML document cannot execute on the admin origin. An anchor would therefore only
+ * ever download. Reading the bytes here and deciding the type from what the record
+ * SAYS it is — never from the bytes, never from the response — is what lets an image
+ * be shown while a document stays a download.
+ *
+ * Buffering in the tab is bounded by `PAYMENT_RECEIPT_MAX_BYTES`, which the API
+ * enforces on both sides of its own fetch.
+ */
+export async function fetchPaymentReceiptBytes(
+  paymentId: string,
+  receiptId: string,
+): Promise<Blob> {
+  const response = await fetch(
+    `${API_PREFIX}${PAYMENT_ROUTES.receiptContent(paymentId, receiptId)}`,
+    { credentials: 'same-origin', headers: { accept: 'application/octet-stream' } },
+  );
+  if (!response.ok) {
+    const payload: unknown = await response.json().catch(() => null);
+    throw toApiError(response.status, payload);
+  }
+  return response.blob();
 }
 
 /**

@@ -20,12 +20,15 @@ import {
   discountAmountMinor,
   clampDiscount,
   normaliseDiscountCode,
+  templateDefinition,
 } from '@nexa/contracts';
 import { MAIN_MENU_BUTTONS, MAIN_MENU_ROWS } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
 import {
   BOT_INTENTS,
   CONFIRM_CALLBACK_PREFIX,
+  REFUSAL_REPLIES,
+  refusalValuesFor,
   followUpForSettlement,
   GATEWAY_PAY_CALLBACK_PREFIX,
   intentOf,
@@ -614,6 +617,39 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.manual_instructions',
       'bot.payment.not_pending',
       /*
+       * The five 5R keys. Each reviewed against this case's own rule — does the copy
+       * promise a flow this head has — and the answer for all five is yes, because 5R is
+       * the phase that builds the flow they describe.
+       *
+       *   `receipt_prompt`        asks for the file and names the minutes remaining. It
+       *                           is sent only when a window was genuinely opened in the
+       *                           tap's transaction: `receiptWindow === null` gets
+       *                           `received_for_review` instead, which promises nothing.
+       *                           It repeats the caution above it — nothing has been
+       *                           received or verified — because a customer who reads
+       *                           "send your receipt" as "you have paid" is the
+       *                           `PRBR-004` collapse in a customer's own head.
+       *   `receipt_received`      says the FILE arrived and a reviewer will look at it.
+       *                           It may say that, and `received_for_review`'s comment
+       *                           above is corrected in the catalogue to record why:
+       *                           5R makes "your receipt was received" true and leaves
+       *                           "your payment was received" as false as it ever was.
+       *   `receipt_not_expected`  the refusal that keeps this from becoming
+       *                           `INCIDENT-FIN-001`. It names the remedy — open the
+       *                           invoice, tap the button — rather than consuming a file
+       *                           nobody asked for.
+       *   `receipt_expired`       distinct from the above BECAUSE the remedy differs:
+       *                           the customer did what they were asked and took too
+       *                           long, so it says to tap again.
+       *   `receipt_limit`         says the receipts already sent are what the reviewer
+       *                           sees, because a customer not told that sends more.
+       */
+      'bot.payment.receipt_expired',
+      'bot.payment.receipt_limit',
+      'bot.payment.receipt_not_expected',
+      'bot.payment.receipt_prompt',
+      'bot.payment.receipt_received',
+      /*
        * The answer to the new button below, and the wording is the load-bearing part.
        *
        * Its Persian used to read «رسید شما دریافت شد» — "your receipt has been
@@ -625,9 +661,12 @@ describe('profile metadata, normalised before it is ever stored', () => {
        */
       'bot.payment.received_for_review',
       /*
-       * The button that produces it. `bot.payment.manual_instructions` used to end
-       * «سپس رسید را ارسال نمایید» and there was no surface to send one to; the
-       * instruction now names this button, which exists.
+       * The button that produces them, and since the Payment UX addendum it names both
+       * halves of what one tap does: «✅ پرداخت را انجام دادم | ارسال رسید».
+       *
+       * `bot.payment.manual_instructions` used to end «سپس رسید را ارسال نمایید»
+       * with no surface to send one to. 5A made the instruction name this button, and 5R
+       * is what makes the second half of its label true.
        */
       'bot.payment.sent_button',
       'bot.payment.transfer_instructions',
@@ -1012,5 +1051,89 @@ describe('what follows a settlement', () => {
     expect([...COMMERCIAL_ORDER_PURPOSES, 'NEW_SERVICE'].sort()).toEqual(
       [...ORDER_PURPOSES].sort(),
     );
+  });
+});
+
+/**
+ * Every refusal the bot can answer with must be RENDERABLE with the values it sends.
+ *
+ * This is the rule behind two defects on this branch, and it is the rule rather than
+ * either instance because both were invisible in exactly the same way. The resolver
+ * validates values against the template's declaration; a missing required token refuses
+ * the whole render; and the webhook must swallow a reply failure, because a non-200
+ * makes Telegram redeliver the update for ever. So the customer is told NOTHING, the
+ * durable write has already committed, and no test that checks which KEY a handler
+ * returns can see it.
+ */
+describe('a refusal the customer can actually be told', () => {
+  it('supplies every required token for every refusal key', () => {
+    const missing: string[] = [];
+    for (const key of new Set(Object.values(REFUSAL_REPLIES))) {
+      const supplied = refusalValuesFor(key);
+      for (const placeholder of templateDefinition(key).placeholders) {
+        if (placeholder.required && supplied[placeholder.token] === undefined) {
+          missing.push(`${key} needs {${placeholder.token}}`);
+        }
+      }
+    }
+    expect(missing, 'a refusal that cannot render tells the customer nothing').toStrictEqual([]);
+  });
+
+  // The instance that proved the rule: `{limit}` carries the cap so the constant and the
+  // Persian sentence cannot disagree, which is exactly why it must be supplied.
+  it('carries the receipt cap into the limit refusal', () => {
+    expect(refusalValuesFor('bot.payment.receipt_limit' as TemplateKey)).toStrictEqual({
+      limit: 5,
+    });
+  });
+});
+
+/**
+ * Which `PhotoSize` becomes the receipt.
+ *
+ * Telegram documents `file_size` as OPTIONAL on a photo size, so a ranking that mixes
+ * bytes and pixels compares 5 KB against 1920 and picks the thumbnail — the operator
+ * then opens a receipt they cannot read, which is a failure nothing else reports.
+ */
+describe('choosing a photo size', () => {
+  const photo = (over: Record<string, unknown>) => ({
+    message: {
+      message_id: 9,
+      chat: { id: 5, type: 'private' },
+      photo: over['photo'],
+    },
+  });
+  const chosen = (sizes: readonly unknown[]): string | null =>
+    intentOf(photo({ photo: sizes })).file?.fileId ?? null;
+
+  it('prefers the larger image when only the thumbnail declares its size', () => {
+    expect(
+      chosen([
+        { file_id: 'thumb', file_unique_id: 'u-thumb', width: 90, height: 60, file_size: 5_000 },
+        { file_id: 'full', file_unique_id: 'u-full', width: 1_920, height: 1_280 },
+      ]),
+    ).toBe('full');
+  });
+
+  it('breaks a tie between equal dimensions by declared size', () => {
+    expect(
+      chosen([
+        { file_id: 'small', file_unique_id: 'u-s', width: 800, height: 600, file_size: 40_000 },
+        { file_id: 'big', file_unique_id: 'u-b', width: 800, height: 600, file_size: 90_000 },
+      ]),
+    ).toBe('big');
+  });
+
+  it('does not let a wide, short crop outrank a taller image', () => {
+    expect(
+      chosen([
+        { file_id: 'wide', file_unique_id: 'u-w', width: 1_200, height: 100 },
+        { file_id: 'tall', file_unique_id: 'u-t', width: 900, height: 900 },
+      ]),
+    ).toBe('tall');
+  });
+
+  it('still chooses a size that declared no dimensions at all, rather than nothing', () => {
+    expect(chosen([{ file_id: 'bare', file_unique_id: 'u-bare' }])).toBe('bare');
   });
 });

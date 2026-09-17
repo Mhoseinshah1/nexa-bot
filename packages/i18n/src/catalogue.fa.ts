@@ -145,16 +145,18 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.manual_instructions':
     'برای پرداخت مبلغ {total} طبق راهنمای فروشنده اقدام کنید و سپس دکمهٔ «پرداخت را انجام دادم» را بزنید.\nکد پیگیری این پرداخت: {reference}',
   /*
-   * The message a manual transfer actually needs, and the one that replaces
-   * «طبق راهنمای
-   * فروشنده» — "follow the seller's
-   * instructions", which named instructions that did not exist anywhere in the product.
+   * The invoice layout the owner specified: heading, invoice id, payable amount, then
+   * the destination lines, then the instructions.
    *
-   * {destination} is composed from the payment's FROZEN snapshot, so editing the account
-   * afterwards does not change what this customer was told.
+   * The trailing paragraph is the tenant-editable part of that layout — editable
+   * because the whole body is a tenant-overridable template, which is also why there
+   * is no second key for it.
+   *
+   * {destination} is composed from the payment's FROZEN snapshot, so editing the
+   * account afterwards does not change what this customer was told.
    */
   'bot.payment.transfer_instructions':
-    'مبلغ {total} را به حساب زیر واریز کنید:\n{destination}\n\nکد پیگیری این پرداخت: {reference}\nپس از واریز، دکمهٔ «پرداخت را انجام دادم» را بزنید.',
+    '🧾 جزئیات فاکتور پرداخت شما\n\nشناسه فاکتور: {reference}\nمبلغ قابل پرداخت: {total}\n{destination}\n\nپس از واریز، دکمهٔ پایین را بزنید و تصویر یا فایل رسید را ارسال کنید. پرداخت شما پس از بررسی پشتیبانی تأیید می‌شود.',
   'bot.payment.destination.bank': 'بانک: {value}',
   'bot.payment.destination.holder': 'به نام: {value}',
   'bot.payment.destination.card': 'شماره کارت: {value}',
@@ -164,18 +166,43 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.wallet_button': 'پرداخت از کیف پول',
   'bot.payment.manual_button': 'پرداخت کارت به کارت',
   'bot.payment.unconfigured': 'این روش پرداخت در حال حاضر فعال نیست.',
-  'bot.payment.sent_button': 'پرداخت را انجام دادم',
+  /*
+   * ONE button naming both halves, and the Payment UX addendum fixes the wording.
+   *
+   * «ارسال رسید» is deliberately NOT a second button. The tap records the
+   * customer’s claim and opens the upload window in one transaction, so two buttons
+   * would be two ways to reach one action — and a customer who pressed only the first
+   * would have a window open and no idea it was there.
+   */
+  'bot.payment.sent_button': '✅ پرداخت را انجام دادم | ارسال رسید',
   /*
    * Whose claim this repeats is the whole of the wording.
    *
-   * It used to read «رسید شما دریافت شد» — "your receipt has been received" — which is
-   * two untruths at once: no receipt is accepted anywhere in this product, and nothing
-   * has been received. What is true is that the CUSTOMER's claim is recorded and a
-   * person will check it against a bank statement. A sentence that blurred the two
-   * would be `PRBR-004` in a message.
+   * It used to read «رسید شما دریافت شد» — "your receipt has been received" — which was
+   * two untruths at once: no receipt was accepted anywhere in this product, and nothing
+   * had been received. 5R makes the FIRST half true and not the second: a receipt is now
+   * stored and bound to this payment, and no money has still been received or verified.
+   * So `bot.payment.receipt_received` may say the file arrived and this key may not say
+   * anything more than it did — what is true here is that the CUSTOMER's claim is
+   * recorded and a person will check it against a bank statement. A sentence that
+   * blurred the two would be `PRBR-004` in a message.
+   *
+   * It is still reachable: it is the notification-lane wording for
+   * `PAYMENT_TRANSFER_RECORDED`, which is what a customer is told when the interactive
+   * reply could not be delivered.
    */
   'bot.payment.received_for_review':
     'اعلام شما ثبت شد. هنوز مبلغی دریافت یا تأیید نشده است؛ پس از بررسی، نتیجه به شما اطلاع داده می‌شود.',
+  'bot.payment.receipt_prompt':
+    'اعلام شما ثبت شد. هنوز مبلغی دریافت یا تأیید نشده است.\n\nاکنون تصویر یا فایل رسید را در همین گفتگو ارسال کنید. تا {minutes} دقیقه فرصت دارید.',
+  'bot.payment.receipt_received':
+    'رسید شما دریافت و به این پرداخت پیوست شد. هنوز مبلغی تأیید نشده است؛ پس از بررسی، نتیجه به شما اطلاع داده می‌شود.',
+  'bot.payment.receipt_not_expected':
+    'در حال حاضر منتظر رسیدی از شما نیستیم. برای ارسال رسید، ابتدا پیام پرداخت خود را باز کنید و دکمهٔ ارسال رسید را بزنید.',
+  'bot.payment.receipt_expired':
+    'مهلت ارسال رسید به پایان رسید. لطفاً دوباره از پیام پرداخت، دکمهٔ ارسال رسید را بزنید.',
+  'bot.payment.receipt_limit':
+    'برای این پرداخت {limit} رسید ثبت شده است و بیش از این پذیرفته نمی‌شود. همین رسیدها بررسی می‌شوند.',
   'bot.payment.window_too_short':
     'مهلت این سفارش برای پرداخت کارت به کارت کافی نیست. لطفاً دوباره سفارش دهید.',
   'bot.payment.cancel_button': 'انصراف از پرداخت',

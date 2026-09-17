@@ -102,6 +102,22 @@ export class DrizzlePaymentRepository implements PaymentRepository {
     return row === undefined ? null : toRecord(row);
   }
 
+  async findByIdForUpdate(
+    scope: TenantContext,
+    id: PaymentId,
+    tx: unknown,
+  ): Promise<PaymentRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select()
+      .from(payments)
+      .where(and(eq(payments.tenantId, tenantId), eq(payments.id, id)))
+      .limit(1)
+      .for('update');
+    const row = rows[0];
+    return row === undefined ? null : toRecord(row);
+  }
+
   async findByReference(
     scope: TenantContext,
     reference: string,

@@ -645,6 +645,7 @@ TRANSACTION_GUARD="assertOutsideTransaction("
 SINK_FILES="
 apps/api/src/infrastructure/net/safe-http.ts
 apps/api/src/infrastructure/telegram/send-message.ts
+apps/api/src/infrastructure/telegram/fetch-file.ts
 apps/api/src/modules/platform/backup/infrastructure/telegram-backup-delivery.ts
 apps/api/src/modules/platform/backup/infrastructure/pg-tools.ts
 "

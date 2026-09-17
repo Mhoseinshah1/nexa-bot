@@ -153,6 +153,25 @@ export interface PaymentRepository {
 
   findById(scope: TenantContext, id: PaymentId, tx?: unknown): Promise<PaymentRecord | null>;
 
+  /**
+   * The same read, holding the row until the caller's transaction ends.
+   *
+   * One caller: filing a receipt. It refuses a payment that is not PENDING, and an
+   * ordinary read cannot enforce that — an operator's confirmation can commit between
+   * the read and the insert, and the evidence then lands on a payment somebody has
+   * already decided. The confirm path UPDATEs this row, so holding it here makes the
+   * two orders the only two: either the operator waits and then sees the receipt, or
+   * this read waits and then sees CONFIRMED and refuses.
+   *
+   * Requires a transaction. Locking a row outside one holds it for a statement and
+   * releases it immediately, which would look like protection and be none.
+   */
+  findByIdForUpdate(
+    scope: TenantContext,
+    id: PaymentId,
+    tx: unknown,
+  ): Promise<PaymentRecord | null>;
+
   findByReference(
     scope: TenantContext,
     reference: string,

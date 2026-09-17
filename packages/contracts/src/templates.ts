@@ -608,7 +608,9 @@ export const TEMPLATES = [
   {
     key: 'bot.payment.transfer_instructions',
     description:
-      'How to pay out of band, with the destination the payment was ISSUED against. ' +
+      'The invoice: heading, invoice id, payable amount, the destination lines, then ' +
+      'the tenant-editable instructions. Carries the destination the payment was ' +
+      'ISSUED against. ' +
       'Supersedes bot.payment.manual_instructions, which is kept for payments created ' +
       'before a destination existed. {destination} is composed from the payment\u2019s ' +
       'frozen snapshot through the four bot.payment.destination.* keys, so a line whose ' +
@@ -776,12 +778,89 @@ export const TEMPLATES = [
   {
     key: 'bot.payment.sent_button',
     description:
-      'The label on the button a customer presses to say they have sent the transfer. A ' +
-      'key rather than a literal, for the reason `bot.payment.wallet_button` gives. It ' +
-      'sits beside `bot.payment.cancel_button` on the instructions message and is the ' +
-      'opposite action, so the two labels must be impossible to confuse at a glance.',
+      'The label on the button a customer presses to say they have sent the transfer AND ' +
+      'to start sending its receipt. A key rather than a literal, for the reason ' +
+      '`bot.payment.wallet_button` gives. It sits beside `bot.payment.cancel_button` on ' +
+      'the instructions message and is the opposite action, so the two labels must be ' +
+      'impossible to confuse at a glance. ' +
+      'The Payment UX addendum fixes the seeded label as one button naming both halves, ' +
+      'not two buttons: the tap records the customer\u2019s claim and opens the upload ' +
+      'window in one transaction, so a label naming only one of them would describe half ' +
+      'of what the tap does. It still settles nothing \u2014 ' +
+      '`bot.payment.receipt_prompt` is the answer, and confirmation remains an ' +
+      'operator\u2019s under `receipts.review`.',
     format: 'PLAIN_TEXT',
     placeholders: [],
+  },
+  {
+    key: 'bot.payment.receipt_prompt',
+    description:
+      'The answer to that tap. It has to carry two facts at once and neither may be ' +
+      'dropped: the claim is on record and a person will check it, AND the customer may ' +
+      'now send the receipt image or file. The minutes are a token rather than a number ' +
+      'in the sentence, so `RECEIPT_CAPTURE_MINUTES` and the text cannot disagree. ' +
+      'Nothing here says the payment was received \u2014 the caution ' +
+      '`bot.payment.received_for_review` records applies word for word.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'minutes',
+        type: 'NUMBER',
+        description:
+          'How long the upload window stays open, in minutes. The lesser of ' +
+          '`RECEIPT_CAPTURE_MINUTES` and what is left of the payment\u2019s own deadline.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.receipt_received',
+    description:
+      'The answer to a receipt that was filed. It confirms the FILE arrived and says a ' +
+      'reviewer will look at it \u2014 it must not say the payment is confirmed, for the ' +
+      'reason `bot.payment.received_for_review` gives at length. It is also the answer to ' +
+      'a redelivered upload of the same file, because the customer\u2019s situation is ' +
+      'identical either way and a second sentence for a Telegram retry would be a ' +
+      'difference they cannot act on.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.receipt_not_expected',
+    description:
+      'The answer to an image or a document sent when no upload window is open. It names ' +
+      'the situation and the remedy \u2014 open an invoice and tap the button \u2014 ' +
+      'rather than silently consuming the file. `INCIDENT-FIN-001` is the alternative: a ' +
+      'message swallowed by a prompt nobody remembered asking.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.receipt_expired',
+    description:
+      'The answer to a file that arrived after its window closed. Distinct from ' +
+      '`bot.payment.receipt_not_expected` because the customer did what they were asked ' +
+      'and the remedy is to tap the button again, which that sentence does not say.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.receipt_limit',
+    description:
+      'The answer to a receipt beyond `PAYMENT_RECEIPT_MAX_PER_PAYMENT`. It says the ones ' +
+      'already sent are what the reviewer sees, because a customer who is not told that ' +
+      'sends more.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'limit',
+        type: 'NUMBER',
+        description: 'How many receipts one payment may hold.',
+        required: true,
+        repeatable: false,
+      },
+    ],
   },
   {
     key: 'bot.payment.window_too_short',

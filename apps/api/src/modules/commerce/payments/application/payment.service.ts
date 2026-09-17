@@ -1,10 +1,12 @@
 import {
   COMMERCE_ERROR_CODES,
+  PAYMENT_RECEIPT_MAX_PER_PAYMENT,
   PAYMENT_WINDOW_MINUTES_MIN,
   orderPurposeNeedsService,
   ORDER_MACHINE,
   PAYMENT_PAGE_DEFAULT,
   PAYMENT_PAGE_MAX,
+  RECEIPT_CAPTURE_MINUTES,
   SELF_CONTAINED_PAYMENT_METHODS,
   errors,
   nextState,
@@ -12,6 +14,7 @@ import {
   paymentIdSchema,
   type ActorContext,
   type AuditWriter,
+  type BotInstanceId,
   type Clock,
   type IdGenerator,
   type IdempotencyStore,
@@ -22,6 +25,7 @@ import {
   type PaymentId,
   type PaymentMethod,
   type PermissionKey,
+  type ReceiptCaptureId,
   type TenantContext,
   type UnitOfWork,
   type UserId,
@@ -41,6 +45,7 @@ import type {
   PaymentDestinationRecord,
   PaymentDestinationRepository,
 } from './account-ports.js';
+import type { PaymentReceiptRepository, ReceiptCaptureRepository } from './receipt-ports.js';
 import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
@@ -102,6 +107,27 @@ export interface PaymentServiceDeps {
   readonly accounts: Pick<PaymentAccountRepository, 'selectDestination'>;
   /** Freezes that destination onto the payment, in the same transaction. */
   readonly destinations: PaymentDestinationRepository;
+  /**
+   * Opens the receipt-upload window, in the transaction that records the claim.
+   *
+   * The WHOLE port, not a narrowed read, because this module is the one that opens a
+   * window and the one that must be able to close a superseded one. `ReceiptService`
+   * holds the same port and does the closing on the other side.
+   *
+   * In the same transaction as the claim for one reason: the reply asks the customer to
+   * send a file, and a reply that asked for one with no window on record would be
+   * answered with "nothing was expected" — the refusal for a file nobody asked for,
+   * given to a customer who was asked.
+   */
+  readonly receiptCaptures: ReceiptCaptureRepository;
+  /**
+   * COUNTING receipts, and nothing else — a narrowed read, so this module still cannot
+   * file one. The count is what stops a window being promised to a customer whose
+   * payment already holds every receipt it may; `PaymentReceiptRepository` entire
+   * would put `attach` in reach of the module that records claims, which is the
+   * separation the port above describes.
+   */
+  readonly receipts: Pick<PaymentReceiptRepository, 'countForPayment'>;
   /**
    * Read to refuse a BLOCKED customer INSIDE the transaction that would move their money.
    *
@@ -236,6 +262,76 @@ export interface PaymentWithdrawal {
 export interface PaymentSentSignal {
   readonly idempotencyKey: string;
   readonly paymentId: string;
+  /**
+   * The bot this tap arrived on, which is the bot the upload window belongs to.
+   *
+   * Carried on the command rather than read from `TenantContext.botInstanceId`, which is
+   * nullable: a window opened under one bot and looked for under another would answer a
+   * customer's photo with "nothing was expected", and a nullable field makes that a
+   * runtime possibility instead of a compile error. It is an identifier and nothing else
+   * — the customer, the payment and the amount are all re-read from rows.
+   */
+  readonly botInstanceId: BotInstanceId;
+}
+
+/**
+ * The claim, and the upload window it opened.
+ *
+ * A pair rather than a payment the surface then opens a window for, the same shape and
+ * for the same reason as `ManualTransferInstruction`: there is no call site that can ask
+ * a customer for a receipt without a window existing, because the type does not offer
+ * one.
+ *
+ * `receiptWindow` is null in two real cases, and the surface says something different in
+ * each: a redelivered tap whose window has since closed, and a payment already past its
+ * own deadline — where a window would be asking for evidence nobody could act on.
+ */
+export interface TransferSignalResult {
+  readonly payment: PaymentRecord;
+  readonly receiptWindow: ReceiptWindow | null;
+}
+
+export interface ReceiptWindow {
+  readonly expiresAt: Date;
+  /** What the customer is told, so the sentence and the deadline cannot disagree. */
+  readonly minutes: number;
+}
+
+/**
+ * When the upload window closes: the sooner of `RECEIPT_CAPTURE_MINUTES` and the
+ * payment's own deadline.
+ *
+ * Null when that instant is not after `now`. Two things produce it — a payment still
+ * `PENDING` past its deadline because the sweep has not reached it, and a window of zero
+ * minutes — and in both a window would accept evidence for something already over.
+ * `receipt_captures_expiry_check` refuses `expires_at <= opened_at` one layer down, so
+ * this returning null is what keeps that from being a 500.
+ *
+ * A NULL payment deadline means the payment has none, and then the cap is the only bound
+ * there is — the same reading `paymentDeadline` gives a null order deadline, and the
+ * reason this takes `Date | null` rather than making the caller decide.
+ *
+ * Pure and module-level so the rule is one expression rather than two branches at the
+ * call site, exactly as `paymentDeadline` is.
+ */
+export function receiptWindowExpiry(now: Date, paymentExpiresAt: Date | null): Date | null {
+  const capped = new Date(now.getTime() + RECEIPT_CAPTURE_MINUTES * 60_000);
+  const chosen =
+    paymentExpiresAt !== null && paymentExpiresAt.getTime() < capped.getTime()
+      ? paymentExpiresAt
+      : capped;
+  return chosen.getTime() > now.getTime() ? chosen : null;
+}
+
+/**
+ * How many minutes to tell the customer they have.
+ *
+ * Rounded UP and floored at one. Down would say "you have 29 minutes" for 29 minutes and
+ * 59 seconds, and a truthful zero is useless to somebody holding a phone — the caller
+ * only reaches this with a window that is genuinely open.
+ */
+export function receiptWindowMinutes(expiresAt: Date, now: Date): number {
+  return Math.max(1, Math.ceil((expiresAt.getTime() - now.getTime()) / 60_000));
 }
 
 export interface PaymentListQuery {
@@ -1379,7 +1475,7 @@ export class PaymentService {
     actor: ActorContext,
     customerId: UserId,
     signal: PaymentSentSignal,
-  ): Promise<PaymentRecord> {
+  ): Promise<TransferSignalResult> {
     const paymentId = this.paymentId(signal.paymentId);
     const denial = { action: 'payment.signal_sent', entityType: 'Payment', entityId: paymentId };
     await this.authorize(scope, actor, PAYMENT_PLACE_PERMISSION, denial);
@@ -1393,7 +1489,36 @@ export class PaymentService {
     );
     if (replayed !== null) {
       const existing = await this.deps.repository.findById(scope, paymentId);
-      if (existing !== null) return existing;
+      if (existing !== null) {
+        /*
+         * The window is READ on this path, never re-opened.
+         *
+         * This is one Telegram update delivered twice, not a second tap — a second tap
+         * carries a different key and goes through the mutation below. Re-opening would
+         * extend a deadline the customer was already told, and reporting the original
+         * window as open when it has since closed would ask for a file that would then
+         * be refused. So whatever is open now is what the customer is told, and null is
+         * a real answer.
+         */
+        const open = await this.deps.receiptCaptures.findOpen(
+          scope,
+          signal.botInstanceId,
+          customerId,
+        );
+        const stillOpen =
+          open !== null &&
+          open.paymentId === paymentId &&
+          open.expiresAt.getTime() > this.deps.clock.now().getTime();
+        return {
+          payment: existing,
+          receiptWindow: stillOpen
+            ? {
+                expiresAt: open.expiresAt,
+                minutes: receiptWindowMinutes(open.expiresAt, this.deps.clock.now()),
+              }
+            : null,
+        };
+      }
     }
 
     const now = this.deps.clock.now();
@@ -1487,7 +1612,70 @@ export class PaymentService {
         if (current === null) {
           throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
         }
-        return current;
+
+        /*
+         * The upload window, opened in THIS transaction.
+         *
+         * Opened whether or not this call is the one that stamped the claim. `stamped`
+         * being false here means a second tap on a claim already recorded — the branch
+         * above has already refused every other reading of it — and a customer tapping
+         * again is a customer who wants to send the receipt. Refusing them a window
+         * because the first tap recorded the claim would answer the photo that follows
+         * with "nothing was expected".
+         *
+         * The audit row above is still written only when this call stamped it, because
+         * that is a claim being recorded and this is not.
+         */
+        const expiresAt = receiptWindowExpiry(now, current.expiresAt);
+        if (expiresAt === null) return { payment: current, receiptWindow: null };
+
+        /*
+         * The same lock `ReceiptService.submit` takes, and for the first of two reasons.
+         *
+         * A customer with two unpaid invoices can tap both buttons at once. Each of
+         * these transactions closes what it can SEE and inserts; neither sees the
+         * other's uncommitted row, so the second insert hits
+         * `receipt_captures_open_key`, the webhook swallows the failure, and that tap is
+         * answered with nothing while the window that survives names the other invoice.
+         */
+        await this.deps.receiptCaptures.lockForCustomer(
+          scope,
+          signal.botInstanceId,
+          customerId,
+          tx,
+        );
+
+        /*
+         * And the second reason: a window is not promised when it cannot be used.
+         *
+         * After the fifth receipt the capture closed as `RECEIVED` and the payment is
+         * still PENDING, so a later tap on the original button reached `open` and the
+         * customer was told to send another — which `submit` then refuses with
+         * `RECEIPT_LIMIT_REACHED` every time. `receiptWindow: null` answers with
+         * `bot.payment.received_for_review` instead, which is true and promises
+         * nothing. The count is read under the lock, so it cannot be stale.
+         */
+        const held = await this.deps.receipts.countForPayment(scope, paymentId, tx);
+        if (held >= PAYMENT_RECEIPT_MAX_PER_PAYMENT) {
+          return { payment: current, receiptWindow: null };
+        }
+
+        await this.deps.receiptCaptures.open(
+          scope,
+          {
+            id: this.deps.ids.uuid() as ReceiptCaptureId,
+            botInstanceId: signal.botInstanceId,
+            customerId,
+            paymentId,
+            openedAt: now,
+            expiresAt,
+          },
+          tx,
+        );
+        return {
+          payment: current,
+          receiptWindow: { expiresAt, minutes: receiptWindowMinutes(expiresAt, now) },
+        };
       },
     );
   }

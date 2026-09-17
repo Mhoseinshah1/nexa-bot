@@ -1,15 +1,23 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   PAYMENT_METHODS,
   PAYMENT_STATES,
   uuidV7Schema,
   type PaymentMethod,
+  type PaymentReceiptView,
   type PaymentState,
   type PaymentSummaryResponse,
 } from '@nexa/contracts';
-import { confirmPayment, fetchPayment, fetchPayments, rejectPayment } from '../api/client';
-import { formatTimestamp } from '../format';
+import {
+  confirmPayment,
+  fetchPayment,
+  fetchPaymentReceipts,
+  fetchPaymentReceiptBytes,
+  fetchPayments,
+  rejectPayment,
+} from '../api/client';
+import { formatTimestamp, splitBytes } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { mayRequest, queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
@@ -353,13 +361,162 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
 // Detail
 // ---------------------------------------------------------------------------
 
+/**
+ * What the customer SENT, and a way to look at it.
+ *
+ * A receipt is a claim with a file attached. Nothing here confirms a payment — the
+ * confirm form below is the only thing that does, and it charges `receipts.review`
+ * while this card charges `receipts.view`.
+ *
+ * The bytes are read through the API rather than from Telegram: the bot token stays in
+ * the API process, and the file id a receipt stores is useless without it. The API
+ * serves them as `application/octet-stream` with `nosniff` and `attachment`, so the
+ * type shown here is decided from what the RECORD says it is and never from the
+ * response — a customer's «receipt» that is really an SVG cannot become a script on
+ * this origin.
+ */
+function ReceiptsCard({ paymentId }: { paymentId: string }) {
+  const receipts = useQuery({
+    queryKey: ['payment-receipts', paymentId],
+    queryFn: () => fetchPaymentReceipts(paymentId),
+  });
+  const rows = receipts.data?.receipts ?? [];
+
+  return (
+    <Card title={t('web.payment_receipts')}>
+      <StateSwitch
+        query={receipts}
+        isEmpty={rows.length === 0}
+        empty={<Empty title={t('web.payment_receipts_empty')} />}
+      >
+        <p className="muted small">{t('web.payment_receipts_note')}</p>
+        <div className="receipt-list">
+          {rows.map((receipt) => (
+            <ReceiptRow key={receipt.id} paymentId={paymentId} receipt={receipt} />
+          ))}
+        </div>
+      </StateSwitch>
+    </Card>
+  );
+}
+
+/** One receipt: what it is, when it arrived, and the control that fetches its bytes. */
+function ReceiptRow({ paymentId, receipt }: { paymentId: string; receipt: PaymentReceiptView }) {
+  const [objectUrl, setObjectUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  /*
+   * An object URL is a document-lifetime handle, so it is revoked when this row goes
+   * away or replaces it. Without this, every open leaks the file until the tab closes.
+   */
+  useEffect(
+    () => () => {
+      if (objectUrl !== null) URL.revokeObjectURL(objectUrl);
+    },
+    [objectUrl],
+  );
+
+  /*
+   * From the RECORD, never from the response, and for a PHOTO from `kind` ALONE.
+   *
+   * A photo carries no mime type: Telegram re-encodes it and declares none, so
+   * `receiptFileOf` stores null rather than fabricating one. Requiring `image/` here
+   * therefore made every real photo a download, and the fixture claiming `image/jpeg`
+   * was the only thing that said otherwise.
+   *
+   * Safe without one because the ELEMENT decides: an `<img>` decodes an image or shows
+   * nothing, and a script inside an SVG does not run when the SVG is an `<img>` source.
+   * A DOCUMENT is a download whatever it claims to be.
+   */
+  const renderable = receipt.kind === 'PHOTO';
+  /*
+   * The Blob carries the record's type when the record has one and NOTHING otherwise —
+   * never a type this code invented. An untyped blob in an `<img>` is sniffed by the
+   * browser, which is the one place sniffing an image is what should happen.
+   */
+  const photoType =
+    receipt.mimeType !== null && receipt.mimeType.startsWith('image/') ? receipt.mimeType : '';
+
+  const load = useMutation({
+    mutationFn: () => fetchPaymentReceiptBytes(paymentId, receipt.id),
+    onSuccess: (blob) => {
+      setFailed(false);
+      setObjectUrl(
+        URL.createObjectURL(
+          new Blob([blob], {
+            type: renderable ? photoType : 'application/octet-stream',
+          }),
+        ),
+      );
+    },
+    onError: () => setFailed(true),
+  });
+
+  const size = receipt.fileSize === null ? null : splitBytes(BigInt(receipt.fileSize));
+
+  return (
+    <div className="receipt">
+      <KV
+        items={[
+          [
+            t('web.payment_receipt_kind'),
+            t(
+              receipt.kind === 'PHOTO'
+                ? 'web.payment_receipt_kind_photo'
+                : 'web.payment_receipt_kind_document',
+            ),
+          ],
+          [
+            t('web.payment_receipt_file'),
+            receipt.fileName === null ? <Dash key="f" /> : receipt.fileName,
+          ],
+          [
+            t('web.payment_receipt_size'),
+            size === null ? <Dash key="s" /> : `${size.value} ${t(size.unit)}`,
+          ],
+          [t('web.payment_receipt_sent_at'), formatTimestamp(receipt.createdAt)],
+        ]}
+      />
+      <div className="btn-group">
+        <button
+          type="button"
+          className="btn"
+          disabled={load.isPending}
+          onClick={() => load.mutate()}
+        >
+          {t(renderable ? 'web.payment_receipt_view' : 'web.payment_receipt_download')}
+        </button>
+      </div>
+      {failed && (
+        <Banner tone="warn" title={t('web.payment_receipt_failed')}>
+          {t('web.payment_receipt_failed_hint')}
+        </Banner>
+      )}
+      {objectUrl !== null &&
+        (renderable ? (
+          <img className="receipt-image" src={objectUrl} alt={t('web.payment_receipt_alt')} />
+        ) : (
+          <div className="btn-group">
+            {/* The file the operator asked for, named as the customer sent it. */}
+            <a className="btn" href={objectUrl} download={receipt.fileName ?? receipt.id}>
+              {t('web.payment_receipt_save')}
+            </a>
+          </div>
+        ))}
+    </div>
+  );
+}
+
 export function PaymentDetailPage({
   id,
   mayReview,
+  mayViewReceipts,
   denied,
 }: {
   id: string;
   mayReview: boolean;
+  /** `receipts.view`, separate from `mayReview`: reading evidence is not deciding. */
+  mayViewReceipts: boolean;
   denied: boolean;
 }) {
   const onLink = useLinkHandler();
@@ -580,6 +737,14 @@ export function PaymentDetailPage({
                 />
               </Card>
             )}
+
+            {/*
+              What the customer sent, when they sent anything.
+              Its own card and its own permission: `receipts.view` reads the evidence,
+              `receipts.review` decides. A reader who may see a payment does not
+              automatically get to open a customer's bank screenshot.
+            */}
+            {mayViewReceipts && <ReceiptsCard paymentId={id} />}
 
             {/*
               How it ended WITHOUT money, when it did.
