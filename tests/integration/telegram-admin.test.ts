@@ -549,6 +549,40 @@ describe('the Telegram management panel', () => {
     ]);
   });
 
+  it('queues a reviewer notice on a default installation, where ops notifications are off', async () => {
+    /*
+     * `ops_notifications` is `defaultEnabled: false` and its own description says why —
+     * "a destination has to be configured and tested first". A reviewer-addressed
+     * message did not come from that destination and must not wait on it: gated on the
+     * flag, a default installation with correctly bound reviewers queued NOTHING, which
+     * is the product promising a notification it never sends.
+     */
+    expect(await ctx.container.featureFlagResolver.isEnabled(tenantA, 'ops_notifications')).toBe(false);
+
+    const addressed = await ctx.container.notifications.queue(tenantA, {
+      kind: 'RECEIPT_AWAITING_REVIEW',
+      dedupeKey: `receipt.awaiting:${ctx.container.ids.uuid()}`,
+      templateKey: 'bot.admin.receipt_awaiting',
+      values: { reference: 'NX-TEST', total: money(250_000n, 'IRT') },
+      destination: { transport: 'TELEGRAM', chatId: '701600', topicId: null },
+    });
+    expect(addressed.created).toBe(true);
+    expect(addressed.intent?.destination).toEqual({
+      transport: 'TELEGRAM',
+      chatId: '701600',
+      topicId: null,
+    });
+
+    // And the operations lane is still gated, which is the half the flag is for.
+    const operational = await ctx.container.notifications.queue(tenantA, {
+      kind: 'OPERATIONS_TEST',
+      dedupeKey: `ops.test:${ctx.container.ids.uuid()}`,
+      templateKey: 'bot.admin.receipt_awaiting',
+      values: { reference: 'NX-TEST', total: money(250_000n, 'IRT') },
+    });
+    expect(operational.created).toBe(false);
+  });
+
   // -------------------------------------------------------------------------
   // Helpers
   // -------------------------------------------------------------------------

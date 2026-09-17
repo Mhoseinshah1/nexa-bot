@@ -56,6 +56,27 @@ describe('the Telegram command menu', () => {
     }
   });
 
+  it('routes the admin keyboard label, because a keyboard tap arrives as text', () => {
+    /*
+     * The button was drawn and did nothing.
+     *
+     * `TelegramCustomerMessenger` appends `bot.menu.admin` to the keyboard for a bound
+     * administrator, and a reply-keyboard tap reaches the bot as an ordinary TEXT
+     * message — so unless the composition root maps that exact label to `/admin`,
+     * `intentOf` answers `bot.unknown_command` and only typing the command works. The
+     * keyboard's own comment in `bot-commands.ts` names this failure one constant over:
+     * a label nothing routes is a button that tells the person the bot did not
+     * understand.
+     *
+     * Read from the SOURCE of the composition root, for the reason the command list
+     * above is: a constant here would be the thing that drifts.
+     */
+    const container = new URL('../../apps/api/src/container.ts', import.meta.url);
+    const source = readFileSync(container, 'utf8');
+    expect(source).toContain('CATALOGUE_FA[ADMIN_MENU_BUTTON.label]');
+    expect(source).toContain('`/${ADMIN_MENU_COMMAND}`');
+  });
+
   it('has a declared template key and a Persian description for every entry', () => {
     // A registered command with no description would be registered as an empty string,
     // which Telegram accepts and a customer reads as a blank menu row.

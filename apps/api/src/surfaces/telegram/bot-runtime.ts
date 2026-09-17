@@ -3257,11 +3257,23 @@ export class BotRuntime {
        * to find what they already saw. The lane's dedupe key makes that harmless; not
        * sending it makes it absent.
        *
-       * Nothing here can fail the turn: the customer's receipt is committed and their
-       * reply is decided, and the queue in the panel is the durable record either way —
-       * this is the notification, not the work.
+       * The poke cannot fail this turn, and that is enforced in TWO places rather than
+       * asserted once. The composition root catches and logs, because it owns the
+       * transaction; this `catch` is the surface's own guarantee, because the call sits
+       * inside the try whose handler is `refusal` — and `refusal` RETHROWS anything it
+       * has no reply for. Without it a database error while telling reviewers would
+       * have cost the customer the acknowledgement for a receipt already committed, and
+       * Telegram's redelivery answers `filed: false`, which skips the poke for ever.
        */
-      if (result.filed) await this.deps.notifyReviewers?.(scope, result.paymentId);
+      if (result.filed) {
+        try {
+          await this.deps.notifyReviewers?.(scope, result.paymentId);
+        } catch {
+          // Deliberately not rethrown and deliberately not reported from here: the
+          // container logs it, the queue in the panel is the durable record, and the
+          // customer's answer is about their receipt rather than about our plumbing.
+        }
+      }
       return { key: 'bot.payment.receipt_received', values: {}, buttons: [], orderId: null };
     } catch (error) {
       return refusal(error);

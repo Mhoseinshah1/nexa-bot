@@ -112,16 +112,26 @@ export class NotificationService {
     },
     tx?: unknown,
   ): Promise<{ readonly intent: NotificationIntent | null; readonly created: boolean }> {
-    if (!(await this.features.isEnabled(scope, 'ops_notifications', tx))) {
+    /*
+     * The flag gates the OPERATIONS lane, and only it.
+     *
+     * `ops_notifications` is off by default and its own description says what it is
+     * for: "a destination has to be configured and tested first". A message addressed
+     * to a named administrator did not come from that destination and is not waiting
+     * on it — gating this on the flag meant a default installation with correctly bound
+     * receipt reviewers queued nothing at all, silently, which is the product
+     * promising a notification it never sends.
+     *
+     * So the check applies to the path that reads the setting. A caller that supplies
+     * its own destination has already decided who it is writing to.
+     */
+    if (
+      input.destination === undefined &&
+      !(await this.features.isEnabled(scope, 'ops_notifications', tx))
+    ) {
       return { intent: null, created: false };
     }
 
-    /*
-     * The override wins, and its absence still means the OPERATIONS destination —
-     * so an installation that has not configured one queues nothing, exactly as
-     * before. A caller that supplies a destination is not subject to that setting,
-     * because the setting is not where its address came from.
-     */
     const destination = input.destination ?? (await this.destination(scope, tx));
     if (destination === null) return { intent: null, created: false };
 

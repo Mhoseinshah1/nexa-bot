@@ -1,5 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import {
+  ADMIN_MENU_BUTTON,
+  ADMIN_MENU_COMMAND,
   MAIN_MENU_BUTTONS,
   MAX_REQUESTS_PER_PROBE,
   OPERATION_LEASE_SECONDS_MIN,
@@ -12,6 +14,7 @@ import type {
   Logger,
   OperationalEventRecorder,
   PasswordHasher,
+  PaymentId,
   PermissionKey,
   SecretCipher,
   TenantId,
@@ -2069,6 +2072,45 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     logger,
   });
 
+  /**
+   * Tells the administrators who may decide a receipt that one is waiting (Phase 5T).
+   *
+   * ONE transaction for the whole fan-out, so a reviewer list read halfway through a
+   * role change cannot produce a message for authority somebody no longer holds.
+   * Addressed to each administrator's own chat through the lane's destination override,
+   * snapshotted into the row — a message sent today still says which chat it went to
+   * after that binding is revoked tomorrow. The dedupe key names the payment AND the
+   * reviewer: one receipt is one message per person, and a redelivered upload is none.
+   */
+  const notifyReviewersOf = async (scope: TenantContext, paymentId: PaymentId): Promise<void> => {
+    await uow.run(scope, async (tx) => {
+      const payment = await paymentRepository.findById(scope, paymentId, tx);
+      if (payment === null) return;
+      const reviewers = await telegramAdmins.reviewers(
+        scope,
+        RECEIPTS_REVIEW_PERMISSION,
+        newCorrelationId(ids.uuid()),
+        tx,
+      );
+      for (const reviewer of reviewers) {
+        const chatId = reviewer.admin.telegramUserId;
+        /* istanbul ignore next -- `listTelegramBound` selects only bound rows. */
+        if (chatId === null) continue;
+        await notifications.queue(
+          scope,
+          {
+            kind: 'RECEIPT_AWAITING_REVIEW',
+            dedupeKey: `receipt.awaiting:${payment.id}:${reviewer.admin.id}`,
+            templateKey: 'bot.admin.receipt_awaiting',
+            values: { reference: payment.reference, total: payment.amount },
+            destination: { transport: 'TELEGRAM', chatId, topicId: null },
+          },
+          tx,
+        );
+      }
+    });
+  };
+
   return {
     config,
     logger,
@@ -2146,9 +2188,26 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
        * `@nexa/i18n` in a surface, and `TelegramCustomerMessenger` draws the same
        * keyboard from the same constant. One source, two consumers, no drift.
        */
-      mainMenu: new Map(
-        MAIN_MENU_BUTTONS.map((button) => [CATALOGUE_FA[button.label], `/${button.command}`]),
-      ),
+      mainMenu: new Map([
+        ...MAIN_MENU_BUTTONS.map(
+          (button) => [CATALOGUE_FA[button.label], `/${button.command}`] as const,
+        ),
+        /*
+         * The management panel's label, and it has to be HERE or the button does not
+         * work at all.
+         *
+         * `TelegramCustomerMessenger` appends this row for a bound administrator, and
+         * a tap on a reply keyboard arrives as ordinary TEXT — so without the route
+         * `intentOf` cannot turn «پنل مدیریت» into `/admin` and answers
+         * `bot.unknown_command`. That is precisely the failure the keyboard comment
+         * warns about one constant over: a visible button matching nothing.
+         *
+         * The map carries NO authority. It translates a label into a command; whether
+         * that command opens anything is decided by `adminTurn`, which resolves the
+         * binding and finds nothing for a customer who types the same words.
+         */
+        [CATALOGUE_FA[ADMIN_MENU_BUTTON.label], `/${ADMIN_MENU_COMMAND}`] as const,
+      ]),
       destinations: paymentDestinationRenderer,
       accounts: paymentAccountRepository,
       receipts: receiptService,
@@ -2167,32 +2226,25 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
        * a redelivered upload produces none.
        */
       notifyReviewers: async (scope, paymentId) => {
-        await uow.run(scope, async (tx) => {
-          const payment = await paymentRepository.findById(scope, paymentId, tx);
-          if (payment === null) return;
-          const reviewers = await telegramAdmins.reviewers(
-            scope,
-            RECEIPTS_REVIEW_PERMISSION,
-            newCorrelationId(ids.uuid()),
-            tx,
+        /*
+         * Swallowed HERE, and recorded, because the surface awaits this.
+         *
+         * `submitReceipt` calls it inside the try whose catch is `refusal`, and
+         * `refusal` RETHROWS anything it has no reply for — so a failed settings read
+         * or notification insert would have cost the customer their
+         * "receipt received" answer for a receipt that is already committed, and
+         * Telegram's redelivery answers `filed: false`, which skips the poke for ever.
+         * The queue in the panel is the durable record; this is the poke, and a poke
+         * that failed is a log line rather than a customer left in silence.
+         */
+        try {
+          await notifyReviewersOf(scope, paymentId);
+        } catch (error) {
+          logger.error(
+            { err: error instanceof Error ? error.name : 'unknown', paymentId },
+            'Could not tell the reviewers a receipt is waiting.',
           );
-          for (const reviewer of reviewers) {
-            const chatId = reviewer.admin.telegramUserId;
-            /* istanbul ignore next -- `listTelegramBound` selects only bound rows. */
-            if (chatId === null) continue;
-            await notifications.queue(
-              scope,
-              {
-                kind: 'RECEIPT_AWAITING_REVIEW',
-                dedupeKey: `receipt.awaiting:${payment.id}:${reviewer.admin.id}`,
-                templateKey: 'bot.admin.receipt_awaiting',
-                values: { reference: payment.reference, total: payment.amount },
-                destination: { transport: 'TELEGRAM', chatId, topicId: null },
-              },
-              tx,
-            );
-          }
-        });
+        }
       },
       /*
        * The one write the turn makes after its Telegram send, and the transaction
