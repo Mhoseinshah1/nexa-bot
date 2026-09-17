@@ -7,6 +7,7 @@ import {
   NOTIFICATION_TRANSPORTS,
 } from './notifications.js';
 import { uuidV7Schema } from './ids.js';
+import { paymentAccountInputSchema } from './payment-accounts.js';
 import { CUSTOMER_STATUSES, telegramUserIdSchema } from './customer.js';
 import {
   MAX_DEVICE_LIMIT,
@@ -1991,6 +1992,35 @@ export const paymentSummarySchema = z.object({
 });
 export type PaymentSummaryResponse = z.infer<typeof paymentSummarySchema>;
 
+/**
+ * WHERE this payment's instructions told the customer to send the money.
+ *
+ * Read from the payment's frozen snapshot, so renaming, editing or disabling the
+ * account afterwards does not change what this screen says the customer was told. That
+ * immutability is the whole reason the snapshot exists, and until this shape existed
+ * nothing an operator could open showed it — the `label` was documented as retained
+ * for reconciliation and reached no surface. Found by the Codex review of PR #34.
+ *
+ * `cardLast4`, never the card number. A reviewer's question here is WHICH account a
+ * transfer should have arrived in, and the label, the bank, the holder and four digits
+ * answer it; the full number is on the Payment Accounts screen under
+ * `payments.accounts.edit`, which is the one place it is needed and the one place it is
+ * entered. Sending sixteen digits to a browser that does not need them would put a
+ * card number in every operator's memory cache and error reporter.
+ *
+ * `hasIban` rather than the Sheba itself, for the same reason: whether the customer was
+ * given one changes how a statement is read; the value does not.
+ */
+export const paymentDestinationViewSchema = z.object({
+  accountId: uuidV7Schema,
+  label: z.string(),
+  bankName: z.string(),
+  holderName: z.string(),
+  cardLast4: z.string().regex(/^[0-9]{4}$/u),
+  hasIban: z.boolean(),
+});
+export type PaymentDestinationView = z.infer<typeof paymentDestinationViewSchema>;
+
 export const paymentDetailSchema = paymentSummarySchema.extend({
   /** The operator's note about the evidence. Detail only. */
   evidenceNote: z.string().nullable(),
@@ -2000,6 +2030,12 @@ export const paymentDetailSchema = paymentSummarySchema.extend({
    * person's bank transfer.
    */
   resolutionNote: z.string().nullable(),
+  /**
+   * Null for a payment that never carried one: a wallet settlement, or a manual
+   * transfer issued before 5A existed. Not null for "you may not see it" — the fields
+   * here need no permission beyond `payments.view`, because none of them is the number.
+   */
+  destination: paymentDestinationViewSchema.nullable(),
 });
 export type PaymentDetailResponse = z.infer<typeof paymentDetailSchema>;
 
@@ -2079,6 +2115,121 @@ export const PAYMENT_ROUTES = {
   detail: (id: string) => `/payments/${encodeURIComponent(id)}`,
   confirm: (id: string) => `/payments/${encodeURIComponent(id)}/confirm`,
   reject: (id: string) => `/payments/${encodeURIComponent(id)}/reject`,
+} as const;
+
+// --- Manual-transfer accounts -------------------------------------------------
+
+/**
+ * One configured destination, as the Web Admin renders it.
+ *
+ * The card number and the Sheba are returned IN FULL, and that is deliberate rather than
+ * an oversight in a codebase that refuses to return a panel credential. They are not
+ * secrets: this installation PUBLISHES them, to every customer who chooses to pay out of
+ * band, and an operator who cannot read the value cannot check it against their bank.
+ * `docs/conventions.md` states the rule directly — a setting surface returns its current
+ * value, and "the only way to read a price is to overwrite it" is the legacy defect it
+ * names.
+ *
+ * The masking the Web Admin applies in its LIST is presentation: an operator's screen in
+ * a shared office is a different threat from a response body, and the edit form shows the
+ * whole number because that is where it is checked.
+ */
+export const paymentAccountSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  bankName: z.string(),
+  holderName: z.string(),
+  cardNumber: z.string(),
+  iban: z.string().nullable(),
+  enabled: z.boolean(),
+  /** At most one per tenant, and it is always enabled. Both are database constraints. */
+  isDefault: z.boolean(),
+  sortOrder: z.number().int(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+export type PaymentAccountView = z.infer<typeof paymentAccountSchema>;
+
+/**
+ * Every account this tenant has, with no cursor.
+ *
+ * The one list in this API that is not a keyset page, because
+ * `PAYMENT_ACCOUNT_MAX_PER_TENANT` makes it complete by construction. A paginated
+ * configuration screen silently omits the row an operator is looking for; a bound the
+ * create path enforces does not.
+ */
+export const paymentAccountListResponseSchema = z.object({
+  accounts: z.array(paymentAccountSchema),
+});
+export type PaymentAccountListResponse = z.infer<typeof paymentAccountListResponseSchema>;
+
+export const paymentAccountResponseSchema = z.object({ account: paymentAccountSchema });
+export type PaymentAccountResponse = z.infer<typeof paymentAccountResponseSchema>;
+
+/**
+ * A create, which carries the fields plus the two decisions that are not fields.
+ *
+ * `enabled` and `makeDefault` are separate from `paymentAccountInputSchema` because they
+ * are not properties of the account — they are the tenant's disposition towards it, and
+ * the update path changes each through its own endpoint so that "I edited a card number"
+ * and "I changed where money goes" are two different audit rows.
+ *
+ * The FIRST enabled account a tenant creates becomes the default whether or not
+ * `makeDefault` is set, and the service says why: a tenant with one account and no
+ * default has a manual-transfer button that refuses, which is a configuration screen
+ * that looks complete and is not.
+ */
+export const createPaymentAccountRequestSchema = paymentAccountInputSchema.extend({
+  idempotencyKey: z.string().min(8).max(255),
+  enabled: z.boolean(),
+  makeDefault: z.boolean(),
+});
+export type CreatePaymentAccountRequest = z.input<typeof createPaymentAccountRequestSchema>;
+
+/**
+ * An edit of the account's own fields, and only those.
+ *
+ * It cannot enable, disable or promote — those are the endpoints below. Every field is
+ * required rather than patchable, because a partial write of a payment destination is how
+ * a card number ends up beside the wrong holder name: the form shows all four, the
+ * operator retypes the card and the holder stays as it was. The surface submits what it
+ * rendered.
+ *
+ * Editing does NOT touch any payment already issued against this account. That is the
+ * whole purpose of `payment_destinations`, and it is enforced by a trigger rather than by
+ * this comment.
+ */
+export const updatePaymentAccountRequestSchema = paymentAccountInputSchema.extend({
+  idempotencyKey: z.string().min(8).max(255),
+});
+export type UpdatePaymentAccountRequest = z.input<typeof updatePaymentAccountRequestSchema>;
+
+/**
+ * Enabling or disabling one account.
+ *
+ * Disabling the DEFAULT is refused with `PAYMENT_ACCOUNT_DISABLED` rather than silently
+ * promoting somebody else: which account money should arrive in next is the operator's
+ * decision, and a system that picks one for them has made a financial choice nobody
+ * recorded.
+ */
+export const setPaymentAccountEnabledRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  enabled: z.boolean(),
+});
+export type SetPaymentAccountEnabledRequest = z.infer<typeof setPaymentAccountEnabledRequestSchema>;
+
+/** Promoting one account to be the destination new payments are issued against. */
+export const setDefaultPaymentAccountRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+});
+export type SetDefaultPaymentAccountRequest = z.infer<typeof setDefaultPaymentAccountRequestSchema>;
+
+export const PAYMENT_ACCOUNT_ROUTES = {
+  list: '/payment-accounts',
+  create: '/payment-accounts',
+  update: (id: string) => `/payment-accounts/${encodeURIComponent(id)}`,
+  enabled: (id: string) => `/payment-accounts/${encodeURIComponent(id)}/enabled`,
+  makeDefault: (id: string) => `/payment-accounts/${encodeURIComponent(id)}/default`,
 } as const;
 
 // --- Services ----------------------------------------------------------------

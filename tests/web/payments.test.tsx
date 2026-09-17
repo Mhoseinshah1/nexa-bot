@@ -57,9 +57,32 @@ function payment(overrides: Record<string, unknown> = {}): Record<string, unknow
 const detail = (overrides: Record<string, unknown> = {}) => [
   {
     url: `/payments/${ROW_ID}`,
-    body: { payment: { ...payment(overrides), evidenceNote: null, resolutionNote: null } },
+    body: {
+      payment: {
+        ...payment(overrides),
+        evidenceNote: null,
+        resolutionNote: null,
+        // REQUIRED by `paymentDetailSchema` since the Codex round on PR #34. Null is a
+        // real answer — a wallet settlement has no destination — and the cases below
+        // override it.
+        destination: null,
+        ...('destination' in overrides ? { destination: overrides['destination'] } : {}),
+      },
+    },
   },
 ];
+
+const ACCOUNT_ID = '019250ab-cdef-7012-8345-6789abcdef01';
+
+/** What the server sends: four digits and a flag, never the card number. */
+const DESTINATION = {
+  accountId: ACCOUNT_ID,
+  label: 'main',
+  bankName: 'Bank Melli',
+  holderName: 'Acme Store',
+  cardLast4: '7893',
+  hasIban: true,
+};
 
 const list = (payments: unknown[], nextCursor: string | null = null) => [
   { url: '/payments', body: { payments, nextCursor } },
@@ -560,5 +583,56 @@ describe('the payments route', () => {
     await waitFor(() => {
       expect(api.calls.some((call) => call.url.includes('/payments'))).toBe(false);
     });
+  });
+});
+
+/**
+ * The card the Codex review of PR #34 found missing.
+ *
+ * The snapshot was frozen onto every manual-transfer payment by 5A and reached exactly
+ * one caller: the customer's own instructions. So the reviewer holding a bank statement
+ * could not tell which account a payment had named — the question the snapshot exists to
+ * answer after an account is renamed or disabled.
+ *
+ * Two cases, and the second is the one that matters: a PROHIBITION. The browser must
+ * never receive the sixteen digits, so the assertion is on what is absent rather than on
+ * what is drawn.
+ */
+describe('the frozen destination on a payment detail', () => {
+  it('names the account the instructions pointed at', async () => {
+    stubApi(detail({ destination: DESTINATION }));
+    const { container } = renderPage(
+      <PaymentDetailPage id={ROW_ID} mayReview={false} denied={false} />,
+    );
+    await screen.findByText('مقصد واریز اعلام‌شده');
+
+    expect(container.textContent).toContain('مقصد واریز اعلام‌شده');
+    expect(container.textContent).toContain('main');
+    expect(container.textContent).toContain('Bank Melli');
+    expect(container.textContent).toContain('Acme Store');
+    expect(container.textContent).toContain('7893');
+    // A Sheba was given, and WHETHER is all this screen says about it.
+    expect(container.textContent).toContain('به مشتری اعلام شد');
+  });
+
+  it('never renders a full card number, and says nothing when there is no destination', async () => {
+    stubApi(detail({ destination: DESTINATION }));
+    const withCard = renderPage(<PaymentDetailPage id={ROW_ID} mayReview={false} denied={false} />);
+    await screen.findByText('مقصد واریز اعلام‌شده');
+    /*
+     * Sixteen consecutive digits anywhere on the page. `cardLast4` is what the contract
+     * carries, so this fails only if somebody widens the schema — which is the change
+     * this case exists to stop.
+     */
+    expect(withCard.container.textContent ?? '').not.toMatch(/[0-9]{16}/u);
+    cleanup();
+
+    stubApi(detail());
+    const without = renderPage(<PaymentDetailPage id={ROW_ID} mayReview={false} denied={false} />);
+    // The reference proves the page RENDERED; the destination card is what must not be
+    // there. Anchoring on the card's own title would pass on a page that never loaded.
+    await screen.findByText('جزئیات پرداخت');
+    // Hidden, not filled with dashes: a wallet payment genuinely has no destination.
+    expect(without.container.textContent).not.toContain('مقصد واریز اعلام‌شده');
   });
 });

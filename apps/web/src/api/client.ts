@@ -116,6 +116,11 @@ import {
   type CustomerListResponse,
   type CustomerResponse,
   type CustomerStatus,
+  PAYMENT_ACCOUNT_ROUTES,
+  paymentAccountListResponseSchema,
+  paymentAccountResponseSchema,
+  type PaymentAccountListResponse,
+  type PaymentAccountResponse,
 } from '@nexa/contracts';
 
 /**
@@ -809,6 +814,74 @@ export function fetchPayment(id: string): Promise<PaymentResponse> {
  * the figure at approval time is an operator able to approve a different payment from
  * the one the customer made.
  */
+/**
+ * The manual-transfer destinations, all of them, with no cursor.
+ *
+ * The one list in this client that does not page. `PAYMENT_ACCOUNT_MAX_PER_TENANT`
+ * makes it complete by construction, which a configuration screen needs and a paginated
+ * one cannot promise.
+ */
+export function fetchPaymentAccounts(): Promise<PaymentAccountListResponse> {
+  return authedGet(PAYMENT_ACCOUNT_ROUTES.list, paymentAccountListResponseSchema);
+}
+
+/**
+ * Adds a destination.
+ *
+ * The card number and the Sheba are sent as the operator typed them — separators,
+ * Persian digits and all. Normalisation happens on the SERVER, inside
+ * `paymentAccountInputSchema`, so that what is stored and what is frozen onto a payment
+ * are one representation decided in one place. A browser that normalised first would be
+ * a second opinion about what a card number is, and the one nobody tests.
+ */
+export function createPaymentAccount(input: {
+  idempotencyKey: string;
+  label: string;
+  bankName: string;
+  holderName: string;
+  cardNumber: string;
+  iban: string | null;
+  sortOrder: number;
+  enabled: boolean;
+  makeDefault: boolean;
+}): Promise<PaymentAccountResponse> {
+  return post(PAYMENT_ACCOUNT_ROUTES.create, input, paymentAccountResponseSchema);
+}
+
+/** Corrects the fields. It cannot enable, disable or promote — those are their own calls. */
+export function updatePaymentAccount(input: {
+  id: string;
+  idempotencyKey: string;
+  label: string;
+  bankName: string;
+  holderName: string;
+  cardNumber: string;
+  iban: string | null;
+  sortOrder: number;
+}): Promise<PaymentAccountResponse> {
+  const { id, ...body } = input;
+  return post(PAYMENT_ACCOUNT_ROUTES.update(id), body, paymentAccountResponseSchema);
+}
+
+/** Stops or resumes using one account. Disabling the default is refused by the server. */
+export function setPaymentAccountEnabled(input: {
+  id: string;
+  idempotencyKey: string;
+  enabled: boolean;
+}): Promise<PaymentAccountResponse> {
+  const { id, ...body } = input;
+  return post(PAYMENT_ACCOUNT_ROUTES.enabled(id), body, paymentAccountResponseSchema);
+}
+
+/** Moves the destination new payments are issued against. Issued ones do not move. */
+export function setDefaultPaymentAccount(input: {
+  id: string;
+  idempotencyKey: string;
+}): Promise<PaymentAccountResponse> {
+  const { id, ...body } = input;
+  return post(PAYMENT_ACCOUNT_ROUTES.makeDefault(id), body, paymentAccountResponseSchema);
+}
+
 export function confirmPayment(input: {
   id: string;
   idempotencyKey: string;

@@ -33,9 +33,11 @@ without an explicit instruction.
 
 **The deployment checkpoint after Phase 2 is done too**: an immutable image,
 a production Compose topology behind Caddy, an Ubuntu installer, and `botctl`
-with update and rollback (ADR-0022, `docs/deployment.md`). It has never been
-run against a real server — `docs/vps-acceptance.md` is the checklist that
-decides that. `BLOCKER-SECRETS-V2` is still open.
+with update and rollback (ADR-0022, `docs/deployment.md`). `v0.2.0` and
+`v0.2.1` HAVE been deployed to a real staging server, and the owner's own
+acceptance on them is what produced the Telegram main menu and the Phase 5
+payment work. What is still unrun is the PRODUCTION checklist —
+`docs/vps-acceptance.md` decides that. `BLOCKER-SECRETS-V2` is still open.
 
 Three deployment rules that are easy to break by accident:
 

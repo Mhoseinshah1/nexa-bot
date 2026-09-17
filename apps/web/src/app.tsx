@@ -18,6 +18,7 @@ import { SystemPage } from './pages/system';
 import { RecoveryPage } from './pages/recovery';
 import { PlannedPage, PLANNED_SURFACES, type PlannedKey } from './pages/planned';
 import { PaymentsPage, PaymentDetailPage } from './pages/payments';
+import { PaymentAccountsPage } from './pages/payment-accounts';
 import { ProductDetailPage, ProductsPage } from './pages/products';
 import { OrderDetailPage, OrdersPage } from './pages/orders';
 import { ServiceDetailPage, ServicesPage } from './pages/services';
@@ -204,6 +205,21 @@ export const NAV: readonly NavEntry[] = [
     label: 'web.nav_payments',
     icon: 'payments',
     permission: 'payments.view',
+    group: 'web.navgroup_sales',
+  },
+  {
+    id: 'payment-accounts',
+    path: '/payment-accounts',
+    label: 'web.nav_payment_accounts',
+    icon: 'payments',
+    /*
+     * EITHER, the shape `/panels` and `/products` already use and for the same
+     * reason: the page renders the create form on `payments.accounts.edit` whether
+     * or not the view key is held, and the server authorizes the write on the edit
+     * key alone. Gating the link on view alone would hide a page that serves a
+     * custom-role editor correctly.
+     */
+    permission: ['payments.accounts.view', 'payments.accounts.edit'],
     group: 'web.navgroup_sales',
   },
   {
@@ -486,6 +502,19 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
       ),
       crumbs: [nav('services'), { label: t('web.service_detail') }],
       title: t('web.service_detail'),
+    };
+  }
+
+  if (route.path === '/payment-accounts') {
+    return {
+      element: (
+        <PaymentAccountsPage
+          denied={!may('payments.accounts.view')}
+          mayEdit={may('payments.accounts.edit')}
+        />
+      ),
+      crumbs: [{ label: t('web.payment_accounts_title') }],
+      title: t('web.payment_accounts_title'),
     };
   }
 

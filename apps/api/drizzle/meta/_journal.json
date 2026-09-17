@@ -435,6 +435,34 @@
       "when": 1789587006139,
       "tag": "0061_customer_notification_kinds",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1789628177224,
+      "tag": "0062_payment_accounts",
+      "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1789628178224,
+      "tag": "0063_payment_destinations_append_only",
+      "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1789628179224,
+      "tag": "0064_payment_account_permissions",
+      "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1789628180224,
+      "tag": "0065_payment_account_check_digits",
+      "breakpoints": true
     }
   ]
 }

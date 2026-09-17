@@ -166,6 +166,55 @@ async function telegramCall(request: TelegramSendRequest): Promise<TelegramCallO
 }
 
 /**
+ * One labelled inline-keyboard button, on its way to the wire.
+ *
+ * `data` and `copyText` are mutually exclusive and one of them is required. Expressed as
+ * a union rather than as two optional fields, so a caller cannot construct a button that
+ * is neither — which Telegram renders as a rectangle that does nothing when tapped, and
+ * which no test asserting "the button is there" would catch.
+ */
+export type TelegramButton = { readonly text: string; readonly row?: number } & (
+  | { readonly data: string; readonly copyText?: undefined }
+  | { readonly copyText: string; readonly data?: undefined }
+);
+
+/** Telegram caps a `CopyTextButton`'s payload at 256 characters. */
+export const TELEGRAM_COPY_TEXT_MAX = 256;
+
+/**
+ * Buttons grouped into the rows Telegram draws.
+ *
+ * Grouping is by `row`, and a button without one is given a key nothing else can share,
+ * so the default stays exactly what it was: one button per row, in the order supplied.
+ * Rows come out in the order their FIRST button appeared, which is the only ordering a
+ * caller can reason about without also passing an index.
+ *
+ * Exported for the unit tests, because the grouping is a rule and a rule with no test is
+ * a rule that gets silently reverted.
+ */
+export function telegramButtonMarkup(
+  buttons: readonly TelegramButton[],
+): Record<string, unknown>[][] {
+  const rows = new Map<string, Record<string, unknown>[]>();
+  buttons.forEach((button, index) => {
+    if (button.copyText !== undefined && button.copyText.length > TELEGRAM_COPY_TEXT_MAX) {
+      throw new Error(
+        `A copy button may carry at most ${TELEGRAM_COPY_TEXT_MAX} characters; got ${button.copyText.length}.`,
+      );
+    }
+    const key = button.row === undefined ? `self:${index}` : `row:${button.row}`;
+    const cell =
+      button.copyText === undefined
+        ? { text: button.text, callback_data: button.data }
+        : { text: button.text, copy_text: { text: button.copyText } };
+    const existing = rows.get(key);
+    if (existing === undefined) rows.set(key, [cell]);
+    else existing.push(cell);
+  });
+  return [...rows.values()];
+}
+
+/**
  * The body of a customer-facing text message.
  *
  * `link_preview_options` rather than the deprecated `disable_web_page_preview`, for the
@@ -178,13 +227,22 @@ export function textMessageBody(input: {
   readonly text: string;
   readonly html: boolean;
   /**
-   * One inline-keyboard button per row, already labelled.
+   * The inline-keyboard buttons, already labelled.
    *
    * Omitted entirely when there are none. An EMPTY `inline_keyboard` is not the same
    * thing: Telegram accepts it and renders a message carrying a blank attachment, which
    * is a visible artefact for every reply that happens to have no buttons.
+   *
+   * Each button carries EITHER a `data` (Telegram `callback_data`, a route this
+   * installation handles) or a `copyText` (a `CopyTextButton`, handled entirely by the
+   * client). Never both, and never neither — `telegramButtonMarkup` throws rather than
+   * emit a button Telegram would reject or, worse, render as an inert rectangle.
+   *
+   * `row` groups them. Buttons sharing a number sit side by side in the order given; one
+   * without a number gets its own row, which is what every caller did before the
+   * manual-transfer invoice needed two copy controls above one action.
    */
-  readonly buttons?: readonly { readonly text: string; readonly data: string }[];
+  readonly buttons?: readonly TelegramButton[];
   /**
    * A persistent keyboard under the chat, as rows of plain labels.
    *
@@ -205,11 +263,7 @@ export function textMessageBody(input: {
   };
   if (input.html) body.parse_mode = 'HTML';
   if (input.buttons !== undefined && input.buttons.length > 0) {
-    body.reply_markup = {
-      inline_keyboard: input.buttons.map((button) => [
-        { text: button.text, callback_data: button.data },
-      ]),
-    };
+    body.reply_markup = { inline_keyboard: telegramButtonMarkup(input.buttons) };
   } else if (input.keyboard !== undefined && input.keyboard.length > 0) {
     body.reply_markup = {
       keyboard: input.keyboard.map((row) => row.map((text) => ({ text }))),

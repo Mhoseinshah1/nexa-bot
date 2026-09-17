@@ -384,10 +384,11 @@ outage into data loss.
 create an owner at all: the only code that had ever created a tenant was the
 development seed, and `bootstrap-owner` refuses without one.
 
-**It has never been run against a real server.** CI builds the image, brings
-the stack up, migrates, serves the panel through the edge, backs up, and drives
-update → failed-health back-out → rollback against a local registry. It cannot
-issue a certificate, reboot a host, or prove DNS points anywhere.
+**`v0.2.0` and `v0.2.1` have been deployed to a real staging server; the
+PRODUCTION checklist is still unrun.** CI builds the image, brings the stack up,
+migrates, serves the panel through the edge, backs up, and drives update →
+failed-health back-out → rollback against a local registry. It cannot issue a
+certificate, reboot a host, or prove DNS points anywhere.
 `docs/vps-acceptance.md` is the checklist that decides whether this model can
 carry a customer, and nothing here claims it has passed.
 
@@ -707,6 +708,38 @@ OQ-TG-04. Nothing consumes a panel beyond provisioning: no renewal, no suspensio
 termination, no usage synchronisation, and no lifecycle sweeper moving `ACTIVE` to
 `EXPIRED`.
 
-## Phases 5–8
+## Phase 5 — payment core completion
+
+Between Phase 4 and Phase 7, closing what staging acceptance on `v0.2.1` exposed.
+Audit: `docs/phase5-audit.md`. Falsification: `docs/phase5a-falsification.md`.
+
+### 5A — structured manual transfer (done)
+
+A payment destination is a row, and once a payment is issued against it, a frozen copy
+of that row. Before this, a card number could only live inside an overridden
+`bot.payment.manual_instructions`, where editing it rewrote every already-issued
+instruction.
+
+`payment_accounts` holds the tenant's configuration: at most one default (partial unique
+index), a default is always enabled (CHECK), one live account per card number (second
+partial index), card and Sheba check digits (migration 0065), and no delete — an account
+is disabled, because `payment_destinations` names the row each payment was issued
+against. `payment_destinations` is append-only by trigger. A manual transfer with no
+enabled account is refused rather than issued blank, and the button is not drawn.
+
+The customer's message composes four per-line template keys, absent fields omitted, with
+two `CopyTextButton`s above the actions per the owner's addendum; the amount copies as
+bare digits. The Codex round on PR #34 produced ten P2 findings, all fixed — including
+the per-tenant account ceiling, now held by a tenant-scoped advisory lock rather than
+documented as raceable.
+
+### Next
+
+5R the receipt-submission flow (in progress), then 5B wallet top-up, 5C gateway
+configuration, 5D a real gateway adapter, 5E refunds, 5F hardening and staging
+acceptance. The gateway PROVIDER is an owner decision — several evidenced, none chosen —
+so 5A–5C are provider-neutral and the question goes to the owner at 5D.
+
+## Phases 6–8
 
 Not started. Scope in `docs/architecture.md`.

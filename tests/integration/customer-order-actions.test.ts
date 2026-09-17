@@ -144,10 +144,12 @@ describe('a customer acting on their own order', () => {
   }
 
   const transferFor = (scope: typeof tenantA, customerId: UserId, orderId: string, key: string) =>
-    ctx.container.payments.requestManualTransfer(scope, systemActor(key), customerId, {
-      idempotencyKey: key,
-      orderId,
-    });
+    ctx.container.payments
+      .requestManualTransfer(scope, systemActor(key), customerId, {
+        idempotencyKey: key,
+        orderId,
+      })
+      .then((issued) => issued.payment);
 
   const paymentRow = async (
     id: string,

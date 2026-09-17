@@ -52,6 +52,7 @@ export * from './commerce.js';
 export * from './customer-notifications.js';
 export * from './bot-commands.js';
 export * from './payment.js';
+export * from './payment-accounts.js';
 export * from './provisioning.js';
 export * from './promotions.js';
 export * from './templates.js';

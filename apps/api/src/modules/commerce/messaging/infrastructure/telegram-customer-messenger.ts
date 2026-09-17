@@ -12,9 +12,11 @@ import {
   callbackAnswerBody,
   telegramSend,
   textMessageBody,
+  type TelegramButton,
 } from '../../../../infrastructure/telegram/send-message.js';
 import type {
   CustomerButton,
+  CustomerButtonRow,
   CustomerMessage,
   CustomerMessenger,
   CustomerSendConditionReader,
@@ -75,6 +77,11 @@ export const CUSTOMER_SEND_OK_CODE = 'telegram.customer_send_ok';
  */
 export function customerSendConditionKey(botInstanceId: BotInstanceId): string {
   return `${CUSTOMER_SEND_FAILED_CODE}:${botInstanceId}`;
+}
+
+/** A button's row, as a spreadable fragment, so `exactOptionalPropertyTypes` stays satisfied. */
+function rowOf(button: { readonly row?: CustomerButtonRow }): { row?: number } {
+  return button.row === undefined ? {} : { row: button.row };
 }
 
 /** Why a reply did not certainly reach the customer. Context, never a code. */
@@ -286,8 +293,8 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
   private async labelButtons(
     scope: TenantContext,
     buttons: readonly CustomerButton[],
-  ): Promise<{ readonly text: string; readonly data: string }[]> {
-    const labelled: { text: string; data: string }[] = [];
+  ): Promise<TelegramButton[]> {
+    const labelled: TelegramButton[] = [];
     for (const button of buttons) {
       const text =
         button.label.kind === 'TEMPLATE'
@@ -295,7 +302,17 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
           : button.label.amount === undefined
             ? button.label.text
             : `${button.label.text} — ${formatMoney(button.label.amount)}`;
-      labelled.push({ text, data: button.data });
+      /*
+       * The union is discriminated by the field that IS the difference, not by a `kind`
+       * tag beside it. A copy button carries a string for the clipboard and no route; a
+       * callback button carries a route and nothing to copy. There is no third case, and
+       * a tag would be a third thing to keep in step with the two that decide it.
+       */
+      labelled.push(
+        'copyText' in button
+          ? { text, copyText: button.copyText, ...rowOf(button) }
+          : { text, data: button.data, ...rowOf(button) },
+      );
     }
     return labelled;
   }

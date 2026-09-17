@@ -144,6 +144,23 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    */
   'bot.payment.manual_instructions':
     'برای پرداخت مبلغ {total} طبق راهنمای فروشنده اقدام کنید و سپس دکمهٔ «پرداخت را انجام دادم» را بزنید.\nکد پیگیری این پرداخت: {reference}',
+  /*
+   * The message a manual transfer actually needs, and the one that replaces
+   * «طبق راهنمای
+   * فروشنده» — "follow the seller's
+   * instructions", which named instructions that did not exist anywhere in the product.
+   *
+   * {destination} is composed from the payment's FROZEN snapshot, so editing the account
+   * afterwards does not change what this customer was told.
+   */
+  'bot.payment.transfer_instructions':
+    'مبلغ {total} را به حساب زیر واریز کنید:\n{destination}\n\nکد پیگیری این پرداخت: {reference}\nپس از واریز، دکمهٔ «پرداخت را انجام دادم» را بزنید.',
+  'bot.payment.destination.bank': 'بانک: {value}',
+  'bot.payment.destination.holder': 'به نام: {value}',
+  'bot.payment.destination.card': 'شماره کارت: {value}',
+  'bot.payment.destination.sheba': 'شبا: {value}',
+  'bot.payment.copy_card_button': '📋 کپی شماره کارت',
+  'bot.payment.copy_amount_button': '💵 کپی مبلغ',
   'bot.payment.wallet_button': 'پرداخت از کیف پول',
   'bot.payment.manual_button': 'پرداخت کارت به کارت',
   'bot.payment.unconfigured': 'این روش پرداخت در حال حاضر فعال نیست.',

@@ -161,6 +161,33 @@ export const moneySchema = z.object({
 });
 export type MoneyWire = z.infer<typeof moneySchema>;
 
+/**
+ * The amount as a bare number, for a machine rather than for a reader.
+ *
+ * `1500000`, not `۱٬۵۰۰٬۰۰۰ تومان`. It exists for exactly one caller — the Telegram
+ * "copy the amount" button, whose string is pasted into a banking app — and the grouping
+ * separators, the Persian digits and the currency word that `formatMoney` adds are all
+ * things a banking app rejects.
+ *
+ * Deliberately NOT in `@nexa/i18n` beside `formatMoney`. This has no locale and must not
+ * acquire one: the moment it renders Persian digits it stops being pasteable, which is
+ * its whole purpose. It is also why a surface may call it — surfaces may import
+ * contracts and may not import the catalogue.
+ *
+ * Negative amounts keep their sign, which no caller currently produces and which is
+ * still the only truthful thing to return for one.
+ */
+export function plainAmount(value: Money): string {
+  const exponent = CURRENCY_EXPONENT[value.currency];
+  const negative = value.amountMinor < 0n;
+  const digits = (negative ? -value.amountMinor : value.amountMinor).toString();
+  if (exponent === 0) return `${negative ? '-' : ''}${digits}`;
+  const padded = digits.padStart(exponent + 1, '0');
+  const major = padded.slice(0, padded.length - exponent);
+  const minor = padded.slice(padded.length - exponent);
+  return `${negative ? '-' : ''}${major}.${minor}`;
+}
+
 export function toWire(value: Money): MoneyWire {
   return { amountMinor: value.amountMinor.toString(), currency: value.currency };
 }

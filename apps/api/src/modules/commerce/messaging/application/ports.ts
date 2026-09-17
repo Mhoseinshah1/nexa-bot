@@ -30,17 +30,52 @@ export type CustomerButtonLabel =
   | { readonly kind: 'TEXT'; readonly text: string; readonly amount?: Money };
 
 /**
- * One inline-keyboard button.
+ * Which row a button is drawn on.
+ *
+ * Buttons sharing a number sit side by side, in the order given; a button without one
+ * gets a row to itself, which is what every button in this product did before the
+ * manual-transfer invoice needed two copy controls above one action.
+ *
+ * Deliberately a number on the button rather than an array of arrays. Rows-of-rows would
+ * have changed the shape every one of the twenty existing call sites passes, to express
+ * a layout nineteen of them do not have.
+ */
+export type CustomerButtonRow = number;
+
+/**
+ * One inline-keyboard button that carries a ROUTE.
  *
  * `data` is Telegram's `callback_data`, which it caps at 64 BYTES — a real constraint
  * rather than a guideline, and the reason Phase 0 recorded that a bare UUID plus a route
  * prefix leaves nothing. The callers here send `<one letter>:<uuid>`, which is 38 bytes,
  * so an opaque reference table is not needed and is deliberately not introduced.
  */
-export interface CustomerButton {
+export interface CustomerCallbackButton {
   readonly label: CustomerButtonLabel;
   readonly data: string;
+  readonly row?: CustomerButtonRow;
 }
+
+/**
+ * One inline-keyboard button that COPIES a string to the customer's clipboard.
+ *
+ * Telegram's own `CopyTextButton` (Bot API 7.11). It carries no `callback_data` and
+ * reaches no handler — the tap is handled entirely by the client — which is why it is a
+ * separate shape rather than a flag on the one above: a copy button has no route, and a
+ * type that let it have one would let a caller give it a destructive prefix.
+ *
+ * The alternative, a callback that replies with a message containing just the digits,
+ * is what a bot does when the API has no copy button. It puts a second message in the
+ * chat for every tap and leaves the customer scrolling past six identical card numbers.
+ */
+export interface CustomerCopyButton {
+  readonly label: CustomerButtonLabel;
+  /** What lands on the clipboard. Telegram caps it at 256 characters. */
+  readonly copyText: string;
+  readonly row?: CustomerButtonRow;
+}
+
+export type CustomerButton = CustomerCallbackButton | CustomerCopyButton;
 
 /**
  * One message to one customer.

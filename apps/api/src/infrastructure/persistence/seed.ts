@@ -4,7 +4,7 @@ import { resolveKeyring } from '../crypto/resolve-keyring.js';
 import { loadConfig } from '../config/load-config.js';
 import { acceptsV1 } from '../config/config.schema.js';
 import { createDatabase, type Database } from './database.js';
-import { botInstances, tenants } from './schema.js';
+import { botInstances, paymentAccounts, tenants } from './schema.js';
 
 /**
  * Deterministic seed data.
@@ -24,6 +24,8 @@ export const SEED_IDS = {
   botA1: '01900000-0000-7000-8000-00000000a001',
   botA2: '01900000-0000-7000-8000-00000000a002',
   botB1: '01900000-0000-7000-8000-00000000b001',
+  paymentAccountA: '01900000-0000-7000-8000-0000000000a1',
+  paymentAccountB: '01900000-0000-7000-8000-0000000000b1',
 } as const;
 
 /**
@@ -119,6 +121,51 @@ export async function seed(db: Database, cipher: SecretCipher): Promise<void> {
         username: 'globex_store_bot',
         status: 'ACTIVE',
         ...encrypted('000000:seed-token-globex-1', SEED_IDS.tenantB, SEED_IDS.botB1),
+      },
+    ])
+    .onConflictDoNothing();
+
+  /*
+   * One manual-transfer destination per tenant, enabled and default.
+   *
+   * Seeded because 5A makes a destination a PRECONDITION of an out-of-band payment: the
+   * service refuses with `PAYMENT_DESTINATION_UNCONFIGURED` when a tenant has none, so a
+   * seed without one leaves every manual-transfer path in the product unreachable in
+   * development and in the integration suite.
+   *
+   * Both card numbers and Shebas are FABRICATED and satisfy their own check digits —
+   * Luhn for the card, mod-97 for the Sheba — which is what lets the seed exercise the
+   * real validation rather than a version of it with the checks turned off. Neither
+   * addresses an account that exists anywhere.
+   *
+   * TWO tenants, because a cross-tenant test with one seeded destination proves nothing.
+   */
+  await db
+    .insert(paymentAccounts)
+    .values([
+      {
+        id: SEED_IDS.paymentAccountA,
+        tenantId: SEED_IDS.tenantA,
+        label: 'Acme Melli',
+        bankName: 'بانک ملی ایران',
+        holderName: 'Acme Store',
+        cardNumber: '6037991234567893',
+        iban: 'IR429600000001003242000012',
+        enabled: true,
+        isDefault: true,
+        sortOrder: 0,
+      },
+      {
+        id: SEED_IDS.paymentAccountB,
+        tenantId: SEED_IDS.tenantB,
+        label: 'Globex Saderat',
+        bankName: 'بانک صادرات ایران',
+        holderName: 'Globex Ltd',
+        cardNumber: '6037991234567992',
+        iban: null,
+        enabled: true,
+        isDefault: true,
+        sortOrder: 0,
       },
     ])
     .onConflictDoNothing();

@@ -1500,6 +1500,15 @@ mechanism no contract states. If the owner's intent was a Telegram admin chat, b
 halves move together — the application layer takes an `ActorContext` and `ACTOR_TYPES`
 already includes `TELEGRAM_ADMIN`, so it is an addition rather than a rewrite.
 
+**5A addendum — the owner has reversed the storage half.** The Payment UX addendum
+specifies an invoice button «✅ پرداخت را انجام دادم | ارسال رسید» whose tap starts
+receipt submission for that exact payment, so receipts ARE stored — a later instruction
+from the same owner, superseding «رسید پرداخت … ذخیره … نمی‌شود». The review model is
+untouched: settlement still requires operator confirmation, `PAYMENT_EVIDENCE_KINDS`
+stays `OPERATOR_REVIEW`, and an upload confirms nothing. The question this entry asks —
+whether the approval DECISION belongs in Telegram or the Web Admin — is still open and
+still blocks nothing. Storage is subphase 5R; see `docs/phase5-audit.md` §7.
+
 ## OQ-4C-04 — what happens to wallet funds in a currency the installation stopped selling
 
 `sales.currency` is `RUNTIME`-mutable over `['IRT','IRR']` and the Web Admin ships a
