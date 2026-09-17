@@ -47,7 +47,6 @@ describe('a customer sending a receipt', () => {
   let ctx: TestContext;
   let products: DrizzleProductRepository;
   let botA: BotInstanceId;
-  let botB: BotInstanceId;
   let panelA: string;
   let panelB: string;
   let customerA: UserId;
@@ -66,7 +65,6 @@ describe('a customer sending a receipt', () => {
     await ctx.reset();
     products = new DrizzleProductRepository(ctx.container.database.db);
     botA = (await firstBot(tenantA.tenantId)) as BotInstanceId;
-    botB = (await firstBot(tenantB.tenantId)) as BotInstanceId;
     panelA = ctx.container.ids.uuid();
     panelB = ctx.container.ids.uuid();
     await ctx.container.database.db.execute(sql`
