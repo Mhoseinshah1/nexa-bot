@@ -60,6 +60,22 @@ export const PERMISSIONS = [
   // Payments, receipts, refunds — four separate concepts, four separate keys
   p('payments.view', 'View payments', 'LOW'),
   p('payments.retry', 'Retry a payment settlement'),
+  /*
+   * The destination money arrives at, as its own pair rather than `settings.*`.
+   *
+   * Reuse was the first idea and it is wrong in both directions. `settings.edit` is
+   * CRITICAL and owner-only, so reusing it would mean a finance operator cannot change
+   * the card number customers are transferring to — a catalogue promising something the
+   * seeded role cannot do, which is the defect migration 0055 exists to repair. And
+   * `settings.view` is held by roles with no financial business, so reusing it would
+   * widen who reads the destination at the same time.
+   *
+   * EDIT is CRITICAL and not HIGH. What it changes is where a customer's money goes, and
+   * the blast radius of a wrong value is every transfer made until somebody notices —
+   * the same reason `users.wallet.debit` sits there.
+   */
+  p('payments.accounts.view', 'View the configured manual-transfer accounts', 'LOW'),
+  p('payments.accounts.edit', 'Add, edit, enable or disable a manual-transfer account', 'CRITICAL'),
   p('receipts.view', 'View submitted receipts', 'LOW'),
   p('receipts.review', 'Approve or reject a receipt', 'HIGH'),
   p('refunds.view', 'View refunds', 'LOW'),
@@ -204,6 +220,12 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       'settings.view',
       'templates.view',
       'templates.edit',
+      // Read only, and that is a narrowing rather than a grant. Until Phase 5 an
+      // operator COULD change the card number, by editing the template body it was
+      // typed into; the destination is data now, and `templates.edit` no longer
+      // reaches it. What is left is the question they actually need answered —
+      // which account is a customer being told to pay.
+      'payments.accounts.view',
       'reports.view',
       'opslog.view',
       // Whether this installation's backups are working is an operational
@@ -226,6 +248,10 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       'receipts.review',
       'refunds.view',
       'refunds.issue',
+      // Finance is the role that owns where money arrives. Without the edit key the
+      // only account holder able to change a blocked card would be the owner.
+      'payments.accounts.view',
+      'payments.accounts.edit',
       'reports.view',
       'reports.export',
       'audit.view',
@@ -298,7 +324,15 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
      * whose roles already exist, because `ensureSystemRoles` writes a seed's
      * permissions only when the role is created.
      */
-    permissions: ['payments.view', 'receipts.view', 'receipts.review'],
+    permissions: [
+      'payments.view',
+      'receipts.view',
+      'receipts.review',
+      // Reconciling a claimed transfer against a bank statement means knowing which
+      // account it should have arrived in. The payment's own frozen snapshot answers
+      // it for one payment; this answers it for the tenant.
+      'payments.accounts.view',
+    ],
   },
   { key: 'observer', name: 'Observer', permissions: READ_ONLY },
 ];

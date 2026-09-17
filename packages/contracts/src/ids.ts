@@ -52,6 +52,7 @@ export type AdminSessionId = Branded<string, 'AdminSessionId'>;
 export type OrderId = Branded<string, 'OrderId'>;
 export type ServiceId = Branded<string, 'ServiceId'>;
 export type PaymentId = Branded<string, 'PaymentId'>;
+export type PaymentAccountId = Branded<string, 'PaymentAccountId'>;
 export type ReceiptId = Branded<string, 'ReceiptId'>;
 export type RefundId = Branded<string, 'RefundId'>;
 export type WalletEntryId = Branded<string, 'WalletEntryId'>;
@@ -76,6 +77,7 @@ export const productIdSchema = brandedId('ProductId');
 export const serviceIdSchema = brandedId('ServiceId');
 export const serviceAddonIdSchema = brandedId('ServiceAddonId');
 export const paymentIdSchema = brandedId('PaymentId');
+export const paymentAccountIdSchema = brandedId('PaymentAccountId');
 export const eventIdSchema = brandedId('EventId');
 export const correlationIdSchema = brandedId('CorrelationId');
 

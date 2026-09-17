@@ -606,6 +606,114 @@ export const TEMPLATES = [
     ],
   },
   {
+    key: 'bot.payment.transfer_instructions',
+    description:
+      'How to pay out of band, with the destination the payment was ISSUED against. ' +
+      'Supersedes bot.payment.manual_instructions, which is kept for payments created ' +
+      'before a destination existed. {destination} is composed from the payment\u2019s ' +
+      'frozen snapshot through the four bot.payment.destination.* keys, so a line whose ' +
+      'field the tenant never configured is not composed at all \u2014 an optional ' +
+      'placeholder could not do that, because an absent one renders as a literal ' +
+      '{token}.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'destination',
+        type: 'STRING',
+        description: 'The bank, holder, card and Sheba lines, already rendered.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'total',
+        type: 'MONEY',
+        description: 'The amount to transfer.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'reference',
+        type: 'STRING',
+        description: 'The reference the customer must quote.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  /*
+   * Four line keys rather than four placeholders on the message above.
+   *
+   * Each is one field of the frozen destination snapshot, rendered only when that field
+   * is present. An optional placeholder cannot express that: `renderTemplateBody`
+   * substitutes only the tokens it is given and leaves the rest exactly as written, so a
+   * tenant who configured no Sheba would send the literal `{sheba}` to a customer.
+   *
+   * They are tenant-overridable like every other key here, which is the point — a
+   * tenant who writes «به نام» where another writes
+   * «صاحب حساب» changes one line and
+   * nothing else. The token is `value` on all four rather than `card`, `sheba` and so on,
+   * because the four are one shape and four differently-named declarations would be four
+   * things to keep in step for no gain.
+   */
+  {
+    key: 'bot.payment.destination.bank',
+    description: 'One line of the transfer destination. The bank the account is held at.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'value',
+        type: 'STRING',
+        description: 'The field, taken from the payment’s frozen snapshot.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.destination.holder',
+    description: 'One line of the transfer destination. The name the account is in.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'value',
+        type: 'STRING',
+        description: 'The field, taken from the payment’s frozen snapshot.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.destination.card',
+    description:
+      'One line of the transfer destination. The sixteen-digit card number, unseparated so it pastes into a banking app.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'value',
+        type: 'STRING',
+        description: 'The field, taken from the payment’s frozen snapshot.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.destination.sheba',
+    description:
+      'One line of the transfer destination. The Sheba — IR and twenty-four digits. The one field an account may not have.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'value',
+        type: 'STRING',
+        description: 'The field, taken from the payment’s frozen snapshot.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
     key: 'bot.payment.wallet_button',
     description:
       'The label on the button a customer presses to pay for an order from their ' +

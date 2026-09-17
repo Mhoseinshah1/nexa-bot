@@ -27,7 +27,7 @@ Persian body is:
 > برای پرداخت مبلغ {total} طبق راهنمای فروشنده اقدام کنید و سپس دکمهٔ «پرداخت را
 > انجام دادم» را بزنید.\nکد پیگیری این پرداخت: {reference}
 
-«طبق راهنمای فروشنده» — *follow the seller's instructions*. There are no seller's
+«طبق راهنمای فروشنده» — _follow the seller's instructions_. There are no seller's
 instructions. The template's own description in `templates.ts` says so outright:
 
 > The instructions themselves are tenant copy — this installation ships no bank
@@ -38,29 +38,29 @@ So the only way an operator can put a card number in front of a customer today i
 into the message. That is the exact shape of the legacy defect this codebase was
 built to end, and it fails in four distinct ways:
 
-| Failure | Why |
-| --- | --- |
-| A card number is history-bearing data stored as copy | Editing the template rewrites what *every already-issued* payment instruction says, including ones a customer transferred against yesterday. The message in the chat is frozen; the truth behind it is not. |
-| There is no second account | One template body is one destination. A tenant with two cards, or one card that gets blocked on a Friday, has nowhere to put the second. |
-| Nothing validates it | A transposed digit is copy. It renders, it sends, and the money goes to whoever owns that card. |
-| The operator's workflow is wrong | Changing a card number should not require opening a message editor and re-typing a Persian sentence around it. `docs/phase4c-audit.md` §7 already lists "Payment settings" as unbuilt. |
+| Failure                                              | Why                                                                                                                                                                                                         |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A card number is history-bearing data stored as copy | Editing the template rewrites what _every already-issued_ payment instruction says, including ones a customer transferred against yesterday. The message in the chat is frozen; the truth behind it is not. |
+| There is no second account                           | One template body is one destination. A tenant with two cards, or one card that gets blocked on a Friday, has nowhere to put the second.                                                                    |
+| Nothing validates it                                 | A transposed digit is copy. It renders, it sends, and the money goes to whoever owns that card.                                                                                                             |
+| The operator's workflow is wrong                     | Changing a card number should not require opening a message editor and re-typing a Persian sentence around it. `docs/phase4c-audit.md` §7 already lists "Payment settings" as unbuilt.                      |
 
 **`payments` carries no destination at all** — not a column, not a reference, not a
 snapshot. The full column list is in `schema.ts` and the nearest thing to a
-destination is `external_reference`, which is documented as the *gateway's* id and is
+destination is `external_reference`, which is documented as the _gateway's_ id and is
 unused in this release.
 
 ## 2. What else is missing, measured rather than asserted
 
-| Capability | State on `58ec7ca` | Evidence |
-| --- | --- | --- |
-| Structured bank/card accounts | **Absent.** No table, no service, no route, no screen. | `grep -rn 'bank' packages/contracts/src/settings.ts` → one prose mention in an unrelated docblock |
-| Payment destination snapshot | **Absent.** | `payments` has no destination column |
-| Customer wallet top-up | **Absent.** `wallet.topup.minimum` is in the registry with **no consumer**, deliberately — `docs/phase4c-audit.md` §6 records the decision and the correction that followed it | `settings.ts:414` |
-| Gateway configuration | **Absent.** `GATEWAY` is a frozen `PAYMENT_METHOD` member with no adapter, no row and no button; `PAYMENT_METHOD_UNAVAILABLE` is what a customer gets | `payment.ts`, `bot-runtime.ts:paymentButtons` |
-| Gateway callback / verify / reconcile | **Absent.** `PAYMENT_MACHINE` declares `LOSE_TRACK`, `RECONCILE_CONFIRMED` and `RECONCILE_FAILED`; none has a producer | `OQ-4G-04` |
-| `UNKNOWN` payments | **Unreachable.** No path writes the state, so `payments_unknown_idx` — the reconciliation queue — is a partial index over an empty set | `OQ-4G-04` |
-| Refunds | **Absent as an entity.** `refunds.view` and `refunds.issue` are seeded permissions with no surface; `PURCHASE_REVERSAL`, `REFUND`, `CHARGEBACK` are frozen ledger reasons with no producer | `OQ-4C-02` |
+| Capability                            | State on `58ec7ca`                                                                                                                                                                         | Evidence                                                                                          |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| Structured bank/card accounts         | **Absent.** No table, no service, no route, no screen.                                                                                                                                     | `grep -rn 'bank' packages/contracts/src/settings.ts` → one prose mention in an unrelated docblock |
+| Payment destination snapshot          | **Absent.**                                                                                                                                                                                | `payments` has no destination column                                                              |
+| Customer wallet top-up                | **Absent.** `wallet.topup.minimum` is in the registry with **no consumer**, deliberately — `docs/phase4c-audit.md` §6 records the decision and the correction that followed it             | `settings.ts:414`                                                                                 |
+| Gateway configuration                 | **Absent.** `GATEWAY` is a frozen `PAYMENT_METHOD` member with no adapter, no row and no button; `PAYMENT_METHOD_UNAVAILABLE` is what a customer gets                                      | `payment.ts`, `bot-runtime.ts:paymentButtons`                                                     |
+| Gateway callback / verify / reconcile | **Absent.** `PAYMENT_MACHINE` declares `LOSE_TRACK`, `RECONCILE_CONFIRMED` and `RECONCILE_FAILED`; none has a producer                                                                     | `OQ-4G-04`                                                                                        |
+| `UNKNOWN` payments                    | **Unreachable.** No path writes the state, so `payments_unknown_idx` — the reconciliation queue — is a partial index over an empty set                                                     | `OQ-4G-04`                                                                                        |
+| Refunds                               | **Absent as an entity.** `refunds.view` and `refunds.issue` are seeded permissions with no surface; `PURCHASE_REVERSAL`, `REFUND`, `CHARGEBACK` are frozen ledger reasons with no producer | `OQ-4C-02`                                                                                        |
 
 Note the shape all six share: the **vocabulary is already frozen and the producer is
 missing**. Phase 5 is largely a phase of giving existing contract members their first
@@ -75,7 +75,7 @@ Searched: every file under `docs/research/` for `sheba`, `iban`, `card number`,
 
 **Established.**
 
-- `کارت به کارت` exists in the legacy system as one of eleven *gateways*, and it is
+- `کارت به کارت` exists in the legacy system as one of eleven _gateways_, and it is
   **disabled** in the inspected installation (`FBR-004`).
 - Every gateway shares an eight-control base schema — name, cashback, tutorial, min
   amount, max amount, and three history/age gating controls — "differing only in
@@ -83,7 +83,7 @@ Searched: every file under `docs/research/` for `sheba`, `iban`, `card number`,
 - The card-to-card schema has **sixteen** controls, so eight are specific to it. The
   three the corpus names are the auto-approval trio (`FBR-007`) and the per-gateway
   amount limits (`FBR-008`).
-- `📚 تنظیم آموزش کارت به کارت` — *set the card-to-card tutorial* — is a free-text
+- `📚 تنظیم آموزش کارت به کارت` — _set the card-to-card tutorial_ — is a free-text
   setting, and it is the field `INCIDENT-FIN-001` overwrote in production by typing a
   navigation string into a captured prompt.
 
@@ -97,11 +97,11 @@ card number as a structured field or only inside the tutorial text.
 "the UI did not show it", never "it does not exist", and an `UNKNOWN` is never resolved
 by guessing. So the field list below is derived from **what an Iranian card-to-card
 transfer actually requires**, not from a claim about MirzaBot, and this file says which
-is which. The directive permits exactly that: *"If the research corpus establishes
+is which. The directive permits exactly that: _"If the research corpus establishes
 additional bank/payment metadata, use it. If not evidenced and not required for current
-UX, leave it out."*
+UX, leave it out."_
 
-One thing the corpus *does* decide for us, and it is the most useful finding here:
+One thing the corpus _does_ decide for us, and it is the most useful finding here:
 **the tutorial-as-free-text field is the mechanism that INCIDENT-FIN-001 corrupted.**
 5A's whole point is that a payment destination must stop being free text.
 
@@ -142,7 +142,7 @@ is what makes the rendered instruction always complete.
   stripped, then **exactly 16 digits and a passing Luhn check**.
 - Sheba: normalised to `IR` + 24 digits, then the **ISO 13616 mod-97 check**.
 
-Both are *structural*: they prove the string is well-formed, never that the account
+Both are _structural_: they prove the string is well-formed, never that the account
 exists or that the holder name matches it. The code says that where somebody might
 read it as a guarantee.
 
@@ -233,10 +233,10 @@ a payment whose currency differs from the order's is refused, never rescaled.
 
 Recorded so they are not lost, with the subphase that owns each.
 
-| # | Defect | Owner |
-| --- | --- | --- |
+| #     | Defect                                                                                                                                                                                                                                                                                                                                     | Owner                                                                                   |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
 | A5-01 | `bot.service.detail` declares `expiresAt` and `syncedAt` optional, and `bot-runtime.ts:1399-1400` omits them when null — so a service with no expiry or no completed usage sync renders the literal `{expiresAt}` / `{syncedAt}` to the customer. `renderTemplateBody` substitutes only tokens it is given and leaves the rest as written. | 5F (a payment-adjacent instance of the same renderer behaviour 5A works around in §4.6) |
-| A5-02 | `CLAUDE.md`'s deployment paragraph still reads "It has never been run against a real server", which `v0.2.0` and `v0.2.1` staging deployments contradict. `docs/vps-acceptance.md` was corrected in PR #33; this sentence was missed. | 5A (one-line documentation correction, carried with this branch) |
+| A5-02 | `CLAUDE.md`'s deployment paragraph still reads "It has never been run against a real server", which `v0.2.0` and `v0.2.1` staging deployments contradict. `docs/vps-acceptance.md` was corrected in PR #33; this sentence was missed.                                                                                                      | 5A (one-line documentation correction, carried with this branch)                        |
 
 ---
 

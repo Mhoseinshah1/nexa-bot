@@ -774,6 +774,49 @@ export const COMMERCE_ERROR_CODES = {
    * live order from the person who placed it.
    */
   ORDER_TRANSFER_UNDER_REVIEW: 'commerce.order_transfer_under_review',
+
+  /** No manual-transfer account with that id for this tenant. */
+  PAYMENT_ACCOUNT_NOT_FOUND: 'commerce.payment_account_not_found',
+  /**
+   * Another ENABLED account of this tenant already holds that card number.
+   *
+   * Scoped to enabled ones on purpose, and the partial unique index says the same thing
+   * one layer down. A tenant re-adding a card they disabled last month is doing something
+   * ordinary; two live accounts for one card is not, because the two then differ only in
+   * a holder name or a label and nothing decides which a customer is shown.
+   */
+  PAYMENT_ACCOUNT_DUPLICATE: 'commerce.payment_account_duplicate',
+  /**
+   * A disabled account cannot be made the default, and a default cannot be disabled.
+   *
+   * One code for both because they are one rule read from two ends: the default is what a
+   * new payment is issued against, and `DISABLED` is an operator saying stop using this.
+   * A row that was both would defeat the second by way of the first. The remedy is the
+   * same from either direction — promote another account — so the message is too.
+   */
+  PAYMENT_ACCOUNT_DISABLED: 'commerce.payment_account_disabled',
+  /**
+   * The tenant has no enabled account, so there is nowhere for a transfer to go.
+   *
+   * A REFUSAL rather than a payment with blank instructions, and the reason is the one
+   * `PAYMENT_METHOD_UNAVAILABLE` gives for a gateway with no adapter: what a product
+   * offers is how it tells a customer what it can do. A manual-transfer payment with no
+   * destination is a reference number and an amount with no way to pay them.
+   *
+   * The Telegram surface does not draw the button when this would be the answer, so a
+   * customer normally never sees it. It is still thrown, because the button is drawn from
+   * a read that can be a moment stale and the last enabled account can be disabled in
+   * between.
+   */
+  PAYMENT_DESTINATION_UNCONFIGURED: 'commerce.payment_destination_unconfigured',
+  /**
+   * The tenant is at `PAYMENT_ACCOUNT_MAX_PER_TENANT`.
+   *
+   * The rail that makes the account list complete by construction rather than paginated.
+   * Named rather than folded into a request-invalid because the operator's remedy is to
+   * disable something, and a validation error would not say that.
+   */
+  PAYMENT_ACCOUNT_LIMIT_REACHED: 'commerce.payment_account_limit_reached',
 } as const;
 
 /*
