@@ -55,10 +55,28 @@ export async function resolveInstallationTenant(container: Container): Promise<v
   // commits, the target silently holds authority nobody ever checked. The
   // lock makes role contents unable to change between an authorization and the
   // assignment it authorised.
+  //
+  // The payment ROUTES this release can operate get the same treatment, and for the
+  // same reason (Phase 5C). `PaymentGatewayService` consults them before a top-up is
+  // issued, so a tenant with no route answers its customers' next payment attempt with
+  // `PAYMENT_GATEWAY_UNAVAILABLE` — a release that silently stops taking money.
+  //
+  // Through the REPOSITORY rather than the service, deliberately. This is a boot-time
+  // reconcile with no actor behind it, exactly like `ensureSystemRoles`, and routing it
+  // through the guarded service would have meant either fabricating an actor — which
+  // `docs/conventions.md` forbids by name — or widening `SYSTEM_JOB_PERMISSIONS` for a
+  // statement no operator asked for. `ensureDefaults` is a conflict-ignoring insert, so
+  // a boot that changes nothing costs one statement and a route an operator has tuned
+  // is never reset.
+  //
+  // Migration 0071 covers the installations that upgrade INTO this release; this covers
+  // the ones provisioned after it, and a tenant created by a later release that adds a
+  // route to the catalogue.
   const scope: TenantContext = { tenantId: primary.id, botInstanceId: null };
   await container.uow.run(scope, async (tx) => {
     await container.admins.lockTenantForAdminChange(scope, tx);
     await container.roles.ensureSystemRoles(scope, tx);
+    await container.paymentGatewayProvisioning.ensureDefaults(scope, container.clock.now(), tx);
   });
 }
 

@@ -12,9 +12,13 @@
 -- WHY THIS IS NOT OPTIONAL
 --
 -- 0070 adds `payment_gateways`, and `PaymentGatewayService` is what the wallet top-up
--- path now consults before issuing an invoice. On a FRESH install `ensureTenantGateways`
--- writes the row during provisioning. On an UPGRADED install nothing would, so without
--- this every existing installation would answer its customers' next top-up with
+-- path now consults before issuing an invoice. On an install provisioned AFTER this
+-- release, `resolveInstallationTenant` writes the row at boot through
+-- `PaymentGatewayRepository.ensureDefaults`, in the same transaction as
+-- `ensureSystemRoles`. On an UPGRADED install that call runs too — but this migration is
+-- what makes the two indistinguishable at the moment the release lands, before any boot
+-- has happened. Without it an existing installation would answer its customers' next
+-- top-up with
 -- `PAYMENT_GATEWAY_UNAVAILABLE` — a release that silently stops taking money, which is
 -- the exact defect class 0055 repaired for `receipt_reviewer` and 0064 for the accounts
 -- surface.
