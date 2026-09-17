@@ -557,7 +557,9 @@ describe('the Telegram management panel', () => {
      * flag, a default installation with correctly bound reviewers queued NOTHING, which
      * is the product promising a notification it never sends.
      */
-    expect(await ctx.container.featureFlagResolver.isEnabled(tenantA, 'ops_notifications')).toBe(false);
+    expect(await ctx.container.featureFlagResolver.isEnabled(tenantA, 'ops_notifications')).toBe(
+      false,
+    );
 
     const addressed = await ctx.container.notifications.queue(tenantA, {
       kind: 'RECEIPT_AWAITING_REVIEW',
