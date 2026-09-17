@@ -20,12 +20,15 @@ import {
   discountAmountMinor,
   clampDiscount,
   normaliseDiscountCode,
+  templateDefinition,
 } from '@nexa/contracts';
 import { MAIN_MENU_BUTTONS, MAIN_MENU_ROWS } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
 import {
   BOT_INTENTS,
   CONFIRM_CALLBACK_PREFIX,
+  REFUSAL_REPLIES,
+  refusalValuesFor,
   followUpForSettlement,
   GATEWAY_PAY_CALLBACK_PREFIX,
   intentOf,
@@ -1048,5 +1051,89 @@ describe('what follows a settlement', () => {
     expect([...COMMERCIAL_ORDER_PURPOSES, 'NEW_SERVICE'].sort()).toEqual(
       [...ORDER_PURPOSES].sort(),
     );
+  });
+});
+
+/**
+ * Every refusal the bot can answer with must be RENDERABLE with the values it sends.
+ *
+ * This is the rule behind two defects on this branch, and it is the rule rather than
+ * either instance because both were invisible in exactly the same way. The resolver
+ * validates values against the template's declaration; a missing required token refuses
+ * the whole render; and the webhook must swallow a reply failure, because a non-200
+ * makes Telegram redeliver the update for ever. So the customer is told NOTHING, the
+ * durable write has already committed, and no test that checks which KEY a handler
+ * returns can see it.
+ */
+describe('a refusal the customer can actually be told', () => {
+  it('supplies every required token for every refusal key', () => {
+    const missing: string[] = [];
+    for (const key of new Set(Object.values(REFUSAL_REPLIES))) {
+      const supplied = refusalValuesFor(key);
+      for (const placeholder of templateDefinition(key).placeholders) {
+        if (placeholder.required && supplied[placeholder.token] === undefined) {
+          missing.push(`${key} needs {${placeholder.token}}`);
+        }
+      }
+    }
+    expect(missing, 'a refusal that cannot render tells the customer nothing').toStrictEqual([]);
+  });
+
+  // The instance that proved the rule: `{limit}` carries the cap so the constant and the
+  // Persian sentence cannot disagree, which is exactly why it must be supplied.
+  it('carries the receipt cap into the limit refusal', () => {
+    expect(refusalValuesFor('bot.payment.receipt_limit' as TemplateKey)).toStrictEqual({
+      limit: 5,
+    });
+  });
+});
+
+/**
+ * Which `PhotoSize` becomes the receipt.
+ *
+ * Telegram documents `file_size` as OPTIONAL on a photo size, so a ranking that mixes
+ * bytes and pixels compares 5 KB against 1920 and picks the thumbnail — the operator
+ * then opens a receipt they cannot read, which is a failure nothing else reports.
+ */
+describe('choosing a photo size', () => {
+  const photo = (over: Record<string, unknown>) => ({
+    message: {
+      message_id: 9,
+      chat: { id: 5, type: 'private' },
+      photo: over['photo'],
+    },
+  });
+  const chosen = (sizes: readonly unknown[]): string | null =>
+    intentOf(photo({ photo: sizes })).file?.fileId ?? null;
+
+  it('prefers the larger image when only the thumbnail declares its size', () => {
+    expect(
+      chosen([
+        { file_id: 'thumb', file_unique_id: 'u-thumb', width: 90, height: 60, file_size: 5_000 },
+        { file_id: 'full', file_unique_id: 'u-full', width: 1_920, height: 1_280 },
+      ]),
+    ).toBe('full');
+  });
+
+  it('breaks a tie between equal dimensions by declared size', () => {
+    expect(
+      chosen([
+        { file_id: 'small', file_unique_id: 'u-s', width: 800, height: 600, file_size: 40_000 },
+        { file_id: 'big', file_unique_id: 'u-b', width: 800, height: 600, file_size: 90_000 },
+      ]),
+    ).toBe('big');
+  });
+
+  it('does not let a wide, short crop outrank a taller image', () => {
+    expect(
+      chosen([
+        { file_id: 'wide', file_unique_id: 'u-w', width: 1_200, height: 100 },
+        { file_id: 'tall', file_unique_id: 'u-t', width: 900, height: 900 },
+      ]),
+    ).toBe('tall');
+  });
+
+  it('still chooses a size that declared no dimensions at all, rather than nothing', () => {
+    expect(chosen([{ file_id: 'bare', file_unique_id: 'u-bare' }])).toBe('bare');
   });
 });

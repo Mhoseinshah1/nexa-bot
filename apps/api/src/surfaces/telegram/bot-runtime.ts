@@ -3,6 +3,7 @@ import {
   isNexaError,
   currencyCodeSchema,
   money,
+  PAYMENT_RECEIPT_MAX_PER_PAYMENT,
   plainAmount,
   uuidV7Schema,
 } from '@nexa/contracts';
@@ -643,7 +644,21 @@ function receiptFileOf(message: unknown): InboundReceiptFile | null {
   return null;
 }
 
-/** The biggest usable size in a `photo` array, by declared size and then by width. */
+/**
+ * The biggest usable size in a `photo` array, ranked by PIXELS with bytes as the
+ * tie-breaker.
+ *
+ * Two comparable numbers, never one of each. Ranking by `file_size` where it exists and
+ * by width where it does not compares byte counts against pixel counts: a 5 KB thumbnail
+ * ranks 5000 and a 1920-pixel original with no declared size ranks 1920, so the
+ * thumbnail wins and the receipt an operator opens is unreadable. Telegram documents
+ * `file_size` as optional on a `PhotoSize`, so that is not a hypothetical shape.
+ *
+ * Pixels first because they are what makes a receipt legible, and `width * height`
+ * rather than width alone because a wide, short crop is not a bigger image. Bytes break
+ * a tie only among equal dimensions, which is where they mean compression rather than
+ * size.
+ */
 function largestPhoto(sizes: readonly unknown[]): {
   readonly fileId: string;
   readonly fileUniqueId: string;
@@ -653,7 +668,8 @@ function largestPhoto(sizes: readonly unknown[]): {
     fileId: string;
     fileUniqueId: string;
     fileSize: bigint | null;
-    rank: number;
+    pixels: number;
+    bytes: number;
   } | null = null;
   for (const candidate of sizes) {
     if (typeof candidate !== 'object' || candidate === null) continue;
@@ -662,15 +678,24 @@ function largestPhoto(sizes: readonly unknown[]): {
     const fileUniqueId = fields['file_unique_id'];
     if (typeof fileId !== 'string' || typeof fileUniqueId !== 'string') continue;
     const size = positiveSize(fields['file_size']);
-    const width = typeof fields['width'] === 'number' ? fields['width'] : 0;
-    const rank = size !== null ? Number(size) : width;
-    if (best === null || rank > best.rank) {
-      best = { fileId, fileUniqueId, fileSize: size, rank };
+    const width = dimension(fields['width']);
+    const height = dimension(fields['height']);
+    // A missing dimension is 1 rather than 0, so a size with no dimensions at all is
+    // still comparable — ranked last among anything that declared them, not discarded.
+    const pixels = Math.max(1, width) * Math.max(1, height);
+    const bytes = size === null ? 0 : Number(size);
+    if (best === null || pixels > best.pixels || (pixels === best.pixels && bytes > best.bytes)) {
+      best = { fileId, fileUniqueId, fileSize: size, pixels, bytes };
     }
   }
   return best === null
     ? null
     : { fileId: best.fileId, fileUniqueId: best.fileUniqueId, fileSize: best.fileSize };
+}
+
+/** A declared pixel count, or 0. Non-integers and negatives are not dimensions. */
+function dimension(value: unknown): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : 0;
 }
 
 /** A declared byte count, or null. Zero and negatives are null: the CHECK refuses them. */
@@ -896,7 +921,7 @@ interface PendingReply {
  * every failure look like an ordinary product state and leave nothing in the operational
  * log. The webhook's catch records it and still answers 200.
  */
-const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
+export const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
   [COMMERCE_ERROR_CODES.PRODUCT_NOT_FOUND]: 'bot.order.unavailable',
   [COMMERCE_ERROR_CODES.PRODUCT_NOT_PURCHASABLE]: 'bot.order.unavailable',
   // The SAME sentence as the others, deliberately. A customer told "this is for
@@ -1040,10 +1065,33 @@ const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
   [COMMERCE_ERROR_CODES.PRODUCT_CURRENCY_UNSUPPORTED]: 'bot.service.action_unavailable',
 };
 
+/**
+ * The refusal keys that need a VALUE, and the value each one needs.
+ *
+ * Almost every refusal is a bare sentence, which is why `refusal` supplied `{}` for all
+ * of them. `bot.payment.receipt_limit` is not: it declares a required `{limit}` so that
+ * `PAYMENT_RECEIPT_MAX_PER_PAYMENT` and the Persian text cannot disagree — and the
+ * resolver VALIDATES values against the declaration, so the empty object refused the
+ * whole render and the customer was told nothing at all.
+ *
+ * That is the second instance of one defect on this branch (the first was the receipt
+ * prompt's `minutes`), which is why `bot-runtime.test.ts` now asserts the RULE rather
+ * than this row: every key in `REFUSAL_REPLIES` must have every required token supplied
+ * here. A key added with a placeholder and no entry fails that test instead of failing
+ * silently in front of a customer.
+ */
+const REFUSAL_VALUES: Readonly<Partial<Record<TemplateKey, TemplateValues>>> = {
+  'bot.payment.receipt_limit': { limit: PAYMENT_RECEIPT_MAX_PER_PAYMENT },
+};
+
+export function refusalValuesFor(key: TemplateKey): TemplateValues {
+  return REFUSAL_VALUES[key] ?? {};
+}
+
 function refusal(error: unknown): PendingReply {
   const key = isNexaError(error) ? REFUSAL_REPLIES[error.code] : undefined;
   if (key === undefined) throw error;
-  return { key, values: {}, buttons: [], orderId: null };
+  return { key, values: refusalValuesFor(key), buttons: [], orderId: null };
 }
 
 /**

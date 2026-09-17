@@ -140,18 +140,26 @@ async function download(
     if (!response.ok) {
       return { outcome: 'UNAVAILABLE', reason: `the file answered ${String(response.status)}` };
     }
-    const buffer = await response.arrayBuffer();
-    const bytes = new Uint8Array(buffer);
     /*
-     * The SECOND size check, against the bytes rather than the claim.
+     * The bound is enforced WHILE reading, not after.
      *
-     * A declared `file_size` is what Telegram said; this is what arrived. Checking only
-     * the first would make the bound depend on a value from the other side of the
-     * network, which is the class of trust this whole module is written against.
+     * `arrayBuffer()` allocates the whole body first, so a response that lies about or
+     * omits `file_size` could put hundreds of megabytes into this process before any
+     * check ran — and the check below would then refuse a file that had already done
+     * the damage. A declared `Content-Length` is refused up front where it is present,
+     * and the stream is read with a running total that aborts the moment it passes the
+     * cap. Both are claims from the other side of the network, which is why neither is
+     * trusted alone.
      */
-    if (bytes.byteLength > PAYMENT_RECEIPT_MAX_BYTES) {
+    const promised = Number(response.headers.get('content-length') ?? Number.NaN);
+    if (Number.isSafeInteger(promised) && promised > PAYMENT_RECEIPT_MAX_BYTES) {
       return { outcome: 'UNAVAILABLE', reason: 'the file is larger than this API will fetch' };
     }
+    const read = await readBounded(response, controller);
+    if (read === null) {
+      return { outcome: 'UNAVAILABLE', reason: 'the file is larger than this API will fetch' };
+    }
+    const bytes = read;
     if (declaredSize !== null && bytes.byteLength !== declaredSize) {
       /*
        * NOT refused, and that is deliberate. A short read is a truncated download and a
@@ -173,6 +181,48 @@ async function download(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * The response body, or null once it passes the cap.
+ *
+ * Reads chunk by chunk and abandons the request as soon as the running total exceeds
+ * `PAYMENT_RECEIPT_MAX_BYTES`, so the peak allocation is bounded by the cap plus one
+ * chunk rather than by whatever the far end decides to send. The abort is what stops the
+ * transfer; returning without it would leave the socket draining a file nobody wants.
+ *
+ * A body of `null` is a 200 with nothing in it, which is a zero-byte receipt rather than
+ * a failure — the caller's size and type handling says what that is worth.
+ */
+async function readBounded(
+  response: Response,
+  controller: AbortController,
+): Promise<Uint8Array | null> {
+  const body = response.body;
+  if (body === null) return new Uint8Array(0);
+
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const reader = body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value === undefined) continue;
+    total += value.byteLength;
+    if (total > PAYMENT_RECEIPT_MAX_BYTES) {
+      controller.abort();
+      return null;
+    }
+    chunks.push(value);
+  }
+
+  const bytes = new Uint8Array(total);
+  let at = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, at);
+    at += chunk.byteLength;
+  }
+  return bytes;
 }
 
 /**
