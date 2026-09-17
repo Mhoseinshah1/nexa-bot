@@ -817,6 +817,20 @@ export const COMMERCE_ERROR_CODES = {
    * disable something, and a validation error would not say that.
    */
   PAYMENT_ACCOUNT_LIMIT_REACHED: 'commerce.payment_account_limit_reached',
+  /**
+   * Two operators promoted different accounts at once, and this one lost.
+   *
+   * `payment_accounts_tenant_default_key` allows one default per tenant, so the loser's
+   * INSERT-side of clear-then-set meets it. Its own code, NOT
+   * `PAYMENT_ACCOUNT_DUPLICATE`: that one is documented as another enabled account
+   * holding the same CARD NUMBER, a client branching on it would be branching on the
+   * wrong fact, and the two constraints are already told apart by name one layer down.
+   *
+   * It is the one refusal in this family that is plainly RETRYABLE — nothing about the
+   * request was wrong, another operator simply committed first — and the message says
+   * so, because a refusal an operator cannot act on is the one they report as a bug.
+   */
+  PAYMENT_ACCOUNT_DEFAULT_CONFLICT: 'commerce.payment_account_default_conflict',
 } as const;
 
 /*

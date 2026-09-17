@@ -1992,6 +1992,35 @@ export const paymentSummarySchema = z.object({
 });
 export type PaymentSummaryResponse = z.infer<typeof paymentSummarySchema>;
 
+/**
+ * WHERE this payment's instructions told the customer to send the money.
+ *
+ * Read from the payment's frozen snapshot, so renaming, editing or disabling the
+ * account afterwards does not change what this screen says the customer was told. That
+ * immutability is the whole reason the snapshot exists, and until this shape existed
+ * nothing an operator could open showed it — the `label` was documented as retained
+ * for reconciliation and reached no surface. Found by the Codex review of PR #34.
+ *
+ * `cardLast4`, never the card number. A reviewer's question here is WHICH account a
+ * transfer should have arrived in, and the label, the bank, the holder and four digits
+ * answer it; the full number is on the Payment Accounts screen under
+ * `payments.accounts.edit`, which is the one place it is needed and the one place it is
+ * entered. Sending sixteen digits to a browser that does not need them would put a
+ * card number in every operator's memory cache and error reporter.
+ *
+ * `hasIban` rather than the Sheba itself, for the same reason: whether the customer was
+ * given one changes how a statement is read; the value does not.
+ */
+export const paymentDestinationViewSchema = z.object({
+  accountId: uuidV7Schema,
+  label: z.string(),
+  bankName: z.string(),
+  holderName: z.string(),
+  cardLast4: z.string().regex(/^[0-9]{4}$/u),
+  hasIban: z.boolean(),
+});
+export type PaymentDestinationView = z.infer<typeof paymentDestinationViewSchema>;
+
 export const paymentDetailSchema = paymentSummarySchema.extend({
   /** The operator's note about the evidence. Detail only. */
   evidenceNote: z.string().nullable(),
@@ -2001,6 +2030,12 @@ export const paymentDetailSchema = paymentSummarySchema.extend({
    * person's bank transfer.
    */
   resolutionNote: z.string().nullable(),
+  /**
+   * Null for a payment that never carried one: a wallet settlement, or a manual
+   * transfer issued before 5A existed. Not null for "you may not see it" — the fields
+   * here need no permission beyond `payments.view`, because none of them is the number.
+   */
+  destination: paymentDestinationViewSchema.nullable(),
 });
 export type PaymentDetailResponse = z.infer<typeof paymentDetailSchema>;
 
