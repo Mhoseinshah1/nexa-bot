@@ -24,6 +24,16 @@ import type {
 } from '../application/receipt-ports.js';
 
 /**
+ * The advisory-lock CLASS for a customer's receipt work.
+ *
+ * Its own class, distinct from `PAYMENT_ACCOUNT_LOCK_CLASS`, so two locks about
+ * different subjects cannot collide however their object keys are derived. Exported so
+ * the integration test can watch `pg_locks` for waiters on exactly this key, which is
+ * what makes the interleaving test deterministic rather than a sleep.
+ */
+export const RECEIPT_CAPTURE_LOCK_CLASS = 0x5243;
+
+/**
  * The upload window, in PostgreSQL.
  *
  * Every query carries the tenant, the primary-key lookups included, for the reason the
@@ -34,6 +44,25 @@ export class DrizzleReceiptCaptureRepository implements ReceiptCaptureRepository
 
   private exec(tx?: unknown): Executor {
     return (tx as TransactionScope | undefined)?.tx ?? this.db;
+  }
+
+  async lockForCustomer(
+    scope: TenantContext,
+    botInstanceId: BotInstanceId,
+    customerId: UserId,
+    tx: unknown,
+  ): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    /*
+     * One text key built from the three ids, hashed to the int4 the two-argument form
+     * takes. The TENANT is in the key even though the bot id is already unique, because
+     * a lock that a tenant id cannot be read out of is a lock whose collisions cross
+     * tenants — the same reasoning `lockForCreate` states.
+     */
+    await this.exec(tx).execute(
+      sql`SELECT pg_advisory_xact_lock(${RECEIPT_CAPTURE_LOCK_CLASS},
+            hashtext(${`${tenantId}:${botInstanceId}:${customerId}`}))`,
+    );
   }
 
   async open(

@@ -733,12 +733,36 @@ bare digits. The Codex round on PR #34 produced ten P2 findings, all fixed — i
 the per-tenant account ceiling, now held by a tenant-scoped advisory lock rather than
 documented as raceable.
 
+### 5R — the receipt a customer sends (done)
+
+The invoice's second row is one button — «پرداخت را انجام دادم | ارسال رسید» — and
+tapping it records the customer's CLAIM and opens an upload window. It settles nothing:
+confirmation stays with an authorized operator. Falsification:
+`docs/phase5r-falsification.md`.
+
+`receipt_captures` is the window — one open row per (tenant, bot, customer) by partial
+unique index, closed as `RECEIVED`, `SUPERSEDED` or `EXPIRED` — and `payment_receipts`
+holds what arrived, insert-and-select only by trigger, at most five per payment, unique
+on the file. Only Telegram's file IDENTIFIERS are stored; the bytes are fetched on demand
+with the token of the bot that received them (the receipt row carries which), bounded
+mid-read, and served to the Web Admin as an opaque `attachment` with `nosniff` — a
+customer's «receipt» that is really an SVG cannot become a script on the admin page. The
+card is its own permission, `receipts.view`, separate from the `receipts.review` that
+decides.
+
+Both writers take one transaction-scoped advisory lock on (tenant, bot, customer) — the
+key the index constrains — and the filing path reads its payment `FOR UPDATE`, so two
+files cannot both pass the cap and a confirmation cannot commit between the eligibility
+check and the insert. Two consequences are recorded rather than resolved: `support` holds
+`receipts.view` with no surface that admits it (OQ-5R-01), and stopping a bot also stops
+an operator reading receipts it received (OQ-5R-02).
+
 ### Next
 
-5R the receipt-submission flow (in progress), then 5B wallet top-up, 5C gateway
-configuration, 5D a real gateway adapter, 5E refunds, 5F hardening and staging
-acceptance. The gateway PROVIDER is an owner decision — several evidenced, none chosen —
-so 5A–5C are provider-neutral and the question goes to the owner at 5D.
+5B wallet top-up, then 5C gateway configuration, 5D a real gateway adapter, 5E refunds,
+5F hardening and staging acceptance. The gateway PROVIDER is an owner decision — several
+evidenced, none chosen — so 5A–5C are provider-neutral and the question goes to the owner
+at 5D.
 
 ## Phases 6–8
 

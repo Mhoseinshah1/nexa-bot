@@ -1,5 +1,6 @@
 import {
   COMMERCE_ERROR_CODES,
+  PAYMENT_RECEIPT_MAX_PER_PAYMENT,
   PAYMENT_WINDOW_MINUTES_MIN,
   orderPurposeNeedsService,
   ORDER_MACHINE,
@@ -44,7 +45,7 @@ import type {
   PaymentDestinationRecord,
   PaymentDestinationRepository,
 } from './account-ports.js';
-import type { ReceiptCaptureRepository } from './receipt-ports.js';
+import type { PaymentReceiptRepository, ReceiptCaptureRepository } from './receipt-ports.js';
 import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
@@ -111,8 +112,7 @@ export interface PaymentServiceDeps {
    *
    * The WHOLE port, not a narrowed read, because this module is the one that opens a
    * window and the one that must be able to close a superseded one. `ReceiptService`
-   * holds the same port and does the closing on the other side; neither can file a
-   * receipt, which is `PaymentReceiptRepository` and is deliberately not here.
+   * holds the same port and does the closing on the other side.
    *
    * In the same transaction as the claim for one reason: the reply asks the customer to
    * send a file, and a reply that asked for one with no window on record would be
@@ -120,6 +120,14 @@ export interface PaymentServiceDeps {
    * given to a customer who was asked.
    */
   readonly receiptCaptures: ReceiptCaptureRepository;
+  /**
+   * COUNTING receipts, and nothing else — a narrowed read, so this module still cannot
+   * file one. The count is what stops a window being promised to a customer whose
+   * payment already holds every receipt it may; `PaymentReceiptRepository` entire
+   * would put `attach` in reach of the module that records claims, which is the
+   * separation the port above describes.
+   */
+  readonly receipts: Pick<PaymentReceiptRepository, 'countForPayment'>;
   /**
    * Read to refuse a BLOCKED customer INSIDE the transaction that would move their money.
    *
@@ -1620,6 +1628,38 @@ export class PaymentService {
          */
         const expiresAt = receiptWindowExpiry(now, current.expiresAt);
         if (expiresAt === null) return { payment: current, receiptWindow: null };
+
+        /*
+         * The same lock `ReceiptService.submit` takes, and for the first of two reasons.
+         *
+         * A customer with two unpaid invoices can tap both buttons at once. Each of
+         * these transactions closes what it can SEE and inserts; neither sees the
+         * other's uncommitted row, so the second insert hits
+         * `receipt_captures_open_key`, the webhook swallows the failure, and that tap is
+         * answered with nothing while the window that survives names the other invoice.
+         */
+        await this.deps.receiptCaptures.lockForCustomer(
+          scope,
+          signal.botInstanceId,
+          customerId,
+          tx,
+        );
+
+        /*
+         * And the second reason: a window is not promised when it cannot be used.
+         *
+         * After the fifth receipt the capture closed as `RECEIVED` and the payment is
+         * still PENDING, so a later tap on the original button reached `open` and the
+         * customer was told to send another — which `submit` then refuses with
+         * `RECEIPT_LIMIT_REACHED` every time. `receiptWindow: null` answers with
+         * `bot.payment.received_for_review` instead, which is true and promises
+         * nothing. The count is read under the lock, so it cannot be stale.
+         */
+        const held = await this.deps.receipts.countForPayment(scope, paymentId, tx);
+        if (held >= PAYMENT_RECEIPT_MAX_PER_PAYMENT) {
+          return { payment: current, receiptWindow: null };
+        }
+
         await this.deps.receiptCaptures.open(
           scope,
           {

@@ -54,6 +54,32 @@ export interface PaymentReceiptRecord {
 
 export interface ReceiptCaptureRepository {
   /**
+   * Serialises this CUSTOMER's receipt work on this bot, and nothing else.
+   *
+   * Taken by both writers before they read: the tap that opens a window, and the file
+   * that fills one. Without it two things race, and both were real:
+   *
+   *   - two taps on two invoices from one customer each close what they can see and
+   *     insert; neither sees the other's uncommitted row, so the second insert hits
+   *     `receipt_captures_open_key` and the webhook swallows it — one tap gets no
+   *     prompt at all, and the window that survives may name the other invoice;
+   *   - two files arriving together each read the same count and each insert, so a
+   *     payment can hold six receipts where the constant says five.
+   *
+   * The KEY is `(tenant, bot, customer)`, which is the partial unique index's key: the
+   * lock protects exactly what the index constrains, so it serialises nothing wider.
+   * Advisory rather than a row lock for `lockForCreate`'s reason — there is no row to
+   * lock before the first window exists, and the tenant row is this installation's
+   * busiest. Transaction-scoped, so the commit releases it.
+   */
+  lockForCustomer(
+    scope: TenantContext,
+    botInstanceId: BotInstanceId,
+    customerId: UserId,
+    tx: unknown,
+  ): Promise<void>;
+
+  /**
    * Opens a window, closing whatever this customer had open on this bot.
    *
    * Both halves in the caller's transaction, because the partial unique index refuses a

@@ -1060,6 +1060,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
      * for, given to a customer who was asked.
      */
     receiptCaptures: receiptCaptureRepository,
+    // The COUNT only. `PaymentServiceDeps` narrows it, so this module cannot file one.
+    receipts: paymentReceiptRepository,
     /*
      * The READ alone, narrowed here rather than by the type.
      *

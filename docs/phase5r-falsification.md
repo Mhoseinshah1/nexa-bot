@@ -17,6 +17,10 @@ was reverted and the suite re-run green.
 | F5R-10 | A receipt must belong to the payment in the path            | Delete the `receipt.paymentId !== paymentId` refusal        | `wallet-payments-http.test.ts` › refuses a receipt paired with a payment it does not belong to           | dies   |
 | F5R-11 | A photo renders inline from `kind` alone, with no mime type | Require `mimeType.startsWith('image/')` again               | `payments.test.tsx` › fetches a photo through the API and renders it as an image                         | dies   |
 | F5R-12 | `minutes` reaches the resolver as a NUMBER                  | Pass `String(receiptWindow.minutes)`                        | `telegram-payment-flow.test.ts` › never queues a fallback for a customer whose reply went out            | dies   |
+| F5R-13 | The receipt count-and-insert is serialised per customer     | Delete `lockForCustomer` from `ReceiptService.submit`       | `payment-receipts.test.ts` › refuses the sixth of two concurrent receipts at the cap                     | dies   |
+| F5R-14 | Two taps from one customer are serialised too               | Delete `lockForCustomer` from `signalTransferSent`          | `payment-receipts.test.ts` › answers both of two concurrent taps on two invoices                         | dies   |
+| F5R-15 | The payment is held while eligibility is checked            | `findByIdForUpdate` back to `findById`                      | `payment-receipts.test.ts` › refuses a receipt for a payment confirmed while the file was arriving       | dies   |
+| F5R-16 | A window is not promised once the payment is full           | Delete the `held >= MAX` early return                       | `payment-receipts.test.ts` › does not promise another window once the payment is full                    | dies   |
 
 Two notes, because a reader should not have to re-derive them:
 
@@ -38,6 +42,14 @@ Two notes, because a reader should not have to re-derive them:
   saying otherwise, which is `docs/real-panel-acceptance.md`'s rule in the small: a
   fixture this repository wrote and code this repository wrote can only prove they agree
   with each other. The fixture now carries null, as production does.
+
+F5R-13 to F5R-16 are the Codex round on PR #35. Their three cases are driven by a
+holder connection that owns the same advisory key (or the same payment row) while the
+suite polls `pg_locks` for ungranted waiters, so the wait itself is the detector:
+F5R-13 and F5R-14 die naming the lock that was never taken rather than on a count that
+might happen to be right. F5R-15 dies on the outcome instead — an unlocked read still
+blocks on the receipt's foreign key, so the file is filed against a payment the operator
+had already confirmed, which is the defect itself.
 
 F5R-03 needed its test strengthened before it bit: the case waited on the page heading,
 which renders before the query settles, so it passed with the gate deleted. It now waits

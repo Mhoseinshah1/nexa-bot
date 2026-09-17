@@ -913,8 +913,14 @@ export const WEB_FA = {
   'web.payment_receipt_save': 'ذخیرهٔ فایل',
   'web.payment_receipt_alt': 'تصویر رسید ارسالی مشتری',
   'web.payment_receipt_failed': 'رسید در دسترس نیست',
+  /*
+   * The causes, in the order they actually happen. The stopped bot is first because it
+   * is the one an operator can fix: the file is fetched with the token of the bot that
+   * received it, and a stopped bot has no usable token — for which «try again» is not a
+   * remedy.
+   */
   'web.payment_receipt_failed_hint':
-    'دریافت فایل از تلگرام ناموفق بود. ممکن است فایل حذف شده باشد یا تلگرام موقتاً پاسخ نداده باشد. دوباره تلاش کنید.',
+    'دریافت فایل از تلگرام ناموفق بود. اگر رباتِ دریافت‌کنندهٔ این رسید متوقف شده است، ابتدا آن را فعال کنید. در غیر این صورت ممکن است فایل حذف شده باشد یا تلگرام موقتاً پاسخ نداده باشد؛ دوباره تلاش کنید.',
   'web.payment_resolved_at': 'زمان بسته شدن',
   'web.payment_resolver': 'بسته‌شده توسط',
   'web.payment_resolution_note': 'دلیل',

@@ -87,7 +87,7 @@ export interface ReceiptServiceDeps {
    * addendum's own words — *"settlement still requires the existing authorized
    * operator confirmation"* — are enforced by this type as much as by the permission.
    */
-  readonly payments: Pick<PaymentRepository, 'findById'>;
+  readonly payments: Pick<PaymentRepository, 'findById' | 'findByIdForUpdate'>;
   /** Read to refuse a BLOCKED customer inside the transaction that would write the row. */
   readonly customers: CustomerRepository;
   readonly guard: PermissionGuard;
@@ -200,6 +200,16 @@ export class ReceiptService {
       async (tx) => {
         await this.assertScopeActive(scope, tx);
 
+        /*
+         * BEFORE the read, and this is the whole of the concurrency fix.
+         *
+         * Two files arriving together each read the same count and each insert a
+         * different `file_unique_id`, so nothing conflicts and the payment ends up
+         * holding six receipts where the constant says five. Counting does not lock the
+         * gap; this does, keyed on exactly what the partial unique index is keyed on.
+         */
+        await this.deps.captures.lockForCustomer(scope, submission.botInstanceId, customerId, tx);
+
         const open = await this.deps.captures.findOpen(
           scope,
           submission.botInstanceId,
@@ -238,11 +248,14 @@ export class ReceiptService {
           );
         }
 
-        const payment = await this.deps.payments.findById(scope, open.paymentId, tx);
+        const payment = await this.deps.payments.findByIdForUpdate(scope, open.paymentId, tx);
         /*
-         * Re-read, and the ownership checked again against the row. The window names a
-         * payment and the window is ours to trust; the payment's STATE is not, because
-         * an operator can confirm or reject it while the customer is choosing a photo.
+         * Re-read FOR UPDATE, and the ownership checked again against the row. The
+         * window names a payment and the window is ours to trust; the payment's STATE is
+         * not, because an operator can confirm or reject it while the customer is
+         * choosing a photo — and an unlocked read leaves room for that confirmation to
+         * commit between this line and the insert, which would attach evidence to a
+         * payment somebody had already decided.
          */
         if (payment === null || payment.customerId !== customerId) {
           throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');

@@ -54,11 +54,16 @@ export class TelegramReceiptFiles {
     const token = await this.deps.bots.tokenForBotInstance(scope, receipt.botInstanceId);
     if (token === null) {
       /*
-       * No token for that bot: it was deleted, or its secret cannot be decrypted under
-       * any active key. UNAVAILABLE rather than a 500, because the receipt row is
-       * intact and the honest thing to tell a reviewer is that the file cannot be
-       * retrieved — which is exactly what the limitation in
-       * `packages/contracts/src/payment-receipts.ts` predicts.
+       * No token for that bot: it is STOPPED, it was deleted, or its secret cannot be
+       * decrypted under any active key. The first is the likely one and the only
+       * reversible one — `tokenForBotInstance` resolves `ACTIVE` rows only, so stopping
+       * a bot also stops an operator reading receipts it received. Whether an operator's
+       * READ should be exempt from that rule is OQ-5R-02; until it is answered the hint
+       * on the card names this cause, because «try again» is not the remedy for it.
+       *
+       * UNAVAILABLE rather than a 500, because the receipt row is intact and the honest
+       * thing to tell a reviewer is that the file cannot be retrieved — which is exactly
+       * what the limitation in `packages/contracts/src/payment-receipts.ts` predicts.
        */
       return { outcome: 'UNAVAILABLE', reason: 'this bot has no usable token' };
     }

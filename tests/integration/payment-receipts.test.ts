@@ -14,6 +14,7 @@ import {
   type UserId,
 } from '@nexa/contracts';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
+import { RECEIPT_CAPTURE_LOCK_CLASS } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-receipt.repository';
 import type { ProductDraft } from '../../apps/api/src/modules/commerce/catalog/application/ports';
 import type { InboundReceiptFile } from '../../apps/api/src/modules/commerce/payments/application/receipt-ports';
 import {
@@ -319,15 +320,214 @@ describe('a customer sending a receipt', () => {
       }),
     );
 
-    // `sales` holds neither receipt key. `support` would NOT do here: it holds
-    // `receipts.view` without `payments.view`, which is the seeded split the Web Admin
-    // card draws its own permission from and the reason the card is not gated on the
-    // payment read.
+    /*
+     * `sales` holds neither receipt key, which is what makes this case about
+     * `receipts.view` and nothing else. `support` would NOT do: it holds `receipts.view`
+     * WITHOUT `payments.view`, so this call would pass and the Web Admin page that
+     * carries the card would still refuse it — the shape migration 0055 repaired for
+     * `receipt_reviewer`, recorded for `support` as OQ-5R-01 rather than resolved by
+     * widening a seeded role here.
+     */
     await expectRefusal(
       ctx.container.receipts.listForPayment(tenantA, reader, payment.id as PaymentId),
       'platform.permission_denied',
     );
   });
+
+  // -------------------------------------------------------------------------
+  // Concurrency, on the Codex round of PR #35
+  // -------------------------------------------------------------------------
+
+  /*
+   * Three of the four below are driven by a LOCK rather than by `Promise.all` timing: a
+   * holder connection takes the same advisory key — or the same payment row — the suite
+   * waits until each call is provably blocked on it, and only then releases. The wait is
+   * also the falsification detector: with the lock removed nothing blocks, and
+   * `awaitWaiters` fails by name rather than leaving the case to a count that might
+   * happen to be right. The fourth needs no interleaving at all.
+   */
+
+  it('refuses the sixth of two concurrent receipts at the cap', async () => {
+    const payment = await pending('c4');
+    await signal(payment.id, 'c4-signal');
+    for (let index = 0; index < PAYMENT_RECEIPT_MAX_PER_PAYMENT - 1; index += 1) {
+      await submit(payment.id, photo(`u-c4-${String(index)}`), `c4-file-${String(index)}`);
+    }
+    expect(await receiptRows(payment.id)).toHaveLength(PAYMENT_RECEIPT_MAX_PER_PAYMENT - 1);
+
+    const settled = await withHeldLock(async () => {
+      const first = outcomeOf(submit(payment.id, photo('u-c4-a'), 'c4-file-a'));
+      await awaitWaiters(1, 'the first receipt');
+      const second = outcomeOf(submit(payment.id, photo('u-c4-b'), 'c4-file-b'));
+      await awaitWaiters(2, 'the second receipt');
+      return [first, second] as const;
+    });
+
+    const done = await Promise.all(settled);
+    // One files, one is refused. Five, never six — the number the constant says.
+    expect(done.filter((one) => one.ok)).toHaveLength(1);
+    expect(await receiptRows(payment.id)).toHaveLength(PAYMENT_RECEIPT_MAX_PER_PAYMENT);
+    const refused = done.find((one) => !one.ok);
+    /*
+     * `RECEIPT_NOT_EXPECTED`, not `RECEIPT_LIMIT_REACHED`, and the difference is the
+     * serialisation working: the transaction that files the fifth closes the window as
+     * RECEIVED in the SAME transaction, so the loser — which only now gets the lock —
+     * reads no open window at all. It is the same refusal the sequential sixth receipt
+     * gets, which is the point: concurrent and sequential must not differ.
+     */
+    expect(
+      refused === undefined || refused.ok || !isNexaError(refused.error)
+        ? null
+        : refused.error.code,
+    ).toBe('commerce.receipt_not_expected');
+  });
+
+  it('answers both of two concurrent taps on two invoices', async () => {
+    const first = await pending('c2-a');
+    const second = await pending('c2-b');
+
+    const settled = await withHeldLock(async () => {
+      const one = outcomeOf(signal(first.id, 'c2-signal-a'));
+      await awaitWaiters(1, 'the first tap');
+      const two = outcomeOf(signal(second.id, 'c2-signal-b'));
+      await awaitWaiters(2, 'the second tap');
+      return [one, two] as const;
+    });
+
+    /*
+     * BOTH answered. Without the lock each transaction closes what it can see and
+     * inserts, neither sees the other's uncommitted row, and the second insert hits
+     * `receipt_captures_open_key` — the webhook swallows that and one customer's tap
+     * is answered with nothing at all.
+     */
+    const done = await Promise.all(settled);
+    expect(
+      done.every((one) => one.ok),
+      'neither tap may fail',
+    ).toBe(true);
+    // And one open window, because the second superseded the first.
+    const open = (await ctx.container.database.db.execute(
+      sql`SELECT payment_id FROM receipt_captures
+           WHERE tenant_id = ${tenantA.tenantId} AND closed_at IS NULL` as never,
+    )) as unknown as { rows: { payment_id: string }[] };
+    expect(open.rows).toHaveLength(1);
+  });
+
+  it('refuses a receipt for a payment confirmed while the file was arriving', async () => {
+    const payment = await pending('c9');
+    await signal(payment.id, 'c9-signal');
+
+    const outcome = await ctx.container.database.withClient(async (holder) => {
+      await holder.query('BEGIN');
+      try {
+        // The PAYMENT row, held. `submit` re-reads it FOR UPDATE, so it blocks here —
+        // which is the window an operator's confirmation commits in.
+        await holder.query('SELECT id FROM payments WHERE id = $1 FOR UPDATE', [payment.id]);
+        const filing = outcomeOf(submit(payment.id, photo('u-c9'), 'c9-file'));
+        await awaitRowWaiters(1, 'the filing');
+        await holder.query(
+          `UPDATE payments SET state = 'CONFIRMED', evidence_kind = 'OPERATOR_REVIEW',
+             confirmed_at = now() WHERE id = $1`,
+          [payment.id],
+        );
+        await holder.query('COMMIT');
+        return filing;
+      } catch (error: unknown) {
+        await holder.query('ROLLBACK');
+        throw error;
+      }
+    });
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.ok || !isNexaError(outcome.error) ? null : outcome.error.code).toBe(
+      'commerce.payment_state_invalid',
+    );
+    expect(await receiptRows(payment.id)).toHaveLength(0);
+  });
+
+  it('does not promise another window once the payment is full', async () => {
+    const payment = await pending('c8');
+    await signal(payment.id, 'c8-signal');
+    for (let index = 0; index < PAYMENT_RECEIPT_MAX_PER_PAYMENT; index += 1) {
+      await submit(payment.id, photo(`u-c8-${String(index)}`), `c8-file-${String(index)}`);
+    }
+    expect(await captureState(payment.id)).toStrictEqual({ closed: true, reason: 'RECEIVED' });
+
+    /*
+     * The payment is still PENDING, so a customer scrolling back and tapping again used
+     * to be given a fresh window that `submit` would refuse every time. The claim is
+     * still recorded; what is not promised is an upload that cannot work.
+     */
+    const again = await signal(payment.id, 'c8-again');
+    expect(again.receiptWindow).toBeNull();
+    expect(await receiptRows(payment.id)).toHaveLength(PAYMENT_RECEIPT_MAX_PER_PAYMENT);
+  });
+
+  /** Runs `body` while a holder connection owns this customer's advisory key. */
+  async function withHeldLock<T>(body: () => Promise<T>): Promise<T> {
+    return ctx.container.database.withClient(async (holder) => {
+      await holder.query('BEGIN');
+      try {
+        await holder.query('SELECT pg_advisory_xact_lock($1, hashtext($2))', [
+          RECEIPT_CAPTURE_LOCK_CLASS,
+          `${tenantA.tenantId}:${botA}:${customerA}`,
+        ]);
+        const result = await body();
+        await holder.query('COMMIT');
+        return result;
+      } catch (error: unknown) {
+        await holder.query('ROLLBACK');
+        throw error;
+      }
+    });
+  }
+
+  /** Waits until `expected` transactions are blocked on this customer's advisory key. */
+  async function awaitWaiters(expected: number, what: string): Promise<void> {
+    await awaitBlocked(
+      sql`SELECT count(*)::int AS n FROM pg_locks
+           WHERE locktype = 'advisory' AND classid = ${RECEIPT_CAPTURE_LOCK_CLASS}
+             AND objid = (SELECT hashtext(${`${tenantA.tenantId}:${botA}:${customerA}`})::oid)
+             AND NOT granted`,
+      expected,
+      `${what} never blocked on the receipt advisory lock. Either lockForCustomer is not ` +
+        'taken inside the transaction, or it is keyed on something else.',
+    );
+  }
+
+  /** The same, for a transaction waiting on a ROW rather than an advisory key. */
+  async function awaitRowWaiters(expected: number, what: string): Promise<void> {
+    await awaitBlocked(
+      sql`SELECT count(*)::int AS n FROM pg_locks
+           WHERE NOT granted AND locktype IN ('tuple', 'transactionid')`,
+      expected,
+      `${what} never blocked on the payment row. Either the read is not FOR UPDATE, or ` +
+        'it runs outside the transaction that files the receipt.',
+    );
+  }
+
+  async function awaitBlocked(query: unknown, expected: number, complaint: string): Promise<void> {
+    const deadline = Date.now() + 5_000;
+    for (;;) {
+      const rows = (await ctx.container.database.db.execute(query as never)) as unknown as {
+        rows: { n: number }[];
+      };
+      if ((rows.rows[0]?.n ?? 0) >= expected) return;
+      if (Date.now() > deadline) throw new Error(complaint);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
+  function outcomeOf<T>(
+    running: Promise<T>,
+  ): Promise<
+    { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: unknown }
+  > {
+    return running.then(
+      (value) => ({ ok: true, value }) as const,
+      (error: unknown) => ({ ok: false, error }) as const,
+    );
+  }
 
   // -------------------------------------------------------------------------
   // Fixtures
