@@ -781,6 +781,32 @@ payment id on such a credit. `WALLET_TOPUP_CREDITED` tells the customer, because
 top-up is the only confirmed payment that buys nothing and would otherwise arrive in
 silence.
 
+## Phase 5T — Telegram admin and pending receipts
+
+Done. An administrator can review and decide a manual transfer from Telegram, and an
+operator can say who may.
+
+A Telegram account holds no permissions: it holds a BINDING to an administrator
+(`admins.telegram_user_id`, the column Phase 0 added for this), and the authority is
+that administrator's, resolved by the same `AdminPermissionResolver` the Web Admin uses.
+There is no Telegram role enum and no second guard — Mirza's own panel has both, with
+four role names against its web panel's seven and enforcement recorded as NOT_TESTED
+(`UNK-ADM-001`).
+
+`👨‍💼 پنل مدیریت` holds two sections. `💵 رسید های تایید نشده` lists the pending manual
+transfers that hold a receipt, sends the receipt media by `file_id`, and decides through
+the SAME `confirmManualTransfer`/`rejectManualTransfer` the Web Admin calls — no parallel
+settlement. `👨‍🔧 بخش ادمین` lists who has Telegram access and takes `/link` and `/role`,
+as commands rather than a captured prompt (INCIDENT-FIN-001).
+
+Binding is treated as conferring authority, so it takes the escalation gates `setRoles`
+takes: the target's privileges must be a subset of the actor's, and an owner target needs
+`admins.permissions.edit`. Revocation needs nothing invalidated — the binding and the
+status are read on every turn — and `/admin` is deliberately absent from `setMyCommands`,
+because Telegram's command list is per bot and would advertise the panel to every
+customer. No administrator is created from Telegram: that would need a row with no usable
+password hash.
+
 ### Next
 
 5C gateway configuration, 5D a real gateway adapter, 5E refunds,
