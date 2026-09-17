@@ -611,27 +611,35 @@ describe('the customer payment flow over Telegram', () => {
      */
     const keyboard = lastMessage()?.body['reply_markup'] as
       { inline_keyboard: { text: string; callback_data: string }[][] } | undefined;
-    const buttons = (keyboard?.inline_keyboard ?? []).flat();
+    const rows = keyboard?.inline_keyboard ?? [];
+    const buttons = rows.flat();
     /*
-     * TWO buttons since 4H, and their ORDER is the assertion.
+     * THREE rows since 5A, and the LAYOUT is the assertion, not merely the set.
      *
+     * Row one is the owner's addendum after v0.2.1 staging acceptance: two
+     * `CopyTextButton`s side by side, which carry no `callback_data` and reach no
+     * handler — the client does the copying. The amount is copied as bare digits,
+     * because a banking app rejects «۲۵۰٬۰۰۰ تومان» and accepts `250000`.
+     *
+     * Rows two and three are 4H's pair, unchanged and in the same order.
      * `docs/phase4h-audit.md` §4: the instructions used to end «سپس رسید را ارسال
-     * نمایید» — send the receipt — and no surface in this product accepts one (owner
-     * revision 17), so a customer who had transferred the money had nothing to do and
-     * `bot.payment.received_for_review` was a frozen sentence with no producer.
-     *
-     * The claim comes FIRST and the withdrawal second. It is what most customers
-     * returning to this message want, and the destructive one should not be the nearest
-     * thumb.
+     * نمایید» — send the receipt — and no surface accepted one, so a customer who had
+     * transferred the money had nothing to do. The claim comes FIRST and the withdrawal
+     * second: it is what most customers returning to this message want, and the
+     * destructive one should not be the nearest thumb.
      */
-    expect(buttons).toHaveLength(2);
-    expect(buttons.map((b) => b.callback_data)).toEqual([
-      `i:${String(payment?.['id'])}`,
-      `x:${String(payment?.['id'])}`,
-    ]);
+    expect(rows.map((row) => row.length)).toEqual([2, 1, 1]);
+    const copies = rows[0] as unknown as { text: string; copy_text?: { text: string } }[];
+    expect(copies.map((b) => b.copy_text?.text)).toEqual(['6037991234567893', '250000']);
+    // A copy button carries no route. If one ever did, it could carry a destructive one.
+    expect(copies.every((b) => !('callback_data' in b))).toBe(true);
+
+    expect(
+      buttons.filter((b) => b.callback_data !== undefined).map((b) => b.callback_data),
+    ).toEqual([`i:${String(payment?.['id'])}`, `x:${String(payment?.['id'])}`]);
     // Both name the PAYMENT, not the order — the only id that identifies what either
     // one is about, since an order can have had several payments over its life.
-    const cancelButton = buttons[1];
+    const cancelButton = buttons[3];
 
     /*
      * The first tap ASKS. It must not close anything: this message stays in the chat
