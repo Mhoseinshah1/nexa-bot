@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import {
   asId,
   type Admin,
@@ -164,6 +164,32 @@ export class DrizzleAdminRepository implements AdminRepository {
       createdAt: input.now,
       updatedAt: input.now,
     });
+  }
+
+  async setTelegramUserId(
+    scope: ScopeContext,
+    id: AdminId,
+    telegramUserId: string | null,
+    now: Date,
+    tx?: unknown,
+  ): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    await executorOf(this.db, tx)
+      .update(admins)
+      .set({ telegramUserId, updatedAt: now })
+      .where(and(eq(admins.tenantId, tenantId), eq(admins.id, id)));
+  }
+
+  async listTelegramBound(scope: ScopeContext, tx?: unknown): Promise<Admin[]> {
+    const tenantId = requireTenantId(scope);
+    const rows = await executorOf(this.db, tx)
+      .select()
+      .from(admins)
+      .where(and(eq(admins.tenantId, tenantId), isNotNull(admins.telegramUserId)))
+      // Stable and readable: the section is a list a person scans, so it is ordered by
+      // the name they know rather than by insertion.
+      .orderBy(asc(admins.username));
+    return rows.map(toAdmin);
   }
 
   async setStatus(

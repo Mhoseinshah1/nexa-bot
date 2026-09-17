@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { BOT_COMMANDS, TEMPLATES } from '@nexa/contracts';
+import { ADMIN_MENU_COMMAND, BOT_COMMANDS, TEMPLATES } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
 
 /**
@@ -24,9 +24,57 @@ describe('the Telegram command menu', () => {
      */
     const runtime = new URL('../../apps/api/src/surfaces/telegram/bot-runtime.ts', import.meta.url);
     const source = readFileSync(runtime, 'utf8');
-    const answered = [...source.matchAll(/command === '\/([a-z]+)'/g)].map((m) => m[1]).sort();
+    const parsed = [...source.matchAll(/command === '\/([a-z]+)'/g)].map((m) => m[1] ?? '');
+    /*
+     * The management panel's commands are parsed and deliberately NOT registered
+     * (Phase 5T).
+     *
+     * Telegram's command list is per BOT, not per user: `setMyCommands` would advertise
+     * `/link` and `/role` — and the existence of an admin panel — to every customer of
+     * every tenant. So these three are excluded here and asserted absent below, which
+     * makes "not registered" a rule with a test rather than an omission.
+     *
+     * `/admin` is matched through `ADMIN_MENU_COMMAND` rather than a literal, so it
+     * does not appear in `parsed` at all; the assertion below covers it.
+     */
+    const ADMIN_ONLY = new Set(['link', 'role']);
+    const answered = parsed.filter((command) => !ADMIN_ONLY.has(command)).sort();
 
     expect([...BOT_COMMANDS].map((entry) => entry.command).sort()).toEqual(answered);
+
+    /*
+     * And the other half of the 5T rule: the panel's commands are registered NOWHERE.
+     *
+     * Asserted rather than assumed, because the failure would be invisible in exactly
+     * the direction that matters — a `/admin` in the client's command menu is the
+     * product telling every customer that a management panel exists, which is a fact
+     * about the installation and not about them.
+     */
+    const registered = new Set([...BOT_COMMANDS].map((entry) => entry.command));
+    for (const command of [ADMIN_MENU_COMMAND, 'link', 'role']) {
+      expect(registered.has(command as never), command).toBe(false);
+    }
+  });
+
+  it('routes the admin keyboard label, because a keyboard tap arrives as text', () => {
+    /*
+     * The button was drawn and did nothing.
+     *
+     * `TelegramCustomerMessenger` appends `bot.menu.admin` to the keyboard for a bound
+     * administrator, and a reply-keyboard tap reaches the bot as an ordinary TEXT
+     * message — so unless the composition root maps that exact label to `/admin`,
+     * `intentOf` answers `bot.unknown_command` and only typing the command works. The
+     * keyboard's own comment in `bot-commands.ts` names this failure one constant over:
+     * a label nothing routes is a button that tells the person the bot did not
+     * understand.
+     *
+     * Read from the SOURCE of the composition root, for the reason the command list
+     * above is: a constant here would be the thing that drifts.
+     */
+    const container = new URL('../../apps/api/src/container.ts', import.meta.url);
+    const source = readFileSync(container, 'utf8');
+    expect(source).toContain('CATALOGUE_FA[ADMIN_MENU_BUTTON.label]');
+    expect(source).toContain('`/${ADMIN_MENU_COMMAND}`');
   });
 
   it('has a declared template key and a Persian description for every entry', () => {

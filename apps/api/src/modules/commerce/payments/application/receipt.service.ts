@@ -26,7 +26,7 @@ import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzl
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
-import type { CustomerRepository } from '../../customers/application/ports.js';
+import type { CustomerRecord, CustomerRepository } from '../../customers/application/ports.js';
 import type { PaymentRecord, PaymentRepository } from './ports.js';
 import type {
   InboundReceiptFile,
@@ -73,6 +73,20 @@ export interface ReceiptSubmissionResult {
   readonly paymentId: PaymentId;
   readonly filed: boolean;
   /** How many the payment holds after this call. What decides whether the window closed. */
+  readonly held: number;
+}
+
+/**
+ * One row of the reviewer's queue.
+ *
+ * The payment is the authority on the money; `held` is how many receipts are attached,
+ * which is what tells a reviewer whether there is more than one thing to look at. The
+ * customer may be null only if the row disappeared between two reads — the FK makes it
+ * unreachable in practice and it is typed honestly rather than asserted away.
+ */
+export interface ReceiptQueueItem {
+  readonly payment: PaymentRecord;
+  readonly customer: CustomerRecord | null;
   readonly held: number;
 }
 
@@ -363,6 +377,68 @@ export class ReceiptService {
    * anything that decides. The records carry `fileId`, which is why the controller
    * projects them to `PaymentReceiptView` before anything reaches a browser.
    */
+  /**
+   * The queue an administrator works: manual transfers that hold a receipt and are
+   * still PENDING (Phase 5T).
+   *
+   * Bounded, and the bound is applied in SQL against the same predicate — so ten rows
+   * are ten decisions still to make rather than ten rows of which some are already
+   * decided. There is no history here and that is a property rather than an omission:
+   * this answers "what is waiting", the payment's own resolution answers what happened
+   * to everything else, and the Mirza section it is modelled on showed pending items
+   * and nothing else either.
+   *
+   * The payment and the customer are read per row, which is an N+1 bounded by `limit`
+   * and deliberate: the alternative is a three-table join whose projection would have
+   * to be maintained beside two aggregates, to save nine round trips on a screen a
+   * person reads.
+   */
+  async reviewQueue(
+    scope: TenantContext,
+    actor: ActorContext,
+    limit: number,
+  ): Promise<readonly ReceiptQueueItem[]> {
+    await this.deps.guard.check(scope, actor, RECEIPT_VIEW_PERMISSION);
+    const rows = await this.deps.receipts.pendingForReview(scope, limit);
+    const items: ReceiptQueueItem[] = [];
+    for (const row of rows) {
+      const payment = await this.deps.payments.findById(scope, row.paymentId);
+      // A payment resolved between the queue query and this read is simply not in the
+      // list. Skipped rather than rendered as "gone": the row was never shown, so there
+      // is nothing for the reader to reconcile.
+      if (payment === null || payment.state !== 'PENDING') continue;
+      const customer = await this.deps.customers.findById(scope, payment.customerId);
+      items.push({ payment, customer, held: row.held });
+    }
+    return items;
+  }
+
+  /**
+   * One queue item, with its receipts, for the screen that decides it.
+   *
+   * `null` when the payment is no longer PENDING, which is what makes a stale inline
+   * button say so instead of doing something: the message that drew it stays in the
+   * chat for ever, and the state it described is not the state now.
+   */
+  async reviewItem(
+    scope: TenantContext,
+    actor: ActorContext,
+    paymentId: PaymentId,
+  ): Promise<{
+    readonly payment: PaymentRecord;
+    readonly customer: CustomerRecord | null;
+    readonly receipts: readonly PaymentReceiptRecord[];
+  } | null> {
+    await this.deps.guard.check(scope, actor, RECEIPT_VIEW_PERMISSION);
+    const payment = await this.deps.payments.findById(scope, paymentId);
+    if (payment === null || payment.state !== 'PENDING' || payment.method !== 'MANUAL_TRANSFER') {
+      return null;
+    }
+    const receipts = await this.deps.receipts.listForPayment(scope, paymentId);
+    const customer = await this.deps.customers.findById(scope, payment.customerId);
+    return { payment, customer, receipts };
+  }
+
   async listForPayment(
     scope: TenantContext,
     actor: ActorContext,

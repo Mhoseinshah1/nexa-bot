@@ -1,5 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import {
+  ADMIN_MENU_BUTTON,
+  ADMIN_MENU_COMMAND,
   MAIN_MENU_BUTTONS,
   MAX_REQUESTS_PER_PROBE,
   OPERATION_LEASE_SECONDS_MIN,
@@ -12,6 +14,8 @@ import type {
   Logger,
   OperationalEventRecorder,
   PasswordHasher,
+  PaymentId,
+  PermissionKey,
   SecretCipher,
   TenantId,
 } from '@nexa/contracts';
@@ -47,7 +51,7 @@ import { AesGcmSecretCipher } from './infrastructure/crypto/secret-cipher.js';
 import { hostname } from 'node:os';
 import { resolveKeyring } from './infrastructure/crypto/resolve-keyring.js';
 import { blocksReadiness } from './modules/platform/system/application/readiness.service.js';
-import { createLogger } from './infrastructure/logging/logger.js';
+import { createLogger, newCorrelationId } from './infrastructure/logging/logger.js';
 import { createDatabase, type DatabaseHandle } from './infrastructure/persistence/database.js';
 import { createRedis, type RedisHandle } from './infrastructure/redis/redis.js';
 import { DrizzleUnitOfWork } from './infrastructure/persistence/unit-of-work.js';
@@ -75,6 +79,7 @@ import { DrizzleLoginThrottleRepository } from './modules/platform/identity/infr
 import { AuthenticationService } from './modules/platform/identity/application/authentication.service.js';
 import { CredentialThrottle } from './modules/platform/identity/application/credential-throttle.js';
 import { AdminManagementService } from './modules/platform/identity/application/admin-management.service.js';
+import { TelegramAdminService } from './modules/platform/identity/application/telegram-admin.service.js';
 import { BootstrapOwnerService } from './modules/platform/identity/application/bootstrap-owner.service.js';
 import { BotBootstrapService } from './modules/platform/tenancy/application/bot-bootstrap.service.js';
 import { TelegramBotBootstrapGateway } from './modules/platform/tenancy/infrastructure/telegram-bot-bootstrap.gateway.js';
@@ -279,6 +284,11 @@ export interface Container {
   readonly loginThrottle: DrizzleLoginThrottleRepository;
   readonly auth: AuthenticationService;
   readonly adminManagement: AdminManagementService;
+  /**
+   * The Telegram admin seam (Phase 5T): a binding resolved to the SAME administrator
+   * identity the Web Admin authenticates, with no second role model behind it.
+   */
+  readonly telegramAdmins: TelegramAdminService;
   readonly bootstrapOwner: BootstrapOwnerService;
   /**
    * The fresh-install Telegram bootstrap. A CLI provisioning step like
@@ -547,7 +557,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   // The real resolver replaces Phase 0's placeholder, which granted nothing
   // because there were no admins. `SYSTEM_JOB` still holds only its explicit
   // contract set: nothing here reintroduces an actor-type bypass.
-  const guard = new PermissionGuard(new AdminPermissionResolver(admins, roles, clock), opsLog);
+  const permissionResolver = new AdminPermissionResolver(admins, roles, clock);
+  const guard = new PermissionGuard(permissionResolver, opsLog);
 
   // One counter per subject for every path that checks a password: login and
   // `changeOwnPassword` both go through this, so an attacker locked out of one
@@ -596,6 +607,32 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
     credentialThrottle,
   );
+
+  /*
+   * The Telegram admin seam (Phase 5T).
+   *
+   * It shares the resolver the guard uses and delegates every write to
+   * `AdminManagementService`, so there is exactly one place that decides what an
+   * administrator may do and exactly one that changes their roles or their binding.
+   * The Mirza research is why that matters: its Telegram panel and its web panel hold
+   * four role names against seven for one column, and whether either is enforced is
+   * still NOT_TESTED.
+   */
+  /*
+   * The permission a receipt decision takes, named once here.
+   *
+   * `receipts.review` is charged by `PaymentService.confirmManualTransfer` and
+   * `rejectManualTransfer`, and it is ALSO the filter for who gets told a receipt is
+   * waiting: telling somebody who could do nothing about it is noise, and telling
+   * nobody is a receipt that sits there.
+   */
+  const RECEIPTS_REVIEW_PERMISSION = 'receipts.review' as PermissionKey;
+
+  const telegramAdmins = new TelegramAdminService({
+    admins,
+    permissions: permissionResolver,
+    management: adminManagement,
+  });
 
   const bootstrapOwner = new BootstrapOwnerService(
     uow,
@@ -2035,6 +2072,45 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     logger,
   });
 
+  /**
+   * Tells the administrators who may decide a receipt that one is waiting (Phase 5T).
+   *
+   * ONE transaction for the whole fan-out, so a reviewer list read halfway through a
+   * role change cannot produce a message for authority somebody no longer holds.
+   * Addressed to each administrator's own chat through the lane's destination override,
+   * snapshotted into the row — a message sent today still says which chat it went to
+   * after that binding is revoked tomorrow. The dedupe key names the payment AND the
+   * reviewer: one receipt is one message per person, and a redelivered upload is none.
+   */
+  const notifyReviewersOf = async (scope: TenantContext, paymentId: PaymentId): Promise<void> => {
+    await uow.run(scope, async (tx) => {
+      const payment = await paymentRepository.findById(scope, paymentId, tx);
+      if (payment === null) return;
+      const reviewers = await telegramAdmins.reviewers(
+        scope,
+        RECEIPTS_REVIEW_PERMISSION,
+        newCorrelationId(ids.uuid()),
+        tx,
+      );
+      for (const reviewer of reviewers) {
+        const chatId = reviewer.admin.telegramUserId;
+        /* istanbul ignore next -- `listTelegramBound` selects only bound rows. */
+        if (chatId === null) continue;
+        await notifications.queue(
+          scope,
+          {
+            kind: 'RECEIPT_AWAITING_REVIEW',
+            dedupeKey: `receipt.awaiting:${payment.id}:${reviewer.admin.id}`,
+            templateKey: 'bot.admin.receipt_awaiting',
+            values: { reference: payment.reference, total: payment.amount },
+            destination: { transport: 'TELEGRAM', chatId, topicId: null },
+          },
+          tx,
+        );
+      }
+    });
+  };
+
   return {
     config,
     logger,
@@ -2069,6 +2145,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     loginThrottle,
     auth,
     adminManagement,
+    telegramAdmins,
     bootstrapOwner,
     bootstrapBot,
     get installationTenantId() {
@@ -2111,12 +2188,64 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
        * `@nexa/i18n` in a surface, and `TelegramCustomerMessenger` draws the same
        * keyboard from the same constant. One source, two consumers, no drift.
        */
-      mainMenu: new Map(
-        MAIN_MENU_BUTTONS.map((button) => [CATALOGUE_FA[button.label], `/${button.command}`]),
-      ),
+      mainMenu: new Map([
+        ...MAIN_MENU_BUTTONS.map(
+          (button) => [CATALOGUE_FA[button.label], `/${button.command}`] as const,
+        ),
+        /*
+         * The management panel's label, and it has to be HERE or the button does not
+         * work at all.
+         *
+         * `TelegramCustomerMessenger` appends this row for a bound administrator, and
+         * a tap on a reply keyboard arrives as ordinary TEXT — so without the route
+         * `intentOf` cannot turn «پنل مدیریت» into `/admin` and answers
+         * `bot.unknown_command`. That is precisely the failure the keyboard comment
+         * warns about one constant over: a visible button matching nothing.
+         *
+         * The map carries NO authority. It translates a label into a command; whether
+         * that command opens anything is decided by `adminTurn`, which resolves the
+         * binding and finds nothing for a customer who types the same words.
+         */
+        [CATALOGUE_FA[ADMIN_MENU_BUTTON.label], `/${ADMIN_MENU_COMMAND}`] as const,
+      ]),
       destinations: paymentDestinationRenderer,
       accounts: paymentAccountRepository,
       receipts: receiptService,
+      telegramAdmins,
+      /*
+       * The reviewers' poke, Phase 5T.
+       *
+       * The transaction is opened HERE because a surface must not open one, and one
+       * transaction covers the whole fan-out so a reviewer list read halfway through a
+       * role change cannot produce a message for authority somebody no longer holds.
+       *
+       * Addressed to each administrator's OWN chat through the lane's destination
+       * override — snapshotted into the row, so a message sent today still says which
+       * chat it went to after that binding is revoked tomorrow. The dedupe key names
+       * the payment AND the reviewer: one receipt produces one message per person, and
+       * a redelivered upload produces none.
+       */
+      notifyReviewers: async (scope, paymentId) => {
+        /*
+         * Swallowed HERE, and recorded, because the surface awaits this.
+         *
+         * `submitReceipt` calls it inside the try whose catch is `refusal`, and
+         * `refusal` RETHROWS anything it has no reply for — so a failed settings read
+         * or notification insert would have cost the customer their
+         * "receipt received" answer for a receipt that is already committed, and
+         * Telegram's redelivery answers `filed: false`, which skips the poke for ever.
+         * The queue in the panel is the durable record; this is the poke, and a poke
+         * that failed is a log line rather than a customer left in silence.
+         */
+        try {
+          await notifyReviewersOf(scope, paymentId);
+        } catch (error) {
+          logger.error(
+            { err: error instanceof Error ? error.name : 'unknown', paymentId },
+            'Could not tell the reviewers a receipt is waiting.',
+          );
+        }
+      },
       /*
        * The one write the turn makes after its Telegram send, and the transaction
        * it needs, kept OUT of the surface.

@@ -6,7 +6,7 @@ import type {
   TemplateValues,
   TenantContext,
 } from '@nexa/contracts';
-import { MAIN_MENU_ROWS, templateDefinition } from '@nexa/contracts';
+import { ADMIN_MENU_BUTTON, MAIN_MENU_ROWS, templateDefinition } from '@nexa/contracts';
 import { CATALOGUE_FA, formatMoney } from '@nexa/i18n';
 import {
   callbackAnswerBody,
@@ -18,6 +18,7 @@ import type {
   CustomerButton,
   CustomerButtonLabel,
   CustomerButtonRow,
+  CustomerFileMessage,
   CustomerMessage,
   CustomerMessenger,
   CustomerSendConditionReader,
@@ -174,10 +175,24 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
      * string nothing routes, and the customer would press it and be told the bot did
      * not understand — with nothing anywhere recording why.
      */
+    const customerRows =
+      message.keyboard === undefined
+        ? undefined
+        : MAIN_MENU_ROWS.map((row) => row.map((button) => CATALOGUE_FA[button.label]));
+    /*
+     * The admin row is APPENDED to the customer rows rather than replacing them.
+     *
+     * An administrator is also a customer of this bot — the Mirza research confirms the
+     * two concepts are independent, and the same person buys a service and reviews a
+     * receipt — so taking the catalogue away from them to make room for a panel would
+     * be a worse keyboard, not a more secure one.
+     */
     const keyboard =
-      message.keyboard === 'MAIN_MENU'
-        ? MAIN_MENU_ROWS.map((row) => row.map((button) => CATALOGUE_FA[button.label]))
-        : undefined;
+      customerRows === undefined
+        ? undefined
+        : message.keyboard === 'MAIN_MENU_ADMIN'
+          ? [...customerRows, [CATALOGUE_FA[ADMIN_MENU_BUTTON.label]]]
+          : customerRows;
     const result = await telegramSend({
       token,
       apiBaseUrl: this.apiBaseUrl,
@@ -245,6 +260,52 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
    * key is a durable column and a 4xx description can quote a chat id, and a key
    * that varies per error is a key a recovery cannot name.
    */
+  /**
+   * Re-sends a file this installation already holds, by `file_id` (Phase 5T).
+   *
+   * No bytes and no URL. A `file_id` is Telegram's own handle, scoped to the bot that
+   * received the upload, so the media reaches a reviewer without this process
+   * downloading it and without the token appearing anywhere but the request itself —
+   * which is why `botInstanceId` is required rather than resolved to "the tenant's
+   * active bot": the wrong token answers "file not found" for a receipt that exists.
+   *
+   * `sendPhoto` and `sendDocument` are the two methods, matching the two kinds
+   * `PAYMENT_RECEIPT_KINDS` admits. The method is NAMED rather than hard-coded in
+   * `telegramSend`, exactly as its own docblock anticipated.
+   *
+   * No caption. The facts are in the message beside it — that one carries the decision
+   * buttons — and a caption would be a second place the amount is written.
+   */
+  async sendFile(scope: TenantContext, message: CustomerFileMessage): Promise<CustomerSendResult> {
+    const token = await this.bots.tokenForBotInstance(scope, message.botInstanceId);
+    if (token === null) return { outcome: 'REFUSED' };
+
+    const result = await telegramSend({
+      token,
+      apiBaseUrl: this.apiBaseUrl,
+      timeoutMs: this.timeoutMs,
+      method: message.kind === 'PHOTO' ? 'sendPhoto' : 'sendDocument',
+      body: {
+        chat_id: message.chatId,
+        ...(message.kind === 'PHOTO' ? { photo: message.fileId } : { document: message.fileId }),
+      },
+    });
+
+    /*
+     * The outcomes are kept apart exactly as `send` keeps them, and NOTHING here opens
+     * the send-failure condition: this is evidence beside a message that already
+     * arrived, and a failed re-send must not make an operator's "the bot is not
+     * replying" alarm fire for a bot that is replying.
+     */
+    if (result.outcome === 'SUCCEEDED') return { outcome: 'DELIVERED' };
+    if (result.outcome === 'FAILED_RETRYABLE') {
+      return result.retryAfterMs === undefined
+        ? { outcome: 'UNKNOWN' }
+        : { outcome: 'RATE_LIMITED', retryAfterMs: result.retryAfterMs };
+    }
+    return { outcome: 'REFUSED' };
+  }
+
   private async recordFailure(
     scope: TenantContext,
     message: CustomerMessage,

@@ -10,16 +10,20 @@ import {
 import type {
   ActorContext,
   BotInstanceId,
+  CorrelationId,
   CustomerArrival,
   CustomerNotificationKind,
   Money,
   OrderId,
   OrderPurpose,
+  PaymentId,
+  PermissionKey,
   TemplateKey,
   TemplateValues,
   TenantContext,
   UserId,
 } from '@nexa/contracts';
+import { ADMIN_MENU_COMMAND } from '@nexa/contracts';
 import type { CustomerService } from '../../modules/commerce/customers/application/customer.service.js';
 import type { PaymentDestinationRenderer } from '../../modules/commerce/payments/infrastructure/destination-renderer.js';
 import type { PaymentAccountRepository } from '../../modules/commerce/payments/application/account-ports.js';
@@ -29,6 +33,7 @@ import type {
   CustomerButton,
   CustomerSendOutcome,
   CustomerMessenger,
+  MainMenuVariant,
 } from '../../modules/commerce/messaging/application/ports.js';
 import type { CustomerRecord } from '../../modules/commerce/customers/application/ports.js';
 import type { ProductService } from '../../modules/commerce/catalog/application/product.service.js';
@@ -87,6 +92,25 @@ export const BOT_INTENTS = [
   'SERVICE_ACTION_CONFIRM',
   'HELP',
   'RECEIPT_UPLOAD',
+  /*
+   * Phase 5T — the management panel.
+   *
+   * These are intents like any other, and that is the point: they are parsed from the
+   * update with no knowledge of who sent it, and the HANDLER resolves the Telegram
+   * account's binding and charges a permission. A customer who crafts one of these
+   * callbacks reaches `adminTurn`, resolves to no administrator and is answered with
+   * the ordinary unsupported-input fallback — the same reply they get for any other
+   * string this bot does not understand.
+   */
+  'ADMIN_PANEL',
+  'ADMIN_RECEIPTS',
+  'ADMIN_RECEIPT',
+  'ADMIN_APPROVE',
+  'ADMIN_REJECT',
+  'ADMIN_SECTION',
+  'ADMIN_REVOKE',
+  'ADMIN_LINK',
+  'ADMIN_ROLE',
   'UNSUPPORTED',
 ] as const;
 export type BotIntent = (typeof BOT_INTENTS)[number];
@@ -121,6 +145,17 @@ export interface BotCommand {
    * single-id path uses.
    */
   readonly secondaryId?: string | null;
+  /**
+   * The words after a slash command, for the two the management panel accepts.
+   *
+   * `/link <telegram id> <username>` and `/role <username> <role key>` carry their
+   * arguments in the SAME message as the verb, which is what makes them commands rather
+   * than a prompt that captures the next message — the shape INCIDENT-FIN-001 is about.
+   * Split on whitespace and otherwise untouched: every argument is validated by the
+   * service that uses it (`telegramUserIdSchema`, the username lookup, the role key),
+   * because the boundary cannot know which administrator a name refers to.
+   */
+  readonly args?: readonly string[];
   /** Telegram's id for the tapped button, so the spinner can be stopped. */
   readonly callbackQueryId: string | null;
   /**
@@ -323,6 +358,59 @@ export const SERVICE_ADD_TIME_CALLBACK_PREFIX = 'h:';
 export const SERVICE_BUY_TRAFFIC_CALLBACK_PREFIX = 'a:';
 export const SERVICE_BUY_TIME_CALLBACK_PREFIX = 'b:';
 export const SERVICE_ACTION_CONFIRM_CALLBACK_PREFIX = 'q:';
+
+/**
+ * The management panel's prefixes (Phase 5T), deliberately UPPERCASE.
+ *
+ * Every customer-facing prefix above is a lowercase letter, so no admin prefix can ever
+ * become a prefix of one of those — the collision the resend/service pair states as a
+ * silent failure, where every tap routes to whichever branch was tested first.
+ *
+ * `callback_data` is capped at 64 bytes, which is what decides the shape of these: a
+ * prefix plus ONE uuid (38 bytes) fits and a prefix plus two does not. So the panel
+ * carries a payment or an administrator and never a pair, and nothing here carries a
+ * Telegram id — that arrives by command, where there is room for it.
+ */
+/**
+ * How many queue rows one screen shows.
+ *
+ * A bound on a KEYBOARD, like `TOPUP_PRESETS_MAX`: Telegram refuses a reply_markup past
+ * its own limits, and an unbounded queue is a panel that stops working exactly when an
+ * installation is busiest. Ten is what the service asks for, applied in SQL against the
+ * same predicate — so ten rows are ten decisions still to make.
+ */
+const ADMIN_QUEUE_LIMIT = 10;
+
+/**
+ * The two permissions the panel's sections charge, named once.
+ *
+ * Read through the guard by the services behind each section; these constants only
+ * decide which BUTTONS exist, which is not authorization — `docs/conventions.md`:
+ * never by not drawing a button.
+ */
+const RECEIPTS_VIEW_PERMISSION = 'receipts.view' as PermissionKey;
+const ADMINS_VIEW_PERMISSION = 'admins.view' as PermissionKey;
+
+/** The intents `adminTurn` owns, as a set, so `act` has one branch rather than nine. */
+const ADMIN_INTENTS: ReadonlySet<BotIntent> = new Set<BotIntent>([
+  'ADMIN_PANEL',
+  'ADMIN_RECEIPTS',
+  'ADMIN_RECEIPT',
+  'ADMIN_APPROVE',
+  'ADMIN_REJECT',
+  'ADMIN_SECTION',
+  'ADMIN_REVOKE',
+  'ADMIN_LINK',
+  'ADMIN_ROLE',
+]);
+
+export const ADMIN_PANEL_CALLBACK_PREFIX = 'A:';
+export const ADMIN_RECEIPTS_CALLBACK_PREFIX = 'B:';
+export const ADMIN_RECEIPT_CALLBACK_PREFIX = 'C:';
+export const ADMIN_APPROVE_CALLBACK_PREFIX = 'D:';
+export const ADMIN_REJECT_CALLBACK_PREFIX = 'E:';
+export const ADMIN_SECTION_CALLBACK_PREFIX = 'F:';
+export const ADMIN_REVOKE_CALLBACK_PREFIX = 'G:';
 
 /**
  * How many services one `/services` answer shows.
@@ -570,6 +658,34 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
     if (data.startsWith(SERVICE_CALLBACK_PREFIX)) {
       return callbackCommand('SERVICE', data.slice(SERVICE_CALLBACK_PREFIX.length), id);
     }
+    /*
+     * The panel's three screens carry no target, so they match the WHOLE string — the
+     * same rule the top-up menu states. The three that act carry one uuid and go
+     * through `callbackCommand`, which validates it: a crafted id is UNSUPPORTED here
+     * rather than a 500 at a cast, and an id belonging to another tenant finds nothing
+     * because every repository read is tenant-scoped.
+     */
+    if (data === ADMIN_PANEL_CALLBACK_PREFIX) {
+      return { intent: 'ADMIN_PANEL', targetId: null, callbackQueryId: id };
+    }
+    if (data === ADMIN_RECEIPTS_CALLBACK_PREFIX) {
+      return { intent: 'ADMIN_RECEIPTS', targetId: null, callbackQueryId: id };
+    }
+    if (data === ADMIN_SECTION_CALLBACK_PREFIX) {
+      return { intent: 'ADMIN_SECTION', targetId: null, callbackQueryId: id };
+    }
+    if (data.startsWith(ADMIN_RECEIPT_CALLBACK_PREFIX)) {
+      return callbackCommand('ADMIN_RECEIPT', data.slice(ADMIN_RECEIPT_CALLBACK_PREFIX.length), id);
+    }
+    if (data.startsWith(ADMIN_APPROVE_CALLBACK_PREFIX)) {
+      return callbackCommand('ADMIN_APPROVE', data.slice(ADMIN_APPROVE_CALLBACK_PREFIX.length), id);
+    }
+    if (data.startsWith(ADMIN_REJECT_CALLBACK_PREFIX)) {
+      return callbackCommand('ADMIN_REJECT', data.slice(ADMIN_REJECT_CALLBACK_PREFIX.length), id);
+    }
+    if (data.startsWith(ADMIN_REVOKE_CALLBACK_PREFIX)) {
+      return callbackCommand('ADMIN_REVOKE', data.slice(ADMIN_REVOKE_CALLBACK_PREFIX.length), id);
+    }
     return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
   }
 
@@ -616,6 +732,31 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
    * `setMyCommands` render, so the menu and the help cannot disagree.
    */
   if (command === '/help') return { intent: 'HELP', targetId: null, callbackQueryId: null };
+  /*
+   * The management panel's three text entries (Phase 5T).
+   *
+   * `/admin` is deliberately NOT registered with `setMyCommands` — Telegram's command
+   * list is per bot, not per user, so registering it would advertise the panel to every
+   * customer. It is reachable by the keyboard button an administrator gets and by
+   * typing it; both answer the same way, and a customer who types it resolves to no
+   * administrator and gets this function's fallback.
+   *
+   * The two that carry arguments split on whitespace and validate nothing here: what
+   * makes `123456789` a Telegram account and `owner` an administrator is a question for
+   * the services that look them up.
+   */
+  if (command === `/${ADMIN_MENU_COMMAND}`) {
+    return { intent: 'ADMIN_PANEL', targetId: null, callbackQueryId: null };
+  }
+  if (command === '/link' || command === '/role') {
+    const args = asCommand.trim().split(/\s+/).slice(1);
+    return {
+      intent: command === '/link' ? 'ADMIN_LINK' : 'ADMIN_ROLE',
+      targetId: null,
+      args,
+      callbackQueryId: null,
+    };
+  }
   return UNSUPPORTED;
 }
 
@@ -811,7 +952,7 @@ export interface BotRuntimeDeps {
    * addendum's own words — *"settlement still requires the existing authorized operator
    * confirmation"* — are a dependency here rather than only a permission.
    */
-  readonly receipts: Pick<ReceiptService, 'submit'>;
+  readonly receipts: Pick<ReceiptService, 'submit' | 'reviewQueue' | 'reviewItem'>;
   readonly wallet: WalletService;
   readonly services: ProvisioningService;
   readonly delivery: DeliveryService;
@@ -867,6 +1008,80 @@ export interface BotRuntimeDeps {
    * past reports, applied to something the customer can read back.
    */
   readonly purchaseTitle: (scope: TenantContext, orderId: OrderId) => Promise<string | null>;
+  /**
+   * The management panel's seam (Phase 5T).
+   *
+   * A narrow port rather than the service, so this surface can resolve a binding, read
+   * who holds one, and ask for a binding or a role change — and cannot reach anything
+   * else about identity. Every method behind it charges its own permission through the
+   * same guard the Web Admin uses; nothing here is authorized by having the port.
+   */
+  readonly telegramAdmins?: TelegramAdminPort;
+  /**
+   * Tells the administrators who may decide a receipt that one is waiting.
+   *
+   * A narrow function for `queueRateLimitedFact`'s reason: the notification lane takes
+   * a transaction and a surface must not open one, so the composition root owns the
+   * unit of work and this hands over the two values only the turn knows.
+   *
+   * Returns nothing and must not throw. The receipt is already filed and the customer
+   * has already been answered; a failure to poke a reviewer changes neither, and the
+   * queue in the panel is the durable record either way.
+   */
+  readonly notifyReviewers?: (scope: TenantContext, paymentId: PaymentId) => Promise<void>;
+}
+
+/**
+ * What the surface may ask about Telegram administrators.
+ *
+ * Structural rather than the class, which is what keeps `bot-runtime.test.ts` able to
+ * stand one up without an identity module — and what stops this file from acquiring the
+ * ability to create an administrator, change a password or read a hash.
+ */
+export interface TelegramAdminPort {
+  resolve(
+    scope: TenantContext,
+    telegramUserId: string,
+    correlationId: CorrelationId,
+  ): Promise<{
+    readonly admin: {
+      readonly id: string;
+      readonly username: string;
+      readonly telegramUserId: string | null;
+    };
+    readonly actor: ActorContext;
+    readonly permissions: ReadonlySet<PermissionKey>;
+  } | null>;
+  listBound(
+    scope: TenantContext,
+    actor: ActorContext,
+  ): Promise<
+    readonly {
+      readonly id: string;
+      readonly username: string;
+      readonly telegramUserId: string | null;
+    }[]
+  >;
+  link(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: { readonly username: string; readonly telegramUserId: string; readonly reason: string },
+  ): Promise<{ readonly username: string }>;
+  revoke(
+    scope: TenantContext,
+    actor: ActorContext,
+    targetId: string,
+    reason: string,
+  ): Promise<{ readonly username: string }>;
+  setRoles(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly username: string;
+      readonly roleKeys: readonly string[];
+      readonly reason: string;
+    },
+  ): Promise<{ readonly admin: { readonly username: string }; readonly roleKeys: string[] }>;
 }
 
 /**
@@ -949,7 +1164,7 @@ interface PendingReply {
    * keyboard the customer already has, and would fight with the inline keyboards the
    * contextual flows attach.
    */
-  readonly keyboard?: 'MAIN_MENU';
+  readonly keyboard?: MainMenuVariant;
 }
 
 /**
@@ -1334,6 +1549,392 @@ export class BotRuntime {
   }
 
   /**
+   * The management panel's turn (Phase 5T), or `null` when this is not an administrator.
+   *
+   * `null` rather than a refusal, because the caller then falls through to the ordinary
+   * unsupported-input reply — the SAME answer any unrecognised string gets. That is the
+   * whole of the "a customer cannot open the admin menu by crafting callback data"
+   * property: the callback parses, this method resolves no administrator behind the
+   * Telegram id that sent it, and the customer learns nothing about what exists.
+   *
+   * The administrator's OWN actor is what every call below carries — `TELEGRAM_ADMIN`
+   * with their administrator id — so the audit row names the person and not the bot, and
+   * the guard resolves their real permissions. The turn's `SYSTEM_JOB` actor stops here.
+   */
+  private async adminTurn(
+    scope: TenantContext,
+    actor: ActorContext,
+    command: BotCommand,
+    input: {
+      readonly idempotencyKey: string;
+      readonly botInstanceId: BotInstanceId;
+      readonly update: unknown;
+      readonly telegramUserId: string;
+    },
+  ): Promise<PendingReply | null> {
+    const admins = this.deps.telegramAdmins;
+    if (admins === undefined) return null;
+
+    const identity = await admins.resolve(scope, input.telegramUserId, actor.correlationId);
+    if (identity === null) return null;
+
+    const { actor: adminActor, permissions } = identity;
+    // An administrator who holds neither of the panel's permissions has no panel, and
+    // is answered exactly as a customer is. Nothing is hidden from them that they could
+    // otherwise have done: both sections charge these keys server-side as well.
+    const mayReview = permissions.has(RECEIPTS_VIEW_PERMISSION);
+    const maySeeAdmins = permissions.has(ADMINS_VIEW_PERMISSION);
+    if (!mayReview && !maySeeAdmins) return null;
+
+    try {
+      switch (command.intent) {
+        case 'ADMIN_PANEL':
+          return {
+            key: 'bot.admin.panel',
+            values: {},
+            buttons: [
+              ...(mayReview
+                ? [
+                    {
+                      label: {
+                        kind: 'TEMPLATE' as const,
+                        key: 'bot.admin.receipts_button' as const,
+                      },
+                      data: ADMIN_RECEIPTS_CALLBACK_PREFIX,
+                    },
+                  ]
+                : []),
+              ...(maySeeAdmins
+                ? [
+                    {
+                      label: {
+                        kind: 'TEMPLATE' as const,
+                        key: 'bot.admin.section_button' as const,
+                      },
+                      data: ADMIN_SECTION_CALLBACK_PREFIX,
+                    },
+                  ]
+                : []),
+            ],
+            orderId: null,
+          };
+        case 'ADMIN_RECEIPTS':
+          return await this.adminReceipts(scope, adminActor);
+        case 'ADMIN_RECEIPT':
+          return command.targetId === null
+            ? null
+            : await this.adminReceipt(scope, adminActor, command.targetId, input);
+        case 'ADMIN_APPROVE':
+        case 'ADMIN_REJECT':
+          return command.targetId === null
+            ? null
+            : await this.adminDecide(
+                scope,
+                adminActor,
+                command.targetId,
+                command.intent === 'ADMIN_APPROVE',
+                input.idempotencyKey,
+              );
+        case 'ADMIN_SECTION':
+          return await this.adminSection(scope, adminActor);
+        case 'ADMIN_REVOKE':
+          return command.targetId === null
+            ? null
+            : await this.adminRevokeAccess(scope, adminActor, command.targetId);
+        case 'ADMIN_LINK':
+          return await this.adminLink(scope, adminActor, command.args ?? []);
+        case 'ADMIN_ROLE':
+          return await this.adminRole(scope, adminActor, command.args ?? []);
+        default:
+          return null;
+      }
+    } catch {
+      /*
+       * ONE refusal for everything, and the distinctions are deliberately not rendered.
+       *
+       * A permission denial, an unknown administrator, a Telegram account already bound
+       * and an attempted escalation are four different facts, all of them recorded — the
+       * guard writes an operational event, the services write audit rows, and both carry
+       * the error code. What a reply must not do is tell whoever holds that chat WHICH
+       * of the four they hit, because the answer is a fact about other administrators.
+       */
+      return { key: 'bot.admin.refused', values: {}, buttons: [], orderId: null };
+    }
+  }
+
+  /**
+   * Whether this turn's Telegram account is an administrator with a panel.
+   *
+   * Used for ONE thing — whether `/start` draws the panel row — and it makes the same
+   * resolution the actions make, so the keyboard cannot promise a section the guard
+   * would refuse. It answers false for every case `adminTurn` treats as "not an
+   * administrator", including an ACTIVE administrator holding neither panel permission.
+   */
+  private async isAdmin(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: { readonly telegramUserId: string },
+  ): Promise<boolean> {
+    const admins = this.deps.telegramAdmins;
+    if (admins === undefined) return false;
+    const identity = await admins.resolve(scope, input.telegramUserId, actor.correlationId);
+    if (identity === null) return false;
+    return (
+      identity.permissions.has(RECEIPTS_VIEW_PERMISSION) ||
+      identity.permissions.has(ADMINS_VIEW_PERMISSION)
+    );
+  }
+
+  /**
+   * The queue: the manual transfers that hold a receipt and are still pending.
+   *
+   * Bounded by `ADMIN_QUEUE_LIMIT` and ordered oldest first by the service, so the
+   * buttons are the work in the order it arrived. The rows carry the REFERENCE and the
+   * amount rather than a payment id: the reference is what the customer quoted to their
+   * bank and what a reviewer matches against a statement.
+   */
+  private async adminReceipts(scope: TenantContext, actor: ActorContext): Promise<PendingReply> {
+    const items = await this.deps.receipts.reviewQueue(scope, actor, ADMIN_QUEUE_LIMIT);
+    if (items.length === 0) {
+      return { key: 'bot.admin.receipts_none', values: {}, buttons: [], orderId: null };
+    }
+    return {
+      key: 'bot.admin.receipts_list',
+      values: {},
+      buttons: items.map((item) => ({
+        label: { kind: 'TEXT' as const, text: item.payment.reference, amount: item.payment.amount },
+        data: `${ADMIN_RECEIPT_CALLBACK_PREFIX}${item.payment.id}`,
+      })),
+      orderId: null,
+    };
+  }
+
+  /**
+   * One queue item: the facts, the media, and the two decisions.
+   *
+   * The MEDIA goes first and the decision message second, which is the order a reviewer
+   * needs — look, then decide. Sending it here is safe and is not the "decide then
+   * send" rule being broken: every read above has committed, nothing durable is
+   * pending, and `telegramSend` still refuses to run inside a transaction.
+   *
+   * A failed media send does not fail the turn. The reviewer still gets the facts and
+   * the buttons, and the receipt is still in the Web Admin — an approval decided on the
+   * reference and the amount is the same approval.
+   */
+  private async adminReceipt(
+    scope: TenantContext,
+    actor: ActorContext,
+    paymentId: string,
+    input: { readonly update: unknown },
+  ): Promise<PendingReply> {
+    const item = await this.deps.receipts.reviewItem(scope, actor, paymentId as PaymentId);
+    if (item === null) {
+      return { key: 'bot.admin.receipt_gone', values: {}, buttons: [], orderId: null };
+    }
+
+    const chatId = privateChatIdOf(input.update);
+    if (chatId !== null) {
+      for (const receipt of item.receipts) {
+        await this.deps.messenger.sendFile(scope, {
+          chatId,
+          // The bot that RECEIVED the upload, from the row. A `file_id` is scoped to
+          // that bot, and the wrong token answers "file not found" for a receipt that
+          // exists — which is why the column is on `payment_receipts` at all.
+          botInstanceId: receipt.botInstanceId,
+          kind: receipt.kind === 'PHOTO' ? 'PHOTO' : 'DOCUMENT',
+          fileId: receipt.fileId,
+        });
+      }
+    }
+
+    return {
+      key: 'bot.admin.receipt',
+      values: {
+        reference: item.payment.reference,
+        total: item.payment.amount,
+        // The customer's Telegram id, which is the identity this installation holds for
+        // them. Not a display name: a name is chosen by the person it names, and a
+        // reviewer deciding money needs the id the rest of the system uses.
+        customer: item.customer?.telegramUserId ?? item.payment.customerId,
+      },
+      buttons: [
+        {
+          label: { kind: 'TEMPLATE', key: 'bot.admin.approve_button' },
+          data: `${ADMIN_APPROVE_CALLBACK_PREFIX}${item.payment.id}`,
+          row: 0,
+        },
+        {
+          label: { kind: 'TEMPLATE', key: 'bot.admin.reject_button' },
+          data: `${ADMIN_REJECT_CALLBACK_PREFIX}${item.payment.id}`,
+          row: 0,
+        },
+      ],
+      orderId: null,
+    };
+  }
+
+  /**
+   * Approve or reject, through the SAME application methods the Web Admin calls.
+   *
+   * `confirmManualTransfer` and `rejectManualTransfer` — no parallel settlement, no
+   * second ledger write, no second notification. Everything that makes a decision safe
+   * lives in there: the permission, the conditional state transition, the wallet credit
+   * keyed on the payment, the customer's notification, the audit row.
+   *
+   * A duplicate tap is safe TWICE OVER. The idempotency key is the update's, so
+   * Telegram's redelivery of one tap is a replay; and two different taps race a
+   * conditional UPDATE that only one can win, after which the loser reads a payment
+   * that is no longer pending and is told so rather than settling anything again.
+   */
+  private async adminDecide(
+    scope: TenantContext,
+    actor: ActorContext,
+    paymentId: string,
+    approve: boolean,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    const item = await this.deps.receipts.reviewItem(scope, actor, paymentId as PaymentId);
+    if (item === null) {
+      return { key: 'bot.admin.receipt_gone', values: {}, buttons: [], orderId: null };
+    }
+
+    if (approve) {
+      await this.deps.payments.confirmManualTransfer(scope, actor, paymentId, {
+        idempotencyKey: `${idempotencyKey}:admin-approve`,
+        // An ASCII note, and an audit field rather than customer-facing text: it says
+        // through which surface the decision was taken, which is exactly what a
+        // reviewer reading the payment later wants to know.
+        note: 'Approved in the Telegram management panel.',
+      });
+      return { key: 'bot.admin.approved', values: {}, buttons: [], orderId: null };
+    }
+
+    await this.deps.payments.rejectManualTransfer(scope, actor, paymentId, {
+      idempotencyKey: `${idempotencyKey}:admin-reject`,
+      note: 'Rejected in the Telegram management panel.',
+    });
+    return { key: 'bot.admin.rejected', values: {}, buttons: [], orderId: null };
+  }
+
+  /**
+   * The administrator section: who holds Telegram access, and the two commands.
+   *
+   * The rows are buttons that REVOKE, which is the one thing the research found its
+   * own section could do besides list and create — and the label is the administrator's
+   * username plus their Telegram id, because identity here is the numeric id and a
+   * reviewer needs to see which account they are removing.
+   */
+  private async adminSection(scope: TenantContext, actor: ActorContext): Promise<PendingReply> {
+    const bound = await this.deps.telegramAdmins?.listBound(scope, actor);
+    if (bound === undefined || bound.length === 0) {
+      return { key: 'bot.admin.admins_none', values: {}, buttons: [], orderId: null };
+    }
+    return {
+      key: 'bot.admin.section',
+      values: {},
+      buttons: bound.map((admin) => ({
+        label: { kind: 'TEXT' as const, text: `${admin.username} — ${admin.telegramUserId ?? ''}` },
+        data: `${ADMIN_REVOKE_CALLBACK_PREFIX}${admin.id}`,
+      })),
+      orderId: null,
+    };
+  }
+
+  /** Removes one administrator's Telegram access, by the button beside their row. */
+  private async adminRevokeAccess(
+    scope: TenantContext,
+    actor: ActorContext,
+    targetId: string,
+  ): Promise<PendingReply> {
+    const admins = this.deps.telegramAdmins;
+    if (admins === undefined) {
+      return { key: 'bot.admin.refused', values: {}, buttons: [], orderId: null };
+    }
+    const revoked = await admins.revoke(
+      scope,
+      actor,
+      targetId,
+      'Telegram access revoked from the management panel.',
+    );
+    return {
+      key: 'bot.admin.revoked',
+      values: { username: revoked.username },
+      buttons: [],
+      orderId: null,
+    };
+  }
+
+  /**
+   * `/link <telegram id> <username>` — gives an existing administrator Telegram access.
+   *
+   * TWO arguments in one message, which is what makes this a command rather than a
+   * prompt: nothing is remembered between updates, so there is no window in which an
+   * ordinary message can be swallowed as an answer (INCIDENT-FIN-001).
+   *
+   * It cannot create an administrator, and that is stated in the reply rather than
+   * worked around: a Telegram-only administrator would need a row with no usable
+   * password hash, and this identity model has no such shape.
+   */
+  private async adminLink(
+    scope: TenantContext,
+    actor: ActorContext,
+    args: readonly string[],
+  ): Promise<PendingReply> {
+    const admins = this.deps.telegramAdmins;
+    const telegramUserId = args[0];
+    const username = args[1];
+    if (admins === undefined || telegramUserId === undefined || username === undefined) {
+      return { key: 'bot.admin.usage', values: {}, buttons: [], orderId: null };
+    }
+    const linked = await admins.link(scope, actor, {
+      telegramUserId,
+      username,
+      reason: 'Telegram access granted from the management panel.',
+    });
+    return {
+      key: 'bot.admin.linked',
+      values: { username: linked.username },
+      buttons: [],
+      orderId: null,
+    };
+  }
+
+  /**
+   * `/role <username> <role key>` — sets an administrator's roles to one Nexa preset.
+   *
+   * Nexa's roles, not a second enum. The four labels the Mirza research observed are
+   * expressible as presets that already exist (`owner`, `sales`, `support`,
+   * `receipt_reviewer`), and `setRoles` carries the escalation rule, the last-owner
+   * protection and the audit row that a Telegram-side enum would not.
+   *
+   * ONE role, because a keyboard-free command that took a list would be a list a
+   * reviewer cannot see; the Web Admin is where a multi-role composition is edited.
+   */
+  private async adminRole(
+    scope: TenantContext,
+    actor: ActorContext,
+    args: readonly string[],
+  ): Promise<PendingReply> {
+    const admins = this.deps.telegramAdmins;
+    const username = args[0];
+    const roleKey = args[1];
+    if (admins === undefined || username === undefined || roleKey === undefined) {
+      return { key: 'bot.admin.usage', values: {}, buttons: [], orderId: null };
+    }
+    const result = await admins.setRoles(scope, actor, {
+      username,
+      roleKeys: [roleKey],
+      reason: 'Roles set from the Telegram management panel.',
+    });
+    return {
+      key: 'bot.admin.roles_set',
+      values: { username: result.admin.username, roles: result.roleKeys.join(', ') },
+      buttons: [],
+      orderId: null,
+    };
+  }
+
+  /**
    * What this intent produces, as a reply that has not been sent yet.
    *
    * Every branch returns; there is no fallthrough that leaves a customer unanswered,
@@ -1349,6 +1950,15 @@ export class BotRuntime {
       readonly idempotencyKey: string;
       readonly botInstanceId: BotInstanceId;
       readonly update: unknown;
+      /**
+       * WHO sent it, by Telegram's numeric id.
+       *
+       * Carried because the management panel resolves an administrator from it, and
+       * never used as a fact about a customer — `resolveFromUpdate` already turned it
+       * into a row before this runs. Never a username: usernames are reassignable and a
+       * customer can choose one that looks like an administrator's.
+       */
+      readonly telegramUserId: string;
     },
   ): Promise<PendingReply> {
     if (command.intent === 'CATALOG') return this.catalogue(scope, actor);
@@ -1507,8 +2117,32 @@ export class BotRuntime {
      * before this, and drawing a menu for somebody who may not use it is the untruthful
      * surface this codebase keeps refusing.
      */
+    /*
+     * The management panel, and it is reached through ONE door.
+     *
+     * Every admin intent lands here, whoever sent it, and `adminTurn` resolves the
+     * Telegram account's binding before it decides anything. A customer who crafts
+     * `D:<uuid>` reaches this line, resolves to no administrator, and falls through to
+     * the same unsupported-input reply below that any other unrecognised string gets.
+     */
+    if (ADMIN_INTENTS.has(command.intent)) {
+      const reply = await this.adminTurn(scope, actor, command, input);
+      if (reply !== null) return reply;
+    }
+
     const key = replyFor(command.intent, arrival);
-    const menu = command.intent === 'START' ? ({ keyboard: 'MAIN_MENU' } as const) : {};
+    /*
+     * The admin row is added for a Telegram account that resolves to an administrator,
+     * and the resolution is the SAME one every admin action makes. A keyboard is not
+     * authority — the actions re-check — but a button nobody behind it can use is the
+     * untruthful surface this codebase keeps refusing.
+     */
+    const menu =
+      command.intent === 'START'
+        ? ({
+            keyboard: (await this.isAdmin(scope, actor, input)) ? 'MAIN_MENU_ADMIN' : 'MAIN_MENU',
+          } as const)
+        : {};
     return { key, values: {}, buttons: [], orderId: null, ...menu };
   }
 
@@ -2609,11 +3243,37 @@ export class BotRuntime {
     idempotencyKey: string,
   ): Promise<PendingReply> {
     try {
-      await this.deps.receipts.submit(scope, actor, customer.id, {
+      const result = await this.deps.receipts.submit(scope, actor, customer.id, {
         idempotencyKey: `${idempotencyKey}:receipt`,
         botInstanceId,
         file,
       });
+      /*
+       * The reviewers are poked AFTER the receipt is filed, and only for a NEW row
+       * (Phase 5T).
+       *
+       * `filed === false` is Telegram redelivering an update whose file is already on
+       * the payment, and a second poke for one receipt is a reviewer opening the queue
+       * to find what they already saw. The lane's dedupe key makes that harmless; not
+       * sending it makes it absent.
+       *
+       * The poke cannot fail this turn, and that is enforced in TWO places rather than
+       * asserted once. The composition root catches and logs, because it owns the
+       * transaction; this `catch` is the surface's own guarantee, because the call sits
+       * inside the try whose handler is `refusal` — and `refusal` RETHROWS anything it
+       * has no reply for. Without it a database error while telling reviewers would
+       * have cost the customer the acknowledgement for a receipt already committed, and
+       * Telegram's redelivery answers `filed: false`, which skips the poke for ever.
+       */
+      if (result.filed) {
+        try {
+          await this.deps.notifyReviewers?.(scope, result.paymentId);
+        } catch {
+          // Deliberately not rethrown and deliberately not reported from here: the
+          // container logs it, the queue in the panel is the durable record, and the
+          // customer's answer is about their receipt rather than about our plumbing.
+        }
+      }
       return { key: 'bot.payment.receipt_received', values: {}, buttons: [], orderId: null };
     } catch (error) {
       return refusal(error);

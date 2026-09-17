@@ -91,14 +91,48 @@ export class NotificationService {
       readonly templateKey: TemplateKey;
       readonly values: TemplateValues;
       readonly correlationId?: string;
+      /**
+       * WHERE to send it, when the answer is not the operations destination.
+       *
+       * Phase 5T addresses an individual administrator's own Telegram chat, which the
+       * `ops.notifications.telegram_chat_id` setting cannot express: that key is the
+       * one place the operators of an installation share, and a receipt waiting for a
+       * decision is addressed to the people who may decide it.
+       *
+       * An override rather than a second lane, because everything this lane already
+       * does — the attempt rows, the bounded retries, the three outcomes kept apart,
+       * the dedupe key — is exactly what a message to a person needs, and a parallel
+       * dispatcher would be a second implementation of all of it.
+       *
+       * It is still SNAPSHOTTED by `create` below, so a message sent in March says
+       * which chat it was addressed to after that administrator's Telegram access is
+       * revoked in April.
+       */
+      readonly destination?: NotificationDestination;
     },
     tx?: unknown,
   ): Promise<{ readonly intent: NotificationIntent | null; readonly created: boolean }> {
-    if (!(await this.features.isEnabled(scope, 'ops_notifications', tx))) {
+    /*
+     * The flag gates the OPERATIONS lane, and only it.
+     *
+     * `ops_notifications` is off by default and its own description says what it is
+     * for: "a destination has to be configured and tested first". A message addressed
+     * to a named administrator did not come from that destination and is not waiting
+     * on it — gating this on the flag meant a default installation with correctly bound
+     * receipt reviewers queued nothing at all, silently, which is the product
+     * promising a notification it never sends.
+     *
+     * So the check applies to the path that reads the setting. A caller that supplies
+     * its own destination has already decided who it is writing to.
+     */
+    if (
+      input.destination === undefined &&
+      !(await this.features.isEnabled(scope, 'ops_notifications', tx))
+    ) {
       return { intent: null, created: false };
     }
 
-    const destination = await this.destination(scope, tx);
+    const destination = input.destination ?? (await this.destination(scope, tx));
     if (destination === null) return { intent: null, created: false };
 
     const maxAttempts = await this.settings.valueOf<number>(

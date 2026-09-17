@@ -113,6 +113,13 @@ describe('the customer notification lane', () => {
           return outcomes.shift() ?? { outcome: 'DELIVERED' };
         },
         acknowledge: async () => undefined,
+        /*
+         * Present and REFUSING, because this lane never sends a file: the customer
+         * notification kinds carry no payload, let alone media. A fake that answered
+         * DELIVERED would let a future caller add a media send here and find a green
+         * test waiting for it.
+         */
+        sendFile: async () => ({ outcome: 'REFUSED' }),
       },
       uow: ctx.container.uow,
       clock: ctx.container.clock,

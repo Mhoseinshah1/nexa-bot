@@ -133,6 +133,53 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.order.transfer_under_review':
     'شما اعلام کرده‌اید که مبلغ این سفارش را واریز کرده‌اید، بنابراین تا پایان بررسی نمی‌توان آن را لغو کرد. نتیجهٔ بررسی به شما اطلاع داده می‌شود.',
 
+  /*
+   * Phase 5T — the management panel.
+   *
+   * Admin-facing Persian, and it says only what this build actually does. The two
+   * section labels are the strings the Mirza research recorded on its own panel
+   * (`👨‍💼 پنل مدیریت`, `💵 رسید های تایید نشده`, `👨‍🔧 بخش ادمین`), because an operator
+   * moving across is looking for those words — and everything BELOW those labels is
+   * Nexa's own behaviour rather than a reproduction of a runtime nobody observed.
+   */
+  'bot.menu.admin': '👨‍💼 پنل مدیریت',
+  'bot.admin.panel': 'پنل مدیریت. بخش مورد نظر را انتخاب کنید:',
+  'bot.admin.receipts_button': '💵 رسید های تایید نشده',
+  'bot.admin.section_button': '👨‍🔧 بخش ادمین',
+  'bot.admin.receipts_list': 'پرداخت‌های در انتظار بررسی:',
+  'bot.admin.receipts_none': 'در حال حاضر هیچ پرداختی در انتظار بررسی نیست.',
+  'bot.admin.receipt':
+    'کد پیگیری: {reference}\nمبلغ: {total}\nمشتری: {customer}\n\nرسید ارسال‌شده در پیام‌های بعدی است. پس از بررسی، یکی از دو گزینه را انتخاب کنید.',
+  'bot.admin.receipt_gone': 'این پرداخت دیگر در انتظار بررسی نیست و نتیجهٔ آن قبلاً ثبت شده است.',
+  'bot.admin.approve_button': '✅ تأیید پرداخت',
+  'bot.admin.reject_button': '❌ رد پرداخت',
+  'bot.admin.approved': 'پرداخت تأیید شد و نتیجه برای مشتری ثبت گردید.',
+  'bot.admin.rejected': 'پرداخت رد شد و نتیجه برای مشتری ثبت گردید.',
+  /*
+   * The syntax is IN the message, because these are commands rather than a prompt.
+   * A prompt that captures the next message is what overwrote a production gateway
+   * setting in INCIDENT-FIN-001; a command carries its argument with it.
+   */
+  'bot.admin.section':
+    'ادمین‌هایی که دسترسی تلگرام دارند در فهرست زیر آمده‌اند.\n\nبرای دادن دسترسی تلگرام به یک ادمین موجود:\n/link <شناسهٔ عددی تلگرام> <نام کاربری ادمین>\n\nبرای تعیین نقش یک ادمین:\n/role <نام کاربری ادمین> <کلید نقش>',
+  'bot.admin.admins_none':
+    'هیچ ادمینی دسترسی تلگرام ندارد. ادمین‌ها در پنل وب ساخته می‌شوند و سپس با /link به تلگرام متصل می‌شوند.',
+  'bot.admin.linked': 'دسترسی تلگرام برای {username} ثبت شد.',
+  'bot.admin.revoked': 'دسترسی تلگرام {username} حذف شد.',
+  'bot.admin.roles_set': 'نقش‌های {username} به {roles} تغییر یافت.',
+  'bot.admin.usage':
+    'دستور ناقص یا نامعتبر است.\n\n/link <شناسهٔ عددی تلگرام> <نام کاربری ادمین>\n/role <نام کاربری ادمین> <کلید نقش>',
+  /*
+   * ONE refusal for every case, on purpose. Which refusal it was belongs to the audit
+   * row and the error code; spelling it out here would tell whoever holds the chat
+   * whether the administrator exists, whether the Telegram account is already bound,
+   * and which permission is missing.
+   */
+  'bot.admin.refused':
+    'این درخواست انجام نشد. دسترسی یا اطلاعات وارد‌شده اجازهٔ این کار را نمی‌دهد.',
+  'bot.admin.receipt_awaiting':
+    'رسید تازه‌ای برای بررسی ثبت شد.\nکد پیگیری: {reference}\nمبلغ: {total}\nاز بخش «رسید های تایید نشده» در پنل مدیریت آن را بررسی کنید.',
+
   'bot.wallet.balance': 'موجودی کیف پول شما: {balance}',
   'bot.wallet.insufficient': 'موجودی کیف پول کافی نیست. کمبود: {shortfall}',
   'bot.wallet.topup_button': '➕ شارژ کیف پول',

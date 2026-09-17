@@ -14,7 +14,11 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
-import { paymentReceipts, receiptCaptures } from '../../../../infrastructure/persistence/schema.js';
+import {
+  paymentReceipts,
+  payments,
+  receiptCaptures,
+} from '../../../../infrastructure/persistence/schema.js';
 import type {
   InboundReceiptFile,
   PaymentReceiptRecord,
@@ -278,6 +282,46 @@ export class DrizzlePaymentReceiptRepository implements PaymentReceiptRepository
       .where(and(eq(paymentReceipts.tenantId, tenantId), eq(paymentReceipts.paymentId, paymentId)))
       .orderBy(asc(paymentReceipts.createdAt), asc(paymentReceipts.id));
     return rows.map(toReceipt);
+  }
+
+  async pendingForReview(
+    scope: TenantContext,
+    limit: number,
+    tx?: unknown,
+  ): Promise<readonly { readonly paymentId: PaymentId; readonly held: number }[]> {
+    const tenantId = requireTenantId(scope);
+    /*
+     * One statement, joined to `payments` so the STATE is part of the predicate rather
+     * than something the caller filters afterwards. `min(payments.created_at)` orders
+     * the queue by when the customer started waiting; the group is what turns three
+     * receipts on one payment into one row to review.
+     */
+    const rows = await this.exec(tx)
+      .select({
+        paymentId: paymentReceipts.paymentId,
+        held: sql<number>`count(*)::int`,
+        oldest: sql<Date>`min(${payments.createdAt})`,
+      })
+      .from(paymentReceipts)
+      .innerJoin(
+        payments,
+        and(
+          eq(payments.tenantId, paymentReceipts.tenantId),
+          eq(payments.id, paymentReceipts.paymentId),
+        ),
+      )
+      .where(
+        and(
+          eq(paymentReceipts.tenantId, tenantId),
+          eq(payments.state, 'PENDING'),
+          eq(payments.method, 'MANUAL_TRANSFER'),
+        ),
+      )
+      .groupBy(paymentReceipts.paymentId)
+      .orderBy(asc(sql`min(${payments.createdAt})`), asc(paymentReceipts.paymentId))
+      .limit(limit);
+
+    return rows.map((row) => ({ paymentId: row.paymentId as PaymentId, held: Number(row.held) }));
   }
 
   async findById(
