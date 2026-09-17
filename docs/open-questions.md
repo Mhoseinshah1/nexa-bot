@@ -1500,6 +1500,25 @@ mechanism no contract states. If the owner's intent was a Telegram admin chat, b
 halves move together — the application layer takes an `ActorContext` and `ACTOR_TYPES`
 already includes `TELEGRAM_ADMIN`, so it is an addition rather than a rewrite.
 
+**5A addendum — the owner has reversed the storage half.** The Payment UX addendum
+received during Phase 5A specifies an invoice button «✅ پرداخت را انجام دادم | ارسال
+رسید» whose tap "starts the receipt-submission flow for that exact payment" and asks the
+customer to upload a receipt image or file, bound to tenant + bot instance + customer +
+payment. That is a later instruction from the same owner and it supersedes «رسید پرداخت
+… ذخیره، بایگانی، نمایش … نمی‌شود».
+
+What it does NOT reverse is the review model, and the addendum says so itself:
+_"settlement still requires the existing authorized operator confirmation"_. So
+`PAYMENT_EVIDENCE_KINDS` stays `OPERATOR_REVIEW`, an upload confirms nothing, and the
+question this entry actually asks — whether the approval DECISION belongs in Telegram or
+the Web Admin — is still open and still blocks nothing.
+
+The storage itself is subphase **5R**, not 5A: 5A ships the two copy buttons and keeps
+the existing «پرداخت را انجام دادم» label, because a button promising a capability that
+does not exist is the defect rather than a step towards fixing it.
+`docs/phase5-audit.md` §8 records the design, including why the bounded upload window is
+not the prompt capture that `INCIDENT-FIN-001` describes.
+
 ## OQ-4C-04 — what happens to wallet funds in a currency the installation stopped selling
 
 `sales.currency` is `RUNTIME`-mutable over `['IRT','IRR']` and the Web Admin ships a

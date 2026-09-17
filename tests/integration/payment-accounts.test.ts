@@ -453,10 +453,12 @@ describe('payment accounts and the destination a payment freezes', () => {
     it('does not let one tenant read, edit or promote the other tenant’s account', async () => {
       const theirs = SEED_IDS.paymentAccountB as PaymentAccountId;
 
-      await expect(ctx.container.paymentAccounts.get(tenantA, owner, theirs)).rejects.toSatisfy(
-        (error: unknown) =>
-          isNexaError(error) && error.code === 'commerce.payment_account_not_found',
-      );
+      // There is no read-one route and no `get`: the list carries every field a surface
+      // needs, and a service method with only a test caller is a placeholder. Isolation
+      // is asserted on the three paths that exist.
+      const mine = await ctx.container.paymentAccounts.list(tenantA, owner);
+      expect(mine.map((account) => account.id)).not.toContain(theirs);
+
       await expect(
         ctx.container.paymentAccounts.update(tenantA, owner, {
           idempotencyKey: 'cross-edit',

@@ -72,25 +72,28 @@ export class PaymentAccountService {
     return this.deps.repository.list(scope);
   }
 
-  async get(scope: TenantContext, actor: ActorContext, id: string): Promise<PaymentAccountRecord> {
-    await this.deps.guard.check(scope, actor, PAYMENT_ACCOUNT_VIEW_PERMISSION);
-    const account = await this.deps.repository.findById(scope, this.accountId(id));
-    if (account === null) {
-      throw errors.notFound(
-        COMMERCE_ERROR_CODES.PAYMENT_ACCOUNT_NOT_FOUND,
-        'Unknown payment account.',
-      );
-    }
-    return account;
-  }
+  /*
+   * There is no `get`, deliberately.
+   *
+   * The list carries every field a surface needs and is complete by construction, so a
+   * read-one would have had no route and no caller but a test. A service method whose
+   * only caller is a test is a placeholder abstraction, which is the thing this codebase
+   * refuses; the isolation it used to assert is asserted on the three paths that exist.
+   */
 
   /**
    * Adds an account.
    *
-   * The FIRST enabled account a tenant creates becomes the default whatever
-   * `makeDefault` says, and that is a real product rule rather than a convenience: a
-   * tenant holding one enabled account and no default has a manual-transfer button that
-   * refuses, which is a configuration screen that looks finished and is not.
+   * An enabled account created when the tenant has NO selectable destination becomes the
+   * default whatever `makeDefault` says. A real product rule rather than a convenience:
+   * a tenant whose only enabled account is not the default has a configuration screen
+   * that looks finished, and `selectDestination` falling back to the lowest-ordered
+   * enabled row is a rescue rather than something to rely on.
+   *
+   * The COUNT is read inside the transaction and the limit checked against it. Two
+   * creates racing at the ceiling can both pass — `PAYMENT_ACCOUNT_MAX_PER_TENANT` is a
+   * rail that keeps the list complete, not a policy anybody is buying, and serialising
+   * every create behind a lock to hold it exactly would cost more than it protects.
    */
   async create(
     scope: TenantContext,

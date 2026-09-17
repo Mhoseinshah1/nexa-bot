@@ -707,6 +707,42 @@ OQ-TG-04. Nothing consumes a panel beyond provisioning: no renewal, no suspensio
 termination, no usage synchronisation, and no lifecycle sweeper moving `ACTIVE` to
 `EXPIRED`.
 
-## Phases 5–8
+## Phase 5 — payment core completion
+
+Between Phase 4 and Phase 7, closing what real staging acceptance on `v0.2.1` exposed.
+The audit is `docs/phase5-audit.md`; the falsification record is
+`docs/phase5a-falsification.md`.
+
+### 5A — structured manual transfer (done)
+
+A payment destination is a **row**, and once a payment has been issued against it, a
+**frozen copy** of that row. Before this the only place a card number could live was
+inside an overridden copy of `bot.payment.manual_instructions`, where editing it rewrote
+what every already-issued instruction said.
+
+`payment_accounts` is the tenant's configuration — at most one default, enforced by a
+partial unique index; a default is always enabled, enforced by a CHECK; one live account
+per card number, enforced by a second partial index. There is no delete: an account is
+disabled, because `payment_destinations` names the row each payment was issued against.
+
+`payment_destinations` is append-only by trigger. A manual transfer with no enabled
+account is REFUSED rather than issued with blank instructions, and the Telegram surface
+does not draw the button when that would be the answer.
+
+The customer's message is composed from four per-line template keys with absent fields
+simply not composed, because `renderTemplateBody` leaves a declared-but-absent token as a
+literal `{token}`. Two Telegram `CopyTextButton`s sit above the actions, per the owner's
+mid-phase addendum; the amount copies as bare digits, because a banking app rejects
+«۲۵۰٬۰۰۰ تومان».
+
+### Not in Phase 5 yet
+
+5B wallet top-up, 5C gateway configuration, 5D a real gateway adapter, 5E refunds, 5F
+hardening and staging acceptance, and 5R the receipt-submission flow the owner's addendum
+asks for. The gateway PROVIDER is an owner decision: several are evidenced in the research
+corpus and none is chosen, so 5A–5C are built provider-neutrally and the question goes to
+the owner at 5D.
+
+## Phases 6–8
 
 Not started. Scope in `docs/architecture.md`.
