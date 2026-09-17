@@ -259,3 +259,68 @@ Recorded so they are not lost, with the subphase that owns each.
 6. Web Admin: a real Payment Accounts surface under the financial section.
 7. The nine required test areas, a mutation pass, the full gate, one self-review, one
    Codex review.
+
+---
+
+## 8. Owner addendum: the invoice keyboard and receipt submission
+
+Received mid-5A, after the account model and migrations were committed. It specifies
+the manual-transfer invoice's inline keyboard exactly:
+
+```
+[📋 کپی شماره کارت]    [💵 کپی مبلغ]
+[✅ پرداخت را انجام دادم | ارسال رسید]
+```
+
+with `ارسال رسید` part of the SAME label as `پرداخت را انجام دادم`, a second-row tap
+that starts receipt submission for that exact payment, does NOT settle it, and asks the
+customer to upload the receipt; the receipt bound to tenant + bot instance + customer +
+payment; settlement still requiring the existing operator confirmation.
+
+### 8.1 It reverses owner revision 17, and that is recorded rather than smoothed over
+
+`OQ-4C-03` and `templates.ts` both carry owner revision 17: _no receipt is stored,
+archived or displayed anywhere in this product_. It is why
+`bot.payment.manual_instructions` stopped saying «سپس رسید را ارسال نمایید», why
+`bot.payment.received_for_review` is worded as recording the customer's CLAIM, and why
+`receipts.view` / `receipts.review` govern a payment rather than a receipt entity.
+
+This addendum is a later instruction from the same owner and supersedes it. What changes
+is the storage decision only — **the review model does not move**: a receipt is evidence
+an operator looks at, `PAYMENT_EVIDENCE_KINDS` stays `OPERATOR_REVIEW`, and nothing about
+an upload confirms a payment. `OQ-4C-03` is updated to say so.
+
+### 8.2 The two copy buttons are a real Telegram mechanism, not a message that says "copy this"
+
+Telegram's `InlineKeyboardButton.copy_text` (a `CopyTextButton`, Bot API 7.11) copies a
+string to the client clipboard on tap. That is what these two buttons use. The
+alternative — a callback that replies with a message containing only the digits — is
+what a bot does when the API has no copy button, and it puts a second message in the chat
+for every tap.
+
+Both values come from the payment's FROZEN snapshot and its own amount, never from the
+account row, so tapping copy on a week-old invoice copies what that invoice says.
+
+### 8.3 Why the receipt flow is its own subphase, and why the label waits for it
+
+5A ships the copy buttons and keeps the existing `پرداخت را انجام دادم` label. The
+combined label lands in the same commit as the flow behind it, for the rule this codebase
+is organised around: a button whose label promises a capability that does not exist is
+the defect, not a step towards fixing it. Subphase **5R**, immediately after 5A.
+
+### 8.4 The capture window is bounded, payment-scoped and cannot swallow a message
+
+The addendum asks for "after tapping it, ask the customer to upload the receipt", which
+is prompt capture — the mechanism `INCIDENT-FIN-001` records destroying a production
+setting, and which earlier directives forbade in the general form. The general form is
+still forbidden. What 5R builds is narrower in four ways, and each one is what makes it
+not that incident:
+
+- it is opened by a tap on ONE payment and stores that payment's id, so there is no
+  "current prompt" a later message can land in by accident;
+- it accepts a PHOTO or a DOCUMENT and nothing else — a text message during an open
+  window routes exactly as it does today, including `/start` and the main-menu labels,
+  so nothing a customer types can be consumed;
+- it is a customer-side window that can attach a file to a payment and can change no
+  configuration, no price and no setting;
+- it expires, and it cannot outlive the payment's own window.
