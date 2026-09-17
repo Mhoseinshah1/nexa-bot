@@ -621,6 +621,33 @@ export const COMMERCE_ERROR_CODES = {
    */
   WALLET_CURRENCY_UNSUPPORTED: 'commerce.wallet_currency_unsupported',
 
+  /**
+   * A top-up amount this tenant does not offer.
+   *
+   * The amount travels in the tap — `callback_data` is client-supplied text — so it is
+   * MATCHED against `wallet.topup.presets` rather than believed. A customer whose keyboard
+   * is older than the configuration gets this rather than an invoice for an amount nobody
+   * offers, and a modified client gets it rather than an amount of its own choosing.
+   */
+  TOPUP_NOT_OFFERED: 'commerce.topup_not_offered',
+  /**
+   * The amount is below `wallet.topup.minimum`.
+   *
+   * Its own code rather than `TOPUP_NOT_OFFERED`, because the two are different facts and
+   * the customer can act on only one of them: a preset below the minimum is a
+   * MISCONFIGURATION the operator must fix, and answering it as "not offered" would send
+   * the customer looking for a button that is right there on their screen.
+   */
+  TOPUP_BELOW_MINIMUM: 'commerce.topup_below_minimum',
+  /**
+   * Nothing this installation has can fund a top-up right now.
+   *
+   * No preset is configured, or no enabled payment account exists to transfer to. The
+   * same rule `requestManualTransfer` already applies to an order: a destination that
+   * cannot be rendered is a refusal, never an invoice with a blank card number.
+   */
+  TOPUP_UNAVAILABLE: 'commerce.topup_unavailable',
+
   PAYMENT_NOT_FOUND: 'commerce.payment_not_found',
   /**
    * The payment is not in the state this command needs. `PAYMENT_MACHINE` refused it.

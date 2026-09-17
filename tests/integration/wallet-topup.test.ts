@@ -1,0 +1,529 @@
+import { sql } from 'drizzle-orm';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  isNexaError,
+  type ActorContext,
+  type BotInstanceId,
+  type CorrelationId,
+  type PaymentId,
+  type UserId,
+} from '@nexa/contracts';
+import {
+  adminActorFor,
+  createAdmin,
+  createTestContext,
+  SEED_IDS,
+  tenantA,
+  tenantB,
+  type TestContext,
+} from './harness';
+
+/**
+ * Wallet top-up: a payment that buys nothing, and the one credit it produces.
+ *
+ * Every case here is one of the ways money could go wrong in a lane with no order to
+ * anchor it:
+ *
+ *   - the AMOUNT is the tenant's configuration, never the tap's claim;
+ *   - a confirmed top-up credits the ledger exactly ONCE, however many times it is
+ *     confirmed, replayed or raced;
+ *   - nothing is provisioned and no order exists to settle;
+ *   - a currency that cannot be spent is refused rather than credited;
+ *   - one tenant's top-up is unreachable with the other tenant's actor.
+ */
+
+const BOT_A = SEED_IDS.botA1 as BotInstanceId;
+const CARD = '6037991234567893';
+
+const systemActor = (correlationId: string): ActorContext => ({
+  type: 'SYSTEM_JOB',
+  id: null,
+  label: 'telegram-update:test',
+  surface: 'TELEGRAM',
+  correlationId: correlationId as CorrelationId,
+});
+
+describe('a customer topping up their wallet', () => {
+  let ctx: TestContext;
+  let customerA: UserId;
+  let ownerA: ActorContext;
+  let ownerB: ActorContext;
+
+  beforeAll(async () => {
+    ctx = await createTestContext();
+  }, 120_000);
+
+  afterAll(async () => {
+    await ctx?.close();
+  });
+
+  beforeEach(async () => {
+    await ctx.reset();
+    ownerA = adminActorFor(
+      await createAdmin(ctx.container, tenantA, { username: 'owner-topup-a', roleKeys: ['owner'] }),
+    );
+    ownerB = adminActorFor(
+      await createAdmin(ctx.container, tenantB, { username: 'owner-topup-b', roleKeys: ['owner'] }),
+    );
+    customerA = await customer('930100');
+    // The seed's own enabled default account is the destination — the same one an order's
+    // transfer uses, which is the point: a top-up funds through the 5A rail unchanged.
+    await setPresets([{ amountMinor: '500000', currency: 'IRT' }]);
+  });
+
+  // -------------------------------------------------------------------------
+  // The amount is configuration, not the tap
+  // -------------------------------------------------------------------------
+
+  it('issues a transfer for an offered amount, against no order', async () => {
+    const { payment, destination } = await topup(500_000n, 't1');
+
+    expect(payment.state).toBe('PENDING');
+    expect(payment.orderId).toBeNull();
+    expect(payment.amount.amountMinor).toBe(500_000n);
+    expect(payment.amount.currency).toBe('IRT');
+    // The structured destination 5A froze, on the top-up path too.
+    expect(destination?.cardNumber).toBe(CARD);
+
+    // Nothing was bought: no order, no service, no provisioning work.
+    expect(await count('orders')).toBe(0);
+    expect(await count('services')).toBe(0);
+    expect(await count('provisioning_operations')).toBe(0);
+  });
+
+  it('refuses an amount the tenant does not offer', async () => {
+    await expectRefusal(topup(400_000n, 't2'), 'commerce.topup_not_offered');
+    expect(await count('payments')).toBe(0);
+  });
+
+  it('refuses a preset below the configured minimum', async () => {
+    await setPresets([{ amountMinor: '500000', currency: 'IRT' }]);
+    await setSetting('wallet.topup.minimum', { amountMinor: '600000', currency: 'IRT' });
+
+    await expectRefusal(topup(500_000n, 't3'), 'commerce.topup_below_minimum');
+    expect(await count('payments')).toBe(0);
+  });
+
+  it('accepts an amount at exactly the minimum', async () => {
+    await setSetting('wallet.topup.minimum', { amountMinor: '500000', currency: 'IRT' });
+    const { payment } = await topup(500_000n, 't4');
+    expect(payment.amount.amountMinor).toBe(500_000n);
+  });
+
+  it('refuses everything when no amount is configured', async () => {
+    await setPresets([]);
+    await expectRefusal(topup(500_000n, 't5'), 'commerce.topup_unavailable');
+    expect(await ctx.container.payments.topupPresets(tenantA)).toHaveLength(0);
+  });
+
+  it('refuses when there is nowhere to transfer the money', async () => {
+    /*
+     * Disabled by SQL, and that is not a shortcut — it is the only way this state is
+     * reachable. `PaymentAccountService.setEnabled` refuses to disable the default
+     * without another account promoted first, which is a product rule worth having: an
+     * installation cannot be left with nowhere to receive money through its own API. So
+     * the branch under test here is the service's LAST line of defence, against a state
+     * only a direct write or a deleted row can produce.
+     */
+    await ctx.container.database.db.execute(
+      sql`UPDATE payment_accounts SET enabled = false, is_default = false
+           WHERE tenant_id = ${tenantA.tenantId}`,
+    );
+
+    await expectRefusal(topup(500_000n, 't6'), 'commerce.topup_unavailable');
+    expect(await count('payments')).toBe(0);
+  });
+
+  it('does not offer a preset in a currency the installation does not sell in', async () => {
+    await setPresets([
+      { amountMinor: '500000', currency: 'IRT' },
+      { amountMinor: '900000', currency: 'IRR' },
+    ]);
+
+    // The READ the keyboard is drawn from drops it...
+    const offered = await ctx.container.payments.topupPresets(tenantA);
+    expect(offered.map((one) => one.amountMinor)).toStrictEqual([500_000n]);
+    // ...and the WRITE refuses it, so a customer with an older keyboard cannot use it.
+    await expectRefusal(topup(900_000n, 't7'), 'commerce.topup_not_offered');
+  });
+
+  it('answers a second tap with the reference the customer already holds', async () => {
+    await setPresets([
+      { amountMinor: '500000', currency: 'IRT' },
+      { amountMinor: '900000', currency: 'IRT' },
+    ]);
+    const first = await topup(500_000n, 't8-a');
+    // A DIFFERENT amount, and deliberately: two open top-ups would be two references for
+    // one intention, and the operator could not tell which a bank transfer names.
+    const second = await topup(900_000n, 't8-b');
+
+    expect(second.payment.id).toBe(first.payment.id);
+    expect(second.payment.amount.amountMinor).toBe(500_000n);
+    expect(await count('payments')).toBe(1);
+  });
+
+  it('answers a redelivered request without creating a second payment', async () => {
+    const first = await topup(500_000n, 't9');
+    const replay = await topup(500_000n, 't9');
+    expect(replay.payment.id).toBe(first.payment.id);
+    expect(await count('payments')).toBe(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // Exactly one credit
+  // -------------------------------------------------------------------------
+
+  it('credits the wallet once when an operator confirms', async () => {
+    const { payment } = await topup(500_000n, 'c1');
+
+    const confirmed = await confirm(payment.id, 'c1-confirm');
+    expect(confirmed.payment.state).toBe('CONFIRMED');
+    expect(confirmed.order).toBeNull();
+
+    const balance = await ctx.container.wallet.balance(tenantA, ownerA, customerA);
+    expect(balance.amountMinor).toBe(500_000n);
+
+    const entries = await ledgerRows();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.reason).toBe('TOPUP_RECEIPT');
+    expect(entries[0]?.direction).toBe('CREDIT');
+    expect(entries[0]?.payment_id).toBe(payment.id);
+    expect(entries[0]?.order_id).toBeNull();
+    // The reference is derived from the PAYMENT, which is what makes every funding path
+    // land on the same row.
+    expect(entries[0]?.reference).toBe(`${payment.id}:topup`);
+
+    // The customer is told, in the lane that has a template for it.
+    const queued = await notifications();
+    expect(queued).toStrictEqual([{ kind: 'WALLET_TOPUP_CREDITED', subject_id: payment.id }]);
+
+    // Still nothing bought.
+    expect(await count('orders')).toBe(0);
+    expect(await count('services')).toBe(0);
+    expect(await count('provisioning_operations')).toBe(0);
+  });
+
+  it('credits once for a redelivered confirmation', async () => {
+    const { payment } = await topup(500_000n, 'c2');
+    await confirm(payment.id, 'c2-confirm');
+    await confirm(payment.id, 'c2-confirm');
+
+    expect(await ledgerRows()).toHaveLength(1);
+    expect((await ctx.container.wallet.balance(tenantA, ownerA, customerA)).amountMinor).toBe(
+      500_000n,
+    );
+  });
+
+  it('credits once when a second operator confirms under a different key', async () => {
+    const { payment } = await topup(500_000n, 'c3');
+    const second = adminActorFor(
+      await createAdmin(ctx.container, tenantA, {
+        username: 'finance-topup',
+        roleKeys: ['finance'],
+      }),
+    );
+
+    await confirm(payment.id, 'c3-first');
+    /*
+     * A DIFFERENT idempotency key, so nothing is answered from the store: this reaches
+     * the mutation, finds the payment already CONFIRMED, and must not append a second
+     * entry. The reference is derived from the payment, so there is no second reference
+     * for it to append under.
+     */
+    const again = await ctx.container.payments.confirmManualTransfer(tenantA, second, payment.id, {
+      idempotencyKey: 'c3-second',
+      note: 'seen in the statement',
+    });
+
+    expect(again.payment.state).toBe('CONFIRMED');
+    expect(await ledgerRows()).toHaveLength(1);
+    expect((await ctx.container.wallet.balance(tenantA, ownerA, customerA)).amountMinor).toBe(
+      500_000n,
+    );
+    // One notification, not two: the loser of the race has nothing new to announce.
+    expect(await notifications()).toHaveLength(1);
+  });
+
+  it('credits once when two confirmations run concurrently', async () => {
+    const { payment } = await topup(500_000n, 'c4');
+    const second = adminActorFor(
+      await createAdmin(ctx.container, tenantA, {
+        username: 'finance-race',
+        roleKeys: ['finance'],
+      }),
+    );
+
+    /*
+     * The interleaving is driven by the PAYMENT ROW: a holder connection takes it FOR
+     * UPDATE, the suite waits until both confirmations are provably blocked on it, and
+     * only then releases. Not `Promise.all` timing — with the conditional UPDATE removed
+     * this test would have to fail for a reason it names, and a sleep could not tell the
+     * difference between serialised and lucky.
+     */
+    const settled = await ctx.container.database.withClient(async (holder) => {
+      await holder.query('BEGIN');
+      try {
+        await holder.query('SELECT id FROM payments WHERE id = $1 FOR UPDATE', [payment.id]);
+        const one = outcomeOf(confirm(payment.id, 'c4-a'));
+        const two = outcomeOf(
+          ctx.container.payments.confirmManualTransfer(tenantA, second, payment.id, {
+            idempotencyKey: 'c4-b',
+            note: 'also seen',
+          }),
+        );
+        await awaitBlocked(2);
+        await holder.query('COMMIT');
+        return [one, two] as const;
+      } catch (error: unknown) {
+        await holder.query('ROLLBACK');
+        throw error;
+      }
+    });
+
+    const done = await Promise.all(settled);
+    // Both are ANSWERED — a second operator pressing approve is not an error — and
+    // between them they produce one credit.
+    expect(done.filter((one) => one.ok)).toHaveLength(2);
+    expect(await ledgerRows()).toHaveLength(1);
+    expect((await ctx.container.wallet.balance(tenantA, ownerA, customerA)).amountMinor).toBe(
+      500_000n,
+    );
+    expect(await notifications()).toHaveLength(1);
+  });
+
+  it('refuses to credit a currency the installation no longer sells in', async () => {
+    const { payment } = await topup(500_000n, 'c5');
+    // The tenant changes the selling currency AFTER the payment was issued. Crediting the
+    // old denomination would put money in a wallet no order can be priced against.
+    await setSetting('sales.currency', 'IRR');
+
+    await expectRefusal(confirm(payment.id, 'c5-confirm'), 'commerce.wallet_currency_unsupported');
+    expect(await ledgerRows()).toHaveLength(0);
+    expect((await paymentRow(payment.id)).state).toBe('PENDING');
+  });
+
+  it('rejects a top-up without crediting anything', async () => {
+    const { payment } = await topup(500_000n, 'c6');
+    await ctx.container.payments.rejectManualTransfer(tenantA, ownerA, payment.id, {
+      idempotencyKey: 'c6-reject',
+      note: 'nothing arrived',
+    });
+
+    expect((await paymentRow(payment.id)).state).toBe('FAILED');
+    expect(await ledgerRows()).toHaveLength(0);
+    expect((await ctx.container.wallet.balance(tenantA, ownerA, customerA)).amountMinor).toBe(0n);
+    /*
+     * The customer is told through the SAME kind an order's rejection uses, which is why
+     * `bot.payment.rejected` no longer asserts that an order is still open: a rejected
+     * top-up has no order, and one kind renders one frozen template for both.
+     */
+    expect(await notifications()).toStrictEqual([
+      { kind: 'PAYMENT_REJECTED', subject_id: payment.id },
+    ]);
+  });
+
+  // -------------------------------------------------------------------------
+  // The 5A/5R rail, unchanged
+  // -------------------------------------------------------------------------
+
+  it('takes a receipt against a top-up, through the flow an order uses', async () => {
+    const { payment } = await topup(500_000n, 'r1');
+
+    // The combined button: the claim is recorded and the upload window opens.
+    const signalled = await ctx.container.payments.signalTransferSent(
+      tenantA,
+      systemActor('r1-signal'),
+      customerA,
+      { idempotencyKey: 'r1-signal', paymentId: payment.id as PaymentId, botInstanceId: BOT_A },
+    );
+    expect(signalled.receiptWindow).not.toBeNull();
+
+    const filed = await ctx.container.receipts.submit(tenantA, systemActor('r1-file'), customerA, {
+      idempotencyKey: 'r1-file',
+      botInstanceId: BOT_A,
+      file: {
+        kind: 'PHOTO',
+        fileId: 'file-topup-receipt',
+        fileUniqueId: 'u-topup-receipt',
+        mimeType: null,
+        fileSize: 102_400n,
+        fileName: null,
+        telegramMessageId: 42n,
+      },
+    });
+
+    // Filed against the TOP-UP, and it settles nothing: the payment is still pending and
+    // the wallet is still empty until an operator confirms.
+    expect(filed.filed).toBe(true);
+    expect(filed.paymentId).toBe(payment.id);
+    expect((await paymentRow(payment.id)).state).toBe('PENDING');
+    expect(await ledgerRows()).toHaveLength(0);
+  });
+
+  it('lets a customer withdraw their own pending top-up', async () => {
+    const { payment } = await topup(500_000n, 'w1');
+
+    const withdrawn = await ctx.container.payments.withdrawPending(
+      tenantA,
+      systemActor('w1-cancel'),
+      customerA,
+      { idempotencyKey: 'w1-cancel', paymentId: payment.id },
+    );
+
+    expect(withdrawn.state).toBe('CANCELLED');
+    expect(await ledgerRows()).toHaveLength(0);
+    // And the next tap issues a fresh reference rather than handing back a dead one.
+    const again = await topup(500_000n, 'w1-again');
+    expect(again.payment.id).not.toBe(payment.id);
+  });
+
+  // -------------------------------------------------------------------------
+  // Tenancy
+  // -------------------------------------------------------------------------
+
+  it('does not let another tenant confirm a top-up', async () => {
+    const { payment } = await topup(500_000n, 'x1');
+
+    await expectRefusal(
+      ctx.container.payments.confirmManualTransfer(tenantB, ownerB, payment.id, {
+        idempotencyKey: 'x1-cross',
+        note: 'not mine',
+      }),
+      'commerce.payment_not_found',
+    );
+    expect(await ledgerRows()).toHaveLength(0);
+    expect((await paymentRow(payment.id)).state).toBe('PENDING');
+  });
+
+  it('keeps one tenant’s presets out of the other’s', async () => {
+    await setPresets([{ amountMinor: '500000', currency: 'IRT' }]);
+    expect(await ctx.container.payments.topupPresets(tenantB)).toHaveLength(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // Helpers
+  // -------------------------------------------------------------------------
+
+  const topup = (amountMinor: bigint, key: string) =>
+    ctx.container.payments.requestWalletTopup(tenantA, systemActor(key), customerA, {
+      idempotencyKey: key,
+      amountMinor,
+    });
+
+  const confirm = (paymentId: string, key: string) =>
+    ctx.container.payments.confirmManualTransfer(tenantA, ownerA, paymentId, {
+      idempotencyKey: key,
+      note: 'seen in the statement',
+    });
+
+  async function customer(telegramUserId: string): Promise<UserId> {
+    const { customer: record } = await ctx.container.customers.resolveFromUpdate(
+      tenantA,
+      systemActor(`resolve-${telegramUserId}`),
+      {
+        idempotencyKey: `resolve-${telegramUserId}`,
+        telegramUserId,
+        from: { id: Number(telegramUserId), first_name: 'زهرا' },
+        botInstanceId: BOT_A,
+      },
+    );
+    return record.id;
+  }
+
+  const setPresets = (presets: readonly { amountMinor: string; currency: string }[]) =>
+    setSetting('wallet.topup.presets', presets);
+
+  async function setSetting(key: string, value: unknown): Promise<void> {
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO setting_values (id, tenant_id, setting_key, value, version, updated_at)
+      VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${key},
+              ${JSON.stringify(value)}::jsonb, 1, now())
+      ON CONFLICT (tenant_id, setting_key)
+        DO UPDATE SET value = ${JSON.stringify(value)}::jsonb, version = setting_values.version + 1`);
+  }
+
+  async function count(table: string): Promise<number> {
+    const rows = (await ctx.container.database.db.execute(
+      sql`SELECT count(*)::int AS n FROM ${sql.raw(`"${table}"`)}` as never,
+    )) as unknown as { rows: { n: number }[] };
+    return rows.rows[0]?.n ?? 0;
+  }
+
+  async function ledgerRows(): Promise<
+    {
+      reason: string;
+      direction: string;
+      payment_id: string | null;
+      order_id: string | null;
+      reference: string;
+    }[]
+  > {
+    const rows = (await ctx.container.database.db.execute(
+      sql`SELECT reason, direction, payment_id, order_id, reference FROM wallet_entries
+           WHERE tenant_id = ${tenantA.tenantId} ORDER BY created_at ASC` as never,
+    )) as unknown as {
+      rows: {
+        reason: string;
+        direction: string;
+        payment_id: string | null;
+        order_id: string | null;
+        reference: string;
+      }[];
+    };
+    return rows.rows;
+  }
+
+  async function notifications(): Promise<{ kind: string; subject_id: string }[]> {
+    const rows = (await ctx.container.database.db.execute(
+      sql`SELECT kind, subject_id FROM customer_notifications
+           WHERE tenant_id = ${tenantA.tenantId} ORDER BY created_at ASC` as never,
+    )) as unknown as { rows: { kind: string; subject_id: string }[] };
+    return rows.rows;
+  }
+
+  async function paymentRow(id: string): Promise<{ state: string }> {
+    const rows = (await ctx.container.database.db.execute(
+      sql`SELECT state FROM payments WHERE id = ${id}` as never,
+    )) as unknown as { rows: { state: string }[] };
+    const row = rows.rows[0];
+    if (row === undefined) throw new Error(`no payment ${id}`);
+    return row;
+  }
+
+  /** Waits until `expected` transactions are blocked on a row lock. */
+  async function awaitBlocked(expected: number): Promise<void> {
+    const deadline = Date.now() + 5_000;
+    for (;;) {
+      const rows = (await ctx.container.database.db.execute(
+        sql`SELECT count(*)::int AS n FROM pg_locks
+             WHERE NOT granted AND locktype IN ('tuple', 'transactionid')` as never,
+      )) as unknown as { rows: { n: number }[] };
+      if ((rows.rows[0]?.n ?? 0) >= expected) return;
+      if (Date.now() > deadline) {
+        throw new Error(
+          `only ${String(rows.rows[0]?.n ?? 0)} of ${String(expected)} confirmations blocked on ` +
+            'the payment row. Either the confirmation does not read it under a lock, or it ' +
+            'does not run inside the transaction that credits the wallet.',
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
+  function outcomeOf<T>(
+    running: Promise<T>,
+  ): Promise<
+    { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: unknown }
+  > {
+    return running.then(
+      (value) => ({ ok: true, value }) as const,
+      (error: unknown) => ({ ok: false, error }) as const,
+    );
+  }
+
+  async function expectRefusal(running: Promise<unknown>, code: string): Promise<void> {
+    const outcome = await outcomeOf(running);
+    expect(outcome.ok, `expected ${code}`).toBe(false);
+    expect(outcome.ok || !isNexaError(outcome.error) ? null : outcome.error.code).toBe(code);
+  }
+});

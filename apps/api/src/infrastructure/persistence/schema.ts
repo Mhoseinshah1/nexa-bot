@@ -3140,6 +3140,32 @@ export const walletEntries = pgTable(
     check('wallet_entries_currency_check', enumCheck('currency', CURRENCY_CODES)),
     /** Positive, always. This is the invariant the whole ledger rests on. */
     check('wallet_entries_amount_check', sql`amount > 0`),
+    /**
+     * A top-up credit names the payment that funded it.
+     *
+     * `TOPUP_RECEIPT` is the ledger's answer to "where did this money come from", and
+     * without the payment it answers "a transfer, some time, decided by somebody". The
+     * column has existed since 4C; this is what makes it required for the one reason
+     * whose whole meaning is the payment.
+     */
+    check(
+      'wallet_entries_topup_payment_check',
+      sql`reason <> 'TOPUP_RECEIPT' OR payment_id IS NOT NULL`,
+    ),
+    /**
+     * ONE top-up credit per payment, decided by the database.
+     *
+     * The rule 5B rests on, and it is keyed on the PAYMENT rather than on the
+     * confirming command: two operators pressing approve together, a redelivered
+     * request, a retry after a crash between the confirm and the append — and a future
+     * gateway callback funding the same top-up — all name the same payment, so all but
+     * one of them conflict here. The derived reference in `WalletTopupService` produces
+     * the same guarantee from the other direction; this is the one a convenience
+     * refactor cannot remove by accident.
+     */
+    uniqueIndex('wallet_entries_topup_payment_key')
+      .on(table.tenantId, table.paymentId)
+      .where(sql`reason = 'TOPUP_RECEIPT'`),
     unique('wallet_entries_tenant_id_key').on(table.tenantId, table.id),
   ],
 );

@@ -713,6 +713,34 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.unknown_command',
       'bot.wallet.balance',
       'bot.wallet.insufficient',
+      /*
+       * 5B's four. Reviewed against this case's own rule — none of them instructs a
+       * customer to do something no surface answers:
+       *
+       *   `bot.wallet.topup_button`      sits under the balance, and only when a top-up
+       *                                  could actually be performed: at least one preset
+       *                                  amount in the selling currency AND an enabled
+       *                                  account to transfer to.
+       *   `bot.wallet.topup_choose`      the prompt above the preset amounts. The buttons
+       *                                  ARE the amounts, read when the tap arrives, so a
+       *                                  customer scrolling back to an old balance gets
+       *                                  today's presets rather than that day's.
+       *   `bot.wallet.topup_refused`     the chosen amount cannot be used — no longer
+       *                                  offered, or below the configured minimum. One
+       *                                  sentence for both because the action is the
+       *                                  same: choose another. The codes stay distinct.
+       *   `bot.wallet.topup_unavailable` nothing can fund a top-up: no preset, or no
+       *                                  enabled account. It does not name the missing
+       *                                  configuration, which is an operator's business.
+       *
+       * `bot.wallet.topup_credited` is deliberately NOT here: it is the notification
+       * lane's, sent by the dispatcher when an operator confirms the transfer, and this
+       * case is about what the interactive surface can produce.
+       */
+      'bot.wallet.topup_button',
+      'bot.wallet.topup_choose',
+      'bot.wallet.topup_refused',
+      'bot.wallet.topup_unavailable',
     ]);
 
     /*

@@ -3,7 +3,11 @@ import { OPERATIONAL_SEVERITIES } from './ports.js';
 import { ORDER_EXPIRY_MINUTES_MAX, ORDER_EXPIRY_MINUTES_MIN } from './commerce.js';
 import { USAGE_SYNC_MINUTES_MAX, USAGE_SYNC_MINUTES_MIN } from './provisioning.js';
 import { moneySchema, salesCurrencyCodeSchema } from './money.js';
-import { PAYMENT_WINDOW_MINUTES_MAX, PAYMENT_WINDOW_MINUTES_MIN } from './payment.js';
+import {
+  PAYMENT_WINDOW_MINUTES_MAX,
+  PAYMENT_WINDOW_MINUTES_MIN,
+  TOPUP_PRESETS_MAX,
+} from './payment.js';
 
 /**
  * The settings registry.
@@ -435,7 +439,57 @@ export const SETTINGS = [
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
     configures: null,
-    consumer: 'PLANNED',
+    // ACTIVE from 5B, which is where the consumer landed: `WalletTopupService.request`
+    // reads it inside the transaction that would create the payment and refuses with
+    // `TOPUP_BELOW_MINIMUM`. Until then this key was configurable and inert, which is
+    // the shape `GSR-008` names — a field an operator fills in that nothing obeys.
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'wallet.topup.presets',
+    description:
+      'The top-up amounts a customer may choose, in the order they are offered. Each is an ' +
+      'explicit amount and currency, and every one must be in the currency this installation ' +
+      'sells in — an amount a wallet cannot be credited in is money that can never be spent. ' +
+      'An empty list means top-up is not offered at all and the button is not drawn. There is ' +
+      'no free-entry amount: a prompt that captures the next message is what swallowed an ' +
+      'ordinary message and overwrote a production gateway setting in INCIDENT-FIN-001.',
+    // A LIST of money, bounded at both ends of each element and in length.
+    //
+    // The length bound is not decoration: these render as Telegram buttons, and a
+    // keyboard is the one place where "the operator may configure as many as they
+    // like" becomes a message Telegram refuses to send. Eight is above every
+    // top-up menu in `docs/research/`.
+    //
+    // Each amount must be POSITIVE. `moneySchema` accepts a signed integer because a
+    // balance legitimately goes below zero; an amount a customer is asked to transfer
+    // cannot, and zero would be a button that invoices nothing. The minimum key's own
+    // refinement makes the same argument for the same reason.
+    schema: z
+      .array(
+        moneySchema.refine(
+          (money) => BigInt(money.amountMinor) > 0n,
+          'A top-up preset must be a positive amount.',
+        ),
+      )
+      .max(TOPUP_PRESETS_MAX)
+      // Duplicates are refused rather than de-duplicated: two identical buttons are a
+      // mistake an operator wants told about, and silently collapsing them would make
+      // the screen disagree with what was saved.
+      .refine(
+        (presets) =>
+          new Set(presets.map((money) => `${money.amountMinor}:${money.currency}`)).size ===
+          presets.length,
+        'Each top-up preset must be distinct.',
+      ),
+    // Empty, so top-up is OFF until an operator chooses the amounts. A default list
+    // would be this file inventing prices for every installation that upgrades.
+    defaultValue: [],
+    zeroMeaning: 'DISABLES',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
   },
 ] as const satisfies readonly SettingDefinition[];
 

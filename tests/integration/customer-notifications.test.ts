@@ -360,6 +360,22 @@ describe('the customer notification lane', () => {
      */
     const id = await customer(tenantA, '5015');
     const rowId = ctx.container.ids.uuid();
+    /*
+     * The definition is CAPTURED, not retyped. This block used to re-add a
+     * hard-coded list, so every kind added after it was written was silently
+     * dropped from the constraint for the rest of the worker's life — a schema
+     * mutation leaking out of one test into every file that ran after it. Phase
+     * 5B's `WALLET_TOPUP_CREDITED` is what noticed: the top-up suite passed alone
+     * and failed behind this one. Restoring what the migrations produced cannot
+     * drift, whatever a later release widens the enum to.
+     */
+    const [captured] = (
+      await ctx.container.database.db.execute<{ definition: string }>(sql`
+        SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint
+         WHERE conname = 'customer_notifications_kind_check'`)
+    ).rows;
+    const definition = captured?.definition;
+    if (definition === undefined) throw new Error('The kind CHECK constraint is not installed.');
     await ctx.container.database.db.execute(
       sql`ALTER TABLE customer_notifications DROP CONSTRAINT customer_notifications_kind_check`,
     );
@@ -384,9 +400,22 @@ describe('the customer notification lane', () => {
       await ctx.container.database.db.execute(
         sql`DELETE FROM customer_notifications WHERE id = ${rowId}`,
       );
-      await ctx.container.database.db.execute(sql`
-        ALTER TABLE customer_notifications ADD CONSTRAINT customer_notifications_kind_check
-        CHECK (kind IN ('PAYMENT_REJECTED','PAYMENT_EXPIRED','ORDER_EXPIRED','SERVICE_ACTION_SUCCEEDED','SERVICE_ACTION_FAILED','SERVICE_PROVISION_DELAYED','PAYMENT_TRANSFER_RECORDED','ORDER_CANCELLED'))`);
+      await ctx.container.database.db.execute(
+        sql.raw(
+          `ALTER TABLE customer_notifications ADD CONSTRAINT customer_notifications_kind_check ${definition}`,
+        ),
+      );
+    }
+
+    // Asserted HERE because the damage is only visible in another file: what this
+    // block leaves behind is what every later suite inserts against.
+    const [restored] = (
+      await ctx.container.database.db.execute<{ definition: string }>(sql`
+        SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint
+         WHERE conname = 'customer_notifications_kind_check'`)
+    ).rows;
+    for (const kind of CUSTOMER_NOTIFICATION_KINDS) {
+      expect(restored?.definition ?? '', kind).toContain(kind);
     }
   });
 

@@ -226,6 +226,17 @@ export const PAYMENT_AMOUNT_MAX_MINOR = 1_000_000_000_000n;
 export const WALLET_ALLOWS_NEGATIVE_BALANCE = false;
 
 /**
+ * How many top-up amounts a tenant may offer.
+ *
+ * A bound on a KEYBOARD, which is why it is small and why it is here rather than left to
+ * the operator: `wallet.topup.presets` renders as inline buttons, and Telegram refuses a
+ * reply_markup past its own limits — so an unbounded list is a configuration that makes
+ * the top-up button stop working for everybody. Eight is above every top-up menu in
+ * `docs/research/`.
+ */
+export const TOPUP_PRESETS_MAX = 8;
+
+/**
  * A ledger entry's amount is positive; direction is separate.
  *
  * Restated here as a function because it is the invariant the whole ledger rests on and

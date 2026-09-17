@@ -27,7 +27,16 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
  */
 export type CustomerButtonLabel =
   | { readonly kind: 'TEMPLATE'; readonly key: TemplateKey }
-  | { readonly kind: 'TEXT'; readonly text: string; readonly amount?: Money };
+  | { readonly kind: 'TEXT'; readonly text: string; readonly amount?: Money }
+  /**
+   * An amount and NOTHING else, formatted by the messenger.
+   *
+   * The wallet top-up presets: the button IS the amount, with no name to put in front of
+   * it. Its own member rather than `TEXT` with an empty string, because that would render
+   * a leading separator — and because a label with no text is a different thing from a
+   * label whose text is blank.
+   */
+  | { readonly kind: 'AMOUNT'; readonly amount: Money };
 
 /**
  * Which row a button is drawn on.
