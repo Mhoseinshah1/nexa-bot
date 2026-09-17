@@ -416,10 +416,26 @@ function ReceiptRow({ paymentId, receipt }: { paymentId: string; receipt: Paymen
     [objectUrl],
   );
 
-  // From the RECORD, never from the response. A DOCUMENT is a download whatever it
-  // claims to be, and only a PHOTO with an image mime type is rendered.
-  const renderable =
-    receipt.kind === 'PHOTO' && receipt.mimeType !== null && receipt.mimeType.startsWith('image/');
+  /*
+   * From the RECORD, never from the response, and for a PHOTO from `kind` ALONE.
+   *
+   * A photo carries no mime type: Telegram re-encodes it and declares none, so
+   * `receiptFileOf` stores null rather than fabricating one. Requiring `image/` here
+   * therefore made every real photo a download, and the fixture claiming `image/jpeg`
+   * was the only thing that said otherwise.
+   *
+   * Safe without one because the ELEMENT decides: an `<img>` decodes an image or shows
+   * nothing, and a script inside an SVG does not run when the SVG is an `<img>` source.
+   * A DOCUMENT is a download whatever it claims to be.
+   */
+  const renderable = receipt.kind === 'PHOTO';
+  /*
+   * The Blob carries the record's type when the record has one and NOTHING otherwise —
+   * never a type this code invented. An untyped blob in an `<img>` is sniffed by the
+   * browser, which is the one place sniffing an image is what should happen.
+   */
+  const photoType =
+    receipt.mimeType !== null && receipt.mimeType.startsWith('image/') ? receipt.mimeType : '';
 
   const load = useMutation({
     mutationFn: () => fetchPaymentReceiptBytes(paymentId, receipt.id),
@@ -428,7 +444,7 @@ function ReceiptRow({ paymentId, receipt }: { paymentId: string; receipt: Paymen
       setObjectUrl(
         URL.createObjectURL(
           new Blob([blob], {
-            type: renderable ? (receipt.mimeType ?? '') : 'application/octet-stream',
+            type: renderable ? photoType : 'application/octet-stream',
           }),
         ),
       );

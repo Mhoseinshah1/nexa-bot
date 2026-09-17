@@ -664,7 +664,12 @@ function receipt(overrides: Record<string, unknown> = {}): Record<string, unknow
     id: RECEIPT_ID,
     kind: 'PHOTO',
     fileUniqueId: 'AgADBAADq',
-    mimeType: 'image/jpeg',
+    /*
+     * NULL, because that is what a photo carries. Telegram re-encodes it and declares
+     * no type, so `receiptFileOf` stores null rather than inventing one — and a fixture
+     * that said `image/jpeg` here is what hid a photo never rendering at all.
+     */
+    mimeType: null,
     fileSize: 204_800,
     fileName: null,
     createdAt: '2026-09-10T12:40:00.000Z',
@@ -749,8 +754,24 @@ describe('the receipts an operator can read', () => {
         call.url.includes(`/payments/${ROW_ID}/receipts/${RECEIPT_ID}/content`),
       ),
     ).toBe(true);
-    // The type came from the RECORD, not from the response, which arrived as JSON.
-    expect(urls.types).toStrictEqual(['image/jpeg']);
+    // EMPTY, not invented: the record has no type, so the Blob gets none and the
+    // `<img>` sniffs. A fabricated `image/jpeg` here would be this code claiming a fact
+    // about a customer's file that nothing observed.
+    expect(urls.types).toStrictEqual(['']);
+  });
+
+  it('passes an image type through when the record happens to carry one', async () => {
+    const urls = stubObjectUrls();
+    stubApi(withReceipts([receipt({ mimeType: 'image/png' })]));
+    const view = renderPage(
+      <PaymentDetailPage id={ROW_ID} mayReview mayViewReceipts denied={false} />,
+    );
+    fireEvent.click(await screen.findByText('مشاهدهٔ رسید'));
+
+    await waitFor(() => {
+      expect(view.container.querySelector('img.receipt-image')).not.toBeNull();
+    });
+    expect(urls.types).toStrictEqual(['image/png']);
   });
 
   it('never renders a DOCUMENT inline, whatever mime type it claims', async () => {
