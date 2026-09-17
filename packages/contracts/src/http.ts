@@ -8,6 +8,7 @@ import {
 } from './notifications.js';
 import { uuidV7Schema } from './ids.js';
 import { paymentAccountInputSchema } from './payment-accounts.js';
+import { PAYMENT_RECEIPT_KINDS } from './payment-receipts.js';
 import { CUSTOMER_STATUSES, telegramUserIdSchema } from './customer.js';
 import {
   MAX_DEVICE_LIMIT,
@@ -2115,7 +2116,44 @@ export const PAYMENT_ROUTES = {
   detail: (id: string) => `/payments/${encodeURIComponent(id)}`,
   confirm: (id: string) => `/payments/${encodeURIComponent(id)}/confirm`,
   reject: (id: string) => `/payments/${encodeURIComponent(id)}/reject`,
+  /** What a customer sent against one payment, under `receipts.view`. */
+  receipts: (id: string) => `/payments/${encodeURIComponent(id)}/receipts`,
+  /**
+   * The BYTES of one receipt, by receipt id rather than by file id.
+   *
+   * Under `/payments` because that is what it belongs to, and keyed on the receipt so
+   * `file_id` never leaves this process: it is what `getFile` takes, it is bot-scoped,
+   * and handing it to a browser would let anything achieving script execution on the
+   * admin page fetch the file from Telegram with the installation's own bot. That is
+   * the rule `bot_instance.bot_token` has had since Phase 0, applied to the identifier
+   * that stands in for it.
+   */
+  receiptContent: (paymentId: string, receiptId: string) =>
+    `/payments/${encodeURIComponent(paymentId)}/receipts/${encodeURIComponent(receiptId)}/content`,
 } as const;
+
+/**
+ * One receipt as the browser receives it. `PaymentReceiptView`'s wire form.
+ *
+ * `fileId` is absent, and `packages/contracts/src/payment-receipts.ts` states why at
+ * length. `fileSize` is a NUMBER here rather than a string: a receipt is bounded by
+ * `PAYMENT_RECEIPT_MAX_BYTES` and so cannot reach the range that makes `Money` a string
+ * on the wire — the rule is about values that can exceed 2^53, not about every integer.
+ */
+export const paymentReceiptViewSchema = z.object({
+  id: uuidV7Schema,
+  kind: z.enum(PAYMENT_RECEIPT_KINDS),
+  fileUniqueId: z.string(),
+  mimeType: z.string().nullable(),
+  fileSize: z.number().int().nonnegative().nullable(),
+  fileName: z.string().nullable(),
+  createdAt: z.iso.datetime(),
+});
+
+export const paymentReceiptListResponseSchema = z.object({
+  receipts: z.array(paymentReceiptViewSchema),
+});
+export type PaymentReceiptListResponse = z.infer<typeof paymentReceiptListResponseSchema>;
 
 // --- Manual-transfer accounts -------------------------------------------------
 
