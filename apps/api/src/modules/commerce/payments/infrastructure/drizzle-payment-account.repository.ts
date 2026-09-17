@@ -64,6 +64,16 @@ function toRecord(row: Row): PaymentAccountRecord {
 }
 
 /**
+ * The advisory-lock CLASS for payment-account creation.
+ *
+ * An arbitrary constant that names a subject, so this lock and any future advisory lock
+ * live in different namespaces whatever their object keys are. It is exported so the
+ * integration test can watch `pg_locks` for waiters on exactly this key — which is what
+ * makes the controlled-interleaving test deterministic instead of a sleep.
+ */
+export const PAYMENT_ACCOUNT_LOCK_CLASS = 0x5041;
+
+/**
  * Manual-transfer accounts, in PostgreSQL.
  *
  * Every query carries `eq(paymentAccounts.tenantId, …)`, the primary-key lookups
@@ -106,6 +116,28 @@ export class DrizzlePaymentAccountRepository implements PaymentAccountRepository
       .limit(1);
     const row = rows[0];
     return row === undefined ? null : toRecord(row);
+  }
+
+  async lockForCreate(scope: TenantContext, tx: unknown): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    /*
+     * The two-argument form, and the first argument is what keeps the namespace clean.
+     *
+     * `PAYMENT_ACCOUNT_LOCK_CLASS` says what this lock is ABOUT, so a later advisory
+     * lock on a different subject cannot collide with it however its key is derived.
+     * `hashtext` over the tenant's id is the object, which is what makes the lock
+     * tenant-scoped: two tenants adding accounts at the same moment do not wait for
+     * each other.
+     *
+     * Two tenants whose ids hash to the same int4 WOULD wait for each other, and that
+     * is stated rather than hidden: it costs mutual exclusion on an operator action
+     * measured in single digits per tenant per year, at a probability of one in 2^32
+     * per pair. The alternative — locking the tenant row — costs the whole product's
+     * write path, every time.
+     */
+    await this.exec(tx).execute(
+      sql`SELECT pg_advisory_xact_lock(${PAYMENT_ACCOUNT_LOCK_CLASS}, hashtext(${tenantId}))`,
+    );
   }
 
   async count(scope: TenantContext, tx: unknown): Promise<number> {

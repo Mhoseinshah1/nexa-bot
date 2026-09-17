@@ -90,10 +90,16 @@ export class PaymentAccountService {
    * that looks finished, and `selectDestination` falling back to the lowest-ordered
    * enabled row is a rescue rather than something to rely on.
    *
-   * The COUNT is read inside the transaction and the limit checked against it. Two
-   * creates racing at the ceiling can both pass — `PAYMENT_ACCOUNT_MAX_PER_TENANT` is a
-   * rail that keeps the list complete, not a policy anybody is buying, and serialising
-   * every create behind a lock to hold it exactly would cost more than it protects.
+   * The COUNT is read inside the transaction, behind a tenant-scoped advisory lock, and
+   * the limit checked against it. Two creates racing at the ceiling cannot both pass.
+   *
+   * That lock is the owner's decision on the Codex review of PR #34. The first version
+   * of this comment argued the race was acceptable — `PAYMENT_ACCOUNT_MAX_PER_TENANT` is
+   * a rail that keeps the list complete rather than a policy anybody buys, and 51 rows
+   * is still a complete list. The owner's ruling is that an invariant this file states
+   * should hold rather than be documented as raceable, and the cost of holding it turned
+   * out to be one advisory lock: tenant-scoped, transaction-scoped, blocking no other
+   * tenant and no other operation. `lockForCreate` carries why it is not a row lock.
    */
   async create(
     scope: TenantContext,
@@ -142,6 +148,17 @@ export class PaymentAccountService {
       denial,
       async (tx) => {
         await this.assertScopeActive(scope, tx);
+
+        /*
+         * The lock BEFORE the count, which is the whole of the fix.
+         *
+         * Counting rows does not lock the gap, so under READ COMMITTED two creates at
+         * the ceiling both read 49 and both commit — the owner's decision on Codex C8
+         * is that this invariant holds rather than being recorded as raceable. The lock
+         * is tenant-scoped and transaction-scoped: it serialises this tenant's creates
+         * against each other, blocks no other tenant, and is released by the commit.
+         */
+        await this.deps.repository.lockForCreate(scope, tx);
 
         const held = await this.deps.repository.count(scope, tx);
         if (held >= PAYMENT_ACCOUNT_MAX_PER_TENANT) {
