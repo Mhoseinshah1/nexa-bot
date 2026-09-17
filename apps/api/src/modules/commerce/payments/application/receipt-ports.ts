@@ -160,6 +160,24 @@ export interface PaymentReceiptRepository {
   ): Promise<readonly PaymentReceiptRecord[]>;
 
   /**
+   * The manual transfers that hold at least one receipt and are still PENDING.
+   *
+   * The reviewer's QUEUE, and every predicate is in SQL on purpose: the limit has to
+   * bound the MATCHING rows, or a page of ten is ten rows of which some number are
+   * already decided. `docs/phase3d` records the same defect found in the management
+   * scope, where a browser-side filter over a page showed nothing and paged past the
+   * one row that mattered.
+   *
+   * Oldest FIRST, by the payment's own creation, because a queue is worked in the
+   * order it arrived and the customer who has waited longest is the one to answer.
+   */
+  pendingForReview(
+    scope: TenantContext,
+    limit: number,
+    tx?: unknown,
+  ): Promise<readonly { readonly paymentId: PaymentId; readonly held: number }[]>;
+
+  /**
    * One receipt by id, scoped to its tenant.
    *
    * The only caller is the route that streams the bytes, and it needs `fileId` — which

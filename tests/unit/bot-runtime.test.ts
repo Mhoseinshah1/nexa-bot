@@ -561,7 +561,11 @@ describe('profile metadata, normalised before it is ever stored', () => {
      * `bot.unknown_command` either — `/services` is a real command in `intentOf`, and
      * every callback prefix is parsed.
      */
-    expect([...sent].sort()).toEqual([
+    /*
+     * The customer-facing half. 5T's admin copy is asserted separately below, for the
+     * reason stated there: this list is what a CUSTOMER can be sent.
+     */
+    expect([...sent].filter((key) => !key.startsWith('bot.admin.')).sort()).toEqual([
       'bot.blocked',
       'bot.catalog.empty',
       'bot.catalog.heading',
@@ -741,6 +745,44 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.wallet.topup_choose',
       'bot.wallet.topup_refused',
       'bot.wallet.topup_unavailable',
+    ]);
+
+    /*
+     * 5T's nineteen, kept as their own assertion rather than merged into the list
+     * above — because they are ADMIN-facing, and the rule this case enforces is about
+     * what a CUSTOMER is promised. Merging them would quietly widen a customer-copy
+     * review into "any text the runtime sends".
+     *
+     * Reviewed against the same rule anyway: none of them instructs anybody to do
+     * something this head cannot do. The two that name commands (`bot.admin.section`
+     * and `bot.admin.usage`) print `/link` and `/role`, which `intentOf` parses — and
+     * `telegram-command-menu.test.ts` is what proves those two are parsed and
+     * deliberately unregistered.
+     *
+     * `bot.menu.admin` and `bot.admin.receipt_awaiting` are NOT here and must not be:
+     * the first is a keyboard label the messenger draws from the shared constant, and
+     * the second is the notification lane's, sent by the dispatcher.
+     */
+    const adminKeys = [...sent].filter((key) => key.startsWith('bot.admin.')).sort();
+    expect(adminKeys).toEqual([
+      'bot.admin.admins_none',
+      'bot.admin.approve_button',
+      'bot.admin.approved',
+      'bot.admin.linked',
+      'bot.admin.panel',
+      'bot.admin.receipt',
+      'bot.admin.receipt_gone',
+      'bot.admin.receipts_button',
+      'bot.admin.receipts_list',
+      'bot.admin.receipts_none',
+      'bot.admin.refused',
+      'bot.admin.reject_button',
+      'bot.admin.rejected',
+      'bot.admin.revoked',
+      'bot.admin.roles_set',
+      'bot.admin.section',
+      'bot.admin.section_button',
+      'bot.admin.usage',
     ]);
 
     /*

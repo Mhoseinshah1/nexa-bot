@@ -164,7 +164,6 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'ادمین‌هایی که دسترسی تلگرام دارند در فهرست زیر آمده‌اند.\n\nبرای دادن دسترسی تلگرام به یک ادمین موجود:\n/link <شناسهٔ عددی تلگرام> <نام کاربری ادمین>\n\nبرای تعیین نقش یک ادمین:\n/role <نام کاربری ادمین> <کلید نقش>',
   'bot.admin.admins_none':
     'هیچ ادمینی دسترسی تلگرام ندارد. ادمین‌ها در پنل وب ساخته می‌شوند و سپس با /link به تلگرام متصل می‌شوند.',
-  'bot.admin.revoke_button': '❌ حذف دسترسی تلگرام',
   'bot.admin.linked': 'دسترسی تلگرام برای {username} ثبت شد.',
   'bot.admin.revoked': 'دسترسی تلگرام {username} حذف شد.',
   'bot.admin.roles_set': 'نقش‌های {username} به {roles} تغییر یافت.',

@@ -130,7 +130,40 @@ export interface CustomerMessage {
    * Mutually exclusive with `buttons` in practice rather than by type: no reply carries
    * both today, and Telegram's `reply_markup` holds one or the other.
    */
-  readonly keyboard?: 'MAIN_MENU';
+  readonly keyboard?: MainMenuVariant;
+}
+
+/**
+ * WHICH persistent keyboard to draw.
+ *
+ * `MAIN_MENU` is every customer's. `MAIN_MENU_ADMIN` is the same rows with the
+ * management-panel entry appended, and it is drawn only for a turn whose Telegram
+ * account resolved to an ACTIVE administrator holding one of the panel's permissions.
+ *
+ * A variant rather than a boolean flag on the message, because the rows themselves stay
+ * in `@nexa/contracts` where both the keyboard and the route map read them: a surface
+ * that composed its own rows could draw a button nothing routes, which is the failure
+ * the shared-catalogue comment on `send` states.
+ *
+ * Drawing the admin row is NOT authorization. Every action behind it re-checks its
+ * permission server-side; this only decides what a person can see.
+ */
+export type MainMenuVariant = 'MAIN_MENU' | 'MAIN_MENU_ADMIN';
+
+/**
+ * A file this installation already holds, sent on to somebody who may see it.
+ *
+ * Phase 5T: a receipt, forwarded to an administrator reviewing it. Carried by `fileId`,
+ * which is what Telegram gave us when the customer uploaded it — so no byte is
+ * downloaded, no URL is built, and the bot token never leaves the transport. A
+ * `file_id` is scoped to the BOT that received it, which is why `botInstanceId` is
+ * required and never "the tenant's active bot".
+ */
+export interface CustomerFileMessage {
+  readonly chatId: string;
+  readonly botInstanceId: BotInstanceId;
+  readonly kind: 'PHOTO' | 'DOCUMENT';
+  readonly fileId: string;
 }
 
 /**
@@ -180,6 +213,16 @@ export interface CustomerMessenger {
    * 200".
    */
   send(scope: TenantContext, message: CustomerMessage): Promise<CustomerSendResult>;
+
+  /**
+   * Sends a file this installation already holds, by `file_id`.
+   *
+   * Same contract as `send`: it does not throw for a send failure, because a receipt
+   * that could not be re-sent must not roll back or fail the turn that was showing it.
+   * The reviewer's screen still carries the facts and the two decisions; the media is
+   * the evidence beside them.
+   */
+  sendFile(scope: TenantContext, message: CustomerFileMessage): Promise<CustomerSendResult>;
 
   /**
    * Stops the spinner on a tapped button. Best effort, and the outcome is not returned.

@@ -79,6 +79,29 @@ export interface AdminRepository {
     tx?: unknown,
   ): Promise<void>;
   /**
+   * Binds a Telegram account to this administrator, or removes the binding (Phase 5T).
+   *
+   * One column, and `admins_tenant_telegram_key` is what makes an account bind to at
+   * most one administrator per tenant. `null` revokes; the administrator, their roles
+   * and their Web Admin access are untouched, which is the whole point of keeping this
+   * as a binding rather than a second kind of administrator.
+   */
+  setTelegramUserId(
+    scope: ScopeContext,
+    id: AdminId,
+    telegramUserId: string | null,
+    now: Date,
+    tx?: unknown,
+  ): Promise<void>;
+  /**
+   * Every administrator in this tenant that HAS a Telegram binding.
+   *
+   * Its own query rather than `list()` filtered in memory: the section that renders it
+   * is bounded and the predicate belongs in SQL, for the reason the management scope
+   * states — a limit applied after a filter in the process is a page of the wrong rows.
+   */
+  listTelegramBound(scope: ScopeContext, tx?: unknown): Promise<Admin[]>;
+  /**
    * Compare-and-set on the password hash.
    *
    * Returns false when the stored hash is no longer `expectedHash` — i.e. the

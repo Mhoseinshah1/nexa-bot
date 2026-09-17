@@ -758,14 +758,6 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
-    key: 'bot.admin.revoke_button',
-    description:
-      'Removes one administrator\u2019s Telegram access. Their account, roles and Web Admin ' +
-      'access are untouched.',
-    format: 'PLAIN_TEXT',
-    placeholders: [],
-  },
-  {
     key: 'bot.admin.linked',
     description: 'A Telegram account is now bound to that administrator.',
     format: 'PLAIN_TEXT',

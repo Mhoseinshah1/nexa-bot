@@ -1,6 +1,8 @@
 import {
+  adminChangeReasonSchema,
   adminPasswordSchema,
   adminUsernameSchema,
+  telegramUserIdSchema,
   createAdminRequestSchema,
   changePasswordRequestSchema,
   errors,
@@ -598,6 +600,152 @@ export class AdminManagementService {
    * The counter is shared with login; the audit row is not. Recording a refused
    * rotation as a refused login would make the trail lie about what happened.
    */
+  /**
+   * Binds a Telegram account to an administrator, or removes the binding (Phase 5T).
+   *
+   * ## What this actually confers
+   *
+   * Everything that administrator can do, through a second channel. `AdminPermissionResolver`
+   * treats `TELEGRAM_ADMIN` exactly as it treats `WEB_ADMIN` — same roles, same
+   * permissions, same tenant — so binding a Telegram account to an administrator hands
+   * whoever holds that account that administrator's authority.
+   *
+   * That is why this takes the SAME two gates `setRoles` applies to conferring
+   * authority, and not merely `admins.edit`:
+   *
+   *   - the target's privileges must be a subset of the actor's
+   *     (`assertRestoresNoMorePrivilegeThanHeld`), so an administrator cannot bind
+   *     their own Telegram account to the owner and act as the owner from a chat;
+   *   - an OWNER target additionally takes `admins.permissions.edit`, because binding
+   *     a channel to the owner account is a change to who may exercise owner authority.
+   *
+   * Without the first gate this method would be the escalation path `UNK-ADM-005`
+   * names, reached with a permission the Mirza research found every one of its four
+   * production admins holding.
+   *
+   * ## What it deliberately does NOT do
+   *
+   * Create an administrator. A Telegram-only administrator would need a row with no
+   * usable `password_hash`, and there is no such shape in this identity model — so the
+   * Telegram section links an administrator the Web Admin created, which is the
+   * cleanest existing creation path rather than a faked second one.
+   *
+   * Revoking is `null`, and it leaves the account, its roles and its Web Admin access
+   * untouched. Access through Telegram ends immediately either way, because the
+   * resolver reads the binding on every turn and a disabled administrator resolves to
+   * nothing at all.
+   */
+  async setTelegramBinding(
+    scope: ScopeContext,
+    actor: ActorContext,
+    targetId: AdminId,
+    input: { readonly telegramUserId: string | null; readonly reason: string },
+  ): Promise<{ admin: Admin; roleKeys: string[] }> {
+    // The cheap rejection, on the pool, exactly as `setStatus` does it. The
+    // authoritative check is inside the transaction below.
+    await this.assertMayAttempt(scope, actor, 'admins.edit', {
+      action: 'admin.telegram_binding',
+      entityId: targetId,
+    });
+
+    const reason = adminChangeReasonSchema.parse(input.reason);
+    // Validated with the SAME schema the customer side uses, because it is the same
+    // fact: a Telegram numeric id. The column's CHECK repeats the shape, and a value
+    // that reached it unvalidated would be a 23514 reported as a server fault.
+    const telegramUserId =
+      input.telegramUserId === null ? null : telegramUserIdSchema.parse(input.telegramUserId);
+
+    return this.runLockedMutation(
+      scope,
+      actor,
+      { action: 'admin.telegram_binding', entityId: targetId },
+      async (tx) => {
+        assertTenantActive(await this.admins.lockTenantForAdminChange(scope, tx));
+        await this.assertSessionStillLive(scope, actor, tx);
+        const now = this.clock.now();
+
+        // Re-read under the lock: an actor disabled or demoted while this request
+        // waited is not a less-privileged actor, and `resolve` gives a disabled one
+        // nothing.
+        await this.guard.check(scope, actor, 'admins.edit', tx);
+
+        const target = await this.requireAdmin(scope, targetId, tx);
+        const targetRoleKeys = await this.admins.roleKeysFor(scope, target.id, tx);
+
+        // Binding a channel to the OWNER is a change to who may exercise owner
+        // authority, so it takes the permission that governs privilege — the same gate
+        // `setStatus` applies to disabling or restoring an owner.
+        if (targetRoleKeys.includes(OWNER_ROLE_KEY)) {
+          await this.guard.check(scope, actor, 'admins.permissions.edit', tx);
+        }
+
+        // Only for a GRANT. Removing a channel confers nothing, and requiring the
+        // grant test to revoke would leave an escalated binding in place precisely
+        // when somebody noticed it.
+        if (telegramUserId !== null) {
+          await this.assertRestoresNoMorePrivilegeThanHeld(scope, actor, target.id, tx);
+        }
+
+        if (target.telegramUserId === telegramUserId) {
+          // The no-op path answers with the same projection read under the same lock,
+          // so the response shape does not depend on whether anything changed.
+          return { admin: target, roleKeys: targetRoleKeys };
+        }
+
+        // The uniqueness the schema enforces, checked on the locked connection so two
+        // requests claiming one Telegram account cannot both pass it. Without this the
+        // partial unique index rejects the UPDATE and an ordinary input mistake is
+        // reported as a 500 — the defect `create` already states.
+        if (telegramUserId !== null) {
+          const linked = await this.admins.findByTelegramUserId(scope, telegramUserId, tx);
+          if (linked !== null && linked.id !== target.id) {
+            throw errors.conflict(
+              IDENTITY_ERROR_CODES.ADMIN_TELEGRAM_ID_TAKEN,
+              'That Telegram account is already linked to an administrator.',
+              { telegramUserId },
+            );
+          }
+        }
+
+        await this.admins.setTelegramUserId(scope, targetId, telegramUserId, now, tx);
+
+        /*
+         * The audit row carries the BEFORE and AFTER ids, and no session is revoked.
+         *
+         * A Telegram binding is not a session: there is nothing to revoke, and the next
+         * turn from that chat resolves the binding again — so removing it ends access
+         * at the next update rather than at some expiry. Web Admin sessions are
+         * untouched on purpose; this changes one channel, not the account.
+         */
+        await this.audit.record(
+          scope,
+          actor,
+          {
+            action: 'admin.telegram_binding',
+            entityType: 'Admin',
+            entityId: targetId,
+            before: { telegramUserId: target.telegramUserId },
+            after: { telegramUserId },
+            reason,
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+
+        /*
+         * No outbox event, and that is a decision rather than an omission.
+         *
+         * `DOMAIN_EVENT_TYPES` is a frozen catalogue with a typed payload per event, and
+         * adding one is a contract change that has to earn itself with a consumer.
+         * Nothing reacts to a binding: there is no session to revoke, no projection to
+         * rebuild, and access ends at the next update because the resolver re-reads the
+         * column every turn. The audit row above is the record this act owes.
+         */
+        return { admin: { ...target, telegramUserId }, roleKeys: targetRoleKeys };
+      },
+    );
+  }
+
   private async reservePasswordAttempt(
     scope: TenantContext,
     actor: ActorContext,

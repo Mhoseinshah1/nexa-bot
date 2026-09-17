@@ -91,6 +91,24 @@ export class NotificationService {
       readonly templateKey: TemplateKey;
       readonly values: TemplateValues;
       readonly correlationId?: string;
+      /**
+       * WHERE to send it, when the answer is not the operations destination.
+       *
+       * Phase 5T addresses an individual administrator's own Telegram chat, which the
+       * `ops.notifications.telegram_chat_id` setting cannot express: that key is the
+       * one place the operators of an installation share, and a receipt waiting for a
+       * decision is addressed to the people who may decide it.
+       *
+       * An override rather than a second lane, because everything this lane already
+       * does — the attempt rows, the bounded retries, the three outcomes kept apart,
+       * the dedupe key — is exactly what a message to a person needs, and a parallel
+       * dispatcher would be a second implementation of all of it.
+       *
+       * It is still SNAPSHOTTED by `create` below, so a message sent in March says
+       * which chat it was addressed to after that administrator's Telegram access is
+       * revoked in April.
+       */
+      readonly destination?: NotificationDestination;
     },
     tx?: unknown,
   ): Promise<{ readonly intent: NotificationIntent | null; readonly created: boolean }> {
@@ -98,7 +116,13 @@ export class NotificationService {
       return { intent: null, created: false };
     }
 
-    const destination = await this.destination(scope, tx);
+    /*
+     * The override wins, and its absence still means the OPERATIONS destination —
+     * so an installation that has not configured one queues nothing, exactly as
+     * before. A caller that supplies a destination is not subject to that setting,
+     * because the setting is not where its address came from.
+     */
+    const destination = input.destination ?? (await this.destination(scope, tx));
     if (destination === null) return { intent: null, created: false };
 
     const maxAttempts = await this.settings.valueOf<number>(
