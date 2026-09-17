@@ -135,6 +135,15 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
 
   'bot.wallet.balance': 'موجودی کیف پول شما: {balance}',
   'bot.wallet.insufficient': 'موجودی کیف پول کافی نیست. کمبود: {shortfall}',
+  'bot.wallet.topup_button': '➕ شارژ کیف پول',
+  'bot.wallet.topup_choose': 'مبلغ شارژ را انتخاب کنید:',
+  'bot.wallet.topup_unavailable':
+    'شارژ کیف پول در حال حاضر فعال نیست. لطفاً با پشتیبانی تماس بگیرید.',
+  /*
+   * No amount, because the notification lane carries no payload. The sentence says the
+   * balance changed and where to read it; `/wallet` derives the figure from the ledger.
+   */
+  'bot.wallet.topup_credited': 'شارژ کیف پول شما تأیید شد. موجودی جدید را با /wallet ببینید.',
 
   /*
    * It used to end «سپس رسید را ارسال نمایید» — "then send the receipt" — and no

@@ -69,6 +69,20 @@ export const CUSTOMER_NOTIFICATION_KINDS = [
   'PAYMENT_TRANSFER_RECORDED',
   /** The customer withdrew their own unpaid order. `orders.id` is the subject. */
   'ORDER_CANCELLED',
+  /**
+   * An operator confirmed a wallet top-up and the credit is on the ledger.
+   * `payments.id` is the subject.
+   *
+   * A fact about an entity, which is what this list admits — and the one outcome a
+   * customer would otherwise learn about only by opening `/wallet` and comparing two
+   * numbers. Every other confirmed payment announces itself through the thing it bought;
+   * a top-up buys nothing, so without this the money arrives in silence.
+   *
+   * It carries no amount, because the lane carries no payload (ADR 0030 §1). The
+   * sentence says the balance changed and tells them where to read it, which is the same
+   * shape `PAYMENT_TRANSFER_RECORDED` has.
+   */
+  'WALLET_TOPUP_CREDITED',
 ] as const;
 export type CustomerNotificationKind = (typeof CUSTOMER_NOTIFICATION_KINDS)[number];
 export const customerNotificationKindSchema = z.enum(CUSTOMER_NOTIFICATION_KINDS);
@@ -114,6 +128,11 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
    */
   PAYMENT_TRANSFER_RECORDED: false,
   ORDER_CANCELLED: false,
+  /*
+   * `false`, and it is the most terminal fact in this list: an append-only ledger entry.
+   * A credit cannot stop having happened, and a late copy of the sentence is still true.
+   */
+  WALLET_TOPUP_CREDITED: false,
 };
 
 /**
@@ -146,6 +165,7 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
    */
   PAYMENT_TRANSFER_RECORDED: 'bot.payment.received_for_review',
   ORDER_CANCELLED: 'bot.order.cancelled',
+  WALLET_TOPUP_CREDITED: 'bot.wallet.topup_credited',
 };
 
 /**

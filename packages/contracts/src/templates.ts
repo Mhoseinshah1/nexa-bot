@@ -565,6 +565,41 @@ export const TEMPLATES = [
     ],
   },
   {
+    key: 'bot.wallet.topup_button',
+    description:
+      'The label on the button that starts a wallet top-up. Shown under the balance, and ' +
+      'only when the tenant has configured at least one preset amount and an enabled ' +
+      'payment account to transfer to.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.wallet.topup_choose',
+    description:
+      'Shown above the preset amounts. Carries no amount of its own: the buttons are the ' +
+      'amounts, and each is rendered from the configured preset rather than from this text.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.wallet.topup_unavailable',
+    description:
+      'Shown when a top-up is asked for and nothing can fund it — no preset amount is ' +
+      'configured, or no enabled payment account exists. Says the facility is unavailable ' +
+      'rather than naming the missing configuration, which is an operator’s business.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.wallet.topup_credited',
+    description:
+      'Sent when an operator confirms a wallet top-up. Carries NO amount: the customer ' +
+      'notification lane has no payload (ADR 0030 §1), so the sentence states that the ' +
+      'balance changed and points at /wallet, where the figure is derived from the ledger.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.wallet.insufficient',
     description:
       'Shown when a wallet settlement is refused for want of funds. Carries the ' +
