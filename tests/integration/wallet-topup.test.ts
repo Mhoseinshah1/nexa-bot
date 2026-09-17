@@ -323,6 +323,61 @@ describe('a customer topping up their wallet', () => {
   });
 
   // -------------------------------------------------------------------------
+  // The 5A/5R rail, unchanged
+  // -------------------------------------------------------------------------
+
+  it('takes a receipt against a top-up, through the flow an order uses', async () => {
+    const { payment } = await topup(500_000n, 'r1');
+
+    // The combined button: the claim is recorded and the upload window opens.
+    const signalled = await ctx.container.payments.signalTransferSent(
+      tenantA,
+      systemActor('r1-signal'),
+      customerA,
+      { idempotencyKey: 'r1-signal', paymentId: payment.id as PaymentId, botInstanceId: BOT_A },
+    );
+    expect(signalled.receiptWindow).not.toBeNull();
+
+    const filed = await ctx.container.receipts.submit(tenantA, systemActor('r1-file'), customerA, {
+      idempotencyKey: 'r1-file',
+      botInstanceId: BOT_A,
+      file: {
+        kind: 'PHOTO',
+        fileId: 'file-topup-receipt',
+        fileUniqueId: 'u-topup-receipt',
+        mimeType: null,
+        fileSize: 102_400n,
+        fileName: null,
+        telegramMessageId: 42n,
+      },
+    });
+
+    // Filed against the TOP-UP, and it settles nothing: the payment is still pending and
+    // the wallet is still empty until an operator confirms.
+    expect(filed.filed).toBe(true);
+    expect(filed.paymentId).toBe(payment.id);
+    expect((await paymentRow(payment.id)).state).toBe('PENDING');
+    expect(await ledgerRows()).toHaveLength(0);
+  });
+
+  it('lets a customer withdraw their own pending top-up', async () => {
+    const { payment } = await topup(500_000n, 'w1');
+
+    const withdrawn = await ctx.container.payments.withdrawPending(
+      tenantA,
+      systemActor('w1-cancel'),
+      customerA,
+      { idempotencyKey: 'w1-cancel', paymentId: payment.id },
+    );
+
+    expect(withdrawn.state).toBe('CANCELLED');
+    expect(await ledgerRows()).toHaveLength(0);
+    // And the next tap issues a fresh reference rather than handing back a dead one.
+    const again = await topup(500_000n, 'w1-again');
+    expect(again.payment.id).not.toBe(payment.id);
+  });
+
+  // -------------------------------------------------------------------------
   // Tenancy
   // -------------------------------------------------------------------------
 

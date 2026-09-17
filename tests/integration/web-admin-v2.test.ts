@@ -738,7 +738,7 @@ describe('the Web Admin V2 surface', () => {
       );
       const byKey = new Map(body.settings.map((setting) => [setting.key, setting]));
 
-      for (const key of ['support.accounts', 'telegram.channels', 'wallet.topup.minimum']) {
+      for (const key of ['support.accounts', 'telegram.channels']) {
         expect(byKey.get(key)?.consumer, key).toBe('PLANNED');
       }
       /*
@@ -746,9 +746,21 @@ describe('the Web Admin V2 surface', () => {
        * `ProductService` refuses a price in any other currency — the Codex review
        * found it declared, rendered and enforced by nothing, which is a setting an
        * operator believes and the system ignores.
+       *
+       * `wallet.topup.minimum` left it in Phase 5B, with `wallet.topup.presets`:
+       * `PaymentService.offeredTopup` now refuses a preset below the minimum and
+       * the Telegram wallet draws its keyboard from the presets. The declaration
+       * follows the consumer and never precedes it — PLANNED here would tell an
+       * operator their minimum is decorative while it is being enforced.
        */
-      expect(byKey.get('sales.currency')?.consumer).toBe('ACTIVE');
-      expect(byKey.get('ops.notifications.max_attempts')?.consumer).toBe('ACTIVE');
+      for (const key of [
+        'sales.currency',
+        'ops.notifications.max_attempts',
+        'wallet.topup.minimum',
+        'wallet.topup.presets',
+      ]) {
+        expect(byKey.get(key)?.consumer, key).toBe('ACTIVE');
+      }
     });
 
     it('round-trips an ordered list of support accounts', async () => {
