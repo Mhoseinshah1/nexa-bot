@@ -16,6 +16,7 @@ was reverted and the suite re-run green.
 | F5R-09 | The bytes are served opaque, never as the declared type     | Echo `receipt.mimeType` as the content type                 | `wallet-payments-http.test.ts` › serves the bytes as an opaque attachment, never as the declared type    | dies   |
 | F5R-10 | A receipt must belong to the payment in the path            | Delete the `receipt.paymentId !== paymentId` refusal        | `wallet-payments-http.test.ts` › refuses a receipt paired with a payment it does not belong to           | dies   |
 | F5R-11 | A photo renders inline from `kind` alone, with no mime type | Require `mimeType.startsWith('image/')` again               | `payments.test.tsx` › fetches a photo through the API and renders it as an image                         | dies   |
+| F5R-12 | `minutes` reaches the resolver as a NUMBER                  | Pass `String(receiptWindow.minutes)`                        | `telegram-payment-flow.test.ts` › never queues a fallback for a customer whose reply went out            | dies   |
 
 Two notes, because a reader should not have to re-derive them:
 
@@ -24,6 +25,13 @@ Two notes, because a reader should not have to re-derive them:
   the two.
 - F5R-05 also kills two neighbouring cases, because a window closed on the first file
   answers every later file with `RECEIPT_NOT_EXPECTED`.
+- F5R-12 is the worst defect on this branch, and only the integration suite caught it.
+  `minutes` is declared `type: 'NUMBER'` and the resolver VALIDATES values against the
+  declaration, so a string refused the entire render; the webhook swallows a reply
+  failure by design (a non-200 makes Telegram redeliver for ever), so the claim
+  committed and the customer was told NOTHING after tapping the button. The unit suite
+  passed throughout: it asserts which key the handler returns, not that the key can be
+  rendered with the values it returns.
 - F5R-11 is a defect this branch introduced and the self-review caught. A photo carries
   NO mime type — Telegram re-encodes it and declares none — so requiring `image/` made
   every real photo a download. The web fixture claiming `image/jpeg` was the only thing

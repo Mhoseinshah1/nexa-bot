@@ -2354,7 +2354,13 @@ export class BotRuntime {
       }
       return {
         key: 'bot.payment.receipt_prompt',
-        values: { minutes: String(receiptWindow.minutes) },
+        /*
+         * A NUMBER, not a string. `minutes` is declared `type: 'NUMBER'`, and the
+         * resolver VALIDATES values against the declaration — a string refused the
+         * whole render, which the webhook then swallowed: the claim committed and the
+         * customer was told nothing at all after tapping the button.
+         */
+        values: { minutes: receiptWindow.minutes },
         buttons: [],
         orderId: null,
         /*
