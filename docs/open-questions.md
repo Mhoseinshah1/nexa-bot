@@ -1856,3 +1856,30 @@ a cause so the operator's remedy is visible.
 
 **Trigger to resolve:** the first operator who cannot read a receipt because a bot was
 stopped, or 5F.
+
+## OQ-5C-01 — do a route's bounds and eligibility apply to an ORDER payment?
+
+5C binds the payment route to the wallet top-up path: `requestWalletTopup` resolves an
+ACTIVE, eligible route inside its transaction and refuses an amount outside that route's
+bounds. `requestManualTransfer` — the order path — does not consult a route at all.
+
+That asymmetry is deliberate for this release and it is not obviously right. In the
+legacy system gateways fund both, and `کارت به کارت` is the same route whichever the
+customer is paying for. Extending the eligibility half is straightforward. Extending the
+AMOUNT half is not: a top-up amount comes from `wallet.topup.presets`, so a preset
+outside a route's bounds is a misconfiguration an operator can fix, whereas an order
+total comes from the catalogue — and a route whose maximum sits below a product's price
+would make that product unbuyable, with the refusal landing on the customer at checkout
+rather than on the operator at configuration time.
+
+Three shapes, and the choice is a product decision rather than a defect:
+
+- eligibility applies to both, amount bounds only to top-up (bounds are a top-up
+  control, which is how the legacy `حداقل/حداکثر شارژ موجودی` pair reads);
+- both apply to both, and the catalogue gains a check that refuses a price no configured
+  route can carry;
+- both apply to both, and an order total outside the bounds is simply refused — the
+  simplest, and the one that puts the failure in front of the wrong person.
+
+**Trigger to resolve:** the first installation that configures a route maximum, or the
+first external gateway adapter, whichever arrives first.

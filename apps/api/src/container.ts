@@ -1095,8 +1095,29 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
   });
 
+  const paymentGatewayRepository = new DrizzlePaymentGatewayRepository(database.db);
+
+  const paymentGatewayService = new PaymentGatewayService({
+    repository: paymentGatewayRepository,
+    audience: new DrizzleGatewayAudienceReader(database.db),
+    guard,
+    uow,
+    audit,
+    opsLog: opsLogWriter,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+  });
+
   const paymentService = new PaymentService({
     repository: paymentRepository,
+    /*
+     * The two READ methods only. This module consults a route and cannot configure one
+     * — `payments.gateways.edit` is Finance's, and a customer-initiated command must
+     * not reach the tenant's own eligibility rules.
+     */
+    gateways: paymentGatewayService,
     notifier: customerNotifier,
     orders: orderRepository,
     provisioning: provisioningService,
@@ -1375,21 +1396,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * else.
    */
   const paymentDestinationRenderer = new PaymentDestinationRenderer(templateResolver);
-
-  const paymentGatewayRepository = new DrizzlePaymentGatewayRepository(database.db);
-
-  const paymentGatewayService = new PaymentGatewayService({
-    repository: paymentGatewayRepository,
-    audience: new DrizzleGatewayAudienceReader(database.db),
-    guard,
-    uow,
-    audit,
-    opsLog: opsLogWriter,
-    sessions,
-    idempotency,
-    scopeActivity: tenants,
-    clock,
-  });
 
   const paymentAccountService = new PaymentAccountService({
     repository: paymentAccountRepository,
