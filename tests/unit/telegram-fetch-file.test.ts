@@ -86,7 +86,17 @@ describe('fetching a receipt file', () => {
   });
 
   afterAll(async () => {
-    await new Promise<void>((resolve) => telegram.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      telegram.close(() => resolve());
+      /*
+       * `close` stops accepting and then waits for every open socket, and two of them
+       * outlive their request: `fetch` keeps its connection alive after a response, and
+       * the aborted transfer below leaves one half-written. Destroying them is what
+       * makes this teardown finish at all — CI timed the hook out at 10s where this
+       * machine happened to win the race against undici's keep-alive expiry.
+       */
+      telegram.closeAllConnections();
+    });
   });
 
   const fetchFile = (fileId: string) =>
