@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import type { Money, PaymentDestinationSnapshot, ScopeContext } from '@nexa/contracts';
+import {
+  money,
+  type Money,
+  type PaymentDestinationSnapshot,
+  type ScopeContext,
+} from '@nexa/contracts';
 import { createTranslator } from '@nexa/i18n';
 import { PaymentDestinationRenderer } from '../../apps/api/src/modules/commerce/payments/infrastructure/destination-renderer';
 
@@ -14,7 +19,7 @@ describe('the manual-transfer invoice', () => {
     render: (_scope, key, values) => Promise.resolve(translator.translate(key, values)),
   });
 
-  const total: Money = { amountMinor: 250_000n, currency: 'IRT' };
+  const total: Money = money(250_000n, 'IRT');
   const snapshot = (over: Partial<PaymentDestinationSnapshot> = {}): PaymentDestinationSnapshot =>
     ({
       bankName: 'بانک ملی',

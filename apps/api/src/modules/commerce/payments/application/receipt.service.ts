@@ -73,7 +73,7 @@ export interface ReceiptSubmissionResult {
   readonly paymentId: PaymentId;
   readonly filed: boolean;
   /** How many the payment holds after this call. What decides whether the window closed. */
-  readonly total: number;
+  readonly held: number;
 }
 
 export interface ReceiptServiceDeps {
@@ -185,7 +185,7 @@ export class ReceiptService {
       return {
         paymentId: replayed.result.paymentId as PaymentId,
         filed: replayed.result.filed,
-        total: replayed.result.total,
+        held: replayed.result.held,
       };
     }
 
@@ -274,7 +274,7 @@ export class ReceiptService {
           },
           tx,
         );
-        const total = filed === null ? already : already + 1;
+        const held = filed === null ? already : already + 1;
 
         /*
          * The window closes when the payment is FULL, and not when the first file
@@ -288,7 +288,7 @@ export class ReceiptService {
          * Conditional, and its false result is ignored on purpose: false means somebody
          * else closed it first, which is not a second decision and not an error.
          */
-        if (total >= PAYMENT_RECEIPT_MAX_PER_PAYMENT) {
+        if (held >= PAYMENT_RECEIPT_MAX_PER_PAYMENT) {
           await this.deps.captures.close(scope, open.id, 'RECEIVED', now, tx);
         }
 
@@ -310,7 +310,7 @@ export class ReceiptService {
               entityId: open.paymentId,
               before: { receipts: already },
               after: {
-                receipts: total,
+                receipts: held,
                 receiptId: filed.id,
                 kind: filed.kind,
                 fileUniqueId: filed.fileUniqueId,
@@ -326,7 +326,7 @@ export class ReceiptService {
         const answer: ReceiptReplay = {
           paymentId: open.paymentId,
           filed: filed !== null,
-          total,
+          held,
         };
         await rememberOnce(
           this.deps.idempotency,
@@ -337,7 +337,7 @@ export class ReceiptService {
           answer,
           tx,
         );
-        return { paymentId: open.paymentId, filed: filed !== null, total };
+        return { paymentId: open.paymentId, filed: filed !== null, held };
       },
     );
   }
@@ -427,5 +427,5 @@ export class ReceiptService {
 interface ReceiptReplay {
   readonly paymentId: string;
   readonly filed: boolean;
-  readonly total: number;
+  readonly held: number;
 }

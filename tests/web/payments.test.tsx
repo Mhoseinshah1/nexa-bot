@@ -251,7 +251,14 @@ describe('the payment list', () => {
 describe('the payment detail', () => {
   const render = (overrides: Record<string, unknown> = {}, mayReview = true) => {
     stubApi(detail(overrides));
-    return renderPage(<PaymentDetailPage id={ROW_ID} mayReview={mayReview} denied={false} />);
+    return renderPage(
+      <PaymentDetailPage
+        id={ROW_ID}
+        mayReview={mayReview}
+        mayViewReceipts={false}
+        denied={false}
+      />,
+    );
   };
 
   it('shows the reviewer and the time a confirmation rests on', async () => {
@@ -287,7 +294,7 @@ describe('the payment detail', () => {
         },
       },
     ]);
-    renderPage(<PaymentDetailPage id={ROW_ID} mayReview denied={false} />);
+    renderPage(<PaymentDetailPage id={ROW_ID} mayReview mayViewReceipts={false} denied={false} />);
     await screen.findByText('تأیید دریافت وجه');
 
     fireEvent.change(screen.getByLabelText('یادداشت بررسی'), { target: { value: 'received' } });
@@ -416,7 +423,9 @@ describe('the payment detail', () => {
         },
       },
     ]);
-    const view = renderPage(<PaymentDetailPage id={ROW_ID} mayReview denied={false} />);
+    const view = renderPage(
+      <PaymentDetailPage id={ROW_ID} mayReview mayViewReceipts={false} denied={false} />,
+    );
     await screen.findAllByText('a1b2c3d4e5f60718:manual');
 
     const reason = view.container.querySelector('#payment-reason') as HTMLInputElement;
@@ -461,7 +470,9 @@ describe('the payment detail', () => {
         : (answered as typeof fetch)(input as RequestInfo, init),
     );
 
-    const view = renderPage(<PaymentDetailPage id={ROW_ID} mayReview denied={false} />);
+    const view = renderPage(
+      <PaymentDetailPage id={ROW_ID} mayReview mayViewReceipts={false} denied={false} />,
+    );
     await screen.findAllByText('a1b2c3d4e5f60718:manual');
 
     const note = view.container.querySelector('#payment-note') as HTMLInputElement;
@@ -496,7 +507,9 @@ describe('the payment detail', () => {
         : (answered as typeof fetch)(input as RequestInfo, init),
     );
 
-    const view = renderPage(<PaymentDetailPage id={ROW_ID} mayReview denied={false} />);
+    const view = renderPage(
+      <PaymentDetailPage id={ROW_ID} mayReview mayViewReceipts={false} denied={false} />,
+    );
     await screen.findAllByText('a1b2c3d4e5f60718:manual');
 
     const note = view.container.querySelector('#payment-note') as HTMLInputElement;
@@ -514,7 +527,9 @@ describe('the payment detail', () => {
 
   it('offers no rejection to an operator without receipts.review', async () => {
     stubApi(detail(payment({ state: 'PENDING', method: 'MANUAL_TRANSFER' })));
-    const view = renderPage(<PaymentDetailPage id={ROW_ID} mayReview={false} denied={false} />);
+    const view = renderPage(
+      <PaymentDetailPage id={ROW_ID} mayReview={false} mayViewReceipts={false} denied={false} />,
+    );
     await screen.findAllByText('a1b2c3d4e5f60718:manual');
     // Not a disabled button and not a hidden one behind a visible card: the whole
     // card is absent, so there is nothing to press and nothing to imply they could.
@@ -602,7 +617,7 @@ describe('the frozen destination on a payment detail', () => {
   it('names the account the instructions pointed at', async () => {
     stubApi(detail({ destination: DESTINATION }));
     const { container } = renderPage(
-      <PaymentDetailPage id={ROW_ID} mayReview={false} denied={false} />,
+      <PaymentDetailPage id={ROW_ID} mayReview={false} mayViewReceipts={false} denied={false} />,
     );
     await screen.findByText('مقصد واریز اعلام‌شده');
 
@@ -617,7 +632,9 @@ describe('the frozen destination on a payment detail', () => {
 
   it('never renders a full card number, and says nothing when there is no destination', async () => {
     stubApi(detail({ destination: DESTINATION }));
-    const withCard = renderPage(<PaymentDetailPage id={ROW_ID} mayReview={false} denied={false} />);
+    const withCard = renderPage(
+      <PaymentDetailPage id={ROW_ID} mayReview={false} mayViewReceipts={false} denied={false} />,
+    );
     await screen.findByText('مقصد واریز اعلام‌شده');
     /*
      * Sixteen consecutive digits anywhere on the page. `cardLast4` is what the contract
@@ -628,11 +645,187 @@ describe('the frozen destination on a payment detail', () => {
     cleanup();
 
     stubApi(detail());
-    const without = renderPage(<PaymentDetailPage id={ROW_ID} mayReview={false} denied={false} />);
+    const without = renderPage(
+      <PaymentDetailPage id={ROW_ID} mayReview={false} mayViewReceipts={false} denied={false} />,
+    );
     // The reference proves the page RENDERED; the destination card is what must not be
     // there. Anchoring on the card's own title would pass on a page that never loaded.
     await screen.findByText('جزئیات پرداخت');
     // Hidden, not filled with dashes: a wallet payment genuinely has no destination.
     expect(without.container.textContent).not.toContain('مقصد واریز اعلام‌شده');
+  });
+});
+
+const RECEIPT_ID = '019260ab-cdef-7012-8345-6789abcdef01';
+
+/** As `paymentReceiptViewSchema` describes one. `fileId` is deliberately not on it. */
+function receipt(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: RECEIPT_ID,
+    kind: 'PHOTO',
+    fileUniqueId: 'AgADBAADq',
+    mimeType: 'image/jpeg',
+    fileSize: 204_800,
+    fileName: null,
+    createdAt: '2026-09-10T12:40:00.000Z',
+    ...overrides,
+  };
+}
+
+const withReceipts = (receipts: unknown[], overrides: Record<string, unknown> = {}) => [
+  ...detail(overrides),
+  { url: `/payments/${ROW_ID}/receipts`, body: { receipts } },
+  { url: `/payments/${ROW_ID}/receipts/${RECEIPT_ID}/content`, body: { bytes: 'stand-in' } },
+];
+
+/**
+ * The receipt card.
+ *
+ * jsdom implements neither `createObjectURL` nor `revokeObjectURL`, so both are stubbed
+ * per test — and the stub is also the assertion for the second case: what the component
+ * puts in the Blob it hands the browser is the type decision under test.
+ */
+describe('the receipts an operator can read', () => {
+  function stubObjectUrls(): { types: string[] } {
+    const types: string[] = [];
+    URL.createObjectURL = vi.fn((blob: Blob) => {
+      types.push(blob.type);
+      return 'blob:stand-in';
+    });
+    URL.revokeObjectURL = vi.fn();
+    return { types };
+  }
+
+  it('draws nothing at all without receipts.view', async () => {
+    const api = stubApi(withReceipts([receipt()]));
+    const view = renderPage(
+      <PaymentDetailPage id={ROW_ID} mayReview mayViewReceipts={false} denied={false} />,
+    );
+    /*
+     * The REFERENCE, not the page heading. «جزئیات پرداخت» is the head and renders
+     * before the query settles, so asserting after it asserts against a skeleton — and
+     * this case passed with the permission gate deleted. The reference exists only once
+     * the detail has arrived, which is the render the card would have appeared in.
+     */
+    // The CONFIRM FORM, which renders only once the detail has arrived and only for a
+    // pending manual transfer. Waiting on the page heading instead asserts against a
+    // skeleton, and this case passed with the permission gate deleted when it did.
+    await screen.findByText('تأیید دریافت وجه');
+
+    expect(view.container.textContent).not.toContain('رسیدهای ارسالی مشتری');
+    // And it did not ASK either: a card that is not drawn must not still fetch a
+    // customer's bank screenshot.
+    expect(api.calls.some((call) => call.url.includes('/receipts'))).toBe(false);
+  });
+
+  it('lists what the customer sent, and says a receipt is not a confirmation', async () => {
+    stubApi(withReceipts([receipt({ fileName: 'rasid.jpg' })]));
+    const view = renderPage(
+      <PaymentDetailPage id={ROW_ID} mayReview mayViewReceipts denied={false} />,
+    );
+    await screen.findByText('rasid.jpg');
+
+    expect(view.container.textContent).toContain('تصویر');
+    expect(view.container.textContent).toContain('rasid.jpg');
+    expect(view.container.textContent).toContain(formatTimestamp('2026-09-10T12:40:00.000Z'));
+    // The sentence that keeps a receipt evidence rather than an outcome.
+    expect(view.container.textContent).toContain('به‌تنهایی پرداخت را تأیید نمی‌کند');
+  });
+
+  it('fetches a photo through the API and renders it as an image', async () => {
+    const urls = stubObjectUrls();
+    const api = stubApi(withReceipts([receipt()]));
+    const view = renderPage(
+      <PaymentDetailPage id={ROW_ID} mayReview mayViewReceipts denied={false} />,
+    );
+    fireEvent.click(await screen.findByText('مشاهدهٔ رسید'));
+
+    await waitFor(() => {
+      expect(view.container.querySelector('img.receipt-image')).not.toBeNull();
+    });
+    // Through the API's own route — the bot token never reaches this bundle.
+    expect(
+      api.calls.some((call) =>
+        call.url.includes(`/payments/${ROW_ID}/receipts/${RECEIPT_ID}/content`),
+      ),
+    ).toBe(true);
+    // The type came from the RECORD, not from the response, which arrived as JSON.
+    expect(urls.types).toStrictEqual(['image/jpeg']);
+  });
+
+  it('never renders a DOCUMENT inline, whatever mime type it claims', async () => {
+    const urls = stubObjectUrls();
+    stubApi(withReceipts([receipt({ kind: 'DOCUMENT', mimeType: 'image/svg+xml' })]));
+    const view = renderPage(
+      <PaymentDetailPage id={ROW_ID} mayReview mayViewReceipts denied={false} />,
+    );
+    // The control says download rather than view, because the record says DOCUMENT.
+    fireEvent.click(await screen.findByText('دریافت فایل رسید'));
+
+    await waitFor(() => {
+      expect(screen.getByText('ذخیرهٔ فایل')).toBeInTheDocument();
+    });
+    /*
+     * The PROHIBITION this case exists for. An `image/svg+xml` a customer uploaded is a
+     * script if it is ever rendered on this origin, and `kind` is what refuses it.
+     */
+    expect(view.container.querySelector('img')).toBeNull();
+    expect(urls.types).toStrictEqual(['application/octet-stream']);
+  });
+
+  it('says the receipt is unavailable rather than showing a broken image', async () => {
+    stubObjectUrls();
+    stubApi([
+      ...detail(),
+      { url: `/payments/${ROW_ID}/receipts`, body: { receipts: [receipt()] } },
+      {
+        url: `/payments/${ROW_ID}/receipts/${RECEIPT_ID}/content`,
+        status: 412,
+        body: {
+          error: {
+            kind: 'precondition_failed',
+            code: 'commerce.receipt_unavailable',
+            message: 'gone',
+            correlationId: 'test',
+          },
+        },
+      },
+    ]);
+    const view = renderPage(
+      <PaymentDetailPage id={ROW_ID} mayReview mayViewReceipts denied={false} />,
+    );
+    fireEvent.click(await screen.findByText('مشاهدهٔ رسید'));
+
+    await waitFor(() => {
+      expect(view.container.textContent).toContain('رسید در دسترس نیست');
+    });
+    expect(view.container.querySelector('img')).toBeNull();
+  });
+
+  // The ROUTE, not the page: `receipts.view` and `receipts.review` are separate props,
+  // and a route deriving both from one permission would pass every case above.
+  it('derives the receipt card from receipts.view, separately from receipts.review', async () => {
+    stubApi(withReceipts([receipt()]));
+    const reviewer = resolve({ path: `/payments/${ROW_ID}`, query: new URLSearchParams() }, [
+      'payments.view',
+      'receipts.review',
+    ]);
+    const view = renderPage(reviewer.element as ReactElement);
+    await waitFor(() => {
+      expect(view.container.textContent).toContain('a1b2c3d4e5f60718:manual');
+    });
+    // Holding review without view draws the decision and not the evidence.
+    expect(view.container.textContent).not.toContain('رسیدهای ارسالی مشتری');
+    cleanup();
+
+    stubApi(withReceipts([receipt()]));
+    const both = resolve({ path: `/payments/${ROW_ID}`, query: new URLSearchParams() }, [
+      'payments.view',
+      'receipts.view',
+    ]);
+    const withView = renderPage(both.element as ReactElement);
+    await waitFor(() => {
+      expect(withView.container.textContent).toContain('رسیدهای ارسالی مشتری');
+    });
   });
 });

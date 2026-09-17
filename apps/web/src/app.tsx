@@ -542,6 +542,7 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
            * drawn or the permission is named.
            */
           mayReview={may('receipts.review')}
+          mayViewReceipts={may('receipts.view')}
           denied={!may('payments.view')}
         />
       ),

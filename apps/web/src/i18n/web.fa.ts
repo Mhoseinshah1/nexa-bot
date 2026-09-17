@@ -894,6 +894,27 @@ export const WEB_FA = {
   'web.payment_destination_sheba_given': 'به مشتری اعلام شد',
   'web.payment_destination_sheba_absent': 'اعلام نشد',
   'web.payment_destination_account': 'شناسهٔ حساب',
+  /*
+   * The receipt card. A receipt is EVIDENCE, and the wording keeps it that way: it
+   * arrived, an operator reads it, and only «تأیید پرداخت» below decides anything.
+   */
+  'web.payment_receipts': 'رسیدهای ارسالی مشتری',
+  'web.payment_receipts_empty': 'مشتری رسیدی ارسال نکرده است.',
+  'web.payment_receipts_note':
+    'رسید، ادعای مشتری است و به‌تنهایی پرداخت را تأیید نمی‌کند. تأیید نهایی با اپراتور است.',
+  'web.payment_receipt_kind': 'نوع',
+  'web.payment_receipt_kind_photo': 'تصویر',
+  'web.payment_receipt_kind_document': 'فایل',
+  'web.payment_receipt_file': 'نام فایل',
+  'web.payment_receipt_size': 'حجم',
+  'web.payment_receipt_sent_at': 'زمان ارسال',
+  'web.payment_receipt_view': 'مشاهدهٔ رسید',
+  'web.payment_receipt_download': 'دریافت فایل رسید',
+  'web.payment_receipt_save': 'ذخیرهٔ فایل',
+  'web.payment_receipt_alt': 'تصویر رسید ارسالی مشتری',
+  'web.payment_receipt_failed': 'رسید در دسترس نیست',
+  'web.payment_receipt_failed_hint':
+    'دریافت فایل از تلگرام ناموفق بود. ممکن است فایل حذف شده باشد یا تلگرام موقتاً پاسخ نداده باشد. دوباره تلاش کنید.',
   'web.payment_resolved_at': 'زمان بسته شدن',
   'web.payment_resolver': 'بسته‌شده توسط',
   'web.payment_resolution_note': 'دلیل',

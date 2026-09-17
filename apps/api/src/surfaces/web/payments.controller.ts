@@ -202,7 +202,7 @@ export class PaymentsController {
       throw errors.notFound(COMMERCE_ERROR_CODES.RECEIPT_NOT_FOUND, 'Unknown receipt.');
     }
 
-    const fetched = await this.container.receiptFiles.fetch(scope, receipt);
+    const fetched = await this.container.receiptFiles.download(scope, receipt);
     if (fetched.outcome !== 'SUCCEEDED') {
       /*
        * The honest answer, and the reason `RECEIPT_UNAVAILABLE` exists: the row is

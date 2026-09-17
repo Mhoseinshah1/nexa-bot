@@ -45,7 +45,12 @@ export class TelegramReceiptFiles {
     },
   ) {}
 
-  async fetch(scope: ScopeContext, receipt: PaymentReceiptRecord): Promise<TelegramFileOutcome> {
+  /*
+   * `download`, not `fetch`. `check-boundaries.sh` treats `fetch(` as a network sink and
+   * must: a method named `fetch` makes every call site indistinguishable from a real
+   * one, which is a check defeated by a name.
+   */
+  async download(scope: ScopeContext, receipt: PaymentReceiptRecord): Promise<TelegramFileOutcome> {
     const token = await this.deps.bots.tokenForBotInstance(scope, receipt.botInstanceId);
     if (token === null) {
       /*
