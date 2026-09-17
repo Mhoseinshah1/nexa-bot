@@ -1617,9 +1617,13 @@ export class PaymentService {
      *
      * 4J's rule: the announcement is enqueued by the transaction that made the fact true,
      * so there is no window in which the credit is committed and the queue row is not.
-     * Only when this call is the one that wrote the entry — the loser of a race has
-     * nothing new to announce, and two copies of "your wallet was topped up" for one
-     * transfer is a customer wondering whether they were credited twice.
+     * Guarded on `inserted` so the loser of a race does not attempt a write it does not
+     * need — but the GUARANTEE is `customer_notifications_subject_key`, unique on
+     * (tenant, kind, subject), and the enqueue is `ON CONFLICT DO NOTHING` against it.
+     * Stated that way round because the falsification pass proved it: forcing this
+     * branch to `true` left the suite green, so a reader who believed the guard was the
+     * invariant would be wrong, and the one place a duplicate is actually refused is the
+     * index.
      *
      * A top-up is the only confirmed payment that buys nothing, so this lane is the only
      * thing that tells them. The answer is not checked, for `rejectManualTransfer`'s

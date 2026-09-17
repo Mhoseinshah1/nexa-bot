@@ -757,9 +757,33 @@ check and the insert. Two consequences are recorded rather than resolved: `suppo
 `receipts.view` with no surface that admits it (OQ-5R-01), and stopping a bot also stops
 an operator reading receipts it received (OQ-5R-02).
 
+### 5B — customer wallet top-up (done)
+
+A customer tops their wallet up from `/wallet`, funded by the manual-transfer rail 5A
+built and reviewed by the receipt flow 5R built. Falsification:
+`docs/phase5b-falsification.md`.
+
+A top-up is a PAYMENT WITH NO ORDER — `payments.order_id` has been nullable and
+documented as this since 4C, and `confirmManualTransfer` carried a deliberate refusal
+for it. That refusal is now the dispatch: a null order credits the wallet and settles
+nothing, so no service is created and no panel is contacted. The amount comes from
+`wallet.topup.presets` (a bounded list of money, empty by default, so top-up is off
+until an operator configures it) and `wallet.topup.minimum` moves from PLANNED to
+ACTIVE. There is no free-entry amount: the tap carries an amount and the service matches
+it against the presets rather than believing it.
+
+Exactly one credit per top-up, twice over: the confirmation is a conditional UPDATE on
+PENDING, and the ledger reference is derived from the PAYMENT — `<payment id>:topup` —
+so every path that ever funds it, a future gateway callback included, lands on the row
+that is already there. Migration 0068 makes that a database fact (a partial unique index
+on `(tenant_id, payment_id)` where the reason is `TOPUP_RECEIPT`) and requires the
+payment id on such a credit. `WALLET_TOPUP_CREDITED` tells the customer, because a
+top-up is the only confirmed payment that buys nothing and would otherwise arrive in
+silence.
+
 ### Next
 
-5B wallet top-up, then 5C gateway configuration, 5D a real gateway adapter, 5E refunds,
+5C gateway configuration, 5D a real gateway adapter, 5E refunds,
 5F hardening and staging acceptance. The gateway PROVIDER is an owner decision — several
 evidenced, none chosen — so 5A–5C are provider-neutral and the question goes to the owner
 at 5D.
