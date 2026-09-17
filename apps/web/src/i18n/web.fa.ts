@@ -887,6 +887,58 @@ export const WEB_FA = {
   'web.payment_account_saved': 'حساب ذخیره شد.',
   'web.payment_account_default_done': 'مقصد پرداخت‌های جدید تغییر کرد.',
   'web.payment_account_limit': 'سقف تعداد حساب‌ها پر شده است. یکی را غیرفعال کنید.',
+  // Payment routes (Phase 5C) — which ways a customer may pay, and under what
+  // conditions. The route is not the destination: `web.payment_accounts_*` above is
+  // where the money goes, this is whether the route is offered at all.
+  'web.nav_payment_gateways': 'روش‌های پرداخت',
+  'web.payment_gateways_title': 'روش‌های پرداخت',
+  'web.payment_gateways_subtitle':
+    'روش‌هایی که به مشتری پیشنهاد می‌شود، به همان ترتیب و با همان شرط‌ها.',
+  // Says the thing the screen cannot show: the roster is what the software can
+  // actually operate, so there is no Add button and its absence is not a defect.
+  'web.payment_gateways_hint':
+    'فهرست روش‌ها ثابت است و تنها روش‌هایی را نشان می‌دهد که این نسخه می‌تواند انجام دهد. روش جدید با نسخهٔ جدید اضافه می‌شود، نه از این صفحه.',
+  'web.payment_gateway_provider': 'روش',
+  'web.payment_gateway_provider_manual_transfer': 'کارت به کارت',
+  'web.payment_gateway_name': 'نام نمایشی',
+  'web.payment_gateway_name_hint':
+    'اختیاری. در صورت خالی بودن، نام پیش‌فرض همین نسخه به مشتری نشان داده می‌شود.',
+  'web.payment_gateway_name_default': 'نام پیش‌فرض',
+  'web.payment_gateway_state': 'وضعیت',
+  'web.payment_gateway_active': 'فعال',
+  'web.payment_gateway_disabled': 'غیرفعال',
+  'web.payment_gateway_min': 'حداقل مبلغ',
+  'web.payment_gateway_max': 'حداکثر مبلغ',
+  'web.payment_gateway_amount_hint': 'مبلغ‌ها به ریال. عدد صفر یعنی بدون محدودیت.',
+  'web.payment_gateway_sort': 'ترتیب نمایش',
+  'web.payment_gateway_unbounded': 'بدون محدودیت',
+  'web.payment_gateway_instructions': 'راهنمای مشتری',
+  'web.payment_gateway_instructions_hint':
+    'اختیاری. همان‌طور که نوشته می‌شود ذخیره می‌شود و به انتهای پیام پرداخت اضافه می‌شود.',
+  'web.payment_gateway_eligibility': 'شرط نمایش به مشتری',
+  // The three controls the research establishes, and the one it establishes is
+  // ABSENT: nothing here keys off a customer's tier.
+  'web.payment_gateway_eligibility_hint':
+    'عدد صفر یعنی شرط غیرفعال است. این شرط‌ها فقط به سابقهٔ پرداخت و مدت عضویت خود مشتری نگاه می‌کنند.',
+  'web.payment_gateway_after_payments': 'فعال پس از این تعداد پرداخت موفق',
+  'web.payment_gateway_until_payments': 'غیرفعال پس از این تعداد پرداخت موفق',
+  'web.payment_gateway_after_days': 'فعال پس از این تعداد روز عضویت',
+  'web.payment_gateway_updated': 'آخرین تغییر',
+  'web.payment_gateway_actions': 'عملیات',
+  'web.payment_gateway_edit': 'ویرایش',
+  'web.payment_gateway_enable': 'فعال کردن',
+  'web.payment_gateway_disable': 'غیرفعال کردن',
+  'web.payment_gateway_editing': 'ویرایش روش پرداخت',
+  // The two things an operator cannot see from the form.
+  'web.payment_gateway_form_hint':
+    'تغییر شرط‌ها روی پرداخت‌هایی که پیش‌تر صادر شده‌اند اثری ندارد. روش پرداخت حذف نمی‌شود؛ غیرفعال می‌شود.',
+  'web.payment_gateway_save': 'ذخیره',
+  'web.payment_gateway_cancel_edit': 'انصراف',
+  'web.payment_gateway_saved': 'روش پرداخت ذخیره شد.',
+  'web.payment_gateway_status_done': 'وضعیت روش پرداخت تغییر کرد.',
+  'web.payment_gateways_empty': 'هنوز روش پرداختی ثبت نشده است.',
+  'web.payment_gateways_empty_hint':
+    'در نصب سالم این فهرست خالی نمی‌ماند. اگر خالی است، سرویس را یک بار راه‌اندازی مجدد کنید تا روش‌های این نسخه ساخته شوند.',
   'web.payment_reject_title': 'رد رسید',
   // Says the two things an operator has to know before pressing it: the order is NOT
   // cancelled, and the decision cannot be undone.

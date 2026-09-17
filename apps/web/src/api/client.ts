@@ -123,6 +123,12 @@ import {
   paymentAccountResponseSchema,
   type PaymentAccountListResponse,
   type PaymentAccountResponse,
+  PAYMENT_GATEWAY_ROUTES,
+  paymentGatewayListResponseSchema,
+  paymentGatewayResponseSchema,
+  type PaymentGatewayListResponse,
+  type PaymentGatewayResponse,
+  type PaymentGatewayStatus,
 } from '@nexa/contracts';
 
 /**
@@ -916,6 +922,56 @@ export function setDefaultPaymentAccount(input: {
 }): Promise<PaymentAccountResponse> {
   const { id, ...body } = input;
   return post(PAYMENT_ACCOUNT_ROUTES.makeDefault(id), body, paymentAccountResponseSchema);
+}
+
+/**
+ * The payment routes, with the denomination their bounds are in.
+ *
+ * The currency arrives WITH the list rather than from a second call, because a bound
+ * rendered in the wrong denomination is a number an operator would act on.
+ */
+export function fetchPaymentGateways(): Promise<PaymentGatewayListResponse> {
+  return authedGet(PAYMENT_GATEWAY_ROUTES.list, paymentGatewayListResponseSchema);
+}
+
+/**
+ * Replaces one route's configuration.
+ *
+ * The amounts are sent as decimal STRINGS of minor units, and the browser does not
+ * compute them: JSON has no bigint, and a `number` here is the float the money model
+ * refuses — silently, above 2^53. The RULES (a maximum below the minimum, payment-count
+ * bounds that cross) are checked on the server, inside `paymentGatewayConfigSchema`, so
+ * this client cannot hold a second opinion about what a valid route is.
+ *
+ * It cannot switch a route on or off. That is the call below, so that "I changed the
+ * limits" and "I stopped accepting this route" are two different audit rows.
+ */
+export function updatePaymentGateway(input: {
+  provider: string;
+  idempotencyKey: string;
+  displayName: string | null;
+  instructions: string | null;
+  minAmountMinor: string;
+  maxAmountMinor: string;
+  eligibility: {
+    activateAfterPayments: number;
+    deactivateAfterPayments: number;
+    activateAfterAccountDays: number;
+  };
+  sortOrder: number;
+}): Promise<PaymentGatewayResponse> {
+  const { provider, ...body } = input;
+  return post(PAYMENT_GATEWAY_ROUTES.update(provider), body, paymentGatewayResponseSchema);
+}
+
+/** Switches one route on or off. A no-op when it is already there, and it says so. */
+export function setPaymentGatewayStatus(input: {
+  provider: string;
+  idempotencyKey: string;
+  status: PaymentGatewayStatus;
+}): Promise<PaymentGatewayResponse> {
+  const { provider, ...body } = input;
+  return post(PAYMENT_GATEWAY_ROUTES.status(provider), body, paymentGatewayResponseSchema);
 }
 
 export function confirmPayment(input: {

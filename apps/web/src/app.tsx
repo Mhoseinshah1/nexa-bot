@@ -19,6 +19,7 @@ import { RecoveryPage } from './pages/recovery';
 import { PlannedPage, PLANNED_SURFACES, type PlannedKey } from './pages/planned';
 import { PaymentsPage, PaymentDetailPage } from './pages/payments';
 import { PaymentAccountsPage } from './pages/payment-accounts';
+import { PaymentGatewaysPage } from './pages/payment-gateways';
 import { ProductDetailPage, ProductsPage } from './pages/products';
 import { OrderDetailPage, OrdersPage } from './pages/orders';
 import { ServiceDetailPage, ServicesPage } from './pages/services';
@@ -220,6 +221,19 @@ export const NAV: readonly NavEntry[] = [
      * custom-role editor correctly.
      */
     permission: ['payments.accounts.view', 'payments.accounts.edit'],
+    group: 'web.navgroup_sales',
+  },
+  {
+    id: 'payment-gateways',
+    path: '/payment-gateways',
+    label: 'web.nav_payment_gateways',
+    icon: 'payments',
+    /*
+     * EITHER, for the reason the accounts link above states: the page renders its form
+     * on `payments.gateways.edit` whether or not the view key is held, and the server
+     * authorizes every write on the edit key alone.
+     */
+    permission: ['payments.gateways.view', 'payments.gateways.edit'],
     group: 'web.navgroup_sales',
   },
   {
@@ -515,6 +529,19 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
       ),
       crumbs: [{ label: t('web.payment_accounts_title') }],
       title: t('web.payment_accounts_title'),
+    };
+  }
+
+  if (route.path === '/payment-gateways') {
+    return {
+      element: (
+        <PaymentGatewaysPage
+          denied={!may('payments.gateways.view')}
+          mayEdit={may('payments.gateways.edit')}
+        />
+      ),
+      crumbs: [{ label: t('web.payment_gateways_title') }],
+      title: t('web.payment_gateways_title'),
     };
   }
 

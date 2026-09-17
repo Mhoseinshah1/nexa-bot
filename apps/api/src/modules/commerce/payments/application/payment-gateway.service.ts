@@ -16,6 +16,7 @@ import {
   type PaymentGatewayStatus,
   type PermissionKey,
   type TenantContext,
+  type SalesCurrencyCode,
   type UnitOfWork,
   type UserId,
 } from '@nexa/contracts';
@@ -28,6 +29,7 @@ import { rememberOnce } from '../../../platform/idempotency/application/remember
 import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
+import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
   accountAgeInDays,
@@ -54,6 +56,15 @@ export interface PaymentGatewayServiceDeps {
   readonly idempotency: IdempotencyStore;
   readonly scopeActivity: ScopeActivityReader;
   readonly clock: Clock;
+  /**
+   * Read for ONE thing: the denomination the amount bounds are expressed in.
+   *
+   * A route stores bare minor units and no currency of its own —
+   * `payment-gateways.ts` records why a per-route currency would be a second
+   * denomination with no conversion to reach it — so the one currency this
+   * installation sells in is what a bound means, and what a surface must render it as.
+   */
+  readonly settings: SettingsResolver;
 }
 
 /** What one command was asked to do, so a replay can answer with the same route. */
@@ -89,9 +100,28 @@ export interface OfferedGateway {
 export class PaymentGatewayService {
   constructor(private readonly deps: PaymentGatewayServiceDeps) {}
 
-  async list(scope: TenantContext, actor: ActorContext): Promise<readonly PaymentGatewayRecord[]> {
+  /**
+   * Every route, with the denomination its bounds are in.
+   *
+   * The currency travels WITH the list rather than being fetched separately by the
+   * surface, because a bound rendered in the wrong denomination is a number an operator
+   * would act on. One read, one answer, and the surface cannot pair them wrongly.
+   */
+  async list(
+    scope: TenantContext,
+    actor: ActorContext,
+  ): Promise<{ gateways: readonly PaymentGatewayRecord[]; currency: SalesCurrencyCode }> {
     await this.deps.guard.check(scope, actor, PAYMENT_GATEWAY_VIEW_PERMISSION);
-    return this.deps.repository.list(scope);
+    const [gateways, currency] = await Promise.all([
+      this.deps.repository.list(scope),
+      this.deps.settings.valueOf<SalesCurrencyCode>(scope, 'sales.currency'),
+    ]);
+    return { gateways, currency };
+  }
+
+  /** The denomination a route's bounds are in, for a surface rendering one route. */
+  async currency(scope: TenantContext): Promise<SalesCurrencyCode> {
+    return this.deps.settings.valueOf<SalesCurrencyCode>(scope, 'sales.currency');
   }
 
   /** Replaces one route's configuration. Cannot switch it on or off — that is `setStatus`. */

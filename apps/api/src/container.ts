@@ -1108,6 +1108,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     idempotency,
     scopeActivity: tenants,
     clock,
+    settings: settingsResolver,
   });
 
   const paymentService = new PaymentService({

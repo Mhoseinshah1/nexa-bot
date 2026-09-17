@@ -9,7 +9,6 @@ import {
 import { uuidV7Schema } from './ids.js';
 import { paymentAccountInputSchema } from './payment-accounts.js';
 import {
-  PAYMENT_GATEWAY_NAME_MAX_LENGTH,
   PAYMENT_GATEWAY_SORT_MAX,
   PAYMENT_GATEWAY_SORT_MIN,
   PAYMENT_GATEWAY_THRESHOLD_MAX,
@@ -46,7 +45,7 @@ import {
   PAYMENT_METHODS,
   PAYMENT_STATES,
 } from './payment.js';
-import { CURRENCY_CODES, MAX_MONEY_AMOUNT_MINOR } from './money.js';
+import { CURRENCY_CODES, MAX_MONEY_AMOUNT_MINOR, salesCurrencyCodeSchema } from './money.js';
 import { OPERATIONAL_SEVERITIES } from './ports.js';
 import {
   SETTING_CLASSIFICATIONS,
@@ -2314,16 +2313,31 @@ export const paymentGatewaySchema = z.object({
    */
   minAmountMinor: z.string(),
   maxAmountMinor: z.string(),
-  currency: z.enum(CURRENCY_CODES),
+  /*
+   * `salesCurrencyCodeSchema`, NOT `CURRENCY_CODES`.
+   *
+   * A route's bounds are compared against an amount denominated in `sales.currency`,
+   * which is one of two codes — and `money.ts` records why that constant exists: the
+   * products form once offered all five, three of which the store cannot sell in, and
+   * Codex found it. Widening this field would put the same defect on this screen.
+   */
+  currency: salesCurrencyCodeSchema,
   eligibility: z.object({
     activateAfterPayments: z.number().int(),
     deactivateAfterPayments: z.number().int(),
     activateAfterAccountDays: z.number().int(),
   }),
   sortOrder: z.number().int(),
-  /** From `PAYMENT_GATEWAY_DESCRIPTORS`, so the screen need not hold the catalogue. */
-  settlesVia: z.enum(PAYMENT_METHODS),
-  requiresCredentials: z.boolean(),
+  /*
+   * The descriptor's two facts — `settlesVia` and `requiresCredentials` — are NOT here.
+   *
+   * They were, and nothing read them: with one operable route `settlesVia` always says
+   * the same thing and there is no credential field to gate. `PAYMENT_GATEWAY_DESCRIPTORS`
+   * is where they live and a unit test is what consumes them; a response field with no
+   * reader is the placeholder abstraction the conventions refuse, and the i18n checker
+   * found the label for one of them rendering nowhere. They land with the second route,
+   * which is what makes either of them worth showing.
+   */
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
 });
@@ -2363,6 +2377,14 @@ export type PaymentGatewayResponse = z.infer<typeof paymentGatewayResponseSchema
  */
 export const updatePaymentGatewayRequestSchema = z.object({
   idempotencyKey: z.string().min(8).max(255),
+  /*
+   * The two text fields carry no length bound HERE, and that is deliberate.
+   *
+   * `paymentGatewayConfigSchema` bounds both, and it is what every caller runs — the
+   * controller parses this shape and then that one, precisely so the RULES live in one
+   * place. Restating a maximum here would be a second number to keep in step, and the
+   * one that drifts is the one nobody tests.
+   */
   displayName: z.union([z.string(), z.null()]).optional(),
   instructions: z.union([z.string(), z.null()]).optional(),
   minAmountMinor: z.string().regex(/^[0-9]{1,19}$/u),
