@@ -609,6 +609,256 @@ export const TEMPLATES = [
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
+  /* ---------------------------------------------------------------------------
+   * Phase 5T — the Telegram admin surface.
+   *
+   * Admin-facing text, in the SAME catalogue as everything else on purpose: an
+   * administrator reading a receipt in Telegram is reading text this product ships,
+   * and a surface may not write a literal whatever the reader's role is.
+   *
+   * What none of these keys does is describe authority. The panel is drawn from the
+   * permissions the guard resolves and every action re-checks server-side, so no
+   * sentence here is load-bearing for access control — drawing a button is not a
+   * grant and not drawing one is not a denial.
+   * ------------------------------------------------------------------------- */
+  {
+    key: 'bot.menu.admin',
+    description:
+      'The keyboard button that opens the management panel. Drawn ONLY for a Telegram ' +
+      'account bound to an ACTIVE administrator holding at least one of the panel\u2019s own ' +
+      'permissions.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.panel',
+    description:
+      'The management panel\u2019s own screen. Says what is inside it and nothing about the ' +
+      'installation; which sections a given administrator may open are the buttons, and ' +
+      'those come from that administrator\u2019s permissions.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.receipts_button',
+    description: 'Opens the queue of manual transfers waiting for a decision.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.section_button',
+    description: 'Opens the administrator section: who holds Telegram access, and how.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.receipts_list',
+    description:
+      'Above the queue. Carries no count: the rows are the answer, and a number rendered ' +
+      'beside them is one more thing that can disagree with them.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.receipts_none',
+    description:
+      'The empty queue \u2014 the only state the Mirza investigation could observe, and the ' +
+      'reason its runtime behaviour is UNKNOWN rather than reproduced. Says nothing is ' +
+      'waiting, never that none ever was: this section shows PENDING work and no history ' +
+      'is reachable from it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.receipt',
+    description:
+      'One payment awaiting a decision, with the facts a reviewer reconciles against a ' +
+      'bank statement: the reference the customer was told to quote, the payable amount, ' +
+      'and who owes it. The receipt files are sent as media beside this message by ' +
+      'file_id, so no token and no URL is ever rendered.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description: 'The payment reference the customer quoted.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'total',
+        type: 'MONEY',
+        description: 'The payable amount, frozen on the payment.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'customer',
+        type: 'STRING',
+        description: 'Who owes it, by the identity this installation holds.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.receipt_gone',
+    description:
+      'The tapped payment is no longer awaiting a decision \u2014 approved, rejected, ' +
+      'withdrawn or expired since the message was drawn. A stale inline button says so ' +
+      'rather than doing anything, because this message stays in the chat for ever.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.approve_button',
+    description: 'Confirms the transfer, through the same application path Web Admin uses.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.reject_button',
+    description: 'Rejects the transfer, through the same application path Web Admin uses.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.approved',
+    description:
+      'The decision landed: the payment is CONFIRMED, and whatever it funds was settled ' +
+      'or credited by the service rather than by this surface.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.rejected',
+    description:
+      'The decision landed: the payment is FAILED, and the customer is told by the ' +
+      'notification lane rather than from here.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.section',
+    description:
+      'The administrator section, and the exact syntax of the two commands it accepts. ' +
+      'Commands rather than a prompt that captures the next message: INCIDENT-FIN-001 is ' +
+      'a captured prompt swallowing an ordinary message and overwriting a production ' +
+      'gateway setting, and a command carries its argument in the same message.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.admins_none',
+    description:
+      'No administrator on this installation has Telegram access yet. Names where one is ' +
+      'created \u2014 the Web Admin \u2014 because this product will not invent an administrator ' +
+      'with no credentials in order to keep a menu shorter.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.revoke_button',
+    description:
+      'Removes one administrator\u2019s Telegram access. Their account, roles and Web Admin ' +
+      'access are untouched.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.linked',
+    description: 'A Telegram account is now bound to that administrator.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'username',
+        type: 'STRING',
+        description: 'The administrator\u2019s username.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.revoked',
+    description: 'That administrator no longer has Telegram access.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'username',
+        type: 'STRING',
+        description: 'The administrator\u2019s username.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.roles_set',
+    description: 'That administrator\u2019s roles are now these.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'username',
+        type: 'STRING',
+        description: 'The administrator\u2019s username.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'roles',
+        type: 'STRING',
+        description: 'The role keys now held, already joined.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.usage',
+    description:
+      'The command was not in the shape it accepts. Reprints the syntax rather than ' +
+      'guessing: every argument here names either an administrator or a Telegram ' +
+      'account, and a guess would bind the wrong one.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.refused',
+    description:
+      'The action was refused. ONE sentence for every refusal an administrator can reach ' +
+      'here \u2014 no permission, an unknown administrator, a Telegram account already bound, ' +
+      'a privilege they do not hold themselves \u2014 because the distinctions belong to the ' +
+      'audit row and the error code, and a Telegram reply enumerating them would tell ' +
+      'whoever holds that chat which case they hit.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.receipt_awaiting',
+    description:
+      'Sent to each administrator with Telegram access who may decide a receipt, when one ' +
+      'is filed. Carries the reference and the amount so a reviewer knows what is ' +
+      'waiting, and no media: the files are in the queue, which is the durable record \u2014 ' +
+      'this is the poke.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description: 'The payment reference the customer quoted.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'total',
+        type: 'MONEY',
+        description: 'The payable amount.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
   {
     key: 'bot.wallet.insufficient',
     description:

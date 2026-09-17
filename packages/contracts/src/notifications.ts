@@ -31,6 +31,21 @@ export const NOTIFICATION_KINDS = [
   'OPERATIONAL_EVENT',
   /** An explicit test of the operations destination. */
   'OPERATIONS_TEST',
+  /**
+   * A manual transfer has a receipt and is waiting for a decision (Phase 5T).
+   *
+   * Addressed to a PERSON rather than to the operations destination, and that is the
+   * first kind here that is: the destination snapshot carries the administrator's own
+   * chat, so a notification sent in March still says who it was sent to after that
+   * administrator's Telegram access is revoked in April.
+   *
+   * It is a POKE and not the work. What makes a receipt reviewable is the queue in the
+   * management panel, which is read from `payments` and `payment_receipts`; if this
+   * message is never delivered the receipt is still there, still pending, and still
+   * visible in the Web Admin. That is why it carries no decision buttons: an inline
+   * button on a notification would make the message the only way in.
+   */
+  'RECEIPT_AWAITING_REVIEW',
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 

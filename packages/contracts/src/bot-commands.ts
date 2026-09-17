@@ -76,3 +76,30 @@ export const MAIN_MENU_ROWS: readonly (readonly BotMenuButton[])[] = [
 
 /** Every menu button, flattened. The rows are layout; this is the set. */
 export const MAIN_MENU_BUTTONS: readonly BotMenuButton[] = MAIN_MENU_ROWS.flat();
+
+/**
+ * The management panel's entry, and why it is not in `MAIN_MENU_ROWS`.
+ *
+ * Phase 5T. The rows above are what EVERY customer sees, and this is drawn only for a
+ * Telegram account bound to an ACTIVE administrator who holds at least one of the
+ * panel's own permissions — so it is a separate constant appended per turn rather than
+ * a fifth entry somebody could render unconditionally by accident.
+ *
+ * Its command is deliberately absent from `BOT_COMMANDS`. That list is what
+ * `setMyCommands` registers with Telegram, and Telegram's command list is per BOT, not
+ * per user: registering `/admin` would advertise the panel's existence to every customer
+ * of every tenant. A customer who types it anyway is answered exactly as they are for
+ * any other unknown command, by the same fallback, because the runtime resolves the
+ * binding before it decides anything and an absent binding is not a different reply.
+ *
+ * Drawing the button is NOT the authorization. Every action inside the panel re-checks
+ * its permission server-side, which is the rule `docs/conventions.md` states as "never
+ * by not drawing a button".
+ */
+export const ADMIN_MENU_COMMAND = 'admin';
+
+/** The label, and the command a tap on it stands for. Same shape as a menu button. */
+export const ADMIN_MENU_BUTTON = {
+  label: 'bot.menu.admin',
+  command: ADMIN_MENU_COMMAND,
+} as const satisfies { readonly label: TemplateKey; readonly command: string };
