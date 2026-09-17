@@ -3,6 +3,7 @@ import {
   isNexaError,
   currencyCodeSchema,
   money,
+  plainAmount,
   uuidV7Schema,
 } from '@nexa/contracts';
 import type {
@@ -19,6 +20,8 @@ import type {
   UserId,
 } from '@nexa/contracts';
 import type { CustomerService } from '../../modules/commerce/customers/application/customer.service.js';
+import type { PaymentDestinationRenderer } from '../../modules/commerce/payments/infrastructure/destination-renderer.js';
+import type { PaymentAccountRepository } from '../../modules/commerce/payments/application/account-ports.js';
 import type {
   CustomerButton,
   CustomerSendOutcome,
@@ -583,6 +586,22 @@ export interface BotRuntimeDeps {
   readonly commercial: CommercialActionService;
   readonly orders: OrderService;
   readonly payments: PaymentService;
+  /**
+   * Composes the destination block for a manual-transfer instruction.
+   *
+   * Injected rather than imported, for the reason `MainMenuRoutes` is: the four line
+   * templates are catalogue text, `check-boundaries.sh` refuses an `@nexa/i18n` import
+   * in a surface, and resolving a tenant override is the application layer's job. What
+   * this surface holds is a function from a frozen snapshot to a string.
+   */
+  readonly destinations: PaymentDestinationRenderer;
+  /**
+   * Whether an out-of-band transfer has anywhere to go.
+   *
+   * The narrowest possible port — one boolean — because this surface has no business
+   * holding a card number in order to decide whether to draw a label.
+   */
+  readonly accounts: Pick<PaymentAccountRepository, 'hasEnabled'>;
   readonly wallet: WalletService;
   readonly services: ProvisioningService;
   readonly delivery: DeliveryService;
@@ -1563,7 +1582,7 @@ export class BotRuntime {
           total: order.totals.total,
           ...(order.expiresAt === null ? {} : { expiresAt: order.expiresAt }),
         },
-        buttons: paymentButtons(order.id),
+        buttons: paymentButtons(order.id, await this.deps.accounts.hasEnabled(scope)),
         orderId: order.id,
       };
     } catch (error) {
@@ -1831,7 +1850,7 @@ export class BotRuntime {
           total: order.totals.total,
           ...(order.expiresAt === null ? {} : { expiresAt: order.expiresAt }),
         },
-        buttons: paymentButtons(order.id),
+        buttons: paymentButtons(order.id, await this.deps.accounts.hasEnabled(scope)),
         orderId: order.id,
       };
     } catch (error) {
@@ -1927,15 +1946,23 @@ export class BotRuntime {
   }
 
   /**
-   * Choosing to pay out of band: a PENDING payment, the amount, and the code to quote.
+   * Choosing to pay out of band: a PENDING payment, WHERE to send the money, and the
+   * code to quote.
    *
-   * No money moves and nothing settles. `bot.payment.manual_instructions` declares
-   * `{total}` and `{reference}` and both come from the payment the service created — the
-   * total from the order's frozen snapshot, the reference GENERATED, because a customer
-   * who could choose it could choose somebody else's.
+   * No money moves and nothing settles. Every figure comes from what the service
+   * committed — the total from the order's frozen snapshot, the reference GENERATED
+   * because a customer who could choose it could choose somebody else's, and the bank
+   * details from `payment_destinations`, which was written in the same transaction as
+   * the payment and can never be edited afterwards.
    *
-   * The instructions themselves are tenant copy. This installation ships no bank details
-   * and invents none, which the key's own description says.
+   * That last one is the whole of 5A. Before it, this message said «طبق راهنمای
+   * فروشنده» — follow the seller's instructions — and the only place an operator could
+   * put a card number was inside an overridden copy of this very template, where editing
+   * it rewrote what every already-issued instruction said.
+   *
+   * A payment issued BEFORE 5A has no snapshot, and falls back to the old key. That is
+   * not a lesser rendering of the same thing: it is the only thing this installation can
+   * truthfully say about a payment whose destination was never recorded.
    */
   private async manualPayment(
     scope: TenantContext,
@@ -1945,13 +1972,58 @@ export class BotRuntime {
     idempotencyKey: string,
   ): Promise<PendingReply> {
     try {
-      const payment = await this.deps.payments.requestManualTransfer(scope, actor, customer.id, {
-        idempotencyKey: `${idempotencyKey}:manual-pay`,
-        orderId,
-      });
+      const { payment, destination } = await this.deps.payments.requestManualTransfer(
+        scope,
+        actor,
+        customer.id,
+        { idempotencyKey: `${idempotencyKey}:manual-pay`, orderId },
+      );
+
+      /*
+       * The two copy controls, and they exist only when there is a snapshot to copy from.
+       *
+       * `copy_text` is Telegram's own clipboard button: no callback data, no handler,
+       * nothing reaches this server when one is tapped. The amount is copied as BARE
+       * digits — `plainAmount`, not `formatMoney` — because a banking app rejects
+       * «۱٬۵۰۰٬۰۰۰ تومان` and accepts `1500000`.
+       *
+       * `row: 0` puts them side by side above the actions, which is the layout the owner
+       * specified after staging acceptance.
+       */
+      const copies: CustomerButton[] =
+        destination === null
+          ? []
+          : [
+              {
+                label: { kind: 'TEMPLATE', key: 'bot.payment.copy_card_button' },
+                copyText: destination.cardNumber,
+                row: 0,
+              },
+              {
+                label: { kind: 'TEMPLATE', key: 'bot.payment.copy_amount_button' },
+                copyText: plainAmount(payment.amount),
+                row: 0,
+              },
+            ];
+
       return {
-        key: 'bot.payment.manual_instructions',
-        values: { total: payment.amount, reference: payment.reference },
+        key:
+          destination === null
+            ? 'bot.payment.manual_instructions'
+            : 'bot.payment.transfer_instructions',
+        values: {
+          total: payment.amount,
+          reference: payment.reference,
+          /*
+           * Composed behind the application layer, by the renderer this surface is
+           * handed. A surface may not resolve the catalogue — `check-boundaries.sh`
+           * refuses an `@nexa/i18n` import here — and the four destination lines are
+           * catalogue text like any other.
+           */
+          ...(destination === null
+            ? {}
+            : { destination: await this.deps.destinations.render(scope, destination) }),
+        },
         /*
          * The way out, beside the instructions that created the obligation.
          *
@@ -1965,6 +2037,7 @@ export class BotRuntime {
          * away from closing the payment it was against.
          */
         buttons: [
+          ...copies,
           /*
            * The step the instructions now tell them to take.
            *
@@ -1973,9 +2046,15 @@ export class BotRuntime {
            * who had transferred the money had nothing to do and nothing to say, and
            * `bot.payment.received_for_review` was a frozen sentence with no producer.
            *
-           * FIRST in the list, before the withdrawal: it is what most customers who
-           * come back to this message want, and the destructive one should not be the
-           * nearest thumb.
+           * The owner's 5A addendum reverses that revision and asks for this label to
+           * become «✅ پرداخت را انجام دادم | ارسال رسید». It is deliberately still the
+           * old label here: the receipt flow lands in 5R, and a button promising a
+           * capability that does not exist is the defect rather than a step towards
+           * fixing it.
+           *
+           * First among the actions, before the withdrawal: it is what most customers
+           * who come back to this message want, and the destructive one should not be
+           * the nearest thumb.
            */
           {
             label: { kind: 'TEMPLATE', key: 'bot.payment.sent_button' },
@@ -2259,9 +2338,9 @@ export function replyFor(intent: BotIntent, arrival: CustomerArrival): TemplateK
 export type { CustomerRecord };
 
 /**
- * The payment methods this installation can actually perform, as buttons.
+ * The payment methods this installation can actually perform RIGHT NOW, as buttons.
  *
- * `WALLET` and `MANUAL_TRANSFER`, which is exactly `SELF_CONTAINED_PAYMENT_METHODS`. A
+ * `WALLET` always, `MANUAL_TRANSFER` only when the tenant has an enabled destination. A
  * gateway button is NOT drawn, and that is the rule `provider.ts` records applied to
  * money: Marzban's descriptor advertising fourteen operations no code could perform was
  * rejected, because what a product publishes is how it tells a user what it can do.
@@ -2269,16 +2348,32 @@ export type { CustomerRecord };
  * Each button carries the ORDER ID and nothing else. There is no amount in a callback
  * and no place to put one.
  */
-function paymentButtons(orderId: string): readonly CustomerButton[] {
+function paymentButtons(orderId: string, manualAvailable: boolean): readonly CustomerButton[] {
   return [
     {
       label: { kind: 'TEMPLATE', key: 'bot.payment.wallet_button' },
       data: `${WALLET_PAY_CALLBACK_PREFIX}${orderId}`,
     },
-    {
-      label: { kind: 'TEMPLATE', key: 'bot.payment.manual_button' },
-      data: `${MANUAL_PAY_CALLBACK_PREFIX}${orderId}`,
-    },
+    /*
+     * Drawn only when there is somewhere for the money to go.
+     *
+     * Since 5A a manual transfer is refused outright when the tenant has no enabled
+     * account — `PAYMENT_DESTINATION_UNCONFIGURED` — so a button drawn regardless would
+     * be a button whose only outcome is an error. That is the rule stated two lines
+     * below for a gateway, applied to the rail that CAN be unconfigured.
+     *
+     * The read can be a moment stale: the last enabled account may be disabled between
+     * this render and the tap. The service refuses that case, which is why the check
+     * exists in both places rather than only here.
+     */
+    ...(manualAvailable
+      ? [
+          {
+            label: { kind: 'TEMPLATE' as const, key: 'bot.payment.manual_button' as const },
+            data: `${MANUAL_PAY_CALLBACK_PREFIX}${orderId}`,
+          },
+        ]
+      : []),
     /*
      * The way out, beside the two ways in.
      *

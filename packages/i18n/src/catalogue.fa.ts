@@ -159,6 +159,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.destination.holder': 'به نام: {value}',
   'bot.payment.destination.card': 'شماره کارت: {value}',
   'bot.payment.destination.sheba': 'شبا: {value}',
+  'bot.payment.copy_card_button': '📋 کپی شماره کارت',
+  'bot.payment.copy_amount_button': '💵 کپی مبلغ',
   'bot.payment.wallet_button': 'پرداخت از کیف پول',
   'bot.payment.manual_button': 'پرداخت کارت به کارت',
   'bot.payment.unconfigured': 'این روش پرداخت در حال حاضر فعال نیست.',

@@ -12,6 +12,7 @@ import { ServiceAddonsController } from './surfaces/web/service-addons.controlle
 import { OrdersController } from './surfaces/web/orders.controller.js';
 import { WalletController } from './surfaces/web/wallet.controller.js';
 import { PaymentsController } from './surfaces/web/payments.controller.js';
+import { PaymentAccountsController } from './surfaces/web/payment-accounts.controller.js';
 import { ServicesController } from './surfaces/web/services.controller.js';
 import { PanelsController } from './surfaces/web/panels.controller.js';
 import { RecoveryController } from './surfaces/web/recovery.controller.js';
@@ -60,6 +61,7 @@ export class AppModule implements NestModule {
         OrdersController as never,
         WalletController as never,
         PaymentsController as never,
+        PaymentAccountsController as never,
         ServicesController as never,
         PanelsController as never,
         RecoveryController as never,

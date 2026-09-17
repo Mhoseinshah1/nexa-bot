@@ -714,6 +714,23 @@ export const TEMPLATES = [
     ],
   },
   {
+    key: 'bot.payment.copy_card_button',
+    description:
+      'Label on the button that copies the card number to the customer\u2019s clipboard. ' +
+      'A Telegram CopyTextButton \u2014 it carries no callback data, reaches no handler ' +
+      'and performs no action on the server.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.copy_amount_button',
+    description:
+      'Label on the button that copies the amount, as bare digits with no separators ' +
+      'and no currency word, so it pastes into a banking app. Also a CopyTextButton.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.payment.wallet_button',
     description:
       'The label on the button a customer presses to pay for an order from their ' +

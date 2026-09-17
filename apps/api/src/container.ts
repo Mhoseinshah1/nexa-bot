@@ -127,6 +127,12 @@ import {
 import { DrizzleWalletRepository } from './modules/commerce/wallet/infrastructure/drizzle-wallet.repository.js';
 import { WalletService } from './modules/commerce/wallet/application/wallet.service.js';
 import { DrizzlePaymentRepository } from './modules/commerce/payments/infrastructure/drizzle-payment.repository.js';
+import {
+  DrizzlePaymentAccountRepository,
+  DrizzlePaymentDestinationRepository,
+} from './modules/commerce/payments/infrastructure/drizzle-payment-account.repository.js';
+import { PaymentDestinationRenderer } from './modules/commerce/payments/infrastructure/destination-renderer.js';
+import { PaymentAccountService } from './modules/commerce/payments/application/payment-account.service.js';
 import { PaymentService } from './modules/commerce/payments/application/payment.service.js';
 import { PaymentExpiryService } from './modules/commerce/payments/application/payment-expiry.service.js';
 import {
@@ -299,6 +305,7 @@ export interface Container {
   readonly commercialActions: CommercialActionService;
   readonly wallet: WalletService;
   readonly payments: PaymentService;
+  readonly paymentAccounts: PaymentAccountService;
   readonly orders: OrderService;
   readonly botRuntime: BotRuntime;
 
@@ -840,6 +847,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * transfer instruction behind.
    */
   const paymentRepository = new DrizzlePaymentRepository(database.db);
+  const paymentAccountRepository = new DrizzlePaymentAccountRepository(database.db);
+  const paymentDestinationRepository = new DrizzlePaymentDestinationRepository(database.db);
 
   const orderRepository = new DrizzleOrderRepository(database.db);
   const orderService = new OrderService({
@@ -1023,6 +1032,15 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     notifier: customerNotifier,
     orders: orderRepository,
     provisioning: provisioningService,
+    /*
+     * The READ half of the account repository, narrowed by the dependency's own type.
+     *
+     * A payment path that could create or edit an account would put a card number within
+     * reach of a customer-initiated command. Managing them is
+     * `PaymentAccountService`'s, under `payments.accounts.edit`.
+     */
+    accounts: paymentAccountRepository,
+    destinations: paymentDestinationRepository,
     /*
      * The READ alone, narrowed here rather than by the type.
      *
@@ -1269,6 +1287,29 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     featureFlagResolver,
     templateCatalogue,
   );
+  /*
+   * Composes the destination block behind the application layer.
+   *
+   * Built after the resolver because it renders through it — four frozen keys, each a
+   * tenant override away from being the tenant's own wording. `bot-runtime.ts` is handed
+   * this rather than the resolver, so the surface can compose a destination and nothing
+   * else.
+   */
+  const paymentDestinationRenderer = new PaymentDestinationRenderer(templateResolver);
+
+  const paymentAccountService = new PaymentAccountService({
+    repository: paymentAccountRepository,
+    guard,
+    uow,
+    audit,
+    opsLog: opsLogWriter,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
+
   const templatesService = new TemplateManagementService(
     guard,
     uow,
@@ -1983,6 +2024,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     commercialActions: commercialActionService,
     wallet: walletService,
     payments: paymentService,
+    paymentAccounts: paymentAccountService,
     provisioning: provisioningService,
     serviceAdmin: new ServiceAdminService({
       services: serviceRepository,
@@ -2003,6 +2045,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       mainMenu: new Map(
         MAIN_MENU_BUTTONS.map((button) => [CATALOGUE_FA[button.label], `/${button.command}`]),
       ),
+      destinations: paymentDestinationRenderer,
+      accounts: paymentAccountRepository,
       /*
        * The one write the turn makes after its Telegram send, and the transaction
        * it needs, kept OUT of the surface.

@@ -380,12 +380,12 @@ describe('payments and settlement', () => {
   it('creates a PENDING payment for the order total, with a generated reference', async () => {
     const order = await awaitingPayment(tenantA, customerA, panelA, 'm1');
 
-    const payment = await ctx.container.payments.requestManualTransfer(
-      tenantA,
-      systemActor('manual-m1'),
-      customerA,
-      { idempotencyKey: 'manual-m1-0001', orderId: order.id },
-    );
+    const payment = await ctx.container.payments
+      .requestManualTransfer(tenantA, systemActor('manual-m1'), customerA, {
+        idempotencyKey: 'manual-m1-0001',
+        orderId: order.id,
+      })
+      .then((issued) => issued.payment);
 
     expect(payment.state).toBe('PENDING');
     expect(payment.method).toBe('MANUAL_TRANSFER');
@@ -399,12 +399,12 @@ describe('payments and settlement', () => {
 
   it('confirms a transfer under receipts.review and settles the order with it', async () => {
     const order = await awaitingPayment(tenantA, customerA, panelA, 'm2');
-    const pending = await ctx.container.payments.requestManualTransfer(
-      tenantA,
-      systemActor('manual-m2'),
-      customerA,
-      { idempotencyKey: 'manual-m2-0001', orderId: order.id },
-    );
+    const pending = await ctx.container.payments
+      .requestManualTransfer(tenantA, systemActor('manual-m2'), customerA, {
+        idempotencyKey: 'manual-m2-0001',
+        orderId: order.id,
+      })
+      .then((issued) => issued.payment);
 
     const reviewer = adminActorFor(
       await createAdmin(ctx.container, tenantA, {
@@ -433,12 +433,12 @@ describe('payments and settlement', () => {
 
   it('refuses a confirmation from an operator without receipts.review', async () => {
     const order = await awaitingPayment(tenantA, customerA, panelA, 'm3');
-    const pending = await ctx.container.payments.requestManualTransfer(
-      tenantA,
-      systemActor('manual-m3'),
-      customerA,
-      { idempotencyKey: 'manual-m3-0001', orderId: order.id },
-    );
+    const pending = await ctx.container.payments
+      .requestManualTransfer(tenantA, systemActor('manual-m3'), customerA, {
+        idempotencyKey: 'manual-m3-0001',
+        orderId: order.id,
+      })
+      .then((issued) => issued.payment);
     const support = adminActorFor(
       await createAdmin(ctx.container, tenantA, {
         username: 'support-payments',
@@ -463,12 +463,12 @@ describe('payments and settlement', () => {
 
   it('answers a repeated confirmation with the same payment, and settles once', async () => {
     const order = await awaitingPayment(tenantA, customerA, panelA, 'm4');
-    const pending = await ctx.container.payments.requestManualTransfer(
-      tenantA,
-      systemActor('manual-m4'),
-      customerA,
-      { idempotencyKey: 'manual-m4-0001', orderId: order.id },
-    );
+    const pending = await ctx.container.payments
+      .requestManualTransfer(tenantA, systemActor('manual-m4'), customerA, {
+        idempotencyKey: 'manual-m4-0001',
+        orderId: order.id,
+      })
+      .then((issued) => issued.payment);
     const reviewer = adminActorFor(
       await createAdmin(ctx.container, tenantA, {
         username: 'finance-m4',
@@ -517,12 +517,12 @@ describe('payments and settlement', () => {
    */
   it('refuses to settle an order from a payment that does not cover it', async () => {
     const order = await awaitingPayment(tenantA, customerA, panelA, 'g1');
-    const pending = await ctx.container.payments.requestManualTransfer(
-      tenantA,
-      systemActor('manual-g1'),
-      customerA,
-      { idempotencyKey: 'manual-g1-0001', orderId: order.id },
-    );
+    const pending = await ctx.container.payments
+      .requestManualTransfer(tenantA, systemActor('manual-g1'), customerA, {
+        idempotencyKey: 'manual-g1-0001',
+        orderId: order.id,
+      })
+      .then((issued) => issued.payment);
     await ctx.container.database.db.execute(
       sql`UPDATE payments SET amount = 1 WHERE id = ${pending.id}` as never,
     );
@@ -550,12 +550,12 @@ describe('payments and settlement', () => {
 
   it('refuses to settle across currencies rather than converting', async () => {
     const order = await awaitingPayment(tenantA, customerA, panelA, 'g2');
-    const pending = await ctx.container.payments.requestManualTransfer(
-      tenantA,
-      systemActor('manual-g2'),
-      customerA,
-      { idempotencyKey: 'manual-g2-0001', orderId: order.id },
-    );
+    const pending = await ctx.container.payments
+      .requestManualTransfer(tenantA, systemActor('manual-g2'), customerA, {
+        idempotencyKey: 'manual-g2-0001',
+        orderId: order.id,
+      })
+      .then((issued) => issued.payment);
     await ctx.container.database.db.execute(
       sql`UPDATE payments SET currency = 'IRR' WHERE id = ${pending.id}` as never,
     );
@@ -696,12 +696,12 @@ describe('payments and settlement', () => {
      */
     it('resolves only from PENDING, and tells the loser it lost', async () => {
       const order = await awaitingPayment(tenantA, customerA, panelA, 'r0');
-      const pending = await ctx.container.payments.requestManualTransfer(
-        tenantA,
-        systemActor('manual-r0'),
-        customerA,
-        { idempotencyKey: 'manual-r0-0001', orderId: order.id },
-      );
+      const pending = await ctx.container.payments
+        .requestManualTransfer(tenantA, systemActor('manual-r0'), customerA, {
+          idempotencyKey: 'manual-r0-0001',
+          orderId: order.id,
+        })
+        .then((issued) => issued.payment);
       const repository = new DrizzlePaymentRepository(ctx.container.database.db);
       const now = ctx.container.clock.now();
 
@@ -729,12 +729,12 @@ describe('payments and settlement', () => {
 
     it('will not resolve a payment that was confirmed', async () => {
       const order = await awaitingPayment(tenantA, customerA, panelA, 'r0b');
-      const pending = await ctx.container.payments.requestManualTransfer(
-        tenantA,
-        systemActor('manual-r0b'),
-        customerA,
-        { idempotencyKey: 'manual-r0b-0001', orderId: order.id },
-      );
+      const pending = await ctx.container.payments
+        .requestManualTransfer(tenantA, systemActor('manual-r0b'), customerA, {
+          idempotencyKey: 'manual-r0b-0001',
+          orderId: order.id,
+        })
+        .then((issued) => issued.payment);
       await ctx.container.payments.confirmManualTransfer(tenantA, owner, pending.id, {
         idempotencyKey: 'manual-r0b-confirm-0001',
         note: 'money arrived',
@@ -795,12 +795,12 @@ describe('payments and settlement', () => {
 
     it('confirms only from PENDING, and tells the loser it lost', async () => {
       const order = await awaitingPayment(tenantA, customerA, panelA, 'r1');
-      const pending = await ctx.container.payments.requestManualTransfer(
-        tenantA,
-        systemActor('manual-r1'),
-        customerA,
-        { idempotencyKey: 'manual-r1-0001', orderId: order.id },
-      );
+      const pending = await ctx.container.payments
+        .requestManualTransfer(tenantA, systemActor('manual-r1'), customerA, {
+          idempotencyKey: 'manual-r1-0001',
+          orderId: order.id,
+        })
+        .then((issued) => issued.payment);
       const repository = new DrizzlePaymentRepository(ctx.container.database.db);
       const confirmation = {
         evidenceKind: 'OPERATOR_REVIEW' as const,
@@ -861,12 +861,12 @@ describe('payments and settlement', () => {
     it('cannot see or address another tenant’s payment', async () => {
       const customerB = await customer(tenantB, BOT_B, '900703');
       const orderB = await awaitingPayment(tenantB, customerB, panelB, 'r4');
-      const theirs = await ctx.container.payments.requestManualTransfer(
-        tenantB,
-        systemActor('manual-r4'),
-        customerB,
-        { idempotencyKey: 'manual-r4-0001', orderId: orderB.id },
-      );
+      const theirs = await ctx.container.payments
+        .requestManualTransfer(tenantB, systemActor('manual-r4'), customerB, {
+          idempotencyKey: 'manual-r4-0001',
+          orderId: orderB.id,
+        })
+        .then((issued) => issued.payment);
       const repository = new DrizzlePaymentRepository(ctx.container.database.db);
 
       expect(await repository.findById(tenantA, theirs.id)).toBeNull();
@@ -1029,10 +1029,12 @@ describe('payments and settlement', () => {
       await block(customerA);
 
       await expect(
-        ctx.container.payments.requestManualTransfer(tenantA, systemActor('blk-m'), customerA, {
-          idempotencyKey: 'blk-m-request-0001',
-          orderId: order.id,
-        }),
+        ctx.container.payments
+          .requestManualTransfer(tenantA, systemActor('blk-m'), customerA, {
+            idempotencyKey: 'blk-m-request-0001',
+            orderId: order.id,
+          })
+          .then((issued) => issued.payment),
       ).rejects.toMatchObject({ code: 'commerce.customer_blocked' });
     });
 
@@ -1066,10 +1068,12 @@ describe('payments and settlement', () => {
       );
 
       await expect(
-        ctx.container.payments.requestManualTransfer(tenantA, systemActor('exp-m'), customerA, {
-          idempotencyKey: 'exp-m-request-0001',
-          orderId: order.id,
-        }),
+        ctx.container.payments
+          .requestManualTransfer(tenantA, systemActor('exp-m'), customerA, {
+            idempotencyKey: 'exp-m-request-0001',
+            orderId: order.id,
+          })
+          .then((issued) => issued.payment),
       ).rejects.toMatchObject({ code: 'commerce.order_expired' });
     });
 
@@ -1088,12 +1092,12 @@ describe('payments and settlement', () => {
         }),
       );
       const order = await awaitingPayment(tenantA, customerA, panelA, 'exp-c');
-      const pending = await ctx.container.payments.requestManualTransfer(
-        tenantA,
-        systemActor('exp-c'),
-        customerA,
-        { idempotencyKey: 'exp-c-request-0001', orderId: order.id },
-      );
+      const pending = await ctx.container.payments
+        .requestManualTransfer(tenantA, systemActor('exp-c'), customerA, {
+          idempotencyKey: 'exp-c-request-0001',
+          orderId: order.id,
+        })
+        .then((issued) => issued.payment);
       await ctx.container.database.db.execute(
         sql`UPDATE orders SET expires_at = now() - interval '1 day' WHERE id = ${order.id}` as never,
       );
@@ -1120,19 +1124,19 @@ describe('payments and settlement', () => {
     it('hands back the open transfer rather than issuing a second code for one order', async () => {
       const order = await awaitingPayment(tenantA, customerA, panelA, 'one-m');
 
-      const first = await ctx.container.payments.requestManualTransfer(
-        tenantA,
-        systemActor('one-m-1'),
-        customerA,
-        { idempotencyKey: 'one-m-request-0001', orderId: order.id },
-      );
+      const first = await ctx.container.payments
+        .requestManualTransfer(tenantA, systemActor('one-m-1'), customerA, {
+          idempotencyKey: 'one-m-request-0001',
+          orderId: order.id,
+        })
+        .then((issued) => issued.payment);
       // A DIFFERENT key: the second tap, not a replay of the first.
-      const second = await ctx.container.payments.requestManualTransfer(
-        tenantA,
-        systemActor('one-m-2'),
-        customerA,
-        { idempotencyKey: 'one-m-request-0002', orderId: order.id },
-      );
+      const second = await ctx.container.payments
+        .requestManualTransfer(tenantA, systemActor('one-m-2'), customerA, {
+          idempotencyKey: 'one-m-request-0002',
+          orderId: order.id,
+        })
+        .then((issued) => issued.payment);
 
       expect(second.id).toBe(first.id);
       expect(second.reference).toBe(first.reference);
@@ -1225,12 +1229,12 @@ describe('payments and settlement', () => {
 
   const pendingTransfer = async (key: string) => {
     const order = await awaitingPayment(tenantA, customerA, panelA, key);
-    const payment = await ctx.container.payments.requestManualTransfer(
-      tenantA,
-      systemActor(key),
-      customerA,
-      { idempotencyKey: `${key}-request-0001`, orderId: order.id },
-    );
+    const payment = await ctx.container.payments
+      .requestManualTransfer(tenantA, systemActor(key), customerA, {
+        idempotencyKey: `${key}-request-0001`,
+        orderId: order.id,
+      })
+      .then((issued) => issued.payment);
     return { order, payment };
   };
 
@@ -1426,12 +1430,12 @@ describe('payments and settlement', () => {
        * `requestManualTransfer` answers a second tap with the PENDING payment already
        * open; once that one is withdrawn there is none, so this issues a new code.
        */
-      const second = await ctx.container.payments.requestManualTransfer(
-        tenantA,
-        systemActor('wd-2b'),
-        customerA,
-        { idempotencyKey: 'wd-2-request-0002', orderId: order.id },
-      );
+      const second = await ctx.container.payments
+        .requestManualTransfer(tenantA, systemActor('wd-2b'), customerA, {
+          idempotencyKey: 'wd-2-request-0002',
+          orderId: order.id,
+        })
+        .then((issued) => issued.payment);
       expect(second.id).not.toBe(payment.id);
       expect(second.state).toBe('PENDING');
     });
@@ -1530,12 +1534,12 @@ describe('payments and settlement', () => {
       const { order: orderA, payment: paymentA } = await pendingTransfer('sw-4');
       const customerB = await customer(tenantB, BOT_B, '900800');
       const orderB = await awaitingPayment(tenantB, customerB, panelB, 'sw-4b');
-      const paymentB = await ctx.container.payments.requestManualTransfer(
-        tenantB,
-        systemActor('sw-4b'),
-        customerB,
-        { idempotencyKey: 'sw-4b-request-0001', orderId: orderB.id },
-      );
+      const paymentB = await ctx.container.payments
+        .requestManualTransfer(tenantB, systemActor('sw-4b'), customerB, {
+          idempotencyKey: 'sw-4b-request-0001',
+          orderId: orderB.id,
+        })
+        .then((issued) => issued.payment);
       await backdate(paymentA.id, orderA.id);
       await backdate(paymentB.id, orderB.id);
 
@@ -1684,10 +1688,12 @@ describe('payments and settlement', () => {
       );
 
       await expect(
-        ctx.container.payments.requestManualTransfer(tenantA, systemActor('short-1'), customerA, {
-          idempotencyKey: 'short-1-request-0001',
-          orderId: order.id,
-        }),
+        ctx.container.payments
+          .requestManualTransfer(tenantA, systemActor('short-1'), customerA, {
+            idempotencyKey: 'short-1-request-0001',
+            orderId: order.id,
+          })
+          .then((issued) => issued.payment),
       ).rejects.toMatchObject({ code: 'commerce.payment_window_too_short' });
 
       expect(await countOf('payments')).toBe(0);
@@ -1706,12 +1712,12 @@ describe('payments and settlement', () => {
         sql`UPDATE payments SET expires_at = now() - interval '1 minute' WHERE id = ${payment.id}` as never,
       );
 
-      const fresh = await ctx.container.payments.requestManualTransfer(
-        tenantA,
-        systemActor('stale-1b'),
-        customerA,
-        { idempotencyKey: 'stale-1-request-0002', orderId: order.id },
-      );
+      const fresh = await ctx.container.payments
+        .requestManualTransfer(tenantA, systemActor('stale-1b'), customerA, {
+          idempotencyKey: 'stale-1-request-0002',
+          orderId: order.id,
+        })
+        .then((issued) => issued.payment);
 
       expect(fresh.id).not.toBe(payment.id);
       expect(fresh.state).toBe('PENDING');
@@ -1734,10 +1740,12 @@ describe('payments and settlement', () => {
       );
 
       await expect(
-        ctx.container.payments.requestManualTransfer(tenantA, systemActor('stale-2b'), customerA, {
-          idempotencyKey: 'stale-2-request-0002',
-          orderId: order.id,
-        }),
+        ctx.container.payments
+          .requestManualTransfer(tenantA, systemActor('stale-2b'), customerA, {
+            idempotencyKey: 'stale-2-request-0002',
+            orderId: order.id,
+          })
+          .then((issued) => issued.payment),
       ).rejects.toMatchObject({ code: 'commerce.payment_window_too_short' });
 
       /*
@@ -1764,12 +1772,12 @@ describe('payments and settlement', () => {
        * is strictly worse than letting a short window run out. The refusal is on the
        * CREATE path only.
        */
-      const again = await ctx.container.payments.requestManualTransfer(
-        tenantA,
-        systemActor('short-2b'),
-        customerA,
-        { idempotencyKey: 'short-2-request-0002', orderId: order.id },
-      );
+      const again = await ctx.container.payments
+        .requestManualTransfer(tenantA, systemActor('short-2b'), customerA, {
+          idempotencyKey: 'short-2-request-0002',
+          orderId: order.id,
+        })
+        .then((issued) => issued.payment);
       expect(again.id).toBe(payment.id);
       expect(again.reference).toBe(payment.reference);
     });
@@ -1906,12 +1914,12 @@ describe('payments and settlement', () => {
         sql`UPDATE orders SET expires_at = now() + interval '14 days' WHERE id = ${order.id}` as never,
       );
 
-      const payment = await ctx.container.payments.requestManualTransfer(
-        tenantA,
-        systemActor('win-1'),
-        customerA,
-        { idempotencyKey: 'win-1-request-0001', orderId: order.id },
-      );
+      const payment = await ctx.container.payments
+        .requestManualTransfer(tenantA, systemActor('win-1'), customerA, {
+          idempotencyKey: 'win-1-request-0001',
+          orderId: order.id,
+        })
+        .then((issued) => issued.payment);
 
       // The default window is the owner's ceiling, sixty minutes. Two hours is the
       // slack that keeps this from being a clock-skew test rather than a rule test.
@@ -1928,12 +1936,12 @@ describe('payments and settlement', () => {
         sql`UPDATE orders SET expires_at = now() + interval '10 minutes' WHERE id = ${order.id}` as never,
       );
 
-      const payment = await ctx.container.payments.requestManualTransfer(
-        tenantA,
-        systemActor('win-2'),
-        customerA,
-        { idempotencyKey: 'win-2-request-0001', orderId: order.id },
-      );
+      const payment = await ctx.container.payments
+        .requestManualTransfer(tenantA, systemActor('win-2'), customerA, {
+          idempotencyKey: 'win-2-request-0001',
+          orderId: order.id,
+        })
+        .then((issued) => issued.payment);
 
       const orderRow = await ctx.container.orders.get(tenantA, owner, order.id);
       expect(payment.expiresAt?.getTime()).toBe(orderRow.expiresAt?.getTime());

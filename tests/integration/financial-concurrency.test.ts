@@ -344,12 +344,12 @@ describe('financial concurrency', () => {
    */
   it('converges two confirmations of one transfer on ONE confirmation', async () => {
     const order = await awaitingPayment('race-manual');
-    const pending = await ctx.container.payments.requestManualTransfer(
-      tenantA,
-      systemActor('race-manual'),
-      customerA,
-      { idempotencyKey: 'race-manual-0001', orderId: order.id },
-    );
+    const pending = await ctx.container.payments
+      .requestManualTransfer(tenantA, systemActor('race-manual'), customerA, {
+        idempotencyKey: 'race-manual-0001',
+        orderId: order.id,
+      })
+      .then((issued) => issued.payment);
     const repository = new DrizzlePaymentRepository(ctx.container.database.db);
     const confirmation = {
       evidenceKind: 'OPERATOR_REVIEW' as const,
@@ -490,12 +490,12 @@ describe('financial concurrency', () => {
 
   it('rolls a confirmation back when the order settles underneath it', async () => {
     const order = await awaitingPayment('race-stale');
-    const pending = await ctx.container.payments.requestManualTransfer(
-      tenantA,
-      systemActor('race-stale'),
-      customerA,
-      { idempotencyKey: 'race-stale-0001', orderId: order.id },
-    );
+    const pending = await ctx.container.payments
+      .requestManualTransfer(tenantA, systemActor('race-stale'), customerA, {
+        idempotencyKey: 'race-stale-0001',
+        orderId: order.id,
+      })
+      .then((issued) => issued.payment);
     const reviewer = adminActorFor(
       await createAdmin(ctx.container, tenantA, {
         username: 'finance-race',

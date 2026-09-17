@@ -608,6 +608,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.cancel_confirm',
       'bot.payment.cancel_confirm_button',
       'bot.payment.cancelled',
+      'bot.payment.copy_amount_button',
+      'bot.payment.copy_card_button',
       'bot.payment.manual_button',
       'bot.payment.manual_instructions',
       'bot.payment.not_pending',
@@ -628,6 +630,7 @@ describe('profile metadata, normalised before it is ever stored', () => {
        * instruction now names this button, which exists.
        */
       'bot.payment.sent_button',
+      'bot.payment.transfer_instructions',
       'bot.payment.unconfigured',
       'bot.payment.wallet_button',
       'bot.payment.window_too_short',

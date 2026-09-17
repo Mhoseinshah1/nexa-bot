@@ -18,6 +18,7 @@ import {
   type OperationId,
   type OperationalEventRecorder,
   type OrderId,
+  type PaymentDestinationSnapshot,
   type PaymentId,
   type PaymentMethod,
   type PermissionKey,
@@ -35,6 +36,7 @@ import {
   runAuthorizedMutation,
 } from '../../../platform/access/application/authorized-mutation.js';
 import { rememberOnce } from '../../../platform/idempotency/application/remember-once.js';
+import type { PaymentAccountRepository, PaymentDestinationRepository } from './account-ports.js';
 import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
@@ -85,6 +87,17 @@ export interface PaymentServiceDeps {
   readonly repository: PaymentRepository;
   readonly orders: OrderRepository;
   readonly wallet: WalletRepository;
+  /**
+   * Where an out-of-band transfer is to be sent, chosen inside the issuing transaction.
+   *
+   * The READ half only. This module chooses a destination and must never be able to
+   * create, edit or promote one — that is `PaymentAccountService`'s, under
+   * `payments.accounts.edit`, and a payment path holding the write would put a card
+   * number within reach of a customer-initiated command.
+   */
+  readonly accounts: Pick<PaymentAccountRepository, 'selectDestination'>;
+  /** Freezes that destination onto the payment, in the same transaction. */
+  readonly destinations: PaymentDestinationRepository;
   /**
    * Read to refuse a BLOCKED customer INSIDE the transaction that would move their money.
    *
@@ -159,6 +172,22 @@ export interface PaymentServiceDeps {
 export interface PaymentIntent {
   readonly idempotencyKey: string;
   readonly orderId: string;
+}
+
+/**
+ * A pending transfer and the destination it was ISSUED against.
+ *
+ * Returned as a pair rather than as a payment the surface then looks a destination up
+ * for, so there is no call site that can render an instruction without one. The pairing
+ * is what makes "the message says where to send the money" a type rather than a habit.
+ *
+ * `destination` is null for a payment created before 5A existed. The surface falls back
+ * to `bot.payment.manual_instructions` for exactly those, which is the only thing it can
+ * truthfully say about a payment whose destination was never recorded.
+ */
+export interface ManualTransferInstruction {
+  readonly payment: PaymentRecord;
+  readonly destination: PaymentDestinationSnapshot | null;
 }
 
 /** What an operator's confirmation carries. Also no amount — see `PaymentRepository.confirm`. */
@@ -503,7 +532,7 @@ export class PaymentService {
     actor: ActorContext,
     customerId: UserId,
     intent: PaymentIntent,
-  ): Promise<PaymentRecord> {
+  ): Promise<ManualTransferInstruction> {
     const orderId = this.orderId(intent.orderId);
     const denial = { action: 'payment.manual_request', entityType: 'Order', entityId: orderId };
     await this.authorize(scope, actor, PAYMENT_PLACE_PERMISSION, denial);
@@ -520,7 +549,12 @@ export class PaymentService {
         scope,
         replayed.result.paymentId as PaymentId,
       );
-      if (existing !== null) return existing;
+      /*
+       * The snapshot is READ, never re-derived. A replay of a week-old request must
+       * answer with the destination that request was issued against, and the tenant may
+       * have changed their default twice since.
+       */
+      if (existing !== null) return this.instructionFor(scope, existing);
     }
 
     const now = this.deps.clock.now();
@@ -657,6 +691,27 @@ export class PaymentService {
           );
         }
 
+        /*
+         * The destination is chosen INSIDE the transaction, and its absence is a refusal.
+         *
+         * A manual-transfer payment with nowhere to send the money is a reference number
+         * and an amount, which is what `bot.payment.manual_instructions` used to be. The
+         * Telegram surface does not draw the button when this would be the answer, but it
+         * draws it from a read that can be a moment stale — so the last enabled account
+         * can be disabled between the button and the tap, and this is where that lands.
+         *
+         * Only on the CREATE path. A customer holding a live reference gets it back with
+         * the destination it was issued against, whatever the tenant has configured since.
+         */
+        const account =
+          already === undefined ? await this.deps.accounts.selectDestination(scope, tx) : null;
+        if (already === undefined && account === null) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_DESTINATION_UNCONFIGURED,
+            'This installation has no account configured to receive a transfer.',
+          );
+        }
+
         const payment =
           already ??
           (await this.deps.repository.create(
@@ -692,6 +747,24 @@ export class PaymentService {
             tx,
           ));
 
+        /*
+         * The snapshot is written in the SAME transaction as the payment.
+         *
+         * Not afterwards, and not lazily on first render. A payment row that exists with
+         * no destination is one whose instructions cannot be produced — and the renderer
+         * would fall back to the pre-5A template, quietly telling the customer to follow
+         * instructions that do not exist. One transaction means a payment either has its
+         * destination or was never created.
+         */
+        const destination =
+          already === undefined && account !== null
+            ? await this.deps.destinations.capture(
+                scope,
+                { paymentId: payment.id, account, now },
+                tx,
+              )
+            : await this.deps.destinations.findByPayment(scope, payment.id, tx);
+
         await this.deps.audit.record(
           scope,
           actor,
@@ -713,6 +786,12 @@ export class PaymentService {
                * and the difference stated in the row rather than by splitting it.
                */
               reissued: already !== undefined,
+              /*
+               * WHICH account this instruction names, by id. The snapshot holds the
+               * values; this says where they came from, which is what an operator
+               * reconciling a bank statement against an audit trail actually asks.
+               */
+              destinationAccountId: account?.id ?? null,
             },
             result: 'SUCCESS',
           },
@@ -728,9 +807,26 @@ export class PaymentService {
           { paymentId: payment.id },
           tx,
         );
-        return payment;
+        return { payment, destination };
       },
     );
+  }
+
+  /**
+   * A payment and the destination it was ISSUED against, read rather than recomputed.
+   *
+   * Null for a payment created before 5A existed. The surface falls back to the old
+   * instructions key for exactly those, which is the only thing it can truthfully say
+   * about a payment whose destination was never recorded.
+   */
+  private async instructionFor(
+    scope: TenantContext,
+    payment: PaymentRecord,
+  ): Promise<ManualTransferInstruction> {
+    return {
+      payment,
+      destination: await this.deps.destinations.findByPayment(scope, payment.id),
+    };
   }
 
   /**

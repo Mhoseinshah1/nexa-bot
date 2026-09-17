@@ -462,12 +462,12 @@ describe('wallet and payment HTTP surfaces', () => {
 
   it('lists payments, filters them, and keeps the evidence note off the list', async () => {
     const order = await awaitingPayment(tenantA, customerA, panelA, 'http-pay-1');
-    const pending = await api.container.payments.requestManualTransfer(
-      tenantA,
-      systemActor('http-pay-1'),
-      customerA,
-      { idempotencyKey: 'http-manual-0001', orderId: order.id },
-    );
+    const pending = await api.container.payments
+      .requestManualTransfer(tenantA, systemActor('http-pay-1'), customerA, {
+        idempotencyKey: 'http-manual-0001',
+        orderId: order.id,
+      })
+      .then((issued) => issued.payment);
 
     const all = await get(PAYMENT_ROUTES.list, viewerCookie);
     expect(all.statusCode).toBe(200);
@@ -495,12 +495,12 @@ describe('wallet and payment HTTP surfaces', () => {
 
   it('shows the detail with its evidence note, behind payments.view', async () => {
     const order = await awaitingPayment(tenantA, customerA, panelA, 'http-pay-2');
-    const pending = await api.container.payments.requestManualTransfer(
-      tenantA,
-      systemActor('http-pay-2'),
-      customerA,
-      { idempotencyKey: 'http-manual-0002', orderId: order.id },
-    );
+    const pending = await api.container.payments
+      .requestManualTransfer(tenantA, systemActor('http-pay-2'), customerA, {
+        idempotencyKey: 'http-manual-0002',
+        orderId: order.id,
+      })
+      .then((issued) => issued.payment);
 
     const refused = await get(PAYMENT_ROUTES.detail(pending.id), technicalCookie);
     expect(refused.statusCode).toBe(403);
@@ -514,12 +514,12 @@ describe('wallet and payment HTTP surfaces', () => {
 
   it('confirms under receipts.review, settles the order, and records the reviewer', async () => {
     const order = await awaitingPayment(tenantA, customerA, panelA, 'http-pay-3');
-    const pending = await api.container.payments.requestManualTransfer(
-      tenantA,
-      systemActor('http-pay-3'),
-      customerA,
-      { idempotencyKey: 'http-manual-0003', orderId: order.id },
-    );
+    const pending = await api.container.payments
+      .requestManualTransfer(tenantA, systemActor('http-pay-3'), customerA, {
+        idempotencyKey: 'http-manual-0003',
+        orderId: order.id,
+      })
+      .then((issued) => issued.payment);
 
     // `viewer` holds `payments.view` and NOT `receipts.review`: the reader who can see a
     // payment and must not be able to approve it.
@@ -551,12 +551,12 @@ describe('wallet and payment HTTP surfaces', () => {
 
   it('answers a repeated confirmation with the same payment, and settles once', async () => {
     const order = await awaitingPayment(tenantA, customerA, panelA, 'http-pay-4');
-    const pending = await api.container.payments.requestManualTransfer(
-      tenantA,
-      systemActor('http-pay-4'),
-      customerA,
-      { idempotencyKey: 'http-manual-0004', orderId: order.id },
-    );
+    const pending = await api.container.payments
+      .requestManualTransfer(tenantA, systemActor('http-pay-4'), customerA, {
+        idempotencyKey: 'http-manual-0004',
+        orderId: order.id,
+      })
+      .then((issued) => issued.payment);
     const body = { idempotencyKey: 'http-confirm-0003', evidenceNote: 'received' };
 
     const first = await post(PAYMENT_ROUTES.confirm(pending.id), financeCookie, body);
@@ -577,12 +577,12 @@ describe('wallet and payment HTTP surfaces', () => {
       INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
       VALUES (${panelB}, ${tenantB.tenantId}, 'Panel B', 'sanaei', 'https://b.example.test', 'ACTIVE')`);
     const theirOrder = await awaitingPayment(tenantB, customerB, panelB, 'http-pay-5');
-    const theirs = await api.container.payments.requestManualTransfer(
-      tenantB,
-      systemActor('http-pay-5'),
-      customerB,
-      { idempotencyKey: 'http-manual-0005', orderId: theirOrder.id },
-    );
+    const theirs = await api.container.payments
+      .requestManualTransfer(tenantB, systemActor('http-pay-5'), customerB, {
+        idempotencyKey: 'http-manual-0005',
+        orderId: theirOrder.id,
+      })
+      .then((issued) => issued.payment);
 
     // The list does not show it and the confirmation does not find it.
     const list = paymentListResponseSchema.parse(
@@ -608,12 +608,12 @@ describe('wallet and payment HTTP surfaces', () => {
    */
   it('offers no way to create, fail, cancel, retry or refund a payment', async () => {
     const order = await awaitingPayment(tenantA, customerA, panelA, 'http-pay-6');
-    const pending = await api.container.payments.requestManualTransfer(
-      tenantA,
-      systemActor('http-pay-6'),
-      customerA,
-      { idempotencyKey: 'http-manual-0006', orderId: order.id },
-    );
+    const pending = await api.container.payments
+      .requestManualTransfer(tenantA, systemActor('http-pay-6'), customerA, {
+        idempotencyKey: 'http-manual-0006',
+        orderId: order.id,
+      })
+      .then((issued) => issued.payment);
 
     for (const url of [
       PAYMENT_ROUTES.list,
