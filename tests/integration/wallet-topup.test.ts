@@ -312,6 +312,14 @@ describe('a customer topping up their wallet', () => {
     expect((await paymentRow(payment.id)).state).toBe('FAILED');
     expect(await ledgerRows()).toHaveLength(0);
     expect((await ctx.container.wallet.balance(tenantA, ownerA, customerA)).amountMinor).toBe(0n);
+    /*
+     * The customer is told through the SAME kind an order's rejection uses, which is why
+     * `bot.payment.rejected` no longer asserts that an order is still open: a rejected
+     * top-up has no order, and one kind renders one frozen template for both.
+     */
+    expect(await notifications()).toStrictEqual([
+      { kind: 'PAYMENT_REJECTED', subject_id: payment.id },
+    ]);
   });
 
   // -------------------------------------------------------------------------

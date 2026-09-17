@@ -224,8 +224,15 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // Sent by the customer notification lane, not as a reply. Both say the payment is
   // closed and neither says the ORDER is: a rejection and an expiry leave the order open
   // until its own deadline, which is the behaviour OQ-4G-05 records.
+  /*
+   * The second sentence is CONDITIONAL since 5B, and that is a correctness fix rather
+   * than a wording preference. It used to assert «سفارش شما همچنان باز است» — your order
+   * is still open — and a rejected wallet TOP-UP has no order at all, so the one sentence
+   * this lane sends for a rejection was false for half of what it can now be sent about.
+   * One kind, one frozen template (ADR 0030), so the sentence has to be true of both.
+   */
   'bot.payment.rejected':
-    'پرداخت شما بررسی شد و تأیید نشد. سفارش شما همچنان باز است و می‌توانید تا پایان مهلت آن دوباره پرداخت کنید.',
+    'پرداخت شما بررسی شد و تأیید نشد. اگر سفارشی در انتظار پرداخت دارید، تا پایان مهلت آن می‌توانید دوباره پرداخت کنید.',
   'bot.payment.expired': 'مهلت پرداخت شما به پایان رسید و این پرداخت بسته شد.',
   'bot.payment.not_pending': 'این پرداخت دیگر در انتظار نیست.',
 
