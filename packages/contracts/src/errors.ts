@@ -860,6 +860,38 @@ export const COMMERCE_ERROR_CODES = {
   PAYMENT_ACCOUNT_DEFAULT_CONFLICT: 'commerce.payment_account_default_conflict',
 
   /**
+   * No configured route of that kind for this tenant.
+   *
+   * A route is addressed by `(tenant, provider)` and the provider comes off a closed
+   * enum, so this is a route nobody has configured yet rather than a malformed
+   * identifier — the malformed case never reaches a service, because
+   * `paymentGatewayProviderSchema` refuses it at the boundary.
+   */
+  PAYMENT_GATEWAY_NOT_FOUND: 'commerce.payment_gateway_not_found',
+  /**
+   * No route can carry this payment for this customer, right now.
+   *
+   * Deliberately ONE code for four different underlying facts — the route is switched
+   * off, or the customer has too few payments, too many, or too young an account — and
+   * the split is the opposite of `TOPUP_BELOW_MINIMUM`'s. There the distinction reached
+   * a customer who could act on it. Here none of the four is the customer's to act on,
+   * and naming which threshold refused them tells whoever holds that chat how this
+   * installation's payment gating is configured. The `reason` detail carries it for the
+   * operator, through the operational log, which is where an operator looks.
+   */
+  PAYMENT_GATEWAY_UNAVAILABLE: 'commerce.payment_gateway_unavailable',
+  /**
+   * The amount is outside what this route accepts.
+   *
+   * Its own code rather than `PAYMENT_GATEWAY_UNAVAILABLE`, on the same argument that
+   * separates `TOPUP_BELOW_MINIMUM` from `TOPUP_NOT_OFFERED`: a bound an operator set on
+   * a route is a MISCONFIGURATION when a preset falls outside it, and answering it as
+   * "no route available" sends the operator looking at eligibility thresholds instead of
+   * at the two numbers that actually refused. The detail says which side it fell on.
+   */
+  PAYMENT_GATEWAY_AMOUNT_REJECTED: 'commerce.payment_gateway_amount_rejected',
+
+  /**
    * A file arrived and no upload window is open for this customer on this bot.
    *
    * The refusal that keeps the receipt flow from becoming a prompt capture.

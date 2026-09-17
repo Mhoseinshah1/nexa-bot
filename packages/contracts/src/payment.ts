@@ -170,8 +170,15 @@ export const PAYMENT_MACHINE: StateMachineDefinition<PaymentState, PaymentEvent>
  *   operator with `receipts.review` confirms it. This is the mechanism the research
  *   actually documents, and a human in the loop is its whole point.
  *
- * A gateway is reached through `PaymentGatewayPort` and there is no adapter in this
- * release. An unconfigured gateway is REFUSED, not simulated.
+ * - `GATEWAY` — a third party takes the money and tells this installation so. There is
+ *   no adapter in this release, and an unconfigured gateway is REFUSED rather than
+ *   simulated: `PAYMENT_METHOD_UNAVAILABLE` names exactly this member.
+ *
+ * `payment-gateways.ts` holds the configuration layer ABOVE this enum — what routes an
+ * operator offers, in what order, to whom, and within what bounds. A route names the
+ * method it settles through (`PAYMENT_GATEWAY_DESCRIPTORS`); it does not become one. So
+ * the manual route is configurable as a route while still settling as `MANUAL_TRANSFER`,
+ * and this member stays exactly as unavailable as it was.
  */
 export const PAYMENT_METHODS = ['WALLET', 'MANUAL_TRANSFER', 'GATEWAY'] as const;
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
