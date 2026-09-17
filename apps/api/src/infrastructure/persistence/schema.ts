@@ -2733,6 +2733,167 @@ export const payments = pgTable(
 );
 
 /**
+ * Where a manual transfer goes: the tenant's configuration, mutable at any time.
+ *
+ * The FIRST of two tables, and the split is the whole design. This one an operator
+ * edits; `payment_destinations` is the frozen copy a customer was actually shown. Until
+ * Phase 5 there was neither, and the only place a card number could live was inside an
+ * overridden template body — so editing it rewrote what every already-issued instruction
+ * said, and `docs/phase5-audit.md` §1 measures the rest of what that cost.
+ *
+ * There is no `deleted_at` and no delete path. `customers` states the rule this follows —
+ * a block is not a deletion — and it holds harder here: `payment_destinations.account_id`
+ * names the row a payment was issued against, and a deleted account is a payment whose
+ * provenance is a dangling id. Disable and edit cover every reason an operator reaches
+ * for delete.
+ *
+ * The card number is NOT a credential and is deliberately not stored like one. This
+ * installation PUBLISHES it, to every customer who chooses to pay out of band; an
+ * encrypted column would mean an operator could not read back what they had configured,
+ * which is the write-only settings defect `docs/conventions.md` names.
+ */
+export const paymentAccounts = pgTable(
+  'payment_accounts',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    /** Operator-facing. Never rendered to a customer; it names the account. */
+    label: text('label').notNull(),
+    bankName: text('bank_name').notNull(),
+    holderName: text('holder_name').notNull(),
+    /** Sixteen ASCII digits, normalised and Luhn-checked at the trust boundary. */
+    cardNumber: text('card_number').notNull(),
+    /** `IR` and twenty-four digits, or NULL. The one field a destination may lack. */
+    iban: text('iban'),
+    enabled: boolean('enabled').notNull().default(true),
+    /**
+     * Which account a new payment is issued against.
+     *
+     * A boolean with a PARTIAL UNIQUE INDEX rather than a `default_account_id` column on
+     * the tenant, and the reason is the one the panels module learned: a pointer from
+     * the parent can name a row that has since been disabled, and nothing in the schema
+     * notices. Here the two rules that matter are both constraints —
+     * at most one per tenant, and a default is always enabled.
+     */
+    isDefault: boolean('is_default').notNull().default(false),
+    sortOrder: integer('sort_order').notNull().default(0),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    /** The operator's list, in the order it is rendered: sort, then created, then id. */
+    index('payment_accounts_tenant_sort_idx').on(
+      table.tenantId,
+      table.sortOrder,
+      table.createdAt,
+      table.id,
+    ),
+    /**
+     * ONE default per tenant, decided by the database.
+     *
+     * Two operators promoting different accounts at the same moment both read "this one
+     * is not the default yet". A service-level check answers both of them yes; this
+     * index answers one of them with a unique violation, which the service turns into a
+     * conflict the operator can act on.
+     */
+    uniqueIndex('payment_accounts_tenant_default_key')
+      .on(table.tenantId)
+      .where(sql`is_default`),
+    /**
+     * One ENABLED account per card number.
+     *
+     * Scoped to enabled rows, because re-adding a card that was disabled last month is
+     * ordinary. Two LIVE accounts for one card are not: they then differ only in a label
+     * or a holder name, and nothing decides which a customer is shown.
+     */
+    uniqueIndex('payment_accounts_tenant_card_key')
+      .on(table.tenantId, table.cardNumber)
+      .where(sql`enabled`),
+    /**
+     * A default is enabled. The other half of "a disabled account cannot be selected".
+     *
+     * Without it the rule is defeated from the far end: disable the default, and the row
+     * a new payment is issued against is one the operator said to stop using.
+     */
+    check('payment_accounts_default_enabled_check', sql`NOT is_default OR enabled`),
+    /*
+     * The same structural checks the contract applies, restated where a hand-written
+     * UPDATE cannot skip them. Not duplication for its own sake: `paymentAccountInputSchema`
+     * guards the HTTP boundary and these guard the table, and a repair script run at 3am
+     * only meets the second.
+     */
+    check('payment_accounts_card_number_check', sql`card_number ~ '^[0-9]{16}$'`),
+    check('payment_accounts_iban_check', sql`iban IS NULL OR iban ~ '^IR[0-9]{24}$'`),
+    check('payment_accounts_label_check', sql`length(btrim(label)) BETWEEN 1 AND 80`),
+    check('payment_accounts_bank_name_check', sql`length(btrim(bank_name)) BETWEEN 1 AND 80`),
+    check('payment_accounts_holder_name_check', sql`length(btrim(holder_name)) BETWEEN 1 AND 120`),
+    check('payment_accounts_sort_order_check', sql`sort_order BETWEEN 0 AND 100000`),
+    unique('payment_accounts_tenant_id_key').on(table.tenantId, table.id),
+  ],
+);
+
+/**
+ * What ONE customer was told, frozen at the moment the payment was issued.
+ *
+ * A separate table rather than columns on `payments`, and not by taste. A CHECK binding a
+ * destination to `method = 'MANUAL_TRANSFER'` would have to be an IMPLICATION rather than
+ * an equality, because every manual-transfer payment issued before this migration has no
+ * destination — and an implication is exactly the "two columns that can disagree" shape
+ * `payments_confirmed_check` exists to refuse. Here the absence is the absence of a row.
+ *
+ * Append-only by trigger, like `audit_logs` (see the migration). A destination that could
+ * be edited after issuance is the defect this whole subphase removes, reintroduced one
+ * layer down.
+ *
+ * `account_id` is provenance and nothing else. Every field a customer needs is COPIED
+ * here, so the rendering never joins back to a row an operator may since have changed.
+ */
+export const paymentDestinations = pgTable(
+  'payment_destinations',
+  {
+    /** One destination per payment. The payment IS the identity. */
+    paymentId: uuid('payment_id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    /** Which account this was taken from. Never read to render; read to reconcile. */
+    accountId: uuid('account_id').notNull(),
+    label: text('label').notNull(),
+    bankName: text('bank_name').notNull(),
+    holderName: text('holder_name').notNull(),
+    cardNumber: text('card_number').notNull(),
+    iban: text('iban'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    /*
+     * The payment travels WITH its tenant, and so does the account.
+     *
+     * Two composite foreign keys rather than two plain ones, for the reason
+     * `payments_order_fk` gives: without the tenant column in the key, a destination row
+     * could name one tenant's payment and another tenant's account, and the render would
+     * print a card number belonging to somebody else's installation.
+     */
+    foreignKey({
+      columns: [table.tenantId, table.paymentId],
+      foreignColumns: [payments.tenantId, payments.id],
+      name: 'payment_destinations_payment_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.accountId],
+      foreignColumns: [paymentAccounts.tenantId, paymentAccounts.id],
+      name: 'payment_destinations_account_fk',
+    }),
+    /** The operator's question: which payments were issued against this account? */
+    index('payment_destinations_account_idx').on(table.tenantId, table.accountId),
+    check('payment_destinations_card_number_check', sql`card_number ~ '^[0-9]{16}$'`),
+    check('payment_destinations_iban_check', sql`iban IS NULL OR iban ~ '^IR[0-9]{24}$'`),
+  ],
+);
+
+/**
  * The wallet ledger — append-only, and the only authority on a balance.
  *
  * There is no balance column anywhere in this schema. A balance is
