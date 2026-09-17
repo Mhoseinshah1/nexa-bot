@@ -88,7 +88,20 @@ function mask(cardNumber: string): string {
   return `•••• •••• •••• ${cardNumber.slice(-4)}`;
 }
 
-export function PaymentAccountsPage({ denied }: { denied: boolean }) {
+/**
+ * `mayEdit` is passed, never derived from `denied`.
+ *
+ * The nav admits either `payments.accounts.view` or `payments.accounts.edit`, and the
+ * service authorizes every write with `edit` alone — so deriving the whole page from
+ * `view` was wrong in both directions at once: an edit-only role arrived with
+ * `denied=true` and lost the form it is the only role allowed to use, while the seeded
+ * view-only roles (operator, observer) were handed every create, edit, promote and
+ * disable control and learnt about the refusal by pressing one. Drawing a control
+ * nobody may use is the legacy defect `UNK-ADM-001` names from the other end — there
+ * the menu was the only enforcement; here the menu disagreed with it. Found by the
+ * Codex review of PR #34.
+ */
+export function PaymentAccountsPage({ denied, mayEdit }: { denied: boolean; mayEdit: boolean }) {
   const queries = useQueryClient();
   const notify = useToast();
   const submission = useSubmissionKey();
@@ -218,48 +231,51 @@ export function PaymentAccountsPage({ denied }: { denied: boolean }) {
       key: 'actions',
       header: t('web.payment_account_actions'),
       align: 'end',
-      render: (row) => (
-        <div className="toolbar">
-          <button
-            type="button"
-            className="btn sm"
-            disabled={busy}
-            onClick={() => {
-              setEditing(row.id);
-              setForm(formOf(row));
-              setMakeDefault(false);
-            }}
-          >
-            {t('web.payment_account_edit')}
-          </button>
-          {!row.isDefault && row.enabled && (
+      // Nothing at all for a view-only role. The column header stays, because a table
+      // whose columns depend on the reader is a table two operators describe differently.
+      render: (row) =>
+        !mayEdit ? null : (
+          <div className="toolbar">
             <button
               type="button"
               className="btn sm"
               disabled={busy}
-              onClick={() => promote.mutate(row.id)}
+              onClick={() => {
+                setEditing(row.id);
+                setForm(formOf(row));
+                setMakeDefault(false);
+              }}
             >
-              {t('web.payment_account_make_default')}
+              {t('web.payment_account_edit')}
             </button>
-          )}
-          {/*
+            {!row.isDefault && row.enabled && (
+              <button
+                type="button"
+                className="btn sm"
+                disabled={busy}
+                onClick={() => promote.mutate(row.id)}
+              >
+                {t('web.payment_account_make_default')}
+              </button>
+            )}
+            {/*
             The default cannot be disabled here, and the server refuses it too. Which
             account money arrives in next is a decision with a person behind it; a
             system that promoted one automatically would have made a financial choice
             nobody recorded.
           */}
-          {!row.isDefault && (
-            <button
-              type="button"
-              className="btn sm"
-              disabled={busy}
-              onClick={() => toggle.mutate({ id: row.id, enabled: !row.enabled })}
-            >
-              {t(row.enabled ? 'web.payment_account_disable' : 'web.payment_account_enable')}
-            </button>
-          )}
-        </div>
-      ),
+            {!row.isDefault && (
+              <button
+                type="button"
+                className="btn sm"
+                disabled={busy}
+                onClick={() => toggle.mutate({ id: row.id, enabled: !row.enabled })}
+              >
+                {t(row.enabled ? 'web.payment_account_disable' : 'web.payment_account_enable')}
+              </button>
+            )}
+          </div>
+        ),
     },
   ];
 
@@ -297,7 +313,7 @@ export function PaymentAccountsPage({ denied }: { denied: boolean }) {
         form, and that is exactly the installation whose manual-transfer button is not
         being drawn to customers.
       */}
-      {!denied && (
+      {mayEdit && (
         <Card
           title={t(editing === null ? 'web.payment_account_new' : 'web.payment_account_editing')}
           hint={t('web.payment_account_form_hint')}

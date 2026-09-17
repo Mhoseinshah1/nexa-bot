@@ -114,7 +114,20 @@ export class PaymentAccountService {
     // would hand it to anybody who guessed the key.
     await this.authorize(scope, actor, denial);
 
-    const requestHash = hashRequest({ ...input.fields, enabled: input.enabled });
+    /*
+     * `makeDefault` is IN the hash.
+     *
+     * It was not, and two creates carrying the same key and the same fields but
+     * different `makeDefault` hashed identically — so the second, the one asking for
+     * the new account to become the destination, was answered with the first's row and
+     * the default was never moved. A payload mismatch is what the store is for and this
+     * is one. Found by the Codex review of PR #34.
+     */
+    const requestHash = hashRequest({
+      ...input.fields,
+      enabled: input.enabled,
+      makeDefault: input.makeDefault,
+    });
     const replayed = await this.replay(scope, input.idempotencyKey, requestHash);
     if (replayed !== null) return replayed;
 
@@ -144,6 +157,25 @@ export class PaymentAccountService {
          * partial unique index is still the thing that decides a true race; this is what
          * makes the ordinary case one statement rather than two.
          */
+        /*
+         * A disabled account cannot be asked to become the destination.
+         *
+         * `paymentAccountCreateRequestSchema` admits the pair, and this used to answer it
+         * by evaluating `input.enabled && ...` to false: a disabled, non-default account
+         * created successfully, and half of what the caller asked for silently dropped.
+         * The same service already reports `PAYMENT_ACCOUNT_DISABLED` for promoting an
+         * existing disabled account, so the contradiction is refused by the same name.
+         * Silent success for a command that was not carried out is the legacy defect this
+         * codebase is built against — `SBR-003`, an admin re-added and nothing written.
+         * Found by the Codex review of PR #34.
+         */
+        if (!input.enabled && input.makeDefault) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_ACCOUNT_DISABLED,
+            'A disabled account cannot be the destination. Create it enabled, or do not make it the default.',
+          );
+        }
+
         const existingDefault =
           input.enabled && (await this.deps.repository.selectDestination(scope, tx));
         const isDefault = input.enabled && (input.makeDefault || existingDefault === null);
@@ -272,6 +304,15 @@ export class PaymentAccountService {
         await this.assertScopeActive(scope, tx);
         const before = await this.require(scope, accountId, tx);
 
+        /*
+         * Read first so the ordinary case gets the sentence that names the remedy. It is
+         * NOT the enforcement: another operator can promote this account between this
+         * read and the UPDATE below, and `setEnabled`'s own predicate is what covers
+         * that. Found by the Codex review of PR #34, which measured the consequence —
+         * the disable passed this check, met `payment_accounts_default_enabled_check`,
+         * and a CHECK violation is not a unique violation, so it escaped
+         * `guardDuplicates` as a 500.
+         */
         if (!input.enabled && before.isDefault) {
           throw errors.conflict(
             COMMERCE_ERROR_CODES.PAYMENT_ACCOUNT_DISABLED,
@@ -290,14 +331,38 @@ export class PaymentAccountService {
         );
 
         /*
-         * Null means the row was ALREADY in the state asked for. Answering with the row
-         * and writing no audit entry is what makes a double-click one decision: an audit
-         * row saying an account was disabled, written when nothing changed, is a record
-         * of something that did not happen.
+         * Null means the UPDATE matched no row, and it is RE-READ rather than assumed.
+         *
+         * Three things produce it now that the predicate also names `is_default`: the row
+         * was already in the state asked for, it became the default between the read
+         * above and the statement, or it is gone. The first is a double-click and writes
+         * no audit entry — a row saying an account was disabled, written when nothing
+         * changed, is a record of something that did not happen. The second is the race
+         * `payment_accounts_default_enabled_check` would otherwise have turned into a
+         * 500, and it gets the refusal that names the remedy.
+         *
+         * Answering with `before` was wrong for a third reason the Codex review of PR #34
+         * names: two concurrent disables under different keys both read
+         * `before.enabled === true`, one wins, and the loser returned the row it had read
+         * — reporting the account as still enabled while the database said otherwise,
+         * and remembering that answer. So the CURRENT row is what is returned.
          */
         if (after === null) {
-          await this.remember(scope, input.idempotencyKey, requestHash, before.id, tx);
-          return before;
+          const current = await this.deps.repository.findById(scope, accountId, tx);
+          if (current === null) {
+            throw errors.notFound(
+              COMMERCE_ERROR_CODES.PAYMENT_ACCOUNT_NOT_FOUND,
+              'Unknown payment account.',
+            );
+          }
+          if (!input.enabled && current.isDefault) {
+            throw errors.conflict(
+              COMMERCE_ERROR_CODES.PAYMENT_ACCOUNT_DISABLED,
+              'This is the default destination. Promote another account before disabling it.',
+            );
+          }
+          await this.remember(scope, input.idempotencyKey, requestHash, current.id, tx);
+          return current;
         }
 
         await this.record(scope, actor, tx, {
@@ -408,8 +473,15 @@ export class PaymentAccountService {
         );
       }
       if (isUniqueViolation(error, 'payment_accounts_tenant_default_key')) {
+        /*
+         * Its own code since the Codex review of PR #34. It used to be
+         * `PAYMENT_ACCOUNT_DUPLICATE`, which the contract documents as another ENABLED
+         * account holding the same card number — a different fact, a different remedy,
+         * and the only one of the two that is not retryable. The constraints were already
+         * told apart here by name; the code they produced was not.
+         */
         throw errors.conflict(
-          COMMERCE_ERROR_CODES.PAYMENT_ACCOUNT_DUPLICATE,
+          COMMERCE_ERROR_CODES.PAYMENT_ACCOUNT_DEFAULT_CONFLICT,
           'Another account became the default while this request was in flight. Try again.',
         );
       }

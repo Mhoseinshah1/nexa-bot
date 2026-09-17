@@ -59,3 +59,53 @@ schema commit and are asserted by the suite afterwards:
 
 `refuses a malformed card number and a malformed Sheba at the table too` and `refuses to
 update or delete a snapshot, in the database` are the tests.
+
+## The Codex round on PR #34
+
+Ten findings, all P2. Seven were confirmed and fixed; the mutations below are the proof
+that the fixes are load-bearing rather than decorative, and each names the test that
+dies. Three findings are answered without a code change and are recorded at the bottom
+with the reason.
+
+Two of these rows are here because the FIRST version of their test did not bite.
+`answers a disable that lost to a promotion` and `returns the CURRENT row when a
+concurrent disable won` were written as raw-SQL setups that committed the competing
+change BEFORE the service ran — so the service's own pre-check refused, the branch under
+test was never reached, and both passed with the fix reverted. They were rewritten to
+hold a `FOR UPDATE` row lock, the technique `customer-order-actions.test.ts` already uses
+for the same shape of window: the service's plain SELECT is not blocked and reads the old
+row, its UPDATE blocks, and the competing change commits in between. That is the third
+time on this project that a race test has had to be rewritten for exactly this reason.
+
+| #      | Rule                                                                    | Mutation                                                                                                                           | Named test                                                                                                     | Result |
+| ------ | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------ |
+| F5A-10 | A create's idempotency hash covers `makeDefault`                        | Drop `makeDefault` from `hashRequest`                                                                                              | `payment-accounts.test.ts` › treats a create differing only in makeDefault as a MISMATCH, not a replay         | dies   |
+| F5A-11 | `enabled: false` with `makeDefault: true` is refused, not half-applied  | Delete the refusal, restoring `input.enabled && (...)` as the only filter                                                          | `payment-accounts.test.ts` › refuses to create a disabled account as the default                               | dies   |
+| F5A-12 | A disable is conditional on the row not being the default               | Remove `is_default = false` from `setEnabled`'s predicate                                                                          | `payment-accounts.test.ts` › answers a disable that lost to a promotion with a refusal, not a constraint error | dies   |
+| F5A-13 | A conditional update that matched nothing is re-read, never assumed     | Restore `return before` in place of the re-read                                                                                    | `payment-accounts.test.ts` › returns the CURRENT row when a concurrent disable won                             | dies   |
+| F5A-14 | A lost default-selection race has its own retryable code                | Map `payment_accounts_tenant_default_key` back to `PAYMENT_ACCOUNT_DUPLICATE`                                                      | `payment-accounts.test.ts` › names a lost default-selection race distinctly from a duplicate card              | dies   |
+| F5A-15 | Check digits are enforced by the table, not only the schema             | `ALTER TABLE payment_accounts DROP CONSTRAINT payment_accounts_card_luhn_check, DROP CONSTRAINT payment_accounts_iban_mod97_check` | `payment-accounts.test.ts` › refuses a shape-valid card or Sheba with wrong check digits, in SQL               | dies   |
+| F5A-16 | A reissued transfer's audit row names the account it was frozen against | Restore `account?.id ?? null`                                                                                                      | `payment-accounts.test.ts` › records the frozen account id on a reissued manual transfer                       | dies   |
+| F5A-17 | The frozen destination reaches the operator's payment detail            | Remove the destination card from the detail page                                                                                   | `payments.test.tsx` › names the account the instructions pointed at                                            | dies   |
+| F5A-18 | The controller projects the snapshot, rather than sending null          | `destination: null` in `toDetail`                                                                                                  | `wallet-payments-http.test.ts` › shows the detail with its evidence note, behind payments.view                 | dies   |
+| F5A-19 | The payment-accounts screen gates writes on `payments.accounts.edit`    | Draw every control whenever the list read is permitted                                                                             | `payment-accounts.test.tsx` › draws no write control for a role that may only view                             | dies   |
+
+F5A-13's mutation also kills F5A-12's test, because with `return before` restored the
+null branch no longer refuses anything. That is reported rather than tidied away: the two
+rules share one branch, and a reader should know that the second mutation is the weaker
+signal of the pair.
+
+F5A-19's mutation kills three tests, including the route-level one that proves `resolve`
+passes the two permissions separately. A page gated correctly behind a route that derived
+`mayEdit` from the wrong key would still be wrong, and nothing else would have said so.
+
+### Answered without a code change
+
+- **The per-tenant account limit is not serialised.** `count`-then-insert under READ
+  COMMITTED lets two creates at the ceiling both pass, leaving 51. This is a stated
+  decision with its reason above `create`: the limit is a rail that keeps the list
+  complete rather than a policy anybody buys, and 51 rows is still a complete list
+  returned without pagination. Serialising every create behind a tenant lock to hold the
+  number exactly costs more than it protects.
+- **Nothing else in the review was left unaddressed.** The other nine are the seven rows
+  above plus the two web findings, which are one fix each.

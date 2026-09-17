@@ -539,6 +539,49 @@ export function PaymentDetailPage({
             </Card>
 
             {/*
+              WHERE the customer was told to send it.
+              Its own card because it is neither the payment nor the evidence: it is
+              what the instructions SAID, frozen when the reference was issued, so it
+              still answers "which account should this have arrived in" after the
+              account has been renamed, edited or disabled. That is the reconciliation
+              question, and until this card existed no operator screen could answer it.
+
+              Absent for a wallet settlement and for a manual transfer issued before
+              5A — both of which genuinely have no destination, which is why the card
+              is hidden rather than filled with dashes.
+
+              Four digits, never sixteen. `paymentDestinationViewSchema` is what stops
+              the rest reaching this bundle at all.
+            */}
+            {row.destination !== null && (
+              <Card title={t('web.payment_destination')}>
+                <KV
+                  items={[
+                    [t('web.payment_destination_label'), row.destination.label],
+                    [t('web.payment_destination_bank'), row.destination.bankName],
+                    [t('web.payment_destination_holder'), row.destination.holderName],
+                    [
+                      t('web.payment_destination_card'),
+                      <Ltr key="dc">{`\u2022\u2022\u2022\u2022 ${row.destination.cardLast4}`}</Ltr>,
+                    ],
+                    [
+                      t('web.payment_destination_sheba'),
+                      t(
+                        row.destination.hasIban
+                          ? 'web.payment_destination_sheba_given'
+                          : 'web.payment_destination_sheba_absent',
+                      ),
+                    ],
+                    [
+                      t('web.payment_destination_account'),
+                      <Copyable key="da" value={row.destination.accountId} />,
+                    ],
+                  ]}
+                />
+              </Card>
+            )}
+
+            {/*
               How it ended WITHOUT money, when it did.
               Its own card rather than three more rows in the evidence one, because
               the two are mutually exclusive by constraint — `payments_confirmed_check`

@@ -2823,6 +2823,13 @@ export const paymentAccounts = pgTable(
      * UPDATE cannot skip them. Not duplication for its own sake: `paymentAccountInputSchema`
      * guards the HTTP boundary and these guard the table, and a repair script run at 3am
      * only meets the second.
+     *
+     * SHAPE only, and the check digits are NOT here: `nexa_luhn_ok` and `nexa_iban_ir_ok`
+     * are functions, drizzle-kit models neither them nor a CHECK that calls one, so
+     * `payment_accounts_card_luhn_check` and `payment_accounts_iban_mod97_check` live in
+     * migration 0065 and are invisible to the drift check by construction. They exist
+     * because these two were the whole of the table's defence and a sixteen-digit string
+     * with a wrong Luhn digit satisfied them — the Codex review of PR #34.
      */
     check('payment_accounts_card_number_check', sql`card_number ~ '^[0-9]{16}$'`),
     check('payment_accounts_iban_check', sql`iban IS NULL OR iban ~ '^IR[0-9]{24}$'`),

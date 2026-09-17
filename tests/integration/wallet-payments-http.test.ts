@@ -510,6 +510,22 @@ describe('wallet and payment HTTP surfaces', () => {
     expect(parsed.payment.state).toBe('PENDING');
     expect(parsed.payment.evidenceNote).toBeNull();
     expect(parsed.payment.confirmedByAdminId).toBeNull();
+
+    /*
+     * The frozen destination, over HTTP, since the Codex review of PR #34.
+     *
+     * The service read and the Web Admin rendering are each covered in their own suite;
+     * what neither can see is the CONTROLLER — `toDetail` receiving a null it did not
+     * have to, which would leave both of those green and every payment screen empty.
+     * The seeded account is the destination this payment was issued against.
+     */
+    const destination = parsed.payment.destination;
+    expect(destination, 'a manual transfer names where it was sent').not.toBeNull();
+    expect(destination?.accountId).toBe(SEED_IDS.paymentAccountA);
+    // FOUR digits. The sixteen must not be on the wire at all — a browser that never
+    // receives them cannot leak them, which is the whole reason the view is narrow.
+    expect(destination?.cardLast4).toMatch(/^[0-9]{4}$/u);
+    expect(response.body).not.toMatch(/[0-9]{16}/u);
   });
 
   it('confirms under receipts.review, settles the order, and records the reviewer', async () => {

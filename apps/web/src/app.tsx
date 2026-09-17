@@ -507,7 +507,12 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
 
   if (route.path === '/payment-accounts') {
     return {
-      element: <PaymentAccountsPage denied={!may('payments.accounts.view')} />,
+      element: (
+        <PaymentAccountsPage
+          denied={!may('payments.accounts.view')}
+          mayEdit={may('payments.accounts.edit')}
+        />
+      ),
       crumbs: [{ label: t('web.payment_accounts_title') }],
       title: t('web.payment_accounts_title'),
     };

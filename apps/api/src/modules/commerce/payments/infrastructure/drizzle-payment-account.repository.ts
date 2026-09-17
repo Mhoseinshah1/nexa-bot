@@ -1,10 +1,5 @@
 import { and, asc, eq, sql } from 'drizzle-orm';
-import type {
-  PaymentAccountId,
-  PaymentDestinationSnapshot,
-  PaymentId,
-  TenantContext,
-} from '@nexa/contracts';
+import type { PaymentAccountId, PaymentId, TenantContext } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
   requireTenantId,
@@ -18,6 +13,7 @@ import type {
   PaymentAccountFields,
   PaymentAccountRecord,
   PaymentAccountRepository,
+  PaymentDestinationRecord,
   PaymentDestinationRepository,
 } from '../application/account-ports.js';
 
@@ -182,8 +178,16 @@ export class DrizzlePaymentAccountRepository implements PaymentAccountRepository
     const tenantId = requireTenantId(scope);
     /*
      * CONDITIONAL on the state it moves FROM, so two concurrent disables produce one
-     * transition. The caller reads null as "nothing to do" and writes no audit row —
-     * which is the difference between a replay and a second decision.
+     * transition. The caller RE-READS on null rather than assuming which of the several
+     * reasons produced it.
+     *
+     * A DISABLE also names `is_default = false`, since the Codex review of PR #34: the
+     * service's own pre-check reads the row a statement earlier, another operator can
+     * promote it in between, and `payment_accounts_default_enabled_check` then refuses
+     * the UPDATE. A CHECK violation is not a unique violation, so it escaped
+     * `guardDuplicates` as a 500 for a race the conditional is supposed to absorb. The
+     * predicate is on the disable only: enabling a default is not a contradiction, and
+     * `is_default` cannot be true on a row that is currently disabled anyway.
      */
     const rows = await this.exec(tx)
       .update(paymentAccounts)
@@ -193,6 +197,7 @@ export class DrizzlePaymentAccountRepository implements PaymentAccountRepository
           eq(paymentAccounts.tenantId, tenantId),
           eq(paymentAccounts.id, id),
           eq(paymentAccounts.enabled, !enabled),
+          ...(enabled ? [] : [eq(paymentAccounts.isDefault, false)]),
         ),
       )
       .returning(COLUMNS);
@@ -298,7 +303,7 @@ export class DrizzlePaymentDestinationRepository implements PaymentDestinationRe
       readonly now: Date;
     },
     tx: unknown,
-  ): Promise<PaymentDestinationSnapshot> {
+  ): Promise<PaymentDestinationRecord> {
     const tenantId = requireTenantId(scope);
     const { account } = input;
     const rows = await this.exec(tx)
@@ -314,32 +319,20 @@ export class DrizzlePaymentDestinationRepository implements PaymentDestinationRe
         iban: account.iban,
         createdAt: input.now,
       })
-      .returning({
-        label: paymentDestinations.label,
-        bankName: paymentDestinations.bankName,
-        holderName: paymentDestinations.holderName,
-        cardNumber: paymentDestinations.cardNumber,
-        iban: paymentDestinations.iban,
-      });
+      .returning(DESTINATION_COLUMNS);
     const row = rows[0];
     if (row === undefined) throw new Error('payment_destinations insert returned no row.');
-    return row;
+    return toDestination(row);
   }
 
   async findByPayment(
     scope: TenantContext,
     paymentId: PaymentId,
     tx?: unknown,
-  ): Promise<PaymentDestinationSnapshot | null> {
+  ): Promise<PaymentDestinationRecord | null> {
     const tenantId = requireTenantId(scope);
     const rows = await this.exec(tx)
-      .select({
-        label: paymentDestinations.label,
-        bankName: paymentDestinations.bankName,
-        holderName: paymentDestinations.holderName,
-        cardNumber: paymentDestinations.cardNumber,
-        iban: paymentDestinations.iban,
-      })
+      .select(DESTINATION_COLUMNS)
       .from(paymentDestinations)
       .where(
         and(
@@ -348,6 +341,37 @@ export class DrizzlePaymentDestinationRepository implements PaymentDestinationRe
         ),
       )
       .limit(1);
-    return rows[0] ?? null;
+    const row = rows[0];
+    return row === undefined ? null : toDestination(row);
   }
 }
+
+/** The composite foreign key to `payment_accounts` is what makes the cast safe. */
+function toDestination(row: {
+  readonly accountId: string;
+  readonly label: string;
+  readonly bankName: string;
+  readonly holderName: string;
+  readonly cardNumber: string;
+  readonly iban: string | null;
+}): PaymentDestinationRecord {
+  return { ...row, accountId: row.accountId as PaymentAccountId };
+}
+
+/**
+ * The five snapshot fields AND the account they came from.
+ *
+ * `accountId` is on both paths since the Codex review of PR #34. The snapshot carries
+ * the VALUES a customer was shown; the id says which row they were copied from, and
+ * without it neither the reissue audit nor the operator's payment detail could name the
+ * account — the first wrote `destinationAccountId: null` for a payment that plainly
+ * had one.
+ */
+const DESTINATION_COLUMNS = {
+  accountId: paymentDestinations.accountId,
+  label: paymentDestinations.label,
+  bankName: paymentDestinations.bankName,
+  holderName: paymentDestinations.holderName,
+  cardNumber: paymentDestinations.cardNumber,
+  iban: paymentDestinations.iban,
+} as const;

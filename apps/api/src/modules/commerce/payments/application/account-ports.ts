@@ -139,6 +139,19 @@ export interface PaymentAccountRepository {
  * trigger. A destination that could be edited after issuance is the defect 5A exists to
  * remove, one layer down.
  */
+/**
+ * The frozen snapshot, plus the id of the account it was copied from.
+ *
+ * It EXTENDS `PaymentDestinationSnapshot` rather than wrapping it, so everything that
+ * renders a destination keeps taking the contract's shape and this adds the one field
+ * only the server needs. The customer's instructions are built from the snapshot half;
+ * `accountId` reaches the reissue audit row and the operator's payment detail, and
+ * neither could name the account without it.
+ */
+export interface PaymentDestinationRecord extends PaymentDestinationSnapshot {
+  readonly accountId: PaymentAccountId;
+}
+
 export interface PaymentDestinationRepository {
   capture(
     scope: TenantContext,
@@ -148,12 +161,12 @@ export interface PaymentDestinationRepository {
       readonly now: Date;
     },
     tx: unknown,
-  ): Promise<PaymentDestinationSnapshot>;
+  ): Promise<PaymentDestinationRecord>;
 
   /** What this payment's customer was told, or null for one issued before 5A. */
   findByPayment(
     scope: TenantContext,
     paymentId: PaymentId,
     tx?: unknown,
-  ): Promise<PaymentDestinationSnapshot | null>;
+  ): Promise<PaymentDestinationRecord | null>;
 }

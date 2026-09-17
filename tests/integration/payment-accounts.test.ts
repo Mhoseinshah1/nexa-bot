@@ -434,11 +434,16 @@ describe('payment accounts and the destination a payment freezes', () => {
     it('refuses a malformed card number and a malformed Sheba at the table too', async () => {
       // The schema refuses these at the boundary; these are the CHECKs underneath, which
       // is what a repair script meets.
+      //
+      // EITHER name, because a five-digit string fails the shape check and the Luhn
+      // check alike and PostgreSQL does not promise which it reports. The case that
+      // pins the Luhn one on its own is in the Codex block below, where the card is
+      // sixteen digits and only the check digit is wrong.
       await rejectsWith(
         ctx.container.database.db.execute(sql`
           INSERT INTO payment_accounts (id, tenant_id, label, bank_name, holder_name, card_number)
           VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, 'x', 'y', 'z', '12345')`),
-        /payment_accounts_card_number_check/,
+        /payment_accounts_card_(number|luhn)_check/,
       );
       await rejectsWith(
         ctx.container.database.db.execute(sql`
@@ -602,6 +607,370 @@ describe('payment accounts and the destination a payment freezes', () => {
       rows: { role_key: string; permission_key: string }[];
     };
     return rows.rows.map((row) => `${row.role_key}:${row.permission_key}`);
+  }
+
+  // -------------------------------------------------------------------------
+  // The Codex round on PR #34. Seven confirmed findings, seven cases.
+  // -------------------------------------------------------------------------
+
+  describe('the Codex findings on PR #34', () => {
+    /*
+     * C2. Two creates, one key, different dispositions.
+     *
+     * The hash covered the fields and `enabled` and not `makeDefault`, so the second
+     * request — the one asking for the new account to become the destination — hashed
+     * identically to the first and was answered with its row. The default never moved
+     * and nothing said so.
+     */
+    it('treats a create differing only in makeDefault as a MISMATCH, not a replay', async () => {
+      await addAccount(tenantA, owner, 'c2-first', { cardNumber: CARD_TWO });
+      await expect(
+        addAccount(tenantA, owner, 'c2-first', { cardNumber: CARD_TWO }, { makeDefault: true }),
+      ).rejects.toSatisfy(
+        (error: unknown) => isNexaError(error) && /idempot/iu.test(error.message + error.code),
+      );
+    });
+
+    /*
+     * C7. `enabled: false` with `makeDefault: true`.
+     *
+     * The expression evaluated to false and a disabled, non-default account was created
+     * successfully — success for a command half of which was discarded. The same
+     * service reports `PAYMENT_ACCOUNT_DISABLED` when an existing disabled account is
+     * promoted, so the contradiction now gets the same name.
+     */
+    it('refuses to create a disabled account as the default', async () => {
+      const before = await accountCount(tenantA.tenantId);
+      await expect(
+        addAccount(
+          tenantA,
+          owner,
+          'c7-contradiction',
+          { cardNumber: CARD_TWO },
+          { enabled: false, makeDefault: true },
+        ),
+      ).rejects.toSatisfy(
+        (error: unknown) =>
+          isNexaError(error) && error.code === 'commerce.payment_account_disabled',
+      );
+      // Nothing was written. Before the fix this created a disabled, non-default row.
+      expect(await accountCount(tenantA.tenantId)).toBe(before);
+    });
+
+    /*
+     * C3. A disable that races a promotion.
+     *
+     * The service's pre-check reads the row, another operator promotes it, and the
+     * UPDATE then met `payment_accounts_default_enabled_check`. A CHECK violation is not
+     * a unique violation, so it escaped `guardDuplicates` as a 500 for a race the
+     * conditional exists to absorb. The promotion is applied by raw SQL here because
+     * that is precisely the interleaving: committed between the read and the statement.
+     */
+    it('answers a disable that lost to a promotion with a refusal, not a constraint error', async () => {
+      await clearSeededAccounts(tenantA.tenantId);
+      const keep = await addAccount(tenantA, owner, 'c3-keep', { cardNumber: CARD_TWO });
+      const target = await addAccount(tenantA, owner, 'c3-target', { cardNumber: CARD_THREE });
+      expect(keep.isDefault).toBe(true);
+      expect(target.isDefault).toBe(false);
+
+      /*
+       * Driven by a ROW LOCK, the technique `customer-order-actions.test.ts` uses for
+       * the same shape of window — and for the same reason: started as two concurrent
+       * calls the promotion simply finished first, the service's own pre-check refused,
+       * and the branch under test was never reached. The test passed with the fix
+       * reverted, which is a test that proves nothing.
+       *
+       * Holding the row makes the ordering a fact. `require`'s plain SELECT is not
+       * blocked and reads a non-default row, so the pre-check passes; the UPDATE blocks,
+       * and by the time it is granted the promotion has committed — so in READ
+       * COMMITTED its predicate is re-evaluated against a row that is now the default.
+       */
+      const attempt = await ctx.container.database.withClient(async (holder) => {
+        await holder.query('BEGIN');
+        try {
+          await holder.query('SELECT id FROM payment_accounts WHERE id = $1 FOR UPDATE', [
+            target.id,
+          ]);
+
+          const running = ctx.container.paymentAccounts.setEnabled(tenantA, owner, {
+            idempotencyKey: 'c3-disable',
+            accountId: target.id,
+            enabled: false,
+          });
+          const outcome = running.then(
+            (record) => ({ ok: true, record }) as const,
+            (error: unknown) => ({ ok: false, error }) as const,
+          );
+
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          // Another operator's promotion: the default must move, so both rows change.
+          await holder.query(
+            'UPDATE payment_accounts SET is_default = false, updated_at = now() WHERE id = $1',
+            [keep.id],
+          );
+          await holder.query(
+            'UPDATE payment_accounts SET is_default = true, updated_at = now() WHERE id = $1',
+            [target.id],
+          );
+          await holder.query('COMMIT');
+          return outcome;
+        } catch (error: unknown) {
+          await holder.query('ROLLBACK');
+          throw error;
+        }
+      });
+
+      const result = await attempt;
+      expect(result.ok, 'disabling the new default must be refused').toBe(false);
+      /*
+       * A NexaError with the frozen code, and that is the whole finding: without the
+       * predicate the UPDATE matched, met `payment_accounts_default_enabled_check`, and
+       * a CHECK violation is not a unique violation — so it escaped `guardDuplicates`
+       * as a raw driver error rather than the refusal that names the remedy.
+       */
+      expect(result.ok ? null : isNexaError(result.error)).toBe(true);
+      expect(result.ok || !isNexaError(result.error) ? null : result.error.code).toBe(
+        'commerce.payment_account_disabled',
+      );
+      // And it is still enabled, because the refusal rolled its transaction back.
+      expect((await accountById(target.id)).enabled).toBe(true);
+    });
+
+    /*
+     * C4. The loser of two concurrent disables.
+     *
+     * Both read `enabled === true`, one wins, and the loser's UPDATE matched nothing.
+     * Returning the row it had READ reported the account as still enabled while the
+     * database said otherwise — and remembered that answer under its own key.
+     */
+    it('returns the CURRENT row when a concurrent disable won', async () => {
+      await clearSeededAccounts(tenantA.tenantId);
+      await addAccount(tenantA, owner, 'c4-default', { cardNumber: CARD_TWO });
+      const target = await addAccount(tenantA, owner, 'c4-target', { cardNumber: CARD_THREE });
+      expect(target.enabled).toBe(true);
+      expect(target.isDefault).toBe(false);
+
+      /*
+       * The same row lock, and it is what makes this case bite: the loser must have READ
+       * the row as enabled. Sequenced the other way round its own read already sees
+       * `enabled = false`, `before` and the current row agree, and returning either is
+       * indistinguishable — which is how this defect survived the first version of
+       * this test.
+       */
+      const attempt = await ctx.container.database.withClient(async (holder) => {
+        await holder.query('BEGIN');
+        try {
+          await holder.query('SELECT id FROM payment_accounts WHERE id = $1 FOR UPDATE', [
+            target.id,
+          ]);
+
+          const running = ctx.container.paymentAccounts.setEnabled(tenantA, owner, {
+            idempotencyKey: 'c4-loser',
+            accountId: target.id,
+            enabled: false,
+          });
+          const outcome = running.then(
+            (record) => ({ ok: true, record }) as const,
+            (error: unknown) => ({ ok: false, error }) as const,
+          );
+
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          // The winner: a different request, its own idempotency key, already committed.
+          await holder.query(
+            'UPDATE payment_accounts SET enabled = false, updated_at = now() WHERE id = $1',
+            [target.id],
+          );
+          await holder.query('COMMIT');
+          return outcome;
+        } catch (error: unknown) {
+          await holder.query('ROLLBACK');
+          throw error;
+        }
+      });
+
+      const result = await attempt;
+      expect(result.ok, 'a lost disable is not an error').toBe(true);
+      /*
+       * `false`, from the row as it now is. Returning the row this call had READ
+       * reported the account as still enabled while the database said otherwise — and
+       * remembered that answer under this key, so a retry would repeat it.
+       */
+      expect(result.ok ? result.record.enabled : null).toBe(false);
+      // No audit row: this call decided nothing.
+      expect(await auditCount('payment_account.set_enabled')).toBe(0);
+    });
+
+    /*
+     * C10. The default race has its own code.
+     *
+     * `PAYMENT_ACCOUNT_DUPLICATE` is documented as another ENABLED account holding the
+     * same card number — a different fact and the only one of the two that is not
+     * retryable. The 23505 is produced here by removing the row `clearDefault` would
+     * have locked, which is the no-current-default case the comment describes.
+     */
+    it('names a lost default-selection race distinctly from a duplicate card', async () => {
+      await clearSeededAccounts(tenantA.tenantId);
+      const first = await addAccount(tenantA, owner, 'c10-first', { cardNumber: CARD_TWO });
+      const second = await addAccount(tenantA, owner, 'c10-second', { cardNumber: CARD_THREE });
+      expect(first.isDefault).toBe(true);
+
+      /*
+       * The state the 23505 needs: a default still held by ANOTHER row when this
+       * request's SET runs.
+       *
+       * `setDefault` clears the current default and then sets its own, in one
+       * transaction, so the index can only refuse when the clear did not take effect —
+       * which is what a concurrent promotion produces. A trigger that reverts the clear
+       * puts the transaction in exactly that state deterministically, in one row and
+       * one statement, instead of depending on two connections interleaving.
+       */
+      await ctx.container.database.db.execute(sql`
+        CREATE FUNCTION nexa_test_keep_default() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          NEW.is_default := true;
+          RETURN NEW;
+        END $$`);
+      await ctx.container.database.db.execute(sql`
+        CREATE TRIGGER nexa_test_keep_default
+        BEFORE UPDATE OF is_default ON payment_accounts
+        FOR EACH ROW WHEN (OLD.is_default AND NOT NEW.is_default)
+        EXECUTE FUNCTION nexa_test_keep_default()`);
+      try {
+        await expect(
+          ctx.container.paymentAccounts.setDefault(tenantA, owner, {
+            idempotencyKey: 'c10-promote',
+            accountId: second.id,
+          }),
+        ).rejects.toSatisfy(
+          (error: unknown) =>
+            isNexaError(error) && error.code === 'commerce.payment_account_default_conflict',
+        );
+      } finally {
+        await ctx.container.database.db.execute(
+          sql`DROP TRIGGER nexa_test_keep_default ON payment_accounts`,
+        );
+        await ctx.container.database.db.execute(sql`DROP FUNCTION nexa_test_keep_default()`);
+      }
+    });
+
+    /*
+     * C6. Check digits at the TABLE.
+     *
+     * The regular expressions are shape-only, and their own comment says these
+     * constraints exist for "a repair script run at 3am". A wrong Luhn digit and a wrong
+     * mod-97 checksum both satisfied them, so that script could poison the default
+     * account — and every destination frozen from it — with a number no bank accepts.
+     *
+     * Asserted through raw SQL on purpose: the service already refuses these, and the
+     * layer under test is the one the service cannot be asked about.
+     */
+    it('refuses a shape-valid card or Sheba with wrong check digits, in SQL', async () => {
+      // The seeded account holds CARD_ONE and its Sheba, so this case writes its own.
+      const before = await accountCount(tenantA.tenantId);
+      const id = ctx.container.ids.uuid();
+      await rejectsWith(
+        ctx.container.database.db.execute(sql`
+          INSERT INTO payment_accounts
+            (id, tenant_id, label, bank_name, holder_name, card_number, iban)
+          VALUES (${id}, ${tenantA.tenantId}, 'x', 'b', 'h', '6037991234567892', NULL)`),
+        /payment_accounts_card_luhn_check/u,
+      );
+      await rejectsWith(
+        ctx.container.database.db.execute(sql`
+          INSERT INTO payment_accounts
+            (id, tenant_id, label, bank_name, holder_name, card_number, iban)
+          VALUES (${id}, ${tenantA.tenantId}, 'x', 'b', 'h', ${CARD_THREE},
+                  'IR439600000001003242000012')`),
+        /payment_accounts_iban_mod97_check/u,
+      );
+      // The valid pair goes in, so the case cannot pass by refusing everything.
+      await ctx.container.database.db.execute(sql`
+        INSERT INTO payment_accounts
+          (id, tenant_id, label, bank_name, holder_name, card_number, iban)
+        VALUES (${id}, ${tenantA.tenantId}, 'x', 'b', 'h', ${CARD_THREE}, NULL)`);
+      expect(await accountCount(tenantA.tenantId)).toBe(before + 1);
+    });
+
+    /*
+     * C5. The reissue audit named no account.
+     *
+     * `account` is null on the reissue path — nothing is selected, because the
+     * destination was chosen when the reference was issued — and writing that null
+     * through made a post-5A payment's audit row indistinguishable from a legacy one
+     * with no captured destination. The snapshot was in hand one statement above.
+     */
+    it('records the frozen account id on a reissued manual transfer', async () => {
+      await clearSeededAccounts(tenantA.tenantId);
+      const account = await addAccount(tenantA, owner, 'c5-account', { cardNumber: CARD_TWO });
+      const orderId = await awaitingPayment('c5-order');
+      await issue('c5-first', orderId);
+      await issue('c5-second', orderId);
+
+      const rows = (await ctx.container.database.db.execute(
+        sql`SELECT "after" ->> 'reissued' AS reissued,
+                   "after" ->> 'destinationAccountId' AS account_id
+              FROM audit_logs
+             WHERE action = 'payment.manual_request'
+             ORDER BY occurred_at, id` as never,
+      )) as unknown as { rows: { reissued: string; account_id: string | null }[] };
+      expect(rows.rows.map((row) => row.reissued)).toEqual(['false', 'true']);
+      // BOTH name the account. Before the fix the second was null.
+      expect(rows.rows.map((row) => row.account_id)).toEqual([account.id, account.id]);
+    });
+
+    /*
+     * C9. The destination reaches an operator.
+     *
+     * `findByPayment` had one caller, the customer's own instructions, so after an
+     * account was renamed or disabled nothing an operator could open said which account
+     * a payment had named. `destinationFor` is the read the payment detail uses.
+     */
+    it('answers which account a payment was issued against, after it was renamed', async () => {
+      await clearSeededAccounts(tenantA.tenantId);
+      const account = await addAccount(tenantA, owner, 'c9-account', { cardNumber: CARD_TWO });
+      const orderId = await awaitingPayment('c9-order');
+      const { payment } = await issue('c9-pay', orderId);
+
+      await ctx.container.paymentAccounts.update(tenantA, owner, {
+        idempotencyKey: 'c9-rename',
+        accountId: account.id,
+        fields: fields({ cardNumber: CARD_TWO, label: 'renamed', bankName: 'other' }) as never,
+      });
+      /*
+       * Renamed, not disabled. Disabling it is impossible here and that is the rule
+       * working: it is the tenant's only enabled account and therefore the default, and
+       * `PAYMENT_ACCOUNT_DISABLED` refuses disabling a default. The rename is what the
+       * case needs anyway — it is the edit that made the legacy system rewrite history.
+       */
+
+      const frozen = await ctx.container.payments.destinationFor(tenantA, owner, payment.id);
+      expect(frozen).not.toBeNull();
+      expect(frozen?.accountId).toBe(account.id);
+      // The VALUES are the ones the customer was told, not the ones the account holds now.
+      expect(frozen?.label).toBe('\u0645\u0644\u06cc');
+      expect(frozen?.cardNumber).toBe(CARD_TWO);
+
+      // And the other tenant cannot read it with the same id.
+      await expect(
+        ctx.container.payments.destinationFor(tenantB, ownerB, payment.id),
+      ).resolves.toBeNull();
+    });
+  });
+
+  async function accountById(id: PaymentAccountId): Promise<{ enabled: boolean }> {
+    const rows = (await ctx.container.database.db.execute(
+      sql`SELECT enabled FROM payment_accounts WHERE id = ${id}` as never,
+    )) as unknown as { rows: { enabled: boolean }[] };
+    const row = rows.rows[0];
+    if (row === undefined) throw new Error(`no payment account ${id}`);
+    return row;
+  }
+
+  async function accountCount(tenantId: string): Promise<number> {
+    const rows = (await ctx.container.database.db.execute(
+      sql`SELECT count(*)::int AS n FROM payment_accounts WHERE tenant_id = ${tenantId}` as never,
+    )) as unknown as { rows: { n: number }[] };
+    return rows.rows[0]?.n ?? 0;
   }
 
   async function auditCount(action: string): Promise<number> {

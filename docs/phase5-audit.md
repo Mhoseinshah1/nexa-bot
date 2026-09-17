@@ -324,3 +324,54 @@ not that incident:
 - it is a customer-side window that can attach a file to a payment and can change no
   configuration, no price and no setting;
 - it expires, and it cannot outlive the payment's own window.
+
+## §9 — The Codex round on PR #34
+
+Ten findings, all P2. Seven fixed, three answered, and this section is the ledger so the
+next reader does not have to reconstruct it from a thread.
+
+| #   | Finding                                                                 | Verdict   | Where it landed                                |
+| --- | ----------------------------------------------------------------------- | --------- | ---------------------------------------------- |
+| C1  | The accounts screen derives every control from `payments.accounts.view` | CONFIRMED | `mayEdit` is passed separately, from `resolve` |
+| C2  | The create hash omits `makeDefault`                                     | CONFIRMED | `hashRequest` covers it                        |
+| C3  | A disable racing a promotion surfaces as a CHECK violation              | CONFIRMED | the predicate names `is_default`               |
+| C4  | A lost disable returns the row it had read                              | CONFIRMED | the null branch re-reads                       |
+| C5  | A reissue's audit row names no account                                  | CONFIRMED | read from the snapshot                         |
+| C6  | The table's card and Sheba checks are shape-only                        | CONFIRMED | migration 0065                                 |
+| C7  | `enabled: false, makeDefault: true` succeeds half-applied               | CONFIRMED | refused by name                                |
+| C8  | The per-tenant limit is not serialised                                  | ANSWERED  | a stated decision; see below                   |
+| C9  | The frozen destination reaches no operator surface                      | CONFIRMED | `paymentDestinationViewSchema`                 |
+| C10 | The default race reports `PAYMENT_ACCOUNT_DUPLICATE`                    | CONFIRMED | its own code                                   |
+
+**C8 is answered rather than fixed, and the reason is above `create` in the service.**
+`PAYMENT_ACCOUNT_MAX_PER_TENANT` is a rail that keeps the account list complete by
+construction rather than a policy anybody is buying; two creates racing at the ceiling
+leave fifty-one, and a list of fifty-one returned without pagination is still complete.
+Serialising every create behind a tenant-level lock to hold the number exactly costs more
+than it protects. Codex's counter-argument — that the bound justifies the absent
+pagination — is the right question to ask and does not survive the answer: the bound is
+what makes the list SMALL, and one extra row does not make it large.
+
+### Two things this round changed about how 5A is tested
+
+**Two race tests did not bite, and were rewritten.** The first versions of C3's and C4's
+cases committed the competing change with raw SQL before the service ran, so the
+service's own pre-check refused and the branch under test was never reached; both passed
+with the fix reverted. They now hold a `FOR UPDATE` row lock, which is the technique
+`customer-order-actions.test.ts` already uses for the same window. `docs/phase5a-falsification.md`
+records this in full, because it is the third time on this project that a race test has
+needed exactly this correction.
+
+**Check digits are now enforced in three places, not two.** `packages/contracts` at the
+HTTP boundary, migration 0065 at the table, and the seed's own fixtures, which are
+fabricated and satisfy Luhn and mod-97 so the suite exercises the real validation rather
+than a version with the checks turned off. `nexa_luhn_ok` and `nexa_iban_ir_ok` are
+functions, so drizzle-kit models neither them nor a CHECK that calls one — they live in
+the hand-written migration and the drift check is unaffected by construction.
+
+### One collision to expect
+
+Subphase **5R** was branched from 5A's head before this round and carries its own
+migrations numbered 0065 and 0066. 5A now owns 0065. 5R must renumber to 0066/0067 when
+it rebases, which is forward-only and safe because it has never been pushed or applied
+anywhere but a local development database.

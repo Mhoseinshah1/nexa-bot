@@ -7,6 +7,7 @@ import {
   rejectPaymentRequestSchema,
   paymentListQuerySchema,
   type OrderId,
+  type PaymentDestinationView,
   type PaymentDetailResponse,
   type PaymentId,
   type PaymentListResponse,
@@ -24,6 +25,7 @@ import type {
   PaymentCursor,
   PaymentRecord,
 } from '../../modules/commerce/payments/application/ports.js';
+import type { PaymentDestinationRecord } from '../../modules/commerce/payments/application/account-ports.js';
 
 /**
  * Payments over HTTP, at `/payments`. Two reads and TWO writes.
@@ -96,7 +98,11 @@ export class PaymentsController {
   @Get('payments/:id')
   async detail(@Req() request: FastifyRequest, @Param('id') id: string): Promise<PaymentResponse> {
     const { scope, actor } = await this.authenticate(request);
-    return { payment: toDetail(await this.container.payments.get(scope, actor, id)) };
+    const [payment, destination] = await Promise.all([
+      this.container.payments.get(scope, actor, id),
+      this.container.payments.destinationFor(scope, actor, id),
+    ]);
+    return { payment: toDetail(payment, destination) };
   }
 
   @Post('payments/:id/confirm')
@@ -111,7 +117,9 @@ export class PaymentsController {
       idempotencyKey: input.idempotencyKey,
       note: input.evidenceNote,
     });
-    return { payment: toDetail(payment) };
+    return {
+      payment: toDetail(payment, await this.container.payments.destinationFor(scope, actor, id)),
+    };
   }
 
   @Post('payments/:id/reject')
@@ -126,7 +134,9 @@ export class PaymentsController {
       idempotencyKey: input.idempotencyKey,
       note: input.resolutionNote,
     });
-    return { payment: toDetail(payment) };
+    return {
+      payment: toDetail(payment, await this.container.payments.destinationFor(scope, actor, id)),
+    };
   }
 
   private async authenticate(
@@ -175,10 +185,32 @@ function toSummary(record: PaymentRecord): PaymentSummaryResponse {
   };
 }
 
-function toDetail(record: PaymentRecord): PaymentDetailResponse {
+function toDetail(
+  record: PaymentRecord,
+  destination: PaymentDestinationRecord | null,
+): PaymentDetailResponse {
   return {
     ...toSummary(record),
     evidenceNote: record.evidenceNote,
     resolutionNote: record.resolutionNote,
+    destination: destination === null ? null : toDestinationView(destination),
+  };
+}
+
+/**
+ * The snapshot, projected for a browser.
+ *
+ * FOUR digits, never sixteen, and no Sheba — `paymentDestinationViewSchema` states the
+ * reason and this is where it is enforced. `slice(-4)` is safe because both the contract
+ * and two CHECK constraints keep `card_number` at exactly sixteen digits.
+ */
+function toDestinationView(destination: PaymentDestinationRecord): PaymentDestinationView {
+  return {
+    accountId: destination.accountId,
+    label: destination.label,
+    bankName: destination.bankName,
+    holderName: destination.holderName,
+    cardLast4: destination.cardNumber.slice(-4),
+    hasIban: destination.iban !== null,
   };
 }
