@@ -273,6 +273,9 @@ function SettingEditor({
   if (setting.key === 'wallet.topup.minimum') {
     return <MoneyEditor value={asMoney(value)} onChange={onChange} disabled={disabled} />;
   }
+  if (setting.key === 'wallet.topup.presets') {
+    return <TopupPresetEditor value={asMoneyList(value)} onChange={onChange} disabled={disabled} />;
+  }
   if (setting.key === 'sales.currency') {
     return <CurrencyEditor value={String(value)} onChange={onChange} disabled={disabled} />;
   }
@@ -513,6 +516,101 @@ function TextEditor({
       />
     </Field>
   );
+}
+
+/**
+ * The top-up amounts a customer may choose. 5B.
+ *
+ * A list, in the order offered, each with its own currency — the same shape the setting
+ * stores, so what is saved is what a customer sees. The currency select lists every code
+ * `moneySchema` accepts for `MoneyEditor`'s reason: the server stores them all, and a
+ * controlled select with no matching option silently rewrites the value on save.
+ *
+ * The hint is not decoration. Only presets in the SELLING currency are offered to a
+ * customer — no conversion exists anywhere in this product — so a row in another currency
+ * is saved, kept and never shown. Saying so here is the difference between a deliberate
+ * configuration and a button nobody can find.
+ */
+function TopupPresetEditor({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: readonly MoneyWire[];
+  onChange: (next: unknown) => void;
+  disabled: boolean;
+}) {
+  return (
+    <>
+      <Banner tone="info" title={t('web.topup_presets_title')}>
+        {t('web.topup_presets_body')}
+      </Banner>
+      <ListEditor
+        items={value}
+        onChange={(next) => onChange([...next])}
+        addLabel={t('web.topup_preset_add')}
+        emptyHint={t('web.topup_preset_empty')}
+        disabled={disabled}
+        // An empty amount rather than a number: the field is text, the schema refuses a
+        // non-positive value, and pre-filling a figure would be this screen inventing a
+        // price.
+        onAdd={() => ({ amountMinor: '', currency: 'IRT' })}
+        renderRow={(item, index, update) => (
+          <div className="input-group">
+            {/*
+              The setting's own name is IN the accessible name, not just the index. The
+              support-account list's finding applies here too: several inputs whose label
+              is a bare number are indistinguishable to anything that navigates by label,
+              and this screen has two money editors on it.
+            */}
+            <label className="visually-hidden" htmlFor={`preset-${index}`}>
+              {`${t('web.setting_topup_presets')} — ${t('web.amount_minor')} ${formatNumber(
+                index + 1,
+              )}`}
+            </label>
+            <input
+              id={`preset-${index}`}
+              className="input ltr mono grow"
+              inputMode="numeric"
+              value={item.amountMinor}
+              disabled={disabled}
+              onChange={(event) => update({ ...item, amountMinor: event.target.value })}
+            />
+            <label className="visually-hidden" htmlFor={`preset-currency-${index}`}>
+              {`${t('web.currency')} ${formatNumber(index + 1)}`}
+            </label>
+            <select
+              id={`preset-currency-${index}`}
+              className="input"
+              value={item.currency}
+              disabled={disabled}
+              onChange={(event) => update({ ...item, currency: event.target.value })}
+            >
+              {CURRENCY_CODES.map((code) => (
+                <option key={code} value={code}>
+                  {currencyLabel(code)}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+      />
+    </>
+  );
+}
+
+function asMoneyList(value: unknown): readonly MoneyWire[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (typeof item !== 'object' || item === null) return [];
+    const record = item as Record<string, unknown>;
+    return [
+      {
+        amountMinor: typeof record['amountMinor'] === 'string' ? record['amountMinor'] : '',
+        currency: typeof record['currency'] === 'string' ? record['currency'] : 'IRT',
+      } as MoneyWire,
+    ];
+  });
 }
 
 function asStringList(value: unknown): readonly string[] {

@@ -466,6 +466,12 @@ export const WEB_FA = {
   'web.monitor_over_capacity': 'فراتر از ظرفیت',
   'web.setting_topup_minimum': 'کمینهٔ شارژ کیف پول',
   'web.setting_sales_currency': 'واحد پول فروشگاه',
+  'web.setting_topup_presets': 'مبالغ شارژ کیف پول',
+  'web.topup_presets_title': 'مبالغ پیشنهادی شارژ',
+  'web.topup_presets_body':
+    'این مبالغ به‌ترتیب به مشتری نشان داده می‌شوند. تنها مبالغی که به واحد پول فروشگاه هستند نمایش داده می‌شوند؛ تبدیل ارز در این سامانه وجود ندارد. فهرست خالی یعنی شارژ کیف پول ارائه نمی‌شود.',
+  'web.topup_preset_add': 'افزودن مبلغ',
+  'web.topup_preset_empty': 'هیچ مبلغی تنظیم نشده است.',
   'web.admin_active': 'فعال',
   'web.admin_suspended': 'معلق',
   'web.event_recorded': 'ثبت‌شده',
@@ -807,6 +813,11 @@ export const WEB_FA = {
   'web.payment_reference': 'کد پیگیری',
   'web.payment_customer': 'مشتری',
   'web.payment_order': 'سفارش',
+  /*
+   * What a payment with no order IS. 5B's top-ups are the first payments in this product
+   * that name no order, and the column showed a dash — which reads as missing data.
+   */
+  'web.payment_topup': 'شارژ کیف پول',
   'web.payment_evidence_kind': 'مبنای تأیید',
   'web.payment_evidence_note': 'یادداشت بررسی',
   'web.payment_reviewer': 'تأییدکننده',

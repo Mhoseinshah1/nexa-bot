@@ -208,9 +208,15 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
     {
       key: 'order',
       header: t('web.payment_order'),
+      /*
+       * No order means a WALLET TOP-UP, and saying so is the point: a dash here read as
+       * missing data, and a payment whose purpose an operator cannot see is one they
+       * cannot review. 5B is the phase that made these exist — nothing before it could
+       * create a payment without an order.
+       */
       render: (row) =>
         row.orderId === null ? (
-          <Dash />
+          <span className="muted small">{t('web.payment_topup')}</span>
         ) : (
           <a href={`/orders/${encodeURIComponent(row.orderId)}`} onClick={onLink}>
             <Ltr>{row.orderId.slice(0, 8)}</Ltr>
@@ -626,7 +632,10 @@ export function PaymentDetailPage({
                   [
                     t('web.payment_order'),
                     row.orderId === null ? (
-                      <Dash key="o" />
+                      // A top-up, named rather than dashed. See the list column.
+                      <span key="o" className="muted small">
+                        {t('web.payment_topup')}
+                      </span>
                     ) : (
                       <a
                         key="o"
