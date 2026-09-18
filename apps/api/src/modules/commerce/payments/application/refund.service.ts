@@ -45,10 +45,10 @@ export interface RefundServiceDeps {
    * The ledger, for the one channel that moves money inside this process.
    *
    * `append` and `lockCustomer` only. `append` is idempotent at the database — an
-   * `ON CONFLICT (tenant_id, reference) DO NOTHING` that re-reads on conflict — and that
-   * is the whole mechanism that makes a wallet refund land EXACTLY ONCE under a replay,
-   * a double-click or two replicas. Nothing here may read a balance to decide anything:
-   * a refund is bounded by the PAYMENT, never by what the wallet currently holds.
+   * `ON CONFLICT (tenant_id, reference) DO NOTHING` that re-reads on conflict — which is
+   * what bounds a given refund to ONE credit; the repeated command itself is stopped
+   * earlier, by the idempotency store. Nothing here may read a balance to decide
+   * anything: a refund is bounded by the PAYMENT, never by what the wallet holds.
    */
   readonly wallet: Pick<WalletRepository, 'append' | 'lockCustomer'>;
   readonly guard: PermissionGuard;
@@ -95,12 +95,20 @@ export interface RefundLedgerView {
  *
  * ## The wallet credit lands exactly once
  *
- * By the LEDGER's own idempotency, not by a check here. `append` conflicts on
- * `(tenant, reference)` and re-reads, and the reference is derived from the refund's id —
- * so a replayed command, a retried transaction and two concurrent workers all produce
- * one movement. The original debit is never touched: a reversal is a new append-only
- * entry, which is `CLAUDE.md`'s rule and the reason the legacy mutable balance column
- * is the failure it names.
+ * Two mechanisms, and it is worth being precise about which does what, because a
+ * mutation test showed the plausible account of this to be wrong.
+ *
+ * A REPLAY never reaches the ledger at all: `replay` answers a repeated idempotency key
+ * with the refund already written. What the ledger guarantees is narrower and still
+ * necessary — the reference is `${refundId}:refund`, DERIVED, so the ledger's unique
+ * `(tenant_id, reference)` makes at most one credit exist for a given refund whatever
+ * reaches it. That is what turns "one credit per refund" from a property of this code
+ * path into a property of the data, and an integration test appends a second entry with
+ * that reference by hand to prove it holds against a writer this class does not control.
+ *
+ * The original debit is never touched either way: a reversal is a new append-only entry,
+ * which is `CLAUDE.md`'s rule and the reason the legacy mutable balance column is the
+ * failure it names.
  */
 export class RefundService {
   constructor(private readonly deps: RefundServiceDeps) {}
@@ -488,10 +496,12 @@ export class RefundService {
   /**
    * One append-only ledger entry, whose reference is derived from the refund.
    *
-   * `${refundId}:refund` — derived, never supplied, so the ledger's own
-   * `ON CONFLICT (tenant_id, reference) DO NOTHING` is what makes the credit land
-   * exactly once. A replayed command reaches the same reference and appends nothing;
-   * the top-up path derives `${paymentId}:topup` for the same reason.
+   * `${refundId}:refund` — derived, never supplied, so the ledger's unique
+   * `(tenant_id, reference)` admits at most one credit for this refund. Not because a
+   * replay arrives here — it does not, `replay` answers that first — but because the
+   * one-to-one between a refund and its credit becomes a constraint rather than an
+   * intention, and holds against any writer. The top-up path derives
+   * `${paymentId}:topup` for the same reason.
    *
    * `lockCustomer` first, matching every other write to this ledger. A credit cannot
    * overdraw so it does not strictly need the serialisation, but taking the lock in one
