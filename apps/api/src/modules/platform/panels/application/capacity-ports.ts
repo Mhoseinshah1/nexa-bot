@@ -1,5 +1,6 @@
 import type { PanelIneligibilityReason, TenantContext } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
+import type { PanelView } from './ports.js';
 
 /**
  * What a panel's capacity looks like right now.
@@ -148,4 +149,17 @@ export interface PanelCapacityRepository {
 export interface PanelIneligible {
   readonly panelId: string;
   readonly reason: PanelIneligibilityReason;
+}
+
+/**
+ * A panel view with its occupancy attached.
+ *
+ * Composed by `PanelService` from two repositories rather than returned by one,
+ * because capacity counts `services` — a table the panels module does not own
+ * and must not learn to join. It EXTENDS `PanelView` so every existing reader of
+ * one keeps working and only the readers that want capacity have to know it is
+ * there.
+ */
+export interface PanelWithCapacity extends PanelView {
+  readonly capacity: PanelCapacity;
 }

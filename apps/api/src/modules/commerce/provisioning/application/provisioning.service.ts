@@ -23,6 +23,7 @@ import {
 } from '@nexa/contracts';
 import { OPERATION_LEGAL_FROM } from './provision-executor.js';
 import { serviceIdOrNotFound } from './service-id.js';
+import type { PanelSalesGate } from '../../../platform/panels/application/panel-sales-gate.js';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
@@ -66,6 +67,13 @@ export interface ProvisioningServiceDeps {
   readonly scopeActivity: ScopeActivityReader;
   /** Unguessable values for the two identities that are capabilities, not ids. */
   readonly secrets: ServiceSecretSource;
+  /**
+   * The holder of the panel slot this order took at confirmation.
+   *
+   * Settlement is where that hold becomes a service, and the handover happens in
+   * this transaction or not at all — see `planForSettledOrder`.
+   */
+  readonly panelSales: PanelSalesGate;
 }
 
 /**
@@ -192,6 +200,46 @@ export class ProvisioningService {
     now: Date,
     tx: TransactionScope,
   ): Promise<{ readonly service: ServiceRecord; readonly operation: OperationRecord }> {
+    /*
+     * The slot handover, and the LAST chance to refuse.
+     *
+     * Read first, because whether a service already exists decides everything
+     * below: an order that has one is a replayed settlement, and a replay must
+     * not be re-judged. The panel may have filled up or been disabled since, and
+     * refusing here would roll back a transaction whose money has already moved,
+     * for a customer who already has what they paid for.
+     *
+     * `consume` takes the panel's lock, deletes the order's hold, and — on a
+     * first settlement only — decides eligibility again with that hold no longer
+     * counted. Releasing before counting is what stops the order's own
+     * reservation refusing the order's own service on the last slot; the lock is
+     * held across the gap and the service is written before this transaction
+     * commits, so nothing else can see it free.
+     *
+     * The refusal is a rollback, and that is the honest outcome: an installation
+     * that cannot deliver must not keep the money. `AT_CAPACITY` here is
+     * unreachable through the ordinary path — the slot was reserved at
+     * confirmation — and reachable through the ones that matter: an operator who
+     * archived the panel, a monitor that confirmed it down, or a hold that
+     * lapsed because the customer paid after their own deadline.
+     */
+    const alreadyProvisioned =
+      (await this.deps.services.findByOrderId(scope, order.id, tx)) !== null;
+    const eligible = await this.deps.panelSales.consume(
+      scope,
+      order.line.panelId,
+      order.id,
+      tx,
+      alreadyProvisioned,
+    );
+    if (!eligible.eligible) {
+      throw errors.preconditionFailed(
+        COMMERCE_ERROR_CODES.PANEL_NOT_ELIGIBLE,
+        'This order cannot be fulfilled on its panel.',
+        { reason: eligible.reason },
+      );
+    }
+
     const serviceId = this.deps.ids.uuid();
     const created = await this.deps.services.create(
       scope,

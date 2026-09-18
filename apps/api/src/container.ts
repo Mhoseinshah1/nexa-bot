@@ -30,6 +30,8 @@ import {
   DrizzlePanelMonitorRepository,
   DrizzlePanelRepository,
 } from './modules/platform/panels/infrastructure/drizzle-panel.repository.js';
+import { DrizzlePanelCapacityRepository } from './modules/platform/panels/infrastructure/drizzle-panel-capacity.repository.js';
+import { PanelSalesGate } from './modules/platform/panels/application/panel-sales-gate.js';
 import {
   effectiveProbeCooldownMs,
   schedulerFreshPanelUpperBound,
@@ -809,7 +811,23 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * `AGGREGATE_TYPES` has no `Product`, so a product mutation's evidence is its audit
    * row.
    */
+  /*
+   * The panel stack's two repositories and the sales gate, constructed HERE
+   * because this is the first place they are needed: the customer catalogue
+   * hides a product whose panel cannot take one more service, and an order
+   * confirmation takes the slot before any money moves.
+   */
+  const panelRepository = new DrizzlePanelRepository(database.db);
+  const panelCapacity = new DrizzlePanelCapacityRepository(database.db);
+  const panelSalesGate = new PanelSalesGate({
+    panels: panelRepository,
+    capacity: panelCapacity,
+    ids,
+    clock,
+  });
+
   const productService = new ProductService({
+    panelSales: panelSalesGate,
     repository: productRepository,
     /*
      * Membership only, never a panel projection.
@@ -932,6 +950,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
 
   const orderRepository = new DrizzleOrderRepository(database.db);
   const orderService = new OrderService({
+    panelSales: panelSalesGate,
     repository: orderRepository,
     /*
      * The NARROW payment lane, not the repository.
@@ -987,7 +1006,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * operated before it plans a retry, and that question must be answerable without
    * decrypting anything.
    */
-  const panelRepository = new DrizzlePanelRepository(database.db);
   const serviceRepository = new DrizzleServiceRepository(database.db);
   const operationRepository = new DrizzleOperationRepository(database.db);
   /**
@@ -1032,6 +1050,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   };
 
   const provisioningService = new ProvisioningService({
+    panelSales: panelSalesGate,
     services: serviceRepository,
     operations: operationRepository,
     panels: panelOperability,
@@ -1217,6 +1236,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    */
   const paymentExpiryLoop = new PaymentExpiryLoop(
     new PaymentExpiryService({
+    panelSales: panelSalesGate,
       payments: paymentRepository,
       notifier: customerNotifier,
       orders: orderRepository,
@@ -2418,6 +2438,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     }),
     panels: new PanelService({
       repository: panelRepository,
+      capacity: panelCapacity,
       credentials: panelCredentials,
       guard,
       // The same reader settings, templates, feature flags and the ping

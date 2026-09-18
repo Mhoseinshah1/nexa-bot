@@ -59,7 +59,13 @@ import type {
   PanelCursor,
   PanelArchiveScope,
 } from './ports.js';
+import { capacityOf } from './panel-capacity.js';
+import { connectionIdentityOf, validationAuthorisesEnable } from './panel-eligibility.js';
 import { attemptProbe, persistProbeResult, type ProbeCoreDeps } from './probe-core.js';
+import type {
+  PanelCapacityRepository,
+  PanelWithCapacity,
+} from './capacity-ports.js';
 import {
   effectivePreviousFailures,
   scheduleAfterProbe,
@@ -99,6 +105,8 @@ export interface CreatePanelCommand {
    * provisioned onto — `decideOperability` answers `ACTIVATION_INCOMPLETE`.
    */
   readonly activation?: PanelActivation;
+  /** Absent means uncapped, which is the honest default for a panel nobody has sized. */
+  readonly maxServices?: number | null;
   readonly idempotencyKey: string;
 }
 
@@ -113,11 +121,23 @@ export interface UpdatePanelCommand {
   readonly baseUrl?: string | undefined;
   /** Absent leaves it; `null` clears it; an object replaces it after validation. */
   readonly activation?: Record<string, unknown> | null | undefined;
+  /** Absent leaves it; `null` removes the cap; a positive integer sets one. */
+  readonly maxServices?: number | null | undefined;
   readonly idempotencyKey: string;
 }
 
 export interface PanelServiceDeps {
   readonly repository: PanelRepository;
+  /**
+   * How full each panel is. A SECOND repository, and deliberately so.
+   *
+   * Capacity counts rows in `services`, which belongs to provisioning. Teaching
+   * `PanelRepository` to join it would give every panel read a dependency on the
+   * commerce schema and would put the count one forgotten predicate away from
+   * every listing. Composed here instead, in the one layer that is allowed to
+   * know about both.
+   */
+  readonly capacity: PanelCapacityRepository;
   readonly credentials: PanelCredentialStore;
   readonly guard: PermissionGuard;
   /**
@@ -336,20 +356,59 @@ export class PanelService {
        */
       archived?: PanelArchiveScope;
     } = {},
-  ): Promise<{ panels: PanelView[]; nextCursor: PanelCursor | null }> {
+  ): Promise<{ panels: PanelWithCapacity[]; nextCursor: PanelCursor | null }> {
     const tenant = this.tenant(scope);
     await this.deps.guard.check(scope, actor, PANELS_VIEW);
-    return this.deps.repository.list(tenant, {
+    const listed = await this.deps.repository.list(tenant, {
       archived: page.archived ?? 'LIVE',
       ...(page.limit === undefined ? {} : { limit: page.limit }),
       ...(page.cursor === undefined ? {} : { cursor: page.cursor }),
     });
+    return { panels: await this.withCapacity(tenant, listed.panels), nextCursor: listed.nextCursor };
   }
 
-  async get(scope: ScopeContext, actor: ActorContext, panelId: string): Promise<PanelView> {
+  async get(scope: ScopeContext, actor: ActorContext, panelId: string): Promise<PanelWithCapacity> {
     const tenant = this.tenant(scope);
     await this.deps.guard.check(scope, actor, PANELS_VIEW);
-    return this.require(tenant, panelId);
+    return this.oneWithCapacity(tenant, await this.require(tenant, panelId));
+  }
+
+  /**
+   * Attaches occupancy to a page of panels in ONE query, never one per row.
+   *
+   * The list is the place an N+1 would actually hurt: a fifty-panel page would
+   * be a hundred and one round trips, and the count is two subqueries. A panel
+   * whose capacity the batch did not return gets a zeroed one carrying its own
+   * cap — which cannot happen, because the ids came from the same tenant's own
+   * listing, and is written as an explicit floor rather than a `!` so that if it
+   * ever does the page renders instead of throwing.
+   */
+  private async withCapacity(
+    tenant: TenantContext,
+    views: readonly PanelView[],
+  ): Promise<PanelWithCapacity[]> {
+    if (views.length === 0) return [];
+    const now = this.deps.clock.now();
+    const found = await this.deps.capacity.readMany(
+      tenant,
+      views.map((view) => view.panel.id),
+      now,
+    );
+    return views.map((view) => ({
+      ...view,
+      capacity: found.get(view.panel.id) ?? capacityOf(view.panel.maxServices, 0, 0),
+    }));
+  }
+
+  /** The same, for one panel. */
+  private async oneWithCapacity(
+    tenant: TenantContext,
+    view: PanelView,
+  ): Promise<PanelWithCapacity> {
+    const [only] = await this.withCapacity(tenant, [view]);
+    // Unreachable: `withCapacity` returns one entry per input and was given one.
+    if (only === undefined) throw new Error('withCapacity dropped its only panel');
+    return only;
   }
 
   /**
@@ -463,7 +522,7 @@ export class PanelService {
     scope: ScopeContext,
     actor: ActorContext,
     input: unknown,
-  ): Promise<{ view: PanelView; replayed: boolean }> {
+  ): Promise<{ view: PanelWithCapacity; replayed: boolean }> {
     const tenant = this.tenant(scope);
     /*
      * AUTHORIZE, then parse. The order is the audit trail.
@@ -531,6 +590,7 @@ export class PanelService {
       ...(parsed.activation === undefined || parsed.activation === null
         ? {}
         : { activation: parseActivation(parsed.providerType, parsed.activation) }),
+      ...(parsed.maxServices === undefined ? {} : { maxServices: parsed.maxServices }),
       idempotencyKey: parsed.idempotencyKey,
     };
     // Two different refusals, and the difference is the operator's next move.
@@ -620,7 +680,7 @@ export class PanelService {
       requestHash,
     );
     if (existing) {
-      return { view: await this.require(tenant, existing.result.panelId), replayed: true };
+      return { view: await this.oneWithCapacity(tenant, await this.require(tenant, existing.result.panelId)), replayed: true };
     }
 
     const panelId = this.deps.ids.uuid();
@@ -665,6 +725,7 @@ export class PanelService {
               providerType,
               baseUrl,
               ...(command.activation === undefined ? {} : { activation: command.activation }),
+              ...(command.maxServices === undefined ? {} : { maxServices: command.maxServices }),
               at: now,
             },
             tx,
@@ -748,7 +809,7 @@ export class PanelService {
       throw error;
     }
 
-    return { view: await this.require(tenant, panelId), replayed: false };
+    return { view: await this.oneWithCapacity(tenant, await this.require(tenant, panelId)), replayed: false };
   }
 
   async update(
@@ -756,7 +817,7 @@ export class PanelService {
     actor: ActorContext,
     panelId: string,
     input: unknown,
-  ): Promise<PanelView> {
+  ): Promise<PanelWithCapacity> {
     const tenant = this.tenant(scope);
     // Authorize, then parse — see `create`.
     await this.authorize(scope, actor, PANELS_EDIT, {
@@ -786,7 +847,7 @@ export class PanelService {
       command.idempotencyKey,
       requestHash,
     );
-    if (existing) return this.require(tenant, panelId);
+    if (existing) return this.oneWithCapacity(tenant, await this.require(tenant, panelId));
 
     const now = this.deps.clock.now();
     await runAuthorizedMutation(
@@ -823,9 +884,23 @@ export class PanelService {
           name?: string;
           baseUrl?: string;
           activation?: PanelActivation | null;
+          maxServices?: number | null;
         } = {};
         if (command.name !== undefined) changes.name = command.name;
         if (baseUrl !== undefined) changes.baseUrl = baseUrl;
+        /*
+         * Accepted WHATEVER the panel's current usage is, deliberately.
+         *
+         * Lowering a cap below the services already on the panel refuses new
+         * sales and terminates nothing — `panels.max_services` says why, and
+         * `decideEligibility` is where the refusal happens. Validating "the cap
+         * must be at least the current usage" here would be the tempting rule
+         * and the wrong one: it would leave an operator whose panel is over its
+         * intended size unable to express the intention at all, and the only
+         * remaining way to stop that panel selling would be `DISABLED`, which
+         * also stops the monitor watching a machine that is carrying customers.
+         */
+        if (command.maxServices !== undefined) changes.maxServices = command.maxServices;
         if (command.activation !== undefined) {
           /*
            * Parsed against the STORED provider type, which is why this is here and not
@@ -884,11 +959,24 @@ export class PanelService {
               name: before.panel.name,
               baseUrl: before.panel.baseUrl,
               activation: activationKeys(before.panel.activation),
+              /*
+               * The VALUE, unlike `activation` beside it.
+               *
+               * A cap is one integer that decides whether a tenant can sell, and
+               * "maxServices changed" tells an operator investigating a silent
+               * catalogue nothing they can act on. The argument for field names
+               * only is that the value is a credential or is readable from the
+               * panel read; neither holds here, and the number is precisely what
+               * somebody reconstructing "why did this stop selling at 14:02"
+               * needs.
+               */
+              maxServices: before.panel.maxServices,
             },
             after: {
               name: updated.name,
               baseUrl: updated.baseUrl,
               activation: activationKeys(updated.activation),
+              maxServices: updated.maxServices,
             },
             result: 'SUCCESS',
           },
@@ -905,7 +993,7 @@ export class PanelService {
         );
       },
     );
-    return this.require(tenant, panelId);
+    return this.oneWithCapacity(tenant, await this.require(tenant, panelId));
   }
 
   /**
@@ -922,7 +1010,7 @@ export class PanelService {
     actor: ActorContext,
     panelId: string,
     input: unknown,
-  ): Promise<PanelView> {
+  ): Promise<PanelWithCapacity> {
     const tenant = this.tenant(scope);
     // Authorize, then parse — see `create`. This is the CRITICAL permission in
     // this module, and it was the one a malformed body could probe silently.
@@ -949,7 +1037,7 @@ export class PanelService {
       idempotencyKey,
       requestHash,
     );
-    if (existing) return this.require(tenant, panelId);
+    if (existing) return this.oneWithCapacity(tenant, await this.require(tenant, panelId));
 
     const now = this.deps.clock.now();
     await runAuthorizedMutation(
@@ -1013,7 +1101,7 @@ export class PanelService {
         );
       },
     );
-    return this.require(tenant, panelId);
+    return this.oneWithCapacity(tenant, await this.require(tenant, panelId));
   }
 
   /**
@@ -1055,7 +1143,7 @@ export class PanelService {
     actor: ActorContext,
     panelId: string,
     input: unknown,
-  ): Promise<PanelView> {
+  ): Promise<PanelWithCapacity> {
     const tenant = this.tenant(scope);
     // Authorize, then parse — see `create`.
     await this.authorize(scope, actor, PANELS_EDIT, {
@@ -1083,7 +1171,7 @@ export class PanelService {
       idempotencyKey,
       requestHash,
     );
-    if (existing) return this.require(tenant, panelId);
+    if (existing) return this.oneWithCapacity(tenant, await this.require(tenant, panelId));
 
     const now = this.deps.clock.now();
     await runAuthorizedMutation(
@@ -1146,6 +1234,43 @@ export class PanelService {
                 // to do next.
                 'Another panel is using that name. Choose a different one to restore this panel under.',
           );
+        }
+
+        /*
+         * ENABLING is the act that puts a panel in front of customers, and it
+         * needs a connection test that vouches for what the panel is NOW.
+         *
+         * Only on the transition INTO `ACTIVE` from something else. Re-saving
+         * `ACTIVE` on an already-active panel is not an enable and must not
+         * demand a fresh test — a panel that has been serving for a month would
+         * otherwise be un-re-confirmable, and an operator would have to probe it
+         * to leave it exactly as it was.
+         *
+         * `validationAuthorisesEnable` is three conditions, and the identity one
+         * is the point: a green test taken before a password was replaced proves
+         * the OLD password worked. Without it, the ordinary sequence "test, find
+         * the password wrong, fix it, enable" would enable on the strength of the
+         * test that preceded the fix.
+         *
+         * The check reads `before`, which was read under the lock this
+         * transaction holds — so a probe cannot land between the decision and the
+         * write, in either direction.
+         */
+        if (status === 'ACTIVE' && before.panel.status !== 'ACTIVE') {
+          const identity = connectionIdentityOf({
+            providerType: before.panel.providerType,
+            baseUrl: before.panel.baseUrl,
+            activation: before.panel.activation,
+            usernameSetAt: before.credentials.usernameSetAt,
+            passwordSetAt: before.credentials.passwordSetAt,
+            apiTokenSetAt: before.credentials.apiTokenSetAt,
+          });
+          if (!validationAuthorisesEnable(before.health, identity, now)) {
+            throw errors.preconditionFailed(
+              PANEL_ERROR_CODES.PANEL_NOT_VALIDATED,
+              'Run a connection test on this panel and let it succeed before enabling it.',
+            );
+          }
         }
 
         // Name and status in ONE statement. Renaming afterwards would first
@@ -1280,7 +1405,7 @@ export class PanelService {
         );
       },
     );
-    return this.require(tenant, panelId);
+    return this.oneWithCapacity(tenant, await this.require(tenant, panelId));
   }
 
   /**
@@ -1301,7 +1426,7 @@ export class PanelService {
     actor: ActorContext,
     panelId: string,
     input: unknown,
-  ): Promise<{ view: PanelView; probed: boolean }> {
+  ): Promise<{ view: PanelWithCapacity; probed: boolean }> {
     const tenant = this.tenant(scope);
     // Authorize, then parse — see `create`.
     await this.authorize(scope, actor, PANELS_EDIT, {
@@ -1336,7 +1461,7 @@ export class PanelService {
       idempotencyKey,
       requestHash,
     );
-    if (existing) return { view: await this.require(tenant, panelId), probed: false };
+    if (existing) return { view: await this.oneWithCapacity(tenant, await this.require(tenant, panelId)), probed: false };
 
     const before = await this.require(tenant, panelId);
 
@@ -1452,7 +1577,7 @@ export class PanelService {
       // Not an error, deliberately. A cooldown that threw would make the
       // ordinary "I clicked twice" case look like a failure, and an operator
       // would learn to retry through it.
-      return { view: before, probed: false };
+      return { view: await this.oneWithCapacity(tenant, before), probed: false };
     }
 
     const health = attempt.health;
@@ -1593,7 +1718,7 @@ export class PanelService {
       },
     );
 
-    return { view: await this.require(tenant, panelId), probed: true };
+    return { view: await this.oneWithCapacity(tenant, await this.require(tenant, panelId)), probed: true };
   }
 
   /** The shared probe core's dependencies, all of which the service already holds. */

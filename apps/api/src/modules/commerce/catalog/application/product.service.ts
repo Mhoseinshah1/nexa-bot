@@ -27,6 +27,7 @@ import { rememberOnce } from '../../../platform/idempotency/application/remember
 import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
+import type { PanelSalesGate } from '../../../platform/panels/application/panel-sales-gate.js';
 import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
 import type { OperationalEventRecorder } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
@@ -71,6 +72,16 @@ export interface ProductServiceDeps {
   readonly repository: ProductRepository;
   /** Membership only — see `PanelDirectory`. Never a panel projection. */
   readonly panels: PanelDirectory;
+  /**
+   * Whether the panel behind a product can take one more service today.
+   *
+   * Used by `browse` and nowhere else in this service. The catalogue is the one
+   * place this is a UX question: an ineligible panel is hidden rather than shown
+   * and then refused, because a customer who taps a plan and is told no learns
+   * nothing and tries again. Every place it MATTERS re-decides for itself — see
+   * `PanelSalesGate`.
+   */
+  readonly panelSales: PanelSalesGate;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly audit: AuditWriter;
@@ -141,7 +152,28 @@ export class ProductService {
   ): Promise<{ readonly items: readonly ProductRecord[]; readonly hasMore: boolean }> {
     await this.deps.guard.check(scope, actor, CATALOG_BROWSE_PERMISSION);
     const bounded = Math.min(Math.max(limit, 1), PRODUCT_PAGE_MAX);
-    return this.deps.repository.listCatalog(scope, bounded);
+    const page = await this.deps.repository.listCatalog(scope, bounded);
+
+    /*
+     * The fleet filter, applied AFTER the database's membership filter.
+     *
+     * The repository answers "is this product listed, priced and bound to a
+     * panel". This answers "and is that panel able to take one more today",
+     * which is a fact about the fleet and cannot be a predicate in that query
+     * without teaching the catalogue to count services.
+     *
+     * `hasMore` is carried through UNCHANGED, and that is deliberate rather than
+     * sloppy: it reports whether the DATABASE had more rows past the bound, which
+     * is still true. Recomputing it from the filtered list would claim there are
+     * no more products whenever the last page happened to be all-ineligible, and
+     * the bot's bound is a bound and not a cursor — see `bot-runtime`.
+     */
+    const panelIds = page.items.flatMap((item) => (item.panelId === null ? [] : [item.panelId]));
+    const verdicts = await this.deps.panelSales.evaluateMany(scope, panelIds);
+    return {
+      items: page.items.filter((item) => item.panelId !== null && verdicts.get(item.panelId)?.eligible === true),
+      hasMore: page.hasMore,
+    };
   }
 
   /** Creates an INACTIVE product. Idempotent, audited. */

@@ -272,6 +272,11 @@ export class DrizzlePanelRepository implements PanelRepository {
           baseUrl: input.baseUrl,
           status: 'ACTIVE',
           ...(input.activation === undefined ? {} : { activation: input.activation }),
+          // `null` and absent mean the same thing on a CREATE — uncapped — so
+          // this could be unconditional. Spelled the same way as `activation`
+          // so a reader does not have to work out whether the two tri-states
+          // differ here, and so an added column inherits the shape.
+          ...(input.maxServices === undefined ? {} : { maxServices: input.maxServices }),
           createdAt: input.at,
           updatedAt: input.at,
         })
@@ -298,6 +303,9 @@ export class DrizzlePanelRepository implements PanelRepository {
     if (input.baseUrl !== undefined) changes['baseUrl'] = input.baseUrl;
     // `null` is a VALUE here, not an absence: it clears the stored activation.
     if (input.activation !== undefined) changes['activation'] = input.activation;
+    // Also a VALUE: `null` removes the cap. Lowering it below current usage is
+    // allowed and terminates nothing — see `panels.max_services`.
+    if (input.maxServices !== undefined) changes['maxServices'] = input.maxServices;
 
     let row;
     try {
@@ -1124,6 +1132,7 @@ function toRecord(row: typeof panels.$inferSelect): PanelRecord {
     providerType: row.providerType as ProviderType,
     baseUrl: row.baseUrl,
     status: row.status as PanelStatus,
+    maxServices: row.maxServices,
     // Passed through unnarrowed: the shape is per provider and the application layer
     // owns the schema that decides it. See `PanelRecord.activation`.
     activation: row.activation,

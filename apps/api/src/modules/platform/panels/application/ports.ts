@@ -47,6 +47,8 @@ export interface PanelRecord {
    * Every reader parses it; `decideOperability` is the one that decides.
    */
   readonly activation: unknown;
+  /** The operator's cap on services this panel may carry, or null for no limit. */
+  readonly maxServices: number | null;
   readonly archivedAt: Date | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
@@ -136,6 +138,8 @@ export interface CreatePanelInput {
   readonly baseUrl: string;
   /** The per-panel provider configuration, when the create carried one. */
   readonly activation?: PanelActivation;
+  /** The cap this panel is created with. Absent means uncapped. */
+  readonly maxServices?: number | null;
   /**
    * From the `Clock` port, not the database's `now()`.
    *
@@ -154,6 +158,8 @@ export interface UpdatePanelInput {
   readonly baseUrl?: string;
   /** Absent leaves it; `null` clears it; an object replaces it. */
   readonly activation?: PanelActivation | null;
+  /** Absent leaves it; `null` removes the cap; a positive integer sets one. */
+  readonly maxServices?: number | null;
 }
 
 /**
