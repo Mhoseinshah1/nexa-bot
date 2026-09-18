@@ -4,6 +4,7 @@ import {
   API_PREFIX,
   PAYMENT_ACCOUNT_ROUTES,
   createPaymentAccountRequestSchema,
+  routePattern,
   setDefaultPaymentAccountRequestSchema,
   setPaymentAccountEnabledRequestSchema,
   updatePaymentAccountRequestSchema,
@@ -69,7 +70,7 @@ export class PaymentAccountsController {
     return { account: toView(account) };
   }
 
-  @Post(PAYMENT_ACCOUNT_ROUTES.update(':id'))
+  @Post(routePattern(PAYMENT_ACCOUNT_ROUTES.update, 'id'))
   async update(
     @Req() request: FastifyRequest,
     @Param('id') id: string,
@@ -85,7 +86,7 @@ export class PaymentAccountsController {
     return { account: toView(account) };
   }
 
-  @Post(PAYMENT_ACCOUNT_ROUTES.enabled(':id'))
+  @Post(routePattern(PAYMENT_ACCOUNT_ROUTES.enabled, 'id'))
   async setEnabled(
     @Req() request: FastifyRequest,
     @Param('id') id: string,
@@ -101,7 +102,7 @@ export class PaymentAccountsController {
     return { account: toView(account) };
   }
 
-  @Post(PAYMENT_ACCOUNT_ROUTES.makeDefault(':id'))
+  @Post(routePattern(PAYMENT_ACCOUNT_ROUTES.makeDefault, 'id'))
   async setDefault(
     @Req() request: FastifyRequest,
     @Param('id') id: string,
