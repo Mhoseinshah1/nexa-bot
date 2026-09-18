@@ -1248,6 +1248,39 @@ export const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
    * makes `refusal` RETHROW, the webhook swallows it by design, and the customer is
    * answered with silence. That is F5R-12, and it cost a whole debugging session.
    */
+  /*
+   * The three the 5F flow pass found reaching a customer with NO entry here, which
+   * means `refusal` rethrew, the webhook swallowed it, and the customer was answered
+   * with silence. All three are generic on purpose — see `bot.request_unavailable`.
+   *
+   * `PAYMENT_DESTINATION_UNCONFIGURED` is the one the code already predicted:
+   * `requestManualTransfer` says in so many words that the surface draws the transfer
+   * button from a read that can be a moment stale, so the last enabled account can be
+   * disabled between the button and the tap, "and this is where that lands". It landed
+   * nowhere. `bot.payment.unconfigured` is the truthful answer — from the customer's
+   * side a method with nowhere to send money is a method that is not available.
+   *
+   * `COMMERCE_REQUEST_INVALID` is `assertScopeActive`: an installation that has stopped
+   * accepting work, refusing a tap that was already on screen.
+   *
+   * `CUSTOMER_NOT_FOUND` is `settleFromWallet`'s `lockCustomer` — unreachable in
+   * practice, because nothing deletes a customer, and mapped anyway: the cost of an
+   * entry is one line and the cost of a missing one is a customer who taps pay and is
+   * told nothing.
+   */
+  [COMMERCE_ERROR_CODES.PAYMENT_DESTINATION_UNCONFIGURED]: 'bot.payment.unconfigured',
+  [COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID]: 'bot.request_unavailable',
+  [COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND]: 'bot.request_unavailable',
+  /*
+   * The FALL-THROUGH for insufficient funds, not its reply.
+   *
+   * `walletPurchase` catches this code and answers `bot.wallet.insufficient` with the
+   * shortfall, which is the useful reply and stays the one a customer gets. But that
+   * catch requires `shortfallOf(details)` to yield a figure, and when it does not it
+   * falls through to `refusal` — onto this code, which had no entry. So the one case
+   * the fall-through exists for was the one case that said nothing.
+   */
+  [COMMERCE_ERROR_CODES.WALLET_INSUFFICIENT_FUNDS]: 'bot.request_unavailable',
   [COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE]: 'bot.wallet.topup_unavailable',
   [COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_AMOUNT_REJECTED]: 'bot.wallet.topup_refused',
   /*
