@@ -13,7 +13,7 @@ import {
 } from '@nexa/contracts';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
-import { createAdmin, migrateOnce, resetDatabase, tenantA, testConfig } from './harness';
+import { createAdmin, migrateOnce, resetDatabase, tenantA, tenantB, testConfig } from './harness';
 
 /**
  * The admin surface over real HTTP.
@@ -545,6 +545,203 @@ describe('admin HTTP surface', () => {
       });
       const body = roleListResponseSchema.parse(response.json());
       expect(body.roles.some((role) => role.key === 'owner' && role.isSystem)).toBe(true);
+    });
+  });
+
+  describe('the Telegram binding', () => {
+    /*
+     * Web Admin → System → Administrators, over HTTP.
+     *
+     * This route exists because an installation can already hold an owner with
+     * no binding — v0.2.5 created them that way — and the only other way to bind
+     * an administrator, the bot's `/link`, has to be sent by an administrator who
+     * is already bound. Every rule below is `setTelegramBinding`'s, reached
+     * through the controller: authentication, tenant scope from the session,
+     * the escalation gates, uniqueness, the audit row, origin protection.
+     */
+    const bindingOf = async (id: string): Promise<string | null> => {
+      const rows = await api.container.database.db.execute<{ telegram_user_id: string | null }>(
+        sql`SELECT telegram_user_id FROM admins WHERE id = ${id}`,
+      );
+      return rows.rows[0]?.telegram_user_id ?? null;
+    };
+    const bindingAudits = async () =>
+      (
+        await api.container.database.db.execute<{
+          entity_id: string;
+          before: unknown;
+          after: unknown;
+          result: string;
+          reason: string | null;
+        }>(
+          sql`SELECT entity_id, before, after, result, reason FROM audit_logs
+               WHERE action = 'admin.telegram_binding' ORDER BY occurred_at ASC, id ASC`,
+        )
+      ).rows;
+    const idOf = async (username: string): Promise<string> => {
+      const rows = await api.container.database.db.execute<{ id: string }>(
+        sql`SELECT id FROM admins WHERE username = ${username} AND tenant_id = ${tenantA.tenantId}`,
+      );
+      const id = rows.rows[0]?.id;
+      if (id === undefined) throw new Error(`no administrator ${username}`);
+      return id;
+    };
+    const bind = (
+      cookie: string,
+      id: string,
+      telegramUserId: string | null,
+      reason = 'staging owner',
+    ) =>
+      inject({
+        method: 'POST',
+        url: `${API_PREFIX}${ADMIN_ROUTES.telegram(id)}`,
+        headers: asAdmin(cookie),
+        payload: { telegramUserId, reason },
+      });
+
+    it('connects an existing unbound owner, then replaces and removes the binding', async () => {
+      // A second owner, unbound — the v0.2.5 state — connected by the first.
+      // Binding an OWNER takes `admins.permissions.edit` as well, which the
+      // signed-in owner holds.
+      await createAdmin(api.container, tenantA, { username: 'unbound-owner', roleKeys: ['owner'] });
+      const target = await idOf('unbound-owner');
+      expect(await bindingOf(target)).toBeNull();
+      const cookie = await cookieFor('owner', 'the-owners-real-password');
+
+      const connected = await bind(cookie, target, '123456789');
+      expect(connected.statusCode).toBe(201);
+      expect(connected.json()).toMatchObject({ id: target, telegramUserId: '123456789' });
+      expect(await bindingOf(target)).toBe('123456789');
+
+      // And the binding is LIVE on the next Telegram update: the resolver
+      // names the owner, with the owner's permissions, and no restart.
+      const resolved = await api.container.telegramAdmins.resolve(
+        tenantA,
+        '123456789',
+        'binding-http' as never,
+      );
+      expect(resolved?.admin.id).toBe(target);
+      expect(resolved?.permissions.has('receipts.review' as never)).toBe(true);
+
+      const replaced = await bind(cookie, target, '987654321', 'new phone');
+      expect(replaced.statusCode).toBe(201);
+      expect(await bindingOf(target)).toBe('987654321');
+      expect(
+        await api.container.telegramAdmins.resolve(tenantA, '123456789', 'binding-http' as never),
+      ).toBeNull();
+
+      const removed = await bind(cookie, target, null, 'left the company');
+      expect(removed.statusCode).toBe(201);
+      expect(removed.json()).toMatchObject({ id: target, telegramUserId: null });
+      expect(await bindingOf(target)).toBeNull();
+      // Revocation takes effect on the next update — there is no cached authority.
+      expect(
+        await api.container.telegramAdmins.resolve(tenantA, '987654321', 'binding-http' as never),
+      ).toBeNull();
+      // The account and its roles are untouched: only the channel was removed.
+      expect(await api.container.admins.roleKeysFor(tenantA, target as never)).toEqual(['owner']);
+    });
+
+    it('records the audit row with the id before and after, and the reason', async () => {
+      await createAdmin(api.container, tenantA, { username: 'audited', roleKeys: ['support'] });
+      const target = await idOf('audited');
+      const cookie = await cookieFor('owner', 'the-owners-real-password');
+
+      expect((await bind(cookie, target, '555000111', 'first phone')).statusCode).toBe(201);
+      expect((await bind(cookie, target, '555000222', 'second phone')).statusCode).toBe(201);
+      expect((await bind(cookie, target, null, 'gone')).statusCode).toBe(201);
+
+      const audits = (await bindingAudits()).filter((row) => row.entity_id === target);
+      expect(audits.map((row) => [row.before, row.after, row.reason, row.result])).toEqual([
+        [{ telegramUserId: null }, { telegramUserId: '555000111' }, 'first phone', 'SUCCESS'],
+        [
+          { telegramUserId: '555000111' },
+          { telegramUserId: '555000222' },
+          'second phone',
+          'SUCCESS',
+        ],
+        [{ telegramUserId: '555000222' }, { telegramUserId: null }, 'gone', 'SUCCESS'],
+      ]);
+    });
+
+    it('refuses a duplicate binding as a conflict, not a 500, and changes nothing', async () => {
+      await createAdmin(api.container, tenantA, {
+        username: 'already-bound',
+        roleKeys: ['support'],
+        telegramUserId: '777000111',
+      });
+      await createAdmin(api.container, tenantA, {
+        username: 'wants-it-too',
+        roleKeys: ['support'],
+      });
+      const target = await idOf('wants-it-too');
+      const cookie = await cookieFor('owner', 'the-owners-real-password');
+
+      const refused = await bind(cookie, target, '777000111');
+      expect(refused.statusCode).toBe(409);
+      expect(refused.json()).toMatchObject({ error: { code: 'admin.telegram_id_taken' } });
+      expect(await bindingOf(target)).toBeNull();
+      expect(await bindingOf(await idOf('already-bound'))).toBe('777000111');
+    });
+
+    it('refuses a malformed id as a validation error, before the row is touched', async () => {
+      await createAdmin(api.container, tenantA, { username: 'malformed', roleKeys: ['support'] });
+      const target = await idOf('malformed');
+      const cookie = await cookieFor('owner', 'the-owners-real-password');
+      for (const bad of ['mamad', '@mamad', '-5', '12 34', '0123', '']) {
+        const refused = await bind(cookie, target, bad);
+        expect(refused.statusCode, `"${bad}" was not refused`).toBe(400);
+      }
+      expect(await bindingOf(target)).toBeNull();
+      expect(await bindingAudits()).toHaveLength(0);
+    });
+
+    it('refuses an unauthorized caller with 403, and a caller from another tenant with 404', async () => {
+      await createAdmin(api.container, tenantA, { username: 'target-a', roleKeys: ['support'] });
+      const target = await idOf('target-a');
+
+      // `support` holds no `admins.edit`: refused, recorded, nothing written.
+      const support = await cookieFor('support', 'the-support-password');
+      const denied = await bind(support, target, '123456789');
+      expect(denied.statusCode).toBe(403);
+      expect(await bindingOf(target)).toBeNull();
+
+      // An owner of tenant B, signed in through the same API, cannot reach a
+      // tenant A administrator: the scope is the SESSION's, and the target is
+      // simply not found in it.
+      await createAdmin(api.container, tenantB, {
+        username: 'owner-b',
+        password: 'the-owner-b-password',
+        roleKeys: ['owner'],
+      });
+      api.container.setInstallationTenant(tenantB.tenantId);
+      let crossTenant;
+      try {
+        const cookieB = await cookieFor('owner-b', 'the-owner-b-password');
+        crossTenant = await bind(cookieB, target, '123456789');
+      } finally {
+        api.container.setInstallationTenant(tenantA.tenantId);
+      }
+      expect(crossTenant.statusCode).toBe(404);
+      expect(await bindingOf(target)).toBeNull();
+      expect((await bindingAudits()).filter((row) => row.result === 'SUCCESS')).toHaveLength(0);
+    });
+
+    it('refuses a cookie-authenticated binding from an unlisted origin', async () => {
+      await createAdmin(api.container, tenantA, {
+        username: 'origin-target',
+        roleKeys: ['support'],
+      });
+      const target = await idOf('origin-target');
+      const cookie = await cookieFor('owner', 'the-owners-real-password');
+      const response = await inject({
+        method: 'POST',
+        url: `${API_PREFIX}${ADMIN_ROUTES.telegram(target)}`,
+        headers: { cookie, origin: 'https://evil.example.test' },
+        payload: { telegramUserId: '123456789', reason: 'csrf' },
+      });
+      expect(response.statusCode).toBe(403);
+      expect(await bindingOf(target)).toBeNull();
     });
   });
 });

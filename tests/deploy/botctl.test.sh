@@ -1015,10 +1015,145 @@ fake_set owner_state_exit 0
 test_case 'a fresh installation still bootstraps normally'
 fake_set owner_state none
 reset_docker_log
-probe="$(bootstrap_probe)"
+probe="$(printf '123456789\n' | bootstrap_probe)"
 assert_contains 'a fresh install did not create the first owner' "$probe" 'first owner created'
 assert_contains 'the bootstrap CLI was never run' \
   "$(docker_log)" 'bootstrap-owner.cli.js'
+
+# ---------------------------------------------------------------------------
+# The first owner is BOUND to a Telegram numeric id, or is not created.
+#
+# v0.2.5 staging: the installer created the owner with no Telegram binding, and
+# `/link` — the one command that binds an administrator — can only be sent by an
+# administrator who is already bound. A fresh installation therefore had no
+# supported way to get its first Telegram administrator, and staging needed a
+# direct database UPDATE. The id is asked for on a terminal, accepted as an
+# argument (it is not a secret), validated before anything is created, and
+# forwarded to the CLI, which writes the owner and the binding in one
+# transaction.
+# ---------------------------------------------------------------------------
+
+# `bootstrap_owner` with extra installer arguments, and stdin left to the caller.
+bootstrap_probe_with() {
+  bash -c '
+    . "$1" --domain admin.example.test --acme-email ops@example.test --version v1.0.0 "${@:2}" >/dev/null 2>&1
+    bootstrap_owner 2>&1
+    printf "EXIT=%s\n" "$?"' _ "${REPO}/deploy/install.sh" "$@"
+}
+
+# `preflight_owner_inputs` with the given installer arguments. The whole
+# `preflight` opens with a root check no build machine passes, so the owner
+# checks are driven on their own, exactly as `refuse_version_change` is.
+owner_inputs_probe() {
+  bash -c '
+    . "$1" --domain admin.example.test --acme-email ops@example.test --version v1.0.0 "${@:2}" >/dev/null 2>&1
+    preflight_owner_inputs 2>&1
+    printf "EXIT=%s\n" "$?"' _ "${REPO}/deploy/install.sh" "$@"
+}
+
+test_case 'the interactive installer asks for the owner Telegram id and forwards it'
+fake_set owner_state none
+reset_docker_log
+probe="$(printf '123456789\n' | bootstrap_probe)"
+assert_contains 'the installer did not ask for the owner Telegram id' \
+  "$probe" 'Owner Telegram numeric ID:'
+assert_contains 'the bootstrap did not succeed with an id' "$probe" 'EXIT=0'
+assert_contains 'the owner was created without saying which Telegram id it is bound to' \
+  "$probe" 'bound to Telegram id 123456789'
+# Forwarded to the CLI as an argument, which is what makes the binding part of
+# the owner's own transaction rather than a step the operator does later.
+assert_contains 'the validated id was not forwarded to the bootstrap CLI' \
+  "$(docker_log | grep -F 'bootstrap-owner.cli.js' | grep -vF -- '--status' || true)" \
+  '--telegram-id 123456789'
+
+test_case 'a --owner-telegram-id argument is forwarded without asking'
+fake_set owner_state none
+reset_docker_log
+probe="$(bootstrap_probe_with --owner-telegram-id 987654321 </dev/null)"
+assert_not_contains 'the installer asked for an id it was given' \
+  "$probe" 'Owner Telegram numeric ID:'
+assert_contains 'the bootstrap did not succeed with the argument' "$probe" 'EXIT=0'
+assert_contains 'the argument was not forwarded to the bootstrap CLI' \
+  "$(docker_log | grep -F 'bootstrap-owner.cli.js' | grep -vF -- '--status' || true)" \
+  '--telegram-id 987654321'
+
+test_case 'an invalid answer at the prompt is asked again, and never forwarded'
+fake_set owner_state none
+reset_docker_log
+probe="$(printf '@mamad\nmamad\n-5\n12 34\n0123\n123456789\n' | bootstrap_probe)"
+assert_contains 'a username was not refused' "$probe" '"@mamad" is not a Telegram numeric id'
+assert_contains 'a negative number was not refused' "$probe" '"-5" is not a Telegram numeric id'
+assert_contains 'the bootstrap did not go on to succeed with the valid answer' "$probe" 'EXIT=0'
+cli_calls="$(docker_log | grep -F 'bootstrap-owner.cli.js' | grep -vF -- '--status' || true)"
+assert_contains 'the valid answer was not the one forwarded' "$cli_calls" '--telegram-id 123456789'
+assert_not_contains 'an invalid answer reached the CLI' "$cli_calls" '@mamad'
+assert_not_contains 'an invalid answer reached the CLI' "$cli_calls" 'telegram-id -5'
+assert_not_contains 'a leading-zero answer reached the CLI' "$cli_calls" '0123'
+
+test_case 'input ending at the Telegram id prompt refuses instead of creating an unbound owner'
+fake_set owner_state none
+reset_docker_log
+probe="$(bootstrap_probe </dev/null)"
+assert_contains 'the missing answer was not refused' "$probe" 'input ended'
+assert_fails 'the installer carried on with no id' test "${probe#*EXIT=}" -eq 0
+assert_not_contains 'the bootstrap CLI ran with no id' \
+  "$(docker_log | grep -F 'bootstrap-owner.cli.js' | grep -vF -- '--status' || true)" \
+  'bootstrap-owner.cli.js'
+
+test_case 'invalid --owner-telegram-id values are refused in preflight, before anything is created'
+for bad in mamad @mamad '12 34' -5 0123 '' '12345678901234567890'; do
+  [ -n "$bad" ] || continue
+  probe="$(owner_inputs_probe --owner-telegram-id "$bad" --owner-password-file "${REPO}/deploy/install.sh" </dev/null)"
+  assert_contains "\"$bad\" was accepted as a Telegram numeric id" \
+    "$probe" 'is not a Telegram numeric id'
+  assert_fails "preflight continued past --owner-telegram-id \"$bad\"" \
+    test "${probe#*EXIT=}" -eq 0
+done
+probe="$(owner_inputs_probe --owner-telegram-id 123456789 --owner-password-file "${REPO}/deploy/install.sh" </dev/null)"
+assert_contains 'a valid --owner-telegram-id was refused' "$probe" 'EXIT=0'
+
+test_case 'a non-interactive install that would create the owner requires --owner-telegram-id'
+# No terminal, a password file, no id: the owner would be created unreachable
+# from Telegram — the v0.2.5 staging state — so it is refused BEFORE anything is
+# created, exactly as the password source is.
+probe="$(owner_inputs_probe --owner-password-file "${REPO}/deploy/install.sh" </dev/null)"
+assert_contains 'the unattended install was not told it needs --owner-telegram-id' \
+  "$probe" 'no terminal and no --owner-telegram-id'
+assert_fails 'preflight continued without --owner-telegram-id' test "${probe#*EXIT=}" -eq 0
+
+test_case '--skip-owner is unchanged: no id is required, and none is asked for'
+probe="$(owner_inputs_probe --skip-owner </dev/null)"
+assert_contains 'skip-owner was refused in preflight for a missing id' "$probe" 'EXIT=0'
+fake_set owner_state none
+reset_docker_log
+probe="$(skip_owner_probe </dev/null)"
+assert_not_contains 'skip-owner asked for the owner Telegram id' \
+  "$probe" 'Owner Telegram numeric ID:'
+assert_contains 'skip-owner no longer succeeds on a fresh host' "$probe" 'EXIT=0'
+
+test_case 'a rerun after a successful bootstrap never asks for the id and never rebinds'
+fake_set owner_state bootstrapped
+reset_docker_log
+probe="$(bootstrap_probe_with --owner-telegram-id 555 </dev/null)"
+assert_contains 'the rerun did not recognise its completed bootstrap' \
+  "$probe" 'already exists from an earlier run'
+assert_not_contains 'the rerun asked for the owner Telegram id again' \
+  "$probe" 'Owner Telegram numeric ID:'
+assert_contains 'the rerun did not succeed' "$probe" 'EXIT=0'
+# The binding is the CLI's, written with the owner; a rerun given a different id
+# must not reach for it. The only bootstrap-owner invocation is the read.
+assert_not_contains 'the rerun ran the bootstrap CLI against an existing owner' \
+  "$(docker_log | grep -F 'bootstrap-owner.cli.js' | grep -vF -- '--status' || true)" \
+  'telegram-id'
+
+test_case 'the final summary tells the owner to /start the bot once'
+# Telegram delivers nothing to an account that has not opened a chat with the
+# bot, and nothing else in the installation can say so.
+installer_summary="$(sed -n '/is installed")/,/^SUMMARY$/p' "${REPO}/deploy/install.sh")"
+assert_contains 'the summary does not tell the owner to /start the bot' \
+  "$installer_summary" 'send /start once'
+assert_contains 'the summary does not say the admin menu arrives on that /start' \
+  "$installer_summary" 'admin menu'
 
 test_case 'the recognised rerun reaches the release-state commit'
 # The behavioural tests above prove `bootstrap_owner` returns 0. This is what

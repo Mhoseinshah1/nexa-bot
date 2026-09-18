@@ -1,8 +1,6 @@
 import {
-  adminChangeReasonSchema,
   adminPasswordSchema,
   adminUsernameSchema,
-  telegramUserIdSchema,
   createAdminRequestSchema,
   changePasswordRequestSchema,
   errors,
@@ -14,6 +12,7 @@ import {
   OWNER_ROLE_KEY,
   setAdminRolesRequestSchema,
   setAdminStatusRequestSchema,
+  setAdminTelegramBindingRequestSchema,
   type ActorContext,
   type Admin,
   type AdminId,
@@ -682,7 +681,7 @@ export class AdminManagementService {
     scope: ScopeContext,
     actor: ActorContext,
     targetId: AdminId,
-    input: { readonly telegramUserId: string | null; readonly reason: string },
+    input: unknown,
   ): Promise<{ admin: Admin; roleKeys: string[] }> {
     // The cheap rejection, on the pool, exactly as `setStatus` does it. The
     // authoritative check is inside the transaction below.
@@ -691,12 +690,14 @@ export class AdminManagementService {
       entityId: targetId,
     });
 
-    const reason = adminChangeReasonSchema.parse(input.reason);
-    // Validated with the SAME schema the customer side uses, because it is the same
-    // fact: a Telegram numeric id. The column's CHECK repeats the shape, and a value
-    // that reached it unvalidated would be a 23514 reported as a server fault.
-    const telegramUserId =
-      input.telegramUserId === null ? null : telegramUserIdSchema.parse(input.telegramUserId);
+    // Parsed AFTER the cheap authorization, as `setStatus` and `setRoles` parse
+    // theirs: `unknown` in, so the Web Admin controller hands the body over
+    // unparsed and a malformed one from a caller without `admins.edit` still
+    // leaves the denial record. The id is validated with the SAME schema the
+    // customer side uses, because it is the same fact: a Telegram numeric id.
+    // The column's CHECK repeats the shape, and a value that reached it
+    // unvalidated would be a 23514 reported as a server fault.
+    const { telegramUserId, reason } = setAdminTelegramBindingRequestSchema.parse(input);
 
     return this.runLockedMutation(
       scope,

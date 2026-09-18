@@ -760,6 +760,7 @@ describe('bootstrap', () => {
         username: 'first-owner',
         displayName: 'First Owner',
         password: 'the-installation-owner-password',
+        telegramUserId: '800011',
       })
       .then((result) => result);
 
@@ -772,6 +773,7 @@ describe('bootstrap', () => {
         username: 'second-owner',
         displayName: 'Second',
         password: 'another-password-entirely',
+        telegramUserId: '800001',
       });
     } catch (error) {
       caught = error;
@@ -784,6 +786,7 @@ describe('bootstrap', () => {
       username: 'first-owner',
       displayName: 'First Owner',
       password: 'the-installation-owner-password',
+      telegramUserId: '800002',
     });
 
     const seeded = await ctx.container.roles.list(tenantB);
@@ -798,6 +801,7 @@ describe('bootstrap', () => {
       username: 'first-owner',
       displayName: 'First Owner',
       password: 'the-installation-owner-password',
+      telegramUserId: '800003',
     });
 
     const audits = await ctx.container.database.db
@@ -816,6 +820,7 @@ describe('bootstrap', () => {
         username: 'first-owner',
         displayName: 'First Owner',
         password: 'short',
+        telegramUserId: '800004',
       }),
     ).rejects.toThrow();
   });

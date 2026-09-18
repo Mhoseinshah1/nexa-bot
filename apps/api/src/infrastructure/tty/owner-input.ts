@@ -1,4 +1,9 @@
-import { adminDisplayNameSchema, adminPasswordSchema, adminUsernameSchema } from '@nexa/contracts';
+import {
+  adminDisplayNameSchema,
+  adminPasswordSchema,
+  adminUsernameSchema,
+  telegramUserIdSchema,
+} from '@nexa/contracts';
 import { PromptInputError } from './prompt.js';
 
 /**
@@ -45,6 +50,20 @@ export function checkOwnerDisplayName(value: string): string {
 
 export function checkOwnerPassword(value: string): string {
   return check(adminPasswordSchema, value, 'The owner password');
+}
+
+/**
+ * The owner's Telegram numeric id, as the bootstrap service will parse it.
+ *
+ * Surrounding whitespace is trimmed — a terminal delivers a trailing newline or
+ * a pasted space, and neither is a value — but nothing else is repaired: a
+ * `@username`, a name, a sign, an interior space or a leading zero is refused,
+ * with the schema's own sentence, because the id is the one fact Telegram
+ * cannot reassign and guessing at it binds the owner's authority to somebody
+ * else's account.
+ */
+export function checkOwnerTelegramId(value: string): string {
+  return check(telegramUserIdSchema, value.trim(), 'The owner Telegram id');
 }
 
 function check<T>(

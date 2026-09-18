@@ -164,6 +164,7 @@ describe('dynamic route registration', () => {
       ['GET', `payments/${id}/receipts/${REFUND_ID}/content`],
       ['POST', `admins/${id}/status`],
       ['POST', `admins/${id}/roles`],
+      ['POST', `admins/${id}/telegram`],
       ['POST', `settings/sales.currency`],
       ['POST', `features/telegram.webhook`],
       ['GET', `templates/bot.start.greeting`],

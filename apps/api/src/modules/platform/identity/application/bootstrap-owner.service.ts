@@ -6,6 +6,7 @@ import {
   IDENTITY_ERROR_CODES,
   OWNER_ROLE_KEY,
   systemJobActor,
+  telegramUserIdSchema,
   type ActorContext,
   type AdminId,
   type AuditWriter,
@@ -49,11 +50,23 @@ export interface BootstrapOwnerInput {
   readonly username: string;
   readonly displayName: string;
   readonly password: string;
+  /**
+   * The owner's Telegram numeric id — REQUIRED, and written in the same
+   * transaction as the owner.
+   *
+   * A fresh installation has no other way to get its first Telegram
+   * administrator: `/link` is a command only an already-bound administrator
+   * can send, so an owner created without a binding could reach the bot only
+   * through a direct database UPDATE, which is what v0.2.5 staging needed. The
+   * binding is part of what "the first owner" means, not a step after it.
+   */
+  readonly telegramUserId: string;
 }
 
 export interface BootstrapOwnerResult {
   readonly adminId: AdminId;
   readonly username: string;
+  readonly telegramUserId: string;
 }
 
 /**
@@ -116,6 +129,12 @@ export class BootstrapOwnerService {
     // owner is called, permanently, unless someone edits the database. Pressing
     // Enter at the prompt used to be accepted.
     const displayName = adminDisplayNameSchema.parse(input.displayName);
+    // The SAME schema every other binding in this product is validated with —
+    // the Web Admin's, the Telegram `/link` command's and the customer side's —
+    // so a username, an `@handle`, a negative number or a value with a space is
+    // refused before anything is hashed or written. The column's CHECK repeats
+    // the shape.
+    const telegramUserId = telegramUserIdSchema.parse(input.telegramUserId);
 
     // A cheap rejection before the hash. NOT the fence — that is re-run under
     // the tenant lock below, because this read sees only what has committed so
@@ -159,7 +178,7 @@ export class BootstrapOwnerService {
           username,
           displayName,
           passwordHash,
-          telegramUserId: null,
+          telegramUserId,
           now,
         },
         tx,
@@ -177,7 +196,10 @@ export class BootstrapOwnerService {
           entityType: 'Admin',
           entityId: adminId,
           before: null,
-          after: { username, roleKeys: [OWNER_ROLE_KEY] },
+          // The binding is in the AFTER, because it is part of what was
+          // created: an audit reader asking "who could reach the bot on day
+          // one" finds the answer on the bootstrap row itself.
+          after: { username, roleKeys: [OWNER_ROLE_KEY], telegramUserId },
           reason: 'Installation bootstrap: first owner.',
           result: 'SUCCESS',
         },
@@ -192,7 +214,7 @@ export class BootstrapOwnerService {
       });
     });
 
-    return { adminId, username };
+    return { adminId, username, telegramUserId };
   }
 
   /**

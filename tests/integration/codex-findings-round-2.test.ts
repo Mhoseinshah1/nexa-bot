@@ -456,6 +456,7 @@ describe('bootstrap creates the first owner once, under concurrency', () => {
         username: 'first-owner',
         displayName: 'First',
         password: 'a-perfectly-fine-password',
+        telegramUserId: '800010',
       })
       .catch((error: unknown) => error);
 
@@ -467,6 +468,7 @@ describe('bootstrap creates the first owner once, under concurrency', () => {
       username: 'second-owner',
       displayName: 'Second',
       password: 'a-perfectly-fine-password',
+      telegramUserId: '800001',
     });
     expect(second.username).toBe('second-owner');
 
@@ -1395,6 +1397,7 @@ describe('the first owner gets the same validation as everyone else', () => {
           username: 'installer',
           displayName,
           password: 'a-perfectly-fine-password',
+          telegramUserId: '800002',
         }),
       ).rejects.toThrow();
     }
@@ -1408,6 +1411,7 @@ describe('the first owner gets the same validation as everyone else', () => {
       username: 'installer',
       displayName: '  The Operator  ',
       password: 'a-perfectly-fine-password',
+      telegramUserId: '800003',
     });
     const stored = await ctx.container.admins.findById(tenantB, created.adminId);
     expect(stored?.displayName).toBe('The Operator');
@@ -1905,6 +1909,7 @@ describe('a revoked session performs no writes', () => {
         username: 'installer',
         displayName: 'The Operator',
         password: 'a-perfectly-fine-password',
+        telegramUserId: '800004',
       }),
     ).resolves.toBeDefined();
   });

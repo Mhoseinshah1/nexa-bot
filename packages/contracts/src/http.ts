@@ -448,6 +448,27 @@ export const setAdminRolesRequestSchema = z.object({
 });
 export type SetAdminRolesRequest = z.infer<typeof setAdminRolesRequestSchema>;
 
+/**
+ * Connect, replace or remove an administrator's Telegram binding.
+ *
+ * `null` removes it. The id is validated with `telegramUserIdSchema` — the one
+ * definition of a Telegram numeric id this product has, shared with the
+ * webhook that resolves identity from it and the installer that binds the
+ * first owner — so a username, an `@handle` or a signed number is refused at
+ * the wire, before the service refuses it again.
+ *
+ * This route exists because an installation can already hold an owner with no
+ * binding (v0.2.5 created them that way), and the only other way to bind an
+ * administrator, `/link`, has to be sent by an administrator who is already
+ * bound. Without it the first Telegram administrator of such an installation
+ * could only be made by editing the database.
+ */
+export const setAdminTelegramBindingRequestSchema = z.object({
+  telegramUserId: telegramUserIdSchema.nullable(),
+  reason: adminChangeReasonSchema,
+});
+export type SetAdminTelegramBindingRequest = z.infer<typeof setAdminTelegramBindingRequestSchema>;
+
 export const adminListResponseSchema = z.object({ admins: z.array(adminSummarySchema) });
 export type AdminListResponse = z.infer<typeof adminListResponseSchema>;
 
@@ -475,6 +496,7 @@ export const ADMIN_ROUTES = {
   create: '/admins',
   status: (id: string) => `/admins/${id}/status`,
   roles: (id: string) => `/admins/${id}/roles`,
+  telegram: (id: string) => `/admins/${id}/telegram`,
   rolesCatalog: '/roles',
 } as const;
 

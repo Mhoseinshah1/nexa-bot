@@ -474,6 +474,25 @@ export const WEB_FA = {
   'web.topup_preset_empty': 'هیچ مبلغی تنظیم نشده است.',
   'web.admin_active': 'فعال',
   'web.admin_suspended': 'معلق',
+  // The Telegram binding of an administrator: System → Administrators.
+  'web.admin_telegram': 'تلگرام',
+  'web.admin_telegram_not_connected': 'متصل نیست',
+  'web.admin_telegram_id_label': 'شناسهٔ عددی تلگرام',
+  'web.admin_telegram_id_hint':
+    'فقط شناسهٔ عددی حساب تلگرام، مثلاً ۱۲۳۴۵۶۷۸۹ — نه نام کاربری و نه @handle. مدیر باید پس از اتصال یک بار به ربات /start بفرستد.',
+  'web.admin_telegram_reason_label': 'دلیل تغییر',
+  'web.admin_telegram_reason_hint': 'در سابقهٔ ممیزی ثبت می‌شود.',
+  'web.admin_telegram_connect': 'اتصال',
+  'web.admin_telegram_replace': 'جایگزینی',
+  'web.admin_telegram_remove': 'قطع اتصال',
+  'web.admin_telegram_edit': 'ویرایش اتصال تلگرام',
+  'web.admin_telegram_cancel': 'انصراف',
+  'web.admin_telegram_connected_done':
+    'حساب تلگرام متصل شد. مدیر باید یک بار به ربات /start بفرستد تا ربات بتواند به او پیام بدهد.',
+  'web.admin_telegram_removed_done':
+    'اتصال تلگرام قطع شد. دسترسی مدیریتی از تلگرام از همین لحظه برداشته شد.',
+  'web.admin_telegram_id_taken': 'این حساب تلگرام قبلاً به مدیر دیگری متصل است.',
+  'web.admin_telegram_id_invalid': 'شناسهٔ عددی تلگرام باید فقط از رقم تشکیل شود.',
   'web.event_recorded': 'ثبت‌شده',
   'web.event_recovered': 'برطرف شد',
   'web.credential_username': 'نام کاربری',

@@ -234,12 +234,15 @@ compose run --rm --no-deps --entrypoint node api \
   fail "provisioning is not idempotent"
 pass "the installation provisions, and reruns cleanly"
 
-# The first owner, with the password on stdin and nowhere else.
+# The first owner, with the password on stdin and nowhere else. The Telegram id
+# is not a secret and is REQUIRED: off a terminal the CLI refuses without it,
+# before reading a byte.
 printf 'a-long-enough-smoke-password\n' |
   compose run --rm --no-deps -T --entrypoint node api \
-    dist/bootstrap-owner.cli.js --username owner --display-name Owner >/dev/null ||
+    dist/bootstrap-owner.cli.js --username owner --display-name Owner \
+    --telegram-id 100200300 >/dev/null ||
   fail "the first owner could not be created"
-pass "the first owner is created from stdin"
+pass "the first owner is created from stdin, bound to a Telegram id"
 
 # The bootstrap CLI, on a REAL Docker TTY, must exit.
 #
@@ -263,7 +266,7 @@ owner_tty_command="${owner_tty_command} -f ${NEXA_DEPLOY_DIR}/compose.yml -f ${R
 owner_tty_command="${owner_tty_command} run --rm --no-deps --entrypoint node api dist/bootstrap-owner.cli.js"
 
 owner_tty_status=0
-printf 'someone\nSomeone Else\nanother-long-smoke-password\nanother-long-smoke-password\n' |
+printf 'someone\nSomeone Else\n100200301\nanother-long-smoke-password\nanother-long-smoke-password\n' |
   timeout 120 script -qec "$owner_tty_command" /dev/null >"$owner_tty_log" 2>&1 ||
   owner_tty_status=$?
 
