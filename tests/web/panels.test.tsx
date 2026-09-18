@@ -877,15 +877,37 @@ describe('the panel detail', () => {
     expect(text).not.toContain('sub://');
   });
 
-  it('says there is more rather than implying the list is complete', async () => {
+  it('says there is more on each list the server truncated, and only those', async () => {
+    /*
+     * BOTH cards, and the count is the assertion.
+     *
+     * The two notices are two guards on two responses, and `findByText` is
+     * satisfied by either — so a single-notice assertion passes with one guard
+     * inverted, which is how the first version of this case let exactly that
+     * mutation live. Asserting the NUMBER separates them.
+     */
     stubApi([
       ...detail(),
-      ...workload([product()], [carriedService()], { services: 'next-page-cursor' }),
+      ...workload([product()], [carriedService()], {
+        products: 'more-products',
+        services: 'more-services',
+      }),
     ]);
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await openWorkload();
 
-    expect(await screen.findByText(t('web.panel_workload_more'))).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getAllByText(t('web.panel_workload_more'))).toHaveLength(2);
+    });
+  });
+
+  it('claims no completeness it was not given: neither list says there is more', async () => {
+    stubApi([...detail(), ...workload([product()], [carriedService()])]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await openWorkload();
+    await screen.findByText('nx-7f3a91');
+
+    expect(screen.queryAllByText(t('web.panel_workload_more'))).toHaveLength(0);
   });
 
   it('distinguishes a panel that carries nothing from one whose lists failed', async () => {
