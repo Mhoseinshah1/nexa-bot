@@ -148,6 +148,7 @@ import {
 import { PaymentAccountService } from './modules/commerce/payments/application/payment-account.service.js';
 import { PaymentGatewayService } from './modules/commerce/payments/application/payment-gateway.service.js';
 import type { PaymentGatewayRepository } from './modules/commerce/payments/application/gateway-ports.js';
+import type { CustomerContactReader } from './modules/commerce/provisioning/application/ports.js';
 import { ReceiptService } from './modules/commerce/payments/application/receipt.service.js';
 import { TelegramReceiptFiles } from './modules/commerce/payments/infrastructure/telegram-receipt-files.js';
 import { PaymentService } from './modules/commerce/payments/application/payment.service.js';
@@ -1617,36 +1618,48 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     },
   );
 
+  /**
+   * Where one customer's service announcement goes, or nothing.
+   *
+   * ONE definition, shared by the delivery lane that sends automatically and by
+   * `ServiceAdminService`, which needs the same answer to decide whether to OFFER a
+   * resend. Two copies would let the screen promise a send the sweep's own rule refuses
+   * — and the rule that would drift is the `BLOCKED` one, which exists because an
+   * operator blocking a customer between the claim and the send is a real race.
+   */
+  const customerContacts: CustomerContactReader = {
+    contactFor: async (scope, customerId, tx) => {
+      const customer = await customerRepository.findById(scope, customerId, tx);
+      if (customer === null || customer.firstBotInstanceId === null) return { kind: 'NONE' };
+      /*
+       * The status of the row just read, not the one the claim matched.
+       *
+       * `claimDeliveryDue` joins `customers` and requires `ACTIVE`, which settles the
+       * ordinary case. It cannot settle the race: an operator blocking a customer
+       * between that claim and this read left the sweep holding a leased row whose
+       * customer is now blocked, and the announcement went out anyway because nothing
+       * looked again. Checked here because here is the last read before the send.
+       */
+      if (customer.status !== 'ACTIVE') return { kind: 'BLOCKED' };
+      return {
+        kind: 'CONTACT',
+        contact: {
+          chatId: customer.telegramUserId,
+          botInstanceId: customer.firstBotInstanceId,
+        },
+      };
+    },
+  };
+
   const deliveryService = new DeliveryService({
     services: serviceRepository,
-    contacts: {
-      contactFor: async (scope, customerId, tx) => {
-        const customer = await customerRepository.findById(scope, customerId, tx);
-        if (customer === null || customer.firstBotInstanceId === null) return { kind: 'NONE' };
-        /*
-         * The status of the row just read, not the one the claim matched.
-         *
-         * `claimDeliveryDue` joins `customers` and requires `ACTIVE`, which settles the
-         * ordinary case. It cannot settle the race: an operator blocking a customer
-         * between that claim and this read left the sweep holding a leased row whose
-         * customer is now blocked, and the announcement went out anyway because nothing
-         * looked again. Checked here because here is the last read before the send.
-         */
-        if (customer.status !== 'ACTIVE') return { kind: 'BLOCKED' };
-        return {
-          kind: 'CONTACT',
-          contact: {
-            chatId: customer.telegramUserId,
-            botInstanceId: customer.firstBotInstanceId,
-          },
-        };
-      },
-    },
+    contacts: customerContacts,
     messenger: customerMessenger,
     // The same tenant kill switch every other write path reads.
     scopeActivity: tenants,
     uow,
     clock,
+    guard,
   });
 
   /**
@@ -2260,6 +2273,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       services: serviceRepository,
       operations: operationRepository,
       guard,
+      // Read-only, both: "can this panel do X" and "is there anywhere to send this".
+      panels: panelOperability,
+      contacts: customerContacts,
     }),
     provisioner,
     provisionerLoop,

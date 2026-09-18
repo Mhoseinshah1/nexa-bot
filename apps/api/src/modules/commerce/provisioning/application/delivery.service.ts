@@ -2,17 +2,24 @@ import {
   COMMERCE_ERROR_CODES,
   DELIVERY_MAX_ATTEMPTS,
   errors,
+  type ActorContext,
   type BotInstanceId,
   type Clock,
+  type PermissionKey,
   type ServiceDeliveryState,
   type TenantContext,
   type UnitOfWork,
   type UserId,
 } from '@nexa/contracts';
+import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { CustomerMessenger } from '../../messaging/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
+import { serviceIdOrNotFound } from './service-id.js';
 import type { CustomerContactReader, ServiceRecord, ServiceRepository } from './ports.js';
+
+/** What an operator-initiated resend charges. The same key every other service edit does. */
+const SERVICE_EDIT_PERMISSION: PermissionKey = 'services.edit';
 
 /**
  * How long before a refused delivery is tried again.
@@ -136,6 +143,15 @@ export interface DeliveryServiceDeps {
   readonly scopeActivity: ScopeActivityReader;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly clock: Clock;
+  /**
+   * For the ONE operator-initiated path here, `resendForOperator`.
+   *
+   * The sweep does not use it and cannot: a background lane has no caller to authorize
+   * and runs as `SYSTEM_JOB`. It is on the deps rather than reached through another
+   * service so that the permission charged for a resend is visible in this file, beside
+   * the send it authorises.
+   */
+  readonly guard: PermissionGuard;
 }
 
 /**
@@ -529,6 +545,52 @@ export class DeliveryService {
       throw errors.notFound(COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND, 'Unknown service.');
     }
     return this.deliver(scope, service, chatId, botInstanceId);
+  }
+
+  /**
+   * Sends a customer their configuration again, because an OPERATOR asked.
+   *
+   * Phase 6A. `redeliver` above is the customer asking for their own — ownership is the
+   * authorisation and the chat comes from the update. This is the other caller: an
+   * operator answering "this customer says they never got their link", who holds a
+   * permission rather than the service, and for whom the chat has to be LOOKED UP.
+   *
+   * ## The lookup is the refusal, and both of its answers are real
+   *
+   * `contactFor` is the same reader the sweep uses. `NONE` is a customer with no durable
+   * bot link — they have never opened the bot, so there is nowhere to send and guessing
+   * a chat id is the failure mode that port's docblock exists to forbid. `BLOCKED` is an
+   * operator's own instruction not to message them, and a resend that overrode it would
+   * be this surface undoing a decision somebody made on another screen. Both answer
+   * `SERVICE_NOT_DELIVERABLE` with the reason named, because the service is real and the
+   * send is what cannot happen.
+   *
+   * ## It plans no operation and touches no panel
+   *
+   * A resend is a message and a delivery row. The service does not move — that is the
+   * rule this whole file exists to hold, and it is why an operator resending to a
+   * customer whose send has already FAILED three times is allowed: `deliver` is legal
+   * from every delivery state, and the attempt ceiling bounds the AUTOMATIC lane only.
+   */
+  async resendForOperator(
+    scope: TenantContext,
+    actor: ActorContext,
+    serviceId: string,
+  ): Promise<DeliveryRecord> {
+    await this.deps.guard.check(scope, actor, SERVICE_EDIT_PERMISSION);
+    const service = await this.deps.services.findById(scope, serviceIdOrNotFound(serviceId));
+    if (service === null) {
+      throw errors.notFound(COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND, 'Unknown service.');
+    }
+    const lookup = await this.deps.contacts.contactFor(scope, service.customerId);
+    if (lookup.kind !== 'CONTACT') {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.SERVICE_NOT_DELIVERABLE,
+        'There is nowhere to send this configuration.',
+        { reason: lookup.kind === 'BLOCKED' ? 'CUSTOMER_BLOCKED' : 'NO_CONTACT' },
+      );
+    }
+    return this.deliver(scope, service, lookup.contact.chatId, lookup.contact.botInstanceId);
   }
 }
 

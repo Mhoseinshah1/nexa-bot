@@ -33,7 +33,7 @@ import {
 } from './harness';
 
 /**
- * Services over real HTTP. THREE routes, all reads, and the reads are the subject.
+ * Services over real HTTP. The READS, which are this file's subject.
  *
  * `docs/phase4h-audit.md` §7 measured what this closes: four `services.*` permissions
  * declared since Phase 2, three seeded roles carrying two of them, real service rows
@@ -49,8 +49,9 @@ import {
  *     because the Web Admin not drawing a link is not authorization;
  *   - tenant scope taken from the SESSION, which is what makes another tenant's
  *     service id useless rather than merely unlikely;
- *   - the ABSENCE of a write. There is no terminate and no transfer, and the case at
- *     the bottom asserts that by asking for them.
+ *   - the ABSENCE of a transfer. Phase 6A built the operator writes — they are proved
+ *     in `service-operations-http.test.ts` — and left transfer unbuilt because its
+ *     product rule is undecided. The case at the bottom asserts that by asking.
  */
 
 const ORIGIN = 'https://admin.example.test';
@@ -562,23 +563,27 @@ describe('service HTTP surface', () => {
   // What is deliberately not here
   // -------------------------------------------------------------------------
 
-  it('offers no write at all', async () => {
+  it('offers no transfer, and asserts that by asking for one', async () => {
     /*
-     * `services.terminate` and `services.transfer` are declared permissions with no
-     * endpoint, and that is asserted by ASKING rather than by a comment.
+     * `services.transfer` is still a declared permission with NO endpoint, and that is
+     * asserted by ASKING rather than by a comment.
      *
-     * Terminate deletes somebody's provider account and needs a confirmation flow this
-     * phase has not designed; transfer has no stated rule for what becomes of the
-     * order, the payment and the subscription the previous owner still holds. A route
-     * that half-worked would be the legacy silent-success pattern with a customer's
-     * paid-for account attached.
+     * Phase 6A built the terminate this case used to forbid, along with six more
+     * operator actions — `service-operations-http.test.ts` is where they are proved.
+     * Transfer is untouched because its product rule is genuinely undecided:
+     * `docs/open-questions.md` still carries what becomes of the order, the payment and
+     * the subscription the previous owner holds. A route that half-worked would be the
+     * legacy silent-success pattern with a customer's paid-for account attached.
+     *
+     * The three verbs against the detail path stay here too. Nothing in this release
+     * edits a service row through it, and a `PATCH` that quietly appeared would be a
+     * write path with none of the refusals the action routes apply.
      */
     const { serviceId } = await serviceFor('svc-nowrite');
     const attempts = [
       { method: 'POST', url: SERVICE_ROUTES.detail(serviceId) },
       { method: 'DELETE', url: SERVICE_ROUTES.detail(serviceId) },
       { method: 'PATCH', url: SERVICE_ROUTES.detail(serviceId) },
-      { method: 'POST', url: `${SERVICE_ROUTES.detail(serviceId)}/terminate` },
       { method: 'POST', url: `${SERVICE_ROUTES.detail(serviceId)}/transfer` },
     ];
     for (const attempt of attempts) {
@@ -593,5 +598,34 @@ describe('service HTTP surface', () => {
         `${attempt.method} ${attempt.url} is routed and must not be`,
       ).toBe(404);
     }
+
+    /*
+     * And the seven that ARE routed, named here so this case cannot go on passing by
+     * the routes having been removed. A 404 from one of these would mean the surface
+     * lost an action; they answer 403 because this session holds `services.view` alone.
+     */
+    for (const action of [
+      SERVICE_ROUTES.syncUsage(serviceId),
+      SERVICE_ROUTES.resend(serviceId),
+      SERVICE_ROUTES.retryProvision(serviceId),
+      SERVICE_ROUTES.reconcile(serviceId),
+      SERVICE_ROUTES.suspend(serviceId),
+      SERVICE_ROUTES.resume(serviceId),
+    ]) {
+      const response = await inject({
+        method: 'POST',
+        url: `${API_PREFIX}${action}`,
+        headers: { cookie: viewerCookie, origin: ORIGIN },
+        payload: { idempotencyKey: 'viewer-attempt-01' },
+      });
+      expect(response.statusCode, `${action} must be routed`).toBe(403);
+    }
+    const terminate = await inject({
+      method: 'POST',
+      url: `${API_PREFIX}${SERVICE_ROUTES.terminate(serviceId)}`,
+      headers: { cookie: viewerCookie, origin: ORIGIN },
+      payload: { idempotencyKey: 'viewer-attempt-01', confirm: 'TERMINATE' },
+    });
+    expect(terminate.statusCode, 'terminate must be routed').toBe(403);
   });
 });

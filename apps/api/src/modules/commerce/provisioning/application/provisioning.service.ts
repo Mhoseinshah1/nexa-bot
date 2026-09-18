@@ -15,12 +15,14 @@ import {
   type OperationId,
   type OperationTarget,
   type OperationType,
+  type PermissionKey,
   type ServiceState,
   type TenantContext,
   type UnitOfWork,
   type UserId,
 } from '@nexa/contracts';
 import { OPERATION_LEGAL_FROM } from './provision-executor.js';
+import { serviceIdOrNotFound } from './service-id.js';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
@@ -115,6 +117,55 @@ export const CUSTOMER_SERVICE_OPERATIONS = [
 ] as const satisfies readonly OperationType[];
 
 export type CustomerServiceOperation = (typeof CUSTOMER_SERVICE_OPERATIONS)[number];
+
+/**
+ * The operations an OPERATOR may ask for on any service in their tenant.
+ *
+ * Phase 6A, and the difference from the customer list above is the whole reason both
+ * exist. A customer initiates three, authorised by owning the service. An operator
+ * initiates five, authorised by a permission — and gets the two the customer list calls
+ * "the system's own work" because an operator can read the answer: `SYNC_USAGE` is the
+ * refresh behind a usage figure they are about to act on, and `RECONCILE` is how an
+ * `UNRECONCILED` service is resolved without waiting for the sweep's five-per-tick.
+ *
+ * `PROVISION` is absent and stays absent: `retryProvisioning` is its own method with its
+ * own refusals, including the one that matters — an `UNRECONCILED` service must be
+ * reconciled before anything asks a panel to create a second account for it.
+ *
+ * `RENEW`, `ADD_TRAFFIC` and `ADD_TIME` are absent for the reason the customer list
+ * gives: they are purchases, and a purchase starts with an order. An operator granting
+ * one for free is a Phase 7 product decision (`docs/open-questions.md`), not an
+ * operation this list can quietly acquire.
+ */
+export const OPERATOR_SERVICE_OPERATIONS = [
+  'SUSPEND',
+  'RESUME',
+  'TERMINATE',
+  'SYNC_USAGE',
+  'RECONCILE',
+] as const satisfies readonly OperationType[];
+
+export type OperatorServiceOperation = (typeof OPERATOR_SERVICE_OPERATIONS)[number];
+
+/**
+ * Which permission each operator operation charges.
+ *
+ * `TERMINATE` is `services.terminate` — a HIGH-risk key held by `owner` alone in the
+ * frozen role catalogue — because it deletes the account on somebody's panel while the
+ * customer keeps the order they paid for. The other four are `services.edit`.
+ *
+ * A table rather than a conditional, so adding an operation cannot inherit the cheaper
+ * key by being written in the wrong branch.
+ */
+export const OPERATOR_OPERATION_PERMISSION: Readonly<
+  Record<OperatorServiceOperation, PermissionKey>
+> = {
+  SUSPEND: 'services.edit',
+  RESUME: 'services.edit',
+  TERMINATE: 'services.terminate',
+  SYNC_USAGE: 'services.edit',
+  RECONCILE: 'services.edit',
+};
 
 export class ProvisioningService {
   constructor(private readonly deps: ProvisioningServiceDeps) {}
@@ -277,7 +328,7 @@ export class ProvisioningService {
     input: { readonly idempotencyKey: string },
   ): Promise<OperationRecord> {
     await this.deps.guard.check(scope, actor, SERVICE_EDIT_PERMISSION);
-    const service = await this.deps.services.findById(scope, serviceId);
+    const service = await this.deps.services.findById(scope, serviceIdOrNotFound(serviceId));
     if (service === null) {
       throw errors.notFound(COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND, 'Unknown service.');
     }
@@ -431,7 +482,15 @@ export class ProvisioningService {
     customerId: UserId,
     id: string,
   ): Promise<ServiceRecord> {
-    const service = await this.deps.services.findById(scope, id);
+    /*
+     * The id is VALIDATED before it reaches a `uuid` column.
+     *
+     * This path is reached from Telegram callback data, which is attacker-supplied: a
+     * crafted `s:<anything>` would otherwise fail at the cast rather than at the
+     * ownership check, and an invalid-cast error is neither the tenancy answer nor a
+     * refusal the surface has a sentence for.
+     */
+    const service = await this.deps.services.findById(scope, serviceIdOrNotFound(id));
     if (service === null || service.customerId !== customerId) {
       throw errors.notFound(COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND, 'Unknown service.');
     }
@@ -515,10 +574,94 @@ export class ProvisioningService {
     input: { readonly idempotencyKey: string },
   ): Promise<OperationRecord> {
     const service = await this.getForCustomer(scope, customerId, serviceId);
+    return this.planRequestedOperation(scope, actor, service, type, input, {
+      requestedBy: customerId,
+      /*
+       * The code this path has answered since 4E, kept.
+       *
+       * `SERVICE_ACTION_NOT_ALLOWED` is the more honest name and the operator path uses
+       * it; changing this one would change what a customer is told by a shipped
+       * surface, which is a product decision and not a refactor. Both are mapped in
+       * `bot-runtime`'s refusal table, so the sentence is the same either way.
+       */
+      stateRefusal: COMMERCE_ERROR_CODES.ORDER_STATE_INVALID,
+    });
+  }
+
+  /**
+   * Plans one management operation an OPERATOR asked for, on any service in their tenant.
+   *
+   * Phase 6A, and the sibling of `requestFromCustomer` above. Everything about the
+   * PLANNING is identical — the same legal-state table, the same panel operability, the
+   * same scope-activity check inside the transaction, the same open-operation return,
+   * the same operation id derived from the caller's idempotency key — and the two things
+   * that differ are the two that must:
+   *
+   * 1. **Authorisation is a permission, not ownership.** `OPERATOR_OPERATION_PERMISSION`
+   *    charges `services.terminate` for a terminate and `services.edit` for the rest,
+   *    through the guard, which writes its own operational event on a denial. The
+   *    service is then read by id WITHOUT a customer comparison, because an operator
+   *    acts on services that are not theirs — that is the job — and the tenant scope is
+   *    the isolation.
+   * 2. **The actor is real.** A Telegram administrator or a Web Admin session has an
+   *    `ActorContext` of its own, so the audit row names who asked rather than recording
+   *    the `SYSTEM_JOB` a webhook runs as and putting the requester in the payload. That
+   *    is the distinction `docs/conventions.md` draws about fabricated actors, and it is
+   *    why this method takes the actor it authorises with and passes the same one to the
+   *    audit writer.
+   *
+   * The guard runs BEFORE the service is read, so an unauthorised caller cannot learn
+   * whether an id exists — the same ordering `ServiceAdminService` uses.
+   */
+  async requestFromOperator(
+    scope: TenantContext,
+    actor: ActorContext,
+    serviceId: string,
+    type: OperatorServiceOperation,
+    input: { readonly idempotencyKey: string },
+  ): Promise<OperationRecord> {
+    await this.deps.guard.check(scope, actor, OPERATOR_OPERATION_PERMISSION[type]);
+    const service = await this.deps.services.findById(scope, serviceIdOrNotFound(serviceId));
+    if (service === null) {
+      throw errors.notFound(COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND, 'Unknown service.');
+    }
+    return this.planRequestedOperation(scope, actor, service, type, input, {
+      requestedBy: 'OPERATOR',
+    });
+  }
+
+  /**
+   * The planning half both request paths share, so neither can drift from the other.
+   *
+   * Extracted in 6A when the operator path arrived, and `requestFromCustomer` was moved
+   * ONTO it rather than left beside it: 4E's version and this one were the same four
+   * refusals in the same order, and a second copy is precisely how one caller ends up
+   * without the scope-activity check or without the open-operation return. Both are
+   * invisible until a stopped tenant gets rows or a double-click gets two operations.
+   *
+   * The four refusals, their ORDER and the reason for each are documented on
+   * `requestFromCustomer` above. Two things are the CALLER's and arrive in `origin`:
+   * who asked, which the audit row records, and which code a state refusal answers —
+   * the customer path keeps the one it has answered since 4E.
+   */
+  private async planRequestedOperation(
+    scope: TenantContext,
+    actor: ActorContext,
+    service: ServiceRecord,
+    type: OperationType,
+    input: { readonly idempotencyKey: string },
+    origin: {
+      readonly requestedBy: 'OPERATOR' | UserId;
+      /** One of exactly two codes, so a third caller cannot invent a third answer. */
+      readonly stateRefusal?:
+        | typeof COMMERCE_ERROR_CODES.ORDER_STATE_INVALID
+        | typeof COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED;
+    },
+  ): Promise<OperationRecord> {
     const legalFrom = OPERATION_LEGAL_FROM[type];
     if (!legalFrom.includes(service.state)) {
       throw errors.conflict(
-        COMMERCE_ERROR_CODES.ORDER_STATE_INVALID,
+        origin.stateRefusal ?? COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
         'That service is not in a state this action can be taken from.',
         { state: service.state },
       );
@@ -540,14 +683,14 @@ export class ProvisioningService {
           'That tenant has stopped accepting work.',
         );
       }
-      const open = await this.deps.operations.findOpen(scope, serviceId, type, tx);
+      const open = await this.deps.operations.findOpen(scope, service.id, type, tx);
       if (open !== null) return open;
       const operation = await this.deps.operations.plan(
         scope,
         {
           id: this.deps.ids.uuid(),
-          operationId: this.deps.operationId(`${serviceId}:${type}:${input.idempotencyKey}`),
-          serviceId,
+          operationId: this.deps.operationId(`${service.id}:${type}:${input.idempotencyKey}`),
+          serviceId: service.id,
           orderId: service.orderId,
           panelId: service.panelId,
           type,
@@ -560,14 +703,17 @@ export class ProvisioningService {
        *
        * `plan` records no actor — an operation row says what is to be done and by which
        * worker it was claimed, not who wanted it — so without this the only answer to
-       * "who asked for this service to be deleted" would be inferred from the fact that
-       * nobody else can. Inference is what `/admin/logs` offered, and the research
-       * records what that was worth.
+       * "who asked for this service to be deleted" would be inferred. Inference is what
+       * `/admin/logs` offered, and the research records what that was worth.
        *
-       * The actor is the SYSTEM_JOB the webhook runs as, because a customer is not an
-       * admin and has no `ActorContext` of their own; the customer id goes in the
-       * payload, where it is a fact about the request rather than a fabricated identity.
-       * That distinction is the reason `docs/conventions.md` forbids inventing actors.
+       * The actor is whatever the CALLER authenticated. For an operator it is their own
+       * `ActorContext`, which is the point of `requestFromOperator`. For a customer it
+       * is the `SYSTEM_JOB` the webhook runs as, because a customer is not an admin and
+       * has no actor of their own — their id goes in `requestedBy`, where it is a fact
+       * about the request rather than a fabricated identity. That distinction is the
+       * reason `docs/conventions.md` forbids inventing actors, and `requestedBy` is what
+       * keeps the two readable apart: a customer id, or the literal `OPERATOR` beside an
+       * admin actor that names the person.
        *
        * The executor writes a SECOND audit row when the panel actually applies the
        * change, and the two are different facts: this one is a decision, that one is an
@@ -580,9 +726,9 @@ export class ProvisioningService {
         {
           action: `service.request_${type.toLowerCase()}`,
           entityType: 'Service',
-          entityId: serviceId,
+          entityId: service.id,
           before: { state: service.state },
-          after: { requestedBy: customerId, operationId: operation.operationId },
+          after: { requestedBy: origin.requestedBy, operationId: operation.operationId },
           result: 'SUCCESS',
         },
         tx,
