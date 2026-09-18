@@ -208,9 +208,15 @@ control EXISTS is not an assertion that it works, and the two look alike in a di
 | ------ | ------------------------------------------------------------ | --------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ------ |
 | F4H-24 | the service list pages newest first (owner revision 13)      | `desc` -> `asc` and `<` -> `>` in the keyset        | `services-http.test.ts` › serves the newest service first                                       | KILLED |
 | F4H-25 | the Web Admin shows a customer's transfer claim on the list  | the column's renderer replaced with a constant dash | `payments.test.tsx` › shows that a customer said they paid, and still calls the payment pending | KILLED |
-| F4H-26 | `/services` issues no write                                  | a `POST .../terminate` added to the page            | `services.test.tsx` › offers no write: every request the page makes is a GET                    | KILLED |
+| F4H-26 | the service LIST issues no write                             | a `POST .../terminate` added to the page            | `services.test.tsx` › offers no write from the list: every request it makes is a GET            | KILLED |
 | F4H-27 | a descending list does not flip the pager labels             | `nextLabel="web.newer"` copied from `/orders`       | `services.test.tsx` › labels the next page older, the way a descending list must                | KILLED |
 | F4H-28 | a promoted page leaves `PLANNED_SURFACES` in the same commit | a `services` entry re-added to the list             | `services.test.tsx` › is gone from PLANNED_SURFACES, so the placeholder cannot shadow it        | KILLED |
+
+F4H-26 was narrowed in Phase 6A, which built the operator actions this row's rule
+originally covered. What the row still asserts is true and still worth asserting: the
+actions are on the DETAIL and the LIST issues no write, because a column of action
+buttons over a page of services is how a mis-click ends the wrong customer's account.
+The renamed test carries the same mutation.
 
 F4H-24 is a correction rather than a rule this slice invented. `/users`, `/orders`
 and `/products` all page an ASCENDING keyset, the service list was written the same

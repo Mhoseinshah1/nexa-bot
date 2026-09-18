@@ -14,6 +14,11 @@ import {
 } from '@nexa/contracts';
 import { providerDescriptor } from '@nexa/contracts';
 import { operationIdFor } from '../../apps/api/src/infrastructure/crypto/operation-id';
+import {
+  SERVICES_PAGE_CALLBACK_PREFIX,
+  SERVICES_PAGE_SIZE,
+} from '../../apps/api/src/surfaces/telegram/bot-runtime';
+import { encodeServiceCursor } from '../../apps/api/src/surfaces/telegram/service-cursor';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
 import { DrizzleOperationRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-operation.repository';
@@ -1516,6 +1521,37 @@ describe('a provisioned service announces itself', () => {
       },
     });
 
+  /**
+   * The same tap, from a DIFFERENT Telegram account.
+   *
+   * `customerUpdate` hardcodes one customer because almost every case here is about
+   * that customer's own service. The cursor cases are not: a page token is a position
+   * and carries no authority, and proving that needs a second person replaying it.
+   */
+  const tapUpdateAs = (data: string, telegramUserId: string, firstName: string) => {
+    updateSeq += 1;
+    return {
+      idempotencyKey: `bot-update-${String(updateSeq)}`,
+      botInstanceId: BOT_A,
+      update: {
+        update_id: updateSeq,
+        callback_query: {
+          id: `cbq-${String(updateSeq)}`,
+          from: { id: Number(telegramUserId), is_bot: false, first_name: firstName },
+          data,
+          message: {
+            message_id: updateSeq,
+            date: 0,
+            chat: { id: 5151, type: 'private' },
+            from: { id: 999999, is_bot: true, first_name: 'Nexa' },
+          },
+        },
+      },
+      telegramUserId,
+      from: { id: Number(telegramUserId), first_name: firstName },
+    };
+  };
+
   const runtime = () => ctx.container.botRuntime;
 
   /**
@@ -1551,6 +1587,115 @@ describe('a provisioned service announces itself', () => {
   it('answers a customer with no services with a different key, not an empty list', async () => {
     const result = await runtime().handle(tenantA, systemActor('bot'), textUpdate('/services'));
     expect(result.replyKey).toBe('bot.service.list_empty');
+  });
+
+  /**
+   * The bound became a PAGE, and this is what proves it.
+   *
+   * Before Phase 6A the list was `SERVICES_PAGE_SIZE` services and silence: the
+   * repository returned a `nextCursor` and the surface dropped it, so a customer with
+   * more than twenty saw twenty and was told nothing about the rest. Twenty is above any
+   * list `docs/research/` shows, which is why nobody noticed and not why it was all
+   * right.
+   *
+   * Twenty-one services, built the way the product builds them — a settled order each,
+   * no panel involved — because the defect only exists above the bound and a fixture at
+   * or below it cannot see either the presence of the button or its absence.
+   */
+  it('offers a next page rather than silently showing twenty of twenty-one services', async () => {
+    const created: string[] = [];
+    for (let index = 0; index < SERVICES_PAGE_SIZE + 1; index += 1) {
+      const orderId = await paidOrder(`bot-page-${String(index)}`);
+      const service = await services.findByOrderId(tenantA, orderId);
+      created.push(service?.id ?? '');
+    }
+
+    const first = await runtime().handle(tenantA, systemActor('bot'), textUpdate('/services'));
+    expect(first.replyKey).toBe('bot.service.list_heading');
+    const firstBody = JSON.stringify(messages()[messages().length - 1]);
+    const firstPage = created.filter((id) => firstBody.includes(`s:${id}`));
+    expect(firstPage, 'the page is the bound, not the whole list').toHaveLength(SERVICES_PAGE_SIZE);
+    expect(firstBody, 'and it says there is more').toContain(SERVICES_PAGE_CALLBACK_PREFIX);
+
+    /*
+     * The token is taken from the button the bot actually drew, never rebuilt here.
+     * A test that constructed its own cursor would pass against a surface that drew a
+     * broken one.
+     */
+    const token = /"l:([^"]+)"/.exec(firstBody)?.[1];
+    if (token === undefined) throw new Error(`no page token in ${firstBody}`);
+    expect(Buffer.byteLength(`l:${token}`, 'utf8')).toBeLessThanOrEqual(64);
+
+    const second = await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`l:${token}`));
+    expect(second.intent).toBe('SERVICES_PAGE');
+    expect(second.replyKey).toBe('bot.service.list_heading');
+    const secondBody = JSON.stringify(messages()[messages().length - 1]);
+    const secondPage = created.filter((id) => secondBody.includes(`s:${id}`));
+
+    /* The twenty-first, and NOT one the first page already showed. */
+    expect(secondPage).toHaveLength(1);
+    expect(firstPage).not.toContain(secondPage[0]);
+    /* And the traversal ends: no further button on the last page. */
+    expect(secondBody).not.toContain(SERVICES_PAGE_CALLBACK_PREFIX);
+
+    /* Every service was reachable across the two pages, none twice. */
+    expect(new Set([...firstPage, ...secondPage]).size).toBe(SERVICES_PAGE_SIZE + 1);
+  });
+
+  it('draws no next-page button for a customer whose services fit on one page', async () => {
+    await paidOrder('bot-one-page');
+    const result = await runtime().handle(tenantA, systemActor('bot'), textUpdate('/services'));
+
+    expect(result.replyKey).toBe('bot.service.list_heading');
+    expect(JSON.stringify(messages()[messages().length - 1])).not.toContain(
+      SERVICES_PAGE_CALLBACK_PREFIX,
+    );
+  });
+
+  it('answers a crafted page token with the unsupported reply, not an error', async () => {
+    /*
+     * `callback_data` is client text. A token this codec did not produce is refused at
+     * the BOUNDARY — the same place a crafted uuid is — so it never reaches the
+     * `timestamptz` and `uuid` casts the query performs. The customer gets the reply
+     * any other string this bot does not understand gets.
+     */
+    await paidOrder('bot-bad-token');
+    for (const token of ['', 'not-a-cursor', 'zz.0011', '-1.0011']) {
+      const result = await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`l:${token}`));
+      expect(result.intent, token).toBe('UNSUPPORTED');
+    }
+  });
+
+  it('shows one customer their own page only, on a token another customer produced', async () => {
+    /*
+     * A cursor is a POSITION, not an authority. The list is scoped to the tenant and to
+     * the customer resolved from the update, so replaying somebody else's token pages
+     * through the replayer's own services — and here that customer has none, so it is
+     * the empty answer rather than a peek at another customer's list.
+     */
+    const orderId = await paidOrder('bot-foreign-cursor');
+    const mine = await services.findByOrderId(tenantA, orderId);
+    const token = encodeServiceCursor({
+      createdAt: '2099-01-01 00:00:00.000000+00',
+      id: mine?.id ?? '',
+    });
+    if (token === null) throw new Error('fixture cursor did not encode');
+
+    const other = await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('other'), {
+      idempotencyKey: 'resolve-other-cursor',
+      telegramUserId: '910911',
+      from: { id: 910911, first_name: 'سارا' },
+      botInstanceId: BOT_A,
+    });
+    expect(other.customer.id).not.toBe(mine?.customerId);
+
+    const result = await runtime().handle(
+      tenantA,
+      systemActor('bot'),
+      tapUpdateAs(`l:${token}`, '910911', 'سارا'),
+    );
+    expect(result.replyKey).toBe('bot.service.list_empty');
+    expect(JSON.stringify(messages()[messages().length - 1])).not.toContain(`s:${mine?.id ?? ''}`);
   });
 
   it('shows one service, with the moment its usage was read', async () => {

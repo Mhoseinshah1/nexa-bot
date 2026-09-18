@@ -1,19 +1,26 @@
 import { useState, type FormEvent } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   SERVICE_DELIVERY_STATES,
+  SERVICE_OPERATOR_ACTIONS,
   SERVICE_STATES,
+  SERVICE_TERMINATE_CONFIRMATION,
   UNLIMITED_TRAFFIC_BYTES,
   uuidV7Schema,
   type OperationState,
   type OperationType,
+  type ServiceActionAvailability,
+  type ServiceActionBlocker,
   type ServiceDeliveryState,
   type ServiceOperationResponse,
+  type ServiceOperatorAction,
   type ServiceState,
   type ServiceSummaryResponse,
 } from '@nexa/contracts';
-import { fetchService, fetchServiceOperations, fetchServices } from '../api/client';
+import { actOnService, fetchService, fetchServiceOperations, fetchServices } from '../api/client';
 import { formatNumber, formatTimestamp, splitBytes } from '../format';
+import { messageFor } from './settings';
+import { useSubmissionKey } from '../submission-key';
 import { mayRequest, queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
@@ -31,6 +38,7 @@ import {
   PageHead,
   Pills,
   StateSwitch,
+  useToast,
   type Column,
   type Tone,
 } from '../ui/kit';
@@ -67,11 +75,22 @@ import {
  * unprovisioned — for which the obvious remedy is to provision it again, on somebody's
  * panel, a second time.
  *
- * ## Read-only, deliberately
+ * ## The actions are the SERVER's list, and the page adds none
  *
- * No terminate and no transfer, although both are declared permissions, and no disabled
- * buttons for them. `services_read_only` says so in words: a disabled control claims
- * "this exists and you lack permission", which is a different and false statement.
+ * Phase 6A. The detail response carries a verdict for each of the seven operator
+ * actions with a blocker code when it is not available, computed by the one evaluator
+ * the write paths agree with. This page renders that list and nothing else: it does not
+ * decide availability, does not infer a reason, and cannot offer an action the request
+ * would refuse.
+ *
+ * Permission is separate and is checked twice — here, so a viewer is told in a sentence
+ * rather than shown a control that records a denial when pressed, and again by the
+ * server, which is the one that counts. `services.terminate` is its own key.
+ *
+ * `services.transfer` is still declared with no endpoint, and
+ * `services_transfer_absent` says so in words rather than as a disabled button: a
+ * disabled control claims "this exists and you lack permission", which is a different
+ * and false statement.
  */
 
 const STATE_LABELS: Readonly<Record<ServiceState, WebKey>> = {
@@ -413,9 +432,199 @@ export function ServicesPage({ route, denied }: { route: Route; denied: boolean 
         <p className="muted">{t('web.services_rule_no_protocol')}</p>
         <p className="muted">{t('web.services_rule_ordering')}</p>
         <p className="muted">{t('web.services_rule_plan_filter')}</p>
-        <p className="muted">{t('web.services_read_only')}</p>
+        <p className="muted">{t('web.services_transfer_absent')}</p>
       </Card>
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Actions
+// ---------------------------------------------------------------------------
+
+const ACTION_LABELS: Readonly<Record<ServiceOperatorAction, WebKey>> = {
+  SYNC_USAGE: 'web.service_action_sync_usage',
+  RESEND_CONFIG: 'web.service_action_resend_config',
+  RETRY_PROVISION: 'web.service_action_retry_provision',
+  RECONCILE: 'web.service_action_reconcile',
+  SUSPEND: 'web.service_action_suspend',
+  RESUME: 'web.service_action_resume',
+  TERMINATE: 'web.service_action_terminate',
+};
+
+/**
+ * Why an action is not offered, in a sentence an operator can act on.
+ *
+ * One per blocker code the contract declares, and the mapping is exhaustive by type —
+ * a new blocker cannot ship without its sentence, which is the failure this table
+ * exists to prevent: a greyed-out button with no explanation is the legacy panel's
+ * entire style of refusal.
+ */
+const BLOCKER_LABELS: Readonly<Record<ServiceActionBlocker, WebKey>> = {
+  STATE: 'web.service_blocker_state',
+  CAPABILITY: 'web.service_blocker_capability',
+  PANEL_NOT_OPERABLE: 'web.service_blocker_panel_not_operable',
+  IN_PROGRESS: 'web.service_blocker_in_progress',
+  NO_CONFIGURATION: 'web.service_blocker_no_configuration',
+  NO_CONTACT: 'web.service_blocker_no_contact',
+};
+
+/**
+ * Which actions charge `services.terminate` rather than `services.edit`.
+ *
+ * A table over every action rather than a `!== 'TERMINATE'` filter, and for the reason
+ * the server's own `OPERATOR_OPERATION_PERMISSION` gives: a second HIGH-risk action
+ * added later would be silently drawn in the ordinary group under the cheaper
+ * permission. Here it has to be classified.
+ */
+const ACTION_NEEDS_TERMINATE: Readonly<Record<ServiceOperatorAction, boolean>> = {
+  SYNC_USAGE: false,
+  RESEND_CONFIG: false,
+  RETRY_PROVISION: false,
+  RECONCILE: false,
+  SUSPEND: false,
+  RESUME: false,
+  TERMINATE: true,
+};
+
+/**
+ * The seven actions, drawn from the server's own verdicts.
+ *
+ * Terminate is separated out below the other six because it is the only one that
+ * deletes an account on somebody's panel and the only one that costs a typed phrase.
+ * The other six are one press each: the request is idempotent under a key held by
+ * `useSubmissionKey`, so pressing twice asks the same question rather than planning a
+ * second operation.
+ *
+ * Nothing here decides availability. `entry.available` and `entry.blocker` come from
+ * the response, and a permission the session lacks is reported as a sentence instead of
+ * removing the section — an absent control says nothing about why.
+ */
+function ServiceActions({
+  id,
+  actions,
+  mayEdit,
+  mayTerminate,
+  onActed,
+}: {
+  id: string;
+  actions: readonly ServiceActionAvailability[];
+  mayEdit: boolean;
+  mayTerminate: boolean;
+  onActed: () => void;
+}) {
+  const toast = useToast();
+  const submission = useSubmissionKey();
+  const [phrase, setPhrase] = useState('');
+
+  const act = useMutation({
+    mutationFn: (input: { action: ServiceOperatorAction; confirm?: string }) =>
+      actOnService({
+        id,
+        action: input.action,
+        idempotencyKey: submission.current({ command: 'services.act', id, action: input.action }),
+        ...(input.confirm === undefined ? {} : { confirm: input.confirm }),
+      }),
+    onSuccess: (result, input) => {
+      submission.settle();
+      if (input.action === 'TERMINATE') setPhrase('');
+      /*
+       * "Recorded", never "done" — for the six that plan an operation.
+       *
+       * The response carries the operation in `PLANNED`: no provider has been called
+       * yet. Reporting success would be the legacy "✅ updated" for a write whose
+       * effect has not happened, and the difference matters most for the action that
+       * deletes an account.
+       */
+      toast({
+        tone: 'ok',
+        message:
+          result.operation === null
+            ? t('web.service_action_resent')
+            : t('web.service_action_planned'),
+      });
+      onActed();
+    },
+    onError: (error: unknown) => {
+      submission.settleOn(error);
+      toast({ tone: 'danger', message: messageFor(error) });
+    },
+  });
+
+  const byAction = new Map(actions.map((entry) => [entry.action, entry]));
+  const ordinary = SERVICE_OPERATOR_ACTIONS.filter((action) => !ACTION_NEEDS_TERMINATE[action]);
+  const phraseMatches = phrase.trim() === SERVICE_TERMINATE_CONFIRMATION;
+  const terminate = byAction.get('TERMINATE');
+
+  return (
+    <Card title={t('web.service_actions_title')} hint={t('web.service_actions_hint')}>
+      {!mayEdit && <Banner tone="neutral">{t('web.service_action_denied_edit')}</Banner>}
+
+      <div className="stack">
+        {ordinary.map((action) => {
+          const entry = byAction.get(action);
+          if (entry === undefined) return null;
+          return (
+            <div key={action} className="stack tight">
+              <div className="btn-group">
+                <button
+                  type="button"
+                  className="btn sm"
+                  disabled={!mayEdit || !entry.available || act.isPending}
+                  onClick={() => act.mutate({ action })}
+                >
+                  {t(ACTION_LABELS[action])}
+                </button>
+              </div>
+              {!entry.available && entry.blocker !== null && (
+                <p className="muted small">{t(BLOCKER_LABELS[entry.blocker])}</p>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {terminate !== undefined && (
+        <div className="stack">
+          <Banner tone="danger" title={t('web.service_terminate_title')}>
+            {t('web.service_terminate_danger')}
+          </Banner>
+          {!mayTerminate ? (
+            <Banner tone="neutral">{t('web.service_action_denied_terminate')}</Banner>
+          ) : !terminate.available && terminate.blocker !== null ? (
+            <p className="muted small">{t(BLOCKER_LABELS[terminate.blocker])}</p>
+          ) : (
+            <>
+              <label className="field">
+                <span className="field-label">{t('web.service_terminate_confirm_label')}</span>
+                <Ltr>{SERVICE_TERMINATE_CONFIRMATION}</Ltr>
+                <input
+                  type="text"
+                  value={phrase}
+                  dir="ltr"
+                  autoComplete="off"
+                  spellCheck={false}
+                  onChange={(event) => setPhrase(event.currentTarget.value)}
+                />
+              </label>
+              {phrase !== '' && !phraseMatches && (
+                <Banner tone="warn">{t('web.service_terminate_confirm_wrong')}</Banner>
+              )}
+              <div className="btn-group">
+                <button
+                  type="button"
+                  className="btn danger"
+                  disabled={!phraseMatches || act.isPending}
+                  onClick={() => act.mutate({ action: 'TERMINATE', confirm: phrase })}
+                >
+                  {t('web.service_terminate_button')}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </Card>
   );
 }
 
@@ -423,8 +632,33 @@ export function ServicesPage({ route, denied }: { route: Route; denied: boolean 
 // Detail
 // ---------------------------------------------------------------------------
 
-export function ServiceDetailPage({ id, denied }: { id: string; denied: boolean }) {
+export function ServiceDetailPage({
+  id,
+  denied,
+  mayEdit,
+  mayTerminate,
+}: {
+  id: string;
+  denied: boolean;
+  mayEdit: boolean;
+  mayTerminate: boolean;
+}) {
   const onLink = useLinkHandler();
+  const client = useQueryClient();
+
+  /*
+   * Both queries again after a write, and not just the detail.
+   *
+   * An action plans an operation, so the HISTORY changed too, and the operations card
+   * sits on the same screen. Refreshing only the row would leave a suspend that was
+   * just requested absent from the list of what has been attempted — which is the one
+   * place an operator looks to find out whether their press did anything.
+   */
+  const refresh = () => {
+    void client.invalidateQueries({ queryKey: ['service', id] });
+    void client.invalidateQueries({ queryKey: ['service-operations', id] });
+    void client.invalidateQueries({ queryKey: ['services'] });
+  };
 
   const service = useQuery({
     queryKey: ['service', id],
@@ -668,6 +902,14 @@ export function ServiceDetailPage({ id, denied }: { id: string; denied: boolean 
               <p className="muted small">{t('web.service_subscription_withheld')}</p>
             </Card>
 
+            <ServiceActions
+              id={id}
+              actions={row.actions}
+              mayEdit={mayEdit}
+              mayTerminate={mayTerminate}
+              onActed={refresh}
+            />
+
             <Card title={t('web.service_operations_title')} hint={t('web.service_operations_hint')}>
               <StateSwitch query={operations} denied={denied}>
                 {operations.data === undefined ? null : operations.data.operations.length === 0 ? (
@@ -684,7 +926,7 @@ export function ServiceDetailPage({ id, denied }: { id: string; denied: boolean 
             </Card>
 
             <Card>
-              <p className="muted">{t('web.services_read_only')}</p>
+              <p className="muted">{t('web.services_transfer_absent')}</p>
             </Card>
           </>
         )}
