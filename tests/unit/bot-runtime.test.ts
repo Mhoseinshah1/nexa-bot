@@ -699,6 +699,7 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.service.detail',
       'bot.service.list_empty',
       'bot.service.list_heading',
+      'bot.service.list_more',
       'bot.service.not_found',
       /*
        * 4H's follow-up to `bot.order.settled`, and the one key here that is sent as a

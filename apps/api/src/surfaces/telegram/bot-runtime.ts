@@ -46,7 +46,11 @@ import type { WalletService } from '../../modules/commerce/wallet/application/wa
 import { ProvisioningService } from '../../modules/commerce/provisioning/application/provisioning.service.js';
 import type { CustomerServiceOperation } from '../../modules/commerce/provisioning/application/provisioning.service.js';
 import type { DeliveryService } from '../../modules/commerce/provisioning/application/delivery.service.js';
-import type { ServiceRecord } from '../../modules/commerce/provisioning/application/ports.js';
+import type {
+  ServiceCursor,
+  ServiceRecord,
+} from '../../modules/commerce/provisioning/application/ports.js';
+import { decodeServiceCursor, encodeServiceCursor } from './service-cursor.js';
 
 /**
  * What the customer asked for.
@@ -77,6 +81,15 @@ export const BOT_INTENTS = [
   'ORDER_CANCEL_ASK',
   'ORDER_CANCEL',
   'SERVICES',
+  /*
+   * The NEXT page of a customer's own services.
+   *
+   * Phase 6A. Its own intent rather than `SERVICES` with an optional payload, because
+   * the two are parsed differently: `SERVICES` comes from a command or the main-menu
+   * keyboard and carries nothing, and this one carries an opaque cursor that the
+   * boundary validates before any handler sees it.
+   */
+  'SERVICES_PAGE',
   'SERVICE',
   'SERVICE_RESEND',
   'SERVICE_SUSPEND',
@@ -155,6 +168,16 @@ export interface BotCommand {
    * because the boundary cannot know which administrator a name refers to.
    */
   readonly args?: readonly string[];
+  /**
+   * A decoded LIST POSITION, for the one callback that pages rather than acts.
+   *
+   * Not `targetId`: a cursor is not an identifier, nothing is looked up by it, and a
+   * field documented as an id would eventually be passed to a repository as one. It
+   * arrives as an opaque token in `callback_data` and is decoded — and therefore
+   * validated — at the boundary, so a handler either receives a well-formed position or
+   * the update is UNSUPPORTED before it gets there.
+   */
+  readonly cursor?: ServiceCursor | null;
   /** Telegram's id for the tapped button, so the spinner can be stopped. */
   readonly callbackQueryId: string | null;
   /**
@@ -315,6 +338,14 @@ export const TOPUP_MENU_CALLBACK_PREFIX = 'o:';
 export const TOPUP_PICK_CALLBACK_PREFIX = 'y:';
 
 export const SERVICE_CALLBACK_PREFIX = 's:';
+/**
+ * The next page of the customer's own service list.
+ *
+ * `l:` because every other lowercase letter is taken; the table above is the registry.
+ * What follows is `encodeServiceCursor`'s token, not a uuid, which is why this prefix is
+ * routed separately from every other one here.
+ */
+export const SERVICES_PAGE_CALLBACK_PREFIX = 'l:';
 export const SERVICE_RESEND_CALLBACK_PREFIX = 'r:';
 
 /**
@@ -654,6 +685,20 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
         data.slice(SERVICE_ACTION_CONFIRM_CALLBACK_PREFIX.length),
         id,
       );
+    }
+    if (data.startsWith(SERVICES_PAGE_CALLBACK_PREFIX)) {
+      /*
+       * The one callback that carries a POSITION rather than an identifier.
+       *
+       * Decoded here, which is the same place `callbackCommand` validates a uuid and
+       * for the same reason: a crafted token must be UNSUPPORTED at the boundary rather
+       * than an invalid cast inside a query. Nothing is authorized by it — the list is
+       * scoped to the tenant and to the customer resolved from the update — so the
+       * decode is about shape, not trust.
+       */
+      const cursor = decodeServiceCursor(data.slice(SERVICES_PAGE_CALLBACK_PREFIX.length));
+      if (cursor === null) return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      return { intent: 'SERVICES_PAGE', targetId: null, cursor, callbackQueryId: id };
     }
     if (data.startsWith(SERVICE_CALLBACK_PREFIX)) {
       return callbackCommand('SERVICE', data.slice(SERVICE_CALLBACK_PREFIX.length), id);
@@ -2161,7 +2206,10 @@ export class BotRuntime {
     if (command.intent === 'SERVICE_ACTION_CONFIRM' && command.targetId !== null) {
       return this.commercialConfirm(scope, actor, customer, command.targetId, input);
     }
-    if (command.intent === 'SERVICES') return this.services(scope, customer);
+    if (command.intent === 'SERVICES') return this.services(scope, customer, null);
+    if (command.intent === 'SERVICES_PAGE') {
+      return this.services(scope, customer, command.cursor ?? null);
+    }
     if (command.intent === 'SERVICE' && command.targetId !== null) {
       return this.serviceDetail(scope, actor, customer, command.targetId);
     }
@@ -2256,9 +2304,27 @@ export class BotRuntime {
    * `listForCustomer` takes the customer id from the RESOLVED customer row, never from
    * anything the update carried, so there is no id here for a modified client to change.
    */
-  private async services(scope: TenantContext, customer: CustomerRecord): Promise<PendingReply> {
-    const page = await this.deps.services.listForCustomer(scope, customer.id, SERVICES_PAGE_SIZE);
+  private async services(
+    scope: TenantContext,
+    customer: CustomerRecord,
+    cursor: ServiceCursor | null,
+  ): Promise<PendingReply> {
+    const page = await this.deps.services.listForCustomer(
+      scope,
+      customer.id,
+      SERVICES_PAGE_SIZE,
+      cursor,
+    );
     if (page.items.length === 0) {
+      /*
+       * An empty PAGE is the empty answer, cursor or not.
+       *
+       * Reachable with a cursor: a customer pages forward and the last of their
+       * services is terminated and swept between the render and the tap. Saying they
+       * have none is truthful about what this page holds and is the answer they get for
+       * having none at all — the alternative, a "nothing further" sentence, is a second
+       * key for a state the customer cannot act on differently.
+       */
       return { key: 'bot.service.list_empty', values: {}, buttons: [], orderId: null };
     }
     const buttons: CustomerButton[] = [];
@@ -2282,6 +2348,25 @@ export class BotRuntime {
     }
     if (buttons.length === 0) {
       return { key: 'bot.service.list_empty', values: {}, buttons: [], orderId: null };
+    }
+    /*
+     * The NEXT page, when the repository says there is one.
+     *
+     * Phase 6A, and what it replaces is the defect this handler shipped with: the page
+     * carried a `nextCursor` and this surface dropped it, so a customer with more than
+     * twenty services saw twenty and was told nothing. Twenty is above any list the
+     * research shows, which is why it went unnoticed and not why it was acceptable.
+     *
+     * The token is appended only when it ENCODES. A cursor this codec cannot carry
+     * would otherwise become a button whose `callback_data` is a bare prefix, and the
+     * honest answer to that is the same as having no further page: a list that ends.
+     */
+    const token = page.nextCursor === null ? null : encodeServiceCursor(page.nextCursor);
+    if (token !== null) {
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.service.list_more' },
+        data: `${SERVICES_PAGE_CALLBACK_PREFIX}${token}`,
+      });
     }
     return { key: 'bot.service.list_heading', values: {}, buttons, orderId: null };
   }

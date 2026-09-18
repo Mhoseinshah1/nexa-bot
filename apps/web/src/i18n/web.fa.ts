@@ -1403,14 +1403,54 @@ export const WEB_FA = {
   'web.services_rule_plan_filter':
     'فیلتر لوکیشن وجود نخواهد داشت؛ به جای آن فیلتر چندانتخابی «پلن» با پشتیبانی از صفحه‌بندی سمت سرور.',
   /*
-   * Said in the product's own words, not left for an operator to infer from a
-   * missing button. `services.terminate` and `services.transfer` are declared
-   * permissions with no endpoint: terminating needs the operator half of a flow
-   * this phase did not build, and a transfer has no stated rule at all for what
-   * becomes of the order, the payment and the link the previous owner is holding.
+   * What is STILL not here, in the product's own words rather than left for an
+   * operator to infer from a missing button.
+   *
+   * Phase 6A built the seven actions this sentence used to say were absent.
+   * `services.transfer` is the one that remains a declared permission with no
+   * endpoint, and for a real reason: there is no stated rule for what becomes of the
+   * order, the payment and the link the previous owner is holding.
    */
-  'web.services_read_only':
-    'در این نسخه از این صفحه فقط می‌توان سرویس‌ها را دید. پایان دادن به سرویس و انتقال آن به مشتری دیگر ساخته نشده‌اند؛ دکمهٔ غیرفعال هم نگذاشته‌ایم، چون یعنی «هست ولی دسترسی ندارید».',
+  'web.services_transfer_absent':
+    'انتقال سرویس به مشتری دیگر در این نسخه ساخته نشده است، چون قاعده‌اش تعیین نشده: تکلیف سفارش، پرداخت و لینکی که مالک قبلی دارد روشن نیست. دکمهٔ غیرفعال هم نگذاشته‌ایم، چون یعنی «هست ولی دسترسی ندارید».',
+
+  // --- Service actions -----------------------------------------------------
+  'web.service_actions_title': 'عملیات روی این سرویس',
+  'web.service_actions_hint':
+    'هر عملیات همان‌جا و با همان قواعد سمت سرور بررسی می‌شود؛ این فهرست تصمیم سرور را نشان می‌دهد، نه تصمیم این صفحه.',
+  'web.service_action_sync_usage': 'به‌روزرسانی مصرف از پنل',
+  'web.service_action_resend_config': 'ارسال مجدد لینک به مشتری',
+  'web.service_action_retry_provision': 'تلاش مجدد برای ساخت روی پنل',
+  'web.service_action_reconcile': 'تطبیق با پنل',
+  'web.service_action_suspend': 'موقتاً غیرفعال کن',
+  'web.service_action_resume': 'دوباره فعال کن',
+  'web.service_action_terminate': 'پایان دادن به سرویس',
+  /*
+   * WHY an action is not offered. One sentence per blocker code, and each one names
+   * the screen or the wait that resolves it — a greyed-out control with no reason is
+   * the legacy panel's whole style of refusal.
+   */
+  'web.service_blocker_state': 'وضعیت فعلی سرویس این کار را ممکن نمی‌کند.',
+  'web.service_blocker_capability':
+    'نوع پنل این سرویس چنین کاری را پشتیبانی نمی‌کند. با تنظیم پنل درست نمی‌شود.',
+  'web.service_blocker_panel_not_operable':
+    'پنل این سرویس در حال حاضر قابل استفاده نیست. صفحهٔ پنل‌ها را ببینید.',
+  'web.service_blocker_in_progress': 'یک عملیات از همین نوع در جریان است؛ کمی بعد دوباره ببینید.',
+  'web.service_blocker_no_configuration': 'هنوز لینکی برای این سرویس ساخته نشده که فرستاده شود.',
+  'web.service_blocker_no_contact':
+    'جایی برای فرستادن نیست: مشتری ربات را شروع نکرده یا مسدود شده است.',
+  'web.service_action_denied_edit': 'برای انجام این کارها به دسترسی «ویرایش سرویس» نیاز دارید.',
+  'web.service_action_denied_terminate':
+    'پایان دادن به سرویس دسترسی جداگانه‌ای دارد که شما ندارید.',
+  'web.service_action_planned': 'درخواست ثبت شد. تا وقتی پنل آن را اعمال نکند، انجام‌شده نیست.',
+  'web.service_action_resent': 'لینک برای مشتری فرستاده شد.',
+  /* The terminate confirmation. A typed phrase, for the reason the recovery screen gives. */
+  'web.service_terminate_title': 'پایان دادن به سرویس',
+  'web.service_terminate_danger':
+    'این کار حساب مشتری را روی پنل حذف می‌کند و برگشت‌پذیر نیست. سفارشی که مشتری پرداخت کرده سر جایش می‌ماند.',
+  'web.service_terminate_confirm_label': 'برای تأیید، این عبارت را دقیقاً بنویسید:',
+  'web.service_terminate_confirm_wrong': 'عبارت تأیید مطابقت ندارد.',
+  'web.service_terminate_button': 'پایان بده',
 
   // --- Units ---------------------------------------------------------------
   'web.unit_seconds': 'ثانیه',

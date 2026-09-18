@@ -3,12 +3,15 @@ import {
   PAYMENT_ROUTES,
   SERVICE_ROUTES,
   serviceListResponseSchema,
+  serviceActionResponseSchema,
   serviceOperationsResponseSchema,
   serviceResponseSchema,
   type ServiceDeliveryState,
+  type ServiceActionResponse,
   type ServiceListResponse,
   type ServiceOperationsResponse,
   type ServiceResponse,
+  type ServiceOperatorAction,
   type ServiceState,
   WALLET_ROUTES,
   paymentListResponseSchema,
@@ -825,6 +828,48 @@ export function fetchService(id: string): Promise<ServiceResponse> {
 /** What has been attempted on one service. Bounded by the server, newest first. */
 export function fetchServiceOperations(id: string): Promise<ServiceOperationsResponse> {
   return authedGet(SERVICE_ROUTES.operations(id), serviceOperationsResponseSchema);
+}
+
+/**
+ * The path each operator action POSTs to, taken from the frozen route table.
+ *
+ * A table rather than seven functions, because the seven differ in exactly one thing
+ * that matters to this layer — terminate carries a phrase — and writing them out
+ * separately would be seven chances to point a label at the wrong URL. The server
+ * charges a different permission for terminate; that is its business, not the client's.
+ */
+const SERVICE_ACTION_PATHS: Readonly<Record<ServiceOperatorAction, (id: string) => string>> = {
+  SYNC_USAGE: SERVICE_ROUTES.syncUsage,
+  RESEND_CONFIG: SERVICE_ROUTES.resend,
+  RETRY_PROVISION: SERVICE_ROUTES.retryProvision,
+  RECONCILE: SERVICE_ROUTES.reconcile,
+  SUSPEND: SERVICE_ROUTES.suspend,
+  RESUME: SERVICE_ROUTES.resume,
+  TERMINATE: SERVICE_ROUTES.terminate,
+};
+
+/**
+ * Takes one action on one service.
+ *
+ * The response carries the service as it NOW is and the operation that was planned, so
+ * the caller can redraw from it without a second round trip — and must, because the
+ * action list in that response is the only truthful one after a write.
+ *
+ * `TERMINATE` is the only action that takes more than a key. The phrase is validated
+ * again by the server, in full and after trimming, so sending it from here is not the
+ * confirmation — the person typing it is.
+ */
+export function actOnService(input: {
+  id: string;
+  action: ServiceOperatorAction;
+  idempotencyKey: string;
+  confirm?: string;
+}): Promise<ServiceActionResponse> {
+  const body =
+    input.action === 'TERMINATE'
+      ? { idempotencyKey: input.idempotencyKey, confirm: input.confirm ?? '' }
+      : { idempotencyKey: input.idempotencyKey };
+  return post(SERVICE_ACTION_PATHS[input.action](input.id), body, serviceActionResponseSchema);
 }
 
 export function fetchPayment(id: string): Promise<PaymentResponse> {

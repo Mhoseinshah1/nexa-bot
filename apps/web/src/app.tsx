@@ -524,6 +524,9 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
           key={service['id'] ?? ''}
           id={service['id'] ?? ''}
           denied={!may('services.view')}
+          mayEdit={may('services.edit')}
+          /* Its own key, and the reason the page separates the terminate control. */
+          mayTerminate={may('services.terminate')}
         />
       ),
       crumbs: [nav('services'), { label: t('web.service_detail') }],

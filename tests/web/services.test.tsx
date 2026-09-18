@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { screen, within } from '@testing-library/react';
-import { SERVICE_OPERATOR_ACTIONS } from '@nexa/contracts';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import {
+  SERVICE_OPERATOR_ACTIONS,
+  type ServiceActionBlocker,
+  type ServiceOperatorAction,
+} from '@nexa/contracts';
 import type { ReactElement } from 'react';
 import { ServiceDetailPage, ServicesPage } from '../../apps/web/src/pages/services';
 import { resolve } from '../../apps/web/src/app';
@@ -93,6 +97,37 @@ const NO_ACTIONS = SERVICE_OPERATOR_ACTIONS.map((action) => ({
   blocker: 'STATE' as const,
 }));
 
+/**
+ * An action matrix with named exceptions, as the server would send it.
+ *
+ * Everything refused for `STATE` unless a case says otherwise, so each case turns on
+ * exactly the verdict it is about. `available: true` carries `blocker: null`, which the
+ * contract requires — a fixture that got that wrong would not parse.
+ */
+const actionsWith = (
+  over: Partial<Record<ServiceOperatorAction, ServiceActionBlocker | 'AVAILABLE'>>,
+): unknown[] =>
+  SERVICE_OPERATOR_ACTIONS.map((action) => {
+    const verdict = over[action];
+    if (verdict === undefined) return { action, available: false, blocker: 'STATE' };
+    if (verdict === 'AVAILABLE') return { action, available: true, blocker: null };
+    return { action, available: false, blocker: verdict };
+  });
+
+/** The POST route for one action, answering with the service and the operation. */
+const actionRoute = (path: string, over: Record<string, unknown> = {}, planned = true) => ({
+  url: `/services/${SERVICE_ID}/${path}`,
+  body: {
+    service: {
+      deliveryAttempts: 1,
+      deliveryNextAttemptAt: null,
+      actions: NO_ACTIONS,
+      ...service(over),
+    },
+    operation: planned ? operation({ type: 'SUSPEND', state: 'PLANNED' }) : null,
+  },
+});
+
 const detail = (overrides: Record<string, unknown> = {}, operations: unknown[] = [operation()]) => [
   { url: `/services/${SERVICE_ID}/operations`, body: { operations } },
   {
@@ -177,28 +212,20 @@ describe('the service list', () => {
   });
 
   /**
-   * The list is a read, and this asserts the ABSENCE of every write.
+   * The LIST is still a read, and this asserts the absence of every write on it.
    *
-   * `services.terminate` and `services.transfer` are declared permissions with no
-   * endpoint, and the page draws no control for either — not even a disabled one, which
-   * would claim "this exists and you lack permission". The only button is the search
-   * submit, and the only inputs are its two filters.
+   * Phase 6A put the seven actions on the DETAIL, not here: a column of buttons over a
+   * page of services is how a mis-click terminates the wrong customer's account. So the
+   * list issues no write, and that is asserted by the METHODS rather than by button
+   * labels — the first version of this case checked that no button said "terminate" and
+   * was worthless, because `پایان‌یافته` is a state FILTER, so it failed on a pill while
+   * a real terminate button named anything else would have passed.
    */
-  it('offers no write: every request the page makes is a GET', async () => {
+  it('offers no write from the list: every request it makes is a GET', async () => {
     const api = stubApi(list([service()]));
     const { container } = renderPage(<ServicesPage route={LIST_ROUTE} denied={false} />);
     await screen.findByText('nx-7f3a91');
 
-    /*
-     * The METHODS, not the button labels.
-     *
-     * Asserting that no button says "terminate" was the first version and it was
-     * worthless: `پایان‌یافته` is a state FILTER, so the assertion failed on a pill
-     * while a real terminate button would have been named something else and passed.
-     * What makes this surface read-only is that it issues no write, and that is what
-     * is asserted — a `POST /services/:id/terminate` added later fails here whatever
-     * its button says.
-     */
     expect(api.calls.map((call) => call.method)).toEqual(['GET']);
     // One form, and it is the filter: no create, no edit, no decision anywhere.
     expect(container.querySelectorAll('form')).toHaveLength(1);
@@ -209,7 +236,7 @@ describe('the service list', () => {
 describe('the service detail', () => {
   it('renders the identity, the traffic and the delivery of one service', async () => {
     stubApi(detail());
-    renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} />);
+    renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
 
     expect(await screen.findByText('nx-7f3a91')).toBeInTheDocument();
     expect(screen.getByText('4821')).toBeInTheDocument();
@@ -221,7 +248,9 @@ describe('the service detail', () => {
   /** The same prohibition as on the list, on the screen that shows one service. */
   it('renders no subscription url on the detail either', async () => {
     stubApi(detail({ subscriptionUrl: 'https://panel.example/sub/DEADBEEFDEADBEEF' }));
-    const { container } = renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} />);
+    const { container } = renderPage(
+      <ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />,
+    );
     await screen.findByText('nx-7f3a91');
 
     expect(container.innerHTML).not.toContain('DEADBEEFDEADBEEF');
@@ -238,7 +267,7 @@ describe('the service detail', () => {
    */
   it('warns on UNRECONCILED without suggesting the service be created again', async () => {
     stubApi(detail({ state: 'UNRECONCILED', providerUserId: null, provisionedAt: null }));
-    renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} />);
+    renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
 
     expect(await screen.findByText(/معلوم نیست روی پنل کاربری/)).toBeInTheDocument();
     expect(screen.getByText(/کاربر تکراری روی پنل/)).toBeInTheDocument();
@@ -246,7 +275,7 @@ describe('the service detail', () => {
 
   it('warns that an UNCONFIRMED delivery is not retried automatically', async () => {
     stubApi(detail({ deliveryState: 'UNCONFIRMED', deliveredAt: null }));
-    renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} />);
+    renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
 
     expect(await screen.findByText(/نتیجهٔ اعلام به مشتری نامشخص است/)).toBeInTheDocument();
   });
@@ -260,7 +289,7 @@ describe('the service detail', () => {
    */
   it('says usage has never been read rather than showing a dash', async () => {
     stubApi(detail({ usageSyncedAt: null }));
-    renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} />);
+    renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
 
     expect(await screen.findByText('هرگز از پنل خوانده نشده است.')).toBeInTheDocument();
   });
@@ -278,15 +307,242 @@ describe('the service detail', () => {
         }),
       ]),
     );
-    renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} />);
+    renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
 
     expect(await screen.findByText('panel refused: duplicate user')).toBeInTheDocument();
     expect(screen.getByText('خواندن مصرف')).toBeInTheDocument();
   });
 
+  // -------------------------------------------------------------------------
+  // The seven actions
+  // -------------------------------------------------------------------------
+
+  it('draws a button for every action the server declares, and no others', async () => {
+    /*
+     * The list comes from the RESPONSE. A page that invented an eighth control, or
+     * dropped one this release has, is the defect the server-side evaluator exists to
+     * make impossible — and this is the assertion that keeps the page honest about it.
+     */
+    stubApi(detail({ actions: actionsWith({}) }));
+    renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
+    await screen.findByText('nx-7f3a91');
+
+    for (const label of [
+      'به‌روزرسانی مصرف از پنل',
+      'ارسال مجدد لینک به مشتری',
+      'تلاش مجدد برای ساخت روی پنل',
+      'تطبیق با پنل',
+      'موقتاً غیرفعال کن',
+      'دوباره فعال کن',
+    ]) {
+      expect(screen.getByRole('button', { name: label }), label).toBeInTheDocument();
+    }
+  });
+
+  it('disables a refused action and says WHY, rather than leaving it greyed out', async () => {
+    /*
+     * The blocker code becomes a sentence naming the screen or the wait that resolves
+     * it. A greyed-out control with no reason is the legacy panel's entire style of
+     * refusal, and each of these three sends an operator somewhere different.
+     */
+    stubApi(
+      detail({
+        actions: actionsWith({
+          SUSPEND: 'CAPABILITY',
+          SYNC_USAGE: 'PANEL_NOT_OPERABLE',
+          RECONCILE: 'IN_PROGRESS',
+        }),
+      }),
+    );
+    renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
+    await screen.findByText('nx-7f3a91');
+
+    expect(screen.getByRole('button', { name: 'موقتاً غیرفعال کن' })).toBeDisabled();
+    expect(screen.getByText(/نوع پنل این سرویس چنین کاری را پشتیبانی نمی‌کند/)).toBeInTheDocument();
+    expect(screen.getByText(/پنل این سرویس در حال حاضر قابل استفاده نیست/)).toBeInTheDocument();
+    expect(screen.getByText(/یک عملیات از همین نوع در جریان است/)).toBeInTheDocument();
+  });
+
+  it('posts the action the button names, with an idempotency key', async () => {
+    const api = stubApi([
+      ...detail({ state: 'ACTIVE', actions: actionsWith({ SUSPEND: 'AVAILABLE' }) }),
+      actionRoute('suspend', { state: 'ACTIVE' }),
+    ]);
+    renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
+    const button = await screen.findByRole('button', { name: 'موقتاً غیرفعال کن' });
+
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
+    });
+    const post = api.calls.find((call) => call.method === 'POST');
+    expect(post?.url).toContain(`/services/${SERVICE_ID}/suspend`);
+    expect((post?.body as { idempotencyKey?: string }).idempotencyKey).toMatch(/.{8,}/);
+  });
+
+  it('reports a planned operation as recorded, never as done', async () => {
+    /*
+     * The operation comes back `PLANNED`: no provider has been called. "Done" here
+     * would be the legacy "✅ updated" for a write whose effect has not happened, and
+     * for the action that deletes an account that difference is the whole point.
+     */
+    stubApi([
+      ...detail({ state: 'ACTIVE', actions: actionsWith({ SUSPEND: 'AVAILABLE' }) }),
+      actionRoute('suspend', { state: 'ACTIVE' }),
+    ]);
+    renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'موقتاً غیرفعال کن' }));
+
+    expect(await screen.findByText(/درخواست ثبت شد/)).toBeInTheDocument();
+  });
+
+  it('says a resend was sent, because it plans no operation at all', async () => {
+    /* `operation: null` is the honest answer for a resend, and the copy follows it. */
+    stubApi([
+      ...detail({ state: 'ACTIVE', actions: actionsWith({ RESEND_CONFIG: 'AVAILABLE' }) }),
+      actionRoute('resend', { state: 'ACTIVE' }, false),
+    ]);
+    renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'ارسال مجدد لینک به مشتری' }));
+
+    expect(await screen.findByText(/لینک برای مشتری فرستاده شد/)).toBeInTheDocument();
+  });
+
+  it('refuses every action to a session without services.edit, in a sentence', async () => {
+    /*
+     * Told, not hidden. A control that can never work records an
+     * `access.permission_denied` event and a DENIED audit row when pressed, which is
+     * the noise the alerts page exists to keep clear — and an absent control says
+     * nothing about why it is absent.
+     *
+     * The matrix still says AVAILABLE, because the matrix is about the SERVICE. The
+     * permission is the session's, and the two are deliberately separate.
+     */
+    const api = stubApi(
+      detail({ state: 'ACTIVE', actions: actionsWith({ SUSPEND: 'AVAILABLE' }) }),
+    );
+    renderPage(
+      <ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit={false} mayTerminate={false} />,
+    );
+    await screen.findByText('nx-7f3a91');
+
+    expect(screen.getByText(/به دسترسی «ویرایش سرویس» نیاز دارید/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'موقتاً غیرفعال کن' })).toBeDisabled();
+    expect(api.calls.map((call) => call.method)).toEqual(['GET', 'GET']);
+  });
+
+  it('separates the terminate permission from the other six', async () => {
+    /*
+     * `services.terminate` is its own HIGH-risk key held by `owner` alone in the frozen
+     * catalogue. A session with `services.edit` gets the six and is told, in a
+     * sentence, why it does not get the seventh.
+     */
+    stubApi(
+      detail({
+        state: 'ACTIVE',
+        actions: actionsWith({ SUSPEND: 'AVAILABLE', TERMINATE: 'AVAILABLE' }),
+      }),
+    );
+    renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate={false} />);
+    await screen.findByText('nx-7f3a91');
+
+    expect(screen.getByRole('button', { name: 'موقتاً غیرفعال کن' })).toBeEnabled();
+    expect(screen.getByText(/پایان دادن به سرویس دسترسی جداگانه‌ای دارد/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'پایان بده' })).toBeNull();
+  });
+
+  it('keeps the terminate button unpressable until the phrase matches exactly', async () => {
+    /*
+     * The typed phrase, for the reason `RECOVERY_CONFIRMATION_PHRASE` gives: terminate
+     * deletes the account on somebody's panel and the customer keeps the order they
+     * paid for, so the confirmation has to cost more than a mis-click. A near-miss is
+     * not a confirmation, and the server compares it again in full.
+     */
+    stubApi([
+      ...detail({ state: 'ACTIVE', actions: actionsWith({ TERMINATE: 'AVAILABLE' }) }),
+      actionRoute('terminate', { state: 'ACTIVE' }),
+    ]);
+    const { container } = renderPage(
+      <ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />,
+    );
+    await screen.findByText('nx-7f3a91');
+
+    const button = screen.getByRole('button', { name: 'پایان بده' });
+    expect(button).toBeDisabled();
+
+    const input = container.querySelector('input[dir="ltr"]');
+    if (input === null) throw new Error('no confirmation input');
+
+    fireEvent.change(input, { target: { value: 'terminate' } });
+    expect(screen.getByText('عبارت تأیید مطابقت ندارد.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'پایان بده' })).toBeDisabled();
+
+    fireEvent.change(input, { target: { value: 'TERMINATE' } });
+    expect(screen.getByRole('button', { name: 'پایان بده' })).toBeEnabled();
+  });
+
+  it('sends the phrase with the terminate, so the server can check it again', async () => {
+    const api = stubApi([
+      ...detail({ state: 'ACTIVE', actions: actionsWith({ TERMINATE: 'AVAILABLE' }) }),
+      actionRoute('terminate', { state: 'TERMINATED' }),
+    ]);
+    const { container } = renderPage(
+      <ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />,
+    );
+    await screen.findByText('nx-7f3a91');
+
+    const input = container.querySelector('input[dir="ltr"]');
+    if (input === null) throw new Error('no confirmation input');
+    fireEvent.change(input, { target: { value: 'TERMINATE' } });
+    fireEvent.click(screen.getByRole('button', { name: 'پایان بده' }));
+
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
+    });
+    const post = api.calls.find((call) => call.method === 'POST');
+    expect(post?.url).toContain('/terminate');
+    expect((post?.body as { confirm?: string }).confirm).toBe('TERMINATE');
+  });
+
+  it('re-reads the service and its history after an action', async () => {
+    /*
+     * Both queries, not just the row. The action planned an operation, so the history
+     * on the same screen changed too — and a screen that refreshed only the row would
+     * leave the operator's own press absent from the one list that says whether it did
+     * anything.
+     */
+    const api = stubApi([
+      ...detail({ state: 'ACTIVE', actions: actionsWith({ SUSPEND: 'AVAILABLE' }) }),
+      actionRoute('suspend', { state: 'ACTIVE' }),
+    ]);
+    renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
+    fireEvent.click(await screen.findByRole('button', { name: 'موقتاً غیرفعال کن' }));
+    await screen.findByText(/درخواست ثبت شد/);
+
+    await waitFor(() => {
+      const reads = api.calls.filter((call) => call.method === 'GET');
+      expect(reads.filter((call) => call.url.includes('/operations')).length).toBeGreaterThan(1);
+      expect(reads.filter((call) => !call.url.includes('/operations')).length).toBeGreaterThan(1);
+    });
+  });
+
+  it('still says a transfer is not built, rather than drawing a disabled button', async () => {
+    stubApi(detail());
+    renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
+    await screen.findByText('nx-7f3a91');
+
+    expect(
+      screen.getByText(/انتقال سرویس به مشتری دیگر در این نسخه ساخته نشده است/),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /انتقال/ })).toBeNull();
+  });
+
   it('says a service has no operations rather than drawing an empty history', async () => {
     stubApi(detail({}, []));
-    renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} />);
+    renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
 
     expect(await screen.findByText('هیچ عملیاتی روی این سرویس ثبت نشده است.')).toBeInTheDocument();
   });
