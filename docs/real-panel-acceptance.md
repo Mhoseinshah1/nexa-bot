@@ -286,7 +286,7 @@ running from the pinned commit. The OBSERVER is
 `tests/acceptance/real-marzban-harness.ts`, on plain `fetch` with its own
 token, sharing no code with the adapter.
 
-Sixteen cases, in seven groups:
+Twenty-seven cases, in eight groups:
 
 | Group | What it establishes                                                                                     |
 | ----- | ------------------------------------------------------------------------------------------------------- |
@@ -297,6 +297,7 @@ Sixteen cases, in seven groups:
 | A5    | Terminating A removes A, leaves B serving, and a replayed terminate succeeds with `wasPresent:false`    |
 | A6    | A username shaped like a path cannot reach B, through terminate or through suspend                      |
 | A7    | No outcome — success or failure — carries the password, the username or an authorization header         |
+| A8    | `applyAllowance` leaves the panel holding the TARGET — renew, add traffic and add time — and moves only the account named   |
 
 ## Standing one up
 
