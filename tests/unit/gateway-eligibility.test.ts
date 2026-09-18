@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  MAX_MONEY_AMOUNT_MINOR,
   PAYMENT_GATEWAY_DESCRIPTORS,
   PAYMENT_GATEWAY_PARITY_DEFERRALS,
   PAYMENT_GATEWAY_PROVIDERS,
@@ -205,6 +206,25 @@ describe('the gateway configuration schema', () => {
       maxAmountMinor: 100_000n,
     });
     expect(parsed.success).toBe(false);
+  });
+
+  it('refuses a bound the payments table cannot hold, before the database has to', () => {
+    /*
+     * Both columns are `bigint`. The wire schema admits nineteen digits, which is one
+     * digit wider than the column's ceiling, so `9999999999999999999` used to pass every
+     * parse and fail inside the UPDATE as a range error the operator met as a 500.
+     * `MAX_MONEY_AMOUNT_MINOR` is that ceiling written down; the value at it is a valid
+     * bound and the value one above it is not.
+     */
+    for (const field of ['minAmountMinor', 'maxAmountMinor'] as const) {
+      const at = paymentGatewayConfigSchema.safeParse({ ...base, [field]: MAX_MONEY_AMOUNT_MINOR });
+      expect(at.success, `${field} at the ceiling`).toBe(true);
+      const over = paymentGatewayConfigSchema.safeParse({
+        ...base,
+        [field]: MAX_MONEY_AMOUNT_MINOR + 1n,
+      });
+      expect(over.success, `${field} one above the ceiling`).toBe(false);
+    }
   });
 
   it('admits a zero maximum as unbounded above', () => {

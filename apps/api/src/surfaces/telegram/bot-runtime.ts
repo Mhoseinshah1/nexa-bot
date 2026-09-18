@@ -1467,15 +1467,41 @@ export class BotRuntime {
     /*
      * 2. The commercial work, still before any send.
      *
-     * A BLOCKED customer never reaches it: `replyFor` answers `bot.blocked` whatever
-     * they asked for, and this is gated on the same condition rather than on its own
-     * copy of the rule. The order service refuses a blocked customer too — that is the
+     * A BLOCKED customer never reaches it: `replyFor` answers `bot.blocked` whatever they
+     * asked for, and this is gated on the same condition rather than on its own copy of
+     * the rule. The order service refuses a blocked customer too — that is the
      * authoritative check, inside the transaction, and this one exists so the surface
      * does not ask for work it already knows will be refused.
+     *
+     * ADMIN INTENTS ARE EXEMPT, and the exemption is the identity model rather than a
+     * convenience.
+     *
+     * A Telegram account that is bound as an administrator is ALSO resolved as a customer
+     * here, because it is the same account. Customer standing and administrator standing
+     * are independent in this product — `docs/research` records the legacy system
+     * treating them as "mutually blind", and Phase 4A kept them separate deliberately. So
+     * a blanket `bot.blocked` meant that blocking somebody's PURCHASES silently revoked
+     * their management panel: the intent never reached `adminTurn`, and the only way back
+     * was to unblock the customer, which is not what the operator who pressed Block
+     * decided.
+     *
+     * Blocking is still enforced for everything a customer can do. This routes the admin
+     * intents to the one door that resolves the binding, and `adminTurn` returning null —
+     * a blocked customer who is NOT an administrator, including one crafting `D:<uuid>` —
+     * falls back to the same `bot.blocked` as before. Authority is not granted here: every
+     * admin action re-checks its own permission inside its own transaction.
      */
+    const blocked: PendingReply = {
+      key: 'bot.blocked' as TemplateKey,
+      values: {},
+      buttons: [],
+      orderId: null,
+    };
     const reply =
       arrival === 'BLOCKED'
-        ? { key: 'bot.blocked' as TemplateKey, values: {}, buttons: [], orderId: null }
+        ? ((ADMIN_INTENTS.has(command.intent)
+            ? await this.adminTurn(scope, actor, command, input)
+            : null) ?? blocked)
         : await this.act(scope, actor, command, customer, arrival, input);
 
     const chatId = privateChatIdOf(input.update);

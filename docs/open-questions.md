@@ -1942,3 +1942,82 @@ Recorded as an intentional safety difference, not as parity still owed. The prod
 question — whether the owner wants any bounded form of it — stays open in the Phase 5
 table above, with the bounds it would need: an explicit cap, a `SYSTEM_JOB` audit actor,
 and an alert.
+
+## OQ-5H-01 — the "either key" navigation shape is a dead end wherever it appears
+
+Four navigation entries admitted either a module's `view` key or its `edit` key —
+`/payment-accounts`, `/payment-gateways`, `/panels` and `/products` — on the stated
+ground that the page "serves a custom-role editor correctly" without the view key.
+
+It does not. In all four the route passes `denied={!may('<module>.view')}`, which disables
+the query that supplies the rows, and every edit form opens from a row. The server agrees:
+each module's `list` charges the view key. So a custom role holding `edit` without `view`
+saw a link, followed it, and arrived at an empty page with no way to reach the form. No
+seeded role is affected — `finance` holds both keys — so this reaches only an installation
+that built such a role, which the comments show the authors expected.
+
+The two payment entries are corrected in the hardening pass that found this: they now
+require the view key, which is what their pages and their endpoints actually need.
+
+`/panels` and `/products` are older than the payment batch and are deliberately NOT
+changed there, to keep that pull request inside the batch it reviews. The open question is
+which way they should go, and it is the same question for all four:
+
+- **Narrow the link** to the view key, as payments now does. Simple, honest, and an
+  edit-only role loses a link that never worked.
+- **Widen the read** so `<module>.edit` also authorizes `list`. Closer to what the
+  comments intended, and defensible — nobody can edit a row they cannot read — but it
+  makes a HIGH-severity key imply a LOW-severity one across four modules, which is a
+  permission-model decision rather than a bug fix.
+
+Nothing is broken for any shipped role either way, so this is not urgent. It must not be
+left as it was, though: a comment asserting behaviour its own file contradicts is how a
+reader stops checking.
+
+## OQ-5H-02 — the top-up button is offered before per-customer eligibility is known
+
+`topupMenu` draws the preset buttons once it knows presets exist and an ACTIVE
+`MANUAL_TRANSFER` route with an enabled destination does too. It does not consult the
+per-customer half of the gateway decision — the activation and deactivation thresholds —
+nor the route's own amount bounds. `requestWalletTopup` does consult both, so a customer
+the route excludes, or one whose every preset falls outside the route's window, is offered
+a button and refused at the tap.
+
+The refusal is clean: `TOPUP_NOT_OFFERED` renders `bot.wallet.topup_refused`, no payment
+row is written and no money moves. So this is a truthfulness defect in a surface, not a
+financial one — but "a button nobody behind it can use is the untruthful surface this
+codebase keeps refusing" is this runtime's own comment, four hundred lines above.
+
+It is left open rather than fixed because the fix is a product decision, not a mechanical
+one, and two of the three candidates are worse than the current behaviour:
+
+- **Plumb the customer into `topupMenu`** and hide the button for an ineligible customer.
+  Truthful, and the most work: the intent currently carries no customer.
+- **Filter presets by the route's bounds.** Needs only the scope — but silently hiding a
+  preset an operator configured means the operator never learns it is unreachable, which
+  is the write-only-setting failure from the other end.
+- **Refuse to save a preset outside the route's bounds.** Tells the right person at the
+  right time, and does not survive an operator later narrowing the bounds.
+
+The disabled-route half of this was real and IS fixed, in the route-status gate that
+preceded the hardening pass: a route switched off no longer draws the button.
+
+## OQ-5H-03 — a receipt review sends its media before its decision buttons
+
+`adminReceipt` sends each stored receipt with `sendFile`, serially, and only then returns
+the message carrying the approve and reject buttons. With the permitted five receipts and
+a Telegram file endpoint that is slow rather than down, five configured timeouts accumulate
+ahead of the reply — ten seconds each by default, and up to a hundred and twenty — so the
+reviewer can be left without controls for longer than the webhook deadline, and Telegram
+may redeliver the update and repeat the media sends while they still have none.
+
+Real, but not fixed in the hardening pass, and the reason is the shape of the fix rather
+than the size of the risk. The handler returns a `PendingReply` that its caller sends after
+the commit; sending the decision message first from inside the handler means returning null
+and emitting the reply out of band, which is a change to the reply contract every Telegram
+handler shares. That is a refactor with its own regression surface, and a hardening pass
+run against a payment batch is the wrong place for it.
+
+The bounded alternatives, for whoever takes it: send the decision message first and the
+media after, or send the media concurrently rather than serially so the worst case is one
+timeout instead of five.

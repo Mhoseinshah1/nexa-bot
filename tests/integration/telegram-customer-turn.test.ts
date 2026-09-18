@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { MAIN_MENU_BUTTONS, TELEGRAM_SECRET_TOKEN_HEADER } from '@nexa/contracts';
+import { MAIN_MENU_BUTTONS, TELEGRAM_SECRET_TOKEN_HEADER, type AdminId } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import {
@@ -9,7 +9,14 @@ import {
   CUSTOMER_SEND_OK_CODE,
 } from '../../apps/api/src/modules/commerce/messaging/infrastructure/telegram-customer-messenger';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
-import { migrateOnce, resetDatabase, tenantA, testConfig } from './harness';
+import {
+  adminActorFor,
+  createAdmin,
+  migrateOnce,
+  resetDatabase,
+  tenantA,
+  testConfig,
+} from './harness';
 
 /**
  * The customer-facing Telegram turn, end to end.
@@ -230,6 +237,58 @@ describe('the customer Telegram turn', () => {
     // Exactly the four this release can perform. A Phase 7 button here would be a
     // promise the product cannot keep.
     expect(MAIN_MENU_BUTTONS).toHaveLength(4);
+  });
+
+  it('still opens the management panel for a BLOCKED customer who is an administrator', async () => {
+    /*
+     * Customer standing and administrator standing are independent — the same Telegram
+     * account is both. The blanket `bot.blocked` used to answer BEFORE the admin intents
+     * were routed, so blocking somebody's purchases silently revoked their management
+     * panel, and the only way back was to unblock the customer, which is not what the
+     * operator who pressed Block decided.
+     */
+    await start();
+    await api.container.database.db.execute(
+      sql`UPDATE customers SET status = 'BLOCKED', blocked_at = now()
+          WHERE telegram_user_id = '5551234567'`,
+    );
+    const owner = await createAdmin(api.container, tenantA, {
+      username: 'turn-owner',
+      roleKeys: ['owner'],
+    });
+    const reviewer = await createAdmin(api.container, tenantA, {
+      username: 'turn-reviewer',
+      roleKeys: ['receipt_reviewer'],
+    });
+    await api.container.adminManagement.setTelegramBinding(
+      tenantA,
+      adminActorFor(owner),
+      reviewer.id as AdminId,
+      { telegramUserId: '5551234567', reason: 'test binding' },
+    );
+
+    sent = [];
+    await start({ text: '/admin' });
+    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.admin.panel']);
+
+    // Blocking is still enforced for everything a CUSTOMER can do.
+    sent = [];
+    await start();
+    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.blocked']);
+  });
+
+  it('answers a BLOCKED customer who is NOT an administrator with bot.blocked on /admin', async () => {
+    // The fallback half of the rule above: an admin intent from a blocked account that
+    // resolves to no administrator is `bot.blocked`, not the unsupported-input reply —
+    // nothing about what exists is revealed by being blocked.
+    await start();
+    await api.container.database.db.execute(
+      sql`UPDATE customers SET status = 'BLOCKED', blocked_at = now()
+          WHERE telegram_user_id = '5551234567'`,
+    );
+    sent = [];
+    await start({ text: '/admin' });
+    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.blocked']);
   });
 
   it('draws no menu for a BLOCKED customer', async () => {

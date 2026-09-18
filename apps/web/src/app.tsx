@@ -214,13 +214,24 @@ export const NAV: readonly NavEntry[] = [
     label: 'web.nav_payment_accounts',
     icon: 'payments',
     /*
-     * EITHER, the shape `/panels` and `/products` already use and for the same
-     * reason: the page renders the create form on `payments.accounts.edit` whether
-     * or not the view key is held, and the server authorizes the write on the edit
-     * key alone. Gating the link on view alone would hide a page that serves a
-     * custom-role editor correctly.
+     * `payments.accounts.view`, and ONLY that — which is a correction.
+     *
+     * This used to admit either key, on the stated ground that the page "serves a
+     * custom-role editor correctly" without the view key. It does not, and never did:
+     * the route below passes `denied={!may('payments.accounts.view')}`, which disables
+     * the only query that supplies rows, and the edit form opens from a row. The server
+     * agrees — `PaymentAccountService.list` charges the view key. So an edit-only custom
+     * role saw a navigation entry, followed it, and arrived at a page with nothing on it
+     * and no way to reach the form.
+     *
+     * A link is a promise that a page will work. The honest fix is the narrower
+     * permission rather than a page that apologises after the click.
+     *
+     * `/panels` and `/products` carry the same shape and the same dead end. They are
+     * older than this batch and are not changed here; `OQ-5H-01` records them so the
+     * inconsistency is a known item rather than a comment that contradicts its code.
      */
-    permission: ['payments.accounts.view', 'payments.accounts.edit'],
+    permission: 'payments.accounts.view',
     group: 'web.navgroup_sales',
   },
   {
@@ -229,11 +240,12 @@ export const NAV: readonly NavEntry[] = [
     label: 'web.nav_payment_gateways',
     icon: 'payments',
     /*
-     * EITHER, for the reason the accounts link above states: the page renders its form
-     * on `payments.gateways.edit` whether or not the view key is held, and the server
-     * authorizes every write on the edit key alone.
+     * `payments.gateways.view`, and only that, for the reason the accounts link above
+     * now states: the route passes `denied={!may('payments.gateways.view')}` and
+     * `PaymentGatewayService.list` charges the same key, so an edit-only role reached a
+     * page it could not load and therefore could not edit from.
      */
-    permission: ['payments.gateways.view', 'payments.gateways.edit'],
+    permission: 'payments.gateways.view',
     group: 'web.navgroup_sales',
   },
   {

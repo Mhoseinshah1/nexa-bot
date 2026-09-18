@@ -3,6 +3,8 @@ import {
   REFUND_METHOD_SUPPORT,
   errors,
   money,
+  paymentIdSchema,
+  refundIdSchema,
   refundFitsWithin,
   refundMayTransition,
   refundableMinor,
@@ -33,6 +35,30 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
 import type { WalletRepository } from '../../wallet/application/ports.js';
 import type { PaymentRecord, PaymentRepository } from './ports.js';
 import type { RefundRecord, RefundRepository } from './refund-ports.js';
+
+/**
+ * A path segment turned into an identifier, or a 404.
+ *
+ * Every id here names a `uuid` column. A cast satisfies the compiler and leaves the
+ * string exactly as it arrived, so `/payments/not-a-uuid/refunds` reached PostgreSQL and
+ * came back as `invalid input syntax for type uuid` — a 500 describing the database, for
+ * a request whose only fault is naming nothing. NOT_FOUND is the truthful answer, and it
+ * is the same answer a well-formed id for a row in another tenant already gets, which is
+ * what stops this from telling an unauthorized caller which ids exist.
+ */
+function parseIdentifier<T>(
+  schema: { safeParse(value: unknown): { success: boolean; data?: T } },
+  value: string,
+  what: 'payment' | 'refund',
+): T {
+  const parsed = schema.safeParse(value);
+  if (!parsed.success || parsed.data === undefined) {
+    throw what === 'payment'
+      ? errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.')
+      : errors.notFound(COMMERCE_ERROR_CODES.REFUND_NOT_FOUND, 'Unknown refund.');
+  }
+  return parsed.data;
+}
 
 export const REFUND_VIEW_PERMISSION = 'refunds.view' satisfies PermissionKey;
 export const REFUND_ISSUE_PERMISSION = 'refunds.issue' satisfies PermissionKey;
@@ -165,7 +191,16 @@ export class RefundService {
       readonly reason: string;
     },
   ): Promise<RefundRecord> {
-    const paymentId = input.paymentId as PaymentId;
+    /*
+     * PARSED here, not cast.
+     *
+     * `payments.id` is a `uuid` column. A cast satisfies TypeScript and nothing else, so
+     * a malformed `/payments/:paymentId/refunds` segment reached PostgreSQL and came back
+     * as `invalid input syntax for type uuid` — a 500 for an identifier that simply does
+     * not name anything, which is a 404. The wire schema now parses it too; this is the
+     * copy that protects a caller which is not the HTTP surface.
+     */
+    const paymentId = parseIdentifier(paymentIdSchema, input.paymentId, 'payment');
     const denial = { action: 'refund.request', entityType: 'Payment', entityId: paymentId };
     await this.authorize(scope, actor, REFUND_ISSUE_PERMISSION, denial);
 
@@ -326,7 +361,8 @@ export class RefundService {
       readonly externalReference: string | null;
     },
   ): Promise<RefundRecord> {
-    const refundId = input.refundId as RefundId;
+    // Parsed rather than cast, for the reason `request` states about `paymentId`.
+    const refundId = parseIdentifier(refundIdSchema, input.refundId, 'refund');
     const denial = { action: 'refund.complete', entityType: 'Refund', entityId: refundId };
     await this.authorize(scope, actor, REFUND_ISSUE_PERMISSION, denial);
 
@@ -425,7 +461,8 @@ export class RefundService {
       readonly note: string;
     },
   ): Promise<RefundRecord> {
-    const refundId = input.refundId as RefundId;
+    // Parsed rather than cast, for the reason `request` states about `paymentId`.
+    const refundId = parseIdentifier(refundIdSchema, input.refundId, 'refund');
     const denial = { action: 'refund.fail', entityType: 'Refund', entityId: refundId };
     await this.authorize(scope, actor, REFUND_ISSUE_PERMISSION, denial);
 

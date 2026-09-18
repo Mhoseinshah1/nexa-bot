@@ -2646,6 +2646,26 @@ export const payments = pgTable(
     uniqueIndex('payments_order_confirmed_key')
       .on(table.orderId)
       .where(sql`state = 'CONFIRMED' AND order_id IS NOT NULL`),
+    /**
+     * At most ONE open top-up per customer, and for the same reason as the index above.
+     *
+     * `requestWalletTopup` reads `findOpenTopup`, finds none, and inserts. Two callbacks
+     * carrying DIFFERENT idempotency keys — a double tap, or two Telegram clients — both
+     * read null inside their own transaction and both insert; the idempotency store has
+     * nothing to replay because the keys differ. The customer then holds two live
+     * references, each independently confirmable, and one bank transfer is credited
+     * twice.
+     *
+     * The service takes a per-customer lock so the ordinary racing pair serialises and
+     * neither sees an error. This is what holds when a lock is bypassed, forgotten, or
+     * outlived by a new code path — and two api replicas is the normal case on every
+     * rolling update, so the database is the only place both of them share.
+     *
+     * The predicate is `findOpenTopup`'s WHERE clause exactly. The two must stay in step.
+     */
+    uniqueIndex('payments_open_topup_key')
+      .on(table.tenantId, table.customerId)
+      .where(sql`state = 'PENDING' AND order_id IS NULL AND method = 'MANUAL_TRANSFER'`),
     /** The reconciliation queue: payments whose outcome nobody knows. */
     index('payments_unknown_idx')
       .on(table.tenantId, table.createdAt)

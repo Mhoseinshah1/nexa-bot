@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "payments_open_topup_key" ON "payments" USING btree ("tenant_id","customer_id") WHERE state = 'PENDING' AND order_id IS NULL AND method = 'MANUAL_TRANSFER';
