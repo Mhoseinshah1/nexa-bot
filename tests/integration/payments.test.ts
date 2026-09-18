@@ -1947,4 +1947,98 @@ describe('payments and settlement', () => {
       expect(payment.expiresAt?.getTime()).toBe(orderRow.expiresAt?.getTime());
     });
   });
+  // -------------------------------------------------------------------------
+  // A route an operator switched off stops ORDER payments too (FBR-002)
+  // -------------------------------------------------------------------------
+
+  /**
+   * The enable/disable toggle has to switch something off, and before this it half did.
+   *
+   * `FBR-002` records it as deciding "whether customers can pay through that route at
+   * all". 5C bound it to the wallet top-up path and nowhere else, so an operator could
+   * disable MANUAL_TRANSFER on the Payment Gateways screen and watch order payments keep
+   * arriving through it — a control that does not do what it says, which is the
+   * write-only-setting class of defect with money attached.
+   *
+   * STATUS only. The route's amount bounds and eligibility thresholds are `OQ-5C-01`, an
+   * open product decision, and these cases are written to pass whichever way it goes:
+   * the route keeps its default bounds and no thresholds, so the only thing that varies
+   * is whether it is ACTIVE.
+   */
+  const disableManualRoute = () =>
+    ctx.container.database.db.execute(
+      sql`UPDATE payment_gateways SET status = 'DISABLED'
+           WHERE tenant_id = ${tenantA.tenantId} AND provider = 'MANUAL_TRANSFER'`,
+    );
+
+  it('refuses to issue an order transfer through a route that is switched off', async () => {
+    const order = await awaitingPayment(tenantA, customerA, panelA, 'gwoff1');
+    await disableManualRoute();
+
+    await expect(
+      ctx.container.payments.requestManualTransfer(tenantA, systemActor('gwoff1'), customerA, {
+        idempotencyKey: 'gwoff1-manual-0001',
+        orderId: order.id,
+      }),
+    ).rejects.toMatchObject({ code: 'commerce.payment_method_unavailable' });
+
+    // Nothing issued, so there is no reference a customer could act on.
+    expect(await countOf('payments')).toBe(0);
+    expect((await stateOf(order.id)).state).toBe('AWAITING_PAYMENT');
+  });
+
+  it('issues one again once the operator switches the route back on', async () => {
+    const order = await awaitingPayment(tenantA, customerA, panelA, 'gwoff2');
+    await disableManualRoute();
+    await ctx.container.database.db.execute(
+      sql`UPDATE payment_gateways SET status = 'ACTIVE'
+           WHERE tenant_id = ${tenantA.tenantId} AND provider = 'MANUAL_TRANSFER'`,
+    );
+
+    const { payment } = await ctx.container.payments.requestManualTransfer(
+      tenantA,
+      systemActor('gwoff2'),
+      customerA,
+      { idempotencyKey: 'gwoff2-manual-0001', orderId: order.id },
+    );
+    expect(payment.state).toBe('PENDING');
+    expect(payment.method).toBe('MANUAL_TRANSFER');
+  });
+
+  it('still answers a reference the customer was already given', async () => {
+    /*
+     * The refusal is on the CREATE path only, beside the destination check and for the
+     * same reason: a customer who holds a reference may already have sent the money, and
+     * answering them "not available" would strand a transfer that is in flight.
+     */
+    const order = await awaitingPayment(tenantA, customerA, panelA, 'gwoff3');
+    const { payment } = await ctx.container.payments.requestManualTransfer(
+      tenantA,
+      systemActor('gwoff3'),
+      customerA,
+      { idempotencyKey: 'gwoff3-manual-0001', orderId: order.id },
+    );
+    await disableManualRoute();
+
+    const again = await ctx.container.payments.requestManualTransfer(
+      tenantA,
+      systemActor('gwoff3'),
+      customerA,
+      { idempotencyKey: 'gwoff3-manual-0001', orderId: order.id },
+    );
+    expect(again.payment.id).toBe(payment.id);
+    expect(again.payment.state).toBe('PENDING');
+  });
+
+  it('leaves the wallet rail alone, because a wallet is not a route', async () => {
+    // `WALLET` settles from the customer's own balance and no `payment_gateways` row
+    // describes it, so switching every route off must not stop a wallet purchase.
+    const order = await awaitingPayment(tenantA, customerA, panelA, 'gwoff4');
+    await credit(tenantA, customerA, 1_000_000n, 'gwoff4-credit');
+    await disableManualRoute();
+
+    const { payment } = await settleFromWallet(tenantA, customerA, order.id, 'gwoff4-settle-0001');
+    expect(payment.state).toBe('CONFIRMED');
+    expect(payment.method).toBe('WALLET');
+  });
 });

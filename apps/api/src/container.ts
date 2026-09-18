@@ -2292,7 +2292,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         [CATALOGUE_FA[ADMIN_MENU_BUTTON.label], `/${ADMIN_MENU_COMMAND}`] as const,
       ]),
       destinations: paymentDestinationRenderer,
-      accounts: paymentAccountRepository,
       receipts: receiptService,
       telegramAdmins,
       /*
