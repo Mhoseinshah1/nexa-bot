@@ -215,10 +215,7 @@ export class RefundService {
          * and summing across denominations would be the implicit conversion at a rate
          * nobody chose that `FBR-010` and the money model both refuse. Fail closed.
          */
-        if (
-          consumption.currency !== null &&
-          consumption.currency !== payment.amount.currency
-        ) {
+        if (consumption.currency !== null && consumption.currency !== payment.amount.currency) {
           throw errors.conflict(
             COMMERCE_ERROR_CODES.REFUND_NOT_PERMITTED,
             'This payment has refunds in another currency.',

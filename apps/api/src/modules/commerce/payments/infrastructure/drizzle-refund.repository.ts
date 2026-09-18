@@ -272,13 +272,7 @@ export class DrizzleRefundRepository implements RefundRepository {
         ...(input.completionNote === undefined ? {} : { completionNote: input.completionNote }),
         updatedAt: now,
       })
-      .where(
-        and(
-          eq(refunds.tenantId, tenantId),
-          eq(refunds.id, id),
-          eq(refunds.state, input.from),
-        ),
-      )
+      .where(and(eq(refunds.tenantId, tenantId), eq(refunds.id, id), eq(refunds.state, input.from)))
       .returning(COLUMNS);
     const row = rows[0];
     return row === undefined ? null : toRecord(row);

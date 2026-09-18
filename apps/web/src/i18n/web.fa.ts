@@ -994,6 +994,64 @@ export const WEB_FA = {
    */
   'web.payment_unknown_banner':
     'نتیجهٔ این پرداخت مشخص نیست. تا زمانی که با سوابق طرف مقابل تطبیق داده نشود، نه موفق است و نه ناموفق.',
+  // --- Refunds (Phase 5E) --------------------------------------------------
+  /*
+   * A refund is money going BACK, and the copy never says it has gone back until an
+   * operator has said so. `AWAITING_EXTERNAL` is the state that carries that
+   * distinction and its wording is the whole point of the lifecycle.
+   */
+  'web.refunds': 'بازگشت وجه',
+  'web.refunds_empty': 'برای این پرداخت بازگشت وجهی ثبت نشده است.',
+  'web.refund_paid': 'مبلغ پرداخت‌شده',
+  'web.refund_consumed': 'مجموع بازگشت‌های ثبت‌شده',
+  'web.refund_remaining': 'باقی‌ماندهٔ قابل بازگشت',
+  /*
+   * «به‌هیچ‌وجه قابل بازگشت نیست» is a different sentence from «باقی‌مانده صفر است»,
+   * and the two must not be merged: the first is a payment that never نشست or a
+   * روش that has no channel in this release.
+   */
+  'web.refund_unavailable':
+    'این پرداخت قابل بازگشت نیست. یا هنوز تأیید نشده است، یا روش پرداخت آن در این نسخه مسیر بازگشتی ندارد.',
+  'web.refund_amount': 'مبلغ',
+  'web.refund_state': 'وضعیت',
+  'web.refund_state_requested': 'ثبت‌شده',
+  'web.refund_state_awaiting': 'در انتظار واریز بیرونی',
+  'web.refund_state_completed': 'بازگشت انجام شد',
+  'web.refund_state_failed': 'منصرف‌شده',
+  'web.refund_channel': 'مسیر بازگشت',
+  'web.refund_channel_wallet': 'اعتبار کیف پول',
+  'web.refund_channel_manual': 'واریز دستی بیرون از سامانه',
+  'web.refund_channel_provider': 'درگاه پرداخت',
+  'web.refund_reason': 'دلیل',
+  'web.refund_requested_by': 'ثبت‌شده توسط',
+  'web.refund_completed_by': 'تأیید واریز توسط',
+  'web.refund_awaiting_hint': 'هنوز کسی واریز را تأیید نکرده است.',
+  'web.refund_created_at': 'زمان ثبت',
+  'web.refund_completed_at': 'زمان واریز',
+  'web.refund_external_reference': 'شمارهٔ پیگیری واریز',
+  'web.refund_request_title': 'ثبت بازگشت وجه',
+  /*
+   * Says the two facts an operator needs before pressing it: the bound is the
+   * server's, and a wallet refund is immediate while a دستی one is not.
+   */
+  'web.refund_request_hint':
+    'مبلغ در سرور و بر پایهٔ همین پرداخت محدود می‌شود؛ رقم این فرم پیشنهاد است. بازگشت به کیف پول در همین لحظه ثبت و اعتبار افزوده می‌شود، اما بازگشت واریز دستی تا زمانی که اپراتور واریز را تأیید نکند «انجام‌شده» به حساب نمی‌آید.',
+  'web.refund_amount_minor': 'مبلغ (به کوچک‌ترین یکای پول)',
+  'web.refund_amount_all': 'کل باقی‌ماندهٔ قابل بازگشت',
+  'web.refund_request': 'ثبت بازگشت وجه',
+  'web.refund_requested': 'بازگشت وجه ثبت شد.',
+  'web.refund_denied': 'ثبت بازگشت وجه به دسترسی «refunds.issue» نیاز دارد.',
+  'web.refund_answer_title': 'پاسخ به بازگشت‌های در انتظار واریز',
+  'web.refund_answer_hint':
+    'این سامانه نمی‌تواند خودکار به حساب بانکی مشتری واریز کند. پس از انجام واریز، آن را همین‌جا تأیید کنید. اگر واریزی انجام نشد و نخواهد شد، «منصرف شدم» مبلغ را به باقی‌ماندهٔ قابل بازگشت برمی‌گرداند و سابقهٔ آن پاک نمی‌شود.',
+  'web.refund_answer_which': 'کدام بازگشت',
+  'web.refund_answer_none': 'انتخاب نشده',
+  'web.refund_answer_note': 'توضیح',
+  'web.refund_complete': 'واریز انجام شد',
+  'web.refund_completed': 'واریز بازگشت وجه تأیید شد.',
+  'web.refund_abandon': 'منصرف شدم',
+  'web.refund_failed_done': 'بازگشت وجه منصرف شد و مبلغ آن آزاد شد.',
+
   'web.payment_not_settled_here':
     'این صفحه فقط وضعیت مالی را نشان می‌دهد. ساخت یا تحویل سرویس در این نسخه انجام نمی‌شود.',
 
