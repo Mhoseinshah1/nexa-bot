@@ -109,7 +109,7 @@ export interface PaymentServiceDeps {
    * `payments.accounts.edit`, and a payment path holding the write would put a card
    * number within reach of a customer-initiated command.
    */
-  readonly accounts: Pick<PaymentAccountRepository, 'selectDestination'>;
+  readonly accounts: Pick<PaymentAccountRepository, 'selectDestination' | 'hasEnabled'>;
   /**
    * Which payment ROUTE a customer may use, and what amounts it accepts (Phase 5C).
    *
@@ -125,7 +125,10 @@ export interface PaymentServiceDeps {
    * issued with no route evaluated is an unbounded invoice this installation never
    * agreed to. Required makes that a compile error instead.
    */
-  readonly gateways: Pick<PaymentGatewayService, 'offer' | 'assertAmountAccepted'>;
+  readonly gateways: Pick<
+    PaymentGatewayService,
+    'offer' | 'assertAmountAccepted' | 'methodIsOffered'
+  >;
   /** Freezes that destination onto the payment, in the same transaction. */
   readonly destinations: PaymentDestinationRepository;
   /**
@@ -694,6 +697,28 @@ export class PaymentService {
    * *"never customer-supplied"*, because a customer who could choose it could choose
    * somebody else's.
    */
+  /**
+   * Whether a manual transfer can be issued AT ALL right now.
+   *
+   * Two facts, and they belong together: the operator must have somewhere for the money
+   * to arrive (an enabled account) AND must not have switched the route off. A surface
+   * that asked only the first drew a button for a route an operator had disabled, which
+   * is what this method exists to stop — and asking one question rather than two keeps
+   * the pair from drifting apart the next time a third condition appears.
+   *
+   * STATUS only, never eligibility: `methodIsOffered` says why. The per-customer
+   * thresholds would make this answer differ per customer, and whether they apply to an
+   * order payment is `OQ-5C-01`.
+   *
+   * The answer can be stale by the time a customer taps — an operator can disable either
+   * side in between — so `requestManualTransfer` refuses both cases again inside its
+   * transaction. This decides whether to OFFER; that decides whether to ISSUE.
+   */
+  async manualTransferOffered(scope: TenantContext): Promise<boolean> {
+    if (!(await this.deps.gateways.methodIsOffered(scope, 'MANUAL_TRANSFER'))) return false;
+    return this.deps.accounts.hasEnabled(scope);
+  }
+
   async requestManualTransfer(
     scope: TenantContext,
     actor: ActorContext,
@@ -855,6 +880,34 @@ export class PaymentService {
           throw errors.conflict(
             COMMERCE_ERROR_CODES.PAYMENT_WINDOW_TOO_SHORT,
             'There is not enough time left on this order to pay for it out of band.',
+          );
+        }
+
+        /*
+         * The ROUTE has to be switched on, and this is where an order payment learns it.
+         *
+         * `FBR-002` records the toggle as deciding "whether customers can pay through
+         * that route at all", and 5C bound it to the wallet top-up path only — so an
+         * operator could disable MANUAL_TRANSFER on the Payment Gateways screen and
+         * watch order payments keep arriving through it. A switch that does not switch
+         * anything off is the write-only-setting class of defect with money attached.
+         *
+         * `methodIsOffered` is STATUS alone, deliberately. The route's amount bounds and
+         * its eligibility thresholds are `OQ-5C-01`, an open product decision — a route
+         * maximum below a product's price would make that product unbuyable with the
+         * refusal landing on the customer at checkout — so this asks the one question
+         * that has no product ambiguity and leaves that decision open.
+         *
+         * Only on the CREATE path, beside the destination check below and for the same
+         * reason: a customer holding a live reference is answered with it.
+         */
+        if (
+          already === undefined &&
+          !(await this.deps.gateways.methodIsOffered(scope, 'MANUAL_TRANSFER', tx))
+        ) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_METHOD_UNAVAILABLE,
+            'This installation is not accepting transfers right now.',
           );
         }
 

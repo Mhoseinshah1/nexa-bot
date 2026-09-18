@@ -26,7 +26,6 @@ import type {
 import { ADMIN_MENU_COMMAND } from '@nexa/contracts';
 import type { CustomerService } from '../../modules/commerce/customers/application/customer.service.js';
 import type { PaymentDestinationRenderer } from '../../modules/commerce/payments/infrastructure/destination-renderer.js';
-import type { PaymentAccountRepository } from '../../modules/commerce/payments/application/account-ports.js';
 import type { InboundReceiptFile } from '../../modules/commerce/payments/application/receipt-ports.js';
 import type { ReceiptService } from '../../modules/commerce/payments/application/receipt.service.js';
 import type {
@@ -937,13 +936,6 @@ export interface BotRuntimeDeps {
    * this surface holds is a function from a frozen snapshot to a string.
    */
   readonly destinations: PaymentDestinationRenderer;
-  /**
-   * Whether an out-of-band transfer has anywhere to go.
-   *
-   * The narrowest possible port — one boolean — because this surface has no business
-   * holding a card number in order to decide whether to draw a label.
-   */
-  readonly accounts: Pick<PaymentAccountRepository, 'hasEnabled'>;
   /**
    * Files the receipt a customer sends, and refuses the file nobody asked for.
    *
@@ -2539,7 +2531,7 @@ export class BotRuntime {
           total: order.totals.total,
           ...(order.expiresAt === null ? {} : { expiresAt: order.expiresAt }),
         },
-        buttons: paymentButtons(order.id, await this.deps.accounts.hasEnabled(scope)),
+        buttons: paymentButtons(order.id, await this.deps.payments.manualTransferOffered(scope)),
         orderId: order.id,
       };
     } catch (error) {
@@ -2807,7 +2799,7 @@ export class BotRuntime {
           total: order.totals.total,
           ...(order.expiresAt === null ? {} : { expiresAt: order.expiresAt }),
         },
-        buttons: paymentButtons(order.id, await this.deps.accounts.hasEnabled(scope)),
+        buttons: paymentButtons(order.id, await this.deps.payments.manualTransferOffered(scope)),
         orderId: order.id,
       };
     } catch (error) {
@@ -2838,7 +2830,7 @@ export class BotRuntime {
      * transaction. This decides what to DRAW; that decides what may happen.
      */
     const offered = await this.deps.payments.topupPresets(scope);
-    const fundable = offered.length > 0 && (await this.deps.accounts.hasEnabled(scope));
+    const fundable = offered.length > 0 && (await this.deps.payments.manualTransferOffered(scope));
     return {
       key: 'bot.wallet.balance',
       values: { balance: money(balance.amountMinor, balance.currency) },
@@ -2865,7 +2857,7 @@ export class BotRuntime {
    */
   private async topupMenu(scope: TenantContext): Promise<PendingReply> {
     const presets = await this.deps.payments.topupPresets(scope);
-    if (presets.length === 0 || !(await this.deps.accounts.hasEnabled(scope))) {
+    if (presets.length === 0 || !(await this.deps.payments.manualTransferOffered(scope))) {
       return { key: 'bot.wallet.topup_unavailable', values: {}, buttons: [], orderId: null };
     }
     return {

@@ -12,6 +12,7 @@ import {
   type Money,
   type OperationalEventRecorder,
   type PaymentGatewayConfig,
+  type PaymentMethod,
   type PaymentGatewayProvider,
   type PaymentGatewayStatus,
   type PermissionKey,
@@ -411,6 +412,40 @@ export class PaymentGatewayService {
         },
       );
     }
+  }
+
+  /**
+   * Whether an ACTIVE route settles through this method. STATUS only, nothing else.
+   *
+   * The narrowest question a payment path can ask a route, and the narrowness is the
+   * point. `offer` answers "which route may THIS customer use for THIS amount", which
+   * folds in the eligibility thresholds and the amount bounds — and whether those apply
+   * to an ORDER payment is the open product decision `OQ-5C-01`. This asks only whether
+   * the operator has switched the route off, which is not a threshold and carries no
+   * product ambiguity: an operator who disables card-to-card means customers should not
+   * be offered card-to-card.
+   *
+   * `FBR-002` is the evidence that the toggle is meant to be load-bearing — "the toggle
+   * determines whether customers can pay through that route at all". Before this, 5C
+   * bound it to the wallet top-up path and nowhere else, so an operator could disable
+   * MANUAL_TRANSFER and watch order payments keep arriving through it. A control that
+   * does not do what it says is the write-only-settings class of defect, and this is the
+   * read that makes it true.
+   *
+   * No permission check: this is a fact about the installation's configuration consulted
+   * by a customer-initiated command, exactly as `settlementMethodFor` is. What a
+   * customer may DO with the answer is charged by the caller.
+   */
+  async methodIsOffered(
+    scope: TenantContext,
+    method: PaymentMethod,
+    tx?: unknown,
+  ): Promise<boolean> {
+    const gateways = await this.deps.repository.list(scope, tx);
+    return gateways.some(
+      (gateway) =>
+        gateway.status === 'ACTIVE' && this.settlementMethodFor(gateway.provider) === method,
+    );
   }
 
   /** How the chosen route settles, from the descriptor rather than from its name. */

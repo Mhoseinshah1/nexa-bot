@@ -514,4 +514,40 @@ describe('payment routes', () => {
     };
     return rows.rows.map((row) => `${row.role_key}:${row.permission_key}`);
   }
+  /**
+   * The toggle has to switch something off, and before this it half did.
+   *
+   * `FBR-002` records the enable/disable control as deciding "whether customers can pay
+   * through that route at all". 5C bound it to the wallet top-up path and nowhere else,
+   * so an operator could switch MANUAL_TRANSFER off and watch ORDER payments keep
+   * arriving through it. This is the read that both surfaces now consult; the order path
+   * itself is proved in `payments.test.ts`.
+   *
+   * STATUS only, deliberately: the route's bounds and eligibility thresholds are
+   * `OQ-5C-01`, an open product decision, and this case would pass either way.
+   */
+  it('stops offering the manual transfer once the operator switches the route off', async () => {
+    expect(await ctx.container.payments.manualTransferOffered(tenantA)).toBe(true);
+
+    await ctx.container.database.db.execute(
+      sql`UPDATE payment_gateways SET status = 'DISABLED'
+           WHERE tenant_id = ${tenantA.tenantId} AND provider = 'MANUAL_TRANSFER'`,
+    );
+    expect(await ctx.container.payments.manualTransferOffered(tenantA)).toBe(false);
+
+    await ctx.container.database.db.execute(
+      sql`UPDATE payment_gateways SET status = 'ACTIVE'
+           WHERE tenant_id = ${tenantA.tenantId} AND provider = 'MANUAL_TRANSFER'`,
+    );
+    expect(await ctx.container.payments.manualTransferOffered(tenantA)).toBe(true);
+  });
+
+  /** The other half of the same answer: no destination, nothing offered. */
+  it('stops offering it when the last enabled account goes away', async () => {
+    await ctx.container.database.db.execute(
+      sql`UPDATE payment_accounts SET enabled = false, is_default = false
+           WHERE tenant_id = ${tenantA.tenantId}`,
+    );
+    expect(await ctx.container.payments.manualTransferOffered(tenantA)).toBe(false);
+  });
 });
