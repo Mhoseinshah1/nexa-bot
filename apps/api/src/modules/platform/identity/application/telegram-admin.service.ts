@@ -217,13 +217,18 @@ export class TelegramAdminService {
       readonly username: string;
       readonly roleKeys: readonly string[];
       readonly reason: string;
+      /** The update's key. A Telegram command is redelivered, so it is replayed, not re-run. */
+      readonly idempotencyKey: string;
     },
   ): Promise<{ admin: Admin; roleKeys: string[] }> {
     const target = await this.requireByUsername(scope, input.username);
-    return this.deps.management.setRoles(scope, actor, target.id, {
-      roleKeys: [...input.roleKeys],
-      reason: input.reason,
-    });
+    return this.deps.management.setRoles(
+      scope,
+      actor,
+      target.id,
+      { roleKeys: [...input.roleKeys], reason: input.reason },
+      { namespace: 'TELEGRAM', idempotencyKey: `${input.idempotencyKey}:admin-role` },
+    );
   }
 
   private async requireByUsername(scope: TenantContext, username: string): Promise<Admin> {

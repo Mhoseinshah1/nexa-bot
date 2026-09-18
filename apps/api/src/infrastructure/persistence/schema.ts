@@ -2915,12 +2915,14 @@ export const paymentGateways = pgTable(
      * back `int8` as a string and the parser this codebase installs turns it into a
      * `bigint`, which is what keeps an amount above 2^53 exact.
      *
-     * There is no companion `currency` column, and that is the one place this table
-     * departs from the money convention deliberately. A bound is compared against an
-     * amount already denominated in the installation's `sales.currency`; storing a
-     * second denomination here would create a pair that can disagree, with no
-     * conversion in this product able to resolve it. The comparison fails closed on a
-     * currency mismatch instead — see `PaymentGatewayService`.
+     * The companion `currency` column is `bounds_currency` below — added by 0077 after
+     * the payment batch's review, and a correction to what this comment used to say.
+     * The bounds were stored bare and relabelled with whatever `sales.currency` was at
+     * COMPARISON time, so an operator switching the installation from IRT to IRR made
+     * every route's `1000000` silently mean a tenth of what it had, with nobody editing
+     * a bound. Storing the denomination the bounds were WRITTEN in is what lets the
+     * comparison fail closed on a mismatch — the case `PaymentGatewayService` always
+     * named and could never reach.
      */
     minAmountMinor: bigint('min_amount_minor', { mode: 'bigint' })
       .notNull()
@@ -2928,6 +2930,15 @@ export const paymentGateways = pgTable(
     maxAmountMinor: bigint('max_amount_minor', { mode: 'bigint' })
       .notNull()
       .default(sql`0`),
+    /**
+     * The denomination the two bounds were written in — the installation's
+     * `sales.currency` at the moment an operator saved them, or at the moment the zero
+     * row was provisioned. Compared against the amount's currency in `offer`, and a
+     * disagreement refuses the route until an operator re-saves it under the new
+     * currency, rather than reinterpreting the numbers. Backfilled by 0078 from each
+     * tenant's setting, then made NOT NULL by 0079.
+     */
+    boundsCurrency: text('bounds_currency').notNull(),
     /**
      * The three eligibility thresholds, where `0` is the condition switched OFF.
      *
@@ -2952,6 +2963,10 @@ export const paymentGateways = pgTable(
     index('payment_gateways_tenant_sort_idx').on(table.tenantId, table.sortOrder, table.provider),
     check('payment_gateways_provider_check', enumCheck('provider', PAYMENT_GATEWAY_PROVIDERS)),
     check('payment_gateways_status_check', enumCheck('status', PAYMENT_GATEWAY_STATUSES)),
+    check(
+      'payment_gateways_bounds_currency_check',
+      nullableEnumCheck('bounds_currency', CURRENCY_CODES),
+    ),
     /*
      * The same structural rules the contract applies, restated where a hand-written
      * UPDATE cannot skip them — the argument `payment_accounts` states: the schema

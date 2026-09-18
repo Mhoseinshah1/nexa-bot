@@ -171,7 +171,20 @@ export class PaymentGatewayService {
       async (tx) => {
         await this.assertScopeActive(scope, tx);
         const before = await this.require(scope, provider, tx);
-        const after = await this.deps.repository.update(scope, provider, input.config, now, tx);
+        // The denomination these bounds are being written in, read inside the transaction.
+        const currency = await this.deps.settings.valueOf<SalesCurrencyCode>(
+          scope,
+          'sales.currency',
+          tx,
+        );
+        const after = await this.deps.repository.update(
+          scope,
+          provider,
+          input.config,
+          currency,
+          now,
+          tx,
+        );
         if (after === null) {
           throw errors.notFound(
             COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_NOT_FOUND,
@@ -364,11 +377,11 @@ export class PaymentGatewayService {
 
     return {
       gateway: eligible,
-      minAmount: this.boundFor(eligible.minAmountMinor, amount.currency),
+      minAmount: this.boundFor(eligible.minAmountMinor, eligible.boundsCurrency),
       maxAmount:
         eligible.maxAmountMinor === 0n
           ? null
-          : this.boundFor(eligible.maxAmountMinor, amount.currency),
+          : this.boundFor(eligible.maxAmountMinor, eligible.boundsCurrency),
     };
   }
 
@@ -456,12 +469,15 @@ export class PaymentGatewayService {
   // -------------------------------------------------------------------------
 
   /**
-   * A bound, denominated in the amount it is compared against.
+   * A bound, denominated in the currency it was WRITTEN in — the row's, never the
+   * amount's.
    *
-   * The bounds carry no currency of their own — `payment-gateways.ts` records why — so
-   * the currency comes from the amount, which is already in the installation's
-   * `sales.currency` by the time any caller has one. That is what makes
-   * `BOUND_CURRENCY_MISMATCH` unreachable today and present anyway.
+   * It used to take the amount's currency, which made `BOUND_CURRENCY_MISMATCH`
+   * unreachable by construction and hid the failure it was reserved for: an operator
+   * switching `sales.currency` from IRT to IRR relabelled every stored `1000000` as
+   * IRR at comparison time, so each route began accepting a tenth of what it had, with
+   * no bound edited and no conversion performed. `assertAmountAccepted` now meets the
+   * row's own denomination and fails closed until the operator re-saves the bounds.
    */
   private boundFor(amountMinor: bigint, currency: CurrencyCode): Money {
     return money(amountMinor, currency);

@@ -10,7 +10,6 @@ import {
   type PaymentGatewayListResponse,
   type PaymentGatewayResponse,
   type PaymentGatewayView,
-  type SalesCurrencyCode,
   type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
@@ -49,8 +48,8 @@ export class PaymentGatewaysController {
   @Get(PAYMENT_GATEWAY_ROUTES.list)
   async list(@Req() request: FastifyRequest): Promise<PaymentGatewayListResponse> {
     const { scope, actor } = await this.authenticate(request);
-    const { gateways, currency } = await this.container.paymentGateways.list(scope, actor);
-    return { gateways: gateways.map((gateway) => toView(gateway, currency)) };
+    const { gateways } = await this.container.paymentGateways.list(scope, actor);
+    return { gateways: gateways.map(toView) };
   }
 
   @Post(routePattern(PAYMENT_GATEWAY_ROUTES.update, 'provider'))
@@ -84,7 +83,7 @@ export class PaymentGatewaysController {
       provider,
       config,
     });
-    return { gateway: toView(gateway, await this.container.paymentGateways.currency(scope)) };
+    return { gateway: toView(gateway) };
   }
 
   @Post(routePattern(PAYMENT_GATEWAY_ROUTES.status, 'provider'))
@@ -100,7 +99,7 @@ export class PaymentGatewaysController {
       provider,
       status: input.status,
     });
-    return { gateway: toView(gateway, await this.container.paymentGateways.currency(scope)) };
+    return { gateway: toView(gateway) };
   }
 
   private async authenticate(
@@ -125,13 +124,13 @@ export class PaymentGatewaysController {
  *
  * The amounts go out as decimal strings. JSON has no bigint, and a `number` here is the
  * float the money model refuses — silently, above 2^53. The currency travels with them
- * because a route stores bare minor units: `payment-gateways.ts` records why a per-route
- * currency would be a second denomination with no conversion to reach it.
+ * and it is the ROW'S: the denomination the bounds were saved in, which is the only one
+ * in which the two numbers mean anything.
  *
  * The descriptor's `settlesVia` and `requiresCredentials` are deliberately absent — the
  * view schema says why.
  */
-function toView(gateway: PaymentGatewayRecord, currency: SalesCurrencyCode): PaymentGatewayView {
+function toView(gateway: PaymentGatewayRecord): PaymentGatewayView {
   return {
     provider: gateway.provider,
     status: gateway.status,
@@ -139,7 +138,10 @@ function toView(gateway: PaymentGatewayRecord, currency: SalesCurrencyCode): Pay
     instructions: gateway.instructions,
     minAmountMinor: gateway.minAmountMinor.toString(),
     maxAmountMinor: gateway.maxAmountMinor.toString(),
-    currency,
+    // The row's own denomination — what the bounds mean, not what the installation
+    // currently sells in. When the two differ the route is refusing, and this is how
+    // the operator sees why.
+    currency: gateway.boundsCurrency,
     eligibility: {
       activateAfterPayments: gateway.activateAfterPayments,
       deactivateAfterPayments: gateway.deactivateAfterPayments,

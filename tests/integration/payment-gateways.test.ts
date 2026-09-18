@@ -281,6 +281,62 @@ describe('payment routes', () => {
     expect(rows[0]?.total).toBe(0);
   });
 
+  it('refuses a route whose bounds were written in another currency, until they are re-saved', async () => {
+    // Bounds saved while the installation sells in IRT: they MEAN IRT.
+    await ctx.container.paymentGateways.configure(tenantA, ownerA, {
+      idempotencyKey: 'gw-cur-1',
+      provider: 'MANUAL_TRANSFER',
+      config: { ...OPEN, minAmountMinor: 100_000n },
+    });
+    const before = (await ctx.container.paymentGateways.list(tenantA, ownerA)).gateways.find(
+      (gateway) => gateway.provider === 'MANUAL_TRANSFER',
+    );
+    expect(before?.boundsCurrency).toBe('IRT');
+
+    /*
+     * The installation switches to IRR. The bounds used to be relabelled with whatever
+     * `sales.currency` was at comparison time, so `100000` silently became 100000 IRR —
+     * a tenth of what the operator had set, with no bound edited and no conversion
+     * performed. The route now fails closed on the mismatch its own error code always
+     * named, and the record shows the operator why.
+     */
+    await setSetting('sales.currency', 'IRR');
+    await setSetting('wallet.topup.presets', [{ amountMinor: '500000', currency: 'IRR' }]);
+
+    const refused = await ctx.container.payments
+      .requestWalletTopup(
+        { ...tenantA, botInstanceId: BOT_A },
+        systemActor('gw-cur-turn-1'),
+        customerA,
+        { idempotencyKey: 'topup-cur-1', amountMinor: 500_000n },
+      )
+      .catch((error: unknown) => error);
+    expect(refused).toMatchObject({ code: COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE });
+    const stale = (await ctx.container.paymentGateways.list(tenantA, ownerA)).gateways.find(
+      (gateway) => gateway.provider === 'MANUAL_TRANSFER',
+    );
+    expect(stale?.boundsCurrency).toBe('IRT');
+
+    // Re-saving the bounds is the operator confirming what they mean now.
+    await ctx.container.paymentGateways.configure(tenantA, ownerA, {
+      idempotencyKey: 'gw-cur-2',
+      provider: 'MANUAL_TRANSFER',
+      config: { ...OPEN, minAmountMinor: 100_000n },
+    });
+    const after = (await ctx.container.paymentGateways.list(tenantA, ownerA)).gateways.find(
+      (gateway) => gateway.provider === 'MANUAL_TRANSFER',
+    );
+    expect(after?.boundsCurrency).toBe('IRR');
+
+    const issued = await ctx.container.payments.requestWalletTopup(
+      { ...tenantA, botInstanceId: BOT_A },
+      systemActor('gw-cur-turn-2'),
+      customerA,
+      { idempotencyKey: 'topup-cur-2', amountMinor: 500_000n },
+    );
+    expect(issued.payment.amount.currency).toBe('IRR');
+  });
+
   it('refuses a top-up when the only route is DISABLED', async () => {
     await ctx.container.paymentGateways.setStatus(tenantA, ownerA, {
       idempotencyKey: 'gw-off-1',
@@ -440,6 +496,38 @@ describe('payment routes', () => {
     };
 
     /**
+     * The shipped 0078, the same way: the statement that gives 0071's rows their
+     * denomination, which is what an installation upgrading through both releases runs.
+     */
+    const denominate = () => {
+      const file = readFileSync(
+        'apps/api/drizzle/0078_payment_gateway_bounds_currency_backfill.sql',
+        'utf8',
+      );
+      const start = file.indexOf('UPDATE "payment_gateways"');
+      expect(start).toBeGreaterThan(-1);
+      return file.slice(start);
+    };
+
+    /**
+     * 0071 ran in a schema with no `bounds_currency`; 0077 added it nullable, 0078
+     * filled it, 0079 made it NOT NULL. Replaying 0071 against today's schema would
+     * meet 0079's constraint before `ON CONFLICT` could apply, which is a state no
+     * installation is ever in. So the replay is run in the order the releases run.
+     */
+    async function asUpgradeThrough0071(fn: () => Promise<void>): Promise<void> {
+      const raw = (text: string) =>
+        ctx.container.database.withClient((client) => client.query(text));
+      await raw('ALTER TABLE payment_gateways ALTER COLUMN bounds_currency DROP NOT NULL');
+      try {
+        await fn();
+        await raw(denominate());
+      } finally {
+        await raw('ALTER TABLE payment_gateways ALTER COLUMN bounds_currency SET NOT NULL');
+      }
+    }
+
+    /**
      * What the role half must produce, written out rather than derived from
      * `ROLE_SEEDS`. Deriving it would run the same computation the migration
      * implements and agree with it however wrong both were.
@@ -465,8 +553,10 @@ describe('payment routes', () => {
       );
       expect(await grantsIn(tenantA.tenantId)).toEqual([]);
 
-      await ctx.container.database.withClient((client) => client.query(backfill()));
-      await ctx.container.database.withClient((client) => client.query(backfill()));
+      await asUpgradeThrough0071(async () => {
+        await ctx.container.database.withClient((client) => client.query(backfill()));
+        await ctx.container.database.withClient((client) => client.query(backfill()));
+      });
 
       expect(await grantsIn(tenantA.tenantId)).toEqual(EXPECTED_GRANTS);
 
@@ -475,6 +565,9 @@ describe('payment routes', () => {
       expect(gateways[0]?.status).toBe('ACTIVE');
       expect(gateways[0]?.displayName).toBeNull();
       expect(gateways[0]?.minAmountMinor).toBe(0n);
+      // 0078 gave the upgraded row the denomination its bounds always meant: the
+      // registry default, since this tenant has no `sales.currency` row.
+      expect(gateways[0]?.boundsCurrency).toBe('IRT');
     });
 
     it('never resets a route an operator has already tuned', async () => {
@@ -484,7 +577,9 @@ describe('payment routes', () => {
         config: { ...OPEN, displayName: 'Tuned', minAmountMinor: 750_000n, sortOrder: 3 },
       });
 
-      await ctx.container.database.withClient((client) => client.query(backfill()));
+      await asUpgradeThrough0071(async () => {
+        await ctx.container.database.withClient((client) => client.query(backfill()));
+      });
 
       const { gateways } = await ctx.container.paymentGateways.list(tenantA, ownerA);
       expect(gateways[0]?.displayName).toBe('Tuned');

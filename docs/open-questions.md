@@ -2021,3 +2021,28 @@ run against a payment batch is the wrong place for it.
 The bounded alternatives, for whoever takes it: send the decision message first and the
 media after, or send the media concurrently rather than serially so the worst case is one
 timeout instead of five.
+
+## OQ-5H-04 — a wallet top-up cannot be refunded until the product says what that means
+
+Confirming a top-up appends a `TOPUP_RECEIPT` credit to the customer's wallet. The refund
+service derived its channel from the payment METHOD alone, so a top-up paid by bank
+transfer resolved to `EXTERNAL_MANUAL`: an operator could return the money through the
+bank while the customer kept, and could still spend, the wallet credit. One transfer, paid
+back twice. The hardening pass refuses a refund of any payment with no order —
+`REFUND_NOT_PERMITTED`, reason `TOPUP_CREDITED_TO_WALLET` — on both the read path and the
+write path.
+
+What would make a top-up refundable is a product decision, not a mechanical one. A
+truthful refund has to REVERSE the credit as well as return the money, and the credit may
+already be spent, in whole or in part. Whether a wallet may go negative is `UNK-UM-005`,
+still open, and the answer decides the design:
+
+- **Never negative.** A top-up is refundable only up to the customer's current balance, and
+  the refund debits the wallet in the same transaction that records the refund.
+- **May go negative.** The full top-up is refundable, the wallet is debited to a negative
+  balance, and the customer cannot buy until it is cleared — which needs a rule for what
+  clears it.
+- **Refuse, as now.** Top-ups are settled by the operator crediting or debiting the wallet
+  directly, with a reason, and never through the refund lane.
+
+Until one is chosen, refusing is the only outcome that cannot create money.

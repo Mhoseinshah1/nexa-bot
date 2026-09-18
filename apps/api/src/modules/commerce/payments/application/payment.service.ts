@@ -761,6 +761,16 @@ export class PaymentService {
       denial,
       async (tx) => {
         await this.assertScopeActive(scope, tx);
+        /*
+         * The customer row FIRST, for the reason `requestWalletTopup` gives: an
+         * administrator's block committing between an unlocked status read and the
+         * insert would issue a live transfer reference to an account that is BLOCKED.
+         * Taken before the order, in the same order `settleFromWallet` takes them, so the
+         * two issuing paths cannot deadlock against each other.
+         */
+        if (!(await this.deps.wallet.lockCustomer(scope, customerId, tx))) {
+          throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
+        }
         await this.assertCustomerMayPay(scope, customerId, tx);
         const order = await this.orderAwaitingPayment(
           scope,
@@ -1111,6 +1121,32 @@ export class PaymentService {
       denial,
       async (tx) => {
         await this.assertScopeActive(scope, tx);
+        /*
+         * The customer row, taken FOR UPDATE — and taken FIRST, before the status is
+         * read, before the presets and the route are consulted, before the open top-up
+         * is looked for. Everything that decides whether and what to issue happens inside
+         * this window.
+         *
+         * Two races end here. An administrator's block that commits between an unlocked
+         * status read and the insert would otherwise leave a live pending payment, and
+         * a live destination, on an account that is now BLOCKED; with the lock, the
+         * block waits for this transaction or precedes it, and either order is
+         * deterministic. And two callbacks carrying different idempotency keys — a
+         * double tap, or the same customer in two Telegram clients — would otherwise
+         * both read `findOpenTopup` as null and both insert: two live references for one
+         * intended transfer, each independently confirmable, one bank transfer credited
+         * twice. The store has nothing to replay because the keys differ.
+         *
+         * The same serialisation point the wallet settlement path takes, and for the
+         * same reason it gives: the ledger is append-only and gives two writers nothing
+         * to contend on, so the customer row is where they meet.
+         * `payments_open_topup_key` is the database-level backstop for a path that
+         * forgets this; the lock is what makes the ordinary racing pair serialise
+         * quietly instead of one of them meeting a raw 23505 the webhook would swallow.
+         */
+        if (!(await this.deps.wallet.lockCustomer(scope, customerId, tx))) {
+          throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
+        }
         await this.assertCustomerMayPay(scope, customerId, tx);
 
         const amount = await this.offeredTopup(scope, intent.amountMinor, tx);
@@ -1136,28 +1172,6 @@ export class PaymentService {
          * details for a dead reference is the failure `PAYMENT_WINDOW_TOO_SHORT` exists
          * to prevent one step earlier.
          */
-        /*
-         * The customer row, taken FOR UPDATE, and the read of their open top-up is
-         * inside that window.
-         *
-         * Without it, two callbacks carrying different idempotency keys — a double tap,
-         * or the same customer in two Telegram clients — both read `findOpenTopup` as
-         * null and both insert. The idempotency store has nothing to replay, because the
-         * keys differ. The customer ends up holding two live references for one intended
-         * transfer, each independently confirmable, and the one payment they actually
-         * made can be credited twice.
-         *
-         * The same serialisation point the wallet settlement path above takes, and for
-         * the same reason it gives: the ledger is append-only and gives two writers
-         * nothing to contend on, so the customer row is where they meet.
-         * `payments_open_topup_key` is the database-level backstop for a path that
-         * forgets this; the lock is what makes the ordinary racing pair serialise
-         * quietly instead of one of them meeting a raw 23505 the webhook would swallow.
-         */
-        if (!(await this.deps.wallet.lockCustomer(scope, customerId, tx))) {
-          throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
-        }
-
         const found = await this.deps.repository.findOpenTopup(scope, customerId, tx);
         const stale =
           found !== null && found.expiresAt !== null && found.expiresAt.getTime() <= now.getTime();

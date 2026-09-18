@@ -584,6 +584,20 @@ export class RefundService {
    */
   private refundabilityOf(payment: PaymentRecord): string | null {
     if (payment.state !== 'CONFIRMED') return 'PAYMENT_NOT_SETTLED';
+    /*
+     * A wallet TOP-UP is not refundable through this service, and the reason is where its
+     * money already went. Confirming a top-up appended a `TOPUP_RECEIPT` credit to the
+     * customer's wallet. The channel below is derived from the payment METHOD alone, so a
+     * top-up paid by bank transfer resolved to `EXTERNAL_MANUAL` — and an operator could
+     * return the money through the bank while the customer kept, and could still spend,
+     * the credit. One transfer, paid back twice.
+     *
+     * Reversing the credit instead is not a mechanical fix: the customer may have spent
+     * it, and whether a wallet may go negative is `UNK-UM-005`, still open. So a top-up is
+     * refused here — where the read path renders `refundable: false` for the same reason
+     * — and `OQ-5H-04` records the decision that would make one refundable.
+     */
+    if (payment.orderId === null) return 'TOPUP_CREDITED_TO_WALLET';
     if (!REFUND_METHOD_SUPPORT[payment.method].supported) return 'CHANNEL_UNSUPPORTED';
     return null;
   }
