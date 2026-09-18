@@ -2648,9 +2648,69 @@ export type ServiceSummaryResponse = z.infer<typeof serviceSummarySchema>;
  *
  * It adds NO credential. The absence in the summary is not a paging optimisation.
  */
+/**
+ * What an operator may do to this service RIGHT NOW, and why not when they may not.
+ *
+ * Phase 6A. The list is computed server-side against the same three authorities the
+ * write paths check — `SERVICE_MACHINE`'s legal states, the panel's declared
+ * capabilities, and whether an operation of that type is already open — so a surface
+ * cannot draw a button the request would refuse, and cannot invent a reason for one it
+ * does not draw.
+ *
+ * It is NOT the authorization. Every action re-checks its permission and all three
+ * conditions inside its own request; this exists so the screen can say "this panel
+ * cannot disable users" instead of a greyed-out button with no explanation, which is
+ * the legacy system's whole style of refusal.
+ */
+export const SERVICE_OPERATOR_ACTIONS = [
+  'SYNC_USAGE',
+  'RESEND_CONFIG',
+  'RETRY_PROVISION',
+  'RECONCILE',
+  'SUSPEND',
+  'RESUME',
+  'TERMINATE',
+] as const;
+export type ServiceOperatorAction = (typeof SERVICE_OPERATOR_ACTIONS)[number];
+
+/**
+ * Why an action is not offered. One of these, never a sentence.
+ *
+ * A code rather than prose because the surface renders it in Persian from its own
+ * catalogue, and because the three that matter are genuinely different jobs:
+ * `STATE` is the customer's or the lifecycle's, `CAPABILITY` and `PANEL_NOT_OPERABLE`
+ * are the operator's panel configuration, and `IN_PROGRESS` is transient and worth
+ * waiting out. `NO_CONFIGURATION` and `NO_CONTACT` are delivery's two: nothing to send,
+ * and nobody to send it to.
+ */
+export const SERVICE_ACTION_BLOCKERS = [
+  'STATE',
+  'CAPABILITY',
+  'PANEL_NOT_OPERABLE',
+  'IN_PROGRESS',
+  'NO_CONFIGURATION',
+  'NO_CONTACT',
+] as const;
+export type ServiceActionBlocker = (typeof SERVICE_ACTION_BLOCKERS)[number];
+
+export const serviceActionAvailabilitySchema = z.object({
+  action: z.enum(SERVICE_OPERATOR_ACTIONS),
+  available: z.boolean(),
+  /** Null exactly when `available` is true. */
+  blocker: z.enum(SERVICE_ACTION_BLOCKERS).nullable(),
+});
+export type ServiceActionAvailability = z.infer<typeof serviceActionAvailabilitySchema>;
+
 export const serviceDetailSchema = serviceSummarySchema.extend({
   deliveryAttempts: z.number().int(),
   deliveryNextAttemptAt: z.iso.datetime().nullable(),
+  /**
+   * Every action, available or not, with its blocker. The full list rather than the
+   * available subset: a surface that received only what it may do could not tell an
+   * action that is unavailable from one this release does not have, and the difference
+   * is what an operator is trying to find out.
+   */
+  actions: z.array(serviceActionAvailabilitySchema),
 });
 export type ServiceDetailResponse = z.infer<typeof serviceDetailSchema>;
 
@@ -2705,22 +2765,72 @@ export const serviceOperationsResponseSchema = z.object({
 export type ServiceOperationsResponse = z.infer<typeof serviceOperationsResponseSchema>;
 
 /**
+ * The word an operator types to terminate a service.
+ *
+ * A typed phrase rather than a second button, for the reason
+ * `RECOVERY_CONFIRMATION_PHRASE` gives: terminate DELETES the account on somebody's
+ * panel and the customer keeps their paid-for order, so the confirmation has to cost
+ * more than a mis-click. Compared after trimming and in full — a near-miss is not a
+ * confirmation.
+ */
+export const SERVICE_TERMINATE_CONFIRMATION = 'TERMINATE';
+
+/** Every service action but terminate: an idempotency key and nothing else. */
+export const serviceActionRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+});
+export type ServiceActionRequest = z.infer<typeof serviceActionRequestSchema>;
+
+export const serviceTerminateRequestSchema = serviceActionRequestSchema.extend({
+  /** The phrase, exactly. See `SERVICE_TERMINATE_CONFIRMATION`. */
+  confirm: z.string().max(64),
+});
+export type ServiceTerminateRequest = z.infer<typeof serviceTerminateRequestSchema>;
+
+/**
+ * What an action answers with: the service as it now is, and the operation it planned.
+ *
+ * BOTH, and neither is redundant. The service is what the screen redraws — a row left
+ * showing its pre-action state is the defect `AdminsSection` had before Phase 3D, where
+ * a suspended administrator kept reading as active. The operation is the evidence the
+ * work was ACCEPTED and not completed: `state` is `PLANNED`, the provider has not been
+ * called, and a surface that reported success would be claiming an effect that has not
+ * happened yet. `operation` is null only for the actions that plan none — a resend
+ * sends a message and writes a delivery row.
+ */
+export const serviceActionResponseSchema = z.object({
+  service: serviceDetailSchema,
+  operation: serviceOperationSchema.nullable(),
+});
+export type ServiceActionResponse = z.infer<typeof serviceActionResponseSchema>;
+
+/**
  * The routes.
  *
- * Read-only in this phase, and the omission is the point rather than an unfinished
- * edge. `services.terminate` and `services.transfer` are declared permissions with no
- * endpoint here: terminating from the Web Admin would need the operator-initiated half
- * of a flow whose customer half 4E built and whose outcome announcement 4H just added,
- * and a transfer has no stated rule at all for what happens to the order, the payment
- * and the subscription the previous owner is holding. `docs/open-questions.md` carries
- * that one; inventing it here is exactly the kind of guess this repository refuses.
+ * Phase 6A adds the writes. The read-only note that stood here said terminate needed
+ * "the operator-initiated half of a flow whose customer half 4E built" and that a
+ * transfer had no stated rule — the first is what this phase builds, and the second is
+ * still true: there is NO transfer route, `services.transfer` remains a declared
+ * permission with no endpoint, and `docs/open-questions.md` still carries the question
+ * of what becomes of the order, the payment and the subscription the previous owner
+ * holds. Inventing that answer in a controller is the guess this repository refuses.
  *
- * What ships is what `services.view` already promises an operator and could not do.
+ * Each action is its own path rather than one `POST /operations` taking a type, because
+ * the permission differs — terminate charges `services.terminate` and the rest charge
+ * `services.edit` — and a single route would make that mapping a runtime switch inside
+ * a handler instead of a property of the URL.
  */
 export const SERVICE_ROUTES = {
   list: '/services',
   detail: (id: string) => `/services/${encodeURIComponent(id)}`,
   operations: (id: string) => `/services/${encodeURIComponent(id)}/operations`,
+  syncUsage: (id: string) => `/services/${encodeURIComponent(id)}/sync-usage`,
+  resend: (id: string) => `/services/${encodeURIComponent(id)}/resend`,
+  retryProvision: (id: string) => `/services/${encodeURIComponent(id)}/retry-provision`,
+  reconcile: (id: string) => `/services/${encodeURIComponent(id)}/reconcile`,
+  suspend: (id: string) => `/services/${encodeURIComponent(id)}/suspend`,
+  resume: (id: string) => `/services/${encodeURIComponent(id)}/resume`,
+  terminate: (id: string) => `/services/${encodeURIComponent(id)}/terminate`,
 } as const;
 
 // --- Backup and disaster recovery -------------------------------------------

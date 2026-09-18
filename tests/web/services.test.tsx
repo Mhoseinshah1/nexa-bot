@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { screen, within } from '@testing-library/react';
+import { SERVICE_OPERATOR_ACTIONS } from '@nexa/contracts';
 import type { ReactElement } from 'react';
 import { ServiceDetailPage, ServicesPage } from '../../apps/web/src/pages/services';
 import { resolve } from '../../apps/web/src/app';
@@ -79,12 +80,31 @@ const list = (services: unknown[], nextCursor: string | null = null) => [
   { url: '/services', body: { services, nextCursor } },
 ];
 
+/**
+ * Every action refused, which is the shape this release's detail page renders.
+ *
+ * `actions` is declared by `serviceDetailSchema` as of Phase 6A, so a fixture without
+ * it fails the client's own parse — which is the seam working. The page does not draw
+ * buttons yet; the cases that do belong with the screen that has them.
+ */
+const NO_ACTIONS = SERVICE_OPERATOR_ACTIONS.map((action) => ({
+  action,
+  available: false,
+  blocker: 'STATE' as const,
+}));
+
 const detail = (overrides: Record<string, unknown> = {}, operations: unknown[] = [operation()]) => [
   { url: `/services/${SERVICE_ID}/operations`, body: { operations } },
   {
     url: `/services/${SERVICE_ID}`,
     body: {
-      service: { ...service(overrides), deliveryAttempts: 1, deliveryNextAttemptAt: null },
+      service: {
+        deliveryAttempts: 1,
+        deliveryNextAttemptAt: null,
+        actions: NO_ACTIONS,
+        /* Last, so a case may override any of the three above by passing it. */
+        ...service(overrides),
+      },
     },
   },
 ];
