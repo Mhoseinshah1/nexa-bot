@@ -47,6 +47,28 @@ export const serviceStateSchema = z.enum(SERVICE_STATES);
 export const SERVICE_TERMINAL_STATES = ['TERMINATED'] as const;
 
 /**
+ * The states in which a service occupies a slot on its panel.
+ *
+ * DERIVED from the terminal list rather than listed, because the question is
+ * exactly "has this stopped being an account on somebody's panel", and
+ * `TERMINATED` is the only state for which the answer is yes. A hand-written
+ * list here would be a second opinion about the state machine, and the state a
+ * future release adds would be missing from it — silently, because an
+ * uncounted service reads as free capacity rather than as an error.
+ *
+ * Every other state occupies or may recover into a slot, and each for its own
+ * reason. `PENDING_PROVISION` is about to become one. `ACTIVE` and `SUSPENDED`
+ * are one — a suspended account is switched off, not deleted. `EXPIRED` is
+ * renewable and the provider still holds the user. `UNRECONCILED` is the case
+ * that matters most: this installation does not know whether the provider holds
+ * an account, and counting it as free is how a panel is oversold by exactly the
+ * services nobody can account for.
+ */
+export const SERVICE_CAPACITY_STATES: readonly ServiceState[] = SERVICE_STATES.filter(
+  (state) => !SERVICE_TERMINAL_STATES.includes(state as (typeof SERVICE_TERMINAL_STATES)[number]),
+);
+
+/**
  * The states in which provisioning is genuinely still unresolved.
  *
  * A WHITELIST, and the distinction it draws is the one a delay notice depends on.
