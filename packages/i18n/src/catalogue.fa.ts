@@ -222,6 +222,14 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.copy_amount_button': '💵 کپی مبلغ',
   'bot.payment.wallet_button': 'پرداخت از کیف پول',
   'bot.payment.manual_button': 'پرداخت کارت به کارت',
+  /*
+   * The generic refusal, and it says two things on purpose: that the request cannot be
+   * completed NOW (so trying later is sensible), and that nothing was charged — because
+   * every cause that reaches this key rolled its transaction back, and a customer whose
+   * tap vanished will otherwise assume the money moved.
+   */
+  'bot.request_unavailable':
+    'انجام این درخواست در حال حاضر امکان‌پذیر نیست و مبلغی از شما کسر نشد. لطفاً کمی بعد دوباره تلاش کنید.',
   'bot.payment.unconfigured': 'این روش پرداخت در حال حاضر فعال نیست.',
   /*
    * ONE button naming both halves, and the Payment UX addendum fixes the wording.
