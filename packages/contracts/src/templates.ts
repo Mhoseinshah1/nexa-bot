@@ -1267,6 +1267,19 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.service.list_more',
+    description:
+      'The label on the button that shows a customer the next page of their services. ' +
+      'Phase 6A. Before it, the list was a BOUND rather than a page: a customer with ' +
+      'more than twenty services saw twenty and was told nothing about the rest, ' +
+      'because the surface discarded the cursor the repository already returned. A ' +
+      'label rather than a heading, so it carries no placeholders \u2014 a count would ' +
+      'go stale between the render and the tap, and the number a customer wants is not ' +
+      '"how many remain" but "is there more".',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.service.not_found',
     description:
       'Shown when a customer acts on a service id that is not theirs, or does not ' +
