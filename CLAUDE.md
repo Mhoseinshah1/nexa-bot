@@ -84,6 +84,30 @@ Four more from Phase 3C:
   budget are conditional writes; **two monitor replicas are the normal case**,
   briefly, on every rolling update.
 
+Four Phase 6B rules, each naming a way to oversell or mis-sell a panel:
+
+- A capacity slot is a **RESERVATION ROW**, not a count. Between a confirmation
+  and a payment there is no service, so counting services sells the last slot
+  twice and the second customer finds out after paying. `reserve` takes the
+  panel's row lock FIRST and counts AFTERWARDS — a count issued before the wait,
+  or the subqueries of a single `INSERT ... SELECT`, see the state the loser
+  started from.
+- **Operability and eligibility are different questions** and disagree in both
+  directions. `decideOperability` asks whether one operation may run and ignores
+  health; `decideEligibility` asks whether we may take money for a new account
+  and ignores capabilities. A full panel is operable; a panel whose adapter
+  cannot suspend is sellable.
+- Eligibility is decided by **one evaluator with four callers** — catalogue,
+  confirmation, settlement, release. Catalogue filtering is a courtesy and is
+  never trusted: confirmation re-decides inside its transaction under the panel's
+  lock, and settlement re-decides again. A predicate copied into four places
+  disagrees with itself invisibly.
+- **Enabling a panel requires a connection test bound to what it is NOW.**
+  `validated_identity` is provider, address, activation and the three credential
+  timestamps — deliberately NOT `configurationFingerprint`, which carries
+  `status` and `updated_at` and would be invalidated by the act it authorises.
+  Lowering a cap below current usage is accepted and terminates nothing.
+
 Four Phase 4 rules that are easy to break by accident:
 
 - A customer is told a fact through the **notification lane**, never a string.
