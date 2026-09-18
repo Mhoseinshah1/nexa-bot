@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  decodeServiceCursor,
-  encodeServiceCursor,
-} from '../../apps/api/src/surfaces/telegram/service-cursor.js';
+  decodeKeysetToken,
+  encodeKeysetToken,
+} from '../../apps/api/src/surfaces/telegram/keyset-token.js';
 import { SERVICES_PAGE_CALLBACK_PREFIX } from '../../apps/api/src/surfaces/telegram/bot-runtime.js';
 import type { ServiceCursor } from '../../apps/api/src/modules/commerce/provisioning/application/ports.js';
 
@@ -22,16 +22,16 @@ const CURSOR: ServiceCursor = {
 };
 
 const micros = (text: string): number => {
-  const token = encodeServiceCursor({ ...CURSOR, createdAt: text });
+  const token = encodeKeysetToken({ ...CURSOR, createdAt: text });
   if (token === null) throw new Error(`did not encode: ${text}`);
   return Number.parseInt(token.split('.')[0] ?? '', 36);
 };
 
 describe('the Telegram service cursor', () => {
   it('round-trips a PostgreSQL microsecond timestamp to the same instant', () => {
-    const token = encodeServiceCursor(CURSOR);
+    const token = encodeKeysetToken(CURSOR);
     expect(token).not.toBeNull();
-    const back = decodeServiceCursor(token ?? '');
+    const back = decodeKeysetToken(token ?? '');
     expect(back).not.toBeNull();
     expect(back?.id).toBe(CURSOR.id);
     /*
@@ -51,11 +51,11 @@ describe('the Telegram service cursor', () => {
      * from — and `services-http.test.ts` holds the HTTP-side measurement of exactly
      * that becoming an endless list.
      */
-    const precise = decodeServiceCursor(
-      encodeServiceCursor({ ...CURSOR, createdAt: '2026-01-01 00:00:00.000123+00' }) ?? '',
+    const precise = decodeKeysetToken(
+      encodeKeysetToken({ ...CURSOR, createdAt: '2026-01-01 00:00:00.000123+00' }) ?? '',
     );
-    const truncated = decodeServiceCursor(
-      encodeServiceCursor({ ...CURSOR, createdAt: '2026-01-01 00:00:00+00' }) ?? '',
+    const truncated = decodeKeysetToken(
+      encodeKeysetToken({ ...CURSOR, createdAt: '2026-01-01 00:00:00+00' }) ?? '',
     );
     expect(precise?.createdAt).not.toBe(truncated?.createdAt);
     expect(micros('2026-01-01 00:00:00.000123+00') - micros('2026-01-01 00:00:00+00')).toBe(123);
@@ -70,10 +70,10 @@ describe('the Telegram service cursor', () => {
     for (const createdAt of [
       '2026-09-18 15:04:05.123456+00',
       '1970-01-01 00:00:00.000001+00',
-      /* The widest the encoding accepts. See the range note in `service-cursor.ts`. */
+      /* The widest the encoding accepts. See the range note in `keyset-token.ts`. */
       '2255-06-05 03:47:34.740991+00',
     ]) {
-      const token = encodeServiceCursor({ ...CURSOR, createdAt });
+      const token = encodeKeysetToken({ ...CURSOR, createdAt });
       expect(token, createdAt).not.toBeNull();
       const data = `${SERVICES_PAGE_CALLBACK_PREFIX}${token ?? ''}`;
       expect(Buffer.byteLength(data, 'utf8'), `${createdAt} -> ${data}`).toBeLessThanOrEqual(64);
@@ -113,15 +113,15 @@ describe('the Telegram service cursor', () => {
       'ABC.019930cdcdef70128345678abcdef012', // uppercase base36
       '-1.019930cdcdef70128345678abcdef012',
     ]) {
-      expect(decodeServiceCursor(bad), bad).toBeNull();
+      expect(decodeKeysetToken(bad), bad).toBeNull();
     }
   });
 
   it('refuses to encode an id that is not a uuid, or a timestamp it cannot read', () => {
-    expect(encodeServiceCursor({ createdAt: CURSOR.createdAt, id: 'nope' })).toBeNull();
-    expect(encodeServiceCursor({ createdAt: 'whenever', id: CURSOR.id })).toBeNull();
+    expect(encodeKeysetToken({ createdAt: CURSOR.createdAt, id: 'nope' })).toBeNull();
+    expect(encodeKeysetToken({ createdAt: 'whenever', id: CURSOR.id })).toBeNull();
     /* A pre-epoch row is refused rather than encoded as a negative count. */
-    expect(encodeServiceCursor({ createdAt: '1969-12-31 23:59:59+00', id: CURSOR.id })).toBeNull();
+    expect(encodeKeysetToken({ createdAt: '1969-12-31 23:59:59+00', id: CURSOR.id })).toBeNull();
   });
 
   it('refuses a timestamp past the safe-integer range rather than encoding it imprecisely', () => {
@@ -131,14 +131,14 @@ describe('the Telegram service cursor', () => {
      * right is a cursor that skips or repeats a row. Refusing means the "more" button
      * is not drawn, which reads as a list that ends — the safe direction of the two.
      */
-    expect(encodeServiceCursor({ createdAt: '2300-01-01 00:00:00+00', id: CURSOR.id })).toBeNull();
+    expect(encodeKeysetToken({ createdAt: '2300-01-01 00:00:00+00', id: CURSOR.id })).toBeNull();
     expect(
-      encodeServiceCursor({ createdAt: '2255-06-05 03:47:34+00', id: CURSOR.id }),
+      encodeKeysetToken({ createdAt: '2255-06-05 03:47:34+00', id: CURSOR.id }),
     ).not.toBeNull();
   });
 
   it('gives back a dashed uuid, the shape the query casts', () => {
-    const back = decodeServiceCursor(encodeServiceCursor(CURSOR) ?? '');
+    const back = decodeKeysetToken(encodeKeysetToken(CURSOR) ?? '');
     expect(back?.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
   });
 });

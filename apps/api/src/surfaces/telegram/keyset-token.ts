@@ -1,4 +1,17 @@
-import type { ServiceCursor } from '../../modules/commerce/provisioning/application/ports.js';
+/**
+ * One keyset cursor, as every paged read in this repository shapes it.
+ *
+ * Structural rather than imported, because the two cursors this codec carries
+ * — `ServiceCursor` and `PanelCursor` — are declared in their own modules and a
+ * surface may not depend on one module's type to page another's. Both are
+ * `{ createdAt, id }` and both document the microsecond rule below as the
+ * reason `createdAt` is PostgreSQL's own text and not a `Date`; a third that
+ * is not this shape does not belong in a callback either.
+ */
+export interface KeysetToken {
+  readonly createdAt: string;
+  readonly id: string;
+}
 
 /**
  * A keyset cursor, small enough to ride in Telegram's `callback_data`.
@@ -15,7 +28,7 @@ import type { ServiceCursor } from '../../modules/commerce/provisioning/applicat
  *
  * The timestamp becomes microseconds since the epoch in base 36, and the UUID loses its
  * dashes. That is 11 + 1 + 32 = 44 characters, so `l:` plus a token is 46 bytes with
- * eighteen to spare. `tests/unit/service-cursor.test.ts` pins that bound, because
+ * eighteen to spare. `tests/unit/keyset-token.test.ts` pins that bound, because
  * nothing in the runtime enforces it — the 64-byte limit is Telegram's, discovered by a
  * rejected `answerCallbackQuery` rather than by a type error.
  *
@@ -25,7 +38,7 @@ import type { ServiceCursor } from '../../modules/commerce/provisioning/applicat
  * a JavaScript `Date`: 4H measured what a millisecond round trip costs here, because the
  * driver TRUNCATES rather than rounds, so a cursor lands strictly outside the row it was
  * built from and the tuple comparison lets that row back in — an endless list of the
- * same page. So the encoding carries microseconds, and `decodeServiceCursor` emits a
+ * same page. So the encoding carries microseconds, and `decodeKeysetToken` emits a
  * literal with six fractional digits that casts back to the same instant.
  *
  * ## The range it covers, stated rather than discovered
@@ -82,7 +95,7 @@ function microsOf(text: string): number | null {
 }
 
 /** The token for one cursor, or null if the cursor is not a shape this can carry. */
-export function encodeServiceCursor(cursor: ServiceCursor): string | null {
+export function encodeKeysetToken(cursor: KeysetToken): string | null {
   const micros = microsOf(cursor.createdAt);
   const id = cursor.id.replace(/-/g, '').toLowerCase();
   if (micros === null || !/^[0-9a-f]{32}$/.test(id)) return null;
@@ -96,7 +109,7 @@ export function encodeServiceCursor(cursor: ServiceCursor): string | null {
  * a token whose hex is not a UUID's worth. The caller answers the ordinary
  * unsupported-input reply, which is what every other unparseable callback gets.
  */
-export function decodeServiceCursor(token: string): ServiceCursor | null {
+export function decodeKeysetToken(token: string): KeysetToken | null {
   const match = TOKEN.exec(token);
   if (match === null) return null;
   const [, encodedMicros, hex] = match;

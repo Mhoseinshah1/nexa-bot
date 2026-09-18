@@ -54,7 +54,7 @@ import type {
 } from '../../modules/commerce/provisioning/application/ports.js';
 import type { OperatorServiceOperation } from '../../modules/commerce/provisioning/application/provisioning.service.js';
 import type { ServiceAdminService } from '../../modules/commerce/provisioning/application/service-admin.service.js';
-import { decodeServiceCursor, encodeServiceCursor } from './service-cursor.js';
+import { decodeKeysetToken, encodeKeysetToken } from './keyset-token.js';
 
 /**
  * What the customer asked for.
@@ -365,7 +365,7 @@ export const SERVICE_CALLBACK_PREFIX = 's:';
  * The next page of the customer's own service list.
  *
  * `l:` because every other lowercase letter is taken; the table above is the registry.
- * What follows is `encodeServiceCursor`'s token, not a uuid, which is why this prefix is
+ * What follows is `encodeKeysetToken`'s token, not a uuid, which is why this prefix is
  * routed separately from every other one here.
  */
 export const SERVICES_PAGE_CALLBACK_PREFIX = 'l:';
@@ -894,7 +894,7 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
        * scoped to the tenant and to the customer resolved from the update — so the
        * decode is about shape, not trust.
        */
-      const cursor = decodeServiceCursor(data.slice(SERVICES_PAGE_CALLBACK_PREFIX.length));
+      const cursor = decodeKeysetToken(data.slice(SERVICES_PAGE_CALLBACK_PREFIX.length));
       if (cursor === null) return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
       return { intent: 'SERVICES_PAGE', targetId: null, cursor, callbackQueryId: id };
     }
@@ -2907,7 +2907,7 @@ export class BotRuntime {
      * would otherwise become a button whose `callback_data` is a bare prefix, and the
      * honest answer to that is the same as having no further page: a list that ends.
      */
-    const token = page.nextCursor === null ? null : encodeServiceCursor(page.nextCursor);
+    const token = page.nextCursor === null ? null : encodeKeysetToken(page.nextCursor);
     if (token !== null) {
       buttons.push({
         label: { kind: 'TEMPLATE', key: 'bot.service.list_more' },
