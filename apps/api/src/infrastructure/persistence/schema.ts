@@ -1484,20 +1484,42 @@ export const panelHealth = pgTable(
      */
     lastHealthyAt: timestamptz('last_healthy_at'),
     /**
-     * Consecutive probes that concluded a failure state, reset to zero by any
-     * non-failing conclusion.
+     * Consecutive probes that concluded an UNUSABLE state, reset to zero by any
+     * probe that did not.
      *
-     * HEALTH state, and deliberately not the identically-named column on
-     * `panel_monitor_schedule`, which that table's own docblock calls "scheduler
-     * state, not health" and which is discarded whenever the health row does not
-     * describe a failure. Backoff and eligibility are different questions: one asks
-     * when to look again, this asks whether to keep selling, and a counter that is
-     * reset for one purpose must not silently answer the other.
+     * Named for what it measures rather than `consecutive_failures`, and that is
+     * deliberate: `panel_monitor_schedule` already has a column by that name whose
+     * own docblock calls it "scheduler state, not health" and which is discarded
+     * whenever the health row does not describe a failure. Two columns with one
+     * name in one module, meaning different things and reset on different rules, is
+     * how the wrong one comes to answer the question.
+     *
+     * UNUSABLE, not failing: `PANEL_UNUSABLE_HEALTH_STATES` is `UNREACHABLE` and
+     * `AUTH_FAILED` only. A `DEGRADED` probe RESETS this, because that state means
+     * the credentials were accepted and the panel is up — it is worrying, not
+     * unusable, and a panel that is up must keep selling.
      *
      * Written by the same conditional upsert that guards `checked_at`, so a probe
      * whose answer arrives out of order cannot advance it.
      */
-    consecutiveFailures: integer('consecutive_failures').notNull().default(0),
+    unusableStreak: integer('unusable_streak').notNull().default(0),
+    /**
+     * The connection identity this probe ran against, or NULL for a row written
+     * before the column existed.
+     *
+     * What `panels.status` may be enabled on the strength of. A test that
+     * succeeded against one base URL, one activation and one set of credentials
+     * says nothing about a different one, and an operator who fixes a password
+     * after a green test must not be able to enable on the strength of the test
+     * that preceded the fix.
+     *
+     * NOT `configurationFingerprint`, which exists for a different job — cancelling
+     * an in-flight probe whose panel changed under it — and which includes `status`
+     * and `updated_at`. Both of those move when a panel is enabled, so reusing it
+     * here would invalidate every validation the moment it was acted on, and force
+     * a fresh probe on every routine re-enable after maintenance.
+     */
+    validatedIdentity: text('validated_identity'),
   },
   (table) => [
     index('panel_health_tenant_idx').on(table.tenantId),

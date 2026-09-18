@@ -1,5 +1,5 @@
 {
-  "id": "71d5ab50-f603-4fb8-ba47-db1194dbbb90",
+  "id": "8dd8e443-4171-434b-9a05-d43f7fe9db83",
   "prevId": "da63aeaf-7534-47dd-8658-9c099ea09caa",
   "version": "7",
   "dialect": "postgresql",
@@ -3860,12 +3860,18 @@
           "primaryKey": false,
           "notNull": false
         },
-        "consecutive_failures": {
-          "name": "consecutive_failures",
+        "unusable_streak": {
+          "name": "unusable_streak",
           "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "default": 0
+        },
+        "validated_identity": {
+          "name": "validated_identity",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {

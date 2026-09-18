@@ -565,8 +565,8 @@
     {
       "idx": 80,
       "version": "7",
-      "when": 1789760589523,
-      "tag": "0080_panel_capacity_and_health_streak",
+      "when": 1789761040645,
+      "tag": "0080_panel_capacity_and_eligibility",
       "breakpoints": true
     }
   ]

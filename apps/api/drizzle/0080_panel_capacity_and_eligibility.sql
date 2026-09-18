@@ -7,7 +7,8 @@ CREATE TABLE "panel_capacity_reservations" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-ALTER TABLE "panel_health" ADD COLUMN "consecutive_failures" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "panel_health" ADD COLUMN "unusable_streak" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "panel_health" ADD COLUMN "validated_identity" text;--> statement-breakpoint
 ALTER TABLE "panels" ADD COLUMN "max_services" integer;--> statement-breakpoint
 ALTER TABLE "panel_capacity_reservations" ADD CONSTRAINT "panel_capacity_reservations_tenant_id_tenants_id_fk" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "panel_capacity_reservations" ADD CONSTRAINT "panel_capacity_reservations_tenant_panel_fk" FOREIGN KEY ("tenant_id","panel_id") REFERENCES "public"."panels"("tenant_id","id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
