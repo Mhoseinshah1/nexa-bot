@@ -234,6 +234,14 @@ export type ProcessRole = 'api' | 'worker' | 'monitor' | 'recovery' | 'provision
 
 export interface Container {
   readonly config: AppConfig;
+  /**
+   * The panel sales gate and the capacity repository, exposed for the same
+   * reason `uow` and `tenants` are: a test that must drive two tenants builds
+   * the service itself, and it has to be given the SAME collaborators
+   * production uses or it proves nothing about production.
+   */
+  readonly panelSales: PanelSalesGate;
+  readonly panelCapacity: DrizzlePanelCapacityRepository;
   readonly logger: Logger;
   readonly clock: Clock;
   readonly ids: IdGenerator;
@@ -2248,6 +2256,14 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     logger,
     clock,
     ids,
+    /*
+     * Exposed so a test that constructs a service directly — because the
+     * container's own loop resolves one tenant and the test drives two — can
+     * hand it the SAME gate production uses rather than a stand-in that agrees
+     * with nothing.
+     */
+    panelSales: panelSalesGate,
+    panelCapacity,
     cipher,
     translator,
     database,

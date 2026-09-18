@@ -220,6 +220,7 @@ describe('panels', () => {
       const panelId = view.panel.id;
 
       const service = new PanelService({
+      capacity: ctx.container.panelCapacity,
         repository: new DrizzlePanelRepository(ctx.container.database.db),
         credentials: new DrizzlePanelCredentialStore(
           ctx.container.database.db,
@@ -1213,6 +1214,7 @@ describe('panels', () => {
     };
 
     const service = new PanelService({
+      capacity: ctx.container.panelCapacity,
       repository: new DrizzlePanelRepository(ctx.container.database.db),
       credentials: counting,
       guard: ctx.container.guard,
@@ -1403,6 +1405,7 @@ describe('panels', () => {
     adapterOverrides: Partial<ProviderConnectionAdapter> = {},
   ) {
     const scripted = new PanelService({
+      capacity: ctx.container.panelCapacity,
       repository: new DrizzlePanelRepository(ctx.container.database.db),
       credentials: new DrizzlePanelCredentialStore(ctx.container.database.db, ctx.container.cipher),
       guard: ctx.container.guard,

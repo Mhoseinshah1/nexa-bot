@@ -207,6 +207,7 @@ describe('the panel health monitor', () => {
   function service(probe: Partial<ProbeCoreDeps> = {}): PanelService {
     const deps = probeDeps(probe);
     return new PanelService({
+      capacity: ctx.container.panelCapacity,
       repository: deps.repository,
       credentials: deps.credentials,
       guard: ctx.container.guard,
@@ -2629,6 +2630,10 @@ describe('the panel health monitor', () => {
             providerVersion: null,
             lastHealthyAt: null,
           },
+          // The identity is irrelevant to what this asserts — the write is
+          // refused on `checked_at` alone — so a placeholder is honest here and
+          // a real digest would only suggest the test depended on it.
+          'stale-probe-identity',
           tx,
         ),
       );

@@ -91,6 +91,7 @@ describe('the panel connection-test throttle', () => {
     repository: PanelRepository = new DrizzlePanelRepository(ctx.container.database.db),
   ) =>
     new PanelService({
+      capacity: ctx.container.panelCapacity,
       repository,
       credentials: new DrizzlePanelCredentialStore(ctx.container.database.db, ctx.container.cipher),
       guard: ctx.container.guard,

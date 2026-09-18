@@ -1165,6 +1165,7 @@ describe('payments and settlement', () => {
    */
   const expirySweep = () =>
     new PaymentExpiryService({
+      panelSales: ctx.container.panelSales,
       payments: new DrizzlePaymentRepository(ctx.container.database.db),
       orders: new DrizzleOrderRepository(ctx.container.database.db),
       uow: ctx.container.uow,
