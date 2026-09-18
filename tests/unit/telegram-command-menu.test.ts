@@ -30,14 +30,19 @@ describe('the Telegram command menu', () => {
      * (Phase 5T).
      *
      * Telegram's command list is per BOT, not per user: `setMyCommands` would advertise
-     * `/link` and `/role` — and the existence of an admin panel — to every customer of
-     * every tenant. So these three are excluded here and asserted absent below, which
-     * makes "not registered" a rule with a test rather than an omission.
+     * `/link`, `/role` and `/service` — and the existence of an admin panel — to every
+     * customer of every tenant. So these four are excluded here and asserted absent
+     * below, which makes "not registered" a rule with a test rather than an omission.
+     *
+     * `/service` is Phase 6A's exact lookup and joins them for the same reason, with
+     * one of its own: it is the singular of `/services`, which every customer HAS, so
+     * registering it would put a command in their menu that reads as theirs and
+     * answers as somebody else's.
      *
      * `/admin` is matched through `ADMIN_MENU_COMMAND` rather than a literal, so it
      * does not appear in `parsed` at all; the assertion below covers it.
      */
-    const ADMIN_ONLY = new Set(['link', 'role']);
+    const ADMIN_ONLY = new Set(['link', 'role', 'service']);
     const answered = parsed.filter((command) => !ADMIN_ONLY.has(command)).sort();
 
     expect([...BOT_COMMANDS].map((entry) => entry.command).sort()).toEqual(answered);
@@ -51,7 +56,7 @@ describe('the Telegram command menu', () => {
      * about the installation and not about them.
      */
     const registered = new Set([...BOT_COMMANDS].map((entry) => entry.command));
-    for (const command of [ADMIN_MENU_COMMAND, 'link', 'role']) {
+    for (const command of [ADMIN_MENU_COMMAND, 'link', 'role', 'service']) {
       expect(registered.has(command as never), command).toBe(false);
     }
   });

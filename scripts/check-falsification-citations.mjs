@@ -57,6 +57,7 @@ const RECORDS = [
   'docs/phase5a-falsification.md',
   'docs/phase5r-falsification.md',
   'docs/phase5b-falsification.md',
+  'docs/phase6a-falsification.md',
 ];
 /**
  * The fewest citations this record may contain.
@@ -83,7 +84,7 @@ const RECORDS = [
  * have to be a map, and a map is a place for a record to be added with no entry
  * and checked against nothing — which is this script's own failure mode.
  */
-const EXPECTED = 1092;
+const EXPECTED = 1108;
 /**
  * A table whose last column is one of these is making citations.
  *

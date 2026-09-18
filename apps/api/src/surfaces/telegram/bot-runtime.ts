@@ -454,18 +454,23 @@ const SERVICES_VIEW_PERMISSION = 'services.view' as PermissionKey;
 const SERVICES_EDIT_PERMISSION = 'services.edit' as PermissionKey;
 const SERVICES_TERMINATE_PERMISSION = 'services.terminate' as PermissionKey;
 
-/** The intents `adminTurn` owns, as a set, so `act` has one branch rather than nine. */
-const ADMIN_INTENTS: ReadonlySet<BotIntent> = new Set<BotIntent>([
-  'ADMIN_PANEL',
-  'ADMIN_RECEIPTS',
-  'ADMIN_RECEIPT',
-  'ADMIN_APPROVE',
-  'ADMIN_REJECT',
-  'ADMIN_SECTION',
-  'ADMIN_REVOKE',
-  'ADMIN_LINK',
-  'ADMIN_ROLE',
-]);
+/**
+ * The intents `adminTurn` owns, so `act` has one branch rather than nineteen.
+ *
+ * DERIVED from the name rather than listed, and that is the fix for a defect rather
+ * than a tidy-up: it was a hand-kept copy of a naming convention, and Phase 6A added
+ * ten `ADMIN_*` intents to `BOT_INTENTS`, wired every one into `adminTurn`'s switch,
+ * and did not add them here. `act` never routed them, so an administrator who pressed
+ * the services buttons got the unknown-input reply — the exact answer a customer gets,
+ * which is why nothing about it looked broken.
+ *
+ * The convention is total: every intent this runtime routes to the management panel is
+ * named `ADMIN_…`, and nothing else is. A new section now reaches the panel by being
+ * named, which is one fewer list to forget.
+ */
+const ADMIN_INTENTS: ReadonlySet<BotIntent> = new Set<BotIntent>(
+  BOT_INTENTS.filter((intent) => intent.startsWith('ADMIN_')),
+);
 
 export const ADMIN_PANEL_CALLBACK_PREFIX = 'A:';
 export const ADMIN_RECEIPTS_CALLBACK_PREFIX = 'B:';
@@ -2010,17 +2015,26 @@ export class BotRuntime {
           return await this.adminServices(scope, adminActor);
         case 'ADMIN_SERVICE': {
           /*
-           * Reached two ways: a queue button carrying a validated uuid, and
-           * `/service <id>` typed by hand. The typed one is validated HERE rather than
-           * at the boundary, because the boundary splits a command's words and cannot
-           * know which of them is meant to be an id.
+           * Reached two ways: a queue button carrying a uuid the boundary validated, and
+           * `/service <id>` typed by hand, which it did not — the boundary splits a
+           * command's words and cannot know which of them is meant to be an id.
+           *
+           * Neither is re-validated HERE, and the empty string stands in for a bare
+           * `/service`. That is the result of a mutation rather than an omission: this
+           * handler validated the typed id and refused an absent one, and BOTH checks
+           * survived being reverted, because `ServiceAdminService.get` runs every id
+           * through `serviceIdOrNotFound` and `SERVICE_NOT_FOUND` is what the catch
+           * below already renders as `bot.admin.service_gone`.
+           *
+           * A guard that survives its own mutation is a rule in name only, and the
+           * danger is not the dead code — it is the next reader taking it for the one
+           * holding the line and removing the one that is. So the answer has ONE place
+           * it is decided, which is also where the permission is charged first, so an
+           * administrator without `services.view` cannot learn whether an id is even
+           * well-formed.
            */
-          const typed = command.targetId ?? (command.args ?? [])[0] ?? null;
-          const id = typed === null ? null : uuidV7Schema.safeParse(typed);
-          if (id === null || !id.success) {
-            return { key: 'bot.admin.service_gone', values: {}, buttons: [], orderId: null };
-          }
-          return await this.adminService(scope, adminActor, id.data, permissions);
+          const typed = command.targetId ?? (command.args ?? [])[0] ?? '';
+          return await this.adminService(scope, adminActor, typed, permissions);
         }
         case 'ADMIN_SERVICE_TERMINATE_ASK':
           return command.targetId === null

@@ -757,15 +757,15 @@ describe('profile metadata, normalised before it is ever stored', () => {
     ]);
 
     /*
-     * 5T's nineteen, kept as their own assertion rather than merged into the list
-     * above — because they are ADMIN-facing, and the rule this case enforces is about
-     * what a CUSTOMER is promised. Merging them would quietly widen a customer-copy
-     * review into "any text the runtime sends".
+     * 5T's nineteen and 6A's seventeen, kept as their own assertion rather than merged
+     * into the list above — because they are ADMIN-facing, and the rule this case
+     * enforces is about what a CUSTOMER is promised. Merging them would quietly widen
+     * a customer-copy review into "any text the runtime sends".
      *
      * Reviewed against the same rule anyway: none of them instructs anybody to do
-     * something this head cannot do. The two that name commands (`bot.admin.section`
-     * and `bot.admin.usage`) print `/link` and `/role`, which `intentOf` parses — and
-     * `telegram-command-menu.test.ts` is what proves those two are parsed and
+     * something this head cannot do. The ones that name commands print `/link`,
+     * `/role` and `/service`, which `intentOf` parses — and
+     * `telegram-command-menu.test.ts` is what proves all three are parsed and
      * deliberately unregistered.
      *
      * `bot.menu.admin` and `bot.admin.receipt_awaiting` are NOT here and must not be:
@@ -791,6 +791,23 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.admin.roles_set',
       'bot.admin.section',
       'bot.admin.section_button',
+      'bot.admin.service',
+      'bot.admin.service_gone',
+      'bot.admin.service_planned',
+      'bot.admin.service_reconcile_button',
+      'bot.admin.service_resend_button',
+      'bot.admin.service_resent',
+      'bot.admin.service_resume_button',
+      'bot.admin.service_retry_button',
+      'bot.admin.service_suspend_button',
+      'bot.admin.service_sync_button',
+      'bot.admin.service_terminate_ask',
+      'bot.admin.service_terminate_button',
+      'bot.admin.service_terminate_confirm_button',
+      'bot.admin.service_unavailable',
+      'bot.admin.services_button',
+      'bot.admin.services_none',
+      'bot.admin.services_section',
       'bot.admin.usage',
     ]);
 
