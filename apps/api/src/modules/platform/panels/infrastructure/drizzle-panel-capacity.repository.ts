@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, count, eq, gt, inArray } from 'drizzle-orm';
 import { SERVICE_CAPACITY_STATES, type TenantContext } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
@@ -21,22 +21,14 @@ function executorOf(db: Database, tx?: TransactionScope): Executor {
 }
 
 /**
- * The states that occupy a slot, as a SQL list.
+ * The states that occupy a slot.
  *
- * Built from the contract's own array rather than written out, so the schema's
- * CHECK constraint, the TypeScript predicate and this predicate cannot describe
- * three different sets. A literal list here is the second opinion that makes a
- * newly added state silently free.
- *
- * Expanded one placeholder per element with `sql.join`, NOT interpolated as an
- * array: a JavaScript array interpolated into a `sql` template becomes ONE
- * parameter, so `state IN ($1)` is compared against an array value and matches
- * nothing. The same expansion `dueForTenants` does, for the same reason.
+ * The contract's own array rather than a list written out here, so the schema's
+ * CHECK constraint, the TypeScript predicate and this query cannot describe
+ * three different sets. A literal list is the second opinion that makes a newly
+ * added state silently free.
  */
-const OCCUPYING_STATES = sql.join(
-  SERVICE_CAPACITY_STATES.map((state) => sql`${state}`),
-  sql`, `,
-);
+const OCCUPYING_STATES = SERVICE_CAPACITY_STATES;
 
 /**
  * Panel capacity, in PostgreSQL.
@@ -58,14 +50,19 @@ export class DrizzlePanelCapacityRepository implements PanelCapacityRepository {
   }
 
   /**
-   * One query for any number of panels.
+   * THREE queries, not one per panel and not one with correlated subqueries.
    *
-   * Two LATERAL-free scalar subqueries per row rather than two LEFT JOINs with
-   * GROUP BY: the counts are over different tables with different predicates,
-   * and joining both before aggregating multiplies them — the classic
-   * fan-out that makes a panel with two services and three holds report six of
-   * each. The subqueries are served by `services_tenant_panel_idx` and
-   * `panel_capacity_reservations_panel_idx`.
+   * The scalar-subquery version this replaced was wrong in a way a green
+   * `psql` session did not show: the same SQL written by hand returned the
+   * right numbers while the generated one returned zeros, because two
+   * un-aliased aggregate subqueries in a `select()` object do not survive the
+   * driver's column mapping. Three plain grouped queries have no such
+   * subtlety, and they are still bounded by the page rather than by the row
+   * count — which is the property that actually mattered.
+   *
+   * A panel with no services and no holds is absent from both aggregates and
+   * lands on zero, which is why the counts are read out of Maps rather than
+   * joined.
    */
   async readMany(
     scope: TenantContext,
@@ -74,34 +71,47 @@ export class DrizzlePanelCapacityRepository implements PanelCapacityRepository {
     tx?: TransactionScope,
   ): Promise<ReadonlyMap<string, PanelCapacity>> {
     const found = new Map<string, PanelCapacity>();
-    if (panelIds.length === 0) return found;
+    const unique = [...new Set(panelIds)];
+    if (unique.length === 0) return found;
+    const exec = executorOf(this.db, tx);
 
-    const rows = await executorOf(this.db, tx)
-      .select({
-        id: panels.id,
-        maxServices: panels.maxServices,
-        services: sql<number>`(
-          SELECT count(*) FROM ${services}
-          WHERE ${services.tenantId} = ${panels.tenantId}
-            AND ${services.panelId} = ${panels.id}
-            AND ${services.state} IN (${OCCUPYING_STATES})
-        )`,
-        reservations: sql<number>`(
-          SELECT count(*) FROM ${panelCapacityReservations}
-          WHERE ${panelCapacityReservations.tenantId} = ${panels.tenantId}
-            AND ${panelCapacityReservations.panelId} = ${panels.id}
-            AND ${panelCapacityReservations.expiresAt} > ${now}::timestamptz
-        )`,
-      })
+    const rows = await exec
+      .select({ id: panels.id, maxServices: panels.maxServices })
       .from(panels)
-      .where(and(eq(panels.tenantId, scope.tenantId), inArray(panels.id, [...panelIds])));
+      .where(and(eq(panels.tenantId, scope.tenantId), inArray(panels.id, unique)));
+    if (rows.length === 0) return found;
 
+    const serviceRows = await exec
+      .select({ panelId: services.panelId, total: count() })
+      .from(services)
+      .where(
+        and(
+          eq(services.tenantId, scope.tenantId),
+          inArray(services.panelId, unique),
+          inArray(services.state, [...OCCUPYING_STATES]),
+        ),
+      )
+      .groupBy(services.panelId);
+
+    const heldRows = await exec
+      .select({ panelId: panelCapacityReservations.panelId, total: count() })
+      .from(panelCapacityReservations)
+      .where(
+        and(
+          eq(panelCapacityReservations.tenantId, scope.tenantId),
+          inArray(panelCapacityReservations.panelId, unique),
+          gt(panelCapacityReservations.expiresAt, now),
+        ),
+      )
+      .groupBy(panelCapacityReservations.panelId);
+
+    const byService = new Map(serviceRows.map((row) => [row.panelId, Number(row.total)]));
+    const byHold = new Map(heldRows.map((row) => [row.panelId, Number(row.total)]));
     for (const row of rows) {
-      // `count(*)` is `bigint`, and the driver hands `bigint` back as a STRING.
-      // `Number()` rather than a cast that types the lie away: a panel with more
-      // than 2^53 services is not a case this installation has, and a string
-      // compared against a number with `>=` would be compared lexically.
-      found.set(row.id, capacityOf(row.maxServices, Number(row.services), Number(row.reservations)));
+      found.set(
+        row.id,
+        capacityOf(row.maxServices, byService.get(row.id) ?? 0, byHold.get(row.id) ?? 0),
+      );
     }
     return found;
   }

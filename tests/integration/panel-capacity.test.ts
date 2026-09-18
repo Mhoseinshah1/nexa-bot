@@ -60,7 +60,7 @@ describe('panel capacity and sales eligibility', () => {
   let customerB: UserId;
   let owner: ActorContext;
   let n = 0;
-  const key = () => `cap-${(n += 1)}`;
+  const key = () => `panel-capacity-key-${(n += 1)}`;
 
   beforeAll(async () => {
     ctx = await createTestContext();
@@ -176,18 +176,32 @@ describe('panel capacity and sales eligibility', () => {
          SET state = EXCLUDED.state, checked_at = EXCLUDED.checked_at,
              failure = EXCLUDED.failure, unusable_streak = EXCLUDED.unusable_streak`);
 
-  /** A service occupying a slot, written directly so no provider is involved. */
-  const placeService = (panelId: string, state: string) =>
-    ctx.container.database.db.execute(sql`
+  /**
+   * A service occupying a slot, written directly so no provider is involved.
+   *
+   * It needs a real product and a real order id because `services` references
+   * both; the ORDER id is minted rather than a row, which the schema allows and
+   * which keeps these fixtures from having to drive a whole purchase to place a
+   * service that exists only to be counted.
+   */
+  async function placeService(panelId: string, state: string): Promise<void> {
+    const product = await activeProduct(panelId);
+    // A real DRAFT, because `services` references `(tenant_id, order_id,
+    // customer_id)` as a triple — the composite reference that stops a service
+    // naming one customer's order against another customer's account.
+    const order = await draftFor(customerA, product);
+    await ctx.container.database.db.execute(sql`
       INSERT INTO services (id, tenant_id, customer_id, order_id, panel_id, product_id,
                             provider_username, subscription_ref, provider_client_id,
-                            traffic_limit_bytes, state, provisioned_at)
+                            traffic_limit_bytes, state, provisioned_at, terminated_at)
       VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${customerA},
-              ${ctx.container.ids.uuid()}, ${panelId}, NULL,
+              ${order}, ${panelId}, ${product.id},
               ${'u' + Math.random().toString(16).slice(2, 10)},
               ${Math.random().toString(16).slice(2).padEnd(32, '0').slice(0, 32)},
               ${ctx.container.ids.uuid()}, 0, ${state},
-              ${state === 'PENDING_PROVISION' || state === 'UNRECONCILED' ? null : new Date()})`);
+              ${state === 'PENDING_PROVISION' || state === 'UNRECONCILED' ? null : new Date()},
+              ${state === 'TERMINATED' ? new Date() : null})`);
+  }
 
   const reservations = async (panelId: string): Promise<number> => {
     const rows = (await ctx.container.database.db.execute(
@@ -512,6 +526,6 @@ describe('panel capacity and sales eligibility', () => {
         maxServices: 2,
         idempotencyKey: key(),
       }),
-    ).rejects.toMatchObject({ kind: 'FORBIDDEN' });
+    ).rejects.toMatchObject({ kind: 'PERMISSION_DENIED' });
   });
 });
