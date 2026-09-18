@@ -476,6 +476,8 @@ export interface OperationRecord {
   readonly operationId: OperationId;
   readonly serviceId: string;
   readonly orderId: OrderId | null;
+  /** The customer who asked for this, or null when nobody did. See `OperationDraft`. */
+  readonly requestedByCustomerId: UserId | null;
   readonly panelId: PanelId;
   readonly type: OperationType;
   readonly state: OperationState;
@@ -507,6 +509,20 @@ export interface OperationDraft {
   readonly operationId: OperationId;
   readonly serviceId: string;
   readonly orderId: OrderId | null;
+  /**
+   * The customer who ASKED for this operation, or null when nobody did.
+   *
+   * Required rather than optional, unlike `target` below, because the honest value is
+   * not the same at every call site and a default would pick one of them silently.
+   * Phase 6A gave operators their own path to `SUSPEND`, `RESUME` and `TERMINATE`, and
+   * from the row's TYPE those are indistinguishable from the customer's own — so the
+   * announcer decided from the type and told a customer that the request THEY made had
+   * been applied, for a change an operator ordered. Null here is what keeps it quiet.
+   *
+   * It is not an actor and does not authorize anything. Who was authorised to ask is
+   * in the audit row; this says only whether somebody is owed the answer.
+   */
+  readonly requestedByCustomerId: UserId | null;
   readonly panelId: PanelId;
   readonly type: OperationType;
   /**

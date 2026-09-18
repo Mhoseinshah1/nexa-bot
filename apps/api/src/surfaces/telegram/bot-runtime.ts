@@ -18,6 +18,8 @@ import type {
   OrderPurpose,
   PaymentId,
   PermissionKey,
+  ServiceActionAvailability,
+  ServiceOperatorAction,
   TemplateKey,
   TemplateValues,
   TenantContext,
@@ -50,6 +52,8 @@ import type {
   ServiceCursor,
   ServiceRecord,
 } from '../../modules/commerce/provisioning/application/ports.js';
+import type { OperatorServiceOperation } from '../../modules/commerce/provisioning/application/provisioning.service.js';
+import type { ServiceAdminService } from '../../modules/commerce/provisioning/application/service-admin.service.js';
 import { decodeServiceCursor, encodeServiceCursor } from './service-cursor.js';
 
 /**
@@ -121,6 +125,25 @@ export const BOT_INTENTS = [
   'ADMIN_REJECT',
   'ADMIN_SECTION',
   'ADMIN_REVOKE',
+  /*
+   * Phase 6A \u2014 the services section.
+   *
+   * `ADMIN_SERVICE_TERMINATE_ASK` is the first ask-then-act pair on the ADMIN side.
+   * Every admin action before it fired on one tap, which is right for approving a
+   * receipt and wrong for deleting an account on a provider: the asking callback is
+   * what a list or a detail screen carries, and the destructive one is produced in
+   * exactly one place.
+   */
+  'ADMIN_SERVICES',
+  'ADMIN_SERVICE',
+  'ADMIN_SERVICE_SYNC',
+  'ADMIN_SERVICE_RESEND',
+  'ADMIN_SERVICE_RETRY',
+  'ADMIN_SERVICE_RECONCILE',
+  'ADMIN_SERVICE_SUSPEND',
+  'ADMIN_SERVICE_RESUME',
+  'ADMIN_SERVICE_TERMINATE_ASK',
+  'ADMIN_SERVICE_TERMINATE',
   'ADMIN_LINK',
   'ADMIN_ROLE',
   'UNSUPPORTED',
@@ -421,19 +444,33 @@ const ADMIN_QUEUE_LIMIT = 10;
 const RECEIPTS_VIEW_PERMISSION = 'receipts.view' as PermissionKey;
 const ADMINS_VIEW_PERMISSION = 'admins.view' as PermissionKey;
 const RECEIPTS_REVIEW_PERMISSION = 'receipts.review' as PermissionKey;
+/*
+ * The three the services section reads, and the same rule applies: these decide which
+ * BUTTONS exist, which is not authorization. `ServiceAdminService`, `ProvisioningService`
+ * and `DeliveryService` each charge their own key through the same guard the Web Admin
+ * uses, so a crafted callback from an administrator who lacks one is refused there.
+ */
+const SERVICES_VIEW_PERMISSION = 'services.view' as PermissionKey;
+const SERVICES_EDIT_PERMISSION = 'services.edit' as PermissionKey;
+const SERVICES_TERMINATE_PERMISSION = 'services.terminate' as PermissionKey;
 
-/** The intents `adminTurn` owns, as a set, so `act` has one branch rather than nine. */
-const ADMIN_INTENTS: ReadonlySet<BotIntent> = new Set<BotIntent>([
-  'ADMIN_PANEL',
-  'ADMIN_RECEIPTS',
-  'ADMIN_RECEIPT',
-  'ADMIN_APPROVE',
-  'ADMIN_REJECT',
-  'ADMIN_SECTION',
-  'ADMIN_REVOKE',
-  'ADMIN_LINK',
-  'ADMIN_ROLE',
-]);
+/**
+ * The intents `adminTurn` owns, so `act` has one branch rather than nineteen.
+ *
+ * DERIVED from the name rather than listed, and that is the fix for a defect rather
+ * than a tidy-up: it was a hand-kept copy of a naming convention, and Phase 6A added
+ * ten `ADMIN_*` intents to `BOT_INTENTS`, wired every one into `adminTurn`'s switch,
+ * and did not add them here. `act` never routed them, so an administrator who pressed
+ * the services buttons got the unknown-input reply — the exact answer a customer gets,
+ * which is why nothing about it looked broken.
+ *
+ * The convention is total: every intent this runtime routes to the management panel is
+ * named `ADMIN_…`, and nothing else is. A new section now reaches the panel by being
+ * named, which is one fewer list to forget.
+ */
+const ADMIN_INTENTS: ReadonlySet<BotIntent> = new Set<BotIntent>(
+  BOT_INTENTS.filter((intent) => intent.startsWith('ADMIN_')),
+);
 
 export const ADMIN_PANEL_CALLBACK_PREFIX = 'A:';
 export const ADMIN_RECEIPTS_CALLBACK_PREFIX = 'B:';
@@ -442,6 +479,167 @@ export const ADMIN_APPROVE_CALLBACK_PREFIX = 'D:';
 export const ADMIN_REJECT_CALLBACK_PREFIX = 'E:';
 export const ADMIN_SECTION_CALLBACK_PREFIX = 'F:';
 export const ADMIN_REVOKE_CALLBACK_PREFIX = 'G:';
+/*
+ * The services section, Phase 6A. One prefix per action, which is the pattern the
+ * CUSTOMER half already uses for its own service actions and the reason the registry
+ * above is readable: a prefix means one thing. Each carries one uuid, so `X:` plus a
+ * service id is 38 bytes and the pair-carrying codec is not needed.
+ */
+export const ADMIN_SERVICES_CALLBACK_PREFIX = 'H:';
+export const ADMIN_SERVICE_CALLBACK_PREFIX = 'I:';
+export const ADMIN_SERVICE_SYNC_CALLBACK_PREFIX = 'J:';
+export const ADMIN_SERVICE_RESEND_CALLBACK_PREFIX = 'K:';
+export const ADMIN_SERVICE_RETRY_CALLBACK_PREFIX = 'L:';
+export const ADMIN_SERVICE_RECONCILE_CALLBACK_PREFIX = 'M:';
+export const ADMIN_SERVICE_SUSPEND_CALLBACK_PREFIX = 'N:';
+export const ADMIN_SERVICE_RESUME_CALLBACK_PREFIX = 'O:';
+export const ADMIN_SERVICE_TERMINATE_ASK_CALLBACK_PREFIX = 'P:';
+/** The one destructive admin callback. Produced by the confirmation screen alone. */
+export const ADMIN_SERVICE_TERMINATE_CALLBACK_PREFIX = 'Q:';
+
+/**
+ * Each services-section prefix and the intent it parses to, in ONE place.
+ *
+ * Read by the boundary and by nothing else. Written as a table so the prefix and the
+ * intent are chosen together: nine separate branches would be nine chances to point one
+ * at the wrong intent, and the row that would matter is the last, where a mis-wiring
+ * would turn the asking callback into the destructive one.
+ */
+/**
+ * The operation each acting intent plans, and the button that offers it.
+ *
+ * `ADMIN_SERVICE_RESEND` and `ADMIN_SERVICE_RETRY` are absent from the operation map on
+ * purpose: a resend plans none, and a retry goes through `retryProvisioning`, which has
+ * its own refusal for the case that matters — an UNRECONCILED service is reconciled
+ * rather than given a second provider account.
+ */
+const ADMIN_SERVICE_OPERATIONS: Readonly<Partial<Record<BotIntent, OperatorServiceOperation>>> = {
+  ADMIN_SERVICE_SYNC: 'SYNC_USAGE',
+  ADMIN_SERVICE_RECONCILE: 'RECONCILE',
+  ADMIN_SERVICE_SUSPEND: 'SUSPEND',
+  ADMIN_SERVICE_RESUME: 'RESUME',
+  ADMIN_SERVICE_TERMINATE: 'TERMINATE',
+};
+
+/**
+ * Each action's button: which verdict offers it, which permission allows it, and where
+ * it points.
+ *
+ * TERMINATE points at the ASKING prefix. That is the row this table exists to make
+ * visible, because a destructive callback drawn on a detail screen is a one-tap
+ * deletion, and the difference between the two prefixes is one letter.
+ */
+const ADMIN_SERVICE_BUTTONS: readonly {
+  readonly action: ServiceOperatorAction;
+  readonly key: TemplateKey;
+  readonly prefix: string;
+  readonly permission: PermissionKey;
+}[] = [
+  {
+    action: 'SYNC_USAGE',
+    key: 'bot.admin.service_sync_button',
+    prefix: ADMIN_SERVICE_SYNC_CALLBACK_PREFIX,
+    permission: SERVICES_EDIT_PERMISSION,
+  },
+  {
+    action: 'RESEND_CONFIG',
+    key: 'bot.admin.service_resend_button',
+    prefix: ADMIN_SERVICE_RESEND_CALLBACK_PREFIX,
+    permission: SERVICES_EDIT_PERMISSION,
+  },
+  {
+    action: 'RETRY_PROVISION',
+    key: 'bot.admin.service_retry_button',
+    prefix: ADMIN_SERVICE_RETRY_CALLBACK_PREFIX,
+    permission: SERVICES_EDIT_PERMISSION,
+  },
+  {
+    action: 'RECONCILE',
+    key: 'bot.admin.service_reconcile_button',
+    prefix: ADMIN_SERVICE_RECONCILE_CALLBACK_PREFIX,
+    permission: SERVICES_EDIT_PERMISSION,
+  },
+  {
+    action: 'SUSPEND',
+    key: 'bot.admin.service_suspend_button',
+    prefix: ADMIN_SERVICE_SUSPEND_CALLBACK_PREFIX,
+    permission: SERVICES_EDIT_PERMISSION,
+  },
+  {
+    action: 'RESUME',
+    key: 'bot.admin.service_resume_button',
+    prefix: ADMIN_SERVICE_RESUME_CALLBACK_PREFIX,
+    permission: SERVICES_EDIT_PERMISSION,
+  },
+  {
+    action: 'TERMINATE',
+    key: 'bot.admin.service_terminate_button',
+    prefix: ADMIN_SERVICE_TERMINATE_ASK_CALLBACK_PREFIX,
+    permission: SERVICES_TERMINATE_PERMISSION,
+  },
+];
+
+/**
+ * The buttons one service's detail draws, for one administrator.
+ *
+ * TWO conditions, and both are necessary. The VERDICT says the service allows the action
+ * right now — the state, the provider's capabilities, the panel's configuration, and
+ * whether one of that type is already open — and comes from the same evaluator the write
+ * paths agree with. The PERMISSION says this administrator may ask for it. Drawing a
+ * button that fails either is drawing a control whose every press records a denial,
+ * which is the noise the alerts page exists to keep clear.
+ *
+ * Neither is authorization. Every action re-checks its permission and all its conditions
+ * inside its own request; `docs/conventions.md` names the rule this must not be read as
+ * satisfying — never by not drawing a button.
+ */
+function adminServiceButtons(
+  serviceId: string,
+  actions: readonly ServiceActionAvailability[],
+  permissions: ReadonlySet<PermissionKey>,
+): CustomerButton[] {
+  const available = new Set(
+    actions.filter((entry) => entry.available).map((entry) => entry.action),
+  );
+  return ADMIN_SERVICE_BUTTONS.filter(
+    (button) => available.has(button.action) && permissions.has(button.permission),
+  ).map((button) => ({
+    label: { kind: 'TEMPLATE' as const, key: button.key },
+    data: `${button.prefix}${serviceId}`,
+  }));
+}
+
+/**
+ * Whether a refusal is about the SERVICE rather than about the administrator.
+ *
+ * The four service refusals are things a person can act on — the state moved, the
+ * provider cannot do it, the panel needs fixing, one of that type is already under way —
+ * and they earn the sentence that says so. Everything else, a permission denial above
+ * all, falls through to the panel's single refusal, which tells whoever holds that chat
+ * nothing about what exists.
+ */
+function isServiceRefusal(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return (
+    code === COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED ||
+    code === COMMERCE_ERROR_CODES.PANEL_NOT_OPERABLE ||
+    code === COMMERCE_ERROR_CODES.SERVICE_UNRECONCILED ||
+    code === COMMERCE_ERROR_CODES.SERVICE_NOT_DELIVERABLE ||
+    code === COMMERCE_ERROR_CODES.ORDER_STATE_INVALID
+  );
+}
+
+const ADMIN_SERVICE_CALLBACKS: readonly (readonly [string, BotIntent])[] = [
+  [ADMIN_SERVICE_CALLBACK_PREFIX, 'ADMIN_SERVICE'],
+  [ADMIN_SERVICE_SYNC_CALLBACK_PREFIX, 'ADMIN_SERVICE_SYNC'],
+  [ADMIN_SERVICE_RESEND_CALLBACK_PREFIX, 'ADMIN_SERVICE_RESEND'],
+  [ADMIN_SERVICE_RETRY_CALLBACK_PREFIX, 'ADMIN_SERVICE_RETRY'],
+  [ADMIN_SERVICE_RECONCILE_CALLBACK_PREFIX, 'ADMIN_SERVICE_RECONCILE'],
+  [ADMIN_SERVICE_SUSPEND_CALLBACK_PREFIX, 'ADMIN_SERVICE_SUSPEND'],
+  [ADMIN_SERVICE_RESUME_CALLBACK_PREFIX, 'ADMIN_SERVICE_RESUME'],
+  [ADMIN_SERVICE_TERMINATE_ASK_CALLBACK_PREFIX, 'ADMIN_SERVICE_TERMINATE_ASK'],
+  [ADMIN_SERVICE_TERMINATE_CALLBACK_PREFIX, 'ADMIN_SERVICE_TERMINATE'],
+];
 
 /**
  * How many services one `/services` answer shows.
@@ -713,6 +911,19 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
     if (data === ADMIN_PANEL_CALLBACK_PREFIX) {
       return { intent: 'ADMIN_PANEL', targetId: null, callbackQueryId: id };
     }
+    if (data === ADMIN_SERVICES_CALLBACK_PREFIX) {
+      return { intent: 'ADMIN_SERVICES', targetId: null, callbackQueryId: id };
+    }
+    /*
+     * The services section's id-carrying callbacks, all through `callbackCommand`.
+     *
+     * A table rather than nine `if`s, because nine near-identical branches is nine
+     * chances to point a prefix at the wrong intent — and the one that matters is the
+     * last row, where a mis-wiring would make the ASKING callback the destructive one.
+     */
+    for (const [prefix, intent] of ADMIN_SERVICE_CALLBACKS) {
+      if (data.startsWith(prefix)) return callbackCommand(intent, data.slice(prefix.length), id);
+    }
     if (data === ADMIN_RECEIPTS_CALLBACK_PREFIX) {
       return { intent: 'ADMIN_RECEIPTS', targetId: null, callbackQueryId: id };
     }
@@ -792,6 +1003,24 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
    */
   if (command === `/${ADMIN_MENU_COMMAND}`) {
     return { intent: 'ADMIN_PANEL', targetId: null, callbackQueryId: null };
+  }
+  /*
+   * Exact lookup, Phase 6A: `/service <id>`.
+   *
+   * A command carrying its argument rather than a prompt that captures the next
+   * message, for the reason `/link` and `/role` state — INCIDENT-FIN-001 is what a
+   * stateful prompt does when it outlives the question it was asked for. Not registered
+   * with `setMyCommands` for the same reason `/admin` is not: the command list is per
+   * bot rather than per user, so registering it would advertise the panel to every
+   * customer.
+   */
+  if (command === '/service') {
+    return {
+      intent: 'ADMIN_SERVICE',
+      targetId: null,
+      args: asCommand.trim().split(/\s+/).slice(1),
+      callbackQueryId: null,
+    };
   }
   if (command === '/link' || command === '/role') {
     const args = asCommand.trim().split(/\s+/).slice(1);
@@ -993,6 +1222,14 @@ export interface BotRuntimeDeps {
   readonly receipts: Pick<ReceiptService, 'submit' | 'reviewQueue' | 'reviewItem'>;
   readonly wallet: WalletService;
   readonly services: ProvisioningService;
+  /**
+   * The operator's READ of a service, for the admin panel's section.
+   *
+   * A `Pick` rather than the class, so this surface can list, read one with its action
+   * verdicts, and read its history — and cannot reach anything that acts. What acts is
+   * `services` and `delivery`, and both charge their own permissions.
+   */
+  readonly serviceAdmin: Pick<ServiceAdminService, 'list' | 'detail' | 'operations'>;
   readonly delivery: DeliveryService;
   /**
    * Puts a rate-limited FACT on the customer notification lane.
@@ -1705,7 +1942,8 @@ export class BotRuntime {
     // otherwise have done: both sections charge these keys server-side as well.
     const mayReview = permissions.has(RECEIPTS_VIEW_PERMISSION);
     const maySeeAdmins = permissions.has(ADMINS_VIEW_PERMISSION);
-    if (!mayReview && !maySeeAdmins) return null;
+    const maySeeServices = permissions.has(SERVICES_VIEW_PERMISSION);
+    if (!mayReview && !maySeeAdmins && !maySeeServices) return null;
 
     try {
       switch (command.intent) {
@@ -1722,6 +1960,17 @@ export class BotRuntime {
                         key: 'bot.admin.receipts_button' as const,
                       },
                       data: ADMIN_RECEIPTS_CALLBACK_PREFIX,
+                    },
+                  ]
+                : []),
+              ...(maySeeServices
+                ? [
+                    {
+                      label: {
+                        kind: 'TEMPLATE' as const,
+                        key: 'bot.admin.services_button' as const,
+                      },
+                      data: ADMIN_SERVICES_CALLBACK_PREFIX,
                     },
                   ]
                 : []),
@@ -1760,6 +2009,51 @@ export class BotRuntime {
                 adminActor,
                 command.targetId,
                 command.intent === 'ADMIN_APPROVE',
+                input.idempotencyKey,
+              );
+        case 'ADMIN_SERVICES':
+          return await this.adminServices(scope, adminActor);
+        case 'ADMIN_SERVICE': {
+          /*
+           * Reached two ways: a queue button carrying a uuid the boundary validated, and
+           * `/service <id>` typed by hand, which it did not — the boundary splits a
+           * command's words and cannot know which of them is meant to be an id.
+           *
+           * Neither is re-validated HERE, and the empty string stands in for a bare
+           * `/service`. That is the result of a mutation rather than an omission: this
+           * handler validated the typed id and refused an absent one, and BOTH checks
+           * survived being reverted, because `ServiceAdminService.get` runs every id
+           * through `serviceIdOrNotFound` and `SERVICE_NOT_FOUND` is what the catch
+           * below already renders as `bot.admin.service_gone`.
+           *
+           * A guard that survives its own mutation is a rule in name only, and the
+           * danger is not the dead code — it is the next reader taking it for the one
+           * holding the line and removing the one that is. So the answer has ONE place
+           * it is decided, which is also where the permission is charged first, so an
+           * administrator without `services.view` cannot learn whether an id is even
+           * well-formed.
+           */
+          const typed = command.targetId ?? (command.args ?? [])[0] ?? '';
+          return await this.adminService(scope, adminActor, typed, permissions);
+        }
+        case 'ADMIN_SERVICE_TERMINATE_ASK':
+          return command.targetId === null
+            ? null
+            : await this.adminServiceTerminateAsk(scope, adminActor, command.targetId, permissions);
+        case 'ADMIN_SERVICE_SYNC':
+        case 'ADMIN_SERVICE_RESEND':
+        case 'ADMIN_SERVICE_RETRY':
+        case 'ADMIN_SERVICE_RECONCILE':
+        case 'ADMIN_SERVICE_SUSPEND':
+        case 'ADMIN_SERVICE_RESUME':
+        case 'ADMIN_SERVICE_TERMINATE':
+          return command.targetId === null
+            ? null
+            : await this.adminServiceAct(
+                scope,
+                adminActor,
+                command.intent,
+                command.targetId,
                 input.idempotencyKey,
               );
         case 'ADMIN_SECTION':
@@ -1806,9 +2100,17 @@ export class BotRuntime {
     if (admins === undefined) return false;
     const identity = await admins.resolve(scope, input.telegramUserId, actor.correlationId);
     if (identity === null) return false;
+    /*
+     * The SAME three `adminTurn` gates on, and that is the rule rather than a
+     * coincidence: the keyboard must not promise a panel the turn would refuse, and it
+     * must not withhold one from an administrator who has a section. An installation
+     * whose only `services.view` holder got no panel row is what a missing third arm
+     * here would produce.
+     */
     return (
       identity.permissions.has(RECEIPTS_VIEW_PERMISSION) ||
-      identity.permissions.has(ADMINS_VIEW_PERMISSION)
+      identity.permissions.has(ADMINS_VIEW_PERMISSION) ||
+      identity.permissions.has(SERVICES_VIEW_PERMISSION)
     );
   }
 
@@ -1953,6 +2255,239 @@ export class BotRuntime {
       note: 'Rejected in the Telegram management panel.',
     });
     return { key: 'bot.admin.rejected', values: {}, buttons: [], orderId: null };
+  }
+
+  /**
+   * The services queue: what needs an administrator, and nothing else.
+   *
+   * TWO searches, and the choice of which two is the whole design. `UNRECONCILED` is a
+   * service whose create was lost — nothing resolves it on its own, and 4D made it a
+   * dead end deliberately so that nobody asks a panel for a second account. A `FAILED`
+   * delivery is a customer who paid and has no link, after the automatic lane gave up
+   * at its attempt ceiling. Every other state either settles itself or belongs to the
+   * customer, and a queue that listed them would be a list of things not to do.
+   *
+   * Bounded by `ADMIN_QUEUE_LIMIT` per search and NOT paged, for the reason that
+   * constant gives: this is a keyboard, Telegram refuses an oversized one, and ten rows
+   * are ten decisions. An installation with more than ten of either has a bigger
+   * question than the eleventh row, and the Web Admin pages properly.
+   */
+  private async adminServices(scope: TenantContext, actor: ActorContext): Promise<PendingReply> {
+    const [unreconciled, undelivered] = await Promise.all([
+      this.deps.serviceAdmin.list(scope, actor, {
+        limit: ADMIN_QUEUE_LIMIT,
+        search: { state: 'UNRECONCILED' },
+      }),
+      this.deps.serviceAdmin.list(scope, actor, {
+        limit: ADMIN_QUEUE_LIMIT,
+        search: { deliveryState: 'FAILED' },
+      }),
+    ]);
+
+    /*
+     * De-duplicated by id: a service can be BOTH unreconciled and undelivered, and two
+     * buttons for one service is a list that looks longer than the work is.
+     */
+    const seen = new Set<string>();
+    const buttons: CustomerButton[] = [];
+    for (const service of [...unreconciled.items, ...undelivered.items]) {
+      if (seen.has(service.id)) continue;
+      seen.add(service.id);
+      buttons.push({
+        /*
+         * The provider username, which is the handle an operator types into the panel
+         * and is NOT a credential. Not the subscription ref and not the client id —
+         * both are bearer capabilities, and this message stays in the chat for ever.
+         */
+        label: { kind: 'TEXT' as const, text: service.providerUsername },
+        data: `${ADMIN_SERVICE_CALLBACK_PREFIX}${service.id}`,
+      });
+    }
+    if (buttons.length === 0) {
+      return { key: 'bot.admin.services_none', values: {}, buttons: [], orderId: null };
+    }
+    return { key: 'bot.admin.services_section', values: {}, buttons, orderId: null };
+  }
+
+  /**
+   * One service, and the actions this administrator may actually take on it.
+   *
+   * The verdicts come from `ServiceAdminService.detail` — the SAME evaluator the Web
+   * Admin renders and the write paths agree with — so this surface decides nothing about
+   * availability. What it adds is the second filter: a verdict says the SERVICE allows
+   * an action, and the permission says this administrator may ask for it. A button drawn
+   * without both is a button whose every tap records a denial.
+   *
+   * `detail` charges `services.view` itself, so an administrator who reached this
+   * through a crafted callback without it is refused there rather than here.
+   */
+  private async adminService(
+    scope: TenantContext,
+    actor: ActorContext,
+    serviceId: string,
+    permissions: ReadonlySet<PermissionKey>,
+  ): Promise<PendingReply> {
+    let found;
+    try {
+      found = await this.deps.serviceAdmin.detail(scope, actor, serviceId);
+    } catch {
+      /*
+       * Unknown, another tenant's, or malformed — ONE answer for all three, which is
+       * the rule `bot.service.not_found` states on the customer side. Telling them
+       * apart would let anybody holding a service id learn whether it exists.
+       */
+      return { key: 'bot.admin.service_gone', values: {}, buttons: [], orderId: null };
+    }
+
+    const { service, actions } = found;
+    const [operations, title] = await Promise.all([
+      this.deps.serviceAdmin.operations(scope, actor, service.id).catch(() => []),
+      this.deps.purchaseTitle(scope, service.orderId),
+    ]);
+    const latest = operations[0];
+
+    return {
+      key: 'bot.admin.service',
+      values: {
+        customer: service.customerId,
+        username: service.providerUsername,
+        panel: service.panelId,
+        product: title ?? service.productId,
+        state: service.state,
+        delivery: service.deliveryState,
+        usedTrafficBytes: service.trafficUsedBytes,
+        totalTrafficBytes: service.trafficLimitBytes,
+        ...(service.usageSyncedAt === null ? {} : { syncedAt: service.usageSyncedAt }),
+        ...(service.expiresAt === null ? {} : { expiresAt: service.expiresAt }),
+        /*
+         * The latest operation AND its outcome, which is what tells a planned action
+         * apart from a completed one. Both words come from the frozen vocabularies, so
+         * an administrator reading this message and the Web Admin screen sees the same
+         * token for the same fact.
+         */
+        operation: latest === undefined ? '-' : `${latest.type} ${latest.state}`,
+      },
+      buttons: adminServiceButtons(service.id, actions, permissions),
+      orderId: null,
+    };
+  }
+
+  /**
+   * The confirmation screen, and the only place the destructive callback is produced.
+   *
+   * Phase 6A, and the first ask-then-act flow the admin panel has. Terminate deletes the
+   * account on somebody's panel while the customer keeps the order they paid for, so it
+   * costs two taps — the same rule the customer half has held since 4E, and the reason
+   * `service-management.test.ts` asserts the destructive prefix appears on no list and
+   * no detail screen.
+   *
+   * The permission is checked again here: an administrator who reached the asking
+   * callback without `services.terminate` is not shown a button they cannot press.
+   */
+  private async adminServiceTerminateAsk(
+    scope: TenantContext,
+    actor: ActorContext,
+    serviceId: string,
+    permissions: ReadonlySet<PermissionKey>,
+  ): Promise<PendingReply> {
+    if (!permissions.has(SERVICES_TERMINATE_PERMISSION)) {
+      return { key: 'bot.admin.refused', values: {}, buttons: [], orderId: null };
+    }
+    let found;
+    try {
+      found = await this.deps.serviceAdmin.detail(scope, actor, serviceId);
+    } catch {
+      return { key: 'bot.admin.service_gone', values: {}, buttons: [], orderId: null };
+    }
+    /*
+     * The verdict is read AGAIN, on the confirmation screen.
+     *
+     * A terminate that became illegal between the detail and this tap — the service was
+     * ended by somebody else, or its panel was disabled — must not be offered a second
+     * button. The write path refuses it anyway; this is the screen not promising what
+     * the tap would refuse.
+     */
+    const verdict = found.actions.find((entry) => entry.action === 'TERMINATE');
+    if (verdict === undefined || !verdict.available) {
+      return { key: 'bot.admin.service_unavailable', values: {}, buttons: [], orderId: null };
+    }
+    return {
+      key: 'bot.admin.service_terminate_ask',
+      values: {},
+      buttons: [
+        {
+          label: { kind: 'TEMPLATE' as const, key: 'bot.admin.service_terminate_confirm_button' },
+          data: `${ADMIN_SERVICE_TERMINATE_CALLBACK_PREFIX}${found.service.id}`,
+        },
+      ],
+      orderId: null,
+    };
+  }
+
+  /**
+   * One action, through the SAME application method the Web Admin's button calls.
+   *
+   * `requestFromOperator`, `retryProvisioning` and `resendForOperator` — no parallel
+   * service logic, no second audit row, no second notification. Everything that makes an
+   * action safe lives in there: the permission, the legal-state check, the panel's
+   * operability, the scope-activity read inside the transaction, the open-operation
+   * return that makes a double tap idempotent, and the audit row naming this
+   * administrator.
+   *
+   * The reply distinguishes the two honest outcomes and nothing else. An operation comes
+   * back PLANNED, so the answer is that the request was recorded — not that it was done,
+   * which is the legacy "updated" for a write whose effect has not happened. A resend
+   * plans no operation and says it was sent. Anything the write path refuses is one
+   * sentence: which of the four refusals it was belongs to the operational log and the
+   * audit row, and an administrator's next step is the Web Admin either way.
+   */
+  private async adminServiceAct(
+    scope: TenantContext,
+    actor: ActorContext,
+    intent: BotIntent,
+    serviceId: string,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    const key = `${idempotencyKey}:${intent.toLowerCase()}`;
+    try {
+      if (intent === 'ADMIN_SERVICE_RESEND') {
+        await this.deps.delivery.resendForOperator(scope, actor, serviceId);
+        return { key: 'bot.admin.service_resent', values: {}, buttons: [], orderId: null };
+      }
+      if (intent === 'ADMIN_SERVICE_RETRY') {
+        await this.deps.services.retryProvisioning(scope, actor, serviceId, {
+          idempotencyKey: key,
+        });
+        return { key: 'bot.admin.service_planned', values: {}, buttons: [], orderId: null };
+      }
+      const operation = ADMIN_SERVICE_OPERATIONS[intent];
+      /*
+       * Unreachable while the dispatch and this table name the same intents, and
+       * answered rather than asserted: a non-null assertion here would turn a future
+       * edit that adds an intent to one and not the other into a runtime throw, on a
+       * button an administrator pressed to fix somebody's service.
+       */
+      if (operation === undefined) {
+        return { key: 'bot.admin.service_unavailable', values: {}, buttons: [], orderId: null };
+      }
+      await this.deps.services.requestFromOperator(scope, actor, serviceId, operation, {
+        idempotencyKey: key,
+      });
+      return { key: 'bot.admin.service_planned', values: {}, buttons: [], orderId: null };
+    } catch (error) {
+      /*
+       * A refusal about the SERVICE is answered differently from a refusal about the
+       * ADMINISTRATOR, and the difference is deliberate. A stale button — the state
+       * moved, the panel was disabled, an operation of that type is already open — is
+       * something the person can act on, so it says the action is not possible now. A
+       * permission denial falls through to `adminTurn`'s single refusal, which tells
+       * whoever holds the chat nothing about what exists.
+       */
+      if (isServiceRefusal(error)) {
+        return { key: 'bot.admin.service_unavailable', values: {}, buttons: [], orderId: null };
+      }
+      throw error;
+    }
   }
 
   /**

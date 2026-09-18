@@ -304,6 +304,7 @@ describe('provisioning invariants', () => {
             operationId,
             serviceId,
             orderId: order.id,
+            requestedByCustomerId: null,
             panelId: panelA as PanelId,
             type: 'PROVISION',
           },

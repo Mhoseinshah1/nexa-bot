@@ -8,7 +8,7 @@ import type {
 } from '@nexa/contracts';
 import {
   ANNOUNCE_GRACE_MS,
-  CUSTOMER_INITIATED_OPERATIONS,
+  CUSTOMER_REQUESTABLE_OPERATIONS,
   OperationOutcomeAnnouncer,
 } from '../../apps/api/src/modules/commerce/messaging/application/operation-outcome-announcer';
 import type { CustomerNotifier } from '../../apps/api/src/modules/commerce/messaging/application/customer-notifier';
@@ -52,7 +52,17 @@ describe('announcing how an operation turned out', () => {
    * terminalise an operation announced nothing. The harness follows: each case says
    * what the ROW says, which is what the production reader answers from.
    */
-  function announcerFor(type: OperationType, state: OperationState = 'SUCCEEDED') {
+  function announcerFor(
+    type: OperationType,
+    state: OperationState = 'SUCCEEDED',
+    /*
+     * Who asked, as the ROW records it — `null` meaning an operator or a background
+     * lane did. Defaulted to the customer so the cases that are about STATE and TYPE
+     * read as they did before this parameter existed; the cases about who asked pass
+     * it explicitly.
+     */
+    requestedByCustomerId: UserId | null = CUSTOMER,
+  ) {
     const queued: Queued[] = [];
     /*
      * Every `markAnnounced` call, in order.
@@ -64,7 +74,13 @@ describe('announcing how an operation turned out', () => {
     const stamped: string[] = [];
     const announcer = new OperationOutcomeAnnouncer({
       reader: {
-        subjectFor: async () => ({ type, state, serviceId: SERVICE, customerId: CUSTOMER }),
+        subjectFor: async () => ({
+          type,
+          state,
+          serviceId: SERVICE,
+          customerId: CUSTOMER,
+          requestedByCustomerId,
+        }),
         dueForAnnouncement: async () => [],
       },
       announcements: {
@@ -145,11 +161,60 @@ describe('announcing how an operation turned out', () => {
   });
 
   it('announces every operation a customer can start from My Services', async () => {
-    for (const type of CUSTOMER_INITIATED_OPERATIONS) {
+    for (const type of CUSTOMER_REQUESTABLE_OPERATIONS) {
       const { announcer, queued } = announcerFor(type, 'SUCCEEDED');
       await announcer.announce(scope, 'operation-1');
       expect(queued.length, `${type} must be announced`).toBe(1);
     }
+  });
+
+  it('says nothing about an operation an OPERATOR asked for, of any requestable type', async () => {
+    /*
+     * Phase 6A-5, and the defect Phase 6A-1 introduced.
+     *
+     * Before the operator action path these six types were reachable only from the
+     * customer's own detail screen, so the TYPE was a sound proxy for who asked. It
+     * stopped being one the moment an operator could plan a `SUSPEND`: the row is
+     * identical, and this branch queued `SERVICE_ACTION_SUCCEEDED`, which renders as
+     * «درخواست شما با موفقیت روی سرور اعمال شد» — YOUR request — to a customer who
+     * made none. The failing direction is worse: `SERVICE_ACTION_FAILED` invites them
+     * to try again, and an operator's terminate is not theirs to retry.
+     *
+     * Silence is the answer rather than a new sentence, because the lane is a closed
+     * set of frozen kinds and none of them means "an operator changed your service";
+     * ADR-0030 §1 refuses the parameterised payload one would need. Every other
+     * operator action in this product — a block, a wallet adjustment, a refund — is
+     * silent to the customer for the same reason.
+     *
+     * BOTH terminal outcomes, because a fix that quieted only the success would leave
+     * the more misleading half in place.
+     */
+    for (const type of CUSTOMER_REQUESTABLE_OPERATIONS) {
+      for (const outcome of ['SUCCEEDED', 'ABANDONED'] as OperationState[]) {
+        const { announcer, queued, stamped } = announcerFor(type, outcome, null);
+        await announcer.announce(scope, 'operation-1');
+        expect(queued, `${type}/${outcome} asked for by an operator`).toEqual([]);
+        /*
+         * And it is ANSWERED. Nobody is owed a message, which is a decision — leaving
+         * `announced_at` NULL would make the sweep re-read this row for ever.
+         */
+        expect(stamped, `${type}/${outcome} must still be stamped`).toEqual(['operation-1']);
+      }
+    }
+  });
+
+  it('still announces a PROVISION delay that no customer requested', async () => {
+    /*
+     * The narrowing above is scoped to the request branch, and this is the case that
+     * proves it did not spread. `SERVICE_PROVISION_DELAYED` is deliberately about
+     * something the customer did NOT ask for — they are waiting on a link they have
+     * paid for — and `planReconciles` plans its `RECONCILE` with no requester at all.
+     * A null check placed above that branch instead of inside the request one would
+     * silence exactly the message 4H added.
+     */
+    const { announcer, queued } = announcerFor('RECONCILE', 'ABANDONED', null);
+    await announcer.announce(scope, 'operation-1');
+    expect(queued.map((q) => q.kind)).toEqual(['SERVICE_PROVISION_DELAYED']);
   });
 
   it('announces a delay when a PROVISION is abandoned', async () => {
@@ -223,6 +288,7 @@ describe('announcing how an operation turned out', () => {
             state: 'SUCCEEDED' as OperationState,
             serviceId: SERVICE,
             customerId: CUSTOMER,
+            requestedByCustomerId: CUSTOMER,
           }),
           dueForAnnouncement: async (_scope, before, limit) => {
             asked.push({ before, limit });

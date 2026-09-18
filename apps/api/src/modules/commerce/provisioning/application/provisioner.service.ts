@@ -893,6 +893,8 @@ export class ProvisionerService {
             ),
             serviceId: unknown.serviceId,
             orderId: unknown.orderId,
+            /* This installation asking a panel what it did. Nobody requested it. */
+            requestedByCustomerId: null,
             panelId: unknown.panelId,
             type: 'RECONCILE',
           },
@@ -1231,6 +1233,8 @@ export class ProvisionerService {
               ),
               serviceId,
               orderId: operation.orderId,
+              /* Re-planned by the reconcile that proved the account absent. */
+              requestedByCustomerId: null,
               panelId: service.panelId,
               type: 'PROVISION',
             },
@@ -1980,6 +1984,8 @@ export class ProvisionerService {
             operationId: this.deps.operationId(`${candidate.id}:SYNC_USAGE:${String(window)}`),
             serviceId: candidate.id,
             orderId: candidate.orderId,
+            /* Housekeeping: a figure read back on a schedule, asked for by nobody. */
+            requestedByCustomerId: null,
             panelId: candidate.panelId,
             type: 'SYNC_USAGE',
           },
