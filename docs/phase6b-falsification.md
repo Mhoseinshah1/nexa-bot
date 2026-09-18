@@ -119,6 +119,48 @@ The controller parses the query and then builds the search separately, so the
 filter can be validated, accepted and silently not passed on — which is a
 surface that appears to filter and returns everything.
 
+## The Telegram panels section: fifteen more
+
+Mutations against `apps/api/src/surfaces/telegram/bot-runtime.ts` and
+`apps/api/src/modules/platform/panels/application/panel-health-view.ts`, run
+against `tests/integration/telegram-admin-panels.test.ts` and
+`tests/integration/panels-http.test.ts`.
+
+| #       | Rule                                                          | Mutation                                            | Named test                                                                                        | Result |
+| ------- | ------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ------ |
+| F6B-T1  | `panels.view` alone opens the management panel                | the fourth arm dropped from `adminTurn`'s gate      | _opens the panel for an administrator whose ONLY section is Panels_                               | KILLED |
+| F6B-T2  | the Panels button is drawn only for `panels.view`             | the condition replaced with `true`                  | _draws no Panels button for an administrator whose role does not hold panels.view_                | KILLED |
+| F6B-T3  | the main menu offers the panel to a panels-only administrator | the fourth arm dropped from `isAdmin`               | _opens the panel for an administrator whose ONLY section is Panels_                               | KILLED |
+| F6B-T4  | the fleet lists live panels only                              | `archived: 'LIVE'` widened to `'ALL'`               | _lists the live panels, one button each, and never an archived one_                               | KILLED |
+| F6B-T5  | a truncated page offers the next one                          | the page button removed                             | _offers a further page only when the server says there is one, and that page works_               | KILLED |
+| F6B-T6  | `W:` asks and `X:` archives                                   | the asking prefix pointed at the archiving intent   | _does not archive on the asking callback_                                                         | KILLED |
+| F6B-T7  | the archive question re-checks `panels.edit`                  | the permission check deleted                        | _refuses the archive question to an administrator without panels.edit_                            | KILLED |
+| F6B-T8  | the archive question re-reads the panel's status              | the ARCHIVED check deleted                          | _answers the archive question with a refusal once the panel is already archived_                  | KILLED |
+| F6B-T9  | a replayed test is reported as a replay                       | both outcomes collapsed to "tested"                 | _says a replay was a replay rather than claiming a probe that did not happen_                     | KILLED |
+| F6B-T10 | the enable gate's refusal names the remedy on this screen     | the `PANEL_NOT_VALIDATED` branch removed            | _refuses to enable a panel nobody has successfully tested, and names the remedy_                  | KILLED |
+| F6B-T11 | every action button needs `panels.edit`                       | `mayEdit` replaced with `true`                      | _draws no action for an administrator who may only view, and refuses the callback anyway_         | KILLED |
+| F6B-T12 | the detail carries no base URL                                | the provider field fed `panel.baseUrl`              | _carries the identity, the health, the occupancy — and no address, credential or body_            | KILLED |
+| F6B-T13 | an absent cap renders as neither zero nor a number            | the cap rendered as `maxServices ?? 0`              | _reports the occupancy as three separate figures, and an absent cap as neither zero nor a number_ | KILLED |
+| F6B-T14 | health reads `DISABLED` from the panel's status               | the projection returned `UNCHECKED` unconditionally | _projects DISABLED health from the panel status rather than storing it_                           | KILLED |
+| F6B-T15 | a forged page cursor is UNSUPPORTED at the boundary           | the null check removed after the decode             | _answers a forged page cursor as unknown input rather than casting it_                            | KILLED |
+
+F6B-T12 is the row the whole section is shaped around, and the test behind it is
+worth reading: the fake panel's credentials are its REAL ones, so the assertion
+that the base URL, the username, the password and a `****` stand-in are absent is
+a search for strings the process actually holds rather than for strings nothing
+could produce.
+
+F6B-T14 is killed by a test in a different file, and that is the point of the
+extraction: the projection is one function with two callers now, so the Web
+Admin's own case fails when the Telegram section's copy of it would have drifted.
+
+F6B-T5 is the row that could most easily have been a test with no teeth. A page
+button is trivial to assert the existence of; what makes the case falsifiable is
+that it FOLLOWS the button and requires the second page to differ from the first.
+A cursor that encodes and does not decode is a button whose only answer is the
+unsupported-input fallback, which is exactly what a "the button is there" test
+cannot see.
+
 ## How the mutations were run
 
 Each mutation is applied to the working tree, the named test is run alone
