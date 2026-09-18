@@ -1651,6 +1651,23 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     },
   };
 
+  /**
+   * The operator's READ of a service, with its action verdicts.
+   *
+   * A local rather than an inline construction, because TWO surfaces hold it now: the
+   * Web Admin's HTTP controller and the Telegram management panel. One instance, so the
+   * two cannot disagree about which actions a service allows — which is the whole point
+   * of the verdicts being computed in one evaluator.
+   */
+  const serviceAdmin = new ServiceAdminService({
+    services: serviceRepository,
+    operations: operationRepository,
+    guard,
+    // Read-only, both: "can this panel do X" and "is there anywhere to send this".
+    panels: panelOperability,
+    contacts: customerContacts,
+  });
+
   const deliveryService = new DeliveryService({
     services: serviceRepository,
     contacts: customerContacts,
@@ -2269,14 +2286,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     receipts: receiptService,
     receiptFiles,
     provisioning: provisioningService,
-    serviceAdmin: new ServiceAdminService({
-      services: serviceRepository,
-      operations: operationRepository,
-      guard,
-      // Read-only, both: "can this panel do X" and "is there anywhere to send this".
-      panels: panelOperability,
-      contacts: customerContacts,
-    }),
+    serviceAdmin,
     provisioner,
     provisionerLoop,
     delivery: deliveryService,
@@ -2388,6 +2398,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       // customer-requested resend and the automatic sweep share `markSendStarted`,
       // and two instances would share nothing.
       services: provisioningService,
+      // The operator's READ of a service, for the admin panel's services section.
+      serviceAdmin,
       delivery: deliveryService,
       /*
        * The plan a service was SOLD as, from the order's frozen snapshot.
