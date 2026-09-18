@@ -1240,11 +1240,25 @@ export class PanelService {
          * ENABLING is the act that puts a panel in front of customers, and it
          * needs a connection test that vouches for what the panel is NOW.
          *
-         * Only on the transition INTO `ACTIVE` from something else. Re-saving
-         * `ACTIVE` on an already-active panel is not an enable and must not
-         * demand a fresh test — a panel that has been serving for a month would
-         * otherwise be un-re-confirmable, and an operator would have to probe it
-         * to leave it exactly as it was.
+         * `DISABLED -> ACTIVE` only, and the two exclusions are both dead ends
+         * avoided rather than oversights.
+         *
+         * Re-saving `ACTIVE` on an already-active panel is not an enable and
+         * must not demand a fresh test — a panel that has been serving for a
+         * month would otherwise be un-re-confirmable, and an operator would have
+         * to probe it to leave it exactly as it was.
+         *
+         * `ARCHIVED -> ACTIVE` is excluded because `testConnection` refuses an
+         * ARCHIVED panel, deliberately and since Phase 3. Gating the restore
+         * would therefore make it unreachable BY ANY SEQUENCE OF REQUESTS: the
+         * operator cannot test to satisfy the gate, and cannot enable without
+         * satisfying it. That is the same shape as the rename dead end the
+         * restore path already carries a fix for, and it is why a restore lands
+         * wherever the operator asked and is probed on the next monitor tick.
+         *
+         * What is left is the case the rule exists for, and it is the common
+         * one: an operator disabled a panel because something was wrong with it,
+         * and is now saying it is fixed.
          *
          * `validationAuthorisesEnable` is three conditions, and the identity one
          * is the point: a green test taken before a password was replaced proves
@@ -1256,7 +1270,7 @@ export class PanelService {
          * transaction holds — so a probe cannot land between the decision and the
          * write, in either direction.
          */
-        if (status === 'ACTIVE' && before.panel.status !== 'ACTIVE') {
+        if (status === 'ACTIVE' && before.panel.status === 'DISABLED') {
           const identity = connectionIdentityOf({
             providerType: before.panel.providerType,
             baseUrl: before.panel.baseUrl,

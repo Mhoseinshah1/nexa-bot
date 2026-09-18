@@ -258,6 +258,18 @@ export interface PanelRepository {
   ): Promise<{ panels: PanelView[]; nextCursor: PanelCursor | null }>;
   find(scope: TenantContext, panelId: string, tx?: TransactionScope): Promise<PanelView | null>;
   /**
+   * The same, for many panels at once. Absent ids are simply missing.
+   *
+   * Exists because the catalogue asks whether EVERY product's panel may be sold
+   * onto, and a `find` per product is one round trip per row on a page — the
+   * N+1 the panel list's own keyset index exists to avoid one query over.
+   */
+  findMany(
+    scope: TenantContext,
+    panelIds: readonly string[],
+    tx?: TransactionScope,
+  ): Promise<PanelView[]>;
+  /**
    * Takes the panel's row lock for the rest of the transaction.
    *
    * THE serialization point for everything a probe's answer depends on. A

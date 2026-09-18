@@ -40,6 +40,7 @@ import {
   adminActorFor,
   createAdmin,
   createTestContext,
+  validatePanelConnection,
   tenantA,
   tenantB,
   type SeededAdmin,
@@ -511,6 +512,10 @@ describe('the panel health monitor', () => {
       expect(probes).toHaveLength(0);
 
       now = new Date(now.getTime() + 1_000);
+      // Re-enabling needs a connection test that vouches for what the panel is
+      // now — the Phase 6B gate. Not this case's subject, which is that the
+      // schedule re-arms.
+      await validatePanelConnection(ctx.container, tenantA, panelId);
       await service().setStatus(tenantA, adminActorFor(ownerA), panelId, {
         status: 'ACTIVE',
         idempotencyKey: key(),
@@ -718,6 +723,10 @@ describe('the panel health monitor', () => {
         status: 'DISABLED',
         idempotencyKey: key(),
       });
+      // The Phase 6B enable gate, satisfied the way an operator satisfies it —
+      // with a connection test. Not this case's subject, which is that the
+      // SCHEDULE comes back out of suspension.
+      await validatePanelConnection(ctx.container, tenantA, panelId);
       await service().setStatus(tenantA, adminActorFor(ownerA), panelId, {
         status: 'ACTIVE',
         idempotencyKey: key(),
@@ -2946,6 +2955,8 @@ describe('the panel health monitor', () => {
             ),
           )
       ).length;
+      // The enable gate again, satisfied the way an operator satisfies it.
+      await validatePanelConnection(ctx.container, tenantA, panelId);
       await service().setStatus(tenantA, adminActorFor(ownerA), panelId, {
         status: 'ACTIVE',
         idempotencyKey: key(),

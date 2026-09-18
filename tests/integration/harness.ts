@@ -8,6 +8,8 @@ import type {
   RoleId,
   TenantContext,
 } from '@nexa/contracts';
+import { connectionIdentityOf } from '../../apps/api/src/modules/platform/panels/application/panel-eligibility';
+import { DrizzlePanelRepository } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel.repository';
 import { providerAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/adapter-registry';
 import { createContainer, type Container } from '../../apps/api/src/container';
 import { loadConfig } from '../../apps/api/src/infrastructure/config/load-config';
@@ -244,4 +246,58 @@ export function adapterWith(
   overrides: Partial<ProviderConnectionAdapter>,
 ): ProviderConnectionAdapter {
   return Object.assign(providerAdapter(type), overrides);
+}
+
+/**
+ * Records a successful connection test against the panel's CURRENT identity,
+ * without a socket.
+ *
+ * `setStatus` refuses `DISABLED -> ACTIVE` unless a recent probe vouches for
+ * what the panel is now, which is the Phase 6B rule and the thing most of these
+ * suites are not about. A test whose subject is the schedule, the health
+ * projection or the operations log should not have to stand up a fake panel to
+ * get past it.
+ *
+ * The identity comes from `connectionIdentityOf` — the PRODUCTION function the
+ * prober uses — rather than a string assembled here. A hand-written digest would
+ * be a second opinion about what a validation covers, and would go on passing
+ * after the real one changed.
+ *
+ * It writes a HEALTHY row, which is also what a real successful probe writes.
+ * Suites that are about the gate itself do not use this: they drive the real
+ * probe, or they assert the refusal.
+ */
+export async function validatePanelConnection(
+  container: Container,
+  scope: TenantContext,
+  panelId: string,
+): Promise<void> {
+  const repository = new DrizzlePanelRepository(container.database.db);
+  const view = await repository.find(scope, panelId);
+  if (view === null) throw new Error(`no panel ${panelId} to validate`);
+  const identity = connectionIdentityOf({
+    providerType: view.panel.providerType,
+    baseUrl: view.panel.baseUrl,
+    activation: view.panel.activation,
+    usernameSetAt: view.credentials.usernameSetAt,
+    passwordSetAt: view.credentials.passwordSetAt,
+    apiTokenSetAt: view.credentials.apiTokenSetAt,
+  });
+  await container.uow.run(scope, (tx) =>
+    repository.recordHealth(
+      scope,
+      panelId,
+      {
+        state: 'HEALTHY',
+        checkedAt: container.clock.now(),
+        latencyMs: 3,
+        failure: null,
+        statusCode: 200,
+        providerVersion: null,
+        lastHealthyAt: container.clock.now(),
+      },
+      identity,
+      tx,
+    ),
+  );
 }

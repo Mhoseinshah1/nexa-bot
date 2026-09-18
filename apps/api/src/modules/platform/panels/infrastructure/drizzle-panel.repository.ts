@@ -255,6 +255,29 @@ export class DrizzlePanelRepository implements PanelRepository {
     return row === undefined ? null : toView(row);
   }
 
+  async findMany(
+    scope: TenantContext,
+    panelIds: readonly string[],
+    tx?: TransactionScope,
+  ): Promise<PanelView[]> {
+    const unique = [...new Set(panelIds)];
+    if (unique.length === 0) return [];
+    const rows = await executorOf(this.db, tx)
+      .select({
+        panel: panels,
+        // FLAT, not a nested group. See `toView` for why.
+        usernameSetAt: panelCredentials.usernameSetAt,
+        passwordSetAt: panelCredentials.passwordSetAt,
+        apiTokenSetAt: panelCredentials.apiTokenSetAt,
+        health: panelHealth,
+      })
+      .from(panels)
+      .leftJoin(panelCredentials, eq(panelCredentials.panelId, panels.id))
+      .leftJoin(panelHealth, eq(panelHealth.panelId, panels.id))
+      .where(and(inArray(panels.id, unique), eq(panels.tenantId, scope.tenantId)));
+    return rows.map(toView);
+  }
+
   async create(
     scope: TenantContext,
     input: CreatePanelInput,

@@ -77,13 +77,15 @@ export class PanelSalesGate {
     if (unique.length === 0) return verdicts;
 
     const now = this.deps.clock.now();
+    // TWO reads for the whole page, never one per panel. The catalogue asks this
+    // about every product it is about to show, and a `find` per product is a
+    // round trip per row.
     const capacities = await this.deps.capacity.readMany(scope, unique, now, tx);
-    for (const panelId of unique) {
-      const view = await this.deps.panels.find(scope, panelId, tx);
-      if (view === null) continue;
-      const capacity = capacities.get(panelId);
+    const views = await this.deps.panels.findMany(scope, unique, tx);
+    for (const view of views) {
+      const capacity = capacities.get(view.panel.id);
       verdicts.set(
-        panelId,
+        view.panel.id,
         decideEligibility({
           status: view.panel.status,
           health: view.health,
