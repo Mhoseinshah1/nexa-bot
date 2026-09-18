@@ -1901,3 +1901,44 @@ Nothing here is guessed and no adapter is written against invented credentials, 
 why 5D is the one part of the payment batch that is skipped rather than deferred.
 
 **Trigger to resolve:** the owner naming a provider.
+
+## OQ-5P-01 — a route's customer-facing name and tutorial have no consumer yet
+
+The Mirza payment parity pass (FBR-009's eight-control schema) found Nexa carrying
+seven of the eight controls, and two of the seven with nowhere to be seen.
+
+`payment_gateways.display_name` and `payment_gateways.instructions` are written by the
+Web Admin and read by the Web Admin and the audit payload. No customer ever sees either.
+The invoice a customer receives renders `bot.payment.transfer_instructions`, whose whole
+body is a tenant-overridable template — so the route's `instructions` duplicates a
+capability that IS wired, and `display_name` reaches nobody at all.
+
+That is the rule 5C applied to `settlesVia` and `requiresCredentials`, which were removed
+for having no reader: do not store configuration nothing consumes. It is not applied here
+because neither resolution is clean while one route exists. Rendering them creates two
+places for the same sentence; removing a column is expand/contract across two releases.
+
+Both fields acquire a real consumer the moment a SECOND route exists, because a chooser
+needs a name per option and per-route instructions to tell them apart — which also makes
+`sortOrder`, already consumed for ordering, visible to a customer rather than only to an
+operator. So this resolves with `OQ-5D-01` rather than before it.
+
+**Trigger to resolve:** the second payment route, whichever provider it is.
+
+## OQ-5P-02 — receipt auto-approval is refused for this release, on purpose
+
+`FBR-007` and `PRBR-003` record four legacy controls — auto-approve, approve-without-
+review, an auto-approval delay, and a per-user exemption — whose combined effect is that
+money claimed by an uploaded receipt can be credited with no human ever seeing it.
+`PRBR-002` adds the consequence: an empty review queue then means either "no receipts" or
+"receipts approved unseen", and the screen cannot tell them apart.
+
+Nexa does not implement them, and that is a decision rather than an omission. Every
+receipt is reviewed by a person who holds `receipts.review`, the reviewer and the time are
+columns, and `payment_receipts` refuses UPDATE — so "was this approved by a human" is
+always answerable, which `UNK-PR-010` records as unanswerable in the legacy system.
+
+Recorded as an intentional safety difference, not as parity still owed. The product
+question — whether the owner wants any bounded form of it — stays open in the Phase 5
+table above, with the bounds it would need: an explicit cap, a `SYSTEM_JOB` audit actor,
+and an alert.
