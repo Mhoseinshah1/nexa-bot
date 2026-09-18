@@ -677,6 +677,14 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.unconfigured',
       'bot.payment.wallet_button',
       'bot.payment.window_too_short',
+      /*
+       * 5F's generic refusal. It is in this inventory because it IS customer-facing,
+       * and it promises nothing: it says the request cannot be completed now and that
+       * nothing was charged. Both are true of every cause that reaches it — a stopped
+       * installation, an absent row, a funds refusal without its figure — and all three
+       * roll back before the reply is built.
+       */
+      'bot.request_unavailable',
       'bot.service.action_confirm_button',
       'bot.service.action_in_progress',
       'bot.service.action_not_allowed',

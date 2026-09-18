@@ -1041,6 +1041,19 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.request_unavailable',
+    description:
+      'The truthful generic refusal, for the causes a customer can neither act on nor ' +
+      'be told apart: the installation has stopped accepting work, a row the command ' +
+      'needs is not there, or a financial refusal arrived without the figure that ' +
+      'makes its own reply renderable. It exists because an UNMAPPED refusal code ' +
+      'makes `refusal` rethrow and the webhook swallow it, which answers the customer ' +
+      'with silence — the F5R-12 class. Says nothing was charged, because in every ' +
+      'case that reaches it the transaction rolled back.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.payment.unconfigured',
     description:
       'Shown when a customer chooses a payment method this installation has not ' +
