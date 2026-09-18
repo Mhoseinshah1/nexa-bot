@@ -6,6 +6,7 @@ import {
   refundCompletionSchema,
   refundFailureSchema,
   refundRequestSchema,
+  routePattern,
   type RefundListResponse,
   type RefundResponse,
   type RefundView,
@@ -41,7 +42,7 @@ import type { RefundRecord } from '../../modules/commerce/payments/application/r
 export class RefundsController {
   constructor(@Inject(CONTAINER) private readonly container: Container) {}
 
-  @Get(REFUND_ROUTES.list(':paymentId'))
+  @Get(routePattern(REFUND_ROUTES.list, 'paymentId'))
   async list(
     @Req() request: FastifyRequest,
     @Param('paymentId') paymentId: string,
@@ -58,7 +59,7 @@ export class RefundsController {
     };
   }
 
-  @Post(REFUND_ROUTES.request(':paymentId'))
+  @Post(routePattern(REFUND_ROUTES.request, 'paymentId'))
   async requestRefund(
     @Req() request: FastifyRequest,
     @Param('paymentId') paymentId: string,
@@ -84,7 +85,7 @@ export class RefundsController {
     return { refund: toView(refund) };
   }
 
-  @Post(REFUND_ROUTES.complete(':refundId'))
+  @Post(routePattern(REFUND_ROUTES.complete, 'refundId'))
   async complete(
     @Req() request: FastifyRequest,
     @Param('refundId') refundId: string,
@@ -101,7 +102,7 @@ export class RefundsController {
     return { refund: toView(refund) };
   }
 
-  @Post(REFUND_ROUTES.fail(':refundId'))
+  @Post(routePattern(REFUND_ROUTES.fail, 'refundId'))
   async fail(
     @Req() request: FastifyRequest,
     @Param('refundId') refundId: string,

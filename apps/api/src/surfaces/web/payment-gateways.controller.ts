@@ -4,6 +4,7 @@ import {
   API_PREFIX,
   PAYMENT_GATEWAY_ROUTES,
   paymentGatewayConfigSchema,
+  routePattern,
   setPaymentGatewayStatusRequestSchema,
   updatePaymentGatewayRequestSchema,
   type PaymentGatewayListResponse,
@@ -52,7 +53,7 @@ export class PaymentGatewaysController {
     return { gateways: gateways.map((gateway) => toView(gateway, currency)) };
   }
 
-  @Post(PAYMENT_GATEWAY_ROUTES.update(':provider'))
+  @Post(routePattern(PAYMENT_GATEWAY_ROUTES.update, 'provider'))
   async update(
     @Req() request: FastifyRequest,
     @Param('provider') provider: string,
@@ -86,7 +87,7 @@ export class PaymentGatewaysController {
     return { gateway: toView(gateway, await this.container.paymentGateways.currency(scope)) };
   }
 
-  @Post(PAYMENT_GATEWAY_ROUTES.status(':provider'))
+  @Post(routePattern(PAYMENT_GATEWAY_ROUTES.status, 'provider'))
   async setStatus(
     @Req() request: FastifyRequest,
     @Param('provider') provider: string,

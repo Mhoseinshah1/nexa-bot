@@ -100,6 +100,57 @@ import {
 
 export const API_PREFIX = '/api/admin/v1';
 
+/**
+ * The SERVER pattern for a route whose client builder URL-encodes its argument.
+ *
+ * ## The defect this exists to make unrepeatable
+ *
+ * Every route builder here calls `encodeURIComponent`, which is correct and must stay:
+ * a real account id, a provider name or a payment reference has to survive a slash or a
+ * space. But a controller that reused a builder to DECLARE its route —
+ * `@Post(PAYMENT_GATEWAY_ROUTES.update(':provider'))` — got `%3Aprovider`, a literal
+ * path segment. Nest then registered `/payment-gateways/%3Aprovider`, the real URL
+ * matched nothing, and the operator was told `Cannot POST
+ * /api/admin/v1/payment-gateways/MANUAL_TRANSFER`.
+ *
+ * Nine routes were registered that way and none of them worked. It reached a real
+ * staging server because every test either called the service directly or stubbed
+ * `fetch` — neither of which touches Nest's route table. `route-registration.test.ts`
+ * is the test that does.
+ *
+ * ## Why derive rather than write the pattern out
+ *
+ * A hand-written `'payment-gateways/:provider'` beside a builder that produces
+ * `/payment-gateways/${id}` is two statements of one path, and the next rename moves
+ * one of them. This calls the SAME builder with a token `encodeURIComponent` leaves
+ * untouched, then substitutes the parameter — so the pattern cannot drift from the URL
+ * the client requests, because it is made of it.
+ *
+ * ## It fails at boot rather than quietly
+ *
+ * If a builder ever transforms its argument beyond encoding, the token will not appear
+ * in the output and this THROWS. A decorator runs at module load, so that is a process
+ * that refuses to start — which is the failure an operator can act on, unlike a route
+ * that silently is not there.
+ */
+export function routePattern(build: (value: string) => string, param: string): string {
+  /*
+   * Unreserved characters only (`A-Z a-z 0-9 - _ . ! ~ * ' ( )`), so
+   * `encodeURIComponent` returns it unchanged. Distinctive enough that it cannot
+   * collide with a real segment of a path in this file.
+   */
+  const token = 'nexaRoutePatternParam';
+  const built = build(token);
+  if (!built.includes(token)) {
+    throw new Error(
+      `routePattern: the builder for ':${param}' did not pass its argument through ` +
+        `verbatim (got ${built}). A builder that transforms its argument cannot be ` +
+        'reused to declare a server route.',
+    );
+  }
+  return built.replace(token, `:${param}`);
+}
+
 export const dependencyStatusSchema = z.object({
   name: z.string(),
   status: z.enum(['up', 'down']),
