@@ -761,6 +761,16 @@ export class PaymentService {
       denial,
       async (tx) => {
         await this.assertScopeActive(scope, tx);
+        /*
+         * The customer row FIRST, for the reason `requestWalletTopup` gives: an
+         * administrator's block committing between an unlocked status read and the
+         * insert would issue a live transfer reference to an account that is BLOCKED.
+         * Taken before the order, in the same order `settleFromWallet` takes them, so the
+         * two issuing paths cannot deadlock against each other.
+         */
+        if (!(await this.deps.wallet.lockCustomer(scope, customerId, tx))) {
+          throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
+        }
         await this.assertCustomerMayPay(scope, customerId, tx);
         const order = await this.orderAwaitingPayment(
           scope,
@@ -1111,6 +1121,32 @@ export class PaymentService {
       denial,
       async (tx) => {
         await this.assertScopeActive(scope, tx);
+        /*
+         * The customer row, taken FOR UPDATE — and taken FIRST, before the status is
+         * read, before the presets and the route are consulted, before the open top-up
+         * is looked for. Everything that decides whether and what to issue happens inside
+         * this window.
+         *
+         * Two races end here. An administrator's block that commits between an unlocked
+         * status read and the insert would otherwise leave a live pending payment, and
+         * a live destination, on an account that is now BLOCKED; with the lock, the
+         * block waits for this transaction or precedes it, and either order is
+         * deterministic. And two callbacks carrying different idempotency keys — a
+         * double tap, or the same customer in two Telegram clients — would otherwise
+         * both read `findOpenTopup` as null and both insert: two live references for one
+         * intended transfer, each independently confirmable, one bank transfer credited
+         * twice. The store has nothing to replay because the keys differ.
+         *
+         * The same serialisation point the wallet settlement path takes, and for the
+         * same reason it gives: the ledger is append-only and gives two writers nothing
+         * to contend on, so the customer row is where they meet.
+         * `payments_open_topup_key` is the database-level backstop for a path that
+         * forgets this; the lock is what makes the ordinary racing pair serialise
+         * quietly instead of one of them meeting a raw 23505 the webhook would swallow.
+         */
+        if (!(await this.deps.wallet.lockCustomer(scope, customerId, tx))) {
+          throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
+        }
         await this.assertCustomerMayPay(scope, customerId, tx);
 
         const amount = await this.offeredTopup(scope, intent.amountMinor, tx);
@@ -1626,12 +1662,31 @@ export class PaymentService {
 
     const moved = await this.deps.repository.confirm(scope, payment.id, confirmation, now, tx);
     if (!moved) {
-      // Another confirmation committed first. Report the row as it now stands, exactly
-      // as `confirmAndSettle` does: the conditional UPDATE made the race safe and this
-      // is only how the winner's result reaches the loser.
+      /*
+       * Somebody else moved the row out of PENDING first — and WHICH way decides whether
+       * this is a success.
+       *
+       * `confirm` and `resolve` both take the row from PENDING, so the racer is either
+       * another confirmation or a rejection, a cancellation or the expiry sweep. Reading
+       * the row back and returning it unconditionally reported all four as this
+       * confirmation's outcome: the Web Admin showed its confirmation toast and the
+       * Telegram admin path replied "approved" over a payment now FAILED or EXPIRED,
+       * with no wallet credit written and nothing to tell the operator so.
+       *
+       * Only a CONFIRMED row is this command's result, and returning it is the idempotent
+       * answer the losing duplicate is owed. Anything else is the rejection path's own
+       * answer, and it is stated with the rejection path's own code.
+       */
       const current = await this.deps.repository.findById(scope, payment.id, tx);
       if (current === null) {
         throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
+      }
+      if (current.state !== 'CONFIRMED') {
+        throw errors.conflict(
+          COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID,
+          'This payment was already resolved another way and cannot be confirmed.',
+          { state: current.state },
+        );
       }
       return current;
     }
@@ -2384,15 +2439,24 @@ export class PaymentService {
     const moved = await this.deps.repository.confirm(scope, payment.id, confirmation, now, tx);
     if (!moved) {
       /*
-       * Another confirmation of this payment committed first.
+       * Somebody else moved the row out of PENDING first, and `confirmAndCredit` states
+       * the rule this shares: WHICH way decides whether this is a success.
        *
-       * Not an error to the caller and not a second settlement either: the row is
-       * re-read and returned as it now stands. The conditional UPDATE is what made the
-       * race safe; this branch is only how the winner's result is reported to the loser.
+       * Another confirmation is the idempotent case and its row is returned. A rejection,
+       * a cancellation or the expiry sweep is not — and reporting one of those as a
+       * settlement is worse here than on the top-up path, because the reply also names an
+       * order the operator is then told is paid for.
        */
       const current = await this.deps.repository.findById(scope, payment.id, tx);
       if (current === null) {
         throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
+      }
+      if (current.state !== 'CONFIRMED') {
+        throw errors.conflict(
+          COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID,
+          'This payment was already resolved another way and cannot be confirmed.',
+          { state: current.state },
+        );
       }
       const settled = await this.deps.orders.findById(scope, order.id, tx);
       return { payment: current, order: settled ?? order };

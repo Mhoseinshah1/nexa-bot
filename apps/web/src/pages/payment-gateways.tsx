@@ -110,27 +110,50 @@ function counted(value: string): number {
 }
 
 /**
- * A minor-unit amount as a decimal STRING, never a number.
+ * A minor-unit amount as a decimal STRING, never a number — or `null` when what was
+ * typed is not one.
  *
- * The browser must not compute it: JSON has no bigint and a `number` is the float the
- * money model refuses, silently, above 2^53. Non-digits collapse to `'0'`, which this
- * form reads as "no bound" rather than as an error, because the server's own schema is
- * what refuses a genuinely contradictory window.
+ * The browser must not COMPUTE it: JSON has no bigint and a `number` is the float the
+ * money model refuses, silently, above 2^53.
+ *
+ * It must not SILENTLY CORRECT it either, which is what this used to do. Deleting every
+ * non-digit turned `-100` into a positive `100` and `1e6` into `16`, then submitted the
+ * result as though the operator had typed it. The server saw a valid number and had
+ * nothing to report. These two fields decide which customer payments a route accepts, so
+ * a stored bound that differs from the one on screen is the write-only-setting failure
+ * this codebase is organised against, with money attached.
+ *
+ * Grouping separators and Persian or Arabic-Indic digits ARE accepted, because those are
+ * ways of writing the same number and an operator typing `۱٬۰۰۰٬۰۰۰` means exactly what
+ * the digits say. A sign, a decimal point, an exponent or any other character is not a
+ * formatting variant of a whole number of minor units, so it is refused rather than
+ * reinterpreted, and the caller reports it against the field.
+ *
+ * Empty still means "no bound" and travels as `'0'`, unchanged.
  */
-function minorOf(value: string): string {
-  const digits = value.trim().replace(/[^0-9]/gu, '');
-  return digits === '' ? '0' : digits.replace(/^0+(?=\d)/u, '');
+const GROUPING = /[\s,\u066C\u2009\u202F']/gu;
+
+export function minorOf(value: string): string | null {
+  const latin = value
+    .trim()
+    .replace(GROUPING, '')
+    .replace(/[\u06F0-\u06F9]/gu, (d) => String(d.charCodeAt(0) - 0x06f0))
+    .replace(/[\u0660-\u0669]/gu, (d) => String(d.charCodeAt(0) - 0x0660));
+  if (latin === '') return '0';
+  if (!/^[0-9]+$/u.test(latin)) return null;
+  return latin.replace(/^0+(?=\d)/u, '');
 }
 
 /**
  * `mayEdit` is passed, never derived from `denied`.
  *
  * The rule the Codex review of PR #34 established on the accounts screen, applied here
- * from the start: the nav admits either `payments.gateways.view` or
- * `payments.gateways.edit`, the service authorizes every write with `edit` alone, so
- * deriving the page from `view` would hand the seeded view-only roles (operator,
- * observer) every control and teach them about the refusal by pressing one. Drawing a
- * control nobody may use is `UNK-ADM-001` from the other end.
+ * from the start: reaching this page takes `payments.gateways.view` and writing takes
+ * `payments.gateways.edit`, which the service charges on its own. So the two keys are
+ * genuinely different questions, and deriving the page from `denied` would hand the
+ * seeded view-only roles (operator, observer) every control and teach them about the
+ * refusal by pressing one. Drawing a control nobody may use is `UNK-ADM-001` from the
+ * other end.
  */
 export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayEdit: boolean }) {
   const queries = useQueryClient();
@@ -161,12 +184,22 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
   const save = useMutation({
     mutationFn: () => {
       if (editing === null) throw new Error('nothing is being edited');
+      /*
+       * Refused here rather than rewritten. `minorOf` returns null for anything that is
+       * not a whole number of minor units, and submitting a corrected value the operator
+       * did not type is the failure it documents.
+       */
+      const min = minorOf(form.minAmountMinor);
+      const max = minorOf(form.maxAmountMinor);
+      if (min === null || max === null) {
+        throw new Error(t('web.payment_gateway_amount_invalid'));
+      }
       const body = {
         provider: editing,
         displayName: form.displayName.trim() === '' ? null : form.displayName.trim(),
         instructions: form.instructions.trim() === '' ? null : form.instructions.trim(),
-        minAmountMinor: minorOf(form.minAmountMinor),
-        maxAmountMinor: minorOf(form.maxAmountMinor),
+        minAmountMinor: min,
+        maxAmountMinor: max,
         eligibility: {
           activateAfterPayments: counted(form.activateAfterPayments),
           deactivateAfterPayments: counted(form.deactivateAfterPayments),

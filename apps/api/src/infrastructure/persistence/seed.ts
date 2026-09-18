@@ -197,6 +197,9 @@ export async function seed(db: Database, cipher: SecretCipher): Promise<void> {
           tenantId,
           provider,
           status: 'ACTIVE' as const,
+          // The seed writes no `sales.currency`, so the registry default is what these
+          // bounds mean — the same answer 0078 gives an upgraded tenant with no row.
+          boundsCurrency: 'IRT' as const,
         })),
       ),
     )

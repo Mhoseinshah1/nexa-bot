@@ -31,7 +31,11 @@ import {
   type ScopeContext,
   type UnitOfWork,
   type ManagementAdminEventCode,
+  type IdempotencyNamespace,
+  type IdempotencyStore,
 } from '@nexa/contracts';
+import { rememberOnce } from '../../idempotency/application/remember-once.js';
+import { hashRequest } from '../../idempotency/infrastructure/drizzle-idempotency-store.js';
 import {
   denialEventRecorded,
   type PermissionGuard,
@@ -106,6 +110,12 @@ export class AdminManagementService {
     private readonly clock: Clock,
     private readonly ids: IdGenerator,
     private readonly throttle: CredentialThrottle,
+    /**
+     * For a caller whose command can be REDELIVERED — the Telegram webhook — and that
+     * therefore names an idempotency key. The Web Admin names none; its retries are a
+     * person pressing a button twice, which the locked delta already answers.
+     */
+    private readonly idempotency: IdempotencyStore,
   ) {}
 
   async list(
@@ -469,6 +479,15 @@ export class AdminManagementService {
     actor: ActorContext,
     targetId: AdminId,
     input: unknown,
+    /**
+     * Present when the command can be redelivered. `/role alice support` from Telegram
+     * used to discard the update's key: if it committed and its reply was lost, a Web
+     * Admin then changed Alice to `finance`, and Telegram redelivered the update, the
+     * old command ran AGAIN and put `support` back — a second durable effect from one
+     * update, silently undoing somebody else's decision. With the key, the redelivery
+     * is answered from the store with the first run's outcome and writes nothing.
+     */
+    replay?: { readonly namespace: IdempotencyNamespace; readonly idempotencyKey: string },
   ): Promise<{ admin: Admin; roleKeys: string[] }> {
     // A cheap rejection, NOT the authorization — see setStatus.
     await this.assertMayAttempt(scope, actor, 'admins.edit', {
@@ -481,6 +500,25 @@ export class AdminManagementService {
     assertNotSelf(adminIdOf(actor), targetId);
 
     const next = [...new Set(command.roleKeys)].sort();
+
+    /*
+     * The replay lookup, AFTER the cheap authorization above, for the reason every
+     * replaying service here gives: a replay returns a row, and an unauthorized caller
+     * must not learn one exists. The hash binds the key to what was asked, so the same
+     * key with different roles is refused as a payload mismatch rather than answered.
+     */
+    const requestHash = hashRequest({ targetId, roleKeys: next, reason: command.reason });
+    if (replay !== undefined) {
+      const found = await this.idempotency.find<{ readonly roleKeys: string[] }>(
+        scope,
+        replay.namespace,
+        replay.idempotencyKey,
+        requestHash,
+      );
+      if (found !== null) {
+        return { admin: await this.requireAdmin(scope, targetId), roleKeys: found.result.roleKeys };
+      }
+    }
 
     // EVERY authoritative read, decision and write happens under the tenant
     // lock, in this transaction.
@@ -548,8 +586,10 @@ export class AdminManagementService {
         }
 
         // Nothing to do. Returning early avoids an audit row and an event
-        // claiming a change that did not happen.
+        // claiming a change that did not happen. Remembered all the same, so a
+        // redelivery of THIS command is answered from the store too.
         if (delta.added.length === 0 && delta.removed.length === 0) {
+          await this.rememberRoles(scope, replay, requestHash, current, tx);
           return { admin: target, roleKeys: current };
         }
 
@@ -587,6 +627,9 @@ export class AdminManagementService {
           aggregateId: target.id,
           payload: { added: delta.added, removed: delta.removed },
         });
+        // In the SAME transaction as the write, so a crash between them cannot leave a
+        // change with no record that would let a redelivery repeat it.
+        await this.rememberRoles(scope, replay, requestHash, next, tx);
         return { admin: target, roleKeys: next };
       },
     );
@@ -1178,6 +1221,27 @@ export class AdminManagementService {
     context: Record<string, unknown>,
   ): Promise<void> {
     await this.opsLog.record(scope, { code, severity: 'INFO', message, context }, tx);
+  }
+
+  /** The replay record for `setRoles`, written only when the caller named a key. */
+  private async rememberRoles(
+    scope: ScopeContext,
+    replay:
+      { readonly namespace: IdempotencyNamespace; readonly idempotencyKey: string } | undefined,
+    requestHash: string,
+    roleKeys: string[],
+    tx: TransactionScope,
+  ): Promise<void> {
+    if (replay === undefined) return;
+    await rememberOnce(
+      this.idempotency,
+      scope,
+      replay.namespace,
+      replay.idempotencyKey,
+      requestHash,
+      { roleKeys },
+      tx,
+    );
   }
 
   /**

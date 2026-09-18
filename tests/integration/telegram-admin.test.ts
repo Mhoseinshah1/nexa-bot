@@ -589,6 +589,40 @@ describe('the Telegram management panel', () => {
   // Helpers
   // -------------------------------------------------------------------------
 
+  it('answers a redelivered /role command from the store instead of running it again', async () => {
+    const target = await createAdmin(ctx.container, tenantA, {
+      username: 'alice-tg',
+      roleKeys: ['support'],
+    });
+    const command = {
+      username: 'alice-tg',
+      roleKeys: ['receipt_reviewer'],
+      reason: 'Roles set from the Telegram management panel.',
+      idempotencyKey: 'update-77',
+    };
+
+    const first = await ctx.container.telegramAdmins.setRoles(tenantA, ownerA, command);
+    expect(first.roleKeys).toEqual(['receipt_reviewer']);
+
+    // A decision taken in the Web Admin in between.
+    await ctx.container.adminManagement.setRoles(tenantA, ownerA, target.id as AdminId, {
+      roleKeys: ['finance'],
+      reason: 'changed on the web',
+    });
+
+    /*
+     * Telegram redelivers the ORIGINAL update — same key, same command. It used to run
+     * again and put `receipt_reviewer` back, silently undoing the web decision: a
+     * second durable effect from one update. Now it is answered with the first run's
+     * outcome and writes nothing.
+     */
+    const replay = await ctx.container.telegramAdmins.setRoles(tenantA, ownerA, command);
+    expect(replay.roleKeys).toEqual(['receipt_reviewer']);
+    expect(await ctx.container.admins.roleKeysFor(tenantA, target.id as AdminId)).toEqual([
+      'finance',
+    ]);
+  });
+
   async function boundReviewer(username: string, telegramUserId: string): Promise<ActorContext> {
     const admin = await createAdmin(ctx.container, tenantA, {
       username,

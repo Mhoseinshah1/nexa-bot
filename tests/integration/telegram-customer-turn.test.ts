@@ -1,7 +1,14 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { MAIN_MENU_BUTTONS, TELEGRAM_SECRET_TOKEN_HEADER } from '@nexa/contracts';
+import {
+  MAIN_MENU_BUTTONS,
+  TELEGRAM_SECRET_TOKEN_HEADER,
+  type ActorContext,
+  type AdminId,
+  type CorrelationId,
+  type UserId,
+} from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import {
@@ -9,7 +16,14 @@ import {
   CUSTOMER_SEND_OK_CODE,
 } from '../../apps/api/src/modules/commerce/messaging/infrastructure/telegram-customer-messenger';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
-import { migrateOnce, resetDatabase, tenantA, testConfig } from './harness';
+import {
+  adminActorFor,
+  createAdmin,
+  migrateOnce,
+  resetDatabase,
+  tenantA,
+  testConfig,
+} from './harness';
 
 /**
  * The customer-facing Telegram turn, end to end.
@@ -110,6 +124,23 @@ describe('the customer Telegram turn', () => {
   });
 
   let updateId = 1000;
+  const systemActor = (correlationId: string): ActorContext => ({
+    type: 'SYSTEM_JOB',
+    id: null,
+    label: 'telegram-update:test',
+    surface: 'TELEGRAM',
+    correlationId: correlationId as CorrelationId,
+  });
+
+  const customerIdOf = async (telegramUserId: string): Promise<UserId> => {
+    const rows = await api.container.database.db.execute<{ id: string }>(
+      sql`SELECT id FROM customers WHERE telegram_user_id = ${telegramUserId}`,
+    );
+    const id = rows.rows[0]?.id;
+    if (id === undefined) throw new Error(`no customer for ${telegramUserId}`);
+    return id as UserId;
+  };
+
   const start = (
     options: {
       bot?: string;
@@ -230,6 +261,151 @@ describe('the customer Telegram turn', () => {
     // Exactly the four this release can perform. A Phase 7 button here would be a
     // promise the product cannot keep.
     expect(MAIN_MENU_BUTTONS).toHaveLength(4);
+  });
+
+  it('still opens the management panel for a BLOCKED customer who is an administrator', async () => {
+    /*
+     * Customer standing and administrator standing are independent — the same Telegram
+     * account is both. The blanket `bot.blocked` used to answer BEFORE the admin intents
+     * were routed, so blocking somebody's purchases silently revoked their management
+     * panel, and the only way back was to unblock the customer, which is not what the
+     * operator who pressed Block decided.
+     */
+    await start();
+    await api.container.database.db.execute(
+      sql`UPDATE customers SET status = 'BLOCKED', blocked_at = now()
+          WHERE telegram_user_id = '5551234567'`,
+    );
+    const owner = await createAdmin(api.container, tenantA, {
+      username: 'turn-owner',
+      roleKeys: ['owner'],
+    });
+    const reviewer = await createAdmin(api.container, tenantA, {
+      username: 'turn-reviewer',
+      roleKeys: ['receipt_reviewer'],
+    });
+    await api.container.adminManagement.setTelegramBinding(
+      tenantA,
+      adminActorFor(owner),
+      reviewer.id as AdminId,
+      { telegramUserId: '5551234567', reason: 'test binding' },
+    );
+
+    sent = [];
+    await start({ text: '/admin' });
+    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.admin.panel']);
+
+    // Blocking is still enforced for everything a CUSTOMER can do.
+    sent = [];
+    await start();
+    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.blocked']);
+  });
+
+  it('answers a BLOCKED customer who is NOT an administrator with bot.blocked on /admin', async () => {
+    // The fallback half of the rule above: an admin intent from a blocked account that
+    // resolves to no administrator is `bot.blocked`, not the unsupported-input reply —
+    // nothing about what exists is revealed by being blocked.
+    await start();
+    await api.container.database.db.execute(
+      sql`UPDATE customers SET status = 'BLOCKED', blocked_at = now()
+          WHERE telegram_user_id = '5551234567'`,
+    );
+    sent = [];
+    await start({ text: '/admin' });
+    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.blocked']);
+  });
+
+  it('draws the receipt decision buttons only for an administrator who may decide', async () => {
+    /*
+     * `receipts.view` opens the review screen; `receipts.review` is what a decision
+     * charges. The seeded observer holds the first without the second, and used to be
+     * drawn approve and reject anyway — two buttons whose every tap failed the guard
+     * with the generic refusal. The buttons are now a promise the tap can keep.
+     */
+    await start();
+    const customerId = await customerIdOf('5551234567');
+    await api.container.database.db.execute(sql`
+      INSERT INTO setting_values (id, tenant_id, setting_key, value, version, updated_at)
+      VALUES (${api.container.ids.uuid()}, ${tenantA.tenantId}, 'wallet.topup.presets',
+              ${JSON.stringify([{ amountMinor: '500000', currency: 'IRT' }])}::jsonb, 1, now())
+      ON CONFLICT (tenant_id, setting_key) DO UPDATE SET value = EXCLUDED.value`);
+    const { payment } = await api.container.payments.requestWalletTopup(
+      tenantA,
+      systemActor('buttons-topup'),
+      customerId,
+      { idempotencyKey: 'buttons-topup', amountMinor: 500_000n },
+    );
+
+    const owner = await createAdmin(api.container, tenantA, {
+      username: 'buttons-owner',
+      roleKeys: ['owner'],
+    });
+    const observer = await createAdmin(api.container, tenantA, {
+      username: 'buttons-observer',
+      roleKeys: ['observer'],
+    });
+    const reviewer = await createAdmin(api.container, tenantA, {
+      username: 'buttons-reviewer',
+      roleKeys: ['receipt_reviewer'],
+    });
+    for (const [admin, telegramUserId] of [
+      [observer, '5550000001'],
+      [reviewer, '5550000002'],
+    ] as const) {
+      await api.container.adminManagement.setTelegramBinding(
+        tenantA,
+        adminActorFor(owner),
+        admin.id as AdminId,
+        { telegramUserId, reason: 'test binding' },
+      );
+    }
+
+    const tap = (from: number, data: string) => {
+      const id = (updateId += 1);
+      return inject({
+        method: 'POST',
+        url: `/telegram/webhook/${BOT_A}`,
+        headers: { [TELEGRAM_SECRET_TOKEN_HEADER]: WEBHOOK_SECRET },
+        payload: {
+          update_id: id,
+          callback_query: {
+            id: `cbq-${id}`,
+            from: { id: from, is_bot: false, first_name: 'Admin' },
+            chat_instance: 'ci',
+            message: {
+              message_id: id,
+              date: 0,
+              chat: { id: from, type: 'private' },
+              from: { id: 999999, is_bot: true, first_name: 'Nexa' },
+              text: 'x',
+            },
+            data,
+          },
+        },
+      });
+    };
+    // A callback turn also answers the callback query; the reply is the message send.
+    const lastMessage = () => sent.filter((one) => one.url.includes('/sendMessage')).at(-1);
+    const decisionButtons = () => {
+      const markup = lastMessage()?.body['reply_markup'] as
+        { inline_keyboard?: { callback_data: string }[][] } | undefined;
+      return (markup?.inline_keyboard ?? [])
+        .flat()
+        .map((b) => b.callback_data)
+        .filter((d) => d.startsWith('D:') || d.startsWith('E:'));
+    };
+
+    // Both reach the receipt screen — asserted, so the observer case cannot pass by
+    // being answered with something else that also happens to carry no buttons.
+    sent = [];
+    await tap(5550000001, `C:${payment.id}`);
+    expect(String(lastMessage()?.body['text'])).toContain(payment.reference);
+    expect(decisionButtons(), 'the observer was drawn decision buttons').toEqual([]);
+
+    sent = [];
+    await tap(5550000002, `C:${payment.id}`);
+    expect(String(lastMessage()?.body['text'])).toContain(payment.reference);
+    expect(decisionButtons().sort()).toEqual([`D:${payment.id}`, `E:${payment.id}`].sort());
   });
 
   it('draws no menu for a BLOCKED customer', async () => {

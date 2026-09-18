@@ -1942,3 +1942,125 @@ Recorded as an intentional safety difference, not as parity still owed. The prod
 question — whether the owner wants any bounded form of it — stays open in the Phase 5
 table above, with the bounds it would need: an explicit cap, a `SYSTEM_JOB` audit actor,
 and an alert.
+
+## OQ-5H-01 — the "either key" navigation shape is a dead end wherever it appears
+
+Four navigation entries admitted either a module's `view` key or its `edit` key —
+`/payment-accounts`, `/payment-gateways`, `/panels` and `/products` — on the stated
+ground that the page "serves a custom-role editor correctly" without the view key.
+
+It does not. In all four the route passes `denied={!may('<module>.view')}`, which disables
+the query that supplies the rows, and every edit form opens from a row. The server agrees:
+each module's `list` charges the view key. So a custom role holding `edit` without `view`
+saw a link, followed it, and arrived at an empty page with no way to reach the form. No
+seeded role is affected — `finance` holds both keys — so this reaches only an installation
+that built such a role, which the comments show the authors expected.
+
+The two payment entries are corrected in the hardening pass that found this: they now
+require the view key, which is what their pages and their endpoints actually need.
+
+`/panels` and `/products` are older than the payment batch and are deliberately NOT
+changed there, to keep that pull request inside the batch it reviews. The open question is
+which way they should go, and it is the same question for all four:
+
+- **Narrow the link** to the view key, as payments now does. Simple, honest, and an
+  edit-only role loses a link that never worked.
+- **Widen the read** so `<module>.edit` also authorizes `list`. Closer to what the
+  comments intended, and defensible — nobody can edit a row they cannot read — but it
+  makes a HIGH-severity key imply a LOW-severity one across four modules, which is a
+  permission-model decision rather than a bug fix.
+
+Nothing is broken for any shipped role either way, so this is not urgent. It must not be
+left as it was, though: a comment asserting behaviour its own file contradicts is how a
+reader stops checking.
+
+## OQ-5H-02 — the top-up button is offered before per-customer eligibility is known
+
+`topupMenu` draws the preset buttons once it knows presets exist and an ACTIVE
+`MANUAL_TRANSFER` route with an enabled destination does too. It does not consult the
+per-customer half of the gateway decision — the activation and deactivation thresholds —
+nor the route's own amount bounds. `requestWalletTopup` does consult both, so a customer
+the route excludes, or one whose every preset falls outside the route's window, is offered
+a button and refused at the tap.
+
+The refusal is clean: `TOPUP_NOT_OFFERED` renders `bot.wallet.topup_refused`, no payment
+row is written and no money moves. So this is a truthfulness defect in a surface, not a
+financial one — but "a button nobody behind it can use is the untruthful surface this
+codebase keeps refusing" is this runtime's own comment, four hundred lines above.
+
+It is left open rather than fixed because the fix is a product decision, not a mechanical
+one, and two of the three candidates are worse than the current behaviour:
+
+- **Plumb the customer into `topupMenu`** and hide the button for an ineligible customer.
+  Truthful, and the most work: the intent currently carries no customer.
+- **Filter presets by the route's bounds.** Needs only the scope — but silently hiding a
+  preset an operator configured means the operator never learns it is unreachable, which
+  is the write-only-setting failure from the other end.
+- **Refuse to save a preset outside the route's bounds.** Tells the right person at the
+  right time, and does not survive an operator later narrowing the bounds.
+
+The disabled-route half of this was real and IS fixed, in the route-status gate that
+preceded the hardening pass: a route switched off no longer draws the button.
+
+## OQ-5H-03 — a receipt review sends its media before its decision buttons
+
+`adminReceipt` sends each stored receipt with `sendFile`, serially, and only then returns
+the message carrying the approve and reject buttons. With the permitted five receipts and
+a Telegram file endpoint that is slow rather than down, five configured timeouts accumulate
+ahead of the reply — ten seconds each by default, and up to a hundred and twenty — so the
+reviewer can be left without controls for longer than the webhook deadline, and Telegram
+may redeliver the update and repeat the media sends while they still have none.
+
+Real, but not fixed in the hardening pass, and the reason is the shape of the fix rather
+than the size of the risk. The handler returns a `PendingReply` that its caller sends after
+the commit; sending the decision message first from inside the handler means returning null
+and emitting the reply out of band, which is a change to the reply contract every Telegram
+handler shares. That is a refactor with its own regression surface, and a hardening pass
+run against a payment batch is the wrong place for it.
+
+The bounded alternatives, for whoever takes it: send the decision message first and the
+media after, or send the media concurrently rather than serially so the worst case is one
+timeout instead of five.
+
+## OQ-5H-04 — a wallet top-up cannot be refunded until the product says what that means
+
+Confirming a top-up appends a `TOPUP_RECEIPT` credit to the customer's wallet. The refund
+service derived its channel from the payment METHOD alone, so a top-up paid by bank
+transfer resolved to `EXTERNAL_MANUAL`: an operator could return the money through the
+bank while the customer kept, and could still spend, the wallet credit. One transfer, paid
+back twice. The hardening pass refuses a refund of any payment with no order —
+`REFUND_NOT_PERMITTED`, reason `TOPUP_CREDITED_TO_WALLET` — on both the read path and the
+write path.
+
+What would make a top-up refundable is a product decision, not a mechanical one. A
+truthful refund has to REVERSE the credit as well as return the money, and the credit may
+already be spent, in whole or in part. Whether a wallet may go negative is `UNK-UM-005`,
+still open, and the answer decides the design:
+
+- **Never negative.** A top-up is refundable only up to the customer's current balance, and
+  the refund debits the wallet in the same transaction that records the refund.
+- **May go negative.** The full top-up is refundable, the wallet is debited to a negative
+  balance, and the customer cannot buy until it is cleared — which needs a rule for what
+  clears it.
+- **Refuse, as now.** Top-ups are settled by the operator crediting or debiting the wallet
+  directly, with a reason, and never through the refund lane.
+
+Until one is chosen, refusing is the only outcome that cannot create money.
+
+## OQ-5H-05 — `payment_gateways.bounds_currency` stays nullable for one release
+
+Migration 0077 added the column nullable and 0078 backfilled it from each tenant's
+`sales.currency`. A third migration made it NOT NULL in the same release, and the
+expand/contract test refused it, correctly: for the length of a rolling update the
+previous release still INSERTs the zero row without the column, and NOT NULL would turn
+that insert into a failed provisioning on the replica that has not restarted yet. So this
+release only expands. A NULL means one thing — a row the previous release wrote after the
+backfill ran — and both readers treat it as that release did, relabelling the bounds with
+the installation's current currency: `offer` compares against the amount's currency and
+the Web Admin view shows the installation's.
+
+The contract step is the NEXT release: a second backfill identical to 0078, then
+`SET NOT NULL`, then the two `?? currency` fallbacks removed so the type becomes
+`SalesCurrencyCode` again. Until then a route the previous release provisioned is the one
+row `BOUND_CURRENCY_MISMATCH` still cannot reach, and it is exactly the row that has never
+been edited.

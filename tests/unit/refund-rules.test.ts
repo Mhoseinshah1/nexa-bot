@@ -174,8 +174,23 @@ describe('what each payment method refunds through', () => {
 });
 
 describe('the submitted shapes', () => {
+  /*
+   * A REAL id, because `paymentId` is parsed as one. It used to be `'p'`: the schema
+   * accepted any string, cast it to `PaymentId`, and let PostgreSQL discover the truth
+   * as `invalid input syntax for type uuid` — a 500 for a request that names nothing.
+   */
+  const PAYMENT = '0192f000-0000-7000-8000-0000000000aa';
+
+  it('refuses a payment id that is not a UUID, before the database has to', () => {
+    const base = { idempotencyKey: 'k'.repeat(12), amountMinor: '1', reason: 'دلیل کافی' };
+    expect(refundRequestSchema.safeParse({ ...base, paymentId: PAYMENT }).success).toBe(true);
+    for (const id of ['p', 'not-a-uuid', '', '../../etc/passwd', PAYMENT.replace('-7', '-4')]) {
+      expect(refundRequestSchema.safeParse({ ...base, paymentId: id }).success, id).toBe(false);
+    }
+  });
+
   it('takes an amount as a digit string and refuses a float or a sign', () => {
-    const base = { idempotencyKey: 'k'.repeat(12), paymentId: 'p', reason: 'دلیل کافی' };
+    const base = { idempotencyKey: 'k'.repeat(12), paymentId: PAYMENT, reason: 'دلیل کافی' };
     expect(refundRequestSchema.safeParse({ ...base, amountMinor: '50000' }).success).toBe(true);
     for (const amount of ['50000.5', '-50000', '5e4', '', ' 50000', '50_000']) {
       expect(refundRequestSchema.safeParse({ ...base, amountMinor: amount }).success, amount).toBe(
@@ -185,7 +200,7 @@ describe('the submitted shapes', () => {
   });
 
   it('requires a reason with content', () => {
-    const base = { idempotencyKey: 'k'.repeat(12), paymentId: 'p', amountMinor: '1' };
+    const base = { idempotencyKey: 'k'.repeat(12), paymentId: PAYMENT, amountMinor: '1' };
     expect(refundRequestSchema.safeParse({ ...base, reason: 'ab' }).success).toBe(false);
     expect(refundRequestSchema.safeParse({ ...base, reason: '   ' }).success).toBe(false);
     expect(refundRequestSchema.safeParse({ ...base, reason: 'abc' }).success).toBe(true);

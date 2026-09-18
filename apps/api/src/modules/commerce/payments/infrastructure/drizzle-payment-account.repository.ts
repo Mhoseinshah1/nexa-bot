@@ -297,7 +297,20 @@ export class DrizzlePaymentAccountRepository implements PaymentAccountRepository
         asc(paymentAccounts.createdAt),
         asc(paymentAccounts.id),
       )
-      .limit(1);
+      .limit(1)
+      /*
+       * FOR SHARE, because this row is about to be SNAPSHOTTED into a payment and sent
+       * to a customer as where to put their money. A plain read let an operator disable
+       * this account, or replace a card number they had just learned was blocked, and
+       * commit between the select and the snapshot — the payment still captured the
+       * stale values and told the customer to pay into them.
+       *
+       * SHARE rather than UPDATE: concurrent payments may all read the same default
+       * account, and only the operator's UPDATE has to wait. If it commits first, this
+       * select sees the new state — a disabled account is simply not here, a corrected
+       * card is what gets snapshotted.
+       */
+      .for('share');
     const row = rows[0];
     return row === undefined ? null : toRecord(row);
   }

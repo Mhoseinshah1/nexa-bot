@@ -935,6 +935,8 @@ export const WEB_FA = {
   'web.payment_gateway_save': 'ذخیره',
   'web.payment_gateway_cancel_edit': 'انصراف',
   'web.payment_gateway_saved': 'روش پرداخت ذخیره شد.',
+  'web.payment_gateway_amount_invalid':
+    'حداقل و حداکثر مبلغ باید عددی صحیح باشند. علامت، نقطهٔ اعشار یا حروف پذیرفته نمی‌شود.',
   'web.payment_gateway_status_done': 'وضعیت روش پرداخت تغییر کرد.',
   'web.payment_gateways_empty': 'هنوز روش پرداختی ثبت نشده است.',
   'web.payment_gateways_empty_hint':

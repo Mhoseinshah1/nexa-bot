@@ -519,6 +519,41 @@
       "when": 1789711632389,
       "tag": "0073_refunds_freeze_guard",
       "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1789711632390,
+      "tag": "0074_close_duplicate_open_topups",
+      "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1789726220012,
+      "tag": "0075_open_topup_unique",
+      "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "7",
+      "when": 1789726220013,
+      "tag": "0076_refund_reason_frozen",
+      "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1789728978465,
+      "tag": "0077_payment_gateway_bounds_currency",
+      "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1789728978466,
+      "tag": "0078_payment_gateway_bounds_currency_backfill",
+      "breakpoints": true
     }
   ]
 }

@@ -1,0 +1,2 @@
+ALTER TABLE "payment_gateways" ADD COLUMN "bounds_currency" text;--> statement-breakpoint
+ALTER TABLE "payment_gateways" ADD CONSTRAINT "payment_gateways_bounds_currency_check" CHECK (bounds_currency IS NULL OR bounds_currency IN ('IRT', 'IRR', 'USD', 'EUR', 'USDT'));

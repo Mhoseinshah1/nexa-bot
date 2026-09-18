@@ -1,13 +1,18 @@
 import { sql } from 'drizzle-orm';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   isNexaError,
+  money,
   type ActorContext,
   type BotInstanceId,
   type CorrelationId,
   type PaymentId,
   type UserId,
 } from '@nexa/contracts';
+import type { PaymentRepository } from '../../apps/api/src/modules/commerce/payments/application/ports';
+import type { TransactionScope } from '../../apps/api/src/infrastructure/persistence/unit-of-work';
+import { DrizzlePaymentRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-payment.repository';
+import { DrizzleWalletRepository } from '../../apps/api/src/modules/commerce/wallet/infrastructure/drizzle-wallet.repository';
 import {
   adminActorFor,
   createAdmin,
@@ -401,8 +406,342 @@ describe('a customer topping up their wallet', () => {
   });
 
   // -------------------------------------------------------------------------
+  // One open top-up, under a produced race
+  // -------------------------------------------------------------------------
+
+  it('hands a request that arrives mid-flight the top-up already being issued', async () => {
+    await setPresets([{ amountMinor: '500000', currency: 'IRT' }]);
+
+    /*
+     * The race is MADE. `Promise.allSettled` of two service calls does not reliably
+     * interleave — `financial-concurrency.test.ts` records the lesson, and the first
+     * draft of this test was green with the lock deleted, which is the proof.
+     *
+     * A transaction is held open having taken the customer lock and inserted a PENDING
+     * top-up, exactly as a first request does. The service is then called with a
+     * DIFFERENT idempotency key — a double tap, or the same customer in a second
+     * Telegram client — so the store has nothing to replay and the create path runs.
+     *
+     * With the lock, the racer blocks on the customer row, resumes after the commit,
+     * reads the held top-up as open, and hands it back: one reference, and the customer
+     * is told the amount they will actually be credited.
+     *
+     * Without the lock, the racer reads null (the holder is uncommitted), inserts, and
+     * blocks on `payments_open_topup_key` instead; the holder commits and the racer's
+     * insert dies with a raw 23505 — an error nothing maps, which the webhook swallows,
+     * so the customer who double-tapped gets silence. The index alone keeps the ledger
+     * honest; the lock is what keeps the customer answered.
+     */
+    const paymentRepository = new DrizzlePaymentRepository(ctx.container.database.db);
+    const walletRepository = new DrizzleWalletRepository(ctx.container.database.db);
+    const heldId = ctx.container.ids.uuid() as PaymentId;
+    const now = ctx.container.clock.now();
+
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let holding: () => void = () => undefined;
+    const locked = new Promise<void>((resolve) => {
+      holding = resolve;
+    });
+
+    const holder = ctx.container.uow.run(tenantA, async (tx) => {
+      await walletRepository.lockCustomer(tenantA, customerA, tx);
+      await paymentRepository.create(
+        tenantA,
+        {
+          id: heldId,
+          customerId: customerA,
+          orderId: null,
+          method: 'MANUAL_TRANSFER',
+          amount: money(500_000n, 'IRT'),
+          reference: 'held-open-topup',
+          expiresAt: new Date(now.getTime() + 60 * 60 * 1000),
+          now,
+        },
+        tx,
+      );
+      holding();
+      await held;
+    });
+
+    await locked;
+    const racing = topup(500_000n, 'race-topup-b').then(
+      (result) => result,
+      (error: unknown) => error,
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    release();
+    await holder;
+    const outcome = await racing;
+
+    expect(outcome, 'the racer was not handed the open top-up').toMatchObject({
+      payment: { id: heldId, state: 'PENDING' },
+    });
+    expect(await openTopupCount()).toBe(1);
+  }, 30_000);
+
+  it('hands back the SAME reference when the second request follows the first', async () => {
+    await setPresets([{ amountMinor: '500000', currency: 'IRT' }]);
+    const first = await topup(500_000n, 'serial-topup-a');
+    const second = await topup(500_000n, 'serial-topup-b');
+
+    /*
+     * The serial case, which the lock must not have changed: an open top-up is handed
+     * back rather than refused, because the customer is looking at bank details for it.
+     */
+    expect(second.payment.id).toBe(first.payment.id);
+    expect(await openTopupCount()).toBe(1);
+  }, 30_000);
+
+  // -------------------------------------------------------------------------
+  // A confirmation that lost its race is not a confirmation
+  // -------------------------------------------------------------------------
+
+  it('refuses to confirm a top-up a rejection took mid-flight', async () => {
+    await setPresets([{ amountMinor: '500000', currency: 'IRT' }]);
+    const { payment } = await topup(500_000n, 'lost-race-reject');
+
+    /*
+     * The race is MADE, not hoped for, and it has to be: a rejection committed BEFORE
+     * the call is caught by the guard `confirmManualTransfer` runs first, so a
+     * sequential test proves nothing about this branch. `financial-concurrency.test.ts`
+     * records the same lesson about `Promise.allSettled`.
+     *
+     * The real window is inside one transaction: `confirmManualTransfer` reads the
+     * payment with a plain SELECT — no `FOR UPDATE` — sees PENDING, and only then runs
+     * the conditional UPDATE. Anything that moves the row out of PENDING in between wins,
+     * and `confirm` returns false. That is an operator rejecting in Telegram while
+     * another approves in the Web Admin, or the expiry sweep landing on the same row.
+     *
+     * So the rejection is committed from inside that window, by hooking the conditional
+     * UPDATE itself. Everything before it has already run against a PENDING row.
+     */
+    const repository = (
+      ctx.container.payments as unknown as { deps: { repository: PaymentRepository } }
+    ).deps.repository;
+    const original = repository.confirm.bind(repository);
+    const hook = vi
+      .spyOn(repository, 'confirm')
+      .mockImplementation(async (...args: Parameters<PaymentRepository['confirm']>) => {
+        hook.mockRestore();
+        await ctx.container.payments.rejectManualTransfer(tenantA, ownerA, payment.id, {
+          idempotencyKey: 'lost-race-reject-reject',
+          note: 'no such transfer in the statement',
+        });
+        return original(...args);
+      });
+
+    try {
+      /*
+       * The branch used to re-read the row and return it WITHOUT checking its state, so
+       * the Web Admin showed its confirmation toast and the Telegram admin path replied
+       * "approved" over a payment that is FAILED — no wallet credit written, and nothing
+       * telling the operator so. The money is the customer's and the operator believes it
+       * has been credited.
+       */
+      await expectRefusal(
+        confirm(payment.id, 'lost-race-reject-confirm'),
+        'commerce.payment_state_invalid',
+      );
+    } finally {
+      hook.mockRestore();
+    }
+
+    expect((await paymentRow(payment.id)).state).toBe('FAILED');
+    expect(await ledgerRows()).toHaveLength(0);
+  }, 30_000);
+
+  it('still answers a genuine duplicate confirmation with the confirmed row', async () => {
+    await setPresets([{ amountMinor: '500000', currency: 'IRT' }]);
+    const { payment } = await topup(500_000n, 'dup-confirm');
+    const first = await confirm(payment.id, 'dup-confirm-a');
+
+    /*
+     * The other half, and the reason it is a separate test: a state check that refused
+     * EVERY loser would have broken the idempotent case this branch exists for. Two
+     * approvals of the same payment must produce one credit and two successful answers.
+     */
+    const second = await confirm(payment.id, 'dup-confirm-b');
+    expect(second.payment.state).toBe('CONFIRMED');
+    expect(second.payment.id).toBe(first.payment.id);
+    expect(await ledgerRows()).toHaveLength(1);
+  }, 30_000);
+
+  // -------------------------------------------------------------------------
+  // A top-up is not refundable: its money is already in the wallet
+  // -------------------------------------------------------------------------
+
+  it('refuses to refund a confirmed top-up, whose credit the customer can already spend', async () => {
+    await setPresets([{ amountMinor: '500000', currency: 'IRT' }]);
+    const { payment } = await topup(500_000n, 'refund-topup');
+    await confirm(payment.id, 'refund-topup-confirm');
+    expect(await ledgerRows()).toHaveLength(1);
+
+    /*
+     * The refund channel was derived from the payment METHOD alone, so a top-up paid by
+     * bank transfer resolved to EXTERNAL_MANUAL: an operator could return the money
+     * through the bank while the customer kept, and could still spend, the wallet credit
+     * the confirmation appended. One transfer, paid back twice.
+     */
+    await expectRefusal(
+      ctx.container.refunds.request(tenantA, ownerA, {
+        idempotencyKey: 'refund-topup-request',
+        paymentId: payment.id,
+        amountMinor: 100_000n,
+        reason: 'اشتباه واریز',
+      }),
+      'commerce.refund_not_permitted',
+    );
+    expect(await count('refunds')).toBe(0);
+    expect(await ledgerRows()).toHaveLength(1);
+  }, 30_000);
+
+  // -------------------------------------------------------------------------
+  // Three more races, each made with a held transaction
+  // -------------------------------------------------------------------------
+
+  it('refuses a top-up when the customer is blocked mid-flight', async () => {
+    await setPresets([{ amountMinor: '500000', currency: 'IRT' }]);
+    const walletRepository = new DrizzleWalletRepository(ctx.container.database.db);
+
+    /*
+     * `assertCustomerMayPay` used to be an ordinary read taken BEFORE the customer lock.
+     * A block committing between that read and the insert left a live pending payment,
+     * and a live destination, on an account that was BLOCKED. The lock now comes first,
+     * so the block waits for this transaction or precedes it, and either order is
+     * deterministic. Here it precedes: the holder takes the row, blocks the customer,
+     * and the racer must read that state rather than the one it saw a moment earlier.
+     */
+    const { holder, release, locked } = hold(async (tx) => {
+      await walletRepository.lockCustomer(tenantA, customerA, tx);
+      await (tx as TransactionScope).tx.execute(
+        sql`UPDATE customers SET status = 'BLOCKED', blocked_at = now() WHERE id = ${customerA}`,
+      );
+    });
+    await locked;
+    const racing = topup(500_000n, 'race-blocked').then(
+      () => 'issued' as const,
+      (error: unknown) => (isNexaError(error) ? error.code : `unexpected: ${String(error)}`),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    release();
+    await holder;
+
+    expect(await racing).toBe('commerce.customer_blocked');
+    expect(await openTopupCount()).toBe(0);
+  }, 30_000);
+
+  it('refuses a top-up when the only destination is disabled mid-flight', async () => {
+    await setPresets([{ amountMinor: '500000', currency: 'IRT' }]);
+
+    /*
+     * `selectDestination` was a plain read. An operator disabling the account, or
+     * replacing a card number they had just learned was blocked, could commit between
+     * the select and the snapshot — and the payment still captured the stale values and
+     * told the customer to pay into them. FOR SHARE makes the operator's UPDATE wait or
+     * be seen; here it is seen, and there is no destination left to issue against.
+     */
+    const { holder, release, locked } = hold(async (tx) => {
+      // The seeded account is the DEFAULT, and `payment_accounts_default_enabled_check`
+      // refuses a default that is disabled — so the operator's action is both at once,
+      // which is what the Payment Accounts screen does when the default is switched off.
+      await (tx as TransactionScope).tx.execute(
+        sql`UPDATE payment_accounts SET enabled = false, is_default = false
+            WHERE tenant_id = ${tenantA.tenantId}`,
+      );
+    });
+    await locked;
+    const racing = topup(500_000n, 'race-destination').then(
+      () => 'issued' as const,
+      (error: unknown) => (isNexaError(error) ? error.code : `unexpected: ${String(error)}`),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    release();
+    await holder;
+
+    // The top-up path's own name for "no destination" — the order path calls it
+    // `PAYMENT_DESTINATION_UNCONFIGURED`; the refusal is the same fact.
+    expect(await racing).toBe('commerce.topup_unavailable');
+    expect(await openTopupCount()).toBe(0);
+  }, 30_000);
+
+  it('refuses a top-up when the route is switched off mid-flight', async () => {
+    await setPresets([{ amountMinor: '500000', currency: 'IRT' }]);
+
+    /*
+     * `offer` read the routes with a plain SELECT even inside the issuing transaction.
+     * An operator switching the route off and committing between that read and the
+     * insert handed the customer a new live transfer reference for a route that was
+     * disabled. Inside a transaction the read now takes FOR SHARE, so `setStatus` waits
+     * or is seen.
+     */
+    const { holder, release, locked } = hold(async (tx) => {
+      await (tx as TransactionScope).tx.execute(
+        sql`UPDATE payment_gateways SET status = 'DISABLED'
+            WHERE tenant_id = ${tenantA.tenantId} AND provider = 'MANUAL_TRANSFER'`,
+      );
+    });
+    await locked;
+    const racing = topup(500_000n, 'race-route').then(
+      () => 'issued' as const,
+      (error: unknown) => (isNexaError(error) ? error.code : `unexpected: ${String(error)}`),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    release();
+    await holder;
+
+    const outcome = await racing;
+    expect(
+      outcome === 'commerce.payment_gateway_unavailable' ||
+        outcome === 'commerce.topup_not_offered',
+      outcome,
+    ).toBe(true);
+    expect(await openTopupCount()).toBe(0);
+  }, 30_000);
+
+  // -------------------------------------------------------------------------
   // Helpers
   // -------------------------------------------------------------------------
+
+  /**
+   * A transaction held open around `work`, for making a race rather than hoping for
+   * one. `locked` resolves once `work` has run; `release` lets the holder commit.
+   */
+  function hold(work: (tx: unknown) => Promise<void>) {
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let holding: () => void = () => undefined;
+    const locked = new Promise<void>((resolve) => {
+      holding = resolve;
+    });
+    const holder = ctx.container.uow.run(tenantA, async (tx) => {
+      try {
+        await work(tx);
+      } catch (error) {
+        // A holder that cannot set the race up must fail the test, not hang it.
+        holding();
+        throw error;
+      }
+      holding();
+      await held;
+    });
+    return { holder, release: () => release(), locked };
+  }
+
+  async function openTopupCount(): Promise<number> {
+    const rows = await ctx.container.database.withClient((client) =>
+      client.query(
+        `SELECT count(*)::int AS n FROM payments
+          WHERE state = 'PENDING' AND order_id IS NULL AND method = 'MANUAL_TRANSFER'`,
+      ),
+    );
+    return (rows.rows[0] as { n: number }).n;
+  }
 
   const topup = (amountMinor: bigint, key: string) =>
     ctx.container.payments.requestWalletTopup(tenantA, systemActor(key), customerA, {

@@ -1,5 +1,6 @@
 import type {
   PaymentGatewayConfig,
+  SalesCurrencyCode,
   PaymentGatewayProvider,
   PaymentGatewayStatus,
   TenantContext,
@@ -25,6 +26,13 @@ export interface PaymentGatewayRecord {
   readonly instructions: string | null;
   readonly minAmountMinor: bigint;
   readonly maxAmountMinor: bigint;
+  /**
+   * The denomination the bounds were written in. Compared, never converted. NULL for a
+   * row the previous release wrote after the backfill ran — `schema.ts` says why the
+   * column stays nullable this release — and a reader treats that as the installation's
+   * current currency, the one that release meant.
+   */
+  readonly boundsCurrency: SalesCurrencyCode | null;
   readonly activateAfterPayments: number;
   readonly deactivateAfterPayments: number;
   readonly activateAfterAccountDays: number;
@@ -57,13 +65,19 @@ export interface PaymentGatewayRepository {
    * path. Returns how many rows it actually wrote, because "nothing to do" and "created
    * the tenant's first route" are different facts to a caller that logs.
    */
-  ensureDefaults(scope: TenantContext, now: Date, tx?: unknown): Promise<number>;
+  ensureDefaults(
+    scope: TenantContext,
+    currency: SalesCurrencyCode,
+    now: Date,
+    tx?: unknown,
+  ): Promise<number>;
 
   /** Replaces one route's configuration. Null when there is no such route. */
   update(
     scope: TenantContext,
     provider: PaymentGatewayProvider,
     config: PaymentGatewayConfig,
+    currency: SalesCurrencyCode,
     now: Date,
     tx: unknown,
   ): Promise<PaymentGatewayRecord | null>;

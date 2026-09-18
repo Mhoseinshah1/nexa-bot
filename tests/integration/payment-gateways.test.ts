@@ -281,6 +281,107 @@ describe('payment routes', () => {
     expect(rows[0]?.total).toBe(0);
   });
 
+  it('refuses a route whose bounds were written in another currency, until they are re-saved', async () => {
+    // Bounds saved while the installation sells in IRT: they MEAN IRT.
+    await ctx.container.paymentGateways.configure(tenantA, ownerA, {
+      idempotencyKey: 'gw-cur-1',
+      provider: 'MANUAL_TRANSFER',
+      config: { ...OPEN, minAmountMinor: 100_000n },
+    });
+    const before = (await ctx.container.paymentGateways.list(tenantA, ownerA)).gateways.find(
+      (gateway) => gateway.provider === 'MANUAL_TRANSFER',
+    );
+    expect(before?.boundsCurrency).toBe('IRT');
+
+    /*
+     * The installation switches to IRR. The bounds used to be relabelled with whatever
+     * `sales.currency` was at comparison time, so `100000` silently became 100000 IRR —
+     * a tenth of what the operator had set, with no bound edited and no conversion
+     * performed. The route now fails closed on the mismatch its own error code always
+     * named, and the record shows the operator why.
+     */
+    await setSetting('sales.currency', 'IRR');
+    await setSetting('wallet.topup.presets', [{ amountMinor: '500000', currency: 'IRR' }]);
+
+    const refused = await ctx.container.payments
+      .requestWalletTopup(
+        { ...tenantA, botInstanceId: BOT_A },
+        systemActor('gw-cur-turn-1'),
+        customerA,
+        { idempotencyKey: 'topup-cur-1', amountMinor: 500_000n },
+      )
+      .catch((error: unknown) => error);
+    expect(refused).toMatchObject({ code: COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE });
+    const stale = (await ctx.container.paymentGateways.list(tenantA, ownerA)).gateways.find(
+      (gateway) => gateway.provider === 'MANUAL_TRANSFER',
+    );
+    expect(stale?.boundsCurrency).toBe('IRT');
+
+    // Re-saving the bounds is the operator confirming what they mean now.
+    await ctx.container.paymentGateways.configure(tenantA, ownerA, {
+      idempotencyKey: 'gw-cur-2',
+      provider: 'MANUAL_TRANSFER',
+      config: { ...OPEN, minAmountMinor: 100_000n },
+    });
+    const after = (await ctx.container.paymentGateways.list(tenantA, ownerA)).gateways.find(
+      (gateway) => gateway.provider === 'MANUAL_TRANSFER',
+    );
+    expect(after?.boundsCurrency).toBe('IRR');
+
+    const issued = await ctx.container.payments.requestWalletTopup(
+      { ...tenantA, botInstanceId: BOT_A },
+      systemActor('gw-cur-turn-2'),
+      customerA,
+      { idempotencyKey: 'topup-cur-2', amountMinor: 500_000n },
+    );
+    expect(issued.payment.amount.currency).toBe('IRR');
+  });
+
+  it('treats a route the previous release wrote without a denomination as that release did', async () => {
+    /*
+     * The column is nullable THIS release on purpose — `OQ-5H-05` — because the previous
+     * release still provisions the zero row without it during a rolling update. This is
+     * that row: the only way a NULL can exist after 0078, so the row is made the way that
+     * release made it rather than through any path this release offers.
+     */
+    await ctx.container.paymentGateways.configure(tenantA, ownerA, {
+      idempotencyKey: 'gw-null-1',
+      provider: 'MANUAL_TRANSFER',
+      config: { ...OPEN, minAmountMinor: 200_000n },
+    });
+    await ctx.container.database.db.execute(
+      sql`UPDATE payment_gateways SET bounds_currency = NULL
+           WHERE tenant_id = ${tenantA.tenantId} AND provider = 'MANUAL_TRANSFER'`,
+    );
+    const legacy = (await ctx.container.paymentGateways.list(tenantA, ownerA)).gateways.find(
+      (gateway) => gateway.provider === 'MANUAL_TRANSFER',
+    );
+    expect(legacy?.boundsCurrency).toBeNull();
+
+    // That release relabelled the bounds with the amount's currency, so a NULL means
+    // exactly that: the top-up is offered, not refused for a mismatch it cannot have.
+    const issued = await ctx.container.payments.requestWalletTopup(
+      { ...tenantA, botInstanceId: BOT_A },
+      systemActor('gw-null-turn-1'),
+      customerA,
+      { idempotencyKey: 'topup-null-1', amountMinor: 500_000n },
+    );
+    expect(issued.payment.amount.currency).toBe('IRT');
+
+    // And the bound is still a bound: below the minimum is still refused.
+    const refused = await ctx.container.payments
+      .requestWalletTopup(
+        { ...tenantA, botInstanceId: BOT_A },
+        systemActor('gw-null-turn-2'),
+        customerA,
+        { idempotencyKey: 'topup-null-2', amountMinor: 100_000n },
+      )
+      .catch((error: unknown) => error);
+    expect(refused).toMatchObject({
+      code: COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_AMOUNT_REJECTED,
+    });
+  });
+
   it('refuses a top-up when the only route is DISABLED', async () => {
     await ctx.container.paymentGateways.setStatus(tenantA, ownerA, {
       idempotencyKey: 'gw-off-1',
@@ -440,6 +541,31 @@ describe('payment routes', () => {
     };
 
     /**
+     * The shipped 0078, the same way: the statement that gives 0071's rows their
+     * denomination, which is what an installation upgrading through both releases runs.
+     */
+    const denominate = () => {
+      const file = readFileSync(
+        'apps/api/drizzle/0078_payment_gateway_bounds_currency_backfill.sql',
+        'utf8',
+      );
+      const start = file.indexOf('UPDATE "payment_gateways"');
+      expect(start).toBeGreaterThan(-1);
+      return file.slice(start);
+    };
+
+    /**
+     * 0071 ran in a schema with no `bounds_currency`; 0077 added it nullable and 0078
+     * filled it. An installation upgrading through both releases runs them in that
+     * order, so the replay does too: 0071's rows arrive with a NULL, and 0078 is what
+     * gives them their denomination.
+     */
+    async function asUpgradeThrough0071(fn: () => Promise<void>): Promise<void> {
+      await fn();
+      await ctx.container.database.withClient((client) => client.query(denominate()));
+    }
+
+    /**
      * What the role half must produce, written out rather than derived from
      * `ROLE_SEEDS`. Deriving it would run the same computation the migration
      * implements and agree with it however wrong both were.
@@ -465,8 +591,10 @@ describe('payment routes', () => {
       );
       expect(await grantsIn(tenantA.tenantId)).toEqual([]);
 
-      await ctx.container.database.withClient((client) => client.query(backfill()));
-      await ctx.container.database.withClient((client) => client.query(backfill()));
+      await asUpgradeThrough0071(async () => {
+        await ctx.container.database.withClient((client) => client.query(backfill()));
+        await ctx.container.database.withClient((client) => client.query(backfill()));
+      });
 
       expect(await grantsIn(tenantA.tenantId)).toEqual(EXPECTED_GRANTS);
 
@@ -475,6 +603,9 @@ describe('payment routes', () => {
       expect(gateways[0]?.status).toBe('ACTIVE');
       expect(gateways[0]?.displayName).toBeNull();
       expect(gateways[0]?.minAmountMinor).toBe(0n);
+      // 0078 gave the upgraded row the denomination its bounds always meant: the
+      // registry default, since this tenant has no `sales.currency` row.
+      expect(gateways[0]?.boundsCurrency).toBe('IRT');
     });
 
     it('never resets a route an operator has already tuned', async () => {
@@ -484,7 +615,9 @@ describe('payment routes', () => {
         config: { ...OPEN, displayName: 'Tuned', minAmountMinor: 750_000n, sortOrder: 3 },
       });
 
-      await ctx.container.database.withClient((client) => client.query(backfill()));
+      await asUpgradeThrough0071(async () => {
+        await ctx.container.database.withClient((client) => client.query(backfill()));
+      });
 
       const { gateways } = await ctx.container.paymentGateways.list(tenantA, ownerA);
       expect(gateways[0]?.displayName).toBe('Tuned');

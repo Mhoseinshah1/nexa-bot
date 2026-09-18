@@ -637,6 +637,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
     credentialThrottle,
+    idempotency,
   );
 
   /*

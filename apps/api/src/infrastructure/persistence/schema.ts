@@ -2646,6 +2646,26 @@ export const payments = pgTable(
     uniqueIndex('payments_order_confirmed_key')
       .on(table.orderId)
       .where(sql`state = 'CONFIRMED' AND order_id IS NOT NULL`),
+    /**
+     * At most ONE open top-up per customer, and for the same reason as the index above.
+     *
+     * `requestWalletTopup` reads `findOpenTopup`, finds none, and inserts. Two callbacks
+     * carrying DIFFERENT idempotency keys — a double tap, or two Telegram clients — both
+     * read null inside their own transaction and both insert; the idempotency store has
+     * nothing to replay because the keys differ. The customer then holds two live
+     * references, each independently confirmable, and one bank transfer is credited
+     * twice.
+     *
+     * The service takes a per-customer lock so the ordinary racing pair serialises and
+     * neither sees an error. This is what holds when a lock is bypassed, forgotten, or
+     * outlived by a new code path — and two api replicas is the normal case on every
+     * rolling update, so the database is the only place both of them share.
+     *
+     * The predicate is `findOpenTopup`'s WHERE clause exactly. The two must stay in step.
+     */
+    uniqueIndex('payments_open_topup_key')
+      .on(table.tenantId, table.customerId)
+      .where(sql`state = 'PENDING' AND order_id IS NULL AND method = 'MANUAL_TRANSFER'`),
     /** The reconciliation queue: payments whose outcome nobody knows. */
     index('payments_unknown_idx')
       .on(table.tenantId, table.createdAt)
@@ -2895,12 +2915,14 @@ export const paymentGateways = pgTable(
      * back `int8` as a string and the parser this codebase installs turns it into a
      * `bigint`, which is what keeps an amount above 2^53 exact.
      *
-     * There is no companion `currency` column, and that is the one place this table
-     * departs from the money convention deliberately. A bound is compared against an
-     * amount already denominated in the installation's `sales.currency`; storing a
-     * second denomination here would create a pair that can disagree, with no
-     * conversion in this product able to resolve it. The comparison fails closed on a
-     * currency mismatch instead — see `PaymentGatewayService`.
+     * The companion `currency` column is `bounds_currency` below — added by 0077 after
+     * the payment batch's review, and a correction to what this comment used to say.
+     * The bounds were stored bare and relabelled with whatever `sales.currency` was at
+     * COMPARISON time, so an operator switching the installation from IRT to IRR made
+     * every route's `1000000` silently mean a tenth of what it had, with nobody editing
+     * a bound. Storing the denomination the bounds were WRITTEN in is what lets the
+     * comparison fail closed on a mismatch — the case `PaymentGatewayService` always
+     * named and could never reach.
      */
     minAmountMinor: bigint('min_amount_minor', { mode: 'bigint' })
       .notNull()
@@ -2908,6 +2930,23 @@ export const paymentGateways = pgTable(
     maxAmountMinor: bigint('max_amount_minor', { mode: 'bigint' })
       .notNull()
       .default(sql`0`),
+    /**
+     * The denomination the two bounds were written in — the installation's
+     * `sales.currency` at the moment an operator saved them, or at the moment the zero
+     * row was provisioned. Compared against the amount's currency in `offer`, and a
+     * disagreement refuses the route until an operator re-saves it under the new
+     * currency, rather than reinterpreting the numbers. Backfilled by 0078 from each
+     * tenant's setting.
+     *
+     * Nullable THIS release, on purpose: the previous release still writes this table
+     * without the column, for the length of a rolling update, and `SET NOT NULL` would
+     * refuse those writes — `migration-compatibility.test.ts` states the rule. A NULL
+     * therefore means "written by the previous release", and the readers fall back to
+     * the installation's current currency for it, which is exactly the relabelling
+     * that release performed. The contract step — a second backfill and NOT NULL — is
+     * the release after this one; `docs/open-questions.md` OQ-5H-05 carries it.
+     */
+    boundsCurrency: text('bounds_currency'),
     /**
      * The three eligibility thresholds, where `0` is the condition switched OFF.
      *
@@ -2932,6 +2971,10 @@ export const paymentGateways = pgTable(
     index('payment_gateways_tenant_sort_idx').on(table.tenantId, table.sortOrder, table.provider),
     check('payment_gateways_provider_check', enumCheck('provider', PAYMENT_GATEWAY_PROVIDERS)),
     check('payment_gateways_status_check', enumCheck('status', PAYMENT_GATEWAY_STATUSES)),
+    check(
+      'payment_gateways_bounds_currency_check',
+      nullableEnumCheck('bounds_currency', CURRENCY_CODES),
+    ),
     /*
      * The same structural rules the contract applies, restated where a hand-written
      * UPDATE cannot skip them — the argument `payment_accounts` states: the schema

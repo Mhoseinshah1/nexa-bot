@@ -125,8 +125,10 @@ export class PaymentGatewaysController {
  *
  * The amounts go out as decimal strings. JSON has no bigint, and a `number` here is the
  * float the money model refuses — silently, above 2^53. The currency travels with them
- * because a route stores bare minor units: `payment-gateways.ts` records why a per-route
- * currency would be a second denomination with no conversion to reach it.
+ * and it is the ROW'S: the denomination the bounds were saved in, which is the only one
+ * in which the two numbers mean anything. The installation's current currency stands in
+ * only for a row the previous release wrote without one — `gateway-ports.ts` says why
+ * that row exists and why it means exactly that.
  *
  * The descriptor's `settlesVia` and `requiresCredentials` are deliberately absent — the
  * view schema says why.
@@ -139,7 +141,10 @@ function toView(gateway: PaymentGatewayRecord, currency: SalesCurrencyCode): Pay
     instructions: gateway.instructions,
     minAmountMinor: gateway.minAmountMinor.toString(),
     maxAmountMinor: gateway.maxAmountMinor.toString(),
-    currency,
+    // The row's own denomination — what the bounds mean, not what the installation
+    // currently sells in. When the two differ the route is refusing, and this is how
+    // the operator sees why.
+    currency: gateway.boundsCurrency ?? currency,
     eligibility: {
       activateAfterPayments: gateway.activateAfterPayments,
       deactivateAfterPayments: gateway.deactivateAfterPayments,

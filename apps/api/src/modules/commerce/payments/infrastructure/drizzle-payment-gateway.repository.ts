@@ -4,6 +4,7 @@ import {
   type PaymentGatewayConfig,
   type PaymentGatewayProvider,
   type PaymentGatewayStatus,
+  type SalesCurrencyCode,
   type TenantContext,
   type UserId,
 } from '@nexa/contracts';
@@ -31,6 +32,7 @@ const COLUMNS = {
   instructions: paymentGateways.instructions,
   minAmountMinor: paymentGateways.minAmountMinor,
   maxAmountMinor: paymentGateways.maxAmountMinor,
+  boundsCurrency: paymentGateways.boundsCurrency,
   activateAfterPayments: paymentGateways.activateAfterPayments,
   deactivateAfterPayments: paymentGateways.deactivateAfterPayments,
   activateAfterAccountDays: paymentGateways.activateAfterAccountDays,
@@ -47,6 +49,7 @@ interface Row {
   readonly instructions: string | null;
   readonly minAmountMinor: bigint;
   readonly maxAmountMinor: bigint;
+  readonly boundsCurrency: string | null;
   readonly activateAfterPayments: number;
   readonly deactivateAfterPayments: number;
   readonly activateAfterAccountDays: number;
@@ -69,6 +72,8 @@ function toRecord(row: Row): PaymentGatewayRecord {
     instructions: row.instructions,
     minAmountMinor: row.minAmountMinor,
     maxAmountMinor: row.maxAmountMinor,
+    // `payment_gateways_bounds_currency_check` constrains it, as the two casts above.
+    boundsCurrency: row.boundsCurrency as SalesCurrencyCode | null,
     activateAfterPayments: row.activateAfterPayments,
     deactivateAfterPayments: row.deactivateAfterPayments,
     activateAfterAccountDays: row.activateAfterAccountDays,
@@ -97,11 +102,20 @@ export class DrizzlePaymentGatewayRepository implements PaymentGatewayRepository
   /** `(sort_order, provider)`, the one ordering, matching the index. */
   async list(scope: TenantContext, tx?: unknown): Promise<readonly PaymentGatewayRecord[]> {
     const tenantId = requireTenantId(scope);
-    const rows = await this.exec(tx)
+    const query = this.exec(tx)
       .select(COLUMNS)
       .from(paymentGateways)
       .where(eq(paymentGateways.tenantId, tenantId))
       .orderBy(asc(paymentGateways.sortOrder), asc(paymentGateways.provider));
+    /*
+     * Inside a transaction, FOR SHARE. A caller that passes one is ISSUING a payment on
+     * the strength of what this returns, and a plain read let an operator switch the
+     * route off and commit between the read and the insert — the customer received a
+     * new live transfer reference after the route was disabled. With the lock the
+     * operator's `setStatus` UPDATE waits, or precedes this read and is seen. The Web
+     * Admin's list passes no transaction and takes no lock; it decides nothing.
+     */
+    const rows = tx === undefined ? await query : await query.for('share');
     return rows.map(toRecord);
   }
 
@@ -132,7 +146,12 @@ export class DrizzlePaymentGatewayRepository implements PaymentGatewayRepository
    * `ON CONFLICT DO NOTHING` rather than an upsert, so re-provisioning never resets a
    * route an operator has tuned. The count returned is rows WRITTEN, not rows wanted.
    */
-  async ensureDefaults(scope: TenantContext, now: Date, tx?: unknown): Promise<number> {
+  async ensureDefaults(
+    scope: TenantContext,
+    currency: SalesCurrencyCode,
+    now: Date,
+    tx?: unknown,
+  ): Promise<number> {
     const tenantId = requireTenantId(scope);
     const inserted = await this.exec(tx)
       .insert(paymentGateways)
@@ -148,6 +167,10 @@ export class DrizzlePaymentGatewayRepository implements PaymentGatewayRepository
            */
           displayName: null,
           instructions: null,
+          // The zero bounds mean "unbounded", and even an unbounded route records the
+          // denomination it was provisioned under: the first real bound an operator
+          // types will be in it.
+          boundsCurrency: currency,
           createdAt: now,
           updatedAt: now,
         })),
@@ -161,6 +184,7 @@ export class DrizzlePaymentGatewayRepository implements PaymentGatewayRepository
     scope: TenantContext,
     provider: PaymentGatewayProvider,
     config: PaymentGatewayConfig,
+    currency: SalesCurrencyCode,
     now: Date,
     tx: unknown,
   ): Promise<PaymentGatewayRecord | null> {
@@ -172,6 +196,8 @@ export class DrizzlePaymentGatewayRepository implements PaymentGatewayRepository
         instructions: config.instructions,
         minAmountMinor: config.minAmountMinor,
         maxAmountMinor: config.maxAmountMinor,
+        // Stamped with what the bounds MEAN at the moment they are written.
+        boundsCurrency: currency,
         activateAfterPayments: config.eligibility.activateAfterPayments,
         deactivateAfterPayments: config.eligibility.deactivateAfterPayments,
         activateAfterAccountDays: config.eligibility.activateAfterAccountDays,

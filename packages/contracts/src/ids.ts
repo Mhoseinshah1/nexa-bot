@@ -81,6 +81,7 @@ export const serviceAddonIdSchema = brandedId('ServiceAddonId');
 export const paymentIdSchema = brandedId('PaymentId');
 export const paymentAccountIdSchema = brandedId('PaymentAccountId');
 export const paymentReceiptIdSchema = brandedId('PaymentReceiptId');
+export const refundIdSchema = brandedId('RefundId');
 export const eventIdSchema = brandedId('EventId');
 export const correlationIdSchema = brandedId('CorrelationId');
 

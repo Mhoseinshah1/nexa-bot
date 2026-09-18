@@ -389,6 +389,7 @@ const ADMIN_QUEUE_LIMIT = 10;
  */
 const RECEIPTS_VIEW_PERMISSION = 'receipts.view' as PermissionKey;
 const ADMINS_VIEW_PERMISSION = 'admins.view' as PermissionKey;
+const RECEIPTS_REVIEW_PERMISSION = 'receipts.review' as PermissionKey;
 
 /** The intents `adminTurn` owns, as a set, so `act` has one branch rather than nine. */
 const ADMIN_INTENTS: ReadonlySet<BotIntent> = new Set<BotIntent>([
@@ -1072,6 +1073,8 @@ export interface TelegramAdminPort {
       readonly username: string;
       readonly roleKeys: readonly string[];
       readonly reason: string;
+      /** The update's key, so a redelivered command is replayed rather than run twice. */
+      readonly idempotencyKey: string;
     },
   ): Promise<{ readonly admin: { readonly username: string }; readonly roleKeys: string[] }>;
 }
@@ -1467,15 +1470,41 @@ export class BotRuntime {
     /*
      * 2. The commercial work, still before any send.
      *
-     * A BLOCKED customer never reaches it: `replyFor` answers `bot.blocked` whatever
-     * they asked for, and this is gated on the same condition rather than on its own
-     * copy of the rule. The order service refuses a blocked customer too — that is the
+     * A BLOCKED customer never reaches it: `replyFor` answers `bot.blocked` whatever they
+     * asked for, and this is gated on the same condition rather than on its own copy of
+     * the rule. The order service refuses a blocked customer too — that is the
      * authoritative check, inside the transaction, and this one exists so the surface
      * does not ask for work it already knows will be refused.
+     *
+     * ADMIN INTENTS ARE EXEMPT, and the exemption is the identity model rather than a
+     * convenience.
+     *
+     * A Telegram account that is bound as an administrator is ALSO resolved as a customer
+     * here, because it is the same account. Customer standing and administrator standing
+     * are independent in this product — `docs/research` records the legacy system
+     * treating them as "mutually blind", and Phase 4A kept them separate deliberately. So
+     * a blanket `bot.blocked` meant that blocking somebody's PURCHASES silently revoked
+     * their management panel: the intent never reached `adminTurn`, and the only way back
+     * was to unblock the customer, which is not what the operator who pressed Block
+     * decided.
+     *
+     * Blocking is still enforced for everything a customer can do. This routes the admin
+     * intents to the one door that resolves the binding, and `adminTurn` returning null —
+     * a blocked customer who is NOT an administrator, including one crafting `D:<uuid>` —
+     * falls back to the same `bot.blocked` as before. Authority is not granted here: every
+     * admin action re-checks its own permission inside its own transaction.
      */
+    const blocked: PendingReply = {
+      key: 'bot.blocked' as TemplateKey,
+      values: {},
+      buttons: [],
+      orderId: null,
+    };
     const reply =
       arrival === 'BLOCKED'
-        ? { key: 'bot.blocked' as TemplateKey, values: {}, buttons: [], orderId: null }
+        ? ((ADMIN_INTENTS.has(command.intent)
+            ? await this.adminTurn(scope, actor, command, input)
+            : null) ?? blocked)
         : await this.act(scope, actor, command, customer, arrival, input);
 
     const chatId = privateChatIdOf(input.update);
@@ -1670,7 +1699,13 @@ export class BotRuntime {
         case 'ADMIN_RECEIPT':
           return command.targetId === null
             ? null
-            : await this.adminReceipt(scope, adminActor, command.targetId, input);
+            : await this.adminReceipt(
+                scope,
+                adminActor,
+                command.targetId,
+                input,
+                permissions.has(RECEIPTS_REVIEW_PERMISSION),
+              );
         case 'ADMIN_APPROVE':
         case 'ADMIN_REJECT':
           return command.targetId === null
@@ -1691,7 +1726,7 @@ export class BotRuntime {
         case 'ADMIN_LINK':
           return await this.adminLink(scope, adminActor, command.args ?? []);
         case 'ADMIN_ROLE':
-          return await this.adminRole(scope, adminActor, command.args ?? []);
+          return await this.adminRole(scope, adminActor, command.args ?? [], input.idempotencyKey);
         default:
           return null;
       }
@@ -1773,6 +1808,8 @@ export class BotRuntime {
     actor: ActorContext,
     paymentId: string,
     input: { readonly update: unknown },
+    /** Whether the resolved identity holds `receipts.review`. The buttons are drawn only then. */
+    mayDecide: boolean,
   ): Promise<PendingReply> {
     const item = await this.deps.receipts.reviewItem(scope, actor, paymentId as PaymentId);
     if (item === null) {
@@ -1804,18 +1841,28 @@ export class BotRuntime {
         // reviewer deciding money needs the id the rest of the system uses.
         customer: item.customer?.telegramUserId ?? item.payment.customerId,
       },
-      buttons: [
-        {
-          label: { kind: 'TEMPLATE', key: 'bot.admin.approve_button' },
-          data: `${ADMIN_APPROVE_CALLBACK_PREFIX}${item.payment.id}`,
-          row: 0,
-        },
-        {
-          label: { kind: 'TEMPLATE', key: 'bot.admin.reject_button' },
-          data: `${ADMIN_REJECT_CALLBACK_PREFIX}${item.payment.id}`,
-          row: 0,
-        },
-      ],
+      /*
+       * The decision buttons only for an identity that may DECIDE. `receipts.view` opens
+       * this screen and the seeded observer holds it without `receipts.review`; drawing
+       * approve and reject for them produced two buttons whose every tap failed the guard
+       * with the generic refusal — the advertised workflow, unusable for every view-only
+       * administrator. The guard still runs on the tap; this is the surface not promising
+       * what the tap will refuse.
+       */
+      buttons: mayDecide
+        ? [
+            {
+              label: { kind: 'TEMPLATE', key: 'bot.admin.approve_button' },
+              data: `${ADMIN_APPROVE_CALLBACK_PREFIX}${item.payment.id}`,
+              row: 0,
+            },
+            {
+              label: { kind: 'TEMPLATE', key: 'bot.admin.reject_button' },
+              data: `${ADMIN_REJECT_CALLBACK_PREFIX}${item.payment.id}`,
+              row: 0,
+            },
+          ]
+        : [],
       orderId: null,
     };
   }
@@ -1961,6 +2008,7 @@ export class BotRuntime {
     scope: TenantContext,
     actor: ActorContext,
     args: readonly string[],
+    idempotencyKey: string,
   ): Promise<PendingReply> {
     const admins = this.deps.telegramAdmins;
     const username = args[0];
@@ -1972,6 +2020,9 @@ export class BotRuntime {
       username,
       roleKeys: [roleKey],
       reason: 'Roles set from the Telegram management panel.',
+      // The update's own key, as the payment decisions pass theirs: a redelivered
+      // command is answered from the store, never run twice.
+      idempotencyKey,
     });
     return {
       key: 'bot.admin.roles_set',

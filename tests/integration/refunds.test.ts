@@ -731,6 +731,100 @@ describe('refunds', () => {
     expect(await count('refunds')).toBe(1);
   });
 
+  it('refuses to rewrite the reason a refund was issued for', async () => {
+    const payment = await manualConfirmed('f3');
+    const created = await refund(owner, payment.id, 100_000n, 'guard-f3-0001');
+
+    /*
+     * `reason` is why money left, recorded by the person who authorised it leaving. 0073
+     * froze the amount and the identity and said in its own exception message that it
+     * froze everything except state, completion and `updated_at` — but left `reason` out
+     * of the comparison, so this UPDATE succeeded and the evidence could be rewritten
+     * after the fact. 0076 closed it.
+     */
+    await expect(
+      rawQuery(`UPDATE refunds SET reason = 'something else' WHERE id = '${created.id}'`),
+    ).rejects.toThrowError(/immutable/iu);
+
+    const rows = await rawQuery(`SELECT reason FROM refunds WHERE id = '${created.id}'`);
+    expect((rows.rows[0] as { reason: string }).reason).toBe(created.reason);
+  });
+
+  it('still allows the completion columns the guard exists to permit', async () => {
+    const payment = await manualConfirmed('f4');
+    const created = await refund(owner, payment.id, 100_000n, 'guard-f4-0001');
+
+    /*
+     * The other half of the rule above, and the reason it is a separate test: a guard
+     * that froze one column too many would pass every refusal test in this file and
+     * break the one path an operator actually uses. Completing a manual refund is a real
+     * UPDATE to state, the completion columns and `updated_at`.
+     */
+    const completed = await ctx.container.refunds.complete(tenantA, owner, {
+      idempotencyKey: 'guard-f4-complete',
+      refundId: created.id,
+      note: 'واریز شد',
+      externalReference: 'TRX-1',
+    });
+    expect(completed.state).toBe('COMPLETED');
+    expect(completed.reason).toBe(created.reason);
+  });
+
+  // -------------------------------------------------------------------------
+  // Identifiers that name nothing
+  // -------------------------------------------------------------------------
+
+  it('answers a malformed payment id with NOT_FOUND rather than a database error', async () => {
+    /*
+     * `payments.id` is a `uuid` column, and the service used to CAST this string rather
+     * than parse it — so PostgreSQL compared 'not-a-uuid' against a uuid and raised
+     * `invalid input syntax for type uuid`, which reached the operator as a 500
+     * describing the database. The request's only fault is naming nothing.
+     */
+    const outcome = await ctx.container.refunds
+      .request(tenantA, owner, {
+        idempotencyKey: 'malformed-payment-0001',
+        paymentId: 'not-a-uuid',
+        amountMinor: 1_000n,
+        reason: 'اشتباه',
+      })
+      .then(() => null)
+      .catch((error: unknown) => error);
+
+    expect(outcome).toMatchObject({ code: 'commerce.payment_not_found' });
+    expect(String(outcome)).not.toMatch(/invalid input syntax/iu);
+  });
+
+  it('answers a malformed refund id with NOT_FOUND on completion and on failure', async () => {
+    for (const [label, call] of [
+      [
+        'complete',
+        () =>
+          ctx.container.refunds.complete(tenantA, owner, {
+            idempotencyKey: 'malformed-refund-complete',
+            refundId: '../../etc/passwd',
+            note: 'واریز شد',
+            externalReference: null,
+          }),
+      ],
+      [
+        'fail',
+        () =>
+          ctx.container.refunds.fail(tenantA, owner, {
+            idempotencyKey: 'malformed-refund-fail',
+            refundId: '../../etc/passwd',
+            note: 'لغو شد',
+          }),
+      ],
+    ] as const) {
+      const outcome = await call()
+        .then(() => null)
+        .catch((error: unknown) => error);
+      expect(outcome, label).toMatchObject({ code: 'commerce.refund_not_found' });
+      expect(String(outcome), label).not.toMatch(/invalid input syntax/iu);
+    }
+  });
+
   it('refuses a state change out of a terminal state at the database', async () => {
     const payment = await manualConfirmed('f2');
     const created = await refund(owner, payment.id, 100_000n, 'guard-f2-0001');

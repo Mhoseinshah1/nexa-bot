@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
-import { RECOVERY_ROUTES, type TenantContext } from '@nexa/contracts';
+import { RECOVERY_ROUTES, type SalesCurrencyCode, type TenantContext } from '@nexa/contracts';
 import { AppModule } from './app.module.js';
 import {
   TELEGRAM_WEBHOOK_BODY_LIMIT_BYTES,
@@ -76,7 +76,20 @@ export async function resolveInstallationTenant(container: Container): Promise<v
   await container.uow.run(scope, async (tx) => {
     await container.admins.lockTenantForAdminChange(scope, tx);
     await container.roles.ensureSystemRoles(scope, tx);
-    await container.paymentGatewayProvisioning.ensureDefaults(scope, container.clock.now(), tx);
+    // The denomination the zero rows are provisioned under, read inside the same
+    // transaction: an unbounded route still records what its first real bound will
+    // mean, so a later currency change is detected rather than reinterpreted.
+    const currency = await container.settingsResolver.valueOf<SalesCurrencyCode>(
+      scope,
+      'sales.currency',
+      tx,
+    );
+    await container.paymentGatewayProvisioning.ensureDefaults(
+      scope,
+      currency,
+      container.clock.now(),
+      tx,
+    );
   });
 }
 
