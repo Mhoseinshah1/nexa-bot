@@ -242,6 +242,7 @@ export interface Container {
    */
   readonly panelSales: PanelSalesGate;
   readonly panelCapacity: DrizzlePanelCapacityRepository;
+  readonly paymentExpirySweep: PaymentExpiryService;
   readonly logger: Logger;
   readonly clock: Clock;
   readonly ids: IdGenerator;
@@ -1242,20 +1243,26 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * whose absence is discovered at runtime. Starting is the role's decision, and
    * `main.worker.ts` is the only file that calls `start()`.
    */
-  const paymentExpiryLoop = new PaymentExpiryLoop(
-    new PaymentExpiryService({
+  /*
+   * Named, so a test can run ONE sweep rather than start a timer.
+   *
+   * The loop owns the schedule and the progress bookkeeping; the service is the
+   * work. A suite that wants the work has no business starting a timer it then
+   * has to stop.
+   */
+  const paymentExpirySweep = new PaymentExpiryService({
     panelSales: panelSalesGate,
-      payments: paymentRepository,
-      notifier: customerNotifier,
-      orders: orderRepository,
-      uow,
-      audit,
-      scopeActivity: tenants,
-      clock,
-      ids,
-    }),
-    {
-      // Resolved per pass: the installation's tenant is a row, so it is not known
+    payments: paymentRepository,
+    notifier: customerNotifier,
+    orders: orderRepository,
+    uow,
+    audit,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
+  const paymentExpiryLoop = new PaymentExpiryLoop(paymentExpirySweep, {
+    // Resolved per pass: the installation's tenant is a row, so it is not known
       // while this object is being built. The same closure the backup scheduler and
       // the recovery executor use, and `PaymentExpiryLoop.tick` treats a null as a
       // healthy pass that had nothing to do.
@@ -1266,8 +1273,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       intervalMs: PAYMENT_EXPIRY_INTERVAL_MS,
       now: () => clock.now().getTime(),
       logger,
-    },
-  );
+  });
 
   /**
    * One HTTP client for every provider call this process makes.
@@ -2279,6 +2285,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     backupRunSweeper,
     recoveryRequestSweeper,
     paymentExpiryLoop,
+    /** The sweep itself, so a test runs one pass instead of starting a timer. */
+    paymentExpirySweep,
     customerNotificationLoop,
     customerNotifications: customerNotificationRepository,
     audit,
