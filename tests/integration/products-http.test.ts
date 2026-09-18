@@ -249,6 +249,68 @@ describe('product HTTP surface', () => {
     );
   });
 
+  it('narrows the list to one panel, and excludes a product that names no panel', async () => {
+    /*
+     * The filter the Web Admin's panel detail asks its "what does this panel
+     * carry" question with.
+     *
+     * The second half is the part worth pinning: `panelId` is an EQUALITY on a
+     * nullable column, so a product with no panel does not match — and must
+     * not, because "every product on this panel" cannot include one that is on
+     * no panel. An `IS NULL OR =` would put it under every panel's heading.
+     */
+    const second = api.container.ids.uuid();
+    await api.container.database.db.execute(sql`
+      INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
+      VALUES (${second}, ${tenantA.tenantId}, 'Panel B', 'sanaei', 'https://panel-b.example.test', 'ACTIVE')`);
+
+    const onA = await createProduct({ title: 'on A' });
+    await createProduct({ title: 'on B', panelId: second });
+    await createProduct({ title: 'on nothing', panelId: null });
+
+    const filtered = productListResponseSchema.parse(
+      (await get(`${PRODUCT_ROUTES.list}?panelId=${panelA}`, editorCookie)).json(),
+    );
+    expect(filtered.products.map((product) => product.id)).toEqual([onA.id]);
+
+    // And the unfiltered list still has all three, so the filter narrowed rather
+    // than the fixtures failing to be created.
+    const all = productListResponseSchema.parse(
+      (await get(PRODUCT_ROUTES.list, editorCookie)).json(),
+    );
+    expect(all.products).toHaveLength(3);
+  });
+
+  it('answers a malformed panel filter with 400 rather than 500', async () => {
+    // `products.panel_id` is a `uuid` column, so an unvalidated string reaches
+    // PostgreSQL as `invalid input syntax for type uuid` — a 500 for a caller
+    // error. The boundary validates it, which is what `uuidV7Schema` is doing
+    // in the query schema.
+    const response = await get(`${PRODUCT_ROUTES.list}?panelId=not-a-uuid`, editorCookie);
+    expect(response.statusCode).toBe(400);
+  });
+
+  it('sees nothing of another tenant through the panel filter', async () => {
+    // The filter is an extra predicate, never a way around the tenant one: a
+    // panel id from tenant B names a real row in `panels` and must still return
+    // an empty page rather than tenant B's catalogue.
+    const panelB = api.container.ids.uuid();
+    await api.container.database.db.execute(sql`
+      INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
+      VALUES (${panelB}, ${tenantB.tenantId}, 'Panel B', 'sanaei', 'https://panel-b.example.test', 'ACTIVE')`);
+    await api.container.database.db.execute(sql`
+      INSERT INTO products (id, tenant_id, title, audience, sort_order, panel_id,
+                            duration_days, traffic_bytes, device_limit,
+                            price_amount, price_currency, status)
+      VALUES (${api.container.ids.uuid()}, ${tenantB.tenantId}, 'theirs', 'EVERYONE', 10,
+              ${panelB}, 30, 53687091200, 2, 250000, 'IRT', 'ACTIVE')`);
+
+    const page = productListResponseSchema.parse(
+      (await get(`${PRODUCT_ROUTES.list}?panelId=${panelB}`, editorCookie)).json(),
+    );
+    expect(page.products).toHaveLength(0);
+  });
+
   it('refuses a traffic allowance past the contract cap', async () => {
     // `MAX_TRAFFIC_BYTES`, 1 PiB. The bound is in the schema, so this is a 400 rather
     // than a row nothing can deliver.

@@ -607,6 +607,7 @@ export function fetchProducts(
     status?: ProductStatus;
     audience?: ProductAudience;
     title?: string;
+    panelId?: string;
   } = {},
 ): Promise<ProductListResponse> {
   const params = new URLSearchParams();
@@ -617,6 +618,10 @@ export function fetchProducts(
   // Omitted when empty, so clearing the box is the unfiltered list rather than a
   // search for the empty string.
   if (query.title !== undefined && query.title !== '') params.set('title', query.title);
+  // Same emptiness rule as `title`, and the same reason `fetchServices` applies it to
+  // its two ids: an empty string is not a filter, and the server validates this one as
+  // a UUID rather than passing it to a `uuid` column.
+  if (query.panelId !== undefined && query.panelId !== '') params.set('panelId', query.panelId);
   const suffix = params.toString();
   return authedGet(
     suffix ? `${PRODUCT_ROUTES.list}?${suffix}` : PRODUCT_ROUTES.list,

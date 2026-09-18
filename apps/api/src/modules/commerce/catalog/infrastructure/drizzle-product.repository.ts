@@ -127,6 +127,7 @@ export class DrizzleProductRepository implements ProductRepository {
 
     if (search.status !== undefined) conditions.push(eq(products.status, search.status));
     if (search.audience !== undefined) conditions.push(eq(products.audience, search.audience));
+    if (search.panelId !== undefined) conditions.push(eq(products.panelId, search.panelId));
     if (search.titlePrefix !== undefined && search.titlePrefix !== '') {
       // Escaped, so a title containing `%` or `_` matches no more than it spells.
       const needle = search.titlePrefix.toLowerCase().replace(/[\\%_]/g, '\\$&');

@@ -580,6 +580,24 @@ export const WEB_FA = {
   'web.panel_tab_health': 'سلامت',
   'web.panel_tab_credentials': 'اعتبارنامه‌ها',
   'web.panel_tab_capabilities': 'قابلیت‌ها',
+  'web.panel_tab_workload': 'بار روی پنل',
+  // What the panel carries. Two server-filtered lists, a first page of each.
+  'web.panel_workload_products': 'محصولات این پنل',
+  'web.panel_workload_products_hint':
+    'محصولاتی که این پنل را نام برده‌اند. اگر پنل از سرویس خارج شود، فروش همین‌ها متوقف می‌شود.',
+  'web.panel_workload_no_products': 'هیچ محصولی این پنل را نام نبرده است.',
+  'web.panel_workload_services': 'سرویس‌های روی این پنل',
+  'web.panel_workload_services_hint':
+    'حساب‌هایی که روی این پنل ساخته شده‌اند. بایگانی کردن پنل هیچ‌کدام را پایان نمی‌دهد.',
+  'web.panel_workload_no_services': 'هنوز سرویسی روی این پنل ساخته نشده است.',
+  'web.panel_workload_more':
+    'بیش از این هم هست؛ فهرست کامل در صفحهٔ مربوط به خودش صفحه‌بندی می‌شود.',
+  // The second press on archive, and the two facts it needs before it.
+  'web.panel_archive_confirm_title': 'بایگانی کردن این پنل',
+  'web.panel_archive_confirm_body':
+    'پنل از فهرست‌ها، از زمان‌بندی پایش و از کاتالوگ خارج می‌شود و نامش آزاد می‌شود. سرویس‌هایی که همین حالا روی آن هستند پایان نمی‌یابند و دست‌نخورده می‌مانند. با دکمهٔ بازگردانی می‌توان این کار را برگرداند.',
+  'web.panel_archive_confirm': 'بله، بایگانی کن',
+  'web.panel_archive_cancel': 'انصراف',
   // Shown to an actor who may create a panel but not open its detail page.
   'web.panel_created_title': 'پنل ساخته شد',
   'web.panel_created_body':

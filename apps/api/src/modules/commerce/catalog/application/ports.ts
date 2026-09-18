@@ -80,6 +80,15 @@ export interface ProductSearch {
   readonly audience?: ProductAudience;
   /** Case-insensitive prefix on the title, the same shape the customer search uses. */
   readonly titlePrefix?: string;
+  /**
+   * One panel's products.
+   *
+   * The operator's question on a panel detail page — what would stop selling if
+   * this panel were disabled. A product with no panel is excluded by it rather
+   * than matching everything, which is why it is an equality on the column and
+   * not a `IS NULL OR =`.
+   */
+  readonly panelId?: PanelId;
 }
 
 /**
