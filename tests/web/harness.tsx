@@ -220,6 +220,21 @@ export function panel(overrides: Record<string, unknown> = {}): Record<string, u
       lastHealthyAt: '2026-09-06T08:00:00.000Z',
       stale: false,
     },
+    /*
+     * Uncapped and empty, which is what a panel nobody has sized looks like.
+     *
+     * The four numbers are the server's, computed together — see
+     * `panelCapacitySchema`. A case about capacity overrides the whole object
+     * rather than one field, so a fixture can never describe a `used` that its
+     * own `services` and `reservations` do not add up to.
+     */
+    capacity: {
+      maxServices: null,
+      services: 0,
+      reservations: 0,
+      used: 0,
+      available: null,
+    },
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     ...overrides,

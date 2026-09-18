@@ -220,7 +220,7 @@ describe('panels', () => {
       const panelId = view.panel.id;
 
       const service = new PanelService({
-      capacity: ctx.container.panelCapacity,
+        capacity: ctx.container.panelCapacity,
         repository: new DrizzlePanelRepository(ctx.container.database.db),
         credentials: new DrizzlePanelCredentialStore(
           ctx.container.database.db,

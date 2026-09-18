@@ -62,10 +62,7 @@ import type {
 import { capacityOf } from './panel-capacity.js';
 import { connectionIdentityOf, validationAuthorisesEnable } from './panel-eligibility.js';
 import { attemptProbe, persistProbeResult, type ProbeCoreDeps } from './probe-core.js';
-import type {
-  PanelCapacityRepository,
-  PanelWithCapacity,
-} from './capacity-ports.js';
+import type { PanelCapacityRepository, PanelWithCapacity } from './capacity-ports.js';
 import {
   effectivePreviousFailures,
   scheduleAfterProbe,
@@ -364,7 +361,10 @@ export class PanelService {
       ...(page.limit === undefined ? {} : { limit: page.limit }),
       ...(page.cursor === undefined ? {} : { cursor: page.cursor }),
     });
-    return { panels: await this.withCapacity(tenant, listed.panels), nextCursor: listed.nextCursor };
+    return {
+      panels: await this.withCapacity(tenant, listed.panels),
+      nextCursor: listed.nextCursor,
+    };
   }
 
   async get(scope: ScopeContext, actor: ActorContext, panelId: string): Promise<PanelWithCapacity> {
@@ -680,7 +680,13 @@ export class PanelService {
       requestHash,
     );
     if (existing) {
-      return { view: await this.oneWithCapacity(tenant, await this.require(tenant, existing.result.panelId)), replayed: true };
+      return {
+        view: await this.oneWithCapacity(
+          tenant,
+          await this.require(tenant, existing.result.panelId),
+        ),
+        replayed: true,
+      };
     }
 
     const panelId = this.deps.ids.uuid();
@@ -809,7 +815,10 @@ export class PanelService {
       throw error;
     }
 
-    return { view: await this.oneWithCapacity(tenant, await this.require(tenant, panelId)), replayed: false };
+    return {
+      view: await this.oneWithCapacity(tenant, await this.require(tenant, panelId)),
+      replayed: false,
+    };
   }
 
   async update(
@@ -1475,7 +1484,11 @@ export class PanelService {
       idempotencyKey,
       requestHash,
     );
-    if (existing) return { view: await this.oneWithCapacity(tenant, await this.require(tenant, panelId)), probed: false };
+    if (existing)
+      return {
+        view: await this.oneWithCapacity(tenant, await this.require(tenant, panelId)),
+        probed: false,
+      };
 
     const before = await this.require(tenant, panelId);
 
@@ -1732,7 +1745,10 @@ export class PanelService {
       },
     );
 
-    return { view: await this.oneWithCapacity(tenant, await this.require(tenant, panelId)), probed: true };
+    return {
+      view: await this.oneWithCapacity(tenant, await this.require(tenant, panelId)),
+      probed: true,
+    };
   }
 
   /** The shared probe core's dependencies, all of which the service already holds. */

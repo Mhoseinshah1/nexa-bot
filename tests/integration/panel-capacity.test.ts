@@ -82,7 +82,10 @@ describe('panel capacity and sales eligibility', () => {
     customerA = await customer('900201');
     customerB = await customer('900202');
     owner = adminActorFor(
-      await createAdmin(ctx.container, tenantA, { username: 'owner-capacity', roleKeys: ['owner'] }),
+      await createAdmin(ctx.container, tenantA, {
+        username: 'owner-capacity',
+        roleKeys: ['owner'],
+      }),
     );
   });
 
@@ -428,9 +431,9 @@ describe('panel capacity and sales eligibility', () => {
 
     // Never probed. The absence of evidence, not evidence of absence — a fresh
     // installation whose monitor has not run must be able to sell.
-    expect((await ctx.container.products.browse(tenantA, systemActor(key()), 20)).items).toHaveLength(
-      1,
-    );
+    expect(
+      (await ctx.container.products.browse(tenantA, systemActor(key()), 20)).items,
+    ).toHaveLength(1);
 
     // Confirmed down, and OLD. A stopped monitor must not close every shop in
     // the installation: old evidence stops being evidence, it does not become
@@ -441,9 +444,9 @@ describe('panel capacity and sales eligibility', () => {
       PANEL_UNHEALTHY_AFTER_FAILURES + 5,
       new Date(ctx.container.clock.now().getTime() - 24 * 60 * 60 * 1000),
     );
-    expect((await ctx.container.products.browse(tenantA, systemActor(key()), 20)).items).toHaveLength(
-      1,
-    );
+    expect(
+      (await ctx.container.products.browse(tenantA, systemActor(key()), 20)).items,
+    ).toHaveLength(1);
     const order = await draftFor(customerA, product);
     await expect(confirm(customerA, order)).resolves.toMatchObject({
       state: 'AWAITING_PAYMENT',
@@ -453,9 +456,9 @@ describe('panel capacity and sales eligibility', () => {
   it('a DEGRADED panel keeps selling: the credentials were accepted', async () => {
     const product = await activeProduct(panelA);
     await setHealth(panelA, 'DEGRADED', 0);
-    expect((await ctx.container.products.browse(tenantA, systemActor(key()), 20)).items).toHaveLength(
-      1,
-    );
+    expect(
+      (await ctx.container.products.browse(tenantA, systemActor(key()), 20)).items,
+    ).toHaveLength(1);
     const order = await draftFor(customerA, product);
     await expect(confirm(customerA, order)).resolves.toMatchObject({
       state: 'AWAITING_PAYMENT',
@@ -510,7 +513,9 @@ describe('panel capacity and sales eligibility', () => {
   it('counts nothing across the tenant boundary', async () => {
     // Another tenant's panel, with the same id nowhere in this tenant's data.
     expect(await capacityOf(panelForeign)).toBeNull();
-    expect(await ctx.container.panelCapacity.read(tenantB, panelForeign, new Date())).not.toBeNull();
+    expect(
+      await ctx.container.panelCapacity.read(tenantB, panelForeign, new Date()),
+    ).not.toBeNull();
   });
 
   it('refuses a cap change to an administrator who holds no panel permission', async () => {

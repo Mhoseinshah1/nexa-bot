@@ -171,7 +171,9 @@ export class ProductService {
     const panelIds = page.items.flatMap((item) => (item.panelId === null ? [] : [item.panelId]));
     const verdicts = await this.deps.panelSales.evaluateMany(scope, panelIds);
     return {
-      items: page.items.filter((item) => item.panelId !== null && verdicts.get(item.panelId)?.eligible === true),
+      items: page.items.filter(
+        (item) => item.panelId !== null && verdicts.get(item.panelId)?.eligible === true,
+      ),
       hasMore: page.hasMore,
     };
   }

@@ -1263,16 +1263,16 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   });
   const paymentExpiryLoop = new PaymentExpiryLoop(paymentExpirySweep, {
     // Resolved per pass: the installation's tenant is a row, so it is not known
-      // while this object is being built. The same closure the backup scheduler and
-      // the recovery executor use, and `PaymentExpiryLoop.tick` treats a null as a
-      // healthy pass that had nothing to do.
-      scope: () =>
-        installationTenantId === null
-          ? null
-          : { tenantId: installationTenantId, botInstanceId: null },
-      intervalMs: PAYMENT_EXPIRY_INTERVAL_MS,
-      now: () => clock.now().getTime(),
-      logger,
+    // while this object is being built. The same closure the backup scheduler and
+    // the recovery executor use, and `PaymentExpiryLoop.tick` treats a null as a
+    // healthy pass that had nothing to do.
+    scope: () =>
+      installationTenantId === null
+        ? null
+        : { tenantId: installationTenantId, botInstanceId: null },
+    intervalMs: PAYMENT_EXPIRY_INTERVAL_MS,
+    now: () => clock.now().getTime(),
+    logger,
   });
 
   /**

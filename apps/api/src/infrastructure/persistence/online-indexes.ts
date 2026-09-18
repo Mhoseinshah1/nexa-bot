@@ -157,8 +157,7 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
      */
     name: 'services_panel_capacity_idx',
     definition:
-      'ON "services" USING btree ("tenant_id","panel_id") ' +
-      "WHERE (state <> 'TERMINATED'::text)",
+      'ON "services" USING btree ("tenant_id","panel_id") ' + "WHERE (state <> 'TERMINATED'::text)",
   },
 ];
 
