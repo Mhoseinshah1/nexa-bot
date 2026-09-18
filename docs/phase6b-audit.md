@@ -154,3 +154,38 @@ customer's behalf is ordinary commerce with an operator actor, and it belongs to
 
 Both are corrected in this phase. A capability matrix that contradicts the
 documentation is the failure this audit exists to catch.
+
+## Migration 0080: what happened, and what was proved
+
+The first version of 0080 was pushed in `1a9ea79`, then regenerated in
+`99cd6d8` because the column it added had to be renamed and `drizzle-kit`
+cannot disambiguate a rename without a TTY. **The commit message for `99cd6d8`
+said "no database anywhere has applied the version being replaced". That was
+wrong**, and the correction matters more than the convenience it claimed: the
+obsolete version HAD been applied to the local development database, which was
+then rolled back by hand. The statement should have been "no shared or durable
+database", which is what the evidence below actually supports.
+
+| #   | Claim                                     | How it was checked                                                                            | Result                                                                                             |
+| --- | ----------------------------------------- | --------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| 1   | never on `main`                           | `git log origin/main -- 'apps/api/drizzle/0080*'`                                             | no commits                                                                                         |
+| 2   | never in a release                        | `git tag --contains 1a9ea79`                                                                  | no tags. `v0.2.6` is based on `28f50f6`, which is an ancestor of all 6B work                       |
+| 3   | never in a durable CI database            | `.github/workflows/ci.yml:73`                                                                 | the Postgres service container declares no `volumes:`; it is created per job and destroyed with it |
+| 4   | never on staging or production            | neither is reachable from this environment and no deployment was performed in this phase      | no path existed                                                                                    |
+| 5   | local databases recreated                 | `nexa_dev` and `nexa_test` dropped and created empty                                          | done                                                                                               |
+| 6   | an empty database applies the whole chain | fresh `nexa_dev`, full migrator run                                                           | 81 migrations, all four 0080 objects present, obsolete column absent                               |
+| 7   | a database at `main` upgrades through it  | `nexa_upgrade` staged with `main`'s own 80-migration folder, then migrated with this branch's | 80 → 81, all four objects appear                                                                   |
+| 8   | no ledger drift between the two paths     | compared the stored hash of the last entry in both databases                                  | identical: `7d50838…fb75a`                                                                         |
+| 9   | schema and migrations agree               | `pnpm db:check`                                                                               | ok                                                                                                 |
+
+Staging the `main`-state database took a second attempt worth recording,
+because the first one silently proved nothing. `NEXA_MIGRATIONS_DIR` is not a
+variable the migrator reads — `migrationsFolder()` resolves relative to its own
+compiled location — so pointing it at `main`'s folder applied THIS branch's
+chain instead, and the ledger showed 81 where it should have shown 80. The
+proof only became real once `main`'s migration folder was placed beside a copy
+of the compiled migrator and run from there.
+
+No `0081` rename was written. An 0081 that renamed a column would describe a
+transition no database outside this branch has ever made, and the forward-only
+rule exists to protect applied history rather than to require fictional history.
