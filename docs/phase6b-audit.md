@@ -189,3 +189,51 @@ of the compiled migrator and run from there.
 No `0081` rename was written. An 0081 that renamed a column would describe a
 transition no database outside this branch has ever made, and the forward-only
 rule exists to protect applied history rather than to require fictional history.
+
+## The one place the owner's two answers pull against each other
+
+The owner settled eligibility with two sentences that are both right and, taken
+literally together, cannot both be implemented:
+
+> UNCHECKED or stale health must not empty the catalogue automatically.
+
+> A newly configured panel must pass connection validation before it can be
+> enabled.
+
+`PanelRepository.create` writes `status: 'ACTIVE'`. If creating a panel counts
+as ENABLING it, then a created panel must be born `DISABLED` and an operator
+must run a connection test before it can sell — at which point no `ACTIVE` panel
+is ever `UNCHECKED` at its first sale, and the first sentence has almost nothing
+left to protect.
+
+**What is implemented: the validation gate is on the TRANSITION into `ACTIVE`
+from something else, not on creation.** Creating a panel is initial
+configuration, and there is no prior state for the gate to protect; the panel is
+made immediately probe-eligible in the same transaction, so a real answer
+arrives within one monitor tick. Enabling a panel that an operator had disabled
+— the case where the gate earns its keep, because the ordinary sequence is
+"test, find the password wrong, fix it, enable" — is refused without a fresh
+passing test bound to the panel's current identity.
+
+Recorded here rather than resolved silently, because the other reading is
+defensible and it is the owner's call. Switching to it is a three-line change in
+`DrizzlePanelRepository.create` plus its schedule eligibility, and a large
+number of test fixtures that create a panel and expect to sell from it.
+
+## Two settlement-time refusals a reader should expect to be unreachable
+
+`ProvisioningService.planForSettledOrder` can now refuse with
+`PANEL_NOT_ELIGIBLE`, which rolls the settlement back. Through the ordinary path
+that refusal cannot fire for `AT_CAPACITY`: the slot was reserved at
+confirmation and is released inside the same transaction, before the count.
+
+It fires for the cases that matter and are all operator- or time-driven: the
+panel was archived or disabled between confirmation and payment, the monitor
+confirmed it unreachable three times running, or the customer paid after their
+own order deadline had lapsed and the hold with it. Rolling back is the honest
+outcome in each — an installation that cannot deliver must not keep the money —
+and it is why the refusal exists rather than a log line.
+
+A settlement REPLAY skips the decision entirely (`alreadyProvisioned`). Judging
+a replay would refuse a transaction whose money has already moved, for a
+customer who already has what they paid for.
