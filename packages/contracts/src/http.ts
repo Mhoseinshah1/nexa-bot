@@ -8,6 +8,7 @@ import {
 } from './notifications.js';
 import { uuidV7Schema } from './ids.js';
 import { paymentAccountInputSchema } from './payment-accounts.js';
+import { refundChannelSchema, refundStateSchema } from './refunds.js';
 import {
   PAYMENT_GATEWAY_SORT_MAX,
   PAYMENT_GATEWAY_SORT_MIN,
@@ -2275,6 +2276,79 @@ export const PAYMENT_ACCOUNT_ROUTES = {
   update: (id: string) => `/payment-accounts/${encodeURIComponent(id)}`,
   enabled: (id: string) => `/payment-accounts/${encodeURIComponent(id)}/enabled`,
   makeDefault: (id: string) => `/payment-accounts/${encodeURIComponent(id)}/default`,
+} as const;
+
+// --- Refunds -----------------------------------------------------------------
+
+/**
+ * One refund, as the Web Admin renders it beneath the payment it reverses.
+ *
+ * The amount is a decimal STRING of minor units with its currency beside it, for the
+ * reason every other amount in this API is: JSON has no bigint and a `number` is the
+ * float the money model refuses, silently, above 2^53.
+ *
+ * Both actor fields and both timestamps are here, and that is the whole point of the
+ * shape: a refund nobody can attribute is the legacy `/admin/logs`, a free-text sentence
+ * with no entity and no before/after. `completedByAdminId` is null until somebody
+ * completes it, which for the manual channel is the only thing that makes the money
+ * actually gone.
+ */
+export const refundSchema = z.object({
+  id: z.string(),
+  paymentId: z.string(),
+  orderId: z.string().nullable(),
+  customerId: z.string(),
+  state: refundStateSchema,
+  channel: refundChannelSchema,
+  amountMinor: z.string(),
+  currency: z.enum(CURRENCY_CODES),
+  reason: z.string(),
+  requestedByAdminId: z.string().nullable(),
+  completedByAdminId: z.string().nullable(),
+  /** The bank reference or note an operator recorded when the money actually left. */
+  externalReference: z.string().nullable(),
+  completionNote: z.string().nullable(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+  completedAt: z.iso.datetime().nullable(),
+});
+export type RefundView = z.infer<typeof refundSchema>;
+
+/**
+ * A payment's refunds, with the server's own arithmetic beside them.
+ *
+ * `refundableMinor` travels WITH the list rather than being recomputed by the browser,
+ * because the browser would be a second opinion about how much money is left to give
+ * back — and the one that disagrees is the one an operator acts on. The server's figure
+ * is derived inside a transaction under a lock; this field is a render of that.
+ *
+ * `refundable` is false for a payment that cannot be refunded AT ALL — never settled,
+ * or a method this release has no channel for — which is a different fact from a
+ * refundable amount of zero, and a surface that conflated them would offer a button for
+ * a gateway payment nobody can reverse.
+ */
+export const refundListResponseSchema = z.object({
+  refunds: z.array(refundSchema),
+  paidMinor: z.string(),
+  consumedMinor: z.string(),
+  refundableMinor: z.string(),
+  currency: z.enum(CURRENCY_CODES),
+  refundable: z.boolean(),
+});
+export type RefundListResponse = z.infer<typeof refundListResponseSchema>;
+
+export const refundResponseSchema = z.object({ refund: refundSchema });
+export type RefundResponse = z.infer<typeof refundResponseSchema>;
+
+export const REFUND_ROUTES = {
+  /** Every refund against one payment, plus what is left to refund. */
+  list: (paymentId: string) => `/payments/${encodeURIComponent(paymentId)}/refunds`,
+  /** Requests one. The amount is bounded server-side; this body is a proposal. */
+  request: (paymentId: string) => `/payments/${encodeURIComponent(paymentId)}/refunds`,
+  /** Records that the external transfer actually happened. The manual channel's second step. */
+  complete: (refundId: string) => `/refunds/${encodeURIComponent(refundId)}/completion`,
+  /** Abandons a refund, releasing its amount back to the refundable balance. */
+  fail: (refundId: string) => `/refunds/${encodeURIComponent(refundId)}/failure`,
 } as const;
 
 // --- Payment gateways --------------------------------------------------------

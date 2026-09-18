@@ -1,0 +1,280 @@
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
+import {
+  REFUND_CONSUMING_STATES,
+  money,
+  type CurrencyCode,
+  type OrderId,
+  type PaymentId,
+  type RefundChannel,
+  type RefundId,
+  type RefundState,
+  type TenantContext,
+  type UserId,
+} from '@nexa/contracts';
+import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
+import {
+  requireTenantId,
+  type TransactionScope,
+} from '../../../../infrastructure/persistence/unit-of-work.js';
+import { payments, refunds } from '../../../../infrastructure/persistence/schema.js';
+import type {
+  RefundConsumption,
+  RefundDraft,
+  RefundRecord,
+  RefundRepository,
+} from '../application/refund-ports.js';
+
+/** The columns the record is built from. Selected explicitly, in one place. */
+const COLUMNS = {
+  id: refunds.id,
+  paymentId: refunds.paymentId,
+  customerId: refunds.customerId,
+  orderId: refunds.orderId,
+  state: refunds.state,
+  channel: refunds.channel,
+  amount: refunds.amount,
+  currency: refunds.currency,
+  reason: refunds.reason,
+  requestedByAdminId: refunds.requestedByAdminId,
+  completedByAdminId: refunds.completedByAdminId,
+  completedAt: refunds.completedAt,
+  externalReference: refunds.externalReference,
+  completionNote: refunds.completionNote,
+  createdAt: refunds.createdAt,
+  updatedAt: refunds.updatedAt,
+} as const;
+
+interface Row {
+  readonly id: string;
+  readonly paymentId: string;
+  readonly customerId: string;
+  readonly orderId: string | null;
+  readonly state: string;
+  readonly channel: string;
+  readonly amount: bigint;
+  readonly currency: string;
+  readonly reason: string;
+  readonly requestedByAdminId: string | null;
+  readonly completedByAdminId: string | null;
+  readonly completedAt: Date | null;
+  readonly externalReference: string | null;
+  readonly completionNote: string | null;
+  readonly createdAt: Date;
+  readonly updatedAt: Date;
+}
+
+function toRecord(row: Row): RefundRecord {
+  return {
+    id: row.id as RefundId,
+    paymentId: row.paymentId as PaymentId,
+    customerId: row.customerId as UserId,
+    orderId: row.orderId === null ? null : (row.orderId as OrderId),
+    /*
+     * Cast rather than re-validated: `refunds_state_check`, `refunds_channel_check` and
+     * `refunds_currency_check` are built from these exact contract enums, so the
+     * database is the boundary that guarantees them.
+     */
+    state: row.state as RefundState,
+    channel: row.channel as RefundChannel,
+    amount: money(row.amount, row.currency as CurrencyCode),
+    reason: row.reason,
+    requestedByAdminId: row.requestedByAdminId,
+    completedByAdminId: row.completedByAdminId,
+    completedAt: row.completedAt,
+    externalReference: row.externalReference,
+    completionNote: row.completionNote,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+/**
+ * Refunds, in PostgreSQL.
+ *
+ * Every query carries `eq(refunds.tenantId, …)`, the primary-key lookups included, for
+ * the reason the payment repository states: a primary-key lookup without the tenant
+ * returns another tenant's row and leaves the caller holding financial evidence it
+ * should never have seen.
+ */
+export class DrizzleRefundRepository implements RefundRepository {
+  constructor(private readonly db: Database) {}
+
+  private exec(tx?: unknown): Executor {
+    return (tx as TransactionScope | undefined)?.tx ?? this.db;
+  }
+
+  /** Oldest first — a history reads forwards, and the sum below does not care. */
+  async listForPayment(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    tx?: unknown,
+  ): Promise<readonly RefundRecord[]> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select(COLUMNS)
+      .from(refunds)
+      .where(and(eq(refunds.tenantId, tenantId), eq(refunds.paymentId, paymentId)))
+      .orderBy(asc(refunds.createdAt), asc(refunds.id));
+    return rows.map(toRecord);
+  }
+
+  async findById(scope: TenantContext, id: RefundId, tx?: unknown): Promise<RefundRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select(COLUMNS)
+      .from(refunds)
+      .where(and(eq(refunds.tenantId, tenantId), eq(refunds.id, id)))
+      .limit(1);
+    const row = rows[0];
+    return row === undefined ? null : toRecord(row);
+  }
+
+  async findByIdForUpdate(
+    scope: TenantContext,
+    id: RefundId,
+    tx: unknown,
+  ): Promise<RefundRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select(COLUMNS)
+      .from(refunds)
+      .where(and(eq(refunds.tenantId, tenantId), eq(refunds.id, id)))
+      .limit(1)
+      .for('update');
+    const row = rows[0];
+    return row === undefined ? null : toRecord(row);
+  }
+
+  /**
+   * The sum that bounds every refund, over the CONSUMING states only.
+   *
+   * `inArray(REFUND_CONSUMING_STATES)` rather than `ne('FAILED')`, so a state added to
+   * `REFUND_STATES` later cannot silently start consuming a payment's refundable
+   * balance. The contract spells the list out for the same reason.
+   *
+   * `MIN(currency)` is not a currency calculation — it is a WITNESS. Every refund of one
+   * payment is in that payment's currency by construction (the service copies it and the
+   * column has a CHECK), so this returns the one value present so the caller can assert
+   * it rather than assume it. `count` is how many rows produced the sum, because a total
+   * that cannot say what it was derived from is the legacy summary that leaves 916,550
+   * unexplained.
+   */
+  async consumptionFor(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    tx: unknown,
+  ): Promise<RefundConsumption> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({
+        consumed: sql<string>`coalesce(sum(${refunds.amount}), 0)::text`,
+        currency: sql<string | null>`min(${refunds.currency})`,
+        total: sql<number>`count(*)::int`,
+      })
+      .from(refunds)
+      .where(
+        and(
+          eq(refunds.tenantId, tenantId),
+          eq(refunds.paymentId, paymentId),
+          inArray(refunds.state, [...REFUND_CONSUMING_STATES]),
+        ),
+      );
+    const row = rows[0];
+    return {
+      consumedMinor: BigInt(row?.consumed ?? '0'),
+      currency: (row?.currency ?? null) as CurrencyCode | null,
+      count: Number(row?.total ?? 0),
+    };
+  }
+
+  async lockPayment(scope: TenantContext, paymentId: PaymentId, tx: unknown): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ id: payments.id })
+      .from(payments)
+      .where(and(eq(payments.tenantId, tenantId), eq(payments.id, paymentId)))
+      .limit(1)
+      .for('update');
+    return rows.length === 1;
+  }
+
+  async create(scope: TenantContext, draft: RefundDraft, tx: unknown): Promise<RefundRecord> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .insert(refunds)
+      .values({
+        id: draft.id,
+        tenantId,
+        paymentId: draft.paymentId,
+        customerId: draft.customerId,
+        orderId: draft.orderId,
+        state: draft.state,
+        channel: draft.channel,
+        amount: draft.amount.amountMinor,
+        currency: draft.amount.currency,
+        reason: draft.reason,
+        requestedByAdminId: draft.requestedByAdminId,
+        completedByAdminId: draft.completedByAdminId,
+        completedAt: draft.completedAt,
+        createdAt: draft.now,
+        updatedAt: draft.now,
+      })
+      .returning(COLUMNS);
+    const row = rows[0];
+    if (row === undefined) {
+      // An INSERT with no conflict clause either returns its row or throws. Reaching
+      // here would mean drizzle returned nothing from a successful insert, which is not
+      // a state to paper over with a re-read.
+      throw new Error('refund insert returned no row');
+    }
+    return toRecord(row);
+  }
+
+  /**
+   * The conditional transition. `from` is in the WHERE, never checked and then written.
+   *
+   * A read-then-write would let two operators both see AWAITING_EXTERNAL and both write
+   * COMPLETED, and the second would record a completion — an operator's name against
+   * money somebody else returned. Naming `from` makes the loser's UPDATE affect zero
+   * rows and say so.
+   *
+   * The completion columns are written in the SAME statement as the state, which is what
+   * `refunds_completed_check` requires: the constraint binds COMPLETED to having both an
+   * operator and a timestamp, so a two-step write would be refused by the database
+   * between the steps.
+   */
+  async transition(
+    scope: TenantContext,
+    id: RefundId,
+    input: {
+      readonly from: RefundState;
+      readonly to: RefundState;
+      readonly completedByAdminId?: string | null;
+      readonly completedAt?: Date | null;
+      readonly externalReference?: string | null;
+      readonly completionNote?: string | null;
+    },
+    now: Date,
+    tx: unknown,
+  ): Promise<RefundRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(refunds)
+      .set({
+        state: input.to,
+        ...(input.completedByAdminId === undefined
+          ? {}
+          : { completedByAdminId: input.completedByAdminId }),
+        ...(input.completedAt === undefined ? {} : { completedAt: input.completedAt }),
+        ...(input.externalReference === undefined
+          ? {}
+          : { externalReference: input.externalReference }),
+        ...(input.completionNote === undefined ? {} : { completionNote: input.completionNote }),
+        updatedAt: now,
+      })
+      .where(and(eq(refunds.tenantId, tenantId), eq(refunds.id, id), eq(refunds.state, input.from)))
+      .returning(COLUMNS);
+    const row = rows[0];
+    return row === undefined ? null : toRecord(row);
+  }
+}

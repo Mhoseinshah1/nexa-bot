@@ -4,20 +4,28 @@ import {
   PAYMENT_METHODS,
   PAYMENT_STATES,
   uuidV7Schema,
+  type RefundChannel,
+  type RefundResponse,
+  type RefundState,
+  type RefundView,
   type PaymentMethod,
   type PaymentReceiptView,
   type PaymentState,
   type PaymentSummaryResponse,
 } from '@nexa/contracts';
 import {
+  completeRefund,
   confirmPayment,
+  failRefund,
   fetchPayment,
   fetchPaymentReceipts,
   fetchPaymentReceiptBytes,
   fetchPayments,
+  fetchRefunds,
   rejectPayment,
+  requestRefund,
 } from '../api/client';
-import { formatTimestamp, splitBytes } from '../format';
+import { formatMoneyText, formatTimestamp, splitBytes } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { mayRequest, queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
@@ -88,6 +96,46 @@ const METHOD_LABELS: Readonly<Record<PaymentMethod, WebKey>> = {
   MANUAL_TRANSFER: 'web.payment_method_manual',
   GATEWAY: 'web.payment_method_gateway',
 };
+
+const REFUND_STATE_LABELS: Readonly<Record<RefundState, WebKey>> = {
+  REQUESTED: 'web.refund_state_requested',
+  AWAITING_EXTERNAL: 'web.refund_state_awaiting',
+  COMPLETED: 'web.refund_state_completed',
+  FAILED: 'web.refund_state_failed',
+};
+
+/*
+ * `AWAITING_EXTERNAL` is `warn` and `FAILED` is neutral, which is the opposite of the
+ * payment table's instinct and is correct here. A refund awaiting an external transfer
+ * is money somebody still owes and a thing an operator must act on; a FAILED refund is
+ * a decision that was cleanly abandoned and released its amount, which is not an
+ * error — it is the honest alternative to deleting the row.
+ */
+const REFUND_STATE_TONES: Readonly<Record<RefundState, Tone>> = {
+  REQUESTED: 'warn',
+  AWAITING_EXTERNAL: 'warn',
+  COMPLETED: 'ok',
+  FAILED: 'neutral',
+};
+
+const REFUND_CHANNEL_LABELS: Readonly<Record<RefundChannel, WebKey>> = {
+  WALLET_CREDIT: 'web.refund_channel_wallet',
+  EXTERNAL_MANUAL: 'web.refund_channel_manual',
+  PROVIDER: 'web.refund_channel_provider',
+};
+
+/**
+ * Digits only, as a decimal STRING of minor units.
+ *
+ * Never parsed to a number: JSON has no bigint and a `number` is the float the money
+ * model refuses, silently, above 2^53. Anything that is not digits collapses to `'0'`,
+ * which the button below reads as "nothing to submit" — the server's own schema is what
+ * refuses a malformed amount, and this only stops the form offering to send one.
+ */
+function digitsOf(value: string): string {
+  const trimmed = value.trim();
+  return /^[0-9]{1,19}$/u.test(trimmed) ? trimmed.replace(/^0+(?=[0-9])/u, '') : '0';
+}
 
 function StateBadge({ value }: { value: PaymentState }) {
   return <Badge tone={STATE_TONES[value]}>{t(STATE_LABELS[value])}</Badge>;
@@ -513,16 +561,387 @@ function ReceiptRow({ paymentId, receipt }: { paymentId: string; receipt: Paymen
   );
 }
 
+/**
+ * Money going back, and how much of this payment is left to give back.
+ *
+ * `refundableMinor` is the SERVER's figure, rendered rather than recomputed. This tab
+ * holds the rows it was handed and could subtract them, and the number it produced
+ * would be a second opinion about money — the one an operator acts on if the two ever
+ * disagreed. The server derives it inside a transaction under a lock on the payment,
+ * which is also why a stale form here is refused rather than honoured.
+ *
+ * Two permissions, and they are not the same decision: `refunds.view` reads the history,
+ * `refunds.issue` moves money. A reader who may see a refund does not get to make one.
+ *
+ * A wallet-funded refund arrives COMPLETED, because the ledger IS the wallet and its
+ * credit committed in the same transaction. A manual transfer arrives
+ * AWAITING_EXTERNAL and STAYS there until an operator says the money left — this
+ * installation has no bank API, and a screen that reported otherwise would be the
+ * silent success the whole lifecycle exists to refuse.
+ */
+function RefundsCard({ paymentId, mayIssue }: { paymentId: string; mayIssue: boolean }) {
+  const notify = useToast();
+  const queries = useQueryClient();
+  const request = useSubmissionKey();
+  const completion = useSubmissionKey();
+  const abandonment = useSubmissionKey();
+  const [amount, setAmount] = useState('');
+  const [reason, setReason] = useState('');
+  /** Which AWAITING_EXTERNAL refund the operator is answering, and with what. */
+  const [answering, setAnswering] = useState<string | null>(null);
+  const [note, setNote] = useState('');
+  const [externalReference, setExternalReference] = useState('');
+
+  const refunds = useQuery({
+    queryKey: ['refunds', paymentId],
+    queryFn: () => fetchRefunds(paymentId),
+  });
+  const data = refunds.data;
+  const rows = data?.refunds ?? [];
+
+  const refresh = (response: RefundResponse) => {
+    void response;
+    void queries.invalidateQueries({ queryKey: ['refunds', paymentId] });
+    /*
+     * The WALLET too, and not only on the wallet channel.
+     *
+     * A wallet refund appends a ledger entry in the same transaction, so a balance
+     * rendered from a cached query would be behind by exactly the amount just returned.
+     * Invalidating unconditionally is cheaper than deciding per channel and cannot be
+     * wrong in the direction that matters.
+     */
+    void queries.invalidateQueries({ queryKey: ['wallet'] });
+  };
+
+  const issue = useMutation({
+    mutationFn: () =>
+      requestRefund({
+        paymentId,
+        // Bound to the amount AND the reason, so an edited figure is a new command
+        // rather than a replay the store refuses as a payload mismatch.
+        idempotencyKey: request.current({ paymentId, amount, reason }),
+        amountMinor: digitsOf(amount),
+        reason: reason.trim(),
+      }),
+    onSuccess: (response) => {
+      request.settle();
+      notify({ tone: 'ok', message: t('web.refund_requested') });
+      setAmount('');
+      setReason('');
+      refresh(response);
+    },
+    /*
+     * A 5xx may have committed. A fresh key on the retry would be a SECOND refund of
+     * somebody's money — the one failure mode on this card that cannot be undone.
+     */
+    onError: (error) => request.settleOn(error),
+  });
+
+  const complete = useMutation({
+    mutationFn: () => {
+      if (answering === null) throw new Error('no refund is being answered');
+      return completeRefund({
+        refundId: answering,
+        idempotencyKey: completion.current({ answering, note, externalReference }),
+        note: note.trim(),
+        externalReference: externalReference.trim() === '' ? null : externalReference.trim(),
+      });
+    },
+    onSuccess: (response) => {
+      completion.settle();
+      notify({ tone: 'ok', message: t('web.refund_completed') });
+      setAnswering(null);
+      setNote('');
+      setExternalReference('');
+      refresh(response);
+    },
+    onError: (error) => completion.settleOn(error),
+  });
+
+  const abandon = useMutation({
+    mutationFn: () => {
+      if (answering === null) throw new Error('no refund is being answered');
+      return failRefund({
+        refundId: answering,
+        idempotencyKey: abandonment.current({ answering, note }),
+        note: note.trim(),
+      });
+    },
+    onSuccess: (response) => {
+      abandonment.settle();
+      notify({ tone: 'ok', message: t('web.refund_failed_done') });
+      setAnswering(null);
+      setNote('');
+      setExternalReference('');
+      refresh(response);
+    },
+    onError: (error) => abandonment.settleOn(error),
+  });
+
+  const currency = data?.currency ?? 'IRT';
+  const remaining = data === undefined ? 0n : BigInt(data.refundableMinor);
+  const columns: readonly Column<RefundView>[] = [
+    {
+      key: 'amount',
+      header: t('web.refund_amount'),
+      render: (row) => <Money value={{ amountMinor: row.amountMinor, currency: row.currency }} />,
+    },
+    {
+      key: 'state',
+      header: t('web.refund_state'),
+      render: (row) => (
+        <Badge tone={REFUND_STATE_TONES[row.state]}>{t(REFUND_STATE_LABELS[row.state])}</Badge>
+      ),
+    },
+    {
+      key: 'channel',
+      header: t('web.refund_channel'),
+      render: (row) => t(REFUND_CHANNEL_LABELS[row.channel]),
+    },
+    { key: 'reason', header: t('web.refund_reason'), render: (row) => row.reason },
+    {
+      key: 'requested',
+      header: t('web.refund_requested_by'),
+      render: (row) =>
+        row.requestedByAdminId === null ? <Dash /> : <Copyable value={row.requestedByAdminId} />,
+    },
+    {
+      key: 'completed',
+      header: t('web.refund_completed_by'),
+      render: (row) =>
+        // A SENTENCE for the one state where the absence is the point: nobody has said
+        // the money left yet, which is a different fact from a missing value.
+        row.state === 'AWAITING_EXTERNAL' ? (
+          <span className="muted small">{t('web.refund_awaiting_hint')}</span>
+        ) : row.completedByAdminId === null ? (
+          <Dash />
+        ) : (
+          <Copyable value={row.completedByAdminId} />
+        ),
+    },
+    {
+      key: 'createdAt',
+      header: t('web.refund_created_at'),
+      render: (row) => formatTimestamp(row.createdAt),
+    },
+    {
+      key: 'completedAt',
+      header: t('web.refund_completed_at'),
+      render: (row) => (row.completedAt === null ? <Dash /> : formatTimestamp(row.completedAt)),
+    },
+    {
+      key: 'externalReference',
+      header: t('web.refund_external_reference'),
+      render: (row) =>
+        row.externalReference === null ? <Dash /> : <Ltr>{row.externalReference}</Ltr>,
+    },
+  ];
+
+  const awaiting = rows.filter((row) => row.state === 'AWAITING_EXTERNAL');
+
+  return (
+    <Card title={t('web.refunds')}>
+      <StateSwitch query={refunds}>
+        {data === undefined ? null : (
+          <>
+            <KV
+              items={[
+                [
+                  t('web.refund_paid'),
+                  <Money key="p" value={{ amountMinor: data.paidMinor, currency }} />,
+                ],
+                [
+                  t('web.refund_consumed'),
+                  <Money key="c" value={{ amountMinor: data.consumedMinor, currency }} />,
+                ],
+                [
+                  t('web.refund_remaining'),
+                  <Money key="r" value={{ amountMinor: data.refundableMinor, currency }} />,
+                ],
+              ]}
+            />
+
+            {/*
+              NOT refundable at all is a different statement from nothing left, and the
+              two get different sentences. A payment that never settled has no money to
+              return; a GATEWAY payment has no channel in this release, and a screen
+              that offered a button for it would promise a reversal nobody can perform.
+            */}
+            {!data.refundable && <Banner tone="info">{t('web.refund_unavailable')}</Banner>}
+
+            {rows.length === 0 ? (
+              <Empty title={t('web.refunds_empty')} />
+            ) : (
+              <DataTable
+                columns={columns}
+                rows={rows}
+                rowKey={(row) => row.id}
+                caption={t('web.refunds')}
+              />
+            )}
+
+            {data.refundable && remaining > 0n && (
+              <>
+                <h3 className="card-subtitle">{t('web.refund_request_title')}</h3>
+                <p className="muted small">{t('web.refund_request_hint')}</p>
+                {mayIssue ? (
+                  <>
+                    <Field label={t('web.refund_amount_minor')} htmlFor="refund-amount">
+                      <input
+                        id="refund-amount"
+                        value={amount}
+                        inputMode="numeric"
+                        maxLength={19}
+                        onChange={(event) => setAmount(event.target.value)}
+                      />
+                    </Field>
+                    <div className="btn-group">
+                      {/* The server's own remaining figure, not one computed here. */}
+                      <button
+                        type="button"
+                        className="btn sm"
+                        onClick={() => setAmount(data.refundableMinor)}
+                      >
+                        {t('web.refund_amount_all')}
+                      </button>
+                    </div>
+                    <Field label={t('web.refund_reason')} htmlFor="refund-reason">
+                      <input
+                        id="refund-reason"
+                        value={reason}
+                        maxLength={500}
+                        onChange={(event) => setReason(event.target.value)}
+                      />
+                    </Field>
+                    <div className="toolbar">
+                      <button
+                        type="button"
+                        className="btn primary sm"
+                        disabled={
+                          issue.isPending || digitsOf(amount) === '0' || reason.trim().length < 3
+                        }
+                        onClick={() => issue.mutate()}
+                      >
+                        {t('web.refund_request')}
+                      </button>
+                    </div>
+                    {issue.error !== null && (
+                      <Banner tone="danger">{messageFor(issue.error)}</Banner>
+                    )}
+                  </>
+                ) : (
+                  // No disabled button: a disabled control and this sentence make the
+                  // same claim, and only one of them names the permission.
+                  <Banner tone="info">{t('web.refund_denied')}</Banner>
+                )}
+              </>
+            )}
+
+            {/*
+              The manual channel's second step, and the reason `AWAITING_EXTERNAL`
+              exists. An operator says the money left, or says it never will — and
+              saying the second RELEASES the amount back to the refundable balance
+              rather than deleting the evidence, which is the over-refund achieved by
+              destroying the record.
+            */}
+            {mayIssue && awaiting.length > 0 && (
+              <>
+                <h3 className="card-subtitle">{t('web.refund_answer_title')}</h3>
+                <p className="muted small">{t('web.refund_answer_hint')}</p>
+                <Field label={t('web.refund_answer_which')} htmlFor="refund-answering">
+                  <select
+                    id="refund-answering"
+                    value={answering ?? ''}
+                    onChange={(event) =>
+                      setAnswering(event.target.value === '' ? null : event.target.value)
+                    }
+                  >
+                    <option value="">{t('web.refund_answer_none')}</option>
+                    {awaiting.map((row) => (
+                      <option key={row.id} value={row.id}>
+                        {`${formatMoneyText({ amountMinor: row.amountMinor, currency: row.currency })} — ${row.id}`}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                {answering !== null && (
+                  <>
+                    <Field label={t('web.refund_answer_note')} htmlFor="refund-note">
+                      <input
+                        id="refund-note"
+                        value={note}
+                        maxLength={500}
+                        onChange={(event) => setNote(event.target.value)}
+                      />
+                    </Field>
+                    <Field
+                      label={t('web.refund_external_reference')}
+                      htmlFor="refund-external-reference"
+                    >
+                      <input
+                        id="refund-external-reference"
+                        value={externalReference}
+                        maxLength={140}
+                        onChange={(event) => setExternalReference(event.target.value)}
+                      />
+                    </Field>
+                    <div className="toolbar">
+                      <button
+                        type="button"
+                        className="btn primary sm"
+                        /*
+                         * Either answer in flight disables BOTH, for the reason the
+                         * confirm/reject pair carries: the two commands race one row
+                         * with different keys, and the operator gets whichever the
+                         * database serves second. Neither can be undone.
+                         */
+                        disabled={complete.isPending || abandon.isPending || note.trim().length < 3}
+                        onClick={() => complete.mutate()}
+                      >
+                        {t('web.refund_complete')}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn danger sm"
+                        disabled={complete.isPending || abandon.isPending || note.trim().length < 3}
+                        onClick={() => abandon.mutate()}
+                      >
+                        {t('web.refund_abandon')}
+                      </button>
+                    </div>
+                    {complete.error !== null && (
+                      <Banner tone="danger">{messageFor(complete.error)}</Banner>
+                    )}
+                    {abandon.error !== null && (
+                      <Banner tone="danger">{messageFor(abandon.error)}</Banner>
+                    )}
+                  </>
+                )}
+              </>
+            )}
+          </>
+        )}
+      </StateSwitch>
+    </Card>
+  );
+}
+
 export function PaymentDetailPage({
   id,
   mayReview,
   mayViewReceipts,
+  mayViewRefunds,
+  mayIssueRefunds,
   denied,
 }: {
   id: string;
   mayReview: boolean;
   /** `receipts.view`, separate from `mayReview`: reading evidence is not deciding. */
   mayViewReceipts: boolean;
+  /** `refunds.view`. Reading a refund history is not the same right as making one. */
+  mayViewRefunds: boolean;
+  /** `refunds.issue`. The CRITICAL half: it moves money. */
+  mayIssueRefunds: boolean;
   denied: boolean;
 }) {
   const onLink = useLinkHandler();
@@ -754,6 +1173,15 @@ export function PaymentDetailPage({
               automatically get to open a customer's bank screenshot.
             */}
             {mayViewReceipts && <ReceiptsCard paymentId={id} />}
+
+            {/*
+              Money going BACK, under its own two permissions.
+              Placed after the evidence and before the decision forms, because that is
+              the order an operator reads in: what arrived, what was sent back, and only
+              then what is left to decide. Hidden entirely without `refunds.view` — a
+              refund history is financial evidence about a customer.
+            */}
+            {mayViewRefunds && <RefundsCard paymentId={id} mayIssue={mayIssueRefunds} />}
 
             {/*
               How it ended WITHOUT money, when it did.

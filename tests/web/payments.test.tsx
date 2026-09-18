@@ -256,6 +256,8 @@ describe('the payment detail', () => {
         id={ROW_ID}
         mayReview={mayReview}
         mayViewReceipts={false}
+        mayViewRefunds={false}
+        mayIssueRefunds={false}
         denied={false}
       />,
     );
@@ -294,7 +296,16 @@ describe('the payment detail', () => {
         },
       },
     ]);
-    renderPage(<PaymentDetailPage id={ROW_ID} mayReview mayViewReceipts={false} denied={false} />);
+    renderPage(
+      <PaymentDetailPage
+        id={ROW_ID}
+        mayReview
+        mayViewReceipts={false}
+        mayViewRefunds={false}
+        mayIssueRefunds={false}
+        denied={false}
+      />,
+    );
     await screen.findByText('تأیید دریافت وجه');
 
     fireEvent.change(screen.getByLabelText('یادداشت بررسی'), { target: { value: 'received' } });
@@ -424,7 +435,14 @@ describe('the payment detail', () => {
       },
     ]);
     const view = renderPage(
-      <PaymentDetailPage id={ROW_ID} mayReview mayViewReceipts={false} denied={false} />,
+      <PaymentDetailPage
+        id={ROW_ID}
+        mayReview
+        mayViewReceipts={false}
+        mayViewRefunds={false}
+        mayIssueRefunds={false}
+        denied={false}
+      />,
     );
     await screen.findAllByText('a1b2c3d4e5f60718:manual');
 
@@ -471,7 +489,14 @@ describe('the payment detail', () => {
     );
 
     const view = renderPage(
-      <PaymentDetailPage id={ROW_ID} mayReview mayViewReceipts={false} denied={false} />,
+      <PaymentDetailPage
+        id={ROW_ID}
+        mayReview
+        mayViewReceipts={false}
+        mayViewRefunds={false}
+        mayIssueRefunds={false}
+        denied={false}
+      />,
     );
     await screen.findAllByText('a1b2c3d4e5f60718:manual');
 
@@ -508,7 +533,14 @@ describe('the payment detail', () => {
     );
 
     const view = renderPage(
-      <PaymentDetailPage id={ROW_ID} mayReview mayViewReceipts={false} denied={false} />,
+      <PaymentDetailPage
+        id={ROW_ID}
+        mayReview
+        mayViewReceipts={false}
+        mayViewRefunds={false}
+        mayIssueRefunds={false}
+        denied={false}
+      />,
     );
     await screen.findAllByText('a1b2c3d4e5f60718:manual');
 
@@ -528,7 +560,14 @@ describe('the payment detail', () => {
   it('offers no rejection to an operator without receipts.review', async () => {
     stubApi(detail(payment({ state: 'PENDING', method: 'MANUAL_TRANSFER' })));
     const view = renderPage(
-      <PaymentDetailPage id={ROW_ID} mayReview={false} mayViewReceipts={false} denied={false} />,
+      <PaymentDetailPage
+        id={ROW_ID}
+        mayReview={false}
+        mayViewReceipts={false}
+        mayViewRefunds={false}
+        mayIssueRefunds={false}
+        denied={false}
+      />,
     );
     await screen.findAllByText('a1b2c3d4e5f60718:manual');
     // Not a disabled button and not a hidden one behind a visible card: the whole
@@ -617,7 +656,14 @@ describe('the frozen destination on a payment detail', () => {
   it('names the account the instructions pointed at', async () => {
     stubApi(detail({ destination: DESTINATION }));
     const { container } = renderPage(
-      <PaymentDetailPage id={ROW_ID} mayReview={false} mayViewReceipts={false} denied={false} />,
+      <PaymentDetailPage
+        id={ROW_ID}
+        mayReview={false}
+        mayViewReceipts={false}
+        mayViewRefunds={false}
+        mayIssueRefunds={false}
+        denied={false}
+      />,
     );
     await screen.findByText('مقصد واریز اعلام‌شده');
 
@@ -633,7 +679,14 @@ describe('the frozen destination on a payment detail', () => {
   it('never renders a full card number, and says nothing when there is no destination', async () => {
     stubApi(detail({ destination: DESTINATION }));
     const withCard = renderPage(
-      <PaymentDetailPage id={ROW_ID} mayReview={false} mayViewReceipts={false} denied={false} />,
+      <PaymentDetailPage
+        id={ROW_ID}
+        mayReview={false}
+        mayViewReceipts={false}
+        mayViewRefunds={false}
+        mayIssueRefunds={false}
+        denied={false}
+      />,
     );
     await screen.findByText('مقصد واریز اعلام‌شده');
     /*
@@ -646,7 +699,14 @@ describe('the frozen destination on a payment detail', () => {
 
     stubApi(detail());
     const without = renderPage(
-      <PaymentDetailPage id={ROW_ID} mayReview={false} mayViewReceipts={false} denied={false} />,
+      <PaymentDetailPage
+        id={ROW_ID}
+        mayReview={false}
+        mayViewReceipts={false}
+        mayViewRefunds={false}
+        mayIssueRefunds={false}
+        denied={false}
+      />,
     );
     // The reference proves the page RENDERED; the destination card is what must not be
     // there. Anchoring on the card's own title would pass on a page that never loaded.
@@ -704,7 +764,14 @@ describe('the receipts an operator can read', () => {
   it('draws nothing at all without receipts.view', async () => {
     const api = stubApi(withReceipts([receipt()]));
     const view = renderPage(
-      <PaymentDetailPage id={ROW_ID} mayReview mayViewReceipts={false} denied={false} />,
+      <PaymentDetailPage
+        id={ROW_ID}
+        mayReview
+        mayViewReceipts={false}
+        mayViewRefunds={false}
+        mayIssueRefunds={false}
+        denied={false}
+      />,
     );
     /*
      * The REFERENCE, not the page heading. «جزئیات پرداخت» is the head and renders
@@ -726,7 +793,14 @@ describe('the receipts an operator can read', () => {
   it('lists what the customer sent, and says a receipt is not a confirmation', async () => {
     stubApi(withReceipts([receipt({ fileName: 'rasid.jpg' })]));
     const view = renderPage(
-      <PaymentDetailPage id={ROW_ID} mayReview mayViewReceipts denied={false} />,
+      <PaymentDetailPage
+        id={ROW_ID}
+        mayReview
+        mayViewReceipts
+        mayViewRefunds={false}
+        mayIssueRefunds={false}
+        denied={false}
+      />,
     );
     await screen.findByText('rasid.jpg');
 
@@ -741,7 +815,14 @@ describe('the receipts an operator can read', () => {
     const urls = stubObjectUrls();
     const api = stubApi(withReceipts([receipt()]));
     const view = renderPage(
-      <PaymentDetailPage id={ROW_ID} mayReview mayViewReceipts denied={false} />,
+      <PaymentDetailPage
+        id={ROW_ID}
+        mayReview
+        mayViewReceipts
+        mayViewRefunds={false}
+        mayIssueRefunds={false}
+        denied={false}
+      />,
     );
     fireEvent.click(await screen.findByText('مشاهدهٔ رسید'));
 
@@ -764,7 +845,14 @@ describe('the receipts an operator can read', () => {
     const urls = stubObjectUrls();
     stubApi(withReceipts([receipt({ mimeType: 'image/png' })]));
     const view = renderPage(
-      <PaymentDetailPage id={ROW_ID} mayReview mayViewReceipts denied={false} />,
+      <PaymentDetailPage
+        id={ROW_ID}
+        mayReview
+        mayViewReceipts
+        mayViewRefunds={false}
+        mayIssueRefunds={false}
+        denied={false}
+      />,
     );
     fireEvent.click(await screen.findByText('مشاهدهٔ رسید'));
 
@@ -778,7 +866,14 @@ describe('the receipts an operator can read', () => {
     const urls = stubObjectUrls();
     stubApi(withReceipts([receipt({ kind: 'DOCUMENT', mimeType: 'image/svg+xml' })]));
     const view = renderPage(
-      <PaymentDetailPage id={ROW_ID} mayReview mayViewReceipts denied={false} />,
+      <PaymentDetailPage
+        id={ROW_ID}
+        mayReview
+        mayViewReceipts
+        mayViewRefunds={false}
+        mayIssueRefunds={false}
+        denied={false}
+      />,
     );
     // The control says download rather than view, because the record says DOCUMENT.
     fireEvent.click(await screen.findByText('دریافت فایل رسید'));
@@ -813,7 +908,14 @@ describe('the receipts an operator can read', () => {
       },
     ]);
     const view = renderPage(
-      <PaymentDetailPage id={ROW_ID} mayReview mayViewReceipts denied={false} />,
+      <PaymentDetailPage
+        id={ROW_ID}
+        mayReview
+        mayViewReceipts
+        mayViewRefunds={false}
+        mayIssueRefunds={false}
+        denied={false}
+      />,
     );
     fireEvent.click(await screen.findByText('مشاهدهٔ رسید'));
 
@@ -848,5 +950,198 @@ describe('the receipts an operator can read', () => {
     await waitFor(() => {
       expect(withView.container.textContent).toContain('رسیدهای ارسالی مشتری');
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Refunds (Phase 5E)
+// ---------------------------------------------------------------------------
+
+const REFUND_ID = '019260ab-cdef-7012-8345-6789abcdef01';
+const ADMIN_ID = '019270ab-cdef-7012-8345-6789abcdef01';
+
+function refundRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: REFUND_ID,
+    paymentId: ROW_ID,
+    orderId: ORDER_ID,
+    customerId: CUSTOMER_ID,
+    state: 'AWAITING_EXTERNAL',
+    channel: 'EXTERNAL_MANUAL',
+    amountMinor: '100000',
+    currency: 'IRT',
+    reason: 'مشتری منصرف شد',
+    requestedByAdminId: ADMIN_ID,
+    completedByAdminId: null,
+    externalReference: null,
+    completionNote: null,
+    createdAt: '2026-09-11T09:00:00.000Z',
+    updatedAt: '2026-09-11T09:00:00.000Z',
+    completedAt: null,
+    ...overrides,
+  };
+}
+
+/** The payment detail plus its refund ledger, both parsed by the real schemas. */
+const withRefunds = (
+  refunds: readonly unknown[],
+  ledger: Record<string, unknown> = {},
+  paymentOverrides: Record<string, unknown> = {},
+) => [
+  ...detail({ state: 'CONFIRMED', ...paymentOverrides }),
+  {
+    url: `/payments/${ROW_ID}/refunds`,
+    body: {
+      refunds,
+      paidMinor: '250000',
+      consumedMinor: '0',
+      refundableMinor: '250000',
+      currency: 'IRT',
+      refundable: true,
+      ...ledger,
+    },
+  },
+];
+
+describe('the refund card', () => {
+  const renderDetail = (routes: readonly unknown[], mayIssue: boolean) => {
+    stubApi(routes as never);
+    return renderPage(
+      <PaymentDetailPage
+        id={ROW_ID}
+        mayReview
+        mayViewReceipts={false}
+        mayViewRefunds
+        mayIssueRefunds={mayIssue}
+        denied={false}
+      />,
+    );
+  };
+
+  it('renders the history with its actors, and the server’s own remaining amount', async () => {
+    const view = renderDetail(
+      withRefunds([refundRow()], { consumedMinor: '100000', refundableMinor: '150000' }),
+      true,
+    );
+    // The CARD's title appears before its query settles, so waiting on it proves
+    // nothing. This label renders only once the ledger has arrived.
+    await screen.findByText('باقی‌ماندهٔ قابل بازگشت');
+
+    expect(view.container.textContent).toContain('در انتظار واریز بیرونی');
+    expect(view.container.textContent).toContain('واریز دستی بیرون از سامانه');
+    expect(view.container.textContent).toContain('مشتری منصرف شد');
+    // Who asked for it. `/admin/logs` could not answer this, which is the point.
+    expect(view.container.textContent).toContain(ADMIN_ID);
+    // And the sentence for the completion nobody has performed — not a dash.
+    expect(view.container.textContent).toContain('هنوز کسی واریز را تأیید نکرده است');
+  });
+
+  it('does not recompute the remaining amount from the rows it was handed', async () => {
+    /*
+     * The server says 150,000 while the rows sum to 100,000 of a 250,000 payment — a
+     * combination the server would not actually produce. It is here precisely to catch
+     * a screen that computed the figure itself: such a screen would render a number the
+     * server never sent, and the one an operator acts on would be the browser's.
+     */
+    const view = renderDetail(
+      withRefunds([refundRow({ amountMinor: '50000' })], {
+        consumedMinor: '100000',
+        refundableMinor: '150000',
+      }),
+      true,
+    );
+    // The CARD's title appears before its query settles, so waiting on it proves
+    // nothing. This label renders only once the ledger has arrived.
+    await screen.findByText('باقی‌ماندهٔ قابل بازگشت');
+    expect(view.container.textContent).toMatch(/۱۵۰٬۰۰۰|150,000/u);
+  });
+
+  it('says a payment cannot be refunded at all, and offers no form', async () => {
+    const view = renderDetail(
+      withRefunds([], { refundable: false, refundableMinor: '250000' }, { method: 'GATEWAY' }),
+      true,
+    );
+    // The CARD's title appears before its query settles, so waiting on it proves
+    // nothing. This label renders only once the ledger has arrived.
+    await screen.findByText('باقی‌ماندهٔ قابل بازگشت');
+
+    expect(view.container.textContent).toContain('این پرداخت قابل بازگشت نیست');
+    // NOT a button. A gateway payment has no channel to reverse in this release, and a
+    // control here would promise a reversal nobody can perform.
+    expect(screen.queryByRole('button', { name: 'ثبت درخواست' })).toBeNull();
+  });
+
+  it('names the permission instead of drawing a disabled button', async () => {
+    const view = renderDetail(withRefunds([]), false);
+    // The CARD's title appears before its query settles, so waiting on it proves
+    // nothing. This label renders only once the ledger has arrived.
+    await screen.findByText('باقی‌ماندهٔ قابل بازگشت');
+
+    expect(view.container.textContent).toContain('refunds.issue');
+    expect(screen.queryByLabelText('مبلغ (به کوچک‌ترین یکای پول)')).toBeNull();
+  });
+
+  it('sends the amount as a decimal string of minor units, with its reason', async () => {
+    const api = stubApi(withRefunds([]) as never);
+    renderPage(
+      <PaymentDetailPage
+        id={ROW_ID}
+        mayReview
+        mayViewReceipts={false}
+        mayViewRefunds
+        mayIssueRefunds
+        denied={false}
+      />,
+    );
+    // The CARD's title appears before its query settles, so waiting on it proves
+    // nothing. This label renders only once the ledger has arrived.
+    await screen.findByText('باقی‌ماندهٔ قابل بازگشت');
+
+    fireEvent.change(screen.getByLabelText('مبلغ (به کوچک‌ترین یکای پول)'), {
+      target: { value: '100000' },
+    });
+    fireEvent.change(screen.getByLabelText('دلیل'), { target: { value: 'مشتری منصرف شد' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ثبت درخواست' }));
+
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
+    });
+    const posted = api.calls.find((call) => call.method === 'POST');
+    const body = posted?.body as Record<string, unknown>;
+    // A STRING, and no currency: a refund is denominated by the payment it reverses.
+    expect(body['amountMinor']).toBe('100000');
+    expect('currency' in body).toBe(false);
+    expect(body['reason']).toBe('مشتری منصرف شد');
+    expect(typeof body['idempotencyKey']).toBe('string');
+  });
+
+  it('fills the amount from the server’s remaining figure, unaltered', async () => {
+    renderDetail(withRefunds([], { refundableMinor: '9007199254740993' }), true);
+    // The CARD's title appears before its query settles, so waiting on it proves
+    // nothing. This label renders only once the ledger has arrived.
+    await screen.findByText('باقی‌ماندهٔ قابل بازگشت');
+
+    fireEvent.click(screen.getByText('کل باقی‌ماندهٔ قابل بازگشت'));
+    // Past 2^53. Copied as a string, because computing it would round it.
+    expect(screen.getByLabelText<HTMLInputElement>('مبلغ (به کوچک‌ترین یکای پول)').value).toBe(
+      '9007199254740993',
+    );
+  });
+
+  it('offers the answer form only for a refund awaiting an external transfer', async () => {
+    const view = renderDetail(
+      withRefunds([refundRow({ state: 'COMPLETED', completedByAdminId: ADMIN_ID })], {
+        consumedMinor: '100000',
+        refundableMinor: '150000',
+      }),
+      true,
+    );
+    // The CARD's title appears before its query settles, so waiting on it proves
+    // nothing. This label renders only once the ledger has arrived.
+    await screen.findByText('باقی‌ماندهٔ قابل بازگشت');
+
+    expect(view.container.textContent).toContain('بازگشت انجام شد');
+    // Nothing left to answer, so the form that records an external transfer is absent.
+    expect(view.container.textContent).not.toContain('پاسخ به بازگشت‌های در انتظار واریز');
   });
 });

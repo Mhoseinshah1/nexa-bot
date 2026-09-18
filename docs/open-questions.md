@@ -1883,3 +1883,21 @@ Three shapes, and the choice is a product decision rather than a defect:
 
 **Trigger to resolve:** the first installation that configures a route maximum, or the
 first external gateway adapter, whichever arrives first.
+
+## OQ-5D-01 — the first concrete gateway provider
+
+**First concrete gateway provider requires owner selection.**
+
+5C shipped the provider-neutral route model: `PAYMENT_GATEWAY_PROVIDERS` holds
+`MANUAL_TRANSFER` alone, and a route names the `PaymentMethod` it settles through so a
+second provider is a descriptor plus an adapter rather than a redesign. What does not
+exist is a decision about WHICH provider that is — NowPayments, Zarinpal, Telegram
+Stars, a custom endpoint, or something else. Each implies different credentials, a
+different callback shape and a different verification authority, and none of them can be
+chosen from the research: the legacy system exposed seven gateways and no rate field on
+any of them.
+
+Nothing here is guessed and no adapter is written against invented credentials, which is
+why 5D is the one part of the payment batch that is skipped rather than deferred.
+
+**Trigger to resolve:** the owner naming a provider.

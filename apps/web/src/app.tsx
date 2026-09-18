@@ -570,6 +570,17 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
            */
           mayReview={may('receipts.review')}
           mayViewReceipts={may('receipts.view')}
+          /*
+           * Two refund permissions, not one.
+           *
+           * `refunds.view` reads the history — financial evidence about a customer —
+           * and `refunds.issue` is the CRITICAL half that moves money. The service
+           * charges both itself; this only decides whether the card is drawn and
+           * whether its forms are, and the denied half names the permission rather
+           * than drawing a disabled button.
+           */
+          mayViewRefunds={may('refunds.view')}
+          mayIssueRefunds={may('refunds.issue')}
           denied={!may('payments.view')}
         />
       ),

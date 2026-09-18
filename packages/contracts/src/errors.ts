@@ -859,6 +859,39 @@ export const COMMERCE_ERROR_CODES = {
    */
   PAYMENT_ACCOUNT_DEFAULT_CONFLICT: 'commerce.payment_account_default_conflict',
 
+  /** No refund with that id for this tenant. */
+  REFUND_NOT_FOUND: 'commerce.refund_not_found',
+  /**
+   * The payment cannot be refunded at all.
+   *
+   * Three facts, one code, and the `reason` detail separates them for the operator: the
+   * payment never settled (only a CONFIRMED payment took money), its method has no
+   * refund channel this release can perform (`GATEWAY`, per `REFUND_METHOD_SUPPORT`), or
+   * it is already refunded in full. None of the three is something a different amount
+   * would fix, which is what distinguishes this from `REFUND_EXCEEDS_REFUNDABLE`.
+   */
+  REFUND_NOT_PERMITTED: 'commerce.refund_not_permitted',
+  /**
+   * The amount asked for is more than the payment has left to give back.
+   *
+   * Its own code because it is the ONE refund refusal a different request would satisfy,
+   * and the detail carries the refundable figure so an operator can act without a second
+   * screen. The bound is computed server-side inside the transaction, under a lock —
+   * `refundFitsWithin` is the rule and a browser's arithmetic is a suggestion.
+   *
+   * A refund can never create money, and this is the code that says so.
+   */
+  REFUND_EXCEEDS_REFUNDABLE: 'commerce.refund_exceeds_refundable',
+  /**
+   * The refund is not in a state from which this command is possible.
+   *
+   * `REFUND_TRANSITIONS` refused. A completion of something already COMPLETED is NOT
+   * this — that is the end state the caller asked for, and it is answered with the
+   * refund, for the reason `PAYMENT_STATE_INVALID` states about a confirmation. This is
+   * a completion of something FAILED, or an attempt to revive a terminal refund.
+   */
+  REFUND_STATE_INVALID: 'commerce.refund_state_invalid',
+
   /**
    * No configured route of that kind for this tenant.
    *

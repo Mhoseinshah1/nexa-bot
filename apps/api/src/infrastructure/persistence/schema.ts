@@ -58,6 +58,8 @@ import {
   ORDER_PURPOSES,
   ORDER_STATES,
   PAYMENT_GATEWAY_PROVIDERS,
+  REFUND_CHANNELS,
+  REFUND_STATES,
   PAYMENT_GATEWAY_STATUSES,
   PAYMENT_RECEIPT_KINDS,
   RECEIPT_CAPTURE_CLOSE_REASONS,
@@ -2974,6 +2976,119 @@ export const paymentGateways = pgTable(
       sql`instructions IS NULL OR length(instructions) BETWEEN 1 AND 1000`,
     ),
     check('payment_gateways_sort_order_check', sql`sort_order BETWEEN 0 AND 100000`),
+  ],
+);
+
+/**
+ * Money going back, as a row with a lifecycle.
+ *
+ * ## Why this is a table and not a column on `payments`
+ *
+ * A payment can be refunded MORE THAN ONCE — partially, by different operators, at
+ * different times — so "was this refunded" is a sum rather than a flag. A boolean would
+ * answer it wrongly the first time somebody refunds half.
+ *
+ * ## The refundable balance is derived, never stored
+ *
+ * There is no `refunded_amount` column on `payments`, deliberately, and it is the same
+ * rule `CLAUDE.md` states about a wallet balance: the amount consumed is
+ * `SUM(amount) WHERE state IN REFUND_CONSUMING_STATES`, computed inside the transaction
+ * that needs it. A cached total is a second place for the truth to live, and the legacy
+ * system's mutable balance column is the failure that rule exists to prevent.
+ *
+ * ## What the append-only guard allows and forbids
+ *
+ * A refund's state DOES change — that is its whole life — so this table is not
+ * `payment_receipts`, which forbids UPDATE outright. `nexa_refunds_guard` freezes
+ * everything that says WHAT was refunded (the payment, the customer, the amount, the
+ * currency, the channel, the requester) and lets the lifecycle columns move. A refund
+ * whose amount could be edited after the fact is a reviewer's evidence changing
+ * underneath the decision made on it.
+ */
+export const refunds = pgTable(
+  'refunds',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    /** The CONFIRMED payment this reverses. A refund with no payment has nothing to bound it. */
+    paymentId: uuid('payment_id').notNull(),
+    customerId: uuid('customer_id').notNull(),
+    /** Copied from the payment, so a refund report needs no join to say what was bought. */
+    orderId: uuid('order_id'),
+    state: text('state').notNull().default('REQUESTED'),
+    /** Derived from the payment's method by `REFUND_METHOD_SUPPORT`, never operator-chosen. */
+    channel: text('channel').notNull(),
+    /**
+     * Minor units, positive, with its currency beside it.
+     *
+     * The currency is STORED rather than joined from the payment, and that is the
+     * money-convention rule rather than denormalisation for speed: `CLAUDE.md` says
+     * never an amount without a currency, and a refund row that had to reach for one
+     * could be read in isolation and misunderstood.
+     */
+    amount: bigint('amount', { mode: 'bigint' }).notNull(),
+    currency: text('currency').notNull(),
+    /** The operator's own words. Required — a refund with no reason is unreviewable. */
+    reason: text('reason').notNull(),
+    /** Who decided. Null only for a refund no administrator requested, which nothing produces. */
+    requestedByAdminId: uuid('requested_by_admin_id'),
+    /**
+     * Who recorded that the money actually left, and when.
+     *
+     * For the manual channel these two are the ONLY evidence the transfer happened, and
+     * they are why `AWAITING_EXTERNAL` exists: this installation has no bank API, so a
+     * person is the mechanism and their name and the time are the record of it.
+     */
+    completedByAdminId: uuid('completed_by_admin_id'),
+    completedAt: timestamptz('completed_at'),
+    /** The bank reference, when there is one. A cash refund across a counter has none. */
+    externalReference: text('external_reference'),
+    /** What the completing operator wrote, or why a refund was abandoned. */
+    completionNote: text('completion_note'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    /** The payment's refund history, and the SUM the refundable balance is derived from. */
+    index('refunds_tenant_payment_idx').on(table.tenantId, table.paymentId, table.createdAt),
+    /** A customer's refunds, for the account view. */
+    index('refunds_tenant_customer_idx').on(table.tenantId, table.customerId, table.createdAt),
+    check('refunds_state_check', enumCheck('state', REFUND_STATES)),
+    check('refunds_channel_check', enumCheck('channel', REFUND_CHANNELS)),
+    check('refunds_currency_check', enumCheck('currency', CURRENCY_CODES)),
+    /**
+     * A refund is for a POSITIVE amount. Zero is not a refund and negative is a charge.
+     *
+     * `refundFitsWithin` refuses both at the boundary; this is the same rule where a
+     * hand-written UPDATE meets it, which is the argument `payment_accounts` makes about
+     * a repair script run at 3am.
+     */
+    check('refunds_amount_check', sql`amount > 0`),
+    check('refunds_reason_check', sql`length(btrim(reason)) BETWEEN 3 AND 500`),
+    check(
+      'refunds_external_reference_check',
+      sql`external_reference IS NULL OR length(btrim(external_reference)) BETWEEN 1 AND 140`,
+    ),
+    /**
+     * COMPLETED means completed BY somebody AT a time — all three or none.
+     *
+     * The rule `payments_confirmed_check` states for a confirmation, applied to the one
+     * transition that means money is gone. Without it a row could claim COMPLETED with
+     * no operator and no timestamp, which is precisely the "money marked returned
+     * because a refund was requested" defect this whole lifecycle exists to prevent.
+     */
+    check(
+      'refunds_completed_check',
+      sql`(state = 'COMPLETED') = (completed_at IS NOT NULL AND completed_by_admin_id IS NOT NULL)`,
+    ),
+    foreignKey({
+      name: 'refunds_payment_fk',
+      columns: [table.tenantId, table.paymentId],
+      foreignColumns: [payments.tenantId, payments.id],
+    }),
+    unique('refunds_tenant_id_key').on(table.tenantId, table.id),
   ],
 );
 

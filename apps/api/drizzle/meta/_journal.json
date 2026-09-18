@@ -505,6 +505,20 @@
       "when": 1789681319949,
       "tag": "0071_payment_gateway_backfill",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1789711632388,
+      "tag": "0072_refunds",
+      "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1789711632389,
+      "tag": "0073_refunds_freeze_guard",
+      "breakpoints": true
     }
   ]
 }

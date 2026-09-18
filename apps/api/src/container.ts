@@ -151,6 +151,8 @@ import type { PaymentGatewayRepository } from './modules/commerce/payments/appli
 import { ReceiptService } from './modules/commerce/payments/application/receipt.service.js';
 import { TelegramReceiptFiles } from './modules/commerce/payments/infrastructure/telegram-receipt-files.js';
 import { PaymentService } from './modules/commerce/payments/application/payment.service.js';
+import { RefundService } from './modules/commerce/payments/application/refund.service.js';
+import { DrizzleRefundRepository } from './modules/commerce/payments/infrastructure/drizzle-refund.repository.js';
 import { PaymentExpiryService } from './modules/commerce/payments/application/payment-expiry.service.js';
 import {
   PaymentExpiryLoop,
@@ -335,6 +337,14 @@ export interface Container {
    * and `PaymentService` still does the settling.
    */
   readonly paymentGateways: PaymentGatewayService;
+  /**
+   * Money going back (Phase 5E).
+   *
+   * Separate from `payments` because the two are opposite decisions over one row and
+   * only one of them may hold `refunds.issue`: settling a payment is `payments.*`, and
+   * reversing one is a finance permission an operator can be granted on its own.
+   */
+  readonly refunds: RefundService;
   /**
    * The route repository, exposed for ONE caller: the boot-time reconcile.
    *
@@ -1166,6 +1176,33 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
     operationId: (key) => operationIdFor('payment', key),
+  });
+
+  const refundService = new RefundService({
+    repository: new DrizzleRefundRepository(database.db),
+    /*
+     * The payment READ only, narrowed by `RefundServiceDeps`.
+     *
+     * A refund is bounded by what a payment says was paid, and a module that could also
+     * write a payment could move that bound — so the one thing this module must not
+     * reach is the write half of the repository it derives its limit from.
+     */
+    payments: paymentRepository,
+    /*
+     * The ledger, `append` and `lockCustomer` only. No balance read: a customer who has
+     * already spent a refunded payment is still owed the refund, so nothing here may
+     * consult what the wallet currently holds.
+     */
+    wallet: walletRepository,
+    guard,
+    uow,
+    audit,
+    opsLog: opsLogWriter,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+    ids,
   });
 
   /*
@@ -2213,6 +2250,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     payments: paymentService,
     paymentAccounts: paymentAccountService,
     paymentGateways: paymentGatewayService,
+    refunds: refundService,
     paymentGatewayProvisioning: paymentGatewayRepository,
     receipts: receiptService,
     receiptFiles,

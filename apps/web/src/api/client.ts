@@ -129,6 +129,11 @@ import {
   type PaymentGatewayListResponse,
   type PaymentGatewayResponse,
   type PaymentGatewayStatus,
+  REFUND_ROUTES,
+  refundListResponseSchema,
+  refundResponseSchema,
+  type RefundListResponse,
+  type RefundResponse,
 } from '@nexa/contracts';
 
 /**
@@ -1201,4 +1206,65 @@ export function confirmRecovery(input: {
     },
     recoveryDetailResponseSchema,
   );
+}
+
+/**
+ * One payment's refunds, and how much of it is left to give back.
+ *
+ * `refundableMinor` comes from the server and is not recomputed here. The browser could
+ * subtract the rows it was just handed, and the figure it produced would be a second
+ * opinion about money — the one an operator acts on if the two ever differed. The
+ * server's is derived inside a transaction under a lock on the payment.
+ *
+ * `refundable: false` is a different fact from a refundable amount of zero: it means
+ * this payment cannot be refunded AT ALL, because it never settled or because its
+ * method has no channel in this release. A screen that conflated them would offer a
+ * button for a gateway payment nobody can reverse.
+ */
+export function fetchRefunds(paymentId: string): Promise<RefundListResponse> {
+  return authedGet(REFUND_ROUTES.list(paymentId), refundListResponseSchema);
+}
+
+/**
+ * Asks for money to go back.
+ *
+ * The amount is a decimal string of minor units and it is a PROPOSAL. The server bounds
+ * it against the CONFIRMED payment minus the refunds already consuming it, so a figure
+ * this tab computed from a stale list is refused rather than honoured — with the
+ * server's own remaining amount in the refusal.
+ *
+ * A wallet-funded payment is credited back inside the same transaction, so the refund
+ * comes back COMPLETED. A manual transfer comes back AWAITING_EXTERNAL: nothing here
+ * can move money through a bank, and saying otherwise is the silent success this
+ * lifecycle exists to refuse.
+ */
+export function requestRefund(input: {
+  paymentId: string;
+  idempotencyKey: string;
+  amountMinor: string;
+  reason: string;
+}): Promise<RefundResponse> {
+  const { paymentId, ...body } = input;
+  return post(REFUND_ROUTES.request(paymentId), { ...body, paymentId }, refundResponseSchema);
+}
+
+/** Records that the external transfer actually happened. The manual channel's second step. */
+export function completeRefund(input: {
+  refundId: string;
+  idempotencyKey: string;
+  note: string;
+  externalReference: string | null;
+}): Promise<RefundResponse> {
+  const { refundId, ...body } = input;
+  return post(REFUND_ROUTES.complete(refundId), body, refundResponseSchema);
+}
+
+/** Abandons a refund, releasing its amount back to the refundable balance. */
+export function failRefund(input: {
+  refundId: string;
+  idempotencyKey: string;
+  note: string;
+}): Promise<RefundResponse> {
+  const { refundId, ...body } = input;
+  return post(REFUND_ROUTES.fail(refundId), body, refundResponseSchema);
 }
