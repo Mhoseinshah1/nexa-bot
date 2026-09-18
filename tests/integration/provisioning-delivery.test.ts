@@ -1203,6 +1203,13 @@ describe('a provisioned service announces itself', () => {
           operationId: operationIdFor('provider', label),
           serviceId,
           orderId,
+          /*
+           * Null: these are planned by hand, by nobody. Each case here is about what
+           * the EXECUTOR does with a type, never about who is told afterwards — the
+           * announcer's rule has its own cases in
+           * `tests/unit/operation-outcome-announcer.test.ts`.
+           */
+          requestedByCustomerId: null,
           panelId: panelId as PanelId,
           type,
           /*

@@ -16,7 +16,7 @@ import type { CustomerNotifier } from './customer-notifier.js';
  * added and the three 4F did. Three of those six are ones they have PAID for, which is
  * why being told nothing was the sharpest gap `docs/phase4h-audit.md` §6 measured.
  */
-export const CUSTOMER_INITIATED_OPERATIONS: readonly OperationType[] = [
+export const CUSTOMER_REQUESTABLE_OPERATIONS: readonly OperationType[] = [
   'SUSPEND',
   'RESUME',
   'TERMINATE',
@@ -74,6 +74,16 @@ export interface OperationOutcomeReader {
     readonly state: OperationState;
     readonly serviceId: string;
     readonly customerId: UserId;
+    /**
+     * The customer who ASKED, or null when nobody did.
+     *
+     * Read separately from `customerId` because they answer different questions:
+     * that one is whose service this is, this one is whether anybody is owed a
+     * sentence about the outcome. Before Phase 6A they could be collapsed, because
+     * the six types below were reachable only from the customer's own screen. They
+     * cannot be now — an operator's suspend is the same type and the same service.
+     */
+    readonly requestedByCustomerId: UserId | null;
   } | null>;
 
   /**
@@ -264,7 +274,10 @@ export class OperationOutcomeAnnouncer {
       }
 
       /* Nobody is owed a message about this one, which is an answer. */
-      if (!CUSTOMER_INITIATED_OPERATIONS.includes(subject.type)) {
+      if (
+        subject.requestedByCustomerId === null ||
+        !CUSTOMER_REQUESTABLE_OPERATIONS.includes(subject.type)
+      ) {
         await stamp();
         return;
       }

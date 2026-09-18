@@ -1747,6 +1747,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
           state: operation.state,
           serviceId: operation.serviceId,
           customerId: service.customerId,
+          requestedByCustomerId: operation.requestedByCustomerId,
         };
       },
       /*

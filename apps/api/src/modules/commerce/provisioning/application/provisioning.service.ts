@@ -248,6 +248,10 @@ export class ProvisioningService {
         operationId: this.deps.operationId(`${service.id}:PROVISION`),
         serviceId: service.id,
         orderId: order.id,
+        /* The customer whose purchase this is. Recorded for the audit-adjacent fact
+         * rather than for a message: `PROVISION` is answered by `DeliveryService`
+         * sending the link, never by the outcome announcer. */
+        requestedByCustomerId: service.customerId,
         panelId: service.panelId,
         type: 'PROVISION',
       },
@@ -408,6 +412,8 @@ export class ProvisioningService {
           ),
           serviceId,
           orderId: service.orderId,
+          /* NULL: this is the operator's retry, not the customer's purchase. */
+          requestedByCustomerId: null,
           panelId: service.panelId,
           type: 'PROVISION',
         },
@@ -692,6 +698,16 @@ export class ProvisioningService {
           operationId: this.deps.operationId(`${service.id}:${type}:${input.idempotencyKey}`),
           serviceId: service.id,
           orderId: service.orderId,
+          /*
+           * The one place the two request paths differ in the ROW they write.
+           *
+           * `requestedBy` already distinguishes them in the audit payload; this puts
+           * the same distinction on the operation, where the announcer can read it in
+           * a later transaction. Without it the announcer decides from the TYPE, and an
+           * operator's suspend is the same type as a customer's — so the customer was
+           * told that the request they made had been applied, having made none.
+           */
+          requestedByCustomerId: origin.requestedBy === 'OPERATOR' ? null : origin.requestedBy,
           panelId: service.panelId,
           type,
         },
@@ -928,6 +944,8 @@ export class ProvisioningService {
         operationId: this.deps.operationId(`${service.id}:${action.kind}:${order.id}`),
         serviceId: service.id,
         orderId: order.id,
+        /* The customer bought this. They are owed the outcome, and this is what says so. */
+        requestedByCustomerId: service.customerId,
         panelId: service.panelId,
         type: action.kind,
         target,

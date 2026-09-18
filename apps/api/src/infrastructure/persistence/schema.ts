@@ -3858,6 +3858,25 @@ export const provisioningOperations = pgTable(
     serviceId: uuid('service_id').notNull(),
     /** Null for an operation not caused by an order — a reconcile, a usage sync. */
     orderId: uuid('order_id'),
+    /**
+     * The customer who ASKED for this, or NULL when nobody did.
+     *
+     * Phase 6A, and it exists because the customer notification lane needs to tell
+     * "the thing you asked for happened" from "an operator changed your service".
+     * Before the operator action path there was no difference to record: `SUSPEND`,
+     * `RESUME` and `TERMINATE` could only be reached from the customer's own detail
+     * screen, so `CUSTOMER_REQUESTABLE_OPERATIONS` could decide the announcement from
+     * the TYPE alone. It cannot any more — an operator suspend is the same type —
+     * and deciding from the type would tell a customer their own request succeeded
+     * when they made none, or invite them to retry a terminate an operator ordered.
+     *
+     * NULL is the honest value for everything a person did not ask for: a reconcile,
+     * a usage sync, the retry of a lost create, and every operator action. An operator
+     * IS recorded — in the audit row `planRequestedOperation` writes, where the actor
+     * names the person. This column answers a narrower question: is a customer owed a
+     * sentence about the outcome.
+     */
+    requestedByCustomerId: uuid('requested_by_customer_id'),
     panelId: uuid('panel_id').notNull(),
     type: text('type').notNull(),
     state: text('state').notNull().default('PLANNED'),
@@ -3950,6 +3969,12 @@ export const provisioningOperations = pgTable(
       columns: [table.tenantId, table.orderId],
       foreignColumns: [orders.tenantId, orders.id],
       name: 'provisioning_operations_order_fk',
+    }),
+    /** A child row may not name a customer of another tenant. */
+    foreignKey({
+      columns: [table.tenantId, table.requestedByCustomerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'provisioning_operations_requested_by_fk',
     }),
     /** The derivation's whole purpose: a retry collides here instead of calling twice. */
     uniqueIndex('provisioning_operations_tenant_operation_key').on(

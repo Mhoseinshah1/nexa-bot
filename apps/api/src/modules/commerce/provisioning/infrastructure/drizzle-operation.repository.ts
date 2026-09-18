@@ -17,6 +17,7 @@ import type {
   PanelId,
   ProviderFailureKind,
   TenantContext,
+  UserId,
 } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
@@ -63,6 +64,7 @@ function toRecord(row: Row): OperationRecord {
     operationId: row.operationId as OperationId,
     serviceId: row.serviceId,
     orderId: row.orderId as OrderId | null,
+    requestedByCustomerId: row.requestedByCustomerId as UserId | null,
     panelId: row.panelId as PanelId,
     type: row.type as OperationType,
     state: row.state as OperationState,
@@ -136,6 +138,7 @@ export class DrizzleOperationRepository implements OperationRepository {
         operationId: draft.operationId,
         serviceId: draft.serviceId,
         orderId: draft.orderId,
+        requestedByCustomerId: draft.requestedByCustomerId,
         panelId: draft.panelId,
         type: draft.type,
         state: 'PLANNED',
