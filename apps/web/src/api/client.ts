@@ -28,6 +28,7 @@ import {
   type WalletResponse,
   ADMIN_ROUTES,
   adminListResponseSchema,
+  adminSummarySchema,
   API_PREFIX,
   AUTH_ROUTES,
   errorResponseSchema,
@@ -36,6 +37,7 @@ import {
   logoutResponseSchema,
   sessionResponseSchema,
   type AdminListResponse,
+  type AdminSummary,
   type HealthInfoResponse,
   type LoginResponse,
   type LogoutResponse,
@@ -275,6 +277,16 @@ export async function fetchAdmins(): Promise<AdminListResponse> {
   const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) throw toApiError(response.status, payload);
   return adminListResponseSchema.parse(payload);
+}
+
+/** Connect (`telegramUserId`), replace, or remove (`null`) an administrator's Telegram binding. */
+export function setAdminTelegramBinding(input: {
+  id: string;
+  telegramUserId: string | null;
+  reason: string;
+}): Promise<AdminSummary> {
+  const { id, ...body } = input;
+  return post(ADMIN_ROUTES.telegram(id), body, adminSummarySchema);
 }
 
 // ---------------------------------------------------------------------------

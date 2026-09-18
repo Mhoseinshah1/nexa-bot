@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   checkOwnerDisplayName,
   checkOwnerPassword,
+  checkOwnerTelegramId,
   checkOwnerUsername,
 } from '../../apps/api/src/infrastructure/tty/owner-input.js';
 import { PromptInputError } from '../../apps/api/src/infrastructure/tty/prompt.js';
@@ -74,6 +75,30 @@ describe('the first owner’s answers', () => {
       'The display name must be at most 120 characters long.',
     );
     expect(checkOwnerDisplayName('  Mamad Owner  ')).toBe('Mamad Owner');
+  });
+
+  it('refuses everything that is not a Telegram numeric id, before the owner is created', () => {
+    // The id binds the owner's authority to one Telegram account for good, and
+    // Telegram cannot reassign a numeric id — which is exactly why a username,
+    // an @handle, a sign, an interior space or a leading zero is refused with
+    // the schema's own sentence rather than repaired into a guess.
+    for (const bad of ['mamad', '@mamad', '-5', '12 34', '0123', '', '+123', '1.5', '1e9']) {
+      expect(failure(() => checkOwnerTelegramId(bad)).message, `"${bad}" was accepted`).toBe(
+        'The owner Telegram id must be a positive Telegram numeric id.',
+      );
+    }
+    // Twenty digits is longer than any Telegram id and longer than the column.
+    expect(failure(() => checkOwnerTelegramId('1'.repeat(20))).message).toContain(
+      'must be a positive Telegram numeric id',
+    );
+  });
+
+  it('accepts a Telegram numeric id, and trims only what a terminal adds around it', () => {
+    expect(checkOwnerTelegramId('123456789')).toBe('123456789');
+    // A trailing newline or a pasted space is not a value; an interior one is
+    // refused above.
+    expect(checkOwnerTelegramId('  123456789 \r')).toBe('123456789');
+    expect(checkOwnerTelegramId('1')).toBe('1');
   });
 
   it('takes its numbers from the schema rather than restating them', () => {

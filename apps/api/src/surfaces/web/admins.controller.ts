@@ -85,6 +85,34 @@ export class AdminsController {
   }
 
   /**
+   * Connect, replace or remove an administrator's Telegram binding.
+   *
+   * The same `setTelegramBinding` the Telegram `/link` command uses, reached
+   * from a surface that does not first require a bound administrator — which is
+   * what lets an installation whose owner was created unbound (v0.2.5 did that)
+   * get its first Telegram administrator without a database UPDATE. The body
+   * goes over UNPARSED, as `setStatus` and `setRoles` send theirs: the service
+   * authorizes first and parses second, so a malformed body from a caller
+   * without `admins.edit` still leaves the denial record.
+   */
+  @Post('admins/:id/telegram')
+  async setTelegramBinding(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<AdminSummary> {
+    const { scope, actor } = await this.authenticate(request, { write: true });
+    const targetId = uuidV7Schema.parse(id) as AdminId;
+    const updated = await this.container.adminManagement.setTelegramBinding(
+      scope,
+      actor,
+      targetId,
+      body,
+    );
+    return toSummary(updated.admin, updated.roleKeys);
+  }
+
+  /**
    * Resolves the session into a scope and an actor.
    *
    * The tenant comes from the SESSION, never from the request: a caller-supplied

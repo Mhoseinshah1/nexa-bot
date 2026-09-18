@@ -4,6 +4,7 @@ import { Prompter, PromptInputError } from './infrastructure/tty/prompt.js';
 import {
   checkOwnerDisplayName,
   checkOwnerPassword,
+  checkOwnerTelegramId,
   checkOwnerUsername,
 } from './infrastructure/tty/owner-input.js';
 import { createContainer } from './container.js';
@@ -20,11 +21,18 @@ import { loadConfig } from './infrastructure/config/load-config.js';
  *
  * The password is read from stdin, never from a command-line argument: argv is
  * visible in `ps` to every user on the machine and lands in shell history.
+ *
+ * The owner's Telegram numeric id is NOT a secret and may be an argument. It is
+ * required: an owner with no binding has no supported way into the bot, since
+ * `/link` needs an administrator who is already bound — the gap v0.2.5 staging
+ * closed with a direct database UPDATE, which this CLI exists to make
+ * unnecessary.
  */
 
 interface Args {
   readonly username: string | null;
   readonly displayName: string | null;
+  readonly telegramUserId: string | null;
   readonly tenantSlug: string | null;
   /**
    * Report whether this installation still needs a first owner, and create
@@ -64,6 +72,7 @@ function parseArgs(argv: readonly string[]): Args {
   return {
     username: get('--username'),
     displayName: get('--display-name'),
+    telegramUserId: get('--telegram-id'),
     tenantSlug: get('--tenant'),
     status: argv.includes('--status'),
   };
@@ -96,7 +105,19 @@ async function main(): Promise<void> {
       return;
     }
 
-    // ONE reader for all three questions. Mixing `readline` with a direct read
+    // Off a terminal the Telegram id has to be an argument, and that is checked
+    // before a single byte of stdin is read. A pipe carries the password, and
+    // reading the id from it instead would take the password line AS the id,
+    // refuse it as malformed, and leave the operator debugging the wrong
+    // field. Refused here, nothing has been created and the message names the
+    // flag.
+    if (stdin.isTTY !== true && args.telegramUserId === null) {
+      throw new PromptInputError(
+        "No terminal and no --telegram-id: the owner's Telegram numeric id is required and cannot be read from a pipe. Pass --telegram-id <numeric-id>. Nothing was created.",
+      );
+    }
+
+    // ONE reader for all four questions. Mixing `readline` with a direct read
     // of the same stdin is what silently swallowed the password on a pipe and
     // exited 0 having created nothing — see `Prompter`.
     const prompt = new Prompter(stdin, stdout);
@@ -108,6 +129,11 @@ async function main(): Promise<void> {
       const username = checkOwnerUsername(args.username ?? (await prompt.line('Owner username: ')));
       const displayName = checkOwnerDisplayName(
         args.displayName ?? (await prompt.line('Display name: ')),
+      );
+      // Asked BEFORE the password, so a mistyped id is refused before the
+      // operator has typed a credential blind, twice.
+      const telegramUserId = checkOwnerTelegramId(
+        args.telegramUserId ?? (await prompt.line('Owner Telegram numeric ID: ')),
       );
 
       // Never echoed, and never taken from argv. This prompt used to say
@@ -149,6 +175,7 @@ async function main(): Promise<void> {
         username,
         displayName,
         password,
+        telegramUserId,
       });
     } finally {
       // Leaving stdin in raw mode would hand the operator back a shell with no
@@ -157,7 +184,13 @@ async function main(): Promise<void> {
     }
 
     console.warn(
-      `Owner "${result.username}" created for tenant "${tenant.slug}" (${result.adminId}).`,
+      `Owner "${result.username}" created for tenant "${tenant.slug}" (${result.adminId}), bound to Telegram id ${result.telegramUserId}.`,
+    );
+    // Telegram lets a bot message only an account that has opened a chat with
+    // it. Said here, once, because nothing else in the installation can tell
+    // the owner, and a reviewer notice that never arrives looks like a bug.
+    console.warn(
+      'Open the bot in Telegram and send /start once from that account, so the bot can reach you.',
     );
   } finally {
     await container.shutdown();

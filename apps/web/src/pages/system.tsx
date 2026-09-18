@@ -1,6 +1,14 @@
-import { useQuery } from '@tanstack/react-query';
-import type { MonitorProfile } from '@nexa/contracts';
-import { fetchAdmins, fetchInfo, fetchMonitorProfile, fetchReadiness } from '../api/client';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useState } from 'react';
+import { IDENTITY_ERROR_CODES, type AdminSummary, type MonitorProfile } from '@nexa/contracts';
+import {
+  ApiError,
+  fetchAdmins,
+  fetchInfo,
+  fetchMonitorProfile,
+  fetchReadiness,
+  setAdminTelegramBinding,
+} from '../api/client';
 import { formatTimestamp } from '../format';
 import { t } from '../i18n/web.fa';
 import { setQuery, type Route } from '../router';
@@ -11,6 +19,7 @@ import {
   Copyable,
   DataTable,
   Duration,
+  Field,
   Ident,
   KV,
   Ltr,
@@ -20,8 +29,10 @@ import {
   StateSwitch,
   Tabs,
   TabPanel,
+  useToast,
 } from '../ui/kit';
 import { pollUnlessFinal } from '../polling';
+import { useSubmissionKey } from '../submission-key';
 
 /**
  * System and operations.
@@ -78,7 +89,12 @@ export function SystemPage({
       <TabPanel id="system-panel" labelledBy={`system-panel-tab-${section}`}>
         {section === 'status' && <StatusSection />}
         {section === 'monitor' && <MonitorSection denied={!permissions.includes('panels.view')} />}
-        {section === 'admins' && <AdminsSection denied={!permissions.includes('admins.view')} />}
+        {section === 'admins' && (
+          <AdminsSection
+            denied={!permissions.includes('admins.view')}
+            mayEdit={permissions.includes('admins.edit')}
+          />
+        )}
       </TabPanel>
 
       <Card title={t('web.system_logs_title')}>
@@ -330,7 +346,7 @@ function CapacityView({ profile }: { profile: MonitorProfile }) {
  */
 const ADMINS_REFRESH_MS = 60_000;
 
-function AdminsSection({ denied }: { denied: boolean }) {
+function AdminsSection({ denied, mayEdit }: { denied: boolean; mayEdit: boolean }) {
   const admins = useQuery({
     queryKey: ['admins'],
     queryFn: fetchAdmins,
@@ -385,9 +401,185 @@ function AdminsSection({ denied }: { denied: boolean }) {
                   <span className="nowrap">{formatTimestamp(row.lastLoginAt)}</span>
                 ),
             },
+            {
+              key: 'telegram',
+              header: t('web.admin_telegram'),
+              render: (row) => <TelegramBinding row={row} mayEdit={mayEdit} />,
+            },
           ]}
         />
       </StateSwitch>
     </Card>
+  );
+}
+
+/**
+ * One administrator's Telegram binding: the numeric id or "not connected", and
+ * — for an actor holding `admins.edit` — connect, replace and remove.
+ *
+ * This exists because an installation can already hold an owner with no
+ * binding (v0.2.5 created them that way), and the only other way to bind an
+ * administrator, the bot's `/link`, has to be sent by an administrator who is
+ * already bound. Without this cell such an installation's first Telegram
+ * administrator could only be made by editing the database.
+ *
+ * The buttons are drawn only for an actor who may edit, and the guard still
+ * runs on the request: the surface stops promising what the server would
+ * refuse, it does not decide. Binding the OWNER additionally takes
+ * `admins.permissions.edit` server-side, and that refusal is rendered as the
+ * server's own message rather than predicted here.
+ */
+function TelegramBinding({ row, mayEdit }: { row: AdminSummary; mayEdit: boolean }) {
+  const notify = useToast();
+  const queries = useQueryClient();
+  const submission = useSubmissionKey();
+  const [editing, setEditing] = useState(false);
+  const [telegramUserId, setTelegramUserId] = useState('');
+  const [reason, setReason] = useState('');
+  const [problem, setProblem] = useState<string | null>(null);
+
+  const mutate = useMutation({
+    mutationFn: (input: { telegramUserId: string | null; reason: string }) => {
+      // The payload fingerprints the held key, so editing the id and pressing
+      // again is a NEW command rather than a replay — see `useSubmissionKey`.
+      submission.current({ id: row.id, ...input });
+      return setAdminTelegramBinding({ id: row.id, ...input });
+    },
+    onSuccess: (updated, variables) => {
+      submission.settle();
+      setProblem(null);
+      setEditing(false);
+      setTelegramUserId('');
+      setReason('');
+      notify({
+        tone: 'ok',
+        message:
+          variables.telegramUserId === null
+            ? t('web.admin_telegram_removed_done')
+            : t('web.admin_telegram_connected_done'),
+      });
+      // The server's own row, written into the roster it came from: the next
+      // resolver turn already sees it, and so does this table.
+      queries.setQueryData(['admins'], (current: { admins: AdminSummary[] } | undefined) =>
+        current === undefined
+          ? current
+          : { admins: current.admins.map((one) => (one.id === updated.id ? updated : one)) },
+      );
+    },
+    onError: (error: unknown) => {
+      submission.settleOn(error);
+      if (
+        error instanceof ApiError &&
+        error.code === IDENTITY_ERROR_CODES.ADMIN_TELEGRAM_ID_TAKEN
+      ) {
+        setProblem(t('web.admin_telegram_id_taken'));
+      } else {
+        setProblem(error instanceof Error ? error.message : String(error));
+      }
+    },
+  });
+
+  const bound = row.telegramUserId !== null;
+  // The same shape the contract's `telegramUserIdSchema` refuses server-side,
+  // checked here so the operator is told before a round trip — never instead
+  // of the server's own check.
+  const idLooksValid = /^[1-9][0-9]{0,18}$/.test(telegramUserId.trim());
+  const reasonGiven = reason.trim().length > 0;
+
+  return (
+    <div className="stack">
+      {bound ? (
+        <Ltr>
+          <code>{row.telegramUserId}</code>
+        </Ltr>
+      ) : (
+        <span className="faint">{t('web.admin_telegram_not_connected')}</span>
+      )}
+      {mayEdit && !editing && (
+        <div className="toolbar">
+          <button
+            type="button"
+            className="btn sm"
+            onClick={() => {
+              setProblem(null);
+              setEditing(true);
+            }}
+          >
+            {bound ? t('web.admin_telegram_edit') : t('web.admin_telegram_connect')}
+          </button>
+        </div>
+      )}
+      {mayEdit && editing && (
+        <form
+          className="stack"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!idLooksValid) {
+              setProblem(t('web.admin_telegram_id_invalid'));
+              return;
+            }
+            mutate.mutate({ telegramUserId: telegramUserId.trim(), reason: reason.trim() });
+          }}
+        >
+          <Field
+            label={t('web.admin_telegram_id_label')}
+            hint={t('web.admin_telegram_id_hint')}
+            htmlFor={`admin-telegram-id-${row.id}`}
+            {...(problem === null ? {} : { error: problem })}
+          >
+            <input
+              id={`admin-telegram-id-${row.id}`}
+              dir="ltr"
+              inputMode="numeric"
+              autoComplete="off"
+              value={telegramUserId}
+              onChange={(event) => setTelegramUserId(event.target.value)}
+            />
+          </Field>
+          <Field
+            label={t('web.admin_telegram_reason_label')}
+            hint={t('web.admin_telegram_reason_hint')}
+            htmlFor={`admin-telegram-reason-${row.id}`}
+          >
+            <input
+              id={`admin-telegram-reason-${row.id}`}
+              value={reason}
+              maxLength={500}
+              onChange={(event) => setReason(event.target.value)}
+            />
+          </Field>
+          <div className="toolbar">
+            <button
+              type="submit"
+              className="btn primary sm"
+              disabled={mutate.isPending || !reasonGiven || telegramUserId.trim() === ''}
+            >
+              {bound ? t('web.admin_telegram_replace') : t('web.admin_telegram_connect')}
+            </button>
+            {bound && (
+              <button
+                type="button"
+                className="btn danger sm"
+                disabled={mutate.isPending || !reasonGiven}
+                onClick={() => mutate.mutate({ telegramUserId: null, reason: reason.trim() })}
+              >
+                {t('web.admin_telegram_remove')}
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn sm"
+              disabled={mutate.isPending}
+              onClick={() => {
+                setEditing(false);
+                setProblem(null);
+              }}
+            >
+              {t('web.admin_telegram_cancel')}
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
   );
 }

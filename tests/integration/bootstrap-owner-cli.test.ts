@@ -128,12 +128,59 @@ describe('the bootstrap CLI on a terminal', () => {
       });
     });
 
-  const owner = (username: string, displayName: string, password: string): Answer[] => [
+  const owner = (
+    username: string,
+    displayName: string,
+    password: string,
+    telegramId = '123456789',
+  ): Answer[] => [
     { after: 'Owner username: ', send: username },
     { after: 'Display name: ', send: displayName },
+    // Asked BEFORE the password, so a mistyped id is refused before a
+    // credential has been typed blind, twice.
+    { after: 'Owner Telegram numeric ID: ', send: telegramId },
     { after: 'Password: ', send: password },
     { after: 'Confirm password: ', send: password },
   ];
+
+  /**
+   * The CLI driven down a PIPE, the way an unattended install drives it: no
+   * terminal, the password on stdin, everything else as arguments.
+   */
+  const runOnAPipe = (
+    args: readonly string[],
+    stdinText: string,
+    budgetMs = 60_000,
+  ): Promise<Run> =>
+    new Promise<Run>((resolve) => {
+      const child = spawn('node', [cli, ...args], {
+        env: {
+          ...process.env,
+          NODE_ENV: 'development',
+          LOG_LEVEL: 'error',
+          DATABASE_URL: config.DATABASE_URL,
+          REDIS_URL: config.REDIS_URL,
+          SECRETS_KEK: config.SECRETS_KEK,
+          SECRETS_KEK_ID: config.SECRETS_KEK_ID,
+          AUTH_MODE: 'password',
+          DEPLOYMENT_TOPOLOGY: 'direct',
+          TRUSTED_PROXY_IPS: '',
+        },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      let output = '';
+      child.stdout.on('data', (chunk: Buffer) => (output += chunk.toString('utf8')));
+      child.stderr.on('data', (chunk: Buffer) => (output += chunk.toString('utf8')));
+      child.stdin.end(stdinText);
+      const giveUp = setTimeout(() => {
+        child.kill('SIGKILL');
+        resolve({ output, code: null, exited: false });
+      }, budgetMs);
+      child.on('close', (code) => {
+        clearTimeout(giveUp);
+        resolve({ output, code, exited: true });
+      });
+    });
 
   const adminRows = async () => ctx.container.database.db.select().from(adminsTable);
 
@@ -146,6 +193,11 @@ describe('the bootstrap CLI on a terminal', () => {
     const rows = await adminRows();
     expect(rows).toHaveLength(1);
     expect(rows[0]?.username).toBe('mamad');
+    // Bound in the same transaction, from the answer the operator typed: an
+    // owner with no binding has no supported way into the bot.
+    expect(rows[0]?.telegramUserId).toBe('123456789');
+    expect(run.output).toContain('bound to Telegram id 123456789');
+    expect(run.output, 'the owner was not told to /start the bot').toContain('send /start once');
 
     expect(
       run.exited,
@@ -172,12 +224,58 @@ describe('the bootstrap CLI on a terminal', () => {
     expect(await adminRows()).toHaveLength(1);
   }, 120_000);
 
+  it('refuses a Telegram id that is not a numeric id, before the password is asked for', async () => {
+    // A username, an @handle, a signed number, a value with a space: each is
+    // refused with the schema's own sentence, and the password prompt is never
+    // reached — so nothing is typed blind for an owner that will not be created.
+    for (const bad of ['mamad', '@mamad', '-5', '12 34', '0123']) {
+      const run = await runOnATerminal(owner('mamad', 'Mamad Owner', 'correcthorsebattery', bad));
+      expect(run.output, `"${bad}" was not refused`).toContain(
+        'The owner Telegram id must be a positive Telegram numeric id.',
+      );
+      expect(run.output, `"${bad}" reached the password prompt`).not.toContain('Password: ');
+      expect(run.exited, `"${bad}" left the CLI running`).toBe(true);
+      expect(run.code).not.toBe(0);
+    }
+    expect(await adminRows()).toHaveLength(0);
+  }, 180_000);
+
+  it('refuses, off a terminal, to run without --telegram-id, before reading stdin', async () => {
+    // The unattended install: the password on a pipe and the id as an argument.
+    // With no argument the id cannot be read from the pipe — the password line
+    // would be taken as the id — so it is refused before a byte is read, and
+    // the refusal names the flag.
+    const refused = await runOnAPipe(
+      ['--username', 'mamad', '--display-name', 'Mamad Owner'],
+      'correcthorsebattery\n',
+    );
+    expect(refused.output).toContain('--telegram-id');
+    expect(refused.output).toContain('Nothing was created.');
+    expect(refused.output, 'the refusal printed a stack trace').not.toContain(
+      'at Object.<anonymous>',
+    );
+    expect(refused.exited).toBe(true);
+    expect(refused.code).not.toBe(0);
+    expect(await adminRows()).toHaveLength(0);
+
+    // And with the argument, the same pipe creates the owner, bound.
+    const created = await runOnAPipe(
+      ['--username', 'mamad', '--display-name', 'Mamad Owner', '--telegram-id', '4242'],
+      'correcthorsebattery\n',
+    );
+    expect(created.output).toContain('Owner "mamad" created');
+    expect(created.code).toBe(0);
+    const rows = await adminRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.telegramUserId).toBe('4242');
+  }, 120_000);
+
   it('answers a short password with one sentence and no stack trace', async () => {
     // The first staging attempt used fewer than twelve characters and got a
     // ZodError stack trace with `Too small: expected string to have >=12
     // characters` in it.
     // No confirmation entry: the password is refused before it is asked for.
-    const run = await runOnATerminal(owner('mamad', 'Mamad Owner', 'short').slice(0, 3));
+    const run = await runOnATerminal(owner('mamad', 'Mamad Owner', 'short').slice(0, 4));
 
     expect(run.output).toContain('The owner password must be at least 12 characters long.');
     expect(run.output, 'the internal Zod wording reached the operator').not.toContain('Too small');

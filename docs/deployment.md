@@ -178,12 +178,25 @@ umask 077
 printf '%s' "$OWNER_PASSWORD" > /root/owner-password
 sudo ./install.sh --domain … --acme-email … --version v1.0.0 \
   --owner-username owner --owner-display-name 'Owner' \
+  --owner-telegram-id 123456789 \
   --owner-password-file /root/owner-password
 shred -u /root/owner-password
 ```
 
 An install with no terminal and no `--owner-password-file` fails rather than
-silently skipping the owner.
+silently skipping the owner. The same holds for `--owner-telegram-id`: the
+first owner is created **bound to a Telegram numeric id**, in the same
+transaction as the owner row, because `/link` can only be sent by an
+administrator who is already bound — so an owner created without one had no
+supported way into the bot. On a terminal the installer asks for it; without a
+terminal it refuses before creating anything. The id is not a secret and may be
+an argument. It is the account's NUMERIC id (digits only), never a username.
+
+A rerun of an installation that has already created its owner does not ask for
+the id again and never rewrites the binding; an existing installation whose
+owner was created without one connects it under **Web Admin → System →
+Administrators**. Either way the owner has to open the bot and send `/start`
+once before Telegram will deliver anything to that account.
 
 The bot token follows exactly the same rule, for the same reason, and has the
 same escape hatch:

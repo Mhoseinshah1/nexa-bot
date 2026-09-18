@@ -24,6 +24,7 @@
 # Usage:
 #   sudo ./install.sh --domain admin.example.com --acme-email ops@example.com \
 #                     --version v1.0.0 [--owner-username owner] \
+#                     [--owner-telegram-id 123456789] \
 #                     [--owner-password-file /path/to/file]
 
 set -euo pipefail
@@ -50,6 +51,12 @@ TENANT_TIMEZONE="Asia/Tehran"
 TENANT_CURRENCY="IRT"
 OWNER_USERNAME=""
 OWNER_DISPLAY_NAME=""
+# The owner's Telegram numeric id. Not a secret, so an argument is fine; and
+# REQUIRED whenever this run creates the owner, because an owner with no binding
+# has no supported way into the bot — `/link` is a command only an administrator
+# who is already bound can send. v0.2.5 staging had to UPDATE the database by
+# hand to get its first Telegram administrator, and that is the gap this closes.
+OWNER_TELEGRAM_ID=""
 OWNER_PASSWORD_FILE=""
 # Set by `require_owner_state`: "none" or "bootstrapped". Anything else dies.
 OWNER_STATE=""
@@ -83,6 +90,9 @@ Optional:
   --currency CODE              IRT, IRR, USD, EUR, USDT (default: IRT)
   --owner-username NAME        first owner's username
   --owner-display-name NAME    first owner's display name
+  --owner-telegram-id ID       first owner's Telegram NUMERIC id, e.g. 123456789
+                               (not a username). Required whenever the owner is
+                               created; asked for when there is a terminal.
   --owner-password-file PATH   read the first owner's password from PATH
                                (the file is never copied and never logged)
   --skip-owner                 do not create the first owner in this run
@@ -138,6 +148,10 @@ while [ $# -gt 0 ]; do
       ;;
     --owner-display-name)
       OWNER_DISPLAY_NAME="${2:-}"
+      shift 2
+      ;;
+    --owner-telegram-id)
+      OWNER_TELEGRAM_ID="${2:-}"
       shift 2
       ;;
     --owner-password-file)
@@ -312,16 +326,7 @@ preflight() {
   done
   nexa_ok "ports 80 and 443 are free, on TCP and on UDP"
 
-  # --- The owner's password source ---
-  if [ "$SKIP_OWNER" = "no" ] && [ -n "$OWNER_PASSWORD_FILE" ]; then
-    [ -r "$OWNER_PASSWORD_FILE" ] ||
-      nexa_die "cannot read the owner password file at ${OWNER_PASSWORD_FILE}."
-    [ -s "$OWNER_PASSWORD_FILE" ] ||
-      nexa_die "the owner password file at ${OWNER_PASSWORD_FILE} is empty."
-  fi
-  if [ "$SKIP_OWNER" = "no" ] && [ -z "$OWNER_PASSWORD_FILE" ] && [ ! -t 0 ]; then
-    nexa_die "no terminal and no --owner-password-file: there is no safe way to read the first owner's password. Pass --owner-password-file, or --skip-owner and run the bootstrap later."
-  fi
+  preflight_owner_inputs
 
   # --- The bot token's source ---
   #
@@ -363,6 +368,39 @@ preflight() {
   # after a webhook failure whenever the original token file had been removed,
   # which is the case the resume path exists for. It moved to
   # `configure_telegram_bot`, where the state is known.
+}
+
+# The first owner's inputs that can be checked before anything is changed.
+#
+# A function of its own so the test suite can drive these refusals with the
+# installer SOURCED, as it drives `refuse_version_change`: `preflight` opens
+# with a root check and an OS check that no build machine passes.
+preflight_owner_inputs() {
+  # --- The owner's password source ---
+  if [ "$SKIP_OWNER" = "no" ] && [ -n "$OWNER_PASSWORD_FILE" ]; then
+    [ -r "$OWNER_PASSWORD_FILE" ] ||
+      nexa_die "cannot read the owner password file at ${OWNER_PASSWORD_FILE}."
+    [ -s "$OWNER_PASSWORD_FILE" ] ||
+      nexa_die "the owner password file at ${OWNER_PASSWORD_FILE} is empty."
+  fi
+  if [ "$SKIP_OWNER" = "no" ] && [ -z "$OWNER_PASSWORD_FILE" ] && [ ! -t 0 ]; then
+    nexa_die "no terminal and no --owner-password-file: there is no safe way to read the first owner's password. Pass --owner-password-file, or --skip-owner and run the bootstrap later."
+  fi
+
+  # --- The owner's Telegram numeric id ---
+  #
+  # Checked HERE, before anything is created, the same way as the password
+  # source: an unattended install that finds out at the owner step that it has
+  # no id is a fully installed system with an owner nobody can reach from
+  # Telegram — the v0.2.5 staging state. The shape check mirrors the
+  # application's `telegramUserIdSchema`; the CLI parses it again with the
+  # schema itself, which stays the enforcement.
+  if [ -n "$OWNER_TELEGRAM_ID" ] && ! nexa_valid_telegram_id "$OWNER_TELEGRAM_ID"; then
+    nexa_die "\"${OWNER_TELEGRAM_ID}\" is not a Telegram numeric id. Give the account's NUMERIC id — digits only, e.g. 123456789 — not a username, not @handle, no sign and no spaces."
+  fi
+  if [ "$SKIP_OWNER" = "no" ] && [ -z "$OWNER_TELEGRAM_ID" ] && [ ! -t 0 ]; then
+    nexa_die "no terminal and no --owner-telegram-id: the first owner must be bound to a Telegram numeric id, and there is nobody to ask. Pass --owner-telegram-id <numeric-id>, or --skip-owner and run the bootstrap later."
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -809,6 +847,41 @@ provision_installation() {
   nexa_ok "installation provisioned"
 }
 
+# The shape of a Telegram numeric id, as `telegramUserIdSchema` states it: a
+# positive integer with no sign, no leading zero, no spaces and at most 19
+# digits. A username, an @handle or a negative number is refused before the CLI
+# is even run, where the operator can still act on it.
+nexa_valid_telegram_id() {
+  [[ $1 =~ ^[1-9][0-9]{0,18}$ ]]
+}
+
+# Asks for the owner's Telegram numeric id at the terminal, until it is one.
+#
+# Only reached when this run CREATES the owner and no id was given: a rerun of a
+# bootstrapped installation returns before this, so the operator is never asked
+# for a binding the installation already has. Reads the terminal the bootstrap
+# CLI itself will read next, so the install asks its questions in one place and
+# in order. Sets the global rather than printing, for the reason
+# `require_owner_state` gives.
+ask_owner_telegram_id() {
+  local answer=""
+  while :; do
+    printf 'Owner Telegram numeric ID: ' >&2
+    IFS= read -r answer || nexa_die "no answer for the owner's Telegram numeric id: input ended. Nothing was created."
+    # Only the EDGES are trimmed — a terminal delivers a trailing CR or a pasted
+    # space, and neither is a value. An interior space is refused below: the
+    # first version of this stripped every space and turned "12 34" into the
+    # valid, and wrong, id 1234.
+    answer="${answer#"${answer%%[![:space:]]*}"}"
+    answer="${answer%"${answer##*[![:space:]]}"}"
+    if nexa_valid_telegram_id "$answer"; then
+      OWNER_TELEGRAM_ID="$answer"
+      return 0
+    fi
+    nexa_warn "\"${answer}\" is not a Telegram numeric id. Digits only, e.g. 123456789 — not a username, not @handle, no sign."
+  done
+}
+
 # Which of the three states this database is in, straight from the application.
 #
 # `none` | `bootstrapped` | `foreign`, one word on stdout. Read-only: the CLI
@@ -888,11 +961,18 @@ bootstrap_owner() {
     return 0
   fi
 
-  # The username and display name may be arguments — they are not secret. The
-  # PASSWORD may not: argv is readable by every user on the machine via `ps`,
-  # and an environment variable would be readable through `docker inspect`. It
-  # reaches the CLI on stdin and nowhere else.
-  local -a identity=()
+  # The owner's Telegram binding is part of creating the owner, not a step
+  # after it: the CLI writes both in one transaction, and refuses to create an
+  # owner without one. Asked here only on a terminal — the preflight already
+  # refused an unattended run with no id — and only when this run actually
+  # creates the owner, which the `bootstrapped` return above guarantees.
+  [ -n "$OWNER_TELEGRAM_ID" ] || ask_owner_telegram_id
+
+  # The username, display name and Telegram id may be arguments — they are not
+  # secret. The PASSWORD may not: argv is readable by every user on the machine
+  # via `ps`, and an environment variable would be readable through `docker
+  # inspect`. It reaches the CLI on stdin and nowhere else.
+  local -a identity=(--telegram-id "$OWNER_TELEGRAM_ID")
   [ -n "$OWNER_USERNAME" ] && identity+=(--username "$OWNER_USERNAME")
   [ -n "$OWNER_DISPLAY_NAME" ] && identity+=(--display-name "$OWNER_DISPLAY_NAME")
 
@@ -920,7 +1000,7 @@ bootstrap_owner() {
   if [ "$ok" -ne 0 ]; then
     nexa_die "creating the first owner failed. The installation is up; rerun this installer or run the bootstrap by hand."
   fi
-  nexa_ok "first owner created"
+  nexa_ok "first owner created, bound to Telegram id ${OWNER_TELEGRAM_ID}"
 }
 
 # ---------------------------------------------------------------------------
@@ -1193,6 +1273,13 @@ start_everything() {
   nexa_ok "the stack is up and the API is ready"
 }
 
+# " (Telegram id 123456789)" when this run knows the owner's id, and nothing
+# when it does not — a rerun of a bootstrapped installation, or --skip-owner.
+owner_telegram_hint() {
+  [ -n "$OWNER_TELEGRAM_ID" ] && printf ' (Telegram id %s)' "$OWNER_TELEGRAM_ID"
+  return 0
+}
+
 # ---------------------------------------------------------------------------
 # What an operator is told when the Telegram step did not finish.
 #
@@ -1398,6 +1485,11 @@ $(nexa_ok "Nexa ${VERSION} is installed")
   backup     botctl backup
   update     botctl update <version>
   rollback   botctl rollback
+
+Telegram can only deliver messages to an account that has opened a chat with
+the bot. Before anything else, the owner$(owner_telegram_hint) must open the bot
+in Telegram and send /start once; the admin menu appears on that /start, and
+receipt notices reach the owner from then on.
 
 Configuration and secrets live in ${NEXA_CONFIG_DIR} (0700, root-owned).
 Backups are written to ${NEXA_BACKUP_DIR}.

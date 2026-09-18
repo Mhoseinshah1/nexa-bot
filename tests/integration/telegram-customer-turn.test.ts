@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  ADMIN_MENU_BUTTON,
   MAIN_MENU_BUTTONS,
   TELEGRAM_SECRET_TOKEN_HEADER,
   type ActorContext,
@@ -299,6 +300,85 @@ describe('the customer Telegram turn', () => {
     sent = [];
     await start();
     expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.blocked']);
+  });
+
+  it('gives the installer-bootstrapped owner the admin menu on /start, and the panel on /admin', async () => {
+    /*
+     * v0.2.5 staging: the first owner was created with no Telegram binding, and
+     * `/link` can only be sent by an administrator who is already bound, so the
+     * owner's /start drew the customer menu and /admin answered as it answers any
+     * customer. The bootstrap now writes the binding with the owner, and nothing
+     * needs restarting: the resolver reads the column on every turn.
+     */
+    const OWNER_TELEGRAM_ID = '5551234567';
+    await api.container.bootstrapOwner.execute(tenantA, {
+      username: 'mamad',
+      displayName: 'Mamad Owner',
+      password: 'correcthorsebattery',
+      telegramUserId: OWNER_TELEGRAM_ID,
+    });
+
+    // The owner's first /start: the customer row is created as for anybody, and
+    // the keyboard carries the panel row, on the wire.
+    sent = [];
+    await start({ from: { id: Number(OWNER_TELEGRAM_ID), is_bot: false, first_name: 'Mamad' } });
+    const keyboardOf = (index: number) =>
+      (
+        sent[index]?.body['reply_markup'] as { keyboard?: { text: string }[][] } | undefined
+      )?.keyboard
+        ?.flat()
+        .map((button) => button.text) ?? [];
+    expect(keyboardOf(0)).toContain(CATALOGUE_FA[ADMIN_MENU_BUTTON.label]);
+
+    // And /admin opens the panel, without a restart and without /link.
+    sent = [];
+    await start({
+      text: '/admin',
+      from: { id: Number(OWNER_TELEGRAM_ID), is_bot: false, first_name: 'Mamad' },
+    });
+    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.admin.panel']);
+  });
+
+  it('revokes Telegram admin access on the next update once the binding is removed', async () => {
+    // Bound through the same path the Web Admin uses, then removed through it.
+    const owner = await createAdmin(api.container, tenantA, {
+      username: 'turn-owner',
+      roleKeys: ['owner'],
+    });
+    const second = await createAdmin(api.container, tenantA, {
+      username: 'second-owner',
+      roleKeys: ['owner'],
+    });
+    await api.container.adminManagement.setTelegramBinding(
+      tenantA,
+      adminActorFor(owner),
+      second.id as AdminId,
+      { telegramUserId: '5551234567', reason: 'connected in the Web Admin' },
+    );
+    sent = [];
+    await start({ text: '/admin' });
+    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.admin.panel']);
+
+    await api.container.adminManagement.setTelegramBinding(
+      tenantA,
+      adminActorFor(owner),
+      second.id as AdminId,
+      { telegramUserId: null, reason: 'removed in the Web Admin' },
+    );
+
+    // The very next update: no panel, and no panel row on the keyboard. There
+    // is no cached authority to expire, so nothing is restarted.
+    sent = [];
+    await start({ text: '/admin' });
+    expect(sent[0]?.body['text']).not.toBe(CATALOGUE_FA['bot.admin.panel']);
+    sent = [];
+    await start();
+    const keyboard =
+      (sent[0]?.body['reply_markup'] as { keyboard?: { text: string }[][] } | undefined)?.keyboard
+        ?.flat()
+        .map((button) => button.text) ?? [];
+    expect(keyboard).not.toContain(CATALOGUE_FA[ADMIN_MENU_BUTTON.label]);
+    expect(keyboard.length).toBeGreaterThan(0);
   });
 
   it('answers a BLOCKED customer who is NOT an administrator with bot.blocked on /admin', async () => {
