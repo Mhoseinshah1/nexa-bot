@@ -375,13 +375,19 @@ export class PaymentGatewayService {
       );
     }
 
+    /*
+     * The row's own denomination. A NULL is a row the previous release wrote during
+     * the rolling update that shipped the column, and that release relabelled its
+     * bounds with the amount's currency — so that, and only that, is what a NULL means.
+     */
+    const boundsCurrency = eligible.boundsCurrency ?? amount.currency;
     return {
       gateway: eligible,
-      minAmount: this.boundFor(eligible.minAmountMinor, eligible.boundsCurrency),
+      minAmount: this.boundFor(eligible.minAmountMinor, boundsCurrency),
       maxAmount:
         eligible.maxAmountMinor === 0n
           ? null
-          : this.boundFor(eligible.maxAmountMinor, eligible.boundsCurrency),
+          : this.boundFor(eligible.maxAmountMinor, boundsCurrency),
     };
   }
 

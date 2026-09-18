@@ -2046,3 +2046,21 @@ still open, and the answer decides the design:
   directly, with a reason, and never through the refund lane.
 
 Until one is chosen, refusing is the only outcome that cannot create money.
+
+## OQ-5H-05 — `payment_gateways.bounds_currency` stays nullable for one release
+
+Migration 0077 added the column nullable and 0078 backfilled it from each tenant's
+`sales.currency`. A third migration made it NOT NULL in the same release, and the
+expand/contract test refused it, correctly: for the length of a rolling update the
+previous release still INSERTs the zero row without the column, and NOT NULL would turn
+that insert into a failed provisioning on the replica that has not restarted yet. So this
+release only expands. A NULL means one thing — a row the previous release wrote after the
+backfill ran — and both readers treat it as that release did, relabelling the bounds with
+the installation's current currency: `offer` compares against the amount's currency and
+the Web Admin view shows the installation's.
+
+The contract step is the NEXT release: a second backfill identical to 0078, then
+`SET NOT NULL`, then the two `?? currency` fallbacks removed so the type becomes
+`SalesCurrencyCode` again. Until then a route the previous release provisioned is the one
+row `BOUND_CURRENCY_MISMATCH` still cannot reach, and it is exactly the row that has never
+been edited.

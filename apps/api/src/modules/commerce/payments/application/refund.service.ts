@@ -597,8 +597,10 @@ export class RefundService {
      * refused here — where the read path renders `refundable: false` for the same reason
      * — and `OQ-5H-04` records the decision that would make one refundable.
      */
-    if (payment.orderId === null) return 'TOPUP_CREDITED_TO_WALLET';
     if (!REFUND_METHOD_SUPPORT[payment.method].supported) return 'CHANNEL_UNSUPPORTED';
+    // After the channel: a method with no reversal channel at all is the more fundamental
+    // refusal, and it is the one an operator can do nothing about.
+    if (payment.orderId === null) return 'TOPUP_CREDITED_TO_WALLET';
     return null;
   }
 

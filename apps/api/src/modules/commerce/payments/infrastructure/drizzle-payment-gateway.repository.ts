@@ -49,7 +49,7 @@ interface Row {
   readonly instructions: string | null;
   readonly minAmountMinor: bigint;
   readonly maxAmountMinor: bigint;
-  readonly boundsCurrency: string;
+  readonly boundsCurrency: string | null;
   readonly activateAfterPayments: number;
   readonly deactivateAfterPayments: number;
   readonly activateAfterAccountDays: number;
@@ -73,7 +73,7 @@ function toRecord(row: Row): PaymentGatewayRecord {
     minAmountMinor: row.minAmountMinor,
     maxAmountMinor: row.maxAmountMinor,
     // `payment_gateways_bounds_currency_check` constrains it, as the two casts above.
-    boundsCurrency: row.boundsCurrency as SalesCurrencyCode,
+    boundsCurrency: row.boundsCurrency as SalesCurrencyCode | null,
     activateAfterPayments: row.activateAfterPayments,
     deactivateAfterPayments: row.deactivateAfterPayments,
     activateAfterAccountDays: row.activateAfterAccountDays,

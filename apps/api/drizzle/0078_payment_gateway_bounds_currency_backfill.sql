@@ -7,9 +7,11 @@
 --
 -- `value` is jsonb holding a bare JSON string; `#>> '{}'` unwraps it.
 --
--- This sits BETWEEN 0077 (column added, nullable) and 0079 (SET NOT NULL) so that an
--- upgrading installation with routes cannot meet 0079 as a failed upgrade. Only rows
--- still NULL are touched, so a re-run changes nothing.
+-- The column stays NULLABLE this release: the previous release writes this table
+-- without it for the length of a rolling update, and the readers treat a NULL as that
+-- release's own relabelling. The NOT NULL is the contract step of the next release,
+-- after a second backfill like this one. Only rows still NULL are touched, so a re-run
+-- changes nothing.
 
 UPDATE "payment_gateways" AS g
 SET "bounds_currency" = COALESCE(

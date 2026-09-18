@@ -2936,9 +2936,17 @@ export const paymentGateways = pgTable(
      * row was provisioned. Compared against the amount's currency in `offer`, and a
      * disagreement refuses the route until an operator re-saves it under the new
      * currency, rather than reinterpreting the numbers. Backfilled by 0078 from each
-     * tenant's setting, then made NOT NULL by 0079.
+     * tenant's setting.
+     *
+     * Nullable THIS release, on purpose: the previous release still writes this table
+     * without the column, for the length of a rolling update, and `SET NOT NULL` would
+     * refuse those writes — `migration-compatibility.test.ts` states the rule. A NULL
+     * therefore means "written by the previous release", and the readers fall back to
+     * the installation's current currency for it, which is exactly the relabelling
+     * that release performed. The contract step — a second backfill and NOT NULL — is
+     * the release after this one; `docs/open-questions.md` OQ-5H-05 carries it.
      */
-    boundsCurrency: text('bounds_currency').notNull(),
+    boundsCurrency: text('bounds_currency'),
     /**
      * The three eligibility thresholds, where `0` is the condition switched OFF.
      *

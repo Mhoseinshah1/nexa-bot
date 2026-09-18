@@ -26,8 +26,13 @@ export interface PaymentGatewayRecord {
   readonly instructions: string | null;
   readonly minAmountMinor: bigint;
   readonly maxAmountMinor: bigint;
-  /** The denomination the bounds were written in. Compared, never converted. */
-  readonly boundsCurrency: SalesCurrencyCode;
+  /**
+   * The denomination the bounds were written in. Compared, never converted. NULL for a
+   * row the previous release wrote after the backfill ran — `schema.ts` says why the
+   * column stays nullable this release — and a reader treats that as the installation's
+   * current currency, the one that release meant.
+   */
+  readonly boundsCurrency: SalesCurrencyCode | null;
   readonly activateAfterPayments: number;
   readonly deactivateAfterPayments: number;
   readonly activateAfterAccountDays: number;

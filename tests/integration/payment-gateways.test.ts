@@ -337,6 +337,51 @@ describe('payment routes', () => {
     expect(issued.payment.amount.currency).toBe('IRR');
   });
 
+  it('treats a route the previous release wrote without a denomination as that release did', async () => {
+    /*
+     * The column is nullable THIS release on purpose — `OQ-5H-05` — because the previous
+     * release still provisions the zero row without it during a rolling update. This is
+     * that row: the only way a NULL can exist after 0078, so the row is made the way that
+     * release made it rather than through any path this release offers.
+     */
+    await ctx.container.paymentGateways.configure(tenantA, ownerA, {
+      idempotencyKey: 'gw-null-1',
+      provider: 'MANUAL_TRANSFER',
+      config: { ...OPEN, minAmountMinor: 200_000n },
+    });
+    await ctx.container.database.db.execute(
+      sql`UPDATE payment_gateways SET bounds_currency = NULL
+           WHERE tenant_id = ${tenantA.tenantId} AND provider = 'MANUAL_TRANSFER'`,
+    );
+    const legacy = (await ctx.container.paymentGateways.list(tenantA, ownerA)).gateways.find(
+      (gateway) => gateway.provider === 'MANUAL_TRANSFER',
+    );
+    expect(legacy?.boundsCurrency).toBeNull();
+
+    // That release relabelled the bounds with the amount's currency, so a NULL means
+    // exactly that: the top-up is offered, not refused for a mismatch it cannot have.
+    const issued = await ctx.container.payments.requestWalletTopup(
+      { ...tenantA, botInstanceId: BOT_A },
+      systemActor('gw-null-turn-1'),
+      customerA,
+      { idempotencyKey: 'topup-null-1', amountMinor: 500_000n },
+    );
+    expect(issued.payment.amount.currency).toBe('IRT');
+
+    // And the bound is still a bound: below the minimum is still refused.
+    const refused = await ctx.container.payments
+      .requestWalletTopup(
+        { ...tenantA, botInstanceId: BOT_A },
+        systemActor('gw-null-turn-2'),
+        customerA,
+        { idempotencyKey: 'topup-null-2', amountMinor: 100_000n },
+      )
+      .catch((error: unknown) => error);
+    expect(refused).toMatchObject({
+      code: COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_AMOUNT_REJECTED,
+    });
+  });
+
   it('refuses a top-up when the only route is DISABLED', async () => {
     await ctx.container.paymentGateways.setStatus(tenantA, ownerA, {
       idempotencyKey: 'gw-off-1',
@@ -510,21 +555,14 @@ describe('payment routes', () => {
     };
 
     /**
-     * 0071 ran in a schema with no `bounds_currency`; 0077 added it nullable, 0078
-     * filled it, 0079 made it NOT NULL. Replaying 0071 against today's schema would
-     * meet 0079's constraint before `ON CONFLICT` could apply, which is a state no
-     * installation is ever in. So the replay is run in the order the releases run.
+     * 0071 ran in a schema with no `bounds_currency`; 0077 added it nullable and 0078
+     * filled it. An installation upgrading through both releases runs them in that
+     * order, so the replay does too: 0071's rows arrive with a NULL, and 0078 is what
+     * gives them their denomination.
      */
     async function asUpgradeThrough0071(fn: () => Promise<void>): Promise<void> {
-      const raw = (text: string) =>
-        ctx.container.database.withClient((client) => client.query(text));
-      await raw('ALTER TABLE payment_gateways ALTER COLUMN bounds_currency DROP NOT NULL');
-      try {
-        await fn();
-        await raw(denominate());
-      } finally {
-        await raw('ALTER TABLE payment_gateways ALTER COLUMN bounds_currency SET NOT NULL');
-      }
+      await fn();
+      await ctx.container.database.withClient((client) => client.query(denominate()));
     }
 
     /**

@@ -1,1 +1,0 @@
-ALTER TABLE "payment_gateways" ALTER COLUMN "bounds_currency" SET NOT NULL;
