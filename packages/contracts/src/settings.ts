@@ -4,6 +4,7 @@ import { ORDER_EXPIRY_MINUTES_MAX, ORDER_EXPIRY_MINUTES_MIN } from './commerce.j
 import { USAGE_SYNC_MINUTES_MAX, USAGE_SYNC_MINUTES_MIN } from './provisioning.js';
 import { moneySchema, salesCurrencyCodeSchema } from './money.js';
 import {
+  PAYMENT_AMOUNT_MAX_MINOR,
   PAYMENT_WINDOW_MINUTES_MAX,
   PAYMENT_WINDOW_MINUTES_MIN,
   TOPUP_PRESETS_MAX,
@@ -467,10 +468,28 @@ export const SETTINGS = [
     // refinement makes the same argument for the same reason.
     schema: z
       .array(
-        moneySchema.refine(
-          (money) => BigInt(money.amountMinor) > 0n,
-          'A top-up preset must be a positive amount.',
-        ),
+        moneySchema
+          .refine(
+            (money) => BigInt(money.amountMinor) > 0n,
+            'A top-up preset must be a positive amount.',
+          )
+          /*
+           * And bounded ABOVE by the same ceiling a payment is.
+           *
+           * A preset is not decoration: `requestWalletTopup` copies it verbatim into
+           * `payments.amount`, a `bigint` column, and renders it as a real Telegram
+           * button first. Without this, an operator can save a preset larger than
+           * PostgreSQL can store, and the customer meets it as a button that 500s —
+           * the defect landing on the person who did not configure it. Above
+           * `PAYMENT_AMOUNT_MAX_MINOR` but inside the column, it is instead a payment
+           * the product's own safety rail would refuse at the tap, which is the same
+           * button that cannot work. Both are refused here, where the operator is
+           * looking at the field.
+           */
+          .refine(
+            (money) => BigInt(money.amountMinor) <= PAYMENT_AMOUNT_MAX_MINOR,
+            `A top-up preset must be at most ${PAYMENT_AMOUNT_MAX_MINOR.toString()} minor units.`,
+          ),
       )
       .max(TOPUP_PRESETS_MAX)
       // Duplicates are refused rather than de-duplicated: two identical buttons are a

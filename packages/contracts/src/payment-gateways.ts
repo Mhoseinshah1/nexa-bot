@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MAX_MONEY_AMOUNT_MINOR } from './money.js';
 import type { PaymentMethod } from './payment.js';
 
 /**
@@ -265,8 +266,18 @@ export const paymentGatewayConfigSchema = z
         (value) => value === null || value.length <= PAYMENT_GATEWAY_INSTRUCTIONS_MAX_LENGTH,
         { message: `must be at most ${PAYMENT_GATEWAY_INSTRUCTIONS_MAX_LENGTH} characters` },
       ),
-    minAmountMinor: z.bigint().min(0n),
-    maxAmountMinor: z.bigint().min(0n),
+    /*
+     * Bounded ABOVE, and the ceiling is the column's rather than the product's.
+     *
+     * `payment_gateways.min_amount_minor` and its maximum are PostgreSQL `bigint`. A
+     * larger value parses here, passes the wire schema's nineteen-digit regex, and then
+     * fails inside the UPDATE as a range error the operator meets as a 500 — for what is
+     * an out-of-range field, which is a validation response. `MAX_MONEY_AMOUNT_MINOR` is
+     * that column's ceiling written down, so the refusal happens where every other
+     * refusal about these two numbers already happens.
+     */
+    minAmountMinor: z.bigint().min(0n).max(MAX_MONEY_AMOUNT_MINOR),
+    maxAmountMinor: z.bigint().min(0n).max(MAX_MONEY_AMOUNT_MINOR),
     eligibility: z.object({
       activateAfterPayments: thresholdSchema,
       deactivateAfterPayments: thresholdSchema,

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { paymentIdSchema } from './ids.js';
 import { PAYMENT_METHODS, type PaymentMethod } from './payment.js';
 
 /**
@@ -205,7 +206,16 @@ export const refundReasonSchema = z
  */
 export const refundRequestSchema = z.object({
   idempotencyKey: z.string().min(8).max(255),
-  paymentId: z.string(),
+  /*
+   * PARSED, not merely typed.
+   *
+   * `payments.id` is a `uuid` column, so a malformed path segment reaching the
+   * repository is compared against it by PostgreSQL and raises `invalid input syntax
+   * for type uuid` — a 500 for what is an unroutable identifier, which is a 404. The
+   * same class Phase 4B's review found three times; this is where it is refused for
+   * refunds, so no caller has to remember to.
+   */
+  paymentId: paymentIdSchema,
   amountMinor: z.string().regex(/^[0-9]{1,19}$/u, 'must be a positive integer string'),
   reason: refundReasonSchema,
 });
