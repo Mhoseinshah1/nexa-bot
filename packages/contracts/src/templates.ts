@@ -739,6 +739,250 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.admin.services_button',
+    description:
+      'Opens the services section of the management panel. Drawn only for an ' +
+      'administrator who holds `services.view`, and the section charges that key again ' +
+      'server-side \u2014 the button decides what is advertised, never what is allowed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.services_section',
+    description:
+      'Introduces the two queues this section shows: services stranded in ' +
+      '`UNRECONCILED`, and services whose configuration could not be delivered. Those ' +
+      'two because they are the states nothing resolves on its own \u2014 every other ' +
+      'state either settles itself or belongs to the customer. No placeholders: a count ' +
+      'here would go stale between the render and the tap.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.services_none',
+    description:
+      'Both queues are empty. Says nothing needs attention, never that nothing ever ' +
+      'did: this section shows OPEN work and no history is reachable from it \u2014 the ' +
+      'same rule `bot.admin.receipts_none` states.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.service',
+    description:
+      'One service, as an administrator sees it in Telegram. Carries the identity, the ' +
+      'lifecycle, the usage, the expiry, the delivery state and the latest operation ' +
+      'outcome \u2014 and NO capability: no subscription URL, no subscription ref, no ' +
+      'provider client id, no panel credential. All four are bearer capabilities and a ' +
+      'chat message is the worst place to put one, because it stays in that chat for ' +
+      'ever and is forwardable.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'customer',
+        type: 'STRING',
+        description:
+          'Whose service it is, by the numeric identity this installation holds \u2014 ' +
+          'never a display name, for the reason `bot.admin.receipt` gives.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'username',
+        type: 'STRING',
+        description: 'The handle an operator types into the panel. Not a credential.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'panel',
+        type: 'STRING',
+        description: 'The panel the service lives on, by the name the operator gave it.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'product',
+        type: 'STRING',
+        description: 'The plan as it was SOLD, from the order\u2019s frozen snapshot.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'state',
+        type: 'STRING',
+        description:
+          'The lifecycle state, as the frozen vocabulary spells it \u2014 the same word the ' +
+          'Web Admin, the audit row and the operational log use. An administrator ' +
+          'matching a chat message against a screen needs the same token on both.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'delivery',
+        type: 'STRING',
+        description:
+          'What is known about telling the customer, from the frozen vocabulary. A ' +
+          'SECOND axis and never merged with the state: a provisioned account whose ' +
+          'message bounced must not read as unprovisioned, because the obvious remedy ' +
+          'for that is a second paid-for account on somebody\u2019s panel.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'usedTrafficBytes',
+        type: 'BYTES',
+        description: 'Traffic used, as of the last successful sync.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'totalTrafficBytes',
+        type: 'BYTES',
+        description: 'The allowance in bytes, or 0 for unlimited.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'syncedAt',
+        type: 'DATETIME',
+        description:
+          'When usage was last read BACK from the panel. Absent means never, and the ' +
+          'copy says so rather than leaving a figure to be read as live.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description: 'When the service expires. Absent means it has no expiry.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'operation',
+        type: 'STRING',
+        description:
+          'The latest operation and its outcome, as the frozen vocabulary spells both, ' +
+          'or that nothing has been attempted. It is what tells a planned action apart ' +
+          'from a completed one.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.service_gone',
+    description:
+      'The tapped service is not this tenant\u2019s, or no longer exists. ONE message for ' +
+      'both, for the reason `bot.service.not_found` gives on the customer side: telling ' +
+      'them apart would let anybody holding a service id learn whether it exists.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.service_sync_button',
+    description: 'Reads usage back from the panel, through the canonical SYNC_USAGE operation.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.service_resend_button',
+    description:
+      'Sends the customer their configuration again. Plans no operation and calls no ' +
+      'provider \u2014 a resend is a message and a delivery row.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.service_retry_button',
+    description:
+      'Asks for the provider account to be created again, through `retryProvisioning` ' +
+      'and its own refusals \u2014 an UNRECONCILED service is reconciled first rather than ' +
+      'given a second account.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.service_reconcile_button',
+    description:
+      'Resolves an UNRECONCILED service against its panel, which is how a lost create ' +
+      'is settled without asking for a duplicate account.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.service_suspend_button',
+    description: 'Pauses the account on the panel, through the canonical SUSPEND operation.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.service_resume_button',
+    description: 'Re-enables a suspended account, through the canonical RESUME operation.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.service_terminate_button',
+    description:
+      'ASKS to end the service. It carries the asking callback and never the destructive ' +
+      'one, which is what makes ending a service two taps in the admin panel \u2014 the ' +
+      'first such flow on the admin side, and the same rule the customer half has held ' +
+      'since 4E.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.service_terminate_ask',
+    description:
+      'The confirmation screen for ending a service: it says what will happen \u2014 the ' +
+      'account is deleted on the panel and the customer keeps the order they paid for ' +
+      '\u2014 and offers the one button that does it. The destructive callback is produced ' +
+      'here and nowhere else.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.service_terminate_confirm_button',
+    description:
+      'The second tap, and the only button in the admin panel whose press deletes an ' +
+      'account on a provider.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.service_planned',
+    description:
+      'The request was RECORDED, and the operation is planned rather than done: no ' +
+      'provider has been called yet. Saying it was done would be the legacy ' +
+      '\u201c\u2705 updated\u201d for a write whose effect has not happened, and for the action ' +
+      'that deletes an account that difference is the whole point.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.service_resent',
+    description:
+      'The configuration was sent to the customer. Its own key rather than ' +
+      '`bot.admin.service_planned`, because a resend plans no operation and reporting a ' +
+      'planned one would invent it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.service_unavailable',
+    description:
+      'The tapped action cannot be taken on this service right now \u2014 the state, the ' +
+      'provider\u2019s capabilities, the panel\u2019s configuration, or an operation of that ' +
+      'type already under way. ONE sentence for all of them on this surface: the ' +
+      'administrator\u2019s next step is the Web Admin, where the reason is named, and the ' +
+      'operational log and audit row carry the distinction. Reached by a button drawn ' +
+      'before the service moved.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.admin.section',
     description:
       'The administrator section, and the exact syntax of the two commands it accepts. ' +

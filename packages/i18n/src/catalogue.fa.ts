@@ -156,6 +156,33 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.approved': 'پرداخت تأیید شد و نتیجه برای مشتری ثبت گردید.',
   'bot.admin.rejected': 'پرداخت رد شد و نتیجه برای مشتری ثبت گردید.',
   /*
+   * The services section, Phase 6A. Every action goes through the canonical path the
+   * Web Admin uses; these strings are what an administrator reads while it does.
+   */
+  'bot.admin.services_button': '🧰 سرویس‌ها',
+  'bot.admin.services_section':
+    'سرویس‌هایی که رسیدگی می‌خواهند:\n\n• سرویس‌هایی که وضعیتشان روی پنل نامعلوم است\n• سرویس‌هایی که لینکشان به مشتری نرسیده است\n\nبرای دیدن یک سرویس مشخص:\n/service <شناسهٔ سرویس>',
+  'bot.admin.services_none':
+    'در حال حاضر هیچ سرویسی رسیدگی نمی‌خواهد. برای دیدن یک سرویس مشخص: /service <شناسهٔ سرویس>',
+  'bot.admin.service':
+    'مشتری: {customer}\nنام کاربری روی پنل: {username}\nپنل: {panel}\nپلن: {product}\nوضعیت: {state}\nتحویل به مشتری: {delivery}\nمصرف: {usedTrafficBytes} از {totalTrafficBytes}\nآخرین خواندن مصرف: {syncedAt}\nانقضا: {expiresAt}\nآخرین عملیات: {operation}',
+  'bot.admin.service_gone': 'این سرویس پیدا نشد.',
+  'bot.admin.service_sync_button': '🔄 خواندن مصرف از پنل',
+  'bot.admin.service_resend_button': '📨 ارسال مجدد لینک',
+  'bot.admin.service_retry_button': '♻️ تلاش مجدد برای ساخت',
+  'bot.admin.service_reconcile_button': '🧭 تطبیق با پنل',
+  'bot.admin.service_suspend_button': '⏸ غیرفعال کردن',
+  'bot.admin.service_resume_button': '▶️ فعال کردن',
+  'bot.admin.service_terminate_button': '🗑 پایان دادن به سرویس',
+  'bot.admin.service_terminate_ask':
+    'با این کار حساب مشتری روی پنل حذف می‌شود و برگشت‌پذیر نیست. سفارشی که مشتری پرداخت کرده سر جایش می‌ماند.\n\nاگر مطمئن هستید، دکمهٔ زیر را بزنید.',
+  'bot.admin.service_terminate_confirm_button': '🗑 بله، پایان بده',
+  'bot.admin.service_planned':
+    'درخواست ثبت شد. تا وقتی پنل آن را اعمال نکند، انجام‌شده نیست؛ نتیجه در تاریخچهٔ سرویس می‌آید.',
+  'bot.admin.service_resent': 'لینک برای مشتری فرستاده شد.',
+  'bot.admin.service_unavailable':
+    'این کار روی این سرویس در حال حاضر ممکن نیست. دلیلش در پنل وب، روی صفحهٔ همین سرویس، نوشته شده است.',
+  /*
    * The syntax is IN the message, because these are commands rather than a prompt.
    * A prompt that captures the next message is what overwrote a production gateway
    * setting in INCIDENT-FIN-001; a command carries its argument with it.
