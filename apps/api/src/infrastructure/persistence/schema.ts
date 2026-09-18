@@ -1290,6 +1290,19 @@ export const panels = pgTable(
      * panel is in and which `PANEL_NOT_OPERABLE` names rather than guesses past.
      */
     activation: jsonb('activation'),
+    /**
+     * The most services this panel may carry, or NULL for no limit.
+     *
+     * Phase 6B, and NULL is the honest default rather than a large number: this
+     * installation does not know what any given panel can take. The number is an
+     * operator's judgement about their own machine, so the absence of one means
+     * "nobody has said", not "unlimited is proven safe".
+     *
+     * A SOFT cap. Lowering it below current usage refuses new sales and terminates
+     * nothing — a limit that could delete a customer's service because somebody
+     * mistyped a number is not a limit, it is an outage with a form field.
+     */
+    maxServices: integer('max_services'),
     /** Set when the panel is archived, so the event has a time and not just a state. */
     archivedAt: timestamptz('archived_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
@@ -1326,6 +1339,17 @@ export const panels = pgTable(
     check('panels_provider_type_check', enumCheck('provider_type', PROVIDER_TYPES)),
     /** An archived panel has a time; a live one does not. Neither state can lie. */
     check('panels_archived_at_check', sql`(status = 'ARCHIVED') = (archived_at IS NOT NULL)`),
+    /**
+     * A cap is a positive number or it is absent.
+     *
+     * Zero is the interesting case and it is refused rather than accepted as "sell
+     * nothing": an operator who wants a panel to stop taking business has
+     * `DISABLED`, which says so, stops the probes and reads as a decision. A zero
+     * cap would be a second way to spell it that nothing else in the system
+     * recognises — the health view would still say `HEALTHY`, the panel would still
+     * be probed, and the catalogue would go quiet with no state anywhere naming why.
+     */
+    check('panels_max_services_check', sql`max_services IS NULL OR max_services > 0`),
     /**
      * Redundant against the primary key, and the target of a composite
      * reference rather than a lookup path.
@@ -1459,6 +1483,21 @@ export const panelHealth = pgTable(
      * state and completely different problems.
      */
     lastHealthyAt: timestamptz('last_healthy_at'),
+    /**
+     * Consecutive probes that concluded a failure state, reset to zero by any
+     * non-failing conclusion.
+     *
+     * HEALTH state, and deliberately not the identically-named column on
+     * `panel_monitor_schedule`, which that table's own docblock calls "scheduler
+     * state, not health" and which is discarded whenever the health row does not
+     * describe a failure. Backoff and eligibility are different questions: one asks
+     * when to look again, this asks whether to keep selling, and a counter that is
+     * reset for one purpose must not silently answer the other.
+     *
+     * Written by the same conditional upsert that guards `checked_at`, so a probe
+     * whose answer arrives out of order cannot advance it.
+     */
+    consecutiveFailures: integer('consecutive_failures').notNull().default(0),
   },
   (table) => [
     index('panel_health_tenant_idx').on(table.tenantId),
@@ -1482,6 +1521,88 @@ export const panelHealth = pgTable(
     check(
       'panel_health_failure_presence_check',
       sql`(state IN ('HEALTHY', 'DEGRADED')) = (failure IS NULL)`,
+    ),
+  ],
+);
+
+/**
+ * A slot on a panel, held for one order while the customer decides whether to pay.
+ *
+ * Phase 6B. The alternative — counting services and comparing against the cap —
+ * is wrong in exactly one place and it is the place that matters: between a
+ * customer confirming an order and their payment settling there is no service
+ * row, so two customers reaching for the last slot both count the same n-1 and
+ * are both sold it. The row is what makes the last slot exclusive, and it exists
+ * for precisely the window in which nothing else represents that customer's
+ * claim on the panel.
+ *
+ * It is released the moment something else does represent it. Settlement writes
+ * the service inside the same transaction that deletes this row, so the slot is
+ * held continuously and counted once, never twice and never briefly by nobody.
+ * Every other exit — the payment expiring, being rejected, the order cancelled —
+ * deletes it and gives the slot back.
+ *
+ * DELETED rather than marked, and that is the design. A `RELEASED` state would
+ * make the capacity query filter on it, and a query that must exclude rows is a
+ * query one caller will forget to write that way; a row that is gone cannot be
+ * counted by accident. What the release MEANT is in the audit trail and the
+ * order's own history, which is where a reader looks for it anyway.
+ */
+export const panelCapacityReservations = pgTable(
+  'panel_capacity_reservations',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    panelId: uuid('panel_id').notNull(),
+    /**
+     * The order this slot is being held for. UNIQUE, and that is the idempotency.
+     *
+     * A confirmation replayed by a retry, a double-tapped button or a second
+     * replica collides here rather than taking a second slot from a panel that
+     * may only have one left.
+     */
+    orderId: uuid('order_id').notNull(),
+    /**
+     * When this hold stops counting, whatever else has happened.
+     *
+     * The backstop for the release that never ran — a process killed between the
+     * payment and the delete, a lane that lost its work. Without it an abandoned
+     * checkout holds somebody else's slot until an operator notices, which on a
+     * single-slot panel means the panel is full and nothing says why.
+     *
+     * The capacity query filters on this rather than a sweep deleting rows,
+     * because a sweep is a process and this must be true without one running.
+     */
+    expiresAt: timestamptz('expires_at').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    /** A child row may not name another tenant's panel. */
+    foreignKey({
+      columns: [table.tenantId, table.panelId],
+      foreignColumns: [panels.tenantId, panels.id],
+      name: 'panel_capacity_reservations_tenant_panel_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.orderId],
+      foreignColumns: [orders.tenantId, orders.id],
+      name: 'panel_capacity_reservations_order_fk',
+    }),
+    /** One slot per order. The collision IS the replay defence. */
+    uniqueIndex('panel_capacity_reservations_order_key').on(table.tenantId, table.orderId),
+    /**
+     * The counting scan: for ONE panel, the holds that have not expired.
+     *
+     * Leads with the panel because that is what capacity is asked about, and
+     * carries `expires_at` so the predicate is served by the same index rather
+     * than by a filter over every hold the panel has ever taken.
+     */
+    index('panel_capacity_reservations_panel_idx').on(
+      table.tenantId,
+      table.panelId,
+      table.expiresAt,
     ),
   ],
 );
