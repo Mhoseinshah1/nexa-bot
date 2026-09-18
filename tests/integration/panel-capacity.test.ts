@@ -273,6 +273,33 @@ describe('panel capacity and sales eligibility', () => {
     expect(capacity?.used).toBe(1);
   });
 
+  it('answers a second acquire for the same order with the slot it already holds', async () => {
+    /*
+     * The RESERVATION's own replay defence, reached directly.
+     *
+     * The case below goes through `confirm`, where the order's idempotency store
+     * answers the second call before the panel is ever consulted — so it proves
+     * that store and says nothing about this. Two transactions acquiring for one
+     * order is the shape a retry across replicas actually has.
+     *
+     * The panel is FULL of this order's own hold when the second call arrives,
+     * which is why the held-check comes before the capacity arithmetic: an order
+     * that already owns its slot is not asking for another, and answering it
+     * `AT_CAPACITY` would refuse a retry at a step it had already passed.
+     */
+    await setCap(panelA, 1);
+    const product = await activeProduct(panelA);
+    const orderId = await draftFor(customerA, product);
+    const acquire = () =>
+      ctx.container.uow.run(tenantA, (tx) =>
+        ctx.container.panelSales.acquire(tenantA, panelA, orderId, tx, null),
+      );
+
+    await expect(acquire()).resolves.toEqual({ eligible: true });
+    await expect(acquire()).resolves.toEqual({ eligible: true });
+    expect(await reservations(panelA)).toBe(1);
+  });
+
   it('a replayed confirmation holds ONE slot, not two', async () => {
     await setCap(panelA, 1);
     const product = await activeProduct(panelA);
@@ -294,17 +321,138 @@ describe('panel capacity and sales eligibility', () => {
     const first = await draftFor(customerA, product);
     const second = await draftFor(customerB, product);
 
-    // Genuinely in flight together. The lock inside `reserve` is what makes one
-    // of these wait; a count taken before that wait would see zero on both
-    // sides and sell the slot twice.
-    const settled = await Promise.allSettled([
-      confirm(customerA, first),
-      confirm(customerB, second),
-    ]);
+    /*
+     * A BARRIER, not a race.
+     *
+     * Two `Promise.all` confirmations are concurrent in the sense that both are
+     * in flight; whether they are both inside the critical section is up to the
+     * event loop, and the first version of this case passed with the row lock
+     * REMOVED — it proved nothing. The barrier makes the interleaving a
+     * property of the test: neither call may begin acquiring until both have
+     * arrived, so both are inside their transactions with the panel not yet
+     * locked by either. The barrier is AHEAD of the lock rather than inside
+     * `reserve`, because `acquire` locks first — a barrier after that point
+     * deadlocks, with one caller holding the row and the other waiting for
+     * PostgreSQL to hand it over.
+     *
+     * From there the lock is the only thing that can separate them. With it,
+     * one waits in PostgreSQL and counts AFTER the other commits. Without it,
+     * both count zero and both are sold the last slot.
+     *
+     * The instance is patched rather than a stand-in injected, because the gate
+     * the order path uses holds THIS object — a stand-in would test a second
+     * wiring that production does not have.
+     */
+    const arrivals: (() => void)[] = [];
+    const bothArrived = new Promise<void>((resolve) => {
+      let seen = 0;
+      arrivals.push(() => {
+        seen += 1;
+        if (seen === 2) resolve();
+      });
+    });
+    const realAcquire = ctx.container.panelSales.acquire.bind(ctx.container.panelSales);
+    ctx.container.panelSales.acquire = async (scope, panelId, orderId, tx, expiresAt) => {
+      arrivals[0]!();
+      await bothArrived;
+      return realAcquire(scope, panelId, orderId, tx, expiresAt);
+    };
 
-    expect(settled.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
-    expect(settled.filter((r) => r.status === 'rejected')).toHaveLength(1);
-    expect(await reservations(panelA)).toBe(1);
+    try {
+      const settled = await Promise.allSettled([
+        confirm(customerA, first),
+        confirm(customerB, second),
+      ]);
+
+      expect(settled.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      expect(settled.filter((r) => r.status === 'rejected')).toHaveLength(1);
+      expect(await reservations(panelA)).toBe(1);
+    } finally {
+      ctx.container.panelSales.acquire = realAcquire;
+    }
+  });
+
+  it('holds the panel row for update before it counts', async () => {
+    /*
+     * The lock itself, asserted where it is the only explanation.
+     *
+     * Two weaker versions of this case were written first and BOTH passed with
+     * `FOR UPDATE` deleted, which is the whole reason this one exists:
+     *
+     *   - two confirmations under a rendezvous barrier. The interleaving that
+     *     oversells is "both count before either inserts", and the lock makes
+     *     that interleaving unconstructible: the loser makes no progress at all
+     *     while the winner is inside, so any barrier waiting for it deadlocks.
+     *   - a reserve that must WAIT while another transaction holds the row. It
+     *     waits either way: `panel_capacity_reservations` references `panels`,
+     *     so the INSERT takes a key-share lock on that row regardless. That case
+     *     proved the foreign key.
+     *
+     * What distinguishes them is the lock MODE the reserving transaction holds
+     * on `panels` at the moment it counts. `SELECT ... FOR UPDATE` takes
+     * `RowShareLock` on the relation; a plain read takes `AccessShareLock`, and
+     * the insert's `RowExclusiveLock` has not happened yet. So the count is
+     * paused and the catalogue is asked, from another connection, what this
+     * transaction is holding.
+     */
+    await setCap(panelA, 2);
+    const product = await activeProduct(panelA);
+    const orderId = await draftFor(customerA, product);
+
+    let reportBackend = (_pid: number): void => {};
+    const backendPid = new Promise<number>((resolve) => {
+      reportBackend = resolve;
+    });
+    let releaseCount = (): void => {};
+    const mayCount = new Promise<void>((resolve) => {
+      releaseCount = resolve;
+    });
+
+    const real = ctx.container.panelCapacity.readMany.bind(ctx.container.panelCapacity);
+    ctx.container.panelCapacity.readMany = async (scope, panelIds, now, tx) => {
+      if (tx !== undefined) {
+        const pid = (await tx.tx.execute(
+          sql`SELECT pg_backend_pid()::int AS pid` as never,
+        )) as unknown as { rows: { pid: number }[] };
+        reportBackend(pid.rows[0]!.pid);
+        await mayCount;
+      }
+      return real(scope, panelIds, now, tx);
+    };
+
+    try {
+      const reserving = ctx.container.uow.run(tenantA, (tx) =>
+        ctx.container.panelCapacity.reserve(
+          tenantA,
+          {
+            id: ctx.container.ids.uuid(),
+            panelId: panelA,
+            orderId,
+            expiresAt: new Date(ctx.container.clock.now().getTime() + 60_000),
+          },
+          ctx.container.clock.now(),
+          tx,
+        ),
+      );
+
+      const pid = await backendPid;
+      const held = (await ctx.container.database.db.execute(
+        sql`SELECT mode FROM pg_locks
+             WHERE pid = ${pid} AND locktype = 'relation'
+               AND relation = 'panels'::regclass` as never,
+      )) as unknown as { rows: { mode: string }[] };
+
+      expect(
+        held.rows.map((row) => row.mode),
+        'reserve counted without holding the panel row for update',
+      ).toContain('RowShareLock');
+
+      releaseCount();
+      await expect(reserving).resolves.toMatchObject({ outcome: 'RESERVED' });
+    } finally {
+      releaseCount();
+      ctx.container.panelCapacity.readMany = real;
+    }
   });
 
   it('refuses a confirmation when services already fill the cap', async () => {

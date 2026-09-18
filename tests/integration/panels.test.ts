@@ -33,6 +33,7 @@ import {
   adminActorFor,
   createAdmin,
   createTestContext,
+  validatePanelConnection,
   tenantA,
   tenantB,
   testConfig,
@@ -973,6 +974,88 @@ describe('panels', () => {
     await expect(
       ctx.container.panels.get(tenantA, adminActorFor(owner), 'not-a-uuid'),
     ).rejects.toMatchObject({ code: 'panel.request_invalid' });
+  });
+
+  // -------------------------------------------------------------------------
+  // Enabling requires a connection test that vouches for what the panel IS NOW
+  // -------------------------------------------------------------------------
+
+  describe('the enable gate', () => {
+    const disable = (panelId: string) =>
+      ctx.container.panels.setStatus(tenantA, adminActorFor(owner), panelId, {
+        status: 'DISABLED',
+        idempotencyKey: key(),
+      });
+    const enable = (panelId: string) =>
+      ctx.container.panels.setStatus(tenantA, adminActorFor(owner), panelId, {
+        status: 'ACTIVE',
+        idempotencyKey: key(),
+      });
+
+    it('refuses to enable a panel nobody has successfully tested', async () => {
+      const { view } = await create(owner, tenantA, { credentials: { password: PASSWORD } });
+      await disable(view.panel.id);
+
+      await expect(enable(view.panel.id)).rejects.toMatchObject({
+        code: 'panel.not_validated',
+      });
+    });
+
+    it('enables on the strength of a test against the panel as it is now', async () => {
+      const { view } = await create(owner, tenantA, { credentials: { password: PASSWORD } });
+      await disable(view.panel.id);
+      await validatePanelConnection(ctx.container, tenantA, view.panel.id);
+
+      await expect(enable(view.panel.id)).resolves.toMatchObject({
+        panel: { status: 'ACTIVE' },
+      });
+    });
+
+    it('stops counting a green test once the credential it used is replaced', async () => {
+      // THE case the gate exists for, and the one an identity comparison is
+      // needed to catch: test, find the password wrong, fix it, enable. The
+      // green test proves the OLD password reached the panel and nothing about
+      // the new one.
+      const { view } = await create(owner, tenantA, { credentials: { password: PASSWORD } });
+      await disable(view.panel.id);
+      await validatePanelConnection(ctx.container, tenantA, view.panel.id);
+
+      await ctx.container.panels.setCredentials(tenantA, adminActorFor(owner), view.panel.id, {
+        credentials: { password: 'a-different-password-entirely' },
+        idempotencyKey: key(),
+      });
+
+      await expect(enable(view.panel.id)).rejects.toMatchObject({
+        code: 'panel.not_validated',
+      });
+    });
+
+    it('does not demand a fresh test to re-save an already ACTIVE panel', async () => {
+      // Re-saving ACTIVE is not an enable. Without this exclusion a panel that
+      // has been serving for a month becomes un-re-confirmable, and an operator
+      // has to probe it to leave it exactly as it was.
+      const { view } = await create(owner, tenantA, { credentials: { password: PASSWORD } });
+
+      await expect(enable(view.panel.id)).resolves.toMatchObject({
+        panel: { status: 'ACTIVE' },
+      });
+    });
+
+    it('does not make an archived panel unrestorable', async () => {
+      // `testConnection` refuses an ARCHIVED panel, so gating this transition
+      // would leave an operator unable to test to satisfy the gate and unable
+      // to enable without satisfying it — the panel would be unrestorable by
+      // any sequence of requests.
+      const { view } = await create(owner, tenantA, { credentials: { password: PASSWORD } });
+      await ctx.container.panels.setStatus(tenantA, adminActorFor(owner), view.panel.id, {
+        status: 'ARCHIVED',
+        idempotencyKey: key(),
+      });
+
+      await expect(enable(view.panel.id)).resolves.toMatchObject({
+        panel: { status: 'ACTIVE' },
+      });
+    });
   });
 
   it('restores an archived panel and keeps its credentials', async () => {
