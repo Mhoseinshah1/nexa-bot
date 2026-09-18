@@ -70,6 +70,30 @@ export interface PanelHealthRecord {
 }
 
 /**
+ * A stored health row: what the probe said, plus the two facts only the STORE
+ * knows.
+ *
+ * Kept apart from `PanelHealthRecord`, which is what a probe PRODUCES, because
+ * neither of these is something a probe can produce. The streak is a property of
+ * the sequence of probes and is derived by the write itself; the identity is
+ * supplied by the caller from the row it holds the lock on. A prober asked for
+ * either would have to invent one, and `toHealthRecord` would need a
+ * previous-row argument it has no business reading.
+ */
+export interface PanelHealthSnapshot extends PanelHealthRecord {
+  /**
+   * Consecutive probes that concluded an UNUSABLE state; zero after any that
+   * did not. What `decideEligibility` applies hysteresis to.
+   */
+  readonly unusableStreak: number;
+  /**
+   * The connection identity this probe ran against, or null for a row written
+   * before the column existed. What an enable may be authorised on.
+   */
+  readonly validatedIdentity: string | null;
+}
+
+/**
  * What a probe result did to the stored health row.
  *
  * `STALE_IGNORED` is not an error and not a no-op the caller may ignore. A
@@ -102,7 +126,7 @@ export interface PanelView {
   readonly panel: PanelRecord;
   readonly credentials: PanelCredentialSummary;
   /** Null when this panel has never been probed. Absence IS the state. */
-  readonly health: PanelHealthRecord | null;
+  readonly health: PanelHealthSnapshot | null;
 }
 
 export interface CreatePanelInput {
@@ -295,6 +319,17 @@ export interface PanelRepository {
     scope: TenantContext,
     panelId: string,
     health: PanelHealthRecord,
+    /**
+     * The connection identity the probe ran against, from the row the caller
+     * holds the lock on.
+     *
+     * Written on EVERY probe, not only a successful one, because it records
+     * which configuration was tested and not whether the test passed. What an
+     * enable needs — that the test both passed and ran against what the panel
+     * is now — is two conditions, and folding them into one column would make a
+     * failed probe indistinguishable from no probe at all.
+     */
+    validatedIdentity: string,
     tx: TransactionScope,
   ): Promise<HealthWriteOutcome>;
   /** The monitor's bookkeeping for one panel, or null if it has no schedule row. */

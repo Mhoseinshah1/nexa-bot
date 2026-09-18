@@ -1,5 +1,10 @@
 import { and, eq, inArray, ne, sql, type SQL } from 'drizzle-orm';
-import { errors, PANEL_ERROR_CODES, PANEL_PAGE_DEFAULT } from '@nexa/contracts';
+import {
+  errors,
+  PANEL_ERROR_CODES,
+  PANEL_PAGE_DEFAULT,
+  PANEL_UNUSABLE_HEALTH_STATES,
+} from '@nexa/contracts';
 import type {
   MonitorDeferralReason,
   PanelHealthState,
@@ -401,8 +406,18 @@ export class DrizzlePanelRepository implements PanelRepository {
     scope: TenantContext,
     panelId: string,
     health: PanelHealthRecord,
+    validatedIdentity: string,
     tx: TransactionScope,
   ): Promise<HealthWriteOutcome> {
+    /*
+     * Whether THIS answer is one that stops a panel selling.
+     *
+     * `PANEL_UNUSABLE_HEALTH_STATES` and not "did the probe fail": `DEGRADED`
+     * is a failure of the diagnostic read and a success of the login, so it
+     * RESETS the streak. The panel answered, the credentials were accepted, and
+     * a panel that is up must keep taking business.
+     */
+    const unusable = PANEL_UNUSABLE_HEALTH_STATES.includes(health.state);
     const columns = {
       state: health.state,
       checkedAt: health.checkedAt,
@@ -411,13 +426,30 @@ export class DrizzlePanelRepository implements PanelRepository {
       statusCode: health.statusCode,
       providerVersion: health.providerVersion,
       lastHealthyAt: health.lastHealthyAt,
+      validatedIdentity,
     };
     const written = await tx.tx
       .insert(panelHealth)
-      .values({ panelId, tenantId: scope.tenantId, ...columns })
+      .values({ panelId, tenantId: scope.tenantId, ...columns, unusableStreak: unusable ? 1 : 0 })
       .onConflictDoUpdate({
         target: panelHealth.panelId,
-        set: columns,
+        set: {
+          ...columns,
+          /*
+           * Derived from the STORED value in the same statement, never read and
+           * written by the caller.
+           *
+           * The read would be a separate statement, and between it and this one
+           * another prober could land — so two overlapping failures would both
+           * write 1 and a panel that has been down for an hour would never cross
+           * the threshold. Incrementing in place makes the count a property of
+           * what actually reached the row.
+           *
+           * It rides the same `setWhere` as everything else, so a probe whose
+           * answer arrives out of order advances nothing.
+           */
+          unusableStreak: unusable ? sql`${panelHealth.unusableStreak} + 1` : sql`0`,
+        },
         // Two conditions, and the second is the interesting one.
         //
         // The tenant predicate is belt and braces on a conflict path: the row
@@ -1147,6 +1179,8 @@ function toView(row: Row): PanelView {
             statusCode: row.health.statusCode,
             providerVersion: row.health.providerVersion,
             lastHealthyAt: row.health.lastHealthyAt,
+            unusableStreak: row.health.unusableStreak,
+            validatedIdentity: row.health.validatedIdentity,
           },
   };
 }
