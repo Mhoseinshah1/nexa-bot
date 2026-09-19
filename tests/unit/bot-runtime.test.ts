@@ -779,6 +779,38 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.admin.approved',
       'bot.admin.linked',
       'bot.admin.panel',
+      /*
+       * 6B's nineteen, the panels section. Reviewed against the same rule, and one
+       * property matters more here than "does it promise a flow": none of these
+       * carries a credential, a base URL, a masked stand-in for either, or a
+       * provider's response body. `bot.admin.panel_detail` renders the failure KIND
+       * from the frozen taxonomy and never the text a provider returned, and no key
+       * in this group offers to create or rotate a credential — that is the Web
+       * Admin's, and `BotRuntimeDeps.panelAdmin` cannot reach it.
+       *
+       * `bot.admin.panel_not_validated` is the only refusal here with its own
+       * sentence, because it is the only one an administrator can resolve without
+       * leaving the screen: the Test button is on it.
+       */
+      'bot.admin.panel_archive_ask',
+      'bot.admin.panel_archive_button',
+      'bot.admin.panel_archive_confirm_button',
+      'bot.admin.panel_archived',
+      'bot.admin.panel_detail',
+      'bot.admin.panel_disable_button',
+      'bot.admin.panel_disabled',
+      'bot.admin.panel_enable_button',
+      'bot.admin.panel_enabled',
+      'bot.admin.panel_gone',
+      'bot.admin.panel_not_validated',
+      'bot.admin.panel_test_button',
+      'bot.admin.panel_test_replayed',
+      'bot.admin.panel_tested',
+      'bot.admin.panel_unavailable',
+      'bot.admin.panels_button',
+      'bot.admin.panels_more_button',
+      'bot.admin.panels_none',
+      'bot.admin.panels_section',
       'bot.admin.receipt',
       'bot.admin.receipt_gone',
       'bot.admin.receipts_button',

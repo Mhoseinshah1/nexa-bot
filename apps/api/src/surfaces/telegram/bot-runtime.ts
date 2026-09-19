@@ -1,5 +1,7 @@
 import {
   COMMERCE_ERROR_CODES,
+  PANEL_ERROR_CODES,
+  providerDescriptor,
   isNexaError,
   currencyCodeSchema,
   money,
@@ -10,6 +12,7 @@ import {
 import type {
   ActorContext,
   BotInstanceId,
+  Clock,
   CorrelationId,
   CustomerArrival,
   CustomerNotificationKind,
@@ -54,7 +57,10 @@ import type {
 } from '../../modules/commerce/provisioning/application/ports.js';
 import type { OperatorServiceOperation } from '../../modules/commerce/provisioning/application/provisioning.service.js';
 import type { ServiceAdminService } from '../../modules/commerce/provisioning/application/service-admin.service.js';
-import { decodeServiceCursor, encodeServiceCursor } from './service-cursor.js';
+import { decodeKeysetToken, encodeKeysetToken, type KeysetToken } from './keyset-token.js';
+import type { PanelService } from '../../modules/platform/panels/application/panel.service.js';
+
+import { readHealth } from '../../modules/platform/panels/application/panel-health-view.js';
 
 /**
  * What the customer asked for.
@@ -144,6 +150,27 @@ export const BOT_INTENTS = [
   'ADMIN_SERVICE_RESUME',
   'ADMIN_SERVICE_TERMINATE_ASK',
   'ADMIN_SERVICE_TERMINATE',
+  /*
+   * Phase 6B — the panels section.
+   *
+   * `ADMIN_PANELS` is the section and `ADMIN_PANEL` is the management panel itself,
+   * which already existed: the singular one is the whole screen and the plural one is
+   * a fleet. `ADMIN_PANEL_DETAIL` is one panel, so no intent is named after two
+   * different things.
+   *
+   * `ADMIN_PANEL_ARCHIVE_ASK` and `ADMIN_PANEL_ARCHIVE` are the ask-then-act pair, the
+   * second on this surface. Archiving is reversible — it is the Web Admin's Restore
+   * button — and still gets a confirmation, because it takes a panel out of the
+   * catalogue and off the monitor's schedule on one tap from a phone.
+   */
+  'ADMIN_PANELS',
+  'ADMIN_PANELS_PAGE',
+  'ADMIN_PANEL_DETAIL',
+  'ADMIN_PANEL_TEST',
+  'ADMIN_PANEL_ENABLE',
+  'ADMIN_PANEL_DISABLE',
+  'ADMIN_PANEL_ARCHIVE_ASK',
+  'ADMIN_PANEL_ARCHIVE',
   'ADMIN_LINK',
   'ADMIN_ROLE',
   'UNSUPPORTED',
@@ -192,15 +219,21 @@ export interface BotCommand {
    */
   readonly args?: readonly string[];
   /**
-   * A decoded LIST POSITION, for the one callback that pages rather than acts.
+   * A decoded LIST POSITION, for the two callbacks that page rather than act.
    *
    * Not `targetId`: a cursor is not an identifier, nothing is looked up by it, and a
    * field documented as an id would eventually be passed to a repository as one. It
    * arrives as an opaque token in `callback_data` and is decoded — and therefore
    * validated — at the boundary, so a handler either receives a well-formed position or
    * the update is UNSUPPORTED before it gets there.
+   *
+   * `KeysetToken` and not one module's cursor type: the customer's services list and
+   * the administrator's panels list both page this way, and a `BotCommand` that named
+   * the provisioning module's type to carry a panel's position would be a lie about
+   * what the field holds. Both cursors ARE this shape, and the handler passes the value
+   * to the repository that minted it.
    */
-  readonly cursor?: ServiceCursor | null;
+  readonly cursor?: KeysetToken | null;
   /** Telegram's id for the tapped button, so the spinner can be stopped. */
   readonly callbackQueryId: string | null;
   /**
@@ -365,7 +398,7 @@ export const SERVICE_CALLBACK_PREFIX = 's:';
  * The next page of the customer's own service list.
  *
  * `l:` because every other lowercase letter is taken; the table above is the registry.
- * What follows is `encodeServiceCursor`'s token, not a uuid, which is why this prefix is
+ * What follows is `encodeKeysetToken`'s token, not a uuid, which is why this prefix is
  * routed separately from every other one here.
  */
 export const SERVICES_PAGE_CALLBACK_PREFIX = 'l:';
@@ -435,6 +468,17 @@ export const SERVICE_ACTION_CONFIRM_CALLBACK_PREFIX = 'q:';
 const ADMIN_QUEUE_LIMIT = 10;
 
 /**
+ * What `bot.admin.panel_detail` renders for a panel with no cap.
+ *
+ * A LITERAL rather than a template key, and that is a deliberate exception worth
+ * stating: `cap` is a `STRING` placeholder inside a message the catalogue owns, and a
+ * surface may not compose one template out of another. What it may do is pass a value,
+ * and the honest value for "unlimited" is a dash — a figure would read as a cap and
+ * `0` would read as a full panel, which is the exact inversion a null means.
+ */
+const UNCAPPED = '\u2014';
+
+/**
  * The two permissions the panel's sections charge, named once.
  *
  * Read through the guard by the services behind each section; these constants only
@@ -453,6 +497,15 @@ const RECEIPTS_REVIEW_PERMISSION = 'receipts.review' as PermissionKey;
 const SERVICES_VIEW_PERMISSION = 'services.view' as PermissionKey;
 const SERVICES_EDIT_PERMISSION = 'services.edit' as PermissionKey;
 const SERVICES_TERMINATE_PERMISSION = 'services.terminate' as PermissionKey;
+/*
+ * The two the panels section reads, and the same rule again: these decide which BUTTONS
+ * exist, never what is allowed. `PanelService.list` and `.get` charge `panels.view`;
+ * `.testConnection` and `.setStatus` charge `panels.edit`, through the same guard the
+ * Web Admin uses. There is deliberately no third key here, because this surface never
+ * touches a credential: `panels.credentials.rotate` has no button in Telegram at all.
+ */
+const PANELS_VIEW_PERMISSION = 'panels.view' as PermissionKey;
+const PANELS_EDIT_PERMISSION = 'panels.edit' as PermissionKey;
 
 /**
  * The intents `adminTurn` owns, so `act` has one branch rather than nineteen.
@@ -496,6 +549,20 @@ export const ADMIN_SERVICE_RESUME_CALLBACK_PREFIX = 'O:';
 export const ADMIN_SERVICE_TERMINATE_ASK_CALLBACK_PREFIX = 'P:';
 /** The one destructive admin callback. Produced by the confirmation screen alone. */
 export const ADMIN_SERVICE_TERMINATE_CALLBACK_PREFIX = 'Q:';
+/*
+ * The panels section, Phase 6B. `R:` and `S:` are the section and one panel; `Y:` is
+ * the only one of the eight that carries a CURSOR rather than a uuid, which is why it
+ * is decoded at the boundary like `l:` and not run through `callbackCommand`.
+ */
+export const ADMIN_PANELS_CALLBACK_PREFIX = 'R:';
+export const ADMIN_PANEL_DETAIL_CALLBACK_PREFIX = 'S:';
+export const ADMIN_PANEL_TEST_CALLBACK_PREFIX = 'T:';
+export const ADMIN_PANEL_ENABLE_CALLBACK_PREFIX = 'U:';
+export const ADMIN_PANEL_DISABLE_CALLBACK_PREFIX = 'V:';
+export const ADMIN_PANEL_ARCHIVE_ASK_CALLBACK_PREFIX = 'W:';
+/** The one archiving callback. Produced by the confirmation screen alone. */
+export const ADMIN_PANEL_ARCHIVE_CALLBACK_PREFIX = 'X:';
+export const ADMIN_PANELS_PAGE_CALLBACK_PREFIX = 'Y:';
 
 /**
  * Each services-section prefix and the intent it parses to, in ONE place.
@@ -628,6 +695,43 @@ function isServiceRefusal(error: unknown): boolean {
     code === COMMERCE_ERROR_CODES.ORDER_STATE_INVALID
   );
 }
+
+/**
+ * Whether a refusal is about the PANEL rather than about the administrator.
+ *
+ * `PANEL_NOT_VALIDATED` earns its own answer, because it is the one refusal on this
+ * screen an administrator can resolve without leaving it: the Test button is right
+ * there. The rest — a status that moved, credentials that do not satisfy the
+ * provider's shape, a spent probe budget, a lost race — are one sentence pointing at
+ * the Web Admin, for the reason `isServiceRefusal` gives. A permission denial is in
+ * neither set and falls through to the panel's single refusal, which tells whoever
+ * holds that chat nothing about what exists.
+ */
+function isPanelRefusal(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return (
+    code === PANEL_ERROR_CODES.PANEL_ARCHIVED ||
+    code === PANEL_ERROR_CODES.PANEL_CREDENTIALS_MISSING ||
+    code === PANEL_ERROR_CODES.PANEL_CREDENTIAL_UNSUPPORTED ||
+    code === PANEL_ERROR_CODES.PANEL_PROBE_LIMITED ||
+    code === PANEL_ERROR_CODES.PANEL_CONFIGURATION_CHANGED ||
+    code === PANEL_ERROR_CODES.PANEL_NAME_TAKEN
+  );
+}
+
+const ADMIN_PANEL_CALLBACKS: readonly (readonly [string, BotIntent])[] = [
+  [ADMIN_PANEL_DETAIL_CALLBACK_PREFIX, 'ADMIN_PANEL_DETAIL'],
+  [ADMIN_PANEL_TEST_CALLBACK_PREFIX, 'ADMIN_PANEL_TEST'],
+  [ADMIN_PANEL_ENABLE_CALLBACK_PREFIX, 'ADMIN_PANEL_ENABLE'],
+  [ADMIN_PANEL_DISABLE_CALLBACK_PREFIX, 'ADMIN_PANEL_DISABLE'],
+  [ADMIN_PANEL_ARCHIVE_ASK_CALLBACK_PREFIX, 'ADMIN_PANEL_ARCHIVE_ASK'],
+  /*
+   * LAST, and the row that makes this a table rather than seven `if`s: a mis-wiring
+   * here would make the ASKING callback the one that archives, which is the same
+   * one-character mistake `ADMIN_SERVICE_CALLBACKS` names in its own comment.
+   */
+  [ADMIN_PANEL_ARCHIVE_CALLBACK_PREFIX, 'ADMIN_PANEL_ARCHIVE'],
+];
 
 const ADMIN_SERVICE_CALLBACKS: readonly (readonly [string, BotIntent])[] = [
   [ADMIN_SERVICE_CALLBACK_PREFIX, 'ADMIN_SERVICE'],
@@ -894,7 +998,7 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
        * scoped to the tenant and to the customer resolved from the update — so the
        * decode is about shape, not trust.
        */
-      const cursor = decodeServiceCursor(data.slice(SERVICES_PAGE_CALLBACK_PREFIX.length));
+      const cursor = decodeKeysetToken(data.slice(SERVICES_PAGE_CALLBACK_PREFIX.length));
       if (cursor === null) return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
       return { intent: 'SERVICES_PAGE', targetId: null, cursor, callbackQueryId: id };
     }
@@ -913,6 +1017,24 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
     }
     if (data === ADMIN_SERVICES_CALLBACK_PREFIX) {
       return { intent: 'ADMIN_SERVICES', targetId: null, callbackQueryId: id };
+    }
+    if (data === ADMIN_PANELS_CALLBACK_PREFIX) {
+      return { intent: 'ADMIN_PANELS', targetId: null, callbackQueryId: id };
+    }
+    if (data.startsWith(ADMIN_PANELS_PAGE_CALLBACK_PREFIX)) {
+      /*
+       * The panels section's own page button, decoded HERE for the reason
+       * `SERVICES_PAGE_CALLBACK_PREFIX` states: a crafted token must be UNSUPPORTED at
+       * the boundary rather than an invalid cast inside a query. Nothing is authorized
+       * by it — the list is tenant-scoped and `panels.view` is charged in the handler
+       * — so the decode is about shape, not trust.
+       */
+      const cursor = decodeKeysetToken(data.slice(ADMIN_PANELS_PAGE_CALLBACK_PREFIX.length));
+      if (cursor === null) return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      return { intent: 'ADMIN_PANELS_PAGE', targetId: null, cursor, callbackQueryId: id };
+    }
+    for (const [prefix, intent] of ADMIN_PANEL_CALLBACKS) {
+      if (data.startsWith(prefix)) return callbackCommand(intent, data.slice(prefix.length), id);
     }
     /*
      * The services section's id-carrying callbacks, all through `callbackCommand`.
@@ -1230,6 +1352,29 @@ export interface BotRuntimeDeps {
    * `services` and `delivery`, and both charge their own permissions.
    */
   readonly serviceAdmin: Pick<ServiceAdminService, 'list' | 'detail' | 'operations'>;
+  /**
+   * The operator's panel operations, for the panels section.
+   *
+   * A `Pick` of FOUR, and what is absent is the point: `setCredentials` is not here, so
+   * no code path in this surface can write a credential even by mistake. Credential
+   * creation and rotation are the Web Admin's, behind `panels.credentials.rotate`, and
+   * the owner's instruction for this phase says so in as many words.
+   *
+   * `create` is absent for the same reason — a panel needs credentials, so creating one
+   * here would either be a panel that cannot be operated or a credential typed into a
+   * chat.
+   */
+  readonly panelAdmin: Pick<PanelService, 'list' | 'get' | 'testConnection' | 'setStatus'>;
+  /**
+   * The clock, for the ONE thing this surface decides about time.
+   *
+   * `readHealth` needs "now" to say whether a probe is stale, and `CLAUDE.md` is
+   * explicit that every timestamp comes from the `Clock` port — a `new Date()` here
+   * would be the one unfakeable value in a runtime whose whole test suite depends on
+   * being able to fix the clock. Nothing else on this surface reads it: every other
+   * timestamp in a reply is a stored value rendered by the template layer.
+   */
+  readonly clock: Clock;
   readonly delivery: DeliveryService;
   /**
    * Puts a rate-limited FACT on the customer notification lane.
@@ -1954,7 +2099,8 @@ export class BotRuntime {
     const mayReview = permissions.has(RECEIPTS_VIEW_PERMISSION);
     const maySeeAdmins = permissions.has(ADMINS_VIEW_PERMISSION);
     const maySeeServices = permissions.has(SERVICES_VIEW_PERMISSION);
-    if (!mayReview && !maySeeAdmins && !maySeeServices) return null;
+    const maySeePanels = permissions.has(PANELS_VIEW_PERMISSION);
+    if (!mayReview && !maySeeAdmins && !maySeeServices && !maySeePanels) return null;
 
     try {
       switch (command.intent) {
@@ -1982,6 +2128,17 @@ export class BotRuntime {
                         key: 'bot.admin.services_button' as const,
                       },
                       data: ADMIN_SERVICES_CALLBACK_PREFIX,
+                    },
+                  ]
+                : []),
+              ...(maySeePanels
+                ? [
+                    {
+                      label: {
+                        kind: 'TEMPLATE' as const,
+                        key: 'bot.admin.panels_button' as const,
+                      },
+                      data: ADMIN_PANELS_CALLBACK_PREFIX,
                     },
                   ]
                 : []),
@@ -2067,6 +2224,38 @@ export class BotRuntime {
                 command.targetId,
                 input.idempotencyKey,
               );
+        case 'ADMIN_PANELS':
+          return await this.adminPanels(scope, adminActor, null);
+        case 'ADMIN_PANELS_PAGE':
+          /*
+           * The cursor is decoded at the boundary, so an unparseable one never reaches
+           * here — it is UNSUPPORTED, the same answer every other unreadable callback
+           * gets. `null` cannot happen and is handled anyway: the first page is the
+           * safe reading of "no position", and throwing on a shape the boundary
+           * guarantees would be a crash for a case that cannot occur.
+           */
+          return await this.adminPanels(scope, adminActor, command.cursor ?? null);
+        case 'ADMIN_PANEL_DETAIL':
+          return command.targetId === null
+            ? null
+            : await this.adminPanelDetail(scope, adminActor, command.targetId, permissions);
+        case 'ADMIN_PANEL_ARCHIVE_ASK':
+          return command.targetId === null
+            ? null
+            : await this.adminPanelArchiveAsk(scope, adminActor, command.targetId, permissions);
+        case 'ADMIN_PANEL_TEST':
+        case 'ADMIN_PANEL_ENABLE':
+        case 'ADMIN_PANEL_DISABLE':
+        case 'ADMIN_PANEL_ARCHIVE':
+          return command.targetId === null
+            ? null
+            : await this.adminPanelAct(
+                scope,
+                adminActor,
+                command.intent,
+                command.targetId,
+                input.idempotencyKey,
+              );
         case 'ADMIN_SECTION':
           return await this.adminSection(scope, adminActor);
         case 'ADMIN_REVOKE':
@@ -2112,16 +2301,17 @@ export class BotRuntime {
     const identity = await admins.resolve(scope, input.telegramUserId, actor.correlationId);
     if (identity === null) return false;
     /*
-     * The SAME three `adminTurn` gates on, and that is the rule rather than a
+     * The SAME four `adminTurn` gates on, and that is the rule rather than a
      * coincidence: the keyboard must not promise a panel the turn would refuse, and it
      * must not withhold one from an administrator who has a section. An installation
-     * whose only `services.view` holder got no panel row is what a missing third arm
-     * here would produce.
+     * whose only `services.view` holder got no panel row is what a missing arm here
+     * would produce, and Phase 6B added the fourth one for the same reason.
      */
     return (
       identity.permissions.has(RECEIPTS_VIEW_PERMISSION) ||
       identity.permissions.has(ADMINS_VIEW_PERMISSION) ||
-      identity.permissions.has(SERVICES_VIEW_PERMISSION)
+      identity.permissions.has(SERVICES_VIEW_PERMISSION) ||
+      identity.permissions.has(PANELS_VIEW_PERMISSION)
     );
   }
 
@@ -2318,6 +2508,292 @@ export class BotRuntime {
       return { key: 'bot.admin.services_none', values: {}, buttons: [], orderId: null };
     }
     return { key: 'bot.admin.services_section', values: {}, buttons, orderId: null };
+  }
+
+  // -------------------------------------------------------------------------
+  // The panels section (Phase 6B)
+  // -------------------------------------------------------------------------
+
+  /**
+   * The fleet: one button per live panel, newest first, and a page button when there
+   * is more.
+   *
+   * PAGED rather than bounded-and-truncated, which is the opposite of what the services
+   * queue does, and the difference is what each list IS. The services section is a
+   * QUEUE of work — ten rows are ten decisions and an eleventh is a bigger question than
+   * the row. A fleet is an inventory: every panel is a legitimate destination, and an
+   * installation with twenty of them must be able to reach the twentieth. So this
+   * carries the repository's own keyset cursor, through the codec that makes it fit
+   * Telegram's 64 bytes.
+   *
+   * `LIVE` and not `ALL`: an archived panel has no action on this surface — restoring
+   * one may need a new name, and a name is not typed into a chat here — so listing them
+   * would be a list of buttons that can only report what cannot be done.
+   *
+   * `list` charges `panels.view` itself, so an administrator who reached this through a
+   * crafted callback without it is refused there rather than here.
+   */
+  private async adminPanels(
+    scope: TenantContext,
+    actor: ActorContext,
+    cursor: KeysetToken | null,
+  ): Promise<PendingReply> {
+    const page = await this.deps.panelAdmin.list(scope, actor, {
+      limit: ADMIN_QUEUE_LIMIT,
+      archived: 'LIVE',
+      cursor,
+    });
+
+    const buttons: CustomerButton[] = page.panels.map((view) => ({
+      /*
+       * The NAME the operator gave it, and nothing else. Not the base URL: an address
+       * is most of what somebody needs to go looking, and this message stays in that
+       * chat for ever and is forwardable.
+       */
+      label: { kind: 'TEXT' as const, text: view.panel.name },
+      data: `${ADMIN_PANEL_DETAIL_CALLBACK_PREFIX}${view.panel.id}`,
+    }));
+    if (buttons.length === 0) {
+      return { key: 'bot.admin.panels_none', values: {}, buttons: [], orderId: null };
+    }
+
+    /*
+     * The next page, appended only when the cursor ENCODES — the rule the customer's
+     * own services list states: a cursor this codec cannot carry would become a button
+     * whose `callback_data` is a bare prefix, and the honest answer to that is the same
+     * as having no further page.
+     */
+    const token = page.nextCursor === null ? null : encodeKeysetToken(page.nextCursor);
+    if (token !== null) {
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.admin.panels_more_button' },
+        data: `${ADMIN_PANELS_PAGE_CALLBACK_PREFIX}${token}`,
+      });
+    }
+    return { key: 'bot.admin.panels_section', values: {}, buttons, orderId: null };
+  }
+
+  /**
+   * One panel: what it is, what its last probe said, how full it is, and the actions
+   * this administrator may take on it.
+   *
+   * The health three — the state, when it was checked, and whether that is stale — come
+   * from `readHealth`, the SAME projection the Web Admin's response builder calls, so
+   * the two surfaces cannot come to disagree about whether a disabled panel reads as
+   * `DISABLED`. The occupancy comes from the capacity projection the service attaches,
+   * for the same reason.
+   *
+   * What it does NOT carry: the base URL, any credential, any masked stand-in for one,
+   * and the provider's response body. The failure is the KIND from the frozen taxonomy,
+   * because a provider's own error text can carry a hostname, a path or a token
+   * fragment — and the Web Admin is where a probe is read in full.
+   */
+  private async adminPanelDetail(
+    scope: TenantContext,
+    actor: ActorContext,
+    panelId: string,
+    permissions: ReadonlySet<PermissionKey>,
+  ): Promise<PendingReply> {
+    let view;
+    try {
+      view = await this.deps.panelAdmin.get(scope, actor, panelId);
+    } catch {
+      /*
+       * Unknown, another tenant's, or malformed — ONE answer for all three, the rule
+       * `bot.admin.service_gone` states: telling them apart would let anybody holding a
+       * panel id learn whether it exists.
+       */
+      return { key: 'bot.admin.panel_gone', values: {}, buttons: [], orderId: null };
+    }
+
+    const reading = readHealth(view.panel, view.health, this.deps.clock.now());
+    const mayEdit = permissions.has(PANELS_EDIT_PERMISSION);
+    const buttons: CustomerButton[] = [];
+    if (mayEdit) {
+      /*
+       * Test is offered for a panel that is not archived, which is the same condition
+       * `testConnection` enforces: it refuses an ARCHIVED panel, so a button for one
+       * could only ever record a refusal.
+       */
+      if (view.panel.status !== 'ARCHIVED') {
+        buttons.push({
+          label: { kind: 'TEMPLATE', key: 'bot.admin.panel_test_button' },
+          data: `${ADMIN_PANEL_TEST_CALLBACK_PREFIX}${view.panel.id}`,
+        });
+      }
+      if (view.panel.status === 'DISABLED') {
+        buttons.push({
+          label: { kind: 'TEMPLATE', key: 'bot.admin.panel_enable_button' },
+          data: `${ADMIN_PANEL_ENABLE_CALLBACK_PREFIX}${view.panel.id}`,
+        });
+      }
+      if (view.panel.status === 'ACTIVE') {
+        buttons.push({
+          label: { kind: 'TEMPLATE', key: 'bot.admin.panel_disable_button' },
+          data: `${ADMIN_PANEL_DISABLE_CALLBACK_PREFIX}${view.panel.id}`,
+        });
+      }
+      if (view.panel.status !== 'ARCHIVED') {
+        buttons.push({
+          /*
+           * The ASKING prefix. `W:` opens the question and `X:` archives, and the two
+           * differ by one character in a table — which is why that table exists and why
+           * the archiving row is its last one.
+           */
+          label: { kind: 'TEMPLATE', key: 'bot.admin.panel_archive_button' },
+          data: `${ADMIN_PANEL_ARCHIVE_ASK_CALLBACK_PREFIX}${view.panel.id}`,
+        });
+      }
+    }
+
+    return {
+      key: 'bot.admin.panel_detail',
+      values: {
+        name: view.panel.name,
+        /*
+         * The descriptor's canonical name, with the stored type as the fallback the
+         * Web Admin's own projection uses. `providerDescriptor` is nullable because a
+         * stored row could in principle name a type this build has no adapter for —
+         * which panel creation refuses, so the fallback is a belt rather than a case.
+         */
+        provider:
+          providerDescriptor(view.panel.providerType)?.canonicalName ?? view.panel.providerType,
+        status: view.panel.status,
+        health: reading.state,
+        ...(reading.checkedAt === null ? {} : { checkedAt: reading.checkedAt }),
+        ...(reading.failure === null ? {} : { failure: reading.failure }),
+        services: view.capacity.services,
+        reservations: view.capacity.reservations,
+        /*
+         * A STRING, and `bot.admin.panel_detail` says why: "no cap" is one of this
+         * field's values, and rendering that as 0 would read as a full panel — the
+         * exact inversion a null cap means.
+         */
+        cap: view.capacity.maxServices === null ? UNCAPPED : String(view.capacity.maxServices),
+      },
+      buttons,
+      orderId: null,
+    };
+  }
+
+  /**
+   * The confirmation screen for archiving, and the count it is decided against.
+   *
+   * Re-reads the panel rather than trusting the callback, for the two reasons the
+   * services terminate-ask gives: the permission is charged again by `get`, and the
+   * count on this screen is the one that is true NOW rather than when the list was
+   * drawn. A stale tap lands on a panel that has since been archived and is answered
+   * `bot.admin.panel_gone` by the status check below rather than by a button that
+   * cannot work.
+   */
+  private async adminPanelArchiveAsk(
+    scope: TenantContext,
+    actor: ActorContext,
+    panelId: string,
+    permissions: ReadonlySet<PermissionKey>,
+  ): Promise<PendingReply> {
+    if (!permissions.has(PANELS_EDIT_PERMISSION)) {
+      return { key: 'bot.admin.panel_unavailable', values: {}, buttons: [], orderId: null };
+    }
+    let view;
+    try {
+      view = await this.deps.panelAdmin.get(scope, actor, panelId);
+    } catch {
+      return { key: 'bot.admin.panel_gone', values: {}, buttons: [], orderId: null };
+    }
+    if (view.panel.status === 'ARCHIVED') {
+      return { key: 'bot.admin.panel_unavailable', values: {}, buttons: [], orderId: null };
+    }
+    return {
+      key: 'bot.admin.panel_archive_ask',
+      values: { services: view.capacity.services },
+      buttons: [
+        {
+          label: { kind: 'TEMPLATE', key: 'bot.admin.panel_archive_confirm_button' },
+          data: `${ADMIN_PANEL_ARCHIVE_CALLBACK_PREFIX}${view.panel.id}`,
+        },
+      ],
+      orderId: null,
+    };
+  }
+
+  /**
+   * The four actions: test, enable, disable, archive.
+   *
+   * Every one of them goes through `PanelService`, which charges `panels.edit` through
+   * the same guard the Web Admin uses and writes the same audit row — so a crafted
+   * callback from an administrator without that key is refused there, and the refusal is
+   * recorded rather than silently swallowed. This surface decides which buttons to draw
+   * and nothing about what is allowed.
+   *
+   * The idempotency key is the TURN's, suffixed by the action. A double tap is the same
+   * command twice, which is what makes the second one a replay rather than a second
+   * write — and for the test that is the difference between one probe of somebody's
+   * panel and two.
+   */
+  private async adminPanelAct(
+    scope: TenantContext,
+    actor: ActorContext,
+    intent: BotIntent,
+    panelId: string,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    try {
+      if (intent === 'ADMIN_PANEL_TEST') {
+        const result = await this.deps.panelAdmin.testConnection(scope, actor, panelId, {
+          idempotencyKey: `${idempotencyKey}:panel-test`,
+        });
+        /*
+         * `probed: false` means the stored health came back WITHOUT a new probe — a
+         * replay under the same key, or a probe of this configuration recently enough
+         * that repeating it would be a way to hammer somebody's provider. Reporting
+         * that as "tested" is the legacy "✅ updated" for a write that did nothing.
+         */
+        return {
+          key: result.probed ? 'bot.admin.panel_tested' : 'bot.admin.panel_test_replayed',
+          values: {},
+          buttons: [],
+          orderId: null,
+        };
+      }
+
+      const status =
+        intent === 'ADMIN_PANEL_ENABLE'
+          ? 'ACTIVE'
+          : intent === 'ADMIN_PANEL_DISABLE'
+            ? 'DISABLED'
+            : 'ARCHIVED';
+      await this.deps.panelAdmin.setStatus(scope, actor, panelId, {
+        status,
+        idempotencyKey: `${idempotencyKey}:panel-${status.toLowerCase()}`,
+      });
+      return {
+        key:
+          status === 'ACTIVE'
+            ? 'bot.admin.panel_enabled'
+            : status === 'DISABLED'
+              ? 'bot.admin.panel_disabled'
+              : 'bot.admin.panel_archived',
+        values: {},
+        buttons: [],
+        orderId: null,
+      };
+    } catch (error) {
+      /*
+       * The one refusal this screen can resolve gets its own sentence, because the
+       * remedy is the Test button an administrator is already looking at. Every other
+       * panel refusal is one sentence pointing at the Web Admin, and a permission
+       * denial is neither — it falls through to `act`'s own handling, which tells
+       * whoever holds that chat nothing about what exists.
+       */
+      if ((error as { code?: unknown } | null)?.code === PANEL_ERROR_CODES.PANEL_NOT_VALIDATED) {
+        return { key: 'bot.admin.panel_not_validated', values: {}, buttons: [], orderId: null };
+      }
+      if (isPanelRefusal(error)) {
+        return { key: 'bot.admin.panel_unavailable', values: {}, buttons: [], orderId: null };
+      }
+      throw error;
+    }
   }
 
   /**
@@ -2907,7 +3383,7 @@ export class BotRuntime {
      * would otherwise become a button whose `callback_data` is a bare prefix, and the
      * honest answer to that is the same as having no further page: a list that ends.
      */
-    const token = page.nextCursor === null ? null : encodeServiceCursor(page.nextCursor);
+    const token = page.nextCursor === null ? null : encodeKeysetToken(page.nextCursor);
     if (token !== null) {
       buttons.push({
         label: { kind: 'TEMPLATE', key: 'bot.service.list_more' },

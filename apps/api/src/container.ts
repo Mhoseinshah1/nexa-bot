@@ -1373,6 +1373,43 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     cadence: monitorCadence,
   };
 
+  /*
+   * The panel operations service, constructed HERE rather than inline in the
+   * container literal.
+   *
+   * It has TWO consumers now: the Web Admin's controller reads `container.panels`, and
+   * the Telegram runtime is handed the same instance as `panelAdmin` (narrowed by a
+   * `Pick` that excludes `setCredentials`). Two `new PanelService({...})` calls would be
+   * two probe cooldown decisions and two idempotency stores over one panel — which is
+   * the shape of defect the monitor's own comment warns about — so there is one.
+   */
+  const panelService = new PanelService({
+    repository: panelRepository,
+    capacity: panelCapacity,
+    credentials: panelCredentials,
+    guard,
+    // The same reader settings, templates, feature flags and the ping
+    // recorder are given. The panels module was the one write path that did
+    // not check whether its scope was still accepting work.
+    scopeActivity: tenants,
+    audit,
+    opsLog,
+    // Whether a probe limit is open, so a recovery is recorded when one ends
+    // and not after every successful test.
+    conditions: new DrizzleOperationalConditionReader(database.db),
+    sessions,
+    uow,
+    idempotency,
+    clock,
+    ids,
+    http: probeCore.http,
+    urlPolicy: probeCore.urlPolicy,
+    probeCooldownMs: probeCore.probeCooldownMs,
+    probeBudget: probeCore.probeBudget,
+    adapters: probeCore.adapters,
+    cadence: probeCore.cadence,
+  });
+
   const monitorBudgetReserve = monitorBudgetReserveFor(
     config.PANEL_PROBE_TENANT_LIMIT,
     config.PANEL_MONITOR_BUDGET_RESERVE_PERCENT,
@@ -2445,6 +2482,17 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       services: provisioningService,
       // The operator's READ of a service, for the admin panel's services section.
       serviceAdmin,
+      /*
+       * The panels section's four operations, Phase 6B.
+       *
+       * The SAME `PanelService` the Web Admin's controller holds, narrowed by the
+       * `Pick` on `BotRuntimeDeps` — so the permission each operation charges, the
+       * audit row it writes and the probe budget it spends are one implementation with
+       * two callers. `setCredentials` is outside that `Pick`, which is how "credentials
+       * are the Web Admin's" becomes a type error rather than a convention.
+       */
+      panelAdmin: panelService,
+      clock,
       delivery: deliveryService,
       /*
        * The plan a service was SOLD as, from the order's frozen snapshot.
@@ -2460,32 +2508,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         return order?.line.title ?? null;
       },
     }),
-    panels: new PanelService({
-      repository: panelRepository,
-      capacity: panelCapacity,
-      credentials: panelCredentials,
-      guard,
-      // The same reader settings, templates, feature flags and the ping
-      // recorder are given. The panels module was the one write path that did
-      // not check whether its scope was still accepting work.
-      scopeActivity: tenants,
-      audit,
-      opsLog,
-      // Whether a probe limit is open, so a recovery is recorded when one ends
-      // and not after every successful test.
-      conditions: new DrizzleOperationalConditionReader(database.db),
-      sessions,
-      uow,
-      idempotency,
-      clock,
-      ids,
-      http: probeCore.http,
-      urlPolicy: probeCore.urlPolicy,
-      probeCooldownMs: probeCore.probeCooldownMs,
-      probeBudget: probeCore.probeBudget,
-      adapters: probeCore.adapters,
-      cadence: probeCore.cadence,
-    }),
+    panels: panelService,
     settingsService,
     settingsResolver,
     featureFlags,

@@ -183,6 +183,39 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.service_unavailable':
     'این کار روی این سرویس در حال حاضر ممکن نیست. دلیلش در پنل وب، روی صفحهٔ همین سرویس، نوشته شده است.',
   /*
+   * Phase 6B — the panels section. No address, no credential, no provider body:
+   * a chat message is forwardable and stays in that chat for ever.
+   */
+  'bot.admin.panels_button': '🛰 پنل‌ها',
+  'bot.admin.panels_section':
+    'پنل‌های در سرویس، از تازه‌ترین. برای دیدن وضعیت و ظرفیت هر پنل، روی نامش بزنید.',
+  'bot.admin.panels_none':
+    'هیچ پنلی در سرویس نیست. پنل‌ها در پنل وب ساخته می‌شوند، چون ساختن پنل به اعتبارنامه نیاز دارد و اعتبارنامه در چت وارد نمی‌شود.',
+  'bot.admin.panels_more_button': '▶️ صفحهٔ بعد',
+  'bot.admin.panel_detail':
+    'پنل: {name}\nارائه‌دهنده: {provider}\nوضعیت: {status}\nسلامت: {health}\nآخرین بررسی: {checkedAt}\nخطای آخرین بررسی: {failure}\n\nسرویس‌های فعال: {services}\nرزرو جاری: {reservations}\nسقف سرویس: {cap}',
+  'bot.admin.panel_gone': 'این پنل پیدا نشد.',
+  'bot.admin.panel_test_button': '🔌 تست اتصال',
+  'bot.admin.panel_tested': 'تست اتصال انجام شد و سلامت پنل به‌روز شد.',
+  'bot.admin.panel_test_replayed':
+    'تست تازه‌ای انجام نشد؛ همین درخواست پیش‌تر ثبت شده یا این پنل به‌تازگی بررسی شده است. آنچه می‌بینید سلامت ذخیره‌شده است.',
+  'bot.admin.panel_enable_button': '▶️ بازگرداندن به سرویس',
+  'bot.admin.panel_disable_button': '⏸ خارج کردن از سرویس',
+  'bot.admin.panel_enabled':
+    'پنل به سرویس برگشت: فروش تازه روی آن ممکن است و پایش دوباره شروع می‌شود.',
+  'bot.admin.panel_disabled':
+    'پنل از سرویس خارج شد: فروش تازه روی آن انجام نمی‌شود و پایش متوقف می‌شود. سرویس‌هایی که همین حالا روی آن هستند دست‌نخورده کار می‌کنند.',
+  'bot.admin.panel_not_validated':
+    'برای بازگرداندن این پنل به سرویس، اول باید یک تست اتصال موفق روی پیکربندی فعلی‌اش انجام شود. دکمهٔ «تست اتصال» روی همین صفحه است.',
+  'bot.admin.panel_archive_button': '🗄 بایگانی کردن پنل',
+  'bot.admin.panel_archive_ask':
+    'با بایگانی کردن، این پنل از کاتالوگ، از زمان‌بندی پایش و از فهرست‌ها خارج می‌شود و نامش آزاد می‌شود. {services} سرویس روی این پنل هست و هیچ‌کدام با این کار پایان نمی‌یابد.\n\nاگر مطمئن هستید، دکمهٔ زیر را بزنید.',
+  'bot.admin.panel_archive_confirm_button': '🗄 بله، بایگانی کن',
+  'bot.admin.panel_archived':
+    'پنل بایگانی شد و نامش آزاد است. بازگردانی از بایگانی در پنل وب انجام می‌شود، چون ممکن است به نام تازه نیاز داشته باشد.',
+  'bot.admin.panel_unavailable':
+    'این کار روی این پنل در حال حاضر ممکن نیست. دلیلش در پنل وب، روی صفحهٔ همین پنل، نوشته شده است.',
+  /*
    * The syntax is IN the message, because these are commands rather than a prompt.
    * A prompt that captures the next message is what overwrote a production gateway
    * setting in INCIDENT-FIN-001; a command carries its argument with it.
