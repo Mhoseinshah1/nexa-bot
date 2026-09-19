@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { PanelsPage, PanelDetailPage, NewPanelPage } from '../../apps/web/src/pages/panels';
 import { t } from '../../apps/web/src/i18n/web.fa';
-import { panel, renderPage, stubApi } from './harness';
+import { panel, product, renderPage, stubApi } from './harness';
 
 /** The panels list reads its archive filter from the URL, as `/system` does. */
 const LIVE_ROUTE = { path: '/panels', query: new URLSearchParams() };
@@ -774,14 +774,250 @@ describe('the panel detail', () => {
    * lists and probes — nor restore one archived through another client.
    */
   it('offers archiving on a live panel', async () => {
-    const api = stubApi([...detail(), { url: '/panels/p1/status', body: { panel: panel() } }]);
+    // Two presses now, and the second is the one that writes — see the Phase 6B
+    // group below, which owns the rule. This case keeps asserting that the
+    // control EXISTS on a live panel, which is what its name claims.
+    const api = stubApi([
+      ...detail(),
+      { url: `/panels/${PANEL_ID}/status`, body: { panel: panel({ status: 'ARCHIVED' }) } },
+    ]);
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
 
-    fireEvent.click(screen.getByRole('button', { name: 'بایگانی' }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.panel_archive') }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.panel_archive_confirm') }));
     await waitFor(() => {
       const write = api.calls.find((call) => call.url.includes('/status'));
       expect(write?.body).toMatchObject({ status: 'ARCHIVED' });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // What the panel carries, and the second press on archive (Phase 6B)
+  // -------------------------------------------------------------------------
+
+  /** One service row, in the shape `serviceSummarySchema` declares. */
+  const carriedService = (overrides: Record<string, unknown> = {}) => ({
+    id: '019250ab-cdef-7012-8345-6789abcdef01',
+    customerId: '019210ab-cdef-7012-8345-6789abcdef01',
+    orderId: '019230ab-cdef-7012-8345-6789abcdef01',
+    panelId: PANEL_ID,
+    productId: '019220ab-cdef-7012-8345-6789abcdef01',
+    state: 'ACTIVE',
+    providerUsername: 'nx-7f3a91',
+    providerUserId: '4821',
+    hasSubscription: true,
+    expiresAt: '2026-12-01T00:00:00.000Z',
+    trafficLimitBytes: '53687091200',
+    trafficUsedBytes: '1073741824',
+    usageSyncedAt: '2026-09-15T08:00:00.000Z',
+    deliveryState: 'DELIVERED',
+    deliveredAt: '2026-09-10T12:35:00.000Z',
+    provisionedAt: '2026-09-10T12:34:00.000Z',
+    terminatedAt: null,
+    createdAt: '2026-09-10T12:30:00.000Z',
+    updatedAt: '2026-09-10T12:35:00.000Z',
+    ...overrides,
+  });
+
+  const workload = (
+    products: readonly unknown[],
+    services: readonly unknown[],
+    cursors: { products?: string | null; services?: string | null } = {},
+  ) => [
+    // `/products?` and not `/products?panelId=`: `fetchProducts` writes `limit`
+    // first, so the filter is not the first parameter. A route keyed on the
+    // parameter ORDER is a stub that silently 404s when somebody reorders the
+    // builder — which is how the first version of these five cases failed.
+    { url: '/products?', body: { products, nextCursor: cursors.products ?? null } },
+    { url: '/services?', body: { services, nextCursor: cursors.services ?? null } },
+  ];
+
+  const openWorkload = async () => {
+    await screen.findByText('Frankfurt A');
+    fireEvent.click(screen.getByRole('tab', { name: t('web.panel_tab_workload') }));
+  };
+
+  it('asks the server for this panel only, and never for the whole catalogue', async () => {
+    // The filter is the point: an unfiltered request would render another
+    // panel's products under this panel's heading, which is the "history
+    // attributed by current reference" failure in a new place.
+    const api = stubApi([...detail(), ...workload([product()], [carriedService()])]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await openWorkload();
+
+    const asked = (path: string) =>
+      api.calls.some((call) => call.url.includes(path) && call.url.includes(`panelId=${PANEL_ID}`));
+    await waitFor(() => {
+      expect(asked('/products')).toBe(true);
+      expect(asked('/services')).toBe(true);
+    });
+  });
+
+  it('names the products and the services this panel carries', async () => {
+    stubApi([...detail(), ...workload([product()], [carriedService()])]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await openWorkload();
+
+    expect(await screen.findByText('پلن یک‌ماهه')).toBeTruthy();
+    expect(await screen.findByText('nx-7f3a91')).toBeTruthy();
+  });
+
+  it('carries no subscription URL, subscription ref or client id for a service it lists', async () => {
+    // The same rule the services surface follows: the provider USERNAME is a
+    // handle, and everything that grants access to the account is not on a
+    // list an operator pages through.
+    stubApi([...detail(), ...workload([], [carriedService()])]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await openWorkload();
+    await screen.findByText('nx-7f3a91');
+
+    const text = document.body.textContent ?? '';
+    expect(text).not.toContain('4821');
+    expect(text).not.toContain('sub://');
+  });
+
+  it('says there is more on each list the server truncated, and only those', async () => {
+    /*
+     * BOTH cards, and the count is the assertion.
+     *
+     * The two notices are two guards on two responses, and `findByText` is
+     * satisfied by either — so a single-notice assertion passes with one guard
+     * inverted, which is how the first version of this case let exactly that
+     * mutation live. Asserting the NUMBER separates them.
+     */
+    stubApi([
+      ...detail(),
+      ...workload([product()], [carriedService()], {
+        products: 'more-products',
+        services: 'more-services',
+      }),
+    ]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await openWorkload();
+
+    await waitFor(() => {
+      expect(screen.getAllByText(t('web.panel_workload_more'))).toHaveLength(2);
+    });
+  });
+
+  it('claims no completeness it was not given: neither list says there is more', async () => {
+    stubApi([...detail(), ...workload([product()], [carriedService()])]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await openWorkload();
+    await screen.findByText('nx-7f3a91');
+
+    expect(screen.queryAllByText(t('web.panel_workload_more'))).toHaveLength(0);
+  });
+
+  it('distinguishes a panel that carries nothing from one whose lists failed', async () => {
+    stubApi([...detail(), ...workload([], [])]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await openWorkload();
+
+    expect(await screen.findByText(t('web.panel_workload_no_products'))).toBeTruthy();
+    expect(await screen.findByText(t('web.panel_workload_no_services'))).toBeTruthy();
+  });
+
+  it('does not archive on the first press', async () => {
+    /*
+     * The rule this pull request adds, and the one worth a test on its own:
+     * archiving used to be ONE click that took a panel out of the catalogue,
+     * out of the monitor's schedule and out of every list.
+     */
+    const api = stubApi([...detail(), { url: '/status', body: { panel: panel() } }]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    fireEvent.click(screen.getByRole('button', { name: t('web.panel_archive') }));
+
+    expect(await screen.findByText(t('web.panel_archive_confirm_title'))).toBeTruthy();
+    expect(api.calls.some((call) => call.url.includes('/status'))).toBe(false);
+  });
+
+  it('tells the operator how many services the panel still carries, before they confirm', async () => {
+    // The number comes from the capacity projection the Overview card renders,
+    // so the two cannot disagree about it.
+    stubApi([
+      ...detail({
+        capacity: { maxServices: 50, services: 7, reservations: 0, used: 7, available: 43 },
+      }),
+    ]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    fireEvent.click(screen.getByRole('button', { name: t('web.panel_archive') }));
+    const confirmation = (await screen.findByText(t('web.panel_archive_confirm_title'))).closest(
+      'div.stack',
+    );
+    // `Num` renders Western digits here, which is the shell's own choice and
+    // not this test's to assert — what matters is that the COUNT is on screen.
+    expect(confirmation?.textContent).toContain('7');
+  });
+
+  it('archives on the second press', async () => {
+    const api = stubApi([
+      ...detail(),
+      { url: `/panels/${PANEL_ID}/status`, body: { panel: panel({ status: 'ARCHIVED' }) } },
+    ]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    fireEvent.click(screen.getByRole('button', { name: t('web.panel_archive') }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.panel_archive_confirm') }));
+
+    await waitFor(() => {
+      const write = api.calls.find((call) => call.url.includes('/status'));
+      expect(write?.body).toMatchObject({ status: 'ARCHIVED' });
+    });
+  });
+
+  it('takes the question back down when the operator declines it', async () => {
+    const api = stubApi([...detail(), { url: '/status', body: { panel: panel() } }]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    fireEvent.click(screen.getByRole('button', { name: t('web.panel_archive') }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.panel_archive_cancel') }));
+
+    await waitFor(() => {
+      expect(screen.queryByText(t('web.panel_archive_confirm_title'))).toBeNull();
+    });
+    expect(api.calls.some((call) => call.url.includes('/status'))).toBe(false);
+  });
+
+  it('leaves no confirmed-looking screen behind when the archive is refused', async () => {
+    /*
+     * `onError` clears the flag as well as `onSuccess`. Without it the danger
+     * banner and its confirm button stay drawn over a panel whose archive just
+     * failed, which reads as "press it again" for a command that was refused.
+     */
+    const api = stubApi([
+      ...detail(),
+      {
+        url: `/panels/${PANEL_ID}/status`,
+        status: 409,
+        body: {
+          error: {
+            kind: 'conflict',
+            code: 'panel.stale_write',
+            message: 'no',
+            correlationId: 'test',
+          },
+        },
+      },
+    ]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    fireEvent.click(screen.getByRole('button', { name: t('web.panel_archive') }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.panel_archive_confirm') }));
+
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.url.includes('/status'))).toBe(true);
+    });
+    await waitFor(() => {
+      expect(screen.queryByText(t('web.panel_archive_confirm_title'))).toBeNull();
     });
   });
 

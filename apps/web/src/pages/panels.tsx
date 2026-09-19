@@ -18,7 +18,9 @@ import {
   createPanel,
   fetchPanel,
   fetchPanels,
+  fetchProducts,
   fetchProviders,
+  fetchServices,
   setPanelCredentials,
   setPanelStatus,
   testPanel,
@@ -31,6 +33,21 @@ import { t, type WebKey } from '../i18n/web.fa';
 import { navigate, setQuery, useLinkHandler, type Route } from '../router';
 import { messageFor } from './settings';
 import { HEALTH_TONES } from './dashboard';
+/*
+ * The product and service vocabularies, imported rather than restated.
+ *
+ * A second copy of either map is a place for one surface to label `EXPIRED`
+ * differently from the page that owns it, which is the "two surfaces compute
+ * the same concept differently" failure `docs/conventions.md` names.
+ */
+import {
+  STATUS_LABELS as PRODUCT_STATUS_LABELS,
+  STATUS_TONES as PRODUCT_STATUS_TONES,
+} from './products';
+import {
+  STATE_LABELS as SERVICE_STATE_LABELS,
+  STATE_TONES as SERVICE_STATE_TONES,
+} from './services';
 import {
   Badge,
   Banner,
@@ -73,6 +90,14 @@ const PANEL_DETAIL_REFRESH_MS = 90_000;
  * cards one: two cadences on one subject produce screens that disagree.
  */
 const PANEL_LIST_REFRESH_MS = PANEL_DETAIL_REFRESH_MS;
+
+/**
+ * How many products and services the workload tab shows.
+ *
+ * A FIRST PAGE, not a page of a traversal. Ten is enough to recognise what a
+ * panel carries and small enough that the tab costs one bounded query each.
+ */
+const WORKLOAD_PAGE = 10;
 
 /**
  * Panels — the one product surface this release genuinely operates.
@@ -411,7 +436,7 @@ export function PanelsPage({
 // Detail
 // ---------------------------------------------------------------------------
 
-type DetailTab = 'overview' | 'health' | 'credentials' | 'capabilities';
+type DetailTab = 'overview' | 'workload' | 'health' | 'credentials' | 'capabilities';
 
 /** The three credential kinds, once, so no list of them can drift from another. */
 type CredentialField = 'username' | 'password' | 'apiToken';
@@ -583,6 +608,7 @@ export function PanelDetailPage({
               onChange={setTab}
               items={[
                 { id: 'overview', label: t('web.panel_tab_overview') },
+                { id: 'workload', label: t('web.panel_tab_workload') },
                 { id: 'health', label: t('web.panel_tab_health') },
                 { id: 'credentials', label: t('web.panel_tab_credentials') },
                 { id: 'capabilities', label: t('web.panel_tab_capabilities') },
@@ -619,6 +645,7 @@ export function PanelDetailPage({
               <div hidden={tab !== 'overview'}>
                 <OverviewTab panel={data} mayEdit={mayEdit} />
               </div>
+              {tab === 'workload' && <WorkloadTab panel={data} />}
               {tab === 'health' && <HealthTab panel={data} />}
               {tab === 'credentials' && (
                 <CredentialsTab
@@ -881,12 +908,22 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
    */
   const [renameOnRestore, setRenameOnRestore] = useState<string | null>(null);
 
+  /**
+   * Whether the operator has asked to archive and not yet confirmed.
+   *
+   * Local to the card and cleared by BOTH exits of the mutation, so a refusal
+   * does not leave a confirmed-looking screen behind and a success does not
+   * leave the block drawn over a panel that is already archived.
+   */
+  const [archiveAsked, setArchiveAsked] = useState(false);
+
   const status = useMutation({
     mutationFn: (command: { idempotencyKey: string; status: PanelStatus; name?: string }) =>
       setPanelStatus({ id: panel.id, ...command }),
     onSuccess: async (result, command) => {
       statusSubmission.settle();
       setRenameOnRestore(null);
+      setArchiveAsked(false);
       /*
        * Only the NAME, and only when this command carried one.
        *
@@ -914,6 +951,7 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
     },
     onError: (error: unknown) => {
       statusSubmission.settleOn(error);
+      setArchiveAsked(false);
       // The one refusal this screen can actually resolve: offer the field
       // rather than repeating advice the operator cannot act on.
       if (error instanceof ApiError && error.code === PANEL_ERROR_CODES.PANEL_NAME_TAKEN) {
@@ -1223,18 +1261,12 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
                 {t('web.panel_enable')}
               </button>
             )}
-            {panel.status !== 'ARCHIVED' && (
+            {panel.status !== 'ARCHIVED' && !archiveAsked && (
               <button
                 type="button"
                 className="btn ghost danger"
                 disabled={status.isPending}
-                onClick={() => {
-                  const command = { status: 'ARCHIVED' as PanelStatus };
-                  status.mutate({
-                    ...command,
-                    idempotencyKey: statusSubmission.current(command),
-                  });
-                }}
+                onClick={() => setArchiveAsked(true)}
               >
                 {t('web.panel_archive')}
               </button>
@@ -1262,6 +1294,65 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
               </button>
             )}
           </div>
+
+          {/*
+            The second press, and what it is told before it.
+
+            Archiving was ONE click, and it is the click that takes a panel out
+            of the catalogue, out of the monitor's schedule and out of every
+            list — while leaving every account already on it exactly where it
+            is. The two facts an operator needs are how many services the panel
+            still carries and that nothing about them changes, and they were
+            nowhere on the screen.
+
+            Deliberately NOT a typed phrase. A phrase is the weight `TERMINATE`
+            carries because that one deletes somebody's account on a provider;
+            archiving is reversible by the Restore button three lines up, and
+            pricing the two the same would teach an operator to type past both.
+
+            The count comes from the capacity projection the Overview card
+            already renders — the same number, from the same response, so the
+            two cannot disagree.
+          */}
+          {archiveAsked && panel.status !== 'ARCHIVED' && (
+            <div className="stack">
+              <Banner tone="danger" title={t('web.panel_archive_confirm_title')}>
+                {t('web.panel_archive_confirm_body')}
+              </Banner>
+              <KV
+                items={[
+                  [
+                    t('web.panel_capacity_services'),
+                    <Num key="s" value={panel.capacity.services} />,
+                  ],
+                ]}
+              />
+              <div className="btn-group">
+                <button
+                  type="button"
+                  className="btn danger"
+                  disabled={status.isPending}
+                  onClick={() => {
+                    const command = { status: 'ARCHIVED' as PanelStatus };
+                    status.mutate({
+                      ...command,
+                      idempotencyKey: statusSubmission.current(command),
+                    });
+                  }}
+                >
+                  {t('web.panel_archive_confirm')}
+                </button>
+                <button
+                  type="button"
+                  className="btn ghost"
+                  disabled={status.isPending}
+                  onClick={() => setArchiveAsked(false)}
+                >
+                  {t('web.panel_archive_cancel')}
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Only after the refusal, because until then there is nothing to
               resolve and an always-present rename field would invite one. */}
@@ -1618,6 +1709,119 @@ function CredentialsTab({
  * that said plainly is more useful than showing one row, because it answers
  * "will this panel be able to…" as well as "can it now".
  */
+/**
+ * What this panel CARRIES — the question an operator asks before touching it.
+ *
+ * Two lists, both server-filtered to this panel, because the answer to "may I
+ * archive this" is not a status: it is how many products stop being sellable
+ * and how many accounts are already on it. The capacity card on Overview gives
+ * the counts; this gives the names.
+ *
+ * Deliberately NOT paginated. It is a first page of each, with a link to the
+ * page that does page properly, and it says so when there is more — a pager
+ * here would be a second traversal of somebody else's list with its own cursor
+ * to get wrong. `nextCursor` is the server's own "there is more", so the notice
+ * cannot claim completeness the response did not.
+ */
+function WorkloadTab({ panel }: { panel: PanelSummaryResponse }) {
+  const onLink = useLinkHandler();
+  const products = useQuery({
+    queryKey: ['panel-products', panel.id],
+    queryFn: () => fetchProducts({ panelId: panel.id, limit: WORKLOAD_PAGE }),
+  });
+  const services = useQuery({
+    queryKey: ['panel-services', panel.id],
+    queryFn: () => fetchServices({ panelId: panel.id, limit: WORKLOAD_PAGE }),
+  });
+
+  return (
+    <div className="stack">
+      <Card title={t('web.panel_workload_products')} hint={t('web.panel_workload_products_hint')}>
+        <StateSwitch query={products} denied={false}>
+          {products.data !== undefined &&
+            (products.data.products.length === 0 ? (
+              <Empty title={t('web.panel_workload_no_products')} />
+            ) : (
+              <>
+                <DataTable
+                  caption={t('web.panel_workload_products')}
+                  rows={[...products.data.products]}
+                  rowKey={(row) => row.id}
+                  columns={[
+                    {
+                      key: 'title',
+                      header: t('web.product_title'),
+                      render: (row) => (
+                        <a href={`/products/${encodeURIComponent(row.id)}`} onClick={onLink}>
+                          {row.title}
+                        </a>
+                      ),
+                    },
+                    {
+                      key: 'status',
+                      header: t('web.status'),
+                      render: (row) => (
+                        <Badge tone={PRODUCT_STATUS_TONES[row.status]}>
+                          {t(PRODUCT_STATUS_LABELS[row.status])}
+                        </Badge>
+                      ),
+                    },
+                  ]}
+                />
+                {products.data.nextCursor !== null && (
+                  <p className="faint small">{t('web.panel_workload_more')}</p>
+                )}
+              </>
+            ))}
+        </StateSwitch>
+      </Card>
+
+      <Card title={t('web.panel_workload_services')} hint={t('web.panel_workload_services_hint')}>
+        <StateSwitch query={services} denied={false}>
+          {services.data !== undefined &&
+            (services.data.services.length === 0 ? (
+              <Empty title={t('web.panel_workload_no_services')} />
+            ) : (
+              <>
+                <DataTable
+                  caption={t('web.panel_workload_services')}
+                  rows={[...services.data.services]}
+                  rowKey={(row) => row.id}
+                  columns={[
+                    {
+                      key: 'username',
+                      header: t('web.service_username'),
+                      render: (row) => (
+                        <a href={`/services/${encodeURIComponent(row.id)}`} onClick={onLink}>
+                          {/* The handle an operator types into the panel, which the
+                              contract is explicit is NOT a credential. No subscription
+                              URL, ref or client id appears on this surface. */}
+                          <Ltr>{row.providerUsername}</Ltr>
+                        </a>
+                      ),
+                    },
+                    {
+                      key: 'state',
+                      header: t('web.status'),
+                      render: (row) => (
+                        <Badge tone={SERVICE_STATE_TONES[row.state]}>
+                          {t(SERVICE_STATE_LABELS[row.state])}
+                        </Badge>
+                      ),
+                    },
+                  ]}
+                />
+                {services.data.nextCursor !== null && (
+                  <p className="faint small">{t('web.panel_workload_more')}</p>
+                )}
+              </>
+            ))}
+        </StateSwitch>
+      </Card>
+    </div>
+  );
+}
+
 function CapabilitiesTab({ panel }: { panel: PanelSummaryResponse }) {
   const held = new Set<string>(panel.capabilities);
   return (
