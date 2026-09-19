@@ -66,6 +66,15 @@ export const PRODUCT_EDIT_PERMISSION: PermissionKey = 'catalog.edit';
  * and nothing else, and the check is made for `SYSTEM_JOB` like every other actor
  * because `nexa-conventions` forbids an actor-type exemption.
  */
+/**
+ * How far `browse` will read to fill a customer's page, in rows, in order.
+ *
+ * Two rounds rather than one, because one page of `PRODUCT_PAGE_MAX` still hid an
+ * eligible product behind a hundred ineligible ones. Two rather than unbounded,
+ * because this runs inside a customer's request.
+ */
+const CATALOGUE_SCAN_LIMITS = [PRODUCT_PAGE_MAX, PRODUCT_PAGE_MAX * 5] as const;
+
 export const CATALOG_BROWSE_PERMISSION: PermissionKey = 'maintenance.run';
 
 export interface ProductServiceDeps {
@@ -152,44 +161,76 @@ export class ProductService {
   ): Promise<{ readonly items: readonly ProductRecord[]; readonly hasMore: boolean }> {
     await this.deps.guard.check(scope, actor, CATALOG_BROWSE_PERMISSION);
     const bounded = Math.min(Math.max(limit, 1), PRODUCT_PAGE_MAX);
-    /*
-     * Scanned to the CATALOGUE's bound, then cut to the caller's.
-     *
-     * Fetching only `bounded` rows and filtering them made a screenful of
-     * ineligible products hide the eligible ones behind it: twenty products on
-     * disabled or full panels and an eligible twenty-first produced an EMPTY
-     * catalogue, and the bot's bound is a bound rather than a cursor, so the
-     * customer had no way to reach past it. Found by the Codex review of this
-     * branch.
-     *
-     * The scan is still bounded — `PRODUCT_PAGE_MAX` rows, one query — and
-     * eligibility for all of them is the same two reads it was for one page,
-     * because `evaluateMany` reads per PAGE and not per panel.
-     */
-    const page = await this.deps.repository.listCatalog(scope, PRODUCT_PAGE_MAX);
 
     /*
-     * The fleet filter, applied AFTER the database's membership filter.
+     * Scanned until the caller's bound is FILLED with eligible products, the catalogue
+     * is exhausted, or the scan ceiling is reached — whichever comes first.
      *
-     * The repository answers "is this product listed, priced and bound to a
-     * panel". This answers "and is that panel able to take one more today",
-     * which is a fact about the fleet and cannot be a predicate in that query
-     * without teaching the catalogue to count services.
+     * Fetching only `bounded` rows and filtering them made a screenful of ineligible
+     * products hide the eligible ones behind it: twenty products on disabled or full
+     * panels and an eligible twenty-first produced an EMPTY catalogue, and the bot's
+     * bound is a bound rather than a cursor, so the customer had no way to reach past
+     * it. Found by the Codex review of this branch.
      *
-     * `hasMore` is an OR of the two ways there can be more, and never a count of
-     * what survived the filter alone: more ELIGIBLE products than the caller
-     * asked for, or a scan that hit the catalogue's bound and may have left rows
-     * behind. Reporting only the first would claim there is nothing further
-     * whenever the tail of a long catalogue happened to be all-ineligible.
+     * Scanning ONE page of `PRODUCT_PAGE_MAX` did not finish the job and was reported
+     * again on the next round: it only moved the cliff from twenty products to a
+     * hundred. So the scan widens until it has enough.
+     *
+     * ## Why a widening re-scan and not a cursor
+     *
+     * `listCatalog` deliberately has no cursor, and `drizzle-product.repository.ts`
+     * records why: the catalogue is ordered by `sort_order` FIRST, that column is
+     * mutable, and a keyset over it can silently skip a product an operator reorders
+     * mid-traversal. Each round here is therefore one query from the start of the
+     * ordering — a fresh, self-consistent snapshot — rather than a continuation of the
+     * last one. The cost of re-reading the rows already seen is what buys the absence
+     * of a skip.
+     *
+     * ## Why a ceiling at all
+     *
+     * This runs inside a customer's request. `CATALOGUE_SCAN_LIMITS` bounds the work
+     * at two queries and `PRODUCT_PAGE_MAX * 5` rows; beyond that, a catalogue whose
+     * first five hundred listed products are ALL ineligible is a fleet-wide outage and
+     * not a paging problem, and `hasMore` stays true so nothing claims otherwise.
      */
-    const panelIds = page.items.flatMap((item) => (item.panelId === null ? [] : [item.panelId]));
-    const verdicts = await this.deps.panelSales.evaluateMany(scope, panelIds);
-    const eligible = page.items.filter(
-      (item) => item.panelId !== null && verdicts.get(item.panelId)?.eligible === true,
-    );
+    const eligible: ProductRecord[] = [];
+    let exhausted = false;
+
+    for (const scan of CATALOGUE_SCAN_LIMITS) {
+      const page = await this.deps.repository.listCatalog(scope, scan);
+
+      /*
+       * The fleet filter, applied AFTER the database's membership filter.
+       *
+       * The repository answers "is this product listed, priced and bound to a panel".
+       * This answers "and is that panel able to take one more today", which is a fact
+       * about the fleet and cannot be a predicate in that query without teaching the
+       * catalogue to count services.
+       */
+      const panelIds = page.items.flatMap((item) => (item.panelId === null ? [] : [item.panelId]));
+      const verdicts = await this.deps.panelSales.evaluateMany(scope, panelIds);
+
+      eligible.length = 0;
+      for (const item of page.items) {
+        if (item.panelId !== null && verdicts.get(item.panelId)?.eligible === true) {
+          eligible.push(item);
+        }
+      }
+
+      exhausted = !page.hasMore;
+      // Enough to fill the caller's bound, or there is nothing further to read.
+      if (eligible.length > bounded || exhausted) break;
+    }
+
     return {
       items: eligible.slice(0, bounded),
-      hasMore: eligible.length > bounded || page.hasMore,
+      /*
+       * An OR of the two ways there can be more, and never a count of what survived
+       * the filter alone: more ELIGIBLE products than the caller asked for, or a scan
+       * that stopped short of the end of the catalogue. Reporting only the first would
+       * claim there is nothing further whenever the tail happened to be all-ineligible.
+       */
+      hasMore: eligible.length > bounded || !exhausted,
     };
   }
 

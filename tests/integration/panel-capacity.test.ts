@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   money,
   PANEL_UNHEALTHY_AFTER_FAILURES,
+  PRODUCT_PAGE_MAX,
   type ActorContext,
   type BotInstanceId,
   type CorrelationId,
@@ -592,6 +593,33 @@ describe('panel capacity and sales eligibility', () => {
     expect(browsed.items.map((item) => item.id)).toEqual([wanted.id]);
     expect(browsed.hasMore, 'and nothing further is claimed, because there is none').toBe(false);
   });
+
+  it('reaches an eligible product past the FIRST hundred, which one scan could not', async () => {
+    /*
+     * Codex C4-N3 on PR #50, and the second round of the same finding.
+     *
+     * The first fix scanned one page of `PRODUCT_PAGE_MAX` and cut to the caller's
+     * bound, which only moved the cliff from twenty products to a hundred: a tenant
+     * whose first hundred listed products sit on a disabled panel still got an EMPTY
+     * catalogue, with no cursor to reach the hundred-and-first. The scan now widens
+     * until the bound is filled or the catalogue is exhausted.
+     *
+     * 101 products is deliberately one past `PRODUCT_PAGE_MAX`, so this fails against
+     * a single-page scan and passes against the widening one.
+     */
+    const roomy = ctx.container.ids.uuid();
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
+      VALUES (${roomy}, ${tenantA.tenantId}, 'Panel D', 'sanaei', 'https://d.example.test', 'ACTIVE')`);
+    for (let index = 0; index < PRODUCT_PAGE_MAX; index += 1) await activeProduct(panelA);
+    const wanted = await activeProduct(roomy);
+    await setStatus(panelA, 'DISABLED');
+
+    const browsed = await ctx.container.products.browse(tenantA, systemActor(key()), 20);
+
+    expect(browsed.items.map((item) => item.id)).toEqual([wanted.id]);
+    expect(browsed.hasMore, 'the catalogue was reached to its end').toBe(false);
+  }, 60_000);
 
   it('still bounds the catalogue, and says so when there are more', async () => {
     // The other half of the same rule: scanning further must not turn the
