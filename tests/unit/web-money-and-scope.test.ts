@@ -170,6 +170,17 @@ const RECORDED_BY: Readonly<Record<string, { file: string; needle: string }>> = 
     file: 'apps/api/src/modules/platform/panels/application/panel-monitor.service.ts',
     needle: "const TENANT_BUDGET_RESOLVED = 'panel.monitor.tenant_budget_ok'",
   },
+  // Both halves of the paid-but-unfulfilled pair are written by the reporter,
+  // never by the two services that call it: the payment settlement opens the
+  // condition, the fulfilment retry closes it, and neither names a code.
+  'order.fulfilment_failed': {
+    file: 'apps/api/src/modules/commerce/orders/application/unfulfilled-order-reporter.ts',
+    needle: "export const ORDER_UNFULFILLED_CODE = 'order.fulfilment_failed'",
+  },
+  'order.fulfilment_ok': {
+    file: 'apps/api/src/modules/commerce/orders/application/unfulfilled-order-reporter.ts',
+    needle: "export const ORDER_FULFILLED_CODE = 'order.fulfilment_ok'",
+  },
   'settings.stored_value_invalid': {
     file: 'apps/api/src/modules/control/settings/application/settings-resolver.ts',
     needle: 'code: INVALID_STORED_SETTING_CODE',
