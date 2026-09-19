@@ -56,6 +56,7 @@ import {
   SERVICE_ADDON_STATUSES,
   COMMERCIAL_ORDER_PURPOSES,
   ORDER_PURPOSES,
+  ORDER_SETTLED_STATES,
   ORDER_STATES,
   PAYMENT_GATEWAY_PROVIDERS,
   REFUND_CHANNELS,
@@ -2582,6 +2583,21 @@ export const orders = pgTable(
     confirmedAt: timestamptz('confirmed_at'),
     settledAt: timestamptz('settled_at'),
     cancelledAt: timestamptz('cancelled_at'),
+    /**
+     * When the money arrived and the order could NOT be fulfilled, and why.
+     *
+     * Both retained after a later retry succeeds, which is why the checks below are
+     * implications rather than the equalities their neighbours use: what went wrong
+     * once is what an operator reading the order a week later needs, and an order that
+     * reached `PAID` the hard way is not the same as one that never stumbled.
+     *
+     * `unfulfilled_reason` is a `PanelEligibility` reason — DISABLED, ARCHIVED,
+     * UNHEALTHY, AT_CAPACITY — and never a provider's own text. It is projected into
+     * an operations event, a notification and the Web Admin, all three of which are
+     * places a provider message must not reach.
+     */
+    unfulfilledAt: timestamptz('unfulfilled_at'),
+    unfulfilledReason: text('unfulfilled_reason'),
     refundedAt: timestamptz('refunded_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
@@ -2639,9 +2655,37 @@ export const orders = pgTable(
     check('orders_discount_bounded_check', sql`discount_amount <= subtotal_amount`),
     check('orders_quantity_check', sql`line_quantity >= 1`),
     /** Each lifecycle timestamp exists exactly when its state has been reached. */
+    /*
+     * Built from `ORDER_SETTLED_STATES`, not from a list typed out here.
+     *
+     * The contract's own predicate for "the money for this order arrived", so a
+     * reconciliation query and this constraint cannot come to disagree about which
+     * states that is — and a state added to one without the other fails the drift
+     * check rather than quietly excluding revenue from a report.
+     */
     check(
       'orders_settled_at_check',
-      sql`(state = 'PAID' OR state = 'REFUNDED') = (settled_at IS NOT NULL)`,
+      // Through `enumCheck`, which is the codebase's one `sql.raw` and the only
+      // form that reaches the generated migration as LITERALS. A `sql` template
+      // with parameters generates `state IN ($1, $2, $3)` into the DDL, which is
+      // a constraint no database will ever evaluate the way it reads.
+      sql`(${enumCheck('state', ORDER_SETTLED_STATES)}) = (settled_at IS NOT NULL)`,
+    ),
+    /*
+     * IMPLICATIONS, deliberately, where the three around them are equalities.
+     *
+     * An order that was stranded and then fulfilled keeps both columns: the history is
+     * the point, and an equality would force the retry to erase the only record that
+     * the customer's money sat undelivered. What must hold is the other direction —
+     * an order IN `PAID_UNFULFILLED` always says when and why.
+     */
+    check(
+      'orders_unfulfilled_at_check',
+      sql`state <> 'PAID_UNFULFILLED' OR unfulfilled_at IS NOT NULL`,
+    ),
+    check(
+      'orders_unfulfilled_reason_check',
+      sql`state <> 'PAID_UNFULFILLED' OR unfulfilled_reason IS NOT NULL`,
     ),
     check('orders_refunded_at_check', sql`(state = 'REFUNDED') = (refunded_at IS NOT NULL)`),
     check('orders_cancelled_at_check', sql`(state = 'CANCELLED') = (cancelled_at IS NOT NULL)`),
