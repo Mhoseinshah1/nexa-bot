@@ -1233,6 +1233,7 @@ export const WEB_FA = {
   'web.order_state_draft': 'پیش‌نویس',
   'web.order_state_awaiting_payment': 'در انتظار پرداخت',
   'web.order_state_paid': 'پرداخت‌شده',
+  'web.order_state_paid_unfulfilled': 'پرداخت‌شده، تحویل‌نشده',
   'web.order_state_cancelled': 'لغوشده',
   'web.order_state_expired': 'منقضی‌شده',
   'web.order_state_refunded': 'بازپرداخت‌شده',

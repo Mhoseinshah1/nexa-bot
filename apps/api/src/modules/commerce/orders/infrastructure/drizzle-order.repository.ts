@@ -170,6 +170,9 @@ export class DrizzleOrderRepository implements OrderRepository {
       readonly confirmedAt?: Date;
       readonly settledAt?: Date;
       readonly cancelledAt?: Date;
+      readonly unfulfilledAt?: Date;
+      readonly unfulfilledReason?: string;
+      readonly panelId?: string;
     },
     now: Date,
     tx?: unknown,
@@ -182,6 +185,11 @@ export class DrizzleOrderRepository implements OrderRepository {
         ...(stamps.confirmedAt === undefined ? {} : { confirmedAt: stamps.confirmedAt }),
         ...(stamps.settledAt === undefined ? {} : { settledAt: stamps.settledAt }),
         ...(stamps.cancelledAt === undefined ? {} : { cancelledAt: stamps.cancelledAt }),
+        ...(stamps.unfulfilledAt === undefined ? {} : { unfulfilledAt: stamps.unfulfilledAt }),
+        ...(stamps.unfulfilledReason === undefined
+          ? {}
+          : { unfulfilledReason: stamps.unfulfilledReason }),
+        ...(stamps.panelId === undefined ? {} : { panelId: stamps.panelId }),
         updatedAt: now,
       })
       .where(and(eq(orders.tenantId, tenantId), eq(orders.id, id), eq(orders.state, from)))
@@ -381,6 +389,8 @@ function toRecord(row: typeof orders.$inferSelect): OrderRecord {
     expiresAt: row.expiresAt,
     confirmedAt: row.confirmedAt,
     settledAt: row.settledAt,
+    unfulfilledAt: row.unfulfilledAt,
+    unfulfilledReason: row.unfulfilledReason,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

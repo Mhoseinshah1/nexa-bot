@@ -186,6 +186,8 @@ import { I18nTemplateCatalogue } from './modules/control/templates/infrastructur
 import { TemplateManagementService } from './modules/control/templates/application/template-management.service.js';
 import { DrizzleNotificationRepository } from './modules/control/notifications/infrastructure/drizzle-notification.repository.js';
 import { NotificationService } from './modules/control/notifications/application/notification.service.js';
+import { UnfulfilledOrderReporter } from './modules/commerce/orders/application/unfulfilled-order-reporter.js';
+import { OrderFulfilmentService } from './modules/commerce/orders/application/order-fulfilment.service.js';
 import { NotificationDispatcher } from './modules/control/notifications/application/notification-dispatcher.js';
 import { NotifyingOperationalEventRecorder } from './modules/control/notifications/application/operational-event-projector.js';
 import { TelegramNotificationTransport } from './modules/control/notifications/infrastructure/telegram-transport.js';
@@ -368,6 +370,8 @@ export interface Container {
   readonly receipts: ReceiptService;
   readonly receiptFiles: TelegramReceiptFiles;
   readonly orders: OrderService;
+  /** Retry or reassign an order that was paid for and could not be fulfilled. */
+  readonly orderFulfilment: OrderFulfilmentService;
   readonly botRuntime: BotRuntime;
 
   // Control plane — Phase 2
@@ -1151,7 +1155,56 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     settings: settingsResolver,
   });
 
+  /**
+   * The reporter that says this installation took money it could not deliver for.
+   *
+   * Its notification lane is reached through a REF for the reason `opsLogRef` above
+   * is: `NotificationService` is constructed further down — it needs the projection
+   * settings and the feature resolver — and payment settlement is constructed here.
+   * A façade with a stable identity is what lets both hold the same lane without
+   * reordering half this file. The forwarding drops nothing, `tx` included, because
+   * dropping it is exactly how a notification queued inside a settling transaction
+   * came to survive that transaction rolling back.
+   */
+  const notificationsRef: { current: NotificationService | null } = { current: null };
+  const unfulfilledOrders = new UnfulfilledOrderReporter({
+    opsLog,
+    notifications: {
+      queue: async (scope, input, tx) => {
+        const lane = notificationsRef.current;
+        /* istanbul ignore next -- filled below, before any request is served. */
+        if (lane === null) throw new Error('the notification lane is not wired yet');
+        return lane.queue(scope, input, tx);
+      },
+    },
+    recipients: telegramAdmins,
+  });
+
+  /**
+   * The operator's way out of a stranded order: deliver it late, here or elsewhere.
+   *
+   * Constructed beside the reporter because they are two halves of one story — the
+   * reporter opens the condition and this closes it — and a future reader looking for
+   * "what happens to a PAID_UNFULFILLED order" finds both in one place.
+   */
+  const orderFulfilment = new OrderFulfilmentService({
+    repository: orderRepository,
+    provisioning: provisioningService,
+    panels: panelRepository,
+    unfulfilled: unfulfilledOrders,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    outbox,
+    clock,
+  });
+
   const paymentService = new PaymentService({
+    unfulfilled: unfulfilledOrders,
     repository: paymentRepository,
     /*
      * The two READ methods only. This module consults a route and cannot configure one
@@ -1866,6 +1919,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     sessions,
   );
 
+  // And the stranded-order reporter's lane, for the same reason and in the same
+  // breath: constructed above, wired here, used only from a request or a worker
+  // tick — both of which happen after this line.
+  notificationsRef.current = notifications;
+
   // Recording and announcing become one call from here on. Everything that
   // already holds `opsLog` holds the façade, so this reaches them too.
   opsLogRef.current = new NotifyingOperationalEventRecorder(
@@ -2336,6 +2394,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     provisionerLoop,
     delivery: deliveryService,
     orders: orderService,
+    orderFulfilment,
     botRuntime: new BotRuntime({
       /*
        * The main menu's routing table, built HERE because this is the only layer

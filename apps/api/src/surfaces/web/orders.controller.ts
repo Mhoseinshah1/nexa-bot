@@ -1,8 +1,9 @@
-import { Controller, Get, Inject, Param, Query, Req } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Post, Query, Req } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
 import {
   API_PREFIX,
   ORDER_ROUTES,
+  fulfilOrderRequestSchema,
   orderListQuerySchema,
   type OrderId,
   type OrderListResponse,
@@ -20,7 +21,7 @@ import { currentCorrelationId, newCorrelationId } from '../../infrastructure/log
 import type { OrderCursor, OrderRecord } from '../../modules/commerce/orders/application/ports.js';
 
 /**
- * Orders over HTTP, at `/orders`. TWO ROUTES, both reads.
+ * Orders over HTTP, at `/orders`. Two reads and ONE write.
  *
  * There is no cancel, no mark-paid, no refund and no settle, and the absence is still
  * the point rather than an unfinished edge — but the reason has changed with 4C and is
@@ -37,6 +38,12 @@ import type { OrderCursor, OrderRecord } from '../../modules/commerce/orders/app
  *
  * A "mark paid" button with nothing behind it is the legacy silent-success pattern, and
  * it is the single easiest thing to add here by accident.
+ *
+ * The one write is `POST /orders/:id/fulfil`, and it is not an exception to any of the
+ * above: it asserts nothing about money. It acts on an order whose payment is already
+ * CONFIRMED and whose service could not be created, and it does the only two things
+ * that can help — try the panel again, or move the order to one that works. The other
+ * way out of that state is a refund, which is the payments surface's.
  *
  * Authentication happens here; AUTHORIZATION does not — `OrderService` charges
  * `orders.view` itself, so no endpoint is protected merely by the Web Admin not drawing
@@ -83,6 +90,31 @@ export class OrdersController {
     // The id is NOT cast here: `OrderService.get` validates it, so a malformed path
     // segment is a 400 rather than a 500 at the `uuid` cast.
     return { order: toSummary(await this.container.orders.get(scope, actor, id)) };
+  }
+
+  /**
+   * Retry or reassign an order that was paid for and could not be fulfilled.
+   *
+   * Authorization is `OrderFulfilmentService`'s, which charges `orders.fulfil` before
+   * the replay lookup and again inside the transaction. This method authenticates and
+   * parses, exactly as every other write on this surface does.
+   */
+  @Post('orders/:id/fulfil')
+  async fulfil(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<OrderResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const input = fulfilOrderRequestSchema.parse(body);
+    const order = await this.container.orderFulfilment.fulfil(scope, actor, {
+      idempotencyKey: input.idempotencyKey,
+      // NOT cast: the service validates it, so a malformed path segment is a 400
+      // rather than a 500 at the `uuid` cast — the rule `detail` states above.
+      orderId: id,
+      ...(input.panelId === undefined ? {} : { panelId: input.panelId }),
+    });
+    return { order: toSummary(order) };
   }
 
   private async authenticate(
@@ -140,6 +172,8 @@ function toSummary(record: OrderRecord): OrderSummaryResponse {
     expiresAt: record.expiresAt === null ? null : record.expiresAt.toISOString(),
     confirmedAt: record.confirmedAt === null ? null : record.confirmedAt.toISOString(),
     settledAt: record.settledAt === null ? null : record.settledAt.toISOString(),
+    unfulfilledAt: record.unfulfilledAt === null ? null : record.unfulfilledAt.toISOString(),
+    unfulfilledReason: record.unfulfilledReason,
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
   };

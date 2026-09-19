@@ -57,6 +57,7 @@ import type { ScopeActivityReader } from '../../../platform/system/application/r
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { OrderRecord, OrderRepository } from '../../orders/application/ports.js';
+import type { UnfulfilledOrderReporter } from '../../orders/application/unfulfilled-order-reporter.js';
 import type { CustomerRepository } from '../../customers/application/ports.js';
 import type { WalletRepository } from '../../wallet/application/ports.js';
 import { canCover, shortfallMinor } from '../../wallet/domain/balance.js';
@@ -200,6 +201,14 @@ export interface PaymentServiceDeps {
    * met it by tapping a dead button. Enqueued inside the rejection's own transaction.
    */
   readonly notifier: CustomerNotifier;
+  /**
+   * Says that this installation took money it could not deliver for — and, later,
+   * that the debt is settled.
+   *
+   * One collaborator rather than three deps, because the condition, the notification
+   * and their symmetry belong together: see `UnfulfilledOrderReporter`.
+   */
+  readonly unfulfilled: UnfulfilledOrderReporter;
   readonly opsLog: OperationalEventRecorder;
   readonly sessions: SessionRepository;
   readonly idempotency: IdempotencyStore;
@@ -2495,9 +2504,50 @@ export class PaymentService {
       throw new Error(`payment ${confirmed.id} is CONFIRMED with no evidence kind.`);
     }
 
-    const to = nextState(ORDER_MACHINE, 'AWAITING_PAYMENT', 'SETTLE');
+    /*
+     * CAN this order be fulfilled — asked before the state is chosen, because the
+     * answer chooses it.
+     *
+     * `SETTLE` and `SETTLE_UNFULFILLED` are different edges and there is no path from
+     * `PAID` back, so discovering the answer after the transition would mean either a
+     * backwards edge or a settled order with no service and nothing saying so. The
+     * call also performs the slot handover under the panel's lock, which is why it
+     * cannot simply be a read.
+     *
+     * Only for purposes that need a NEW service. A renewal acts on a service that
+     * already exists and consumes no slot; `planCommercialAction` below is its path.
+     */
+    /*
+     * `orderPurposeNeedsService` is true for the purposes that NAME an existing
+     * service — a renewal, an add-on — so the branch that CREATES one is its
+     * negation. Read the predicate's own docblock before changing this: the name
+     * says "needs a service to act on", not "needs a service created".
+     */
+    const createsNewService = !orderPurposeNeedsService(order.purpose);
+    const fulfilment = createsNewService
+      ? await this.deps.provisioning.prepareFulfilment(
+          scope,
+          order,
+          tx,
+          /*
+           * Whether money that has already moved is at stake, decided from the
+           * EVIDENCE rather than from the caller.
+           *
+           * `WALLET_DEBIT` is written in this transaction and dies with it, so a
+           * refusal costs the customer nothing and keeps the stricter rule: an
+           * installation that cannot deliver does not take the money. `OPERATOR_REVIEW`
+           * is a bank transfer that arrived days ago — throwing cannot un-receive it,
+           * and the refusal it used to produce left the payment PENDING, which is
+           * neither confirmable nor refundable. Codex C4 on PR #50.
+           */
+          confirmation.evidenceKind === 'WALLET_DEBIT' ? 'REFUSE' : 'STRAND',
+        )
+      : ({ outcome: 'FULFILLABLE' } as const);
+
+    const settling = fulfilment.outcome === 'FULFILLABLE' ? 'SETTLE' : 'SETTLE_UNFULFILLED';
+    const to = nextState(ORDER_MACHINE, 'AWAITING_PAYMENT', settling);
     if (to === null) {
-      throw new Error('ORDER_MACHINE no longer allows SETTLE from AWAITING_PAYMENT.');
+      throw new Error(`ORDER_MACHINE no longer allows ${settling} from AWAITING_PAYMENT.`);
     }
 
     const changed = await this.deps.orders.transition(
@@ -2505,7 +2555,16 @@ export class PaymentService {
       order.id,
       'AWAITING_PAYMENT',
       to,
-      { settledAt: now },
+      {
+        settledAt: now,
+        /*
+         * Both stamps, because `orders_unfulfilled_*_check` require them of a row in
+         * `PAID_UNFULFILLED` — the same reason `settledAt` travels with `SETTLE`.
+         */
+        ...(fulfilment.outcome === 'UNFULFILLABLE'
+          ? { unfulfilledAt: now, unfulfilledReason: fulfilment.reason }
+          : {}),
+      },
       now,
       tx,
     );
@@ -2564,19 +2623,42 @@ export class PaymentService {
       },
     });
 
-    await this.deps.outbox.write(tx, actor, {
-      eventType: 'OrderSettled',
-      aggregateType: 'Order',
-      aggregateId: settled.id,
-      payload: {
-        customerId: settled.customerId,
-        // Required by the frozen event, and it is always present: an order settles
-        // only through a confirmed payment, which is what `settlementIsFunded` says.
-        paymentId: confirmed.id,
-        totalMinor: settled.totals.total.amountMinor.toString(),
-        currency: settled.totals.currency,
-      },
-    });
+    /*
+     * WHICH event, decided by what actually happened.
+     *
+     * `OrderSettled` is what a consumer acts on when a service is coming, so an order
+     * that has none must not emit it: the two are different facts and a flag on one
+     * event would be read by exactly the handlers that should not have run.
+     */
+    if (fulfilment.outcome === 'UNFULFILLABLE') {
+      await this.deps.outbox.write(tx, actor, {
+        eventType: 'OrderPaidUnfulfilled',
+        aggregateType: 'Order',
+        aggregateId: settled.id,
+        payload: {
+          customerId: settled.customerId,
+          paymentId: confirmed.id,
+          panelId: settled.line.panelId,
+          reason: fulfilment.reason,
+          totalMinor: settled.totals.total.amountMinor.toString(),
+          currency: settled.totals.currency,
+        },
+      });
+    } else {
+      await this.deps.outbox.write(tx, actor, {
+        eventType: 'OrderSettled',
+        aggregateType: 'Order',
+        aggregateId: settled.id,
+        payload: {
+          customerId: settled.customerId,
+          // Required by the frozen event, and it is always present: an order settles
+          // only through a confirmed payment, which is what `settlementIsFunded` says.
+          paymentId: confirmed.id,
+          totalMinor: settled.totals.total.amountMinor.toString(),
+          currency: settled.totals.currency,
+        },
+      });
+    }
 
     /*
      * What the customer just bought, recorded in THIS transaction — and WHICH of the two
@@ -2608,7 +2690,34 @@ export class PaymentService {
      * Nothing on either branch contacts a provider. Rows are written and the
      * `provisioner` role picks the work up afterwards, outside every transaction.
      */
-    if (orderPurposeNeedsService(settled.purpose)) {
+    if (fulfilment.outcome === 'UNFULFILLABLE') {
+      /*
+       * The money is recorded and the service is OWED. No service row, no operation,
+       * and nothing provisioned onto a panel that cannot take it.
+       *
+       * The condition and the notification are written here, in the settling
+       * transaction, for the reason every other alert in this codebase is: a process
+       * that died between the state change and the telling would leave an order
+       * stranded with nobody told, and the condition is deduplicated per order, so
+       * nothing would ever say it again.
+       *
+       * No automatic refund. The money arrived and what to do about it — deliver it
+       * late, move it to another panel, or give it back — is a decision with an
+       * amount attached, and this transaction is not where it is taken.
+       */
+      await this.deps.unfulfilled.strand(
+        scope,
+        {
+          id: settled.id,
+          customerId: settled.customerId,
+          panelId: settled.line.panelId,
+          total: settled.totals.total,
+          correlationId: actor.correlationId,
+        },
+        fulfilment.reason,
+        tx,
+      );
+    } else if (orderPurposeNeedsService(settled.purpose)) {
       const action = await this.deps.commercialActions.findByOrderId(scope, settled.id, tx);
       if (action === null) {
         /*

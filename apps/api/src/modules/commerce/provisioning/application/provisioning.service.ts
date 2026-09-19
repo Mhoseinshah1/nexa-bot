@@ -179,6 +179,65 @@ export class ProvisioningService {
   constructor(private readonly deps: ProvisioningServiceDeps) {}
 
   /**
+   * Whether this order can be fulfilled on its panel — and the slot handover.
+   *
+   * Split out of `planForSettledOrder` because the ANSWER now decides which state the
+   * order settles into, and that decision has to be made before the transition rather
+   * than discovered after it. `SETTLE` and `SETTLE_UNFULFILLED` are different edges of
+   * `ORDER_MACHINE` and there is deliberately no path from `PAID` back.
+   *
+   * `consume` takes the panel's lock, deletes the order's hold, and — on a first
+   * settlement only — decides eligibility again with that hold no longer counted.
+   * Releasing before counting is what stops the order's own reservation refusing the
+   * order's own service on the last slot; the lock is held across the gap and the
+   * service is written before this transaction commits, so nothing else can see it
+   * free. When the hold has EXPIRED or was already released, the release is a no-op
+   * and the count that follows is a fresh acquisition under the same lock: the order
+   * competes for a slot exactly as a new one would, and wins or does not.
+   *
+   * ## `onIneligible`, and why the caller decides
+   *
+   * `REFUSE` throws, which rolls the whole transaction back. Right when the money is
+   * still reversible IN this transaction — a wallet debit written moments ago — and
+   * the only honest outcome, because an installation that cannot deliver must not keep
+   * money it can still decline.
+   *
+   * `STRAND` returns the refusal, and the caller records the money and owes the
+   * service. Right when the money has ALREADY MOVED: a bank transfer sitting in the
+   * account cannot be un-received by throwing, and the refusal that used to happen
+   * here left the payment `PENDING` — unconfirmable, and unrefundable, because a
+   * refund needs a confirmed payment. Codex C4 on PR #50.
+   *
+   * A REPLAY skips the decision entirely: the customer already has their service, and
+   * re-judging would refuse a transaction whose money has already moved.
+   */
+  async prepareFulfilment(
+    scope: TenantContext,
+    order: OrderRecord,
+    tx: TransactionScope,
+    onIneligible: 'REFUSE' | 'STRAND',
+  ): Promise<{ readonly outcome: 'FULFILLABLE' } | { readonly outcome: 'UNFULFILLABLE'; readonly reason: string }> {
+    const alreadyProvisioned =
+      (await this.deps.services.findByOrderId(scope, order.id, tx)) !== null;
+    const eligible = await this.deps.panelSales.consume(
+      scope,
+      order.line.panelId,
+      order.id,
+      tx,
+      alreadyProvisioned,
+    );
+    if (eligible.eligible) return { outcome: 'FULFILLABLE' };
+    if (onIneligible === 'STRAND') {
+      return { outcome: 'UNFULFILLABLE', reason: eligible.reason };
+    }
+    throw errors.preconditionFailed(
+      COMMERCE_ERROR_CODES.PANEL_NOT_ELIGIBLE,
+      'This order cannot be fulfilled on its panel.',
+      { reason: eligible.reason },
+    );
+  }
+
+  /**
    * Records that a settled order is owed a service, and plans the work.
    *
    * Idempotent by construction and not by checking. `create` is an upsert against
@@ -192,6 +251,9 @@ export class ProvisioningService {
    * idempotency key, and that is deliberate. The service id is stable across replays
    * because the insert is idempotent; a per-request key is not, so two settlements of
    * one order would derive two operation ids and plan two creates.
+   *
+   * The slot was handed over by `prepareFulfilment`, which the caller runs FIRST and
+   * under the panel's lock. This method writes; it does not decide.
    */
   async planForSettledOrder(
     scope: TenantContext,
@@ -200,46 +262,6 @@ export class ProvisioningService {
     now: Date,
     tx: TransactionScope,
   ): Promise<{ readonly service: ServiceRecord; readonly operation: OperationRecord }> {
-    /*
-     * The slot handover, and the LAST chance to refuse.
-     *
-     * Read first, because whether a service already exists decides everything
-     * below: an order that has one is a replayed settlement, and a replay must
-     * not be re-judged. The panel may have filled up or been disabled since, and
-     * refusing here would roll back a transaction whose money has already moved,
-     * for a customer who already has what they paid for.
-     *
-     * `consume` takes the panel's lock, deletes the order's hold, and — on a
-     * first settlement only — decides eligibility again with that hold no longer
-     * counted. Releasing before counting is what stops the order's own
-     * reservation refusing the order's own service on the last slot; the lock is
-     * held across the gap and the service is written before this transaction
-     * commits, so nothing else can see it free.
-     *
-     * The refusal is a rollback, and that is the honest outcome: an installation
-     * that cannot deliver must not keep the money. `AT_CAPACITY` here is
-     * unreachable through the ordinary path — the slot was reserved at
-     * confirmation — and reachable through the ones that matter: an operator who
-     * archived the panel, a monitor that confirmed it down, or a hold that
-     * lapsed because the customer paid after their own deadline.
-     */
-    const alreadyProvisioned =
-      (await this.deps.services.findByOrderId(scope, order.id, tx)) !== null;
-    const eligible = await this.deps.panelSales.consume(
-      scope,
-      order.line.panelId,
-      order.id,
-      tx,
-      alreadyProvisioned,
-    );
-    if (!eligible.eligible) {
-      throw errors.preconditionFailed(
-        COMMERCE_ERROR_CODES.PANEL_NOT_ELIGIBLE,
-        'This order cannot be fulfilled on its panel.',
-        { reason: eligible.reason },
-      );
-    }
-
     const serviceId = this.deps.ids.uuid();
     const created = await this.deps.services.create(
       scope,

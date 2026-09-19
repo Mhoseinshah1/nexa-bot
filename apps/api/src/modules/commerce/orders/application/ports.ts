@@ -63,8 +63,20 @@ export interface OrderRecord {
    */
   readonly expiresAt: Date | null;
   readonly confirmedAt: Date | null;
-  /** When the money arrived. Bound to PAID by `orders_settled_at_check`. */
+  /**
+   * When the money arrived. Bound to the SETTLED states by
+   * `orders_settled_at_check`, which since this release includes
+   * `PAID_UNFULFILLED`: money that arrived is money that arrived, whether or not
+   * anything could be created for it.
+   */
   readonly settledAt: Date | null;
+  /**
+   * When the order was found unfulfillable, and why — retained even after a later
+   * retry succeeds, because what went wrong once is what an operator reading the
+   * order a week later needs. A `PanelEligibility` reason, never provider text.
+   */
+  readonly unfulfilledAt: Date | null;
+  readonly unfulfilledReason: string | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -160,6 +172,24 @@ export interface OrderRepository {
       readonly confirmedAt?: Date;
       readonly settledAt?: Date;
       readonly cancelledAt?: Date;
+      /*
+       * `PAID_UNFULFILLED`'s pair, and the ONLY writable stamps that survive the
+       * state they were written for. `orders_unfulfilled_*_check` are implications
+       * rather than equalities, so a later `FULFIL` moves the state and leaves both
+       * standing — which is what makes "this order was stranded once" a fact an
+       * operator can still read.
+       */
+      readonly unfulfilledAt?: Date;
+      readonly unfulfilledReason?: string;
+      /**
+       * Where the order will be fulfilled, when an operator REASSIGNS it.
+       *
+       * The one edit to a line snapshot this codebase allows, and it is allowed
+       * because the alternative is worse: an order with no service, on a panel that
+       * cannot take it, and no way to move it but a refund. Only the `FULFIL` edge
+       * passes it, and the audit row says the panel changed.
+       */
+      readonly panelId?: string;
     },
     now: Date,
     tx?: unknown,

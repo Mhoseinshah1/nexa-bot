@@ -57,6 +57,7 @@ const STATE_LABELS: Readonly<Record<OrderState, WebKey>> = {
   DRAFT: 'web.order_state_draft',
   AWAITING_PAYMENT: 'web.order_state_awaiting_payment',
   PAID: 'web.order_state_paid',
+  PAID_UNFULFILLED: 'web.order_state_paid_unfulfilled',
   CANCELLED: 'web.order_state_cancelled',
   EXPIRED: 'web.order_state_expired',
   REFUNDED: 'web.order_state_refunded',
@@ -66,6 +67,12 @@ const STATE_TONES: Readonly<Record<OrderState, Tone>> = {
   DRAFT: 'neutral',
   AWAITING_PAYMENT: 'warn',
   PAID: 'ok',
+  /*
+   * DANGER, and the only state on this page that carries it. The money arrived and
+   * the customer has nothing: an operator scanning the list has to be able to see
+   * that without reading the label.
+   */
+  PAID_UNFULFILLED: 'danger',
   CANCELLED: 'neutral',
   EXPIRED: 'neutral',
   REFUNDED: 'violet',
