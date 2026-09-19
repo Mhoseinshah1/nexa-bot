@@ -887,6 +887,61 @@ describe('a provisioned service announces itself', () => {
     ).toBe('TERMINATED');
   });
 
+  it('credits only what is LEFT when an operator already returned part of it', async () => {
+    /*
+     * There is one answer to "how much did we give back", and it is a sum.
+     *
+     * `refundUndeliverable` locks the payment, sums the refunds already committed
+     * against it, and credits the REMAINDER — it does not credit the price. Nothing
+     * else could: an operator may have returned part of a purchase for their own
+     * reason before the provisioner ever dialled, and a second writer that credits
+     * the full amount hands the customer more than they paid, in two rows that each
+     * look correct on their own. That is the defect a ledger exists to make
+     * impossible, so it is asserted as a ledger: two refunds, one total.
+     *
+     * The order is the correctness and it is asserted as one: the partial goes in
+     * FIRST, while the order is still PAID and deliverable, and the create fails
+     * afterwards.
+     */
+    const orderId = await paidOrder('partial-then-failed');
+    const paymentRow = (await ctx.container.database.db.execute(
+      sql`SELECT id FROM payments WHERE order_id = ${orderId}` as never,
+    )) as unknown as { rows: { id: string }[] };
+    await ctx.container.refunds.request(tenantA, owner, {
+      idempotencyKey: 'partial-refund',
+      paymentId: paymentRow.rows[0]?.id ?? '',
+      amountMinor: 100_000n,
+      reason: 'GOODWILL',
+    });
+
+    // And now it cannot be delivered at all.
+    await ctx.container.panels.setCredentials(tenantA, owner, panelId, {
+      credentials: { password: 'not-the-panel-password' },
+      idempotencyKey: 'wrong-password-partial',
+    });
+    await ctx.container.provisionerLoop.tick();
+
+    const ledger = (await ctx.container.database.db.execute(
+      sql`SELECT amount::text AS amount, reason, requested_by_admin_id IS NULL AS automatic
+            FROM refunds WHERE order_id = ${orderId} ORDER BY amount` as never,
+    )) as unknown as {
+      rows: { amount: string; reason: string; automatic: boolean }[];
+    };
+    expect(ledger.rows, 'the remainder, not the price').toEqual([
+      { amount: '100000', reason: 'GOODWILL', automatic: false },
+      { amount: '150000', reason: 'UNDELIVERABLE', automatic: true },
+    ]);
+
+    const credited = (await ctx.container.database.db.execute(
+      sql`SELECT coalesce(sum(amount), 0)::text AS total FROM wallet_entries
+           WHERE customer_id = ${customerA} AND reason = 'REFUND'` as never,
+    )) as unknown as { rows: { total: string }[] };
+    expect(
+      credited.rows[0]?.total,
+      'and the wallet got back exactly the price, once, across both',
+    ).toBe('250000');
+  });
+
   it('refunds nothing while the outcome is UNKNOWN, and waits for the read', async () => {
     /*
      * The rule the whole lane turns on, asserted at the moment it would be broken.
