@@ -136,6 +136,51 @@ the bound of F6B-C4-7, and the mutation that widens the exception is the fix
 itself. What the row records is that the narrowing is asserted in both
 directions rather than only the one the feature needed.
 
+## The second Codex round: four more, two of them P1
+
+The re-review of `86ce31a` found four. Two were defects in the C4 work itself,
+one was the first half of a fix that had not finished the job, and one belonged
+to the capacity work earlier on this branch.
+
+| #       | Rule                                                           | Mutation                                | Named test                                                                            | Result   |
+| ------- | -------------------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------- | -------- |
+| F6B-N1a | a refund closes the order only once the money has LEFT         | the `COMPLETED` check dropped           | _leaves a stranded order fulfillable while its refund is still awaiting the bank_     | SURVIVED |
+| F6B-N1b | and the wallet branch is the only one that closes at `request` | the call moved out of `if (immediate)`  | _leaves a stranded order fulfillable while its refund is still awaiting the bank_     | SURVIVED |
+| F6B-N1c | the two together                                               | both removed                            | _closes the order when the refund actually completes, and fulfilment is then refused_ | KILLED   |
+| F6B-N1d | a completed refund TRANSITIONS the order                       | the transition skipped                  | _closes the order when the refund actually completes, and fulfilment is then refused_ | KILLED   |
+| F6B-N1e | and closes the condition the settlement opened                 | `recoversCode` dropped                  | _closes the order when the refund actually completes, and fulfilment is then refused_ | KILLED   |
+| F6B-N2a | the card is drawn only for `PAID_UNFULFILLED`                  | drawn for every state                   | _draws no fulfilment card for an order that is not stranded_                          | KILLED   |
+| F6B-N2b | an empty box RETRIES rather than reassigning to nothing        | `panelId` always sent                   | _retries a stranded order on its own panel_                                           | KILLED   |
+| F6B-N2c | `orders.fulfil` is said, not assumed                           | the permission ignored                  | _says why rather than hiding the card, without orders.fulfil_                         | KILLED   |
+| F6B-N2d | a malformed panel id cannot be submitted                       | the `disabled` guard removed            | _refuses a malformed panel id without asking the server_                              | KILLED   |
+| F6B-N3a | the catalogue scan widens until the bound is filled            | back to one round of `PRODUCT_PAGE_MAX` | _reaches an eligible product past the FIRST hundred, which one scan could not_        | KILLED   |
+| F6B-N4a | a changed connection identity starts a new streak              | increment across the change, as before  | _starts a NEW streak when the connection identity changed_                            | KILLED   |
+
+Three rows need their result explained rather than counted.
+
+**F6B-N1a and F6B-N1b survived, and that is the honest record of a rule held
+twice.** A refund closes a stranded order only where the money has actually
+left, and that is enforced at the CALL SITE (`request` calls the closer only on
+the wallet channel, which is born `COMPLETED`) and again INSIDE it (the state is
+re-checked). Removing either leaves the other holding, so neither mutation alone
+can fail a test. F6B-N1c removes both and both refund cases fail, which is what
+establishes the tests are load-bearing rather than decorative.
+
+**F6B-N2d took three attempts and the first two found a bad TEST, not a bad
+rule.** As written, the case asserted "no `/fulfil` call" synchronously after
+the click — no request could have been issued by then either way, so it passed
+with both input guards removed. It now asserts the disabled control directly and
+follows the bad value with a good one, so the "exactly one call" assertion is
+measured against a request that really happens. The submit-handler guard behind
+the disabled attribute is deliberately NOT claimed as separately falsified: with
+the attribute in place no test here can reach it.
+
+**F6B-N3a is the second round of F6B-C4.** The first fix scanned one page and
+cut to the caller's bound, which moved the cliff from twenty products to a
+hundred rather than removing it; the reviewer said so and was right. The row
+above is the widened scan, and the test uses 101 products precisely so it fails
+against the one-page version.
+
 ## Rules held by a mechanism rather than by a mutation
 
 | Rule                                                    | What holds it                                                                                                                  |
