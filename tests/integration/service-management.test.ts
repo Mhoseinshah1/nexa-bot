@@ -863,6 +863,109 @@ describe('a customer manages the service they bought', () => {
     return order.id;
   }
 
+  /** Quote, confirm, then pay by BANK TRANSFER an operator reviews later. */
+  async function buyByTransfer(
+    serviceId: string,
+    kind: 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME',
+    key: string,
+    customerId: UserId = customerA,
+  ): Promise<{ orderId: OrderId; paymentId: string }> {
+    const { order } = await ctx.container.commercialActions.draft(
+      tenantA,
+      systemActor(key),
+      customerId,
+      { serviceId, kind, idempotencyKey: `xfer-${key}-quote` },
+    );
+    await ctx.container.commercialActions.confirm(tenantA, systemActor(key), customerId, {
+      orderId: order.id,
+      idempotencyKey: `xfer-${key}-confirm`,
+    });
+    const { payment } = await ctx.container.payments.requestManualTransfer(
+      tenantA,
+      systemActor(key),
+      customerId,
+      { idempotencyKey: `xfer-${key}-manual`, orderId: order.id },
+    );
+    return { orderId: order.id, paymentId: payment.id };
+  }
+
+  it('records a transfer for a RENEW whose service was terminated while it waited', async () => {
+    /*
+     * Codex M1 on PR #50. C4 gave a manual transfer for a NEW service somewhere to go
+     * when the panel became unusable; a commercial order skipped that question
+     * entirely, because it creates no service and consumes no slot — true, and the
+     * wrong conclusion. `planCommercialAction` has three refusals of its own and all
+     * of them can become true while the receipt sits in the review queue, and each one
+     * threw INSIDE the settling transaction: the confirmation rolled back and the bank
+     * money stayed a `PENDING` payment, neither confirmable nor refundable.
+     */
+    const service = await activeService('renew-stranded');
+    const { orderId, paymentId } = await buyByTransfer(service.id, 'RENEW', 'renew-stranded');
+
+    // The customer's service is terminated before the operator gets to the receipt.
+    await ctx.container.database.db.execute(
+      sql`UPDATE services SET state = 'TERMINATED', terminated_at = now() WHERE id = ${service.id}`,
+    );
+
+    const { payment, order } = await ctx.container.payments.confirmManualTransfer(
+      tenantA,
+      owner,
+      paymentId,
+      { idempotencyKey: `xfer-renew-stranded-confirm-op`, note: 'کارت به کارت' },
+    );
+
+    expect(payment.state, 'the money arrived and the row says so').toBe('CONFIRMED');
+    expect(order?.state).toBe('PAID_UNFULFILLED');
+    const row = (await ctx.container.database.db.execute(
+      sql`SELECT settled_at, unfulfilled_reason FROM orders WHERE id = ${orderId}` as never,
+    )) as unknown as { rows: { settled_at: string | null; unfulfilled_reason: string | null }[] };
+    expect(row.rows[0]?.settled_at).not.toBeNull();
+    expect(row.rows[0]?.unfulfilled_reason).toBe('SERVICE_TERMINATED');
+    // And nothing was planned against a service that cannot take it.
+    expect(await operationOf(service.id, 'RENEW')).toBeUndefined();
+  });
+
+  it('still REFUSES the same renewal paid from the wallet, because nothing left', async () => {
+    /*
+     * The asymmetry, asserted as a pair. A wallet debit is written in the settling
+     * transaction and dies with it, so refusing costs the customer nothing — and an
+     * installation that cannot deliver does not take money it can still decline.
+     */
+    const service = await activeService('renew-wallet-refused');
+    await fund('renew-wallet-refused');
+    const { order } = await ctx.container.commercialActions.draft(
+      tenantA,
+      systemActor('renew-wallet-refused'),
+      customerA,
+      { serviceId: service.id, kind: 'RENEW', idempotencyKey: 'wal-renew-quote' },
+    );
+    await ctx.container.commercialActions.confirm(
+      tenantA,
+      systemActor('renew-wallet-refused'),
+      customerA,
+      { orderId: order.id, idempotencyKey: 'wal-renew-confirm' },
+    );
+    await ctx.container.database.db.execute(
+      sql`UPDATE services SET state = 'TERMINATED', terminated_at = now() WHERE id = ${service.id}`,
+    );
+
+    await expect(
+      ctx.container.payments.settleFromWallet(
+        tenantA,
+        systemActor('renew-wallet-refused'),
+        customerA,
+        { idempotencyKey: 'wal-renew-pay', orderId: order.id },
+      ),
+    ).rejects.toMatchObject({ code: 'commerce.service_action_not_allowed' });
+
+    const row = (await ctx.container.database.db.execute(
+      sql`SELECT state FROM orders WHERE id = ${order.id}` as never,
+    )) as unknown as { rows: { state: string }[] };
+    expect(row.rows[0]?.state, 'still awaiting payment, and refundable by not paying').toBe(
+      'AWAITING_PAYMENT',
+    );
+  });
+
   it('renews a service: charged once, applied once, and the panel ends up holding it', async () => {
     const service = await activeService('renew-happy');
     const before = await services.findById(tenantA, service.id);

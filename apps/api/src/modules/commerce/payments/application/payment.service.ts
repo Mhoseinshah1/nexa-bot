@@ -1461,6 +1461,36 @@ export class PaymentService {
   }
 
   /**
+   * The commercial half of the settlement question: can this action be applied?
+   *
+   * A thin adapter over `ProvisioningService.prepareCommercialAction` that finds the
+   * invoice line first. The missing line stays a THROW under both dispositions — it
+   * means `service_commercial_actions_order_key` is broken, which no operator retry
+   * fixes, and stranding an order whose purchase nothing describes would record money
+   * against work nobody can name.
+   */
+  private async prepareCommercialSettlement(
+    scope: TenantContext,
+    order: OrderRecord,
+    tx: TransactionScope,
+    onIneligible: 'REFUSE' | 'STRAND',
+  ): Promise<
+    | { readonly outcome: 'FULFILLABLE' }
+    | { readonly outcome: 'UNFULFILLABLE'; readonly reason: string }
+  > {
+    const action = await this.deps.commercialActions.findByOrderId(scope, order.id, tx);
+    if (action === null) {
+      throw new Error(`order ${order.id} is ${order.purpose} and carries no commercial action`);
+    }
+    return this.deps.provisioning.prepareCommercialAction(
+      scope,
+      { serviceId: action.serviceId, kind: action.kind },
+      tx,
+      onIneligible,
+    );
+  }
+
+  /**
    * An operator confirming that an out-of-band transfer arrived.
    *
    * The confirmation carries a NOTE and nothing else. It cannot restate the amount —
@@ -2524,25 +2554,33 @@ export class PaymentService {
      * says "needs a service to act on", not "needs a service created".
      */
     const createsNewService = !orderPurposeNeedsService(order.purpose);
+    /*
+     * Whether money that has already moved is at stake, decided from the EVIDENCE
+     * rather than from the caller.
+     *
+     * `WALLET_DEBIT` is written in this transaction and dies with it, so a refusal
+     * costs the customer nothing and keeps the stricter rule: an installation that
+     * cannot deliver does not take the money. `OPERATOR_REVIEW` is a bank transfer that
+     * arrived days ago — throwing cannot un-receive it, and the refusal it used to
+     * produce left the payment PENDING, which is neither confirmable nor refundable.
+     * Codex C4 on PR #50.
+     */
+    const onIneligible = confirmation.evidenceKind === 'WALLET_DEBIT' ? 'REFUSE' : 'STRAND';
+    /*
+     * BOTH branches ask, and that is Codex M1.
+     *
+     * A commercial order creates no service and consumes no slot, which is true and
+     * was the wrong conclusion: `planCommercialAction` has three refusals of its own —
+     * the service left a legal state, the panel stopped being operable, another action
+     * is outstanding — and every one of them can become true between a customer's
+     * confirmation and an operator's review of their transfer. Skipping the question
+     * here meant the throw happened LATER, inside the same transaction, which rolled
+     * the settlement back and left the arrived money as a `PENDING` payment. The exact
+     * condition C4 exists to prevent, on the branch C4 carved out.
+     */
     const fulfilment = createsNewService
-      ? await this.deps.provisioning.prepareFulfilment(
-          scope,
-          order,
-          tx,
-          /*
-           * Whether money that has already moved is at stake, decided from the
-           * EVIDENCE rather than from the caller.
-           *
-           * `WALLET_DEBIT` is written in this transaction and dies with it, so a
-           * refusal costs the customer nothing and keeps the stricter rule: an
-           * installation that cannot deliver does not take the money. `OPERATOR_REVIEW`
-           * is a bank transfer that arrived days ago — throwing cannot un-receive it,
-           * and the refusal it used to produce left the payment PENDING, which is
-           * neither confirmable nor refundable. Codex C4 on PR #50.
-           */
-          confirmation.evidenceKind === 'WALLET_DEBIT' ? 'REFUSE' : 'STRAND',
-        )
-      : ({ outcome: 'FULFILLABLE' } as const);
+      ? await this.deps.provisioning.prepareFulfilment(scope, order, tx, onIneligible)
+      : await this.prepareCommercialSettlement(scope, order, tx, onIneligible);
 
     const settling = fulfilment.outcome === 'FULFILLABLE' ? 'SETTLE' : 'SETTLE_UNFULFILLED';
     const to = nextState(ORDER_MACHINE, 'AWAITING_PAYMENT', settling);
