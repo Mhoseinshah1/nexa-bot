@@ -3271,16 +3271,37 @@ export const refunds = pgTable(
       sql`external_reference IS NULL OR length(btrim(external_reference)) BETWEEN 1 AND 140`,
     ),
     /**
-     * COMPLETED means completed BY somebody AT a time — all three or none.
+     * COMPLETED means completed AT a time. Always.
      *
      * The rule `payments_confirmed_check` states for a confirmation, applied to the one
-     * transition that means money is gone. Without it a row could claim COMPLETED with
-     * no operator and no timestamp, which is precisely the "money marked returned
-     * because a refund was requested" defect this whole lifecycle exists to prevent.
+     * transition that means money is gone: a row cannot claim COMPLETED with no
+     * timestamp, which is the "money marked returned because a refund was requested"
+     * defect this whole lifecycle exists to prevent.
+     */
+    check('refunds_completed_check', sql`(state = 'COMPLETED') = (completed_at IS NOT NULL)`),
+    /**
+     * And BY somebody, when somebody asked for it.
+     *
+     * Split from the check above, because the two halves stopped being one rule.
+     * A refund an OPERATOR requested is completed by an operator, and naming them is
+     * the whole audit value — that half is unchanged and is enforced here.
+     *
+     * An AUTOMATIC refund has no operator on either side. Nobody requested it: a
+     * settlement or a provisioner discovered that what a customer paid for cannot be
+     * delivered, and the money went back in that transaction.
+     * `requested_by_admin_id IS NULL` is what identifies one, and it cannot be an
+     * operator's refund with the field forgotten — `RefundService.request` is guarded
+     * by `refunds.issue`, which `SYSTEM_JOB_PERMISSIONS` does not carry, so every
+     * operator refund has an administrator behind it by construction.
+     *
+     * Writing an admin id into an automatic refund to satisfy the old single check
+     * was the alternative, and it is the one this codebase forbids outright: a
+     * fabricated actor on a money record, attributing a decision to whoever happened
+     * to press approve on an unrelated transfer.
      */
     check(
-      'refunds_completed_check',
-      sql`(state = 'COMPLETED') = (completed_at IS NOT NULL AND completed_by_admin_id IS NOT NULL)`,
+      'refunds_operator_completion_check',
+      sql`(state = 'COMPLETED' AND requested_by_admin_id IS NOT NULL) = (completed_by_admin_id IS NOT NULL)`,
     ),
     foreignKey({
       name: 'refunds_payment_fk',

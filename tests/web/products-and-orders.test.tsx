@@ -455,39 +455,35 @@ describe('the order list', () => {
 });
 
 describe('the order detail', () => {
-  const detail = (
-    overrides: Record<string, unknown> = {},
-    mayViewPayments = true,
-    mayFulfil = true,
-  ) => {
+  const detail = (overrides: Record<string, unknown> = {}, mayViewPayments = true) => {
     stubApi([{ url: '/orders/019230ab', body: { order: order(overrides) } }]);
     return renderPage(
       <OrderDetailPage
         id="019230ab-cdef-7012-8345-6789abcdef01"
         denied={false}
         mayViewPayments={mayViewPayments}
-        mayFulfil={mayFulfil}
       />,
     );
   };
 
   /*
-   * Codex C4-N2 on PR #50: the state, the permission, the route and the notification to
-   * everyone holding it all shipped, and the operator surface drew a badge. These four
-   * cases are the control that was missing, and the first asserts the REQUEST rather
-   * than the button — a control that renders and posts nothing is the same defect.
+   * The retry-and-reassign card is gone with the state it served, and so is every
+   * route it called. What replaced it is a REFUNDED order, which this page renders
+   * like any other terminal state — so the assertion that matters is the negative
+   * one: no write reaches the orders surface from here at all.
+   *
+   * Asserted on the REQUESTS rather than on a missing button, because a control that
+   * renders and posts nothing is the same defect in the other direction, and the
+   * four cases this replaces were written for exactly that reason.
    */
-  it('retries a stranded order on its own panel', async () => {
+  it('renders a refunded order and posts nothing', async () => {
     const api = stubApi([
-      { url: '/orders/019230ab/fulfil', body: { order: order({ state: 'PAID' }) } },
       {
         url: '/orders/019230ab',
         body: {
           order: order({
-            state: 'PAID_UNFULFILLED',
+            state: 'REFUNDED',
             settledAt: '2026-09-10T12:40:00.000Z',
-            unfulfilledAt: '2026-09-10T12:40:00.000Z',
-            unfulfilledReason: 'DISABLED',
           }),
         },
       },
@@ -497,134 +493,12 @@ describe('the order detail', () => {
         id="019230ab-cdef-7012-8345-6789abcdef01"
         denied={false}
         mayViewPayments={false}
-        mayFulfil
       />,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'تلاش دوباره' }));
-
-    await waitFor(() => {
-      expect(api.calls.some((call) => call.url.includes('/fulfil'))).toBe(true);
-    });
-    const sent = api.calls.find((call) => call.url.includes('/fulfil'));
-    expect(sent?.method).toBe('POST');
-    // No `panelId` at all, rather than null: the server reads its PRESENCE as a
-    // reassignment, so a null would be a panel it cannot find.
-    expect(sent?.body).not.toHaveProperty('panelId');
-    expect((sent?.body as { idempotencyKey?: string }).idempotencyKey).toBeTruthy();
-  });
-
-  it('reassigns a stranded order to the panel the operator typed', async () => {
-    const api = stubApi([
-      { url: '/orders/019230ab/fulfil', body: { order: order({ state: 'PAID' }) } },
-      {
-        url: '/orders/019230ab',
-        body: {
-          order: order({
-            state: 'PAID_UNFULFILLED',
-            settledAt: '2026-09-10T12:40:00.000Z',
-            unfulfilledAt: '2026-09-10T12:40:00.000Z',
-            unfulfilledReason: 'AT_CAPACITY',
-          }),
-        },
-      },
-    ]);
-    renderPage(
-      <OrderDetailPage
-        id="019230ab-cdef-7012-8345-6789abcdef01"
-        denied={false}
-        mayViewPayments={false}
-        mayFulfil
-      />,
-    );
-
-    const box = await screen.findByPlaceholderText('01a05e35-c9ad-7e93-bef3-1ed9b55292c8');
-    fireEvent.change(box, { target: { value: '01a05e35-c9ad-7e93-bef3-1ed9b55292c9' } });
-    fireEvent.click(screen.getByRole('button', { name: 'انتقال به پنل دیگر' }));
-
-    await waitFor(() => {
-      expect(api.calls.some((call) => call.url.includes('/fulfil'))).toBe(true);
-    });
-    expect(api.calls.find((call) => call.url.includes('/fulfil'))?.body).toMatchObject({
-      panelId: '01a05e35-c9ad-7e93-bef3-1ed9b55292c9',
-    });
-  });
-
-  it('refuses a malformed panel id without asking the server', async () => {
-    /*
-     * The absence is proven against a request that DOES happen, rather than asserted
-     * straight after the click.
-     *
-     * The first version of this case clicked with a bad id and asserted no `/fulfil`
-     * call — synchronously, before any fetch could have been issued, so it passed with
-     * both guards removed. Correcting the value and clicking again gives the assertion
-     * something to be relative to: exactly one call, carrying the id that was valid.
-     */
-    const api = stubApi([
-      { url: '/orders/019230ab/fulfil', body: { order: order({ state: 'PAID' }) } },
-      {
-        url: '/orders/019230ab',
-        body: {
-          order: order({
-            state: 'PAID_UNFULFILLED',
-            settledAt: '2026-09-10T12:40:00.000Z',
-            unfulfilledAt: '2026-09-10T12:40:00.000Z',
-            unfulfilledReason: 'DISABLED',
-          }),
-        },
-      },
-    ]);
-    renderPage(
-      <OrderDetailPage
-        id="019230ab-cdef-7012-8345-6789abcdef01"
-        denied={false}
-        mayViewPayments={false}
-        mayFulfil
-      />,
-    );
-
-    const box = await screen.findByPlaceholderText('01a05e35-c9ad-7e93-bef3-1ed9b55292c8');
-    fireEvent.change(box, { target: { value: 'not-a-uuid' } });
-    await screen.findByText('شناسهٔ پنل معتبر نیست.');
-    // The control itself, asserted directly: this is the property a test can hold,
-    // and it is what actually stops the request. Clicking a disabled button and then
-    // asserting no call is not evidence — the call would not have been issued yet.
-    expect(screen.getByRole('button', { name: 'انتقال به پنل دیگر' })).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: 'انتقال به پنل دیگر' }));
-
-    fireEvent.change(box, { target: { value: '01a05e35-c9ad-7e93-bef3-1ed9b55292c9' } });
-    fireEvent.click(screen.getByRole('button', { name: 'انتقال به پنل دیگر' }));
-
-    await waitFor(() => {
-      expect(api.calls.filter((call) => call.url.includes('/fulfil'))).toHaveLength(1);
-    });
-    expect(api.calls.find((call) => call.url.includes('/fulfil'))?.body).toMatchObject({
-      panelId: '01a05e35-c9ad-7e93-bef3-1ed9b55292c9',
-    });
-  });
-
-  it('says why rather than hiding the card, without orders.fulfil', async () => {
-    const { container } = detail(
-      {
-        state: 'PAID_UNFULFILLED',
-        settledAt: '2026-09-10T12:40:00.000Z',
-        unfulfilledAt: '2026-09-10T12:40:00.000Z',
-        unfulfilledReason: 'DISABLED',
-      },
-      false,
-      false,
-    );
-
-    await screen.findByText('orders.fulfil', { exact: false });
-    // The card is there; only the form is not. An absent control says nothing about why.
-    expect(container.textContent).toContain('پول دریافت شده و سرویس تحویل نشده');
-    expect(screen.queryByRole('button', { name: 'تلاش دوباره' })).toBeNull();
-  });
-
-  it('draws no fulfilment card for an order that is not stranded', async () => {
-    const { container } = detail({ state: 'PAID', settledAt: '2026-09-10T12:40:00.000Z' });
-    await screen.findByText('زمان تسویه');
-    expect(container.textContent).not.toContain('پول دریافت شده و سرویس تحویل نشده');
+    await screen.findByText('بازپرداخت‌شده');
+    expect(api.calls.filter((call) => call.method !== 'GET')).toHaveLength(0);
+    expect(api.calls.some((call) => call.url.includes('/fulfil'))).toBe(false);
   });
 
   /*
@@ -643,7 +517,6 @@ describe('the order detail', () => {
         id="019230ab-cdef-7012-8345-6789abcdef01"
         denied={false}
         mayViewPayments={false}
-        mayFulfil={false}
       />,
     );
     await screen.findByText('payments.view', { exact: false });

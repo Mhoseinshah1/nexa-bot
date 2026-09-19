@@ -104,34 +104,35 @@ describe('effective permission resolution', () => {
 
 describe('a permission that cannot be held alone', () => {
   /*
-   * The shape Codex found on PR #50: `orders.fulfil` decides what happens to money
-   * already taken, the page that decides it is gated on `orders.view`, and nothing
-   * stopped an administrator holding the first without the second. Four states, and
-   * three of them are the boring ones — they are here because a rule that only ever
-   * fires is indistinguishable from a rule that fires too often.
+   * The shape Codex found on PR #50, applied to the case that outlived it:
+   * `receipts.review` decides what happens to money a customer says they sent, the
+   * page that decides it is `payments.view`'s, and nothing stopped an administrator
+   * holding the first without the second. Four states, and three of them are the
+   * boring ones — they are here because a rule that only ever fires is
+   * indistinguishable from a rule that fires too often.
    */
-  it('drops orders.fulfil from an administrator who cannot view orders', () => {
-    const effective = resolveEffectivePermissions(['orders.fulfil'], [], NOW);
-    expect(effective.has('orders.fulfil')).toBe(false);
-    expect(effective.has('orders.view')).toBe(false);
+  it('drops receipts.review from an administrator who cannot view payments', () => {
+    const effective = resolveEffectivePermissions(['receipts.review'], [], NOW);
+    expect(effective.has('receipts.review')).toBe(false);
+    expect(effective.has('payments.view')).toBe(false);
   });
 
-  it('keeps orders.view for an administrator who cannot fulfil', () => {
-    const effective = resolveEffectivePermissions(['orders.view'], [], NOW);
-    expect(effective.has('orders.view')).toBe(true);
-    expect(effective.has('orders.fulfil')).toBe(false);
+  it('keeps payments.view for an administrator who cannot review', () => {
+    const effective = resolveEffectivePermissions(['payments.view'], [], NOW);
+    expect(effective.has('payments.view')).toBe(true);
+    expect(effective.has('receipts.review')).toBe(false);
   });
 
   it('keeps both when both were granted', () => {
-    const effective = resolveEffectivePermissions(['orders.view', 'orders.fulfil'], [], NOW);
-    expect(effective.has('orders.view')).toBe(true);
-    expect(effective.has('orders.fulfil')).toBe(true);
+    const effective = resolveEffectivePermissions(['payments.view', 'receipts.review'], [], NOW);
+    expect(effective.has('payments.view')).toBe(true);
+    expect(effective.has('receipts.review')).toBe(true);
   });
 
   it('grants neither to an administrator given neither', () => {
     const effective = resolveEffectivePermissions(['users.view'], [], NOW);
-    expect(effective.has('orders.view')).toBe(false);
-    expect(effective.has('orders.fulfil')).toBe(false);
+    expect(effective.has('payments.view')).toBe(false);
+    expect(effective.has('receipts.review')).toBe(false);
   });
 
   /*
@@ -140,44 +141,52 @@ describe('a permission that cannot be held alone', () => {
    * breaks it. Finance holds both keys by seed; denying the read has to take the
    * write with it.
    */
-  it('takes orders.fulfil with it when an override DENIES the read', () => {
+  it('takes receipts.review with it when an override DENIES the read', () => {
     const overrides: PermissionOverride[] = [
-      { permissionKey: 'orders.view', effect: 'DENY', reason: 'under review', expiresAt: null },
+      { permissionKey: 'payments.view', effect: 'DENY', reason: 'under review', expiresAt: null },
     ];
-    const effective = resolveEffectivePermissions(['orders.view', 'orders.fulfil'], overrides, NOW);
-    expect(effective.has('orders.view')).toBe(false);
-    expect(effective.has('orders.fulfil')).toBe(false);
+    const effective = resolveEffectivePermissions(
+      ['payments.view', 'receipts.review'],
+      overrides,
+      NOW,
+    );
+    expect(effective.has('payments.view')).toBe(false);
+    expect(effective.has('receipts.review')).toBe(false);
   });
 
-  it('gives orders.fulfil back when that DENY expires', () => {
+  it('gives receipts.review back when that DENY expires', () => {
     const overrides: PermissionOverride[] = [
       {
-        permissionKey: 'orders.view',
+        permissionKey: 'payments.view',
         effect: 'DENY',
         reason: 'was temporary',
         expiresAt: new Date('2026-05-01T00:00:00Z'),
       },
     ];
-    const effective = resolveEffectivePermissions(['orders.view', 'orders.fulfil'], overrides, NOW);
-    expect(effective.has('orders.fulfil')).toBe(true);
+    const effective = resolveEffectivePermissions(
+      ['payments.view', 'receipts.review'],
+      overrides,
+      NOW,
+    );
+    expect(effective.has('receipts.review')).toBe(true);
   });
 
   /* A GRANT override is a composed permission set too, and is narrowed the same way. */
-  it('drops a GRANTED orders.fulfil when the role cannot read orders', () => {
+  it('drops a GRANTED receipts.review when the role cannot read payments', () => {
     const overrides: PermissionOverride[] = [
-      { permissionKey: 'orders.fulfil', effect: 'GRANT', reason: 'on call', expiresAt: null },
+      { permissionKey: 'receipts.review', effect: 'GRANT', reason: 'on call', expiresAt: null },
     ];
     const effective = resolveEffectivePermissions(['users.view'], overrides, NOW);
-    expect(effective.has('orders.fulfil')).toBe(false);
+    expect(effective.has('receipts.review')).toBe(false);
   });
 
   it('honours a GRANT of both halves', () => {
     const overrides: PermissionOverride[] = [
-      { permissionKey: 'orders.fulfil', effect: 'GRANT', reason: 'on call', expiresAt: null },
-      { permissionKey: 'orders.view', effect: 'GRANT', reason: 'on call', expiresAt: null },
+      { permissionKey: 'receipts.review', effect: 'GRANT', reason: 'on call', expiresAt: null },
+      { permissionKey: 'payments.view', effect: 'GRANT', reason: 'on call', expiresAt: null },
     ];
     const effective = resolveEffectivePermissions(['users.view'], overrides, NOW);
-    expect(effective.has('orders.fulfil')).toBe(true);
+    expect(effective.has('receipts.review')).toBe(true);
   });
 
   it('names a real permission on both sides of every dependency', () => {
@@ -215,11 +224,11 @@ describe('a permission that cannot be held alone', () => {
   });
 
   it('reports the missing prerequisite to whoever is composing the grant', () => {
-    expect(incoherentPermissionGrants(['orders.fulfil' as PermissionKey])).toEqual([
-      { permission: 'orders.fulfil', requires: 'orders.view' },
+    expect(incoherentPermissionGrants(['receipts.review' as PermissionKey])).toEqual([
+      { permission: 'receipts.review', requires: 'payments.view' },
     ]);
-    expect(incoherentPermissionGrants(['orders.fulfil', 'orders.view'] as PermissionKey[])).toEqual(
-      [],
-    );
+    expect(
+      incoherentPermissionGrants(['receipts.review', 'payments.view'] as PermissionKey[]),
+    ).toEqual([]);
   });
 });

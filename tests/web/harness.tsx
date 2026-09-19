@@ -184,8 +184,6 @@ export function order(overrides: Record<string, unknown> = {}): Record<string, u
     expiresAt: '2026-09-10T13:30:00.000Z',
     confirmedAt: null,
     settledAt: null,
-    unfulfilledReason: null,
-    unfulfilledAt: null,
     createdAt: '2026-09-10T12:30:00.000Z',
     updatedAt: '2026-09-10T12:30:00.000Z',
     ...overrides,
