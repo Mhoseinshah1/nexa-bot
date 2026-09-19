@@ -220,6 +220,60 @@ showed settlement reaches the order earlier than the new lock anyway, through
 the foreign key on `payments.order_id` taking `FOR KEY SHARE`. Both are in the
 test's own comments, because both contradict what the fix's first draft claimed.
 
+## The owner's decision: two terminal outcomes, and nothing between them
+
+`PAID_UNFULFILLED` is gone, and with it the operator retry, the reassignment
+and `orders.fulfil`. An order the installation cannot deliver is REFUNDED — the
+exact amount, to the customer's wallet, in the transaction that discovers it.
+What C4 established survives in that shape, and these are the rules that hold
+it, each reverted and watched to fail.
+
+| #   | Rule                                                             | Mutation applied                                                   | Result | Named test                                                                      |
+| --- | ---------------------------------------------------------------- | ------------------------------------------------------------------ | ------ | ------------------------------------------------------------------------------- |
+| 1   | a wallet purchase is REFUSED, never refunded                     | `onIneligible` made `'REFUND'` unconditionally                     | KILLED | _refuses a WALLET settlement instead, and debits nothing_                       |
+| 2   | the automatic credit is what is LEFT, not the price              | `outstanding` set to `payment.amount.amountMinor`                  | KILLED | _credits only what is LEFT when an operator already returned part of it_        |
+| 3   | a create whose outcome is UNKNOWN is never refunded              | the refund branch widened from `FAILED` to `FAILED \|\| UNKNOWN`   | KILLED | _refunds nothing while the outcome is UNKNOWN, and waits for the read_          |
+| 4   | only an operation matching what the order BOUGHT may refund it   | the `PURCHASED_AS` guard deleted                                   | KILLED | _never reports a suspend that suspended nothing_                                |
+| 5   | the customer is told, in the transaction that made it true       | the `notifier.notify` call deleted                                 | KILLED | _refunds when the panel was ARCHIVED after the transfer_                        |
+| 6   | `receipts.review` cannot be held without `payments.view`         | the `PERMISSION_REQUIRES` entry deleted                            | KILLED | _does not let a custom role hold receipts.review without payments.view_         |
+| 7   | 0085 retires `orders.fulfil` from every role that was granted it | the `DELETE FROM "role_permissions"` statement commented out       | KILLED | _never backfills a pair the frozen contract does not assign_                    |
+| 8   | an automatic refund names nobody, and an operator's names both   | `refunds_operator_completion_check` DROPped from the live database | KILLED | _refuses an automatic refund that names an administrator who did not decide it_ |
+
+Row 8 is the second mutation in this document applied to the DATABASE rather
+than to the tree, for the same reason as F6B-C4-7: the rule is a CHECK
+constraint, so reverting it in the schema file would prove nothing about the
+database the tests run against. The constraint was dropped, the four cases run,
+and migration 0086's exact definition re-applied; the file is byte-identical
+and all 28 invariants are green again.
+
+**Two mutations SURVIVED, and both are recorded rather than papered over.**
+
+**AR-S1: removing `panelSales.release` from the refunder changes nothing this
+suite can see.** Every path the tests can build reaches the refunder through
+`PanelSalesGate.consume`, which releases the hold BEFORE it decides
+eligibility — so by the time an UNFULFILLABLE verdict is returned, the slot is
+already back, and `holdsFor(orderId)` reads zero with the release deleted. The
+one path where `consume` returns without releasing is a panel whose ROW has
+gone, and archival does not delete a row, so the suite cannot construct it.
+The call stays: it is idempotent by construction (`release` deletes by order id
+and reports whether anything was there), and a hold nobody released occupies a
+slot until it expires — a panel that filled up would refuse the next customer
+because of the order it had just refunded. It is defence for a case this
+document cannot demonstrate, and saying so is the point of the row.
+
+**AR-S2: removing `if (!moved) return false` also survives.** The boolean is
+the race guard: the order transition is conditional on the caller's `from`, and
+a caller that loses must write nothing. Every replay the suite can produce is
+stopped EARLIER — by the idempotency key at the surface, which is what _refunds
+ONCE when the same confirmation is delivered twice_ actually proves — so the
+refunder is never re-entered with a transition that fails. Demonstrating the
+guard needs two settlements interleaved inside one transaction's lifetime, and
+`docs/phase4b-falsification.md` M05 records that two real requests started with
+`Promise.all` do not reliably interleave. What IS held: the caller's own
+`if (!changed) throw` is exercised by that test, and row 2 above now covers the
+second line of defence — a replay past the transition credits the remainder,
+which is nothing.
+
 ## Rules held by a mechanism rather than by a mutation
 
 | Rule                                                    | What holds it                                                                                                                  |
