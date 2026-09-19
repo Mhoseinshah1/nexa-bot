@@ -78,6 +78,30 @@ archived panel: there was no sequence of operator actions that restored an
 archived panel. The gate is scoped to `DISABLED -> ACTIVE` and the mutation
 re-creates the dead end.
 
+## The Codex review of this branch: eight more
+
+Four findings of the single Codex review were confirmed against the code and
+fixed; each fix is a rule, and each rule is mutated here.
+
+| #      | Rule                                                   | Mutation                                | Named test                                                                    | Result |
+| ------ | ------------------------------------------------------ | --------------------------------------- | ----------------------------------------------------------------------------- | ------ |
+| F6B-C1 | the cap is part of a CREATE's request hash             | the field dropped from the hash         | _refuses to replay a create whose cap differs_                                | KILLED |
+| F6B-C2 | and of an UPDATE's                                     | the same, on the update path            | _refuses to replay an update whose cap differs_                               | KILLED |
+| F6B-C3 | capacity is read in ONE statement, so in one snapshot  | a second statement added before it      | _reads a panel capacity in ONE statement, because two would be two snapshots_ | KILLED |
+| F6B-C4 | the catalogue scans past the caller's bound            | the scan narrowed back to the bound     | _fills the catalogue bound past a screenful of ineligible products_           | KILLED |
+| F6B-C5 | and still cuts the answer to it                        | the slice removed                       | _still bounds the catalogue, and says so when there are more_                 | KILLED |
+| F6B-C6 | `hasMore` counts eligible rows past the bound too      | it reports only the database's own flag | _still bounds the catalogue, and says so when there are more_                 | KILLED |
+| F6B-C7 | a concurrent CAP change is an overwrite like any other | the cap term dropped from the notice    | _promises an overwrite when the concurrent change is the CAP_                 | KILLED |
+| F6B-C8 | and typing the stored value is not one                 | the "differs from stored" term dropped  | _does not call a cap an overwrite when this operator typed the stored one_    | KILLED |
+
+C3 is the one rule whose FAILURE cannot be reproduced in a test, and the row
+says what is asserted instead. The defect is a second snapshot: under READ
+COMMITTED a settlement committing between a service count and a hold count is
+seen by neither, and `used` comes back one too low. Constructing that
+interleaving requires two statements to commit between — which is precisely
+what having one statement makes impossible. So the test counts the statements,
+which is the only form of the rule a test can hold.
+
 ## Rules held by a mechanism rather than by a mutation
 
 | Rule                                                    | What holds it                                                                                                                  |

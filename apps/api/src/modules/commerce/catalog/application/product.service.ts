@@ -152,7 +152,21 @@ export class ProductService {
   ): Promise<{ readonly items: readonly ProductRecord[]; readonly hasMore: boolean }> {
     await this.deps.guard.check(scope, actor, CATALOG_BROWSE_PERMISSION);
     const bounded = Math.min(Math.max(limit, 1), PRODUCT_PAGE_MAX);
-    const page = await this.deps.repository.listCatalog(scope, bounded);
+    /*
+     * Scanned to the CATALOGUE's bound, then cut to the caller's.
+     *
+     * Fetching only `bounded` rows and filtering them made a screenful of
+     * ineligible products hide the eligible ones behind it: twenty products on
+     * disabled or full panels and an eligible twenty-first produced an EMPTY
+     * catalogue, and the bot's bound is a bound rather than a cursor, so the
+     * customer had no way to reach past it. Found by the Codex review of this
+     * branch.
+     *
+     * The scan is still bounded — `PRODUCT_PAGE_MAX` rows, one query — and
+     * eligibility for all of them is the same two reads it was for one page,
+     * because `evaluateMany` reads per PAGE and not per panel.
+     */
+    const page = await this.deps.repository.listCatalog(scope, PRODUCT_PAGE_MAX);
 
     /*
      * The fleet filter, applied AFTER the database's membership filter.
@@ -162,19 +176,20 @@ export class ProductService {
      * which is a fact about the fleet and cannot be a predicate in that query
      * without teaching the catalogue to count services.
      *
-     * `hasMore` is carried through UNCHANGED, and that is deliberate rather than
-     * sloppy: it reports whether the DATABASE had more rows past the bound, which
-     * is still true. Recomputing it from the filtered list would claim there are
-     * no more products whenever the last page happened to be all-ineligible, and
-     * the bot's bound is a bound and not a cursor — see `bot-runtime`.
+     * `hasMore` is an OR of the two ways there can be more, and never a count of
+     * what survived the filter alone: more ELIGIBLE products than the caller
+     * asked for, or a scan that hit the catalogue's bound and may have left rows
+     * behind. Reporting only the first would claim there is nothing further
+     * whenever the tail of a long catalogue happened to be all-ineligible.
      */
     const panelIds = page.items.flatMap((item) => (item.panelId === null ? [] : [item.panelId]));
     const verdicts = await this.deps.panelSales.evaluateMany(scope, panelIds);
+    const eligible = page.items.filter(
+      (item) => item.panelId !== null && verdicts.get(item.panelId)?.eligible === true,
+    );
     return {
-      items: page.items.filter(
-        (item) => item.panelId !== null && verdicts.get(item.panelId)?.eligible === true,
-      ),
-      hasMore: page.hasMore,
+      items: eligible.slice(0, bounded),
+      hasMore: eligible.length > bounded || page.hasMore,
     };
   }
 

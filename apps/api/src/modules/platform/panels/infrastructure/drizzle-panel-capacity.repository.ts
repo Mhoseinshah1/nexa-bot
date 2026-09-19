@@ -1,10 +1,9 @@
-import { and, count, eq, gt, inArray } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { SERVICE_CAPACITY_STATES, type TenantContext } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
   panelCapacityReservations,
   panels,
-  services,
 } from '../../../../infrastructure/persistence/schema.js';
 import { isUniqueViolation } from '../../../../infrastructure/persistence/sqlstate.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
@@ -50,19 +49,27 @@ export class DrizzlePanelCapacityRepository implements PanelCapacityRepository {
   }
 
   /**
-   * THREE queries, not one per panel and not one with correlated subqueries.
+   * ONE statement, and the reason is the snapshot rather than the round trip.
    *
-   * The scalar-subquery version this replaced was wrong in a way a green
-   * `psql` session did not show: the same SQL written by hand returned the
-   * right numbers while the generated one returned zeros, because two
-   * un-aliased aggregate subqueries in a `select()` object do not survive the
-   * driver's column mapping. Three plain grouped queries have no such
-   * subtlety, and they are still bounded by the page rather than by the row
-   * count — which is the property that actually mattered.
+   * Under READ COMMITTED every statement gets a FRESH snapshot, so three
+   * queries read three instants: a settlement committing between the service
+   * count and the hold count is seen by neither — the service did not exist
+   * when the first ran and the hold was gone when the second did — and `used`
+   * comes back one too low. That is a panel reported as having room it does
+   * not have, offered in the catalogue, and refused at confirmation. Found by
+   * the Codex review of this branch.
    *
-   * A panel with no services and no holds is absent from both aggregates and
-   * lands on zero, which is why the counts are read out of Maps rather than
-   * joined.
+   * Raw SQL rather than the query builder, deliberately: the drizzle version of
+   * this shape was wrong in a way a green `psql` session did not show — two
+   * un-aliased aggregate subqueries in a `select()` object returned zeros,
+   * because they do not survive the driver's column mapping. Written out, every
+   * column is named and the mapping is the one written here.
+   *
+   * Still bounded by the PAGE rather than by the row count: one statement whose
+   * two subqueries are indexed lookups per panel, for the panels asked about.
+   *
+   * A panel with no services and no holds lands on zero rather than dropping
+   * out, because the counts are subqueries of the panel row rather than joins.
    */
   async readMany(
     scope: TenantContext,
@@ -75,42 +82,44 @@ export class DrizzlePanelCapacityRepository implements PanelCapacityRepository {
     if (unique.length === 0) return found;
     const exec = executorOf(this.db, tx);
 
-    const rows = await exec
-      .select({ id: panels.id, maxServices: panels.maxServices })
-      .from(panels)
-      .where(and(eq(panels.tenantId, scope.tenantId), inArray(panels.id, unique)));
-    if (rows.length === 0) return found;
+    const ids = sql.join(
+      unique.map((id) => sql`${id}::uuid`),
+      sql`, `,
+    );
+    const occupying = sql.join(
+      OCCUPYING_STATES.map((state) => sql`${state}`),
+      sql`, `,
+    );
+    const result = (await exec.execute(sql`
+      SELECT p.id AS id,
+             p.max_services AS max_services,
+             (SELECT count(*) FROM services s
+               WHERE s.tenant_id = p.tenant_id
+                 AND s.panel_id = p.id
+                 AND s.state IN (${occupying})) AS services,
+             (SELECT count(*) FROM panel_capacity_reservations r
+               WHERE r.tenant_id = p.tenant_id
+                 AND r.panel_id = p.id
+                 AND r.expires_at > ${now}) AS reservations
+        FROM panels p
+       WHERE p.tenant_id = ${scope.tenantId}::uuid
+         AND p.id IN (${ids})
+    `)) as unknown as {
+      rows: {
+        id: string;
+        max_services: number | null;
+        // `count(*)` is `bigint`, which this driver hands back as a STRING
+        // rather than a number. `Number` below is what makes the arithmetic
+        // arithmetic; without it `used` was string concatenation.
+        services: string | number;
+        reservations: string | number;
+      }[];
+    };
 
-    const serviceRows = await exec
-      .select({ panelId: services.panelId, total: count() })
-      .from(services)
-      .where(
-        and(
-          eq(services.tenantId, scope.tenantId),
-          inArray(services.panelId, unique),
-          inArray(services.state, [...OCCUPYING_STATES]),
-        ),
-      )
-      .groupBy(services.panelId);
-
-    const heldRows = await exec
-      .select({ panelId: panelCapacityReservations.panelId, total: count() })
-      .from(panelCapacityReservations)
-      .where(
-        and(
-          eq(panelCapacityReservations.tenantId, scope.tenantId),
-          inArray(panelCapacityReservations.panelId, unique),
-          gt(panelCapacityReservations.expiresAt, now),
-        ),
-      )
-      .groupBy(panelCapacityReservations.panelId);
-
-    const byService = new Map(serviceRows.map((row) => [row.panelId, Number(row.total)]));
-    const byHold = new Map(heldRows.map((row) => [row.panelId, Number(row.total)]));
-    for (const row of rows) {
+    for (const row of result.rows) {
       found.set(
         row.id,
-        capacityOf(row.maxServices, byService.get(row.id) ?? 0, byHold.get(row.id) ?? 0),
+        capacityOf(row.max_services, Number(row.services), Number(row.reservations)),
       );
     }
     return found;
@@ -119,10 +128,13 @@ export class DrizzlePanelCapacityRepository implements PanelCapacityRepository {
   /**
    * Take one slot, under the panel's row lock.
    *
-   * THREE statements, in this order, and the order is the correctness argument:
+   * FOUR statements, in this order, and the order is the correctness argument:
    *
    *   1. `SELECT ... FOR UPDATE` on the panel. Every other reserver of this
    *      panel — and every operator changing its cap — queues here.
+   *   1b. The replay check, described below: read under the lock, before the
+   *      arithmetic, because an order that already holds a slot is not asking
+   *      for one.
    *   2. The counts. Issued AFTER the lock was granted, so under READ COMMITTED
    *      its snapshot includes whatever the transaction we waited for committed.
    *      This is the step a single-statement `INSERT ... SELECT` cannot do: that
