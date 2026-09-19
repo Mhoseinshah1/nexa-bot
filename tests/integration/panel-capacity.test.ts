@@ -11,6 +11,7 @@ import {
   type UserId,
 } from '@nexa/contracts';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
+import { DrizzlePanelCapacityRepository } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel-capacity.repository';
 import type { ProductRecord } from '../../apps/api/src/modules/commerce/catalog/application/ports';
 import {
   adminActorFor,
@@ -527,6 +528,81 @@ describe('panel capacity and sales eligibility', () => {
   // -------------------------------------------------------------------------
   // Eligibility
   // -------------------------------------------------------------------------
+
+  it('reads a panel capacity in ONE statement, because two would be two snapshots', async () => {
+    /*
+     * The counts and the cap come from one statement, and the reason is
+     * PostgreSQL's snapshot rule rather than the round trip. Under READ
+     * COMMITTED each statement gets a FRESH snapshot, so a settlement
+     * committing between a service count and a hold count is seen by neither —
+     * the service did not exist when the first ran and the hold was gone when
+     * the second did — and `used` comes back one too low. A panel then reports
+     * room it does not have. Found by the Codex review of this branch.
+     *
+     * Counted rather than argued, because "one statement" is the only form of
+     * this rule a test can see: the interleaving itself needs a commit between
+     * two statements of another transaction, which is exactly what having one
+     * statement makes impossible to construct.
+     */
+    let statements = 0;
+    const db = ctx.container.database.db;
+    const counting = new Proxy(db, {
+      get(target, property, receiver) {
+        const value = Reflect.get(target, property, receiver) as unknown;
+        if (property === 'execute' && typeof value === 'function') {
+          return (...args: unknown[]) => {
+            statements += 1;
+            return (value as (...a: unknown[]) => unknown).apply(target, args);
+          };
+        }
+        return typeof value === 'function' ? (value as () => unknown).bind(target) : value;
+      },
+    });
+
+    await placeService(panelA, 'ACTIVE');
+    const capacity = await new DrizzlePanelCapacityRepository(counting).read(
+      tenantA,
+      panelA,
+      ctx.container.clock.now(),
+    );
+
+    expect(capacity?.services).toBe(1);
+    expect(statements, 'one statement, so one snapshot').toBe(1);
+  });
+
+  it('fills the catalogue bound past a screenful of ineligible products', async () => {
+    /*
+     * Filtering only the already-bounded page let a screenful of ineligible
+     * products HIDE the eligible ones behind it: twenty products on a disabled
+     * panel and an eligible twenty-first produced an empty catalogue, and the
+     * bot's bound is a bound rather than a cursor, so the customer had no way
+     * to reach past it. Found by the Codex review of this branch.
+     */
+    const roomy = ctx.container.ids.uuid();
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
+      VALUES (${roomy}, ${tenantA.tenantId}, 'Panel C', 'sanaei', 'https://c.example.test', 'ACTIVE')`);
+    for (let index = 0; index < 20; index += 1) await activeProduct(panelA);
+    // Created last, so it sorts last: same `sortOrder`, and the tie breaks on
+    // `createdAt` then id. It is the row the old code could never reach.
+    const wanted = await activeProduct(roomy);
+    await setStatus(panelA, 'DISABLED');
+
+    const browsed = await ctx.container.products.browse(tenantA, systemActor(key()), 20);
+    expect(browsed.items.map((item) => item.id)).toEqual([wanted.id]);
+    expect(browsed.hasMore, 'and nothing further is claimed, because there is none').toBe(false);
+  });
+
+  it('still bounds the catalogue, and says so when there are more', async () => {
+    // The other half of the same rule: scanning further must not turn the
+    // caller's bound into a suggestion. Two eligible products, one asked for.
+    await activeProduct(panelA);
+    await activeProduct(panelA);
+
+    const browsed = await ctx.container.products.browse(tenantA, systemActor(key()), 1);
+    expect(browsed.items).toHaveLength(1);
+    expect(browsed.hasMore).toBe(true);
+  });
 
   it('hides a product whose panel is disabled, and refuses it if asked anyway', async () => {
     const product = await activeProduct(panelA);
