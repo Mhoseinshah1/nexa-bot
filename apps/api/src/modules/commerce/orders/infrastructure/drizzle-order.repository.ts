@@ -170,6 +170,7 @@ export class DrizzleOrderRepository implements OrderRepository {
       readonly confirmedAt?: Date;
       readonly settledAt?: Date;
       readonly cancelledAt?: Date;
+      readonly refundedAt?: Date;
       readonly unfulfilledAt?: Date;
       readonly unfulfilledReason?: string;
       readonly panelId?: string;
@@ -185,6 +186,7 @@ export class DrizzleOrderRepository implements OrderRepository {
         ...(stamps.confirmedAt === undefined ? {} : { confirmedAt: stamps.confirmedAt }),
         ...(stamps.settledAt === undefined ? {} : { settledAt: stamps.settledAt }),
         ...(stamps.cancelledAt === undefined ? {} : { cancelledAt: stamps.cancelledAt }),
+        ...(stamps.refundedAt === undefined ? {} : { refundedAt: stamps.refundedAt }),
         ...(stamps.unfulfilledAt === undefined ? {} : { unfulfilledAt: stamps.unfulfilledAt }),
         ...(stamps.unfulfilledReason === undefined
           ? {}

@@ -1,5 +1,6 @@
 import {
   COMMERCE_ERROR_CODES,
+  ORDER_MACHINE,
   REFUND_METHOD_SUPPORT,
   errors,
   money,
@@ -15,12 +16,14 @@ import {
   type IdempotencyStore,
   type Money,
   type OperationalEventRecorder,
+  type OrderId,
   type PaymentId,
   type PermissionKey,
   type RefundChannel,
   type RefundId,
   type TenantContext,
   type UnitOfWork,
+  nextState,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import {
@@ -33,6 +36,8 @@ import type { SessionRepository } from '../../../platform/identity/application/p
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { WalletRepository } from '../../wallet/application/ports.js';
+import type { OrderRepository } from '../../orders/application/ports.js';
+import { UnfulfilledOrderReporter } from '../../orders/application/unfulfilled-order-reporter.js';
 import type { PaymentRecord, PaymentRepository } from './ports.js';
 import type { RefundRecord, RefundRepository } from './refund-ports.js';
 
@@ -77,6 +82,16 @@ export interface RefundServiceDeps {
    * anything: a refund is bounded by the PAYMENT, never by what the wallet holds.
    */
   readonly wallet: Pick<WalletRepository, 'append' | 'lockCustomer'>;
+  /**
+   * The order WRITE, narrowed to the one edge a refund drives.
+   *
+   * A refund that completes against a `PAID_UNFULFILLED` order must close it — see
+   * `closeUnfulfilledOrder`. Narrowed to `findById` and `transition` so this module
+   * cannot grow into a second place orders are managed from.
+   */
+  readonly orders: Pick<OrderRepository, 'findById' | 'transition'>;
+  /** To close the condition the settlement opened, when the money goes back instead. */
+  readonly unfulfilled: UnfulfilledOrderReporter;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly audit: AuditWriter;
@@ -317,6 +332,7 @@ export class RefundService {
 
         if (immediate) {
           await this.creditWallet(scope, created, actor, now, tx);
+          await this.closeUnfulfilledOrder(scope, actor, created, now, tx);
         }
 
         await this.deps.audit.record(
@@ -421,6 +437,8 @@ export class RefundService {
             { reason: 'STATE_RACE' },
           );
         }
+
+        await this.closeUnfulfilledOrder(scope, actor, after, now, tx);
 
         await this.deps.audit.record(
           scope,
@@ -570,6 +588,77 @@ export class RefundService {
         note: refund.reason,
         now,
       },
+      tx,
+    );
+  }
+
+  /**
+   * The money went back, so the order stops waiting to be fulfilled.
+   *
+   * Codex C4-N1 on PR #50. `PAID_UNFULFILLED -> REFUNDED on REFUND` was a declared
+   * edge of `ORDER_MACHINE` that NOTHING drove, so a refunded stranded order kept its
+   * state, kept its open ERROR condition, and stayed acceptable to
+   * `OrderFulfilmentService.fulfil` — which would have created the service after the
+   * customer's money had already been returned. Both losses, on one order.
+   *
+   * ## Why COMPLETED rather than "a refund exists"
+   *
+   * Requesting a manual refund is a DECISION; the bank transfer has not happened, and
+   * `fail` can still undo it. An operator who finds the panel working again in that
+   * window may legitimately fulfil instead. So this runs where the refund actually
+   * becomes effective, and there are exactly two such places: the wallet channel, born
+   * `COMPLETED` because the ledger entry commits in the same transaction, and
+   * `complete`, which is a person saying the transfer left.
+   *
+   * ## Why any completed refund closes it, not only a full one
+   *
+   * A `PAID_UNFULFILLED` order has no service, so there is nothing a partial refund
+   * could be partial payment FOR. Leaving such an order open to `fulfil` because only
+   * some of the money went back is the reading that costs a customer; closing it leaves
+   * the operator the ordinary remedy of refunding the rest. `settled_at` and the
+   * `unfulfilled_*` stamps all survive, so what happened stays readable.
+   *
+   * Anything else — a `PAID` order, a top-up with no order at all — is left alone. A
+   * refund against a delivered service is a financial record and not a lifecycle event,
+   * and changing that is not this finding's business.
+   */
+  private async closeUnfulfilledOrder(
+    scope: TenantContext,
+    actor: ActorContext,
+    refund: RefundRecord,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<void> {
+    if (refund.state !== 'COMPLETED' || refund.orderId === null) return;
+
+    const orderId = refund.orderId as OrderId;
+    const order = await this.deps.orders.findById(scope, orderId, tx);
+    if (order === null || order.state !== 'PAID_UNFULFILLED') return;
+
+    const to = nextState(ORDER_MACHINE, 'PAID_UNFULFILLED', 'REFUND');
+    if (to === null) {
+      throw new Error('ORDER_MACHINE no longer allows REFUND from PAID_UNFULFILLED.');
+    }
+    /*
+     * Conditional on the state we read, like every other transition in this codebase:
+     * a `fulfil` that committed between the read and this UPDATE wins, and this one
+     * writes nothing rather than dragging a fulfilled order into REFUNDED.
+     */
+    const moved = await this.deps.orders.transition(
+      scope,
+      orderId,
+      'PAID_UNFULFILLED',
+      to,
+      { refundedAt: now },
+      now,
+      tx,
+    );
+    if (!moved) return;
+
+    await this.deps.unfulfilled.resolve(
+      scope,
+      { id: orderId, correlationId: actor.correlationId },
+      `refunded (${refund.id})`,
       tx,
     );
   }

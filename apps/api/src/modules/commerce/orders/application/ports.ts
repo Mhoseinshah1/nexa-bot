@@ -172,6 +172,13 @@ export interface OrderRepository {
       readonly confirmedAt?: Date;
       readonly settledAt?: Date;
       readonly cancelledAt?: Date;
+      /**
+       * `REFUNDED`'s own stamp, and `orders_refunded_at_check` is an EQUALITY —
+       * `(state = 'REFUNDED') = (refunded_at IS NOT NULL)` — so the edge cannot be
+       * taken without it. Until a refund drove that edge nothing passed this, which
+       * is how `REFUND` came to be a declared transition no caller could complete.
+       */
+      readonly refundedAt?: Date;
       /*
        * `PAID_UNFULFILLED`'s pair, and the ONLY writable stamps that survive the
        * state they were written for. `orders_unfulfilled_*_check` are implications

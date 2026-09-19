@@ -226,6 +226,14 @@ describe('an order paid for and not fulfilled', () => {
               ${ctx.container.ids.uuid()}, 0, 'ACTIVE', now())`);
   }
 
+  /** The manual transfer's payment id for an order. */
+  const paymentOf = async (orderId: string): Promise<string> => {
+    const rows = (await ctx.container.database.db.execute(
+      sql`SELECT id FROM payments WHERE order_id = ${orderId}` as never,
+    )) as unknown as { rows: { id: string }[] };
+    return rows.rows[0]?.id as string;
+  };
+
   const orderRow = async (orderId: string) => {
     const rows = (await ctx.container.database.db.execute(
       sql`SELECT state, settled_at, unfulfilled_at, unfulfilled_reason, panel_id
@@ -654,12 +662,87 @@ describe('an order paid for and not fulfilled', () => {
     expect(await countOf('services')).toBe(1);
   });
 
+  it('closes the order when the refund actually completes, and fulfilment is then refused', async () => {
+    /*
+     * Codex C4-N1 on PR #50, and the worst shape this feature could have shipped in:
+     * the money goes back AND the service is created. `REFUND` was a declared edge of
+     * `ORDER_MACHINE` that nothing drove, so a refunded order stayed `PAID_UNFULFILLED`
+     * — still carrying an open ERROR condition, still accepted by `fulfil`.
+     *
+     * The test that was here asserted only that the refund was not REJECTED, which is
+     * exactly the shape this repository keeps recording: a case that passes for a reason
+     * narrower than the one it is named for.
+     */
+    const order = await stranded();
+    const paymentId = await paymentOf(order.id);
+
+    const refund = await ctx.container.refunds.request(tenantA, finance, {
+      idempotencyKey: key(),
+      paymentId,
+      amountMinor: 250_000n,
+      reason: 'پنل غیرفعال شد و سفارش تحویل نشد',
+    });
+
+    // A manual transfer refunds through the bank, so the refund is born awaiting it.
+    expect(refund.state).toBe('AWAITING_EXTERNAL');
+    expect((await orderRow(order.id))?.state, 'not closed before the money leaves').toBe(
+      'PAID_UNFULFILLED',
+    );
+
+    await ctx.container.refunds.complete(tenantA, finance, {
+      idempotencyKey: key(),
+      refundId: refund.id,
+      note: 'واریز شد',
+      externalReference: 'TRX-99',
+    });
+
+    const closed = await orderRow(order.id);
+    expect(closed?.state).toBe('REFUNDED');
+    // The history survives: the row still says why it was never fulfilled.
+    expect(closed?.unfulfilled_reason).toBe('DISABLED');
+    expect(closed?.settled_at, 'and that the money had arrived').not.toBeNull();
+    // The condition an operator was working from is closed by the refund too.
+    expect(await openConditions('order.fulfilment_failed')).toBe(0);
+
+    await setStatus(panelA, 'ACTIVE');
+    await expect(
+      ctx.container.orderFulfilment.fulfil(tenantA, finance, {
+        idempotencyKey: key(),
+        orderId: order.id,
+      }),
+    ).rejects.toMatchObject({ code: 'commerce.order_state_invalid' });
+    expect(await countOf('services'), 'no service for money that went back').toBe(0);
+  });
+
+  it('leaves a stranded order fulfillable while its refund is still awaiting the bank', async () => {
+    /*
+     * The bound of the rule above, and the reason it keys on COMPLETED rather than on
+     * the refund existing. Requesting a manual refund is a decision; the money has not
+     * moved, `fail` can still undo it, and an operator who finds the panel working again
+     * may legitimately fulfil instead.
+     */
+    const order = await stranded();
+    const paymentId = await paymentOf(order.id);
+    await ctx.container.refunds.request(tenantA, finance, {
+      idempotencyKey: key(),
+      paymentId,
+      amountMinor: 250_000n,
+      reason: 'شاید بازگردانده شود',
+    });
+    await setStatus(panelA, 'ACTIVE');
+
+    const fulfilled = await ctx.container.orderFulfilment.fulfil(tenantA, finance, {
+      idempotencyKey: key(),
+      orderId: order.id,
+    });
+
+    expect(fulfilled.state).toBe('PAID');
+    expect(await countOf('services')).toBe(1);
+  });
+
   it('is refundable from PAID_UNFULFILLED, which is the other way out', async () => {
     const order = await stranded();
-    const payments = (await ctx.container.database.db.execute(
-      sql`SELECT id FROM payments WHERE order_id = ${order.id}` as never,
-    )) as unknown as { rows: { id: string }[] };
-    const paymentId = payments.rows[0]?.id as string;
+    const paymentId = await paymentOf(order.id);
 
     const refund = await ctx.container.refunds.request(tenantA, finance, {
       idempotencyKey: key(),

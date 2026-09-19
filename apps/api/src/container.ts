@@ -1277,6 +1277,13 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
      * consult what the wallet currently holds.
      */
     wallet: walletRepository,
+    /*
+     * The order write, narrowed to the one edge a refund drives: a completed refund
+     * closes a `PAID_UNFULFILLED` order, so the money cannot go back AND the service
+     * still be created. Codex C4-N1.
+     */
+    orders: orderRepository,
+    unfulfilled: unfulfilledOrders,
     guard,
     uow,
     audit,
