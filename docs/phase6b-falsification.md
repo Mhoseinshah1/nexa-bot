@@ -193,6 +193,7 @@ reproduced with a real deadlock before anything was changed.
 | F6B-M4a | eligibility is applied before the LIMIT, not after it                | filter the bounded page, as both earlier versions did | _reaches an eligible product past EVERY former scan ceiling_                     | KILLED   |
 | F6B-M4b | the same, against four different reasons a panel is unsellable       | the same mutation                                     | _reaches eligible products behind every KIND of unsellable panel at once_        | KILLED   |
 | F6B-M4c | eligibility costs a fixed number of queries                          | evaluate each returned product's panel individually   | _asks the database a fixed number of times, whatever the catalogue holds_        | KILLED   |
+| F6B-N4  | the eligible fleet is bound ONCE, not one parameter per panel        | both `= ANY(...::uuid[])` forms restored to `inArray` | _sends the fleet as ONE bind parameter, however many panels it holds_            | KILLED   |
 
 Two rows need saying plainly.
 
@@ -211,6 +212,17 @@ customer double-tapping two buttons) and it did fail against the unfixed code on
 the first run of this file, but it cannot be relied on to, so F6B-M3a is the row
 that establishes the rule: the same race with the interleaving MADE, three
 rounds, killed.
+
+**F6B-N4 is the bound F6B-M4c does not give.** Removing the ceiling on how
+many products the catalogue scans left the FLEET filter as an `IN` expansion,
+so the parameter count became the tenant's panel count across three reads — the
+capacity read, the panel view read and the catalogue's own filter. Past
+PostgreSQL's 65535-parameter ceiling that is a rejected bind rather than a slow
+query: an empty shop, with nothing in the response saying the fleet outgrew it.
+M4c counts STATEMENTS and reports three either way, which is exactly why it
+could not see this; N4 measures the WIDEST statement of the whole request, at
+the pool, with the fleet grown by an order of magnitude between the two
+measurements. The unfixed form reports 12 then 102.
 
 **On M3 the reproduction came before the fix, and corrected it twice.** The
 static reading said settlement and the expiry sweep could deadlock; the
