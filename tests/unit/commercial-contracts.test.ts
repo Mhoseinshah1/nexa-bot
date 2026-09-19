@@ -11,7 +11,8 @@ import {
   operationTypeForAddonKind,
   operationTypeForOrderPurpose,
   operationTypeCarriesTarget,
-  orderPurposeNeedsService,
+  orderPurposeCreatesNewService,
+  orderPurposeTargetsExistingService,
   ORDER_PURPOSES,
   OPERATION_TYPES,
   SERVICE_ADDON_KINDS,
@@ -32,8 +33,7 @@ import {
  */
 describe('order purpose', () => {
   it('has exactly one purpose that produces a service, and it is the default one', () => {
-    const producing = ORDER_PURPOSES.filter((p) => !orderPurposeNeedsService(p));
-    expect(producing).toEqual(['NEW_SERVICE']);
+    expect(ORDER_PURPOSES.filter(orderPurposeCreatesNewService)).toEqual(['NEW_SERVICE']);
   });
 
   /*
@@ -46,7 +46,7 @@ describe('order purpose', () => {
       ['ADD_TIME', 'ADD_TRAFFIC', 'RENEW'].sort(),
     );
     for (const purpose of COMMERCIAL_ORDER_PURPOSES) {
-      expect(orderPurposeNeedsService(purpose)).toBe(true);
+      expect(orderPurposeTargetsExistingService(purpose)).toBe(true);
     }
   });
 
@@ -60,14 +60,48 @@ describe('order purpose', () => {
   });
 
   /*
-   * The exhaustiveness the settlement dispatch relies on. A new purpose with no branch
-   * would otherwise reach the provisioning path, which is the defect this whole
-   * discriminator exists to prevent.
+   * THE regression test for the reading that cost this branch three defects.
+   *
+   * `orderPurposeNeedsService` returned `purpose !== 'NEW_SERVICE'` and was read as
+   * "needs a service created" when it meant "names one that exists". The two
+   * predicates are positively named and separately exhaustive so there is nothing left
+   * to misread — and this asserts the property that makes them safe to rely on: every
+   * purpose is on exactly one side, never both and never neither.
    */
-  it('leaves no purpose without an answer', () => {
+  it('classifies every order purpose, exhaustively', () => {
     for (const purpose of ORDER_PURPOSES as readonly OrderPurpose[]) {
-      expect(typeof orderPurposeNeedsService(purpose)).toBe('boolean');
+      const creates = orderPurposeCreatesNewService(purpose);
+      const targets = orderPurposeTargetsExistingService(purpose);
+      expect(
+        { purpose, creates, targets },
+        `${purpose} must be on exactly one side`,
+      ).toEqual({ purpose, creates: !targets, targets: !creates });
     }
+  });
+
+  /*
+   * And the partition stated as sets, so a purpose added to the enum without a branch
+   * fails HERE as well as at the compiler. The `never` arm in each switch throws at
+   * runtime; this is what makes the failure a named test rather than an exception in
+   * whatever settlement happened to run first.
+   */
+  it('partitions the union into creators and targeters with nothing left over', () => {
+    const creators = ORDER_PURPOSES.filter(orderPurposeCreatesNewService);
+    const targeters = ORDER_PURPOSES.filter(orderPurposeTargetsExistingService);
+    expect([...creators, ...targeters].sort()).toEqual([...ORDER_PURPOSES].sort());
+    expect(creators.filter((p) => targeters.includes(p))).toEqual([]);
+  });
+
+  /*
+   * The two derivations that must agree, asserted against each other rather than
+   * against a literal: `COMMERCIAL_ORDER_PURPOSES` is what the schema's CHECK
+   * constraint is built from, and the predicate is what the settlement dispatch reads.
+   * They disagreeing is a row the settlement path would misread.
+   */
+  it('agrees with COMMERCIAL_ORDER_PURPOSES, which the schema CHECK is built from', () => {
+    expect([...COMMERCIAL_ORDER_PURPOSES].sort()).toEqual(
+      ORDER_PURPOSES.filter(orderPurposeTargetsExistingService).sort(),
+    );
   });
 });
 

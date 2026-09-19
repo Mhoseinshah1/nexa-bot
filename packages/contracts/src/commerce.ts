@@ -213,7 +213,8 @@ export interface OrderLineSnapshot {
  * - `ADD_TIME` — more window, likewise.
  *
  * The last three each name a `service_id` and produce NO service. The first names none
- * and produces exactly one. `orderPurposeNeedsService` is that rule, and the schema
+ * and produces exactly one. `orderPurposeCreatesNewService` and
+ * `orderPurposeTargetsExistingService` are that rule from both sides, and the schema
  * carries it as a CHECK so a row cannot exist in the shape the settlement path would
  * misread.
  *
@@ -238,9 +239,64 @@ export const COMMERCIAL_ORDER_PURPOSES = ORDER_PURPOSES.filter(
   (purpose) => purpose !== 'NEW_SERVICE',
 ) as readonly OrderPurpose[];
 
-/** Whether this purpose names an existing service rather than producing one. */
-export function orderPurposeNeedsService(purpose: OrderPurpose): boolean {
-  return purpose !== 'NEW_SERVICE';
+/**
+ * Whether this purpose CREATES a remote service — and therefore consumes one
+ * panel-capacity slot.
+ *
+ * Exhaustive by `switch`, not by inequality, and that is the whole point of it
+ * existing. Its predecessor was `orderPurposeNeedsService`, which returned
+ * `purpose !== 'NEW_SERVICE'` and read as "needs a service to be created" when it
+ * meant "NAMES a service that already exists". That reading cost this branch three
+ * defects: commercial orders reserved capacity nothing ever released, commercial
+ * settlement lost its disposition, and a stranded renewal recovered by provisioning a
+ * second account. Every one of them was a caller reasoning about a negation.
+ *
+ * So there are two positively-named predicates, each total over the union, and a
+ * purpose added without being classified fails to compile — the `never` arm below is
+ * what makes that true, and `classifies every order purpose, exhaustively` is what
+ * makes it true for anyone reading the enum rather than the compiler.
+ *
+ * The safe side of the mistake is unchanged: nothing here lets a new purpose default
+ * into provisioning. An operation that refuses is a bug report; a second provider
+ * account is a customer paying twice.
+ */
+export function orderPurposeCreatesNewService(purpose: OrderPurpose): boolean {
+  switch (purpose) {
+    case 'NEW_SERVICE':
+      return true;
+    case 'RENEW':
+    case 'ADD_TRAFFIC':
+    case 'ADD_TIME':
+      return false;
+    default: {
+      const unclassified: never = purpose;
+      throw new Error(`Unclassified order purpose: ${String(unclassified)}`);
+    }
+  }
+}
+
+/**
+ * Whether this purpose acts on a service that ALREADY exists — and therefore must
+ * neither reserve nor consume a capacity slot.
+ *
+ * The complement of `orderPurposeCreatesNewService` over this union, written as its
+ * own exhaustive switch rather than as its negation. A negation would put both
+ * questions in one place again and re-create the ambiguity the pair exists to end;
+ * `the two purpose predicates partition the union` asserts they stay complementary.
+ */
+export function orderPurposeTargetsExistingService(purpose: OrderPurpose): boolean {
+  switch (purpose) {
+    case 'RENEW':
+    case 'ADD_TRAFFIC':
+    case 'ADD_TIME':
+      return true;
+    case 'NEW_SERVICE':
+      return false;
+    default: {
+      const unclassified: never = purpose;
+      throw new Error(`Unclassified order purpose: ${String(unclassified)}`);
+    }
+  }
 }
 
 /**
