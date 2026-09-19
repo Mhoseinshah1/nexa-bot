@@ -2553,6 +2553,26 @@ export class PaymentService {
      * negation. Read the predicate's own docblock before changing this: the name
      * says "needs a service to act on", not "needs a service created".
      */
+    /*
+     * The ORDER's lock, before `prepareFulfilment`/`prepareCommercialSettlement`
+     * reach for the panel and the reservation below.
+     *
+     * `order → panel → reservation` is the canonical order of this domain, and
+     * settlement is the second of the two places that used to take the order last —
+     * `OrderService.confirm` is the other. Cancellation and the expiry sweep take
+     * the order first and the reservation second, so a settlement holding the
+     * reservation and waiting for the order closed a cycle: PostgreSQL aborted one
+     * side with `40P01`, and a customer's purchase failed with a serialization error
+     * rather than losing cleanly to their own cancellation. Found by the Codex review
+     * of this branch; `tests/integration/lock-order.test.ts` reproduces it with real
+     * code on both sides and passes only with this line.
+     *
+     * After the payment's own confirm above, which is deliberate: cancellation
+     * withdraws pending payments before it touches the order, so payment-then-order
+     * is the sequence both already share.
+     */
+    await this.deps.orders.lock(scope, order.id, tx);
+
     const createsNewService = !orderPurposeNeedsService(order.purpose);
     /*
      * Whether money that has already moved is at stake, decided from the EVIDENCE

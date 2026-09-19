@@ -95,6 +95,25 @@ export class DrizzleOrderRepository implements OrderRepository {
     return row === undefined ? null : toRecord(row);
   }
 
+  /**
+   * `SELECT ... FOR UPDATE` on the order, and nothing else.
+   *
+   * The id alone, not the row: every caller already has the record and wants the
+   * LOCK. Selecting the columns would invite a reader to use this as a locking read
+   * and then act on a snapshot that the lock does not actually make current — the
+   * conditional UPDATE naming its `from` state is still what decides.
+   */
+  async lock(scope: TenantContext, id: OrderId, tx: unknown): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ id: orders.id })
+      .from(orders)
+      .where(and(eq(orders.tenantId, tenantId), eq(orders.id, id)))
+      .for('update')
+      .limit(1);
+    return rows.length === 1;
+  }
+
   /** One page, by keyset on `(created_at, id)` — both immutable, unlike `state`. */
   async list(
     scope: TenantContext,

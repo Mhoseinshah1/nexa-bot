@@ -447,6 +447,23 @@ export class OrderService {
          * The hold expires with the ORDER, so an abandoned checkout frees the slot
          * without anything having to run.
          */
+        /*
+         * The ORDER's lock FIRST, before the panel and the reservation below.
+         *
+         * `order → panel → reservation` is the canonical order of this domain, and
+         * this is one of the two places that used to take it last. Cancellation and
+         * the expiry sweep take the order first and the reservation second; a path
+         * that took them the other way round closed a cycle, and PostgreSQL answered
+         * a customer's confirmation with `40P01` instead of an outcome. Found by the
+         * Codex review of this branch and reproduced in
+         * `tests/integration/lock-order.test.ts`.
+         *
+         * It authorizes nothing and decides nothing: the conditional UPDATE naming
+         * its `from` state is still what makes the transition exclusive. All this
+         * does is take a lock the transaction was going to take anyway, earlier.
+         */
+        await this.deps.repository.lock(scope, orderId, tx);
+
         const eligible = await this.deps.panelSales.acquire(
           scope,
           before.line.panelId,

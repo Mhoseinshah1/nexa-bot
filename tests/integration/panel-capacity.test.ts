@@ -655,13 +655,11 @@ describe('panel capacity and sales eligibility', () => {
      * decides them in an order and a filter built from only the first would pass a
      * test that used only disabled panels.
      */
-    const [disabled, archived, unhealthy, full, roomy] = [
-      ctx.container.ids.uuid(),
-      ctx.container.ids.uuid(),
-      ctx.container.ids.uuid(),
-      ctx.container.ids.uuid(),
-      ctx.container.ids.uuid(),
-    ] as string[];
+    const disabled = ctx.container.ids.uuid();
+    const archived = ctx.container.ids.uuid();
+    const unhealthy = ctx.container.ids.uuid();
+    const full = ctx.container.ids.uuid();
+    const roomy = ctx.container.ids.uuid();
     for (const [index, id] of [disabled, archived, unhealthy, full, roomy].entries()) {
       await ctx.container.database.db.execute(sql`
         INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status, max_services)

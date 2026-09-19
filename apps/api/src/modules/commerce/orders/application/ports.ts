@@ -128,6 +128,31 @@ export interface OrderRepository {
 
   findById(scope: TenantContext, id: OrderId, tx?: unknown): Promise<OrderRecord | null>;
 
+  /**
+   * Takes the ORDER's row lock for the rest of the transaction.
+   *
+   * THE outermost lock of this domain, and the reason it exists as its own method
+   * rather than being implied by the UPDATE that follows. Four transactions touch one
+   * order's three rows — the order, its panel and its capacity reservation — and
+   * before this they did not agree on the sequence: confirmation and settlement took
+   * the panel and the reservation first and the order last, while cancellation and
+   * the expiry sweep took the order first. That is a cycle, and PostgreSQL resolves a
+   * cycle by aborting somebody with `40P01` — a customer's purchase failing with a
+   * serialization error instead of the answer the product has for that race, which is
+   * that one of the two wins cleanly.
+   *
+   * The canonical order is **order → panel → reservation**. The two release paths
+   * already obey it and the expiry sweep cannot do otherwise — `expireDue` discovers
+   * and transitions due orders in ONE statement, so it holds order locks before it
+   * can know which reservations to release. So the two acquisition paths take this
+   * first instead, which costs them a lock they were going to take anyway, later.
+   *
+   * False for an order this tenant does not have. `tests/integration/lock-order.test.ts`
+   * reproduces the deadlock this prevents, deterministically, and reverting either
+   * call site brings it back.
+   */
+  lock(scope: TenantContext, id: OrderId, tx: unknown): Promise<boolean>;
+
   list(
     scope: TenantContext,
     search: OrderSearch,
