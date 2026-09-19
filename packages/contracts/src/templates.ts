@@ -997,6 +997,287 @@ export const TEMPLATES = [
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
+  /*
+   * Phase 6B — the panels section.
+   *
+   * The rule that shapes every key below: this surface shows a panel's IDENTITY, its
+   * health STATE and its occupancy, and never a credential, never an address, and never
+   * a provider's response body. A chat message stays in that chat for ever and is
+   * forwardable, and a panel's base URL plus a failure body is most of what somebody
+   * needs to go looking. Credential creation and rotation are not here at all — they
+   * are the Web Admin's, behind `panels.credentials.rotate`.
+   */
+  {
+    key: 'bot.admin.panels_button',
+    description:
+      'Opens the panels section of the management panel. Drawn only for an ' +
+      'administrator who holds `panels.view`, and the section charges that key again ' +
+      'server-side — the button decides what is advertised, never what is allowed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.panels_section',
+    description:
+      'Introduces the fleet: one button per live panel, newest first, and a further ' +
+      'page when the server says there is one. No counts here — a figure in this ' +
+      'message would go stale between the render and the tap, and the occupancy an ' +
+      'administrator is deciding on belongs to ONE panel rather than to the fleet, ' +
+      'because a cap is per panel and a sum over mixed caps means nothing.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.panels_none',
+    description:
+      'This installation has no live panel. Names where one is created — the Web ' +
+      'Admin — rather than offering to create one here: a panel needs credentials, ' +
+      'and credentials are not entered in a chat.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.panels_more_button',
+    description:
+      'The next page of panels, carrying the keyset cursor the server minted. Drawn ' +
+      'only when the page says there is more AND the cursor fits Telegram’s 64-byte ' +
+      'callback limit; a cursor that cannot be carried is a list that ends, which is ' +
+      'the safe direction.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.panel_detail',
+    description:
+      'One panel, as an administrator sees it in Telegram. Carries the name, the ' +
+      'provider, the status, the health STATE with when it was last checked, the ' +
+      'failure KIND from the frozen vocabulary when there is one, and the occupancy — ' +
+      'services, held slots, and the cap. It carries NO base URL, NO credential, no ' +
+      'masked stand-in for one, and no provider response body: all four are either a ' +
+      'secret or most of the way to finding one, and this message is forwardable for ' +
+      'ever.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'name',
+        type: 'STRING',
+        description: 'The panel, by the name the operator gave it.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'provider',
+        type: 'STRING',
+        description:
+          'The provider, by the descriptor’s display name — a provider type is code ' +
+          'in this codebase, so this is a fixed string and never a stored one.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'status',
+        type: 'STRING',
+        description:
+          'ACTIVE, DISABLED or ARCHIVED, as the frozen vocabulary spells it — the same ' +
+          'word the Web Admin, the audit row and the operational log use.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'health',
+        type: 'STRING',
+        description:
+          'The latest health state, including the two this repository PROJECTS rather ' +
+          'than stores: `DISABLED` for a panel nobody is probing and `UNCHECKED` for one ' +
+          'nobody has probed yet. Health is latest-state-only, so there is no trend to ' +
+          'draw and none is implied.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'checkedAt',
+        type: 'DATETIME',
+        description:
+          'When that health was written. Absent means never, and the copy says so rather ' +
+          'than leaving a state to be read as current.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'failure',
+        type: 'STRING',
+        description:
+          'The failure KIND from the provider taxonomy, when the last probe failed. A ' +
+          'kind and never a body: a provider’s own error text can carry a hostname, a ' +
+          'path or a token fragment, and the Web Admin is where a probe is read in full.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'services',
+        type: 'NUMBER',
+        description: 'How many services occupy a slot on this panel right now.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'reservations',
+        type: 'NUMBER',
+        description:
+          'How many unexpired slots are HELD by orders that are confirmed and not yet ' +
+          'settled. Its own figure rather than folded into the services count, because ' +
+          'between a confirmation and a payment there is no service — and a number that ' +
+          'hid them is the one that oversells the last slot.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'cap',
+        type: 'STRING',
+        description:
+          'The operator’s cap, or that there is none. A STRING rather than a number ' +
+          'because “no cap” is one of its values and rendering that as 0 would read as ' +
+          'a full panel — the exact inversion the null means.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.panel_gone',
+    description:
+      'The tapped panel is not this tenant’s, or no longer exists. ONE message for ' +
+      'both, for the reason `bot.admin.service_gone` gives: telling them apart would let ' +
+      'anybody holding a panel id learn whether it exists.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.panel_test_button',
+    description:
+      'Runs a connection test against the panel, through the one probe implementation ' +
+      'the background monitor also uses. Drawn only for `panels.edit`, which is the key ' +
+      '`testConnection` charges.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.panel_tested',
+    description:
+      'A real probe ran and the stored health is its result. Its own key, distinct from ' +
+      'the replay below, because “tested” for a probe that did not happen is the ' +
+      'legacy “✅ updated” for a write that did nothing.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.panel_test_replayed',
+    description:
+      'No probe ran: either this exact request was already served, or the panel was ' +
+      'probed recently enough that repeating it would be a way to hammer somebody’s ' +
+      'provider. What is shown is the STORED health, and the message says so.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.panel_enable_button',
+    description:
+      'Puts a disabled panel back in service. The server refuses it unless a connection ' +
+      'test has succeeded against the panel as it is NOW — see ' +
+      '`bot.admin.panel_not_validated`.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.panel_disable_button',
+    description:
+      'Takes a panel out of service: no new sales, and the background monitor stops ' +
+      'probing it. Nothing already on it is touched.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.panel_enabled',
+    description: 'The panel is ACTIVE again: sellable, and back on the monitor’s schedule.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.panel_disabled',
+    description:
+      'The panel is DISABLED. Says what that does and does not mean — no new sales, ' +
+      'and every service already on it keeps running — because the opposite reading ' +
+      'invites an administrator to go looking for services that were never stopped.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.panel_not_validated',
+    description:
+      'Enabling was refused because no successful connection test vouches for this ' +
+      'panel as it is NOW. Names the remedy, which is the Test button on the same ' +
+      'screen. Reached by a button drawn before a credential was replaced, and by a ' +
+      'panel nobody has ever tested.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.panel_archive_button',
+    description:
+      'ASKS to archive. Its callback opens the confirmation and changes nothing, which ' +
+      'is the ask-then-act pair `bot.admin.service_terminate_ask` established: the ' +
+      'destructive callback is produced in exactly one place.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.panel_archive_ask',
+    description:
+      'The confirmation screen for archiving a panel. Says what archiving does — out ' +
+      'of the catalogue, off the monitor’s schedule, out of every list, and its name ' +
+      'released — and what it does NOT do, which is end anything already on it. The ' +
+      'count of services still there is part of the question rather than a detail, ' +
+      'because it is the number an administrator is deciding against.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'services',
+        type: 'NUMBER',
+        description:
+          'How many services are still on this panel. None of them is ended by ' +
+          'archiving, and the copy says so beside the figure.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.panel_archive_confirm_button',
+    description: 'The second tap, and the only button in this section that archives a panel.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.panel_archived',
+    description:
+      'The panel is ARCHIVED, and its name is free for another. Says that restoring it ' +
+      'is the Web Admin’s, because a restore may need a new name and a name is not ' +
+      'typed into a chat on this surface.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.panel_unavailable',
+    description:
+      'The tapped action cannot be taken on this panel right now — the status moved, ' +
+      'the credentials do not satisfy the provider’s shape, the probe budget is spent, ' +
+      'or the write lost a race. ONE sentence for all of them on this surface, for the ' +
+      'reason `bot.admin.service_unavailable` gives: the administrator’s next step is ' +
+      'the Web Admin, where the reason is named, and the audit row and the operational ' +
+      'log carry the distinction. Reached by a button drawn before the panel moved.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
   {
     key: 'bot.admin.section',
     description:

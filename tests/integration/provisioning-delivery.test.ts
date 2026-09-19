@@ -18,7 +18,7 @@ import {
   SERVICES_PAGE_CALLBACK_PREFIX,
   SERVICES_PAGE_SIZE,
 } from '../../apps/api/src/surfaces/telegram/bot-runtime';
-import { encodeServiceCursor } from '../../apps/api/src/surfaces/telegram/service-cursor';
+import { encodeKeysetToken } from '../../apps/api/src/surfaces/telegram/keyset-token';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
 import { DrizzleOperationRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-operation.repository';
@@ -2026,7 +2026,7 @@ describe('a provisioned service announces itself', () => {
      */
     const orderId = await paidOrder('bot-foreign-cursor');
     const mine = await services.findByOrderId(tenantA, orderId);
-    const token = encodeServiceCursor({
+    const token = encodeKeysetToken({
       createdAt: '2099-01-01 00:00:00.000000+00',
       id: mine?.id ?? '',
     });

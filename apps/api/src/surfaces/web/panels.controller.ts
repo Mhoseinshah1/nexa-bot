@@ -3,7 +3,6 @@ import type { FastifyRequest } from 'fastify';
 import {
   panelListQuerySchema,
   API_PREFIX,
-  PANEL_HEALTH_FRESH_FOR_MS,
   PANEL_ROUTES,
   providerDescriptor,
   type PanelHealthResponse,
@@ -25,6 +24,7 @@ import { decodeKeysetCursor, encodeKeysetCursor } from './keyset-cursor.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type { PanelView } from '../../modules/platform/panels/application/ports.js';
 import type { PanelWithCapacity } from '../../modules/platform/panels/application/capacity-ports.js';
+import { readHealth } from '../../modules/platform/panels/application/panel-health-view.js';
 
 /**
  * Panels over HTTP.
@@ -216,42 +216,33 @@ export class PanelsController {
   /**
    * Health, as an operator needs to read it.
    *
-   * Three things a stored state cannot say on its own, and each is projected
-   * here rather than persisted:
-   *
-   *   `DISABLED`  — from the panel's status. Storing it would mean re-enabling
-   *                 a panel required a health write, and the health of a panel
-   *                 nobody is probing is not a fact about the panel.
-   *   `UNCHECKED` — the absence of a row. Inventing a row to record that
-   *                 nothing has happened makes a never-checked panel look
-   *                 checked, which is the legacy statistics screen's mistake:
-   *                 it counted CONFIGURED panels and called them connected.
-   *   `stale`     — computed against one constant, server-side, so two
-   *                 surfaces cannot disagree about what "recent" means.
+   * `DISABLED`, `UNCHECKED` and `stale` are PROJECTED rather than stored, and why
+   * each of them is, is written once — in `readHealth`, which this calls and the
+   * Telegram panels section calls too.
    */
   private toHealth(view: PanelView): PanelHealthResponse {
-    const now = this.container.clock.now().getTime();
-    if (view.health === null) {
-      return {
-        state: view.panel.status === 'ACTIVE' ? 'UNCHECKED' : 'DISABLED',
-        checkedAt: null,
-        latencyMs: null,
-        failure: null,
-        status: null,
-        providerVersion: null,
-        lastHealthyAt: null,
-        stale: false,
-      };
-    }
+    /*
+     * The three PROJECTED answers come from `readHealth`, which the Telegram
+     * panels section also calls. It used to be this method's own arithmetic,
+     * and the Telegram section needed the same three answers — "two surfaces
+     * recompute the same concept differently" is a failure this repository has
+     * a measured example of, so the concept moved to the application layer and
+     * both surfaces read it from there.
+     *
+     * What stays here is this response's own shape: the four fields no other
+     * surface renders. A Telegram message has no room for a latency figure, a
+     * provider version or an HTTP status code, and would not be improved by one.
+     */
+    const reading = readHealth(view.panel, view.health, this.container.clock.now());
     return {
-      state: view.panel.status === 'ACTIVE' ? view.health.state : 'DISABLED',
-      checkedAt: view.health.checkedAt.toISOString(),
-      latencyMs: view.health.latencyMs,
-      failure: view.health.failure,
-      status: view.health.statusCode,
-      providerVersion: view.health.providerVersion,
-      lastHealthyAt: view.health.lastHealthyAt?.toISOString() ?? null,
-      stale: now - view.health.checkedAt.getTime() > PANEL_HEALTH_FRESH_FOR_MS,
+      state: reading.state,
+      checkedAt: reading.checkedAt?.toISOString() ?? null,
+      latencyMs: view.health?.latencyMs ?? null,
+      failure: reading.failure,
+      status: view.health?.statusCode ?? null,
+      providerVersion: view.health?.providerVersion ?? null,
+      lastHealthyAt: view.health?.lastHealthyAt?.toISOString() ?? null,
+      stale: reading.stale,
     };
   }
 
