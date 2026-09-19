@@ -950,18 +950,24 @@ describe('a customer manages the service they bought', () => {
     });
   }
 
-  it('records a transfer for a RENEW whose service was terminated while it waited', async () => {
+  it('refunds a transfer for a RENEW whose service was terminated while it waited', async () => {
     /*
-     * Codex M1 on PR #50. C4 gave a manual transfer for a NEW service somewhere to go
-     * when the panel became unusable; a commercial order skipped that question
-     * entirely, because it creates no service and consumes no slot — true, and the
-     * wrong conclusion. `planCommercialAction` has three refusals of its own and all
-     * of them can become true while the receipt sits in the review queue, and each one
-     * threw INSIDE the settling transaction: the confirmation rolled back and the bank
-     * money stayed a `PENDING` payment, neither confirmable nor refundable.
+     * Codex M1 on PR #50, under the outcome the owner chose afterwards. C4 gave a
+     * manual transfer for a NEW service somewhere to go when the panel became
+     * unusable; a commercial order skipped that question entirely, because it creates
+     * no service and consumes no slot — true, and the wrong conclusion.
+     * `planCommercialAction` has three refusals of its own, all of them can become
+     * true while the receipt sits in the review queue, and each one threw INSIDE the
+     * settling transaction: the confirmation rolled back and the bank money stayed a
+     * `PENDING` payment, neither confirmable nor refundable.
+     *
+     * The money still arrives and the payment is still CONFIRMED. What changed is
+     * where the order goes: there is no third state to hold it, so the exact amount
+     * goes back to the wallet in the same transaction.
      */
     const service = await activeService('renew-stranded');
     const { orderId, paymentId } = await buyByTransfer(service.id, 'RENEW', 'renew-stranded');
+    const before = await ctx.container.wallet.balance(tenantA, owner, customerA);
 
     // The customer's service is terminated before the operator gets to the receipt.
     await ctx.container.database.db.execute(
@@ -976,12 +982,21 @@ describe('a customer manages the service they bought', () => {
     );
 
     expect(payment.state, 'the money arrived and the row says so').toBe('CONFIRMED');
-    expect(order?.state).toBe('PAID_UNFULFILLED');
+    expect(order?.state).toBe('REFUNDED');
     const row = (await ctx.container.database.db.execute(
-      sql`SELECT settled_at, unfulfilled_reason FROM orders WHERE id = ${orderId}` as never,
-    )) as unknown as { rows: { settled_at: string | null; unfulfilled_reason: string | null }[] };
-    expect(row.rows[0]?.settled_at).not.toBeNull();
-    expect(row.rows[0]?.unfulfilled_reason).toBe('SERVICE_TERMINATED');
+      sql`SELECT settled_at, refunded_at, total_amount::text AS total
+            FROM orders WHERE id = ${orderId}` as never,
+    )) as unknown as {
+      rows: { settled_at: string | null; refunded_at: string | null; total: string }[];
+    };
+    expect(row.rows[0]?.settled_at, 'the receipt of money survives the reversal').not.toBeNull();
+    expect(row.rows[0]?.refunded_at).not.toBeNull();
+
+    const after = await ctx.container.wallet.balance(tenantA, owner, customerA);
+    expect(
+      after.amountMinor - before.amountMinor,
+      'the exact amount, and nothing else, is back',
+    ).toBe(BigInt(row.rows[0]?.total as string));
     // And nothing was planned against a service that cannot take it.
     expect(await operationOf(service.id, 'RENEW')).toBeUndefined();
   });

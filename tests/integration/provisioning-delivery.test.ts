@@ -789,17 +789,28 @@ describe('a provisioned service announces itself', () => {
       await ctx.container.provisionerLoop.tick();
 
       const service = await services.findByOrderId(tenantA, orderId);
-      expect(
-        service?.state,
-        'nothing is created, because what would be created is not what was sold',
-      ).toBe('PENDING_PROVISION');
-      expect(addClientCalls(), 'and the panel was never dialled').toBe(0);
+      expect(addClientCalls(), 'the panel was never dialled').toBe(0);
 
       const ops = await operations.listForService(tenantA, service?.id ?? '', 10);
       expect(
         ops[0]?.state,
         'CAPABILITY_UNSUPPORTED is permanent: no retry teaches an adapter a field',
       ).toBe('FAILED');
+      /*
+       * And the customer gets their money back rather than a row nobody will move.
+       *
+       * This case used to assert the service stayed `PENDING_PROVISION` — which was
+       * the truthful description of a service that was never created, and also a row
+       * holding a capacity slot on a panel that can never fill it, for an order that
+       * was paid for. There is no state for that any more: the create failed
+       * definitively, so the service is terminated and the order is refunded in the
+       * transaction that records the failure.
+       */
+      expect(service?.state, 'nothing was created, and nothing holds a slot').toBe('TERMINATED');
+      const order = (await ctx.container.database.db.execute(
+        sql`SELECT state FROM orders WHERE id = ${orderId}` as never,
+      )) as unknown as { rows: { state: string }[] };
+      expect(order.rows[0]?.state).toBe('REFUNDED');
     } finally {
       Object.defineProperty(descriptor, 'capabilities', {
         value: original,
@@ -975,45 +986,79 @@ describe('a provisioned service announces itself', () => {
 
     const stalled = await services.findByOrderId(tenantA, orderId);
     const serviceId = stalled?.id ?? '';
-    expect(stalled?.state, 'left where a retry can reach it').toBe('PENDING_PROVISION');
     expect(
       await operations.findOpen(tenantA, serviceId, 'PROVISION'),
-      'and with nothing claimable, so the loop cannot restart itself',
+      'nothing claimable, so the loop cannot restart itself',
     ).toBeNull();
     expect(await operations.findOpen(tenantA, serviceId, 'RECONCILE')).toBeNull();
 
-    // An operator has a row to act on.
+    // An operator has a row to act on: the PANEL is what needs fixing.
     const events = await ctx.container.database.db.execute(
       sql`SELECT code, context FROM operational_events WHERE code = 'provisioning.stalled'`,
     );
     expect(events.rows, 'the operator is told').toHaveLength(1);
 
-    // Another tick changes nothing at all: no operation, no call.
+    /*
+     * And the CUSTOMER is not left in the ceiling with it.
+     *
+     * This is the case the cycle bound was hardest on before: nothing claimable,
+     * nothing in the reconcile queue, and a `PENDING_PROVISION` row holding a
+     * capacity slot for an order that was paid for — a dead end whose only exit was
+     * an operator noticing the condition. The exits are now the two the product has.
+     * The create the reconcile proved absent three times is settled as the definitive
+     * failure it is: the service is terminated, the slot is back, and the money is on
+     * the customer's wallet.
+     *
+     * The panel's condition stays open, because the panel is still broken and the
+     * next purchase would land in the same place.
+     */
+    expect(stalled?.state, 'the service is ended, not parked').toBe('TERMINATED');
+    const order = (await ctx.container.database.db.execute(
+      sql`SELECT state FROM orders WHERE id = ${orderId}` as never,
+    )) as unknown as { rows: { state: string }[] };
+    expect(order.rows[0]?.state).toBe('REFUNDED');
+    const refunds = (await ctx.container.database.db.execute(
+      sql`SELECT state, reason FROM refunds WHERE order_id = ${orderId}` as never,
+    )) as unknown as { rows: { state: string; reason: string }[] };
+    expect(refunds.rows, 'one refund, for the lane that had nobody in it').toEqual([
+      { state: 'COMPLETED', reason: 'UNDELIVERABLE' },
+    ]);
+
+    // Another tick changes nothing at all: no operation, no call, no second refund.
     await ctx.container.provisionerLoop.tick();
     expect(addClientCalls(), 'and it stays stopped').toBe(3);
+    expect((await refundsFor(orderId)).length, 'and refunds once').toBe(1);
 
     /*
-     * And the deliberate way back in still works.
+     * `retryProvisioning` is no longer the way back in, and the refusal is the point.
      *
-     * `retryProvisioning` is the remedy the stalled condition points at, and the panel
-     * having recovered is exactly when an operator presses it.
+     * It used to be the remedy the stalled condition pointed at. A terminated service
+     * cannot be provisioned — `OPERATION_LEGAL_FROM.PROVISION` is `PENDING_PROVISION`
+     * alone — so pressing it against a refunded order is refused rather than creating
+     * an account for money that has gone back. The customer buys again; the operator
+     * fixes the panel.
      */
     panel.setBehaviour('healthy');
-    await ctx.container.provisioning.retryProvisioning(tenantA, owner, serviceId, {
-      idempotencyKey: 'operator-retry-absent',
-    });
-    await ctx.container.provisionerLoop.tick();
-
-    const active = await services.findByOrderId(tenantA, orderId);
-    expect(active?.state).toBe('ACTIVE');
-    expect(panel.clients.size, 'one account, for one paid order').toBe(1);
-    expect(addClientCalls(), 'the three that failed, and the one that worked').toBe(4);
+    await expect(
+      ctx.container.provisioning.retryProvisioning(tenantA, owner, serviceId, {
+        idempotencyKey: 'operator-retry-absent',
+      }),
+    ).rejects.toMatchObject({ code: expect.any(String) });
+    expect(panel.clients.size, 'and no account was created for a refunded order').toBe(0);
 
     const rows = await ctx.container.database.db.execute(
       sql`SELECT count(*)::int AS n FROM services WHERE order_id = ${orderId}`,
     );
     expect((rows.rows[0] as { n: number }).n).toBe(1);
   });
+
+  /** Every refund against one order, so "exactly one" is asserted and not assumed. */
+  async function refundsFor(orderId: string): Promise<readonly { state: string }[]> {
+    const rows = (await ctx.container.database.db.execute(
+      sql`SELECT state FROM refunds WHERE order_id = ${orderId}` as never,
+    )) as unknown as { rows: { state: string }[] };
+    return rows.rows;
+  }
 
   it('holds off a stopped tenant without spending an attempt on it', async () => {
     const orderId = await paidOrder('stopped-provision');

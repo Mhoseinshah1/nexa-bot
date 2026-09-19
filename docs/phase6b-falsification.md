@@ -147,10 +147,10 @@ The re-review of `86ce31a` found four. Two were defects in the C4 work itself,
 one was the first half of a fix that had not finished the job, and one belonged
 to the capacity work earlier on this branch.
 
-| #       | Rule                                                           | Mutation                                | Named test                                                                            | Result   |
-| ------- | -------------------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------- | -------- |
-| F6B-N3a | the catalogue scan widens until the bound is filled            | back to one round of `PRODUCT_PAGE_MAX` | _reaches an eligible product past EVERY former scan ceiling_                          | KILLED   |
-| F6B-N4a | a changed connection identity starts a new streak              | increment across the change, as before  | _starts a NEW streak when the connection identity changed_                            | KILLED   |
+| #       | Rule                                                | Mutation                                | Named test                                                   | Result |
+| ------- | --------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------ | ------ |
+| F6B-N3a | the catalogue scan widens until the bound is filled | back to one round of `PRODUCT_PAGE_MAX` | _reaches an eligible product past EVERY former scan ceiling_ | KILLED |
+| F6B-N4a | a changed connection identity starts a new streak   | increment across the change, as before  | _starts a NEW streak when the connection identity changed_   | KILLED |
 
 **N1 and N2 are retired with the feature, and nine rows went with them.** N1
 was "a completed refund closes a `PAID_UNFULFILLED` order" and N2 was the Web

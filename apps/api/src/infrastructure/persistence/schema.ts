@@ -3810,10 +3810,35 @@ export const services = pgTable(
     check('services_traffic_check', sql`traffic_limit_bytes >= 0 AND traffic_used_bytes >= 0`),
     /** The format the panels accept, pinned so a bad generator fails at the write. */
     check('services_subscription_ref_check', sql`subscription_ref ~ '^[0-9a-f]{32}$'`),
-    /** A provisioned service has a time; one that never was does not. */
+    /**
+     * A provisioned service has a time; one that never was does not — and a
+     * TERMINATED one may be either.
+     *
+     * The equality without that third clause is a rule `SERVICE_MACHINE`
+     * contradicts. The machine has `PENDING_PROVISION -> TERMINATED` and
+     * `UNRECONCILED -> TERMINATED`, and `OPERATION_LEGAL_FROM.TERMINATE` names both
+     * states deliberately — "a service an operator or a customer has decided to end
+     * must be endable whatever went wrong on the way, including one stuck in
+     * `UNRECONCILED` after a lost create". Both of those states have a null
+     * `provisioned_at` by this very check, so taking either edge moved the state to
+     * one side of the equality and left the timestamp on the other, and the UPDATE
+     * raised.
+     *
+     * Nothing had taken those edges. The automatic refund is the first caller: a
+     * create that definitively failed leaves a `PENDING_PROVISION` row occupying a
+     * capacity slot, and terminating it is how the panel gets the slot back. The
+     * suite found this on the first full run, which is the argument for running it.
+     *
+     * The clause is a carve-out for TERMINATED rather than a loosening of the whole
+     * rule: for every state a service can be USED in, the equality still holds, and
+     * `services_terminated_at_check` still forces `terminated_at`. What a terminated
+     * service's null `provisioned_at` now says is true and worth saying — this one
+     * never reached a panel.
+     */
     check(
       'services_provisioned_at_check',
-      sql`(state = 'PENDING_PROVISION' OR state = 'UNRECONCILED') = (provisioned_at IS NULL)`,
+      sql`state = 'TERMINATED'
+          OR (state = 'PENDING_PROVISION' OR state = 'UNRECONCILED') = (provisioned_at IS NULL)`,
     ),
     check(
       'services_terminated_at_check',
