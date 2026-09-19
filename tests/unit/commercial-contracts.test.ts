@@ -72,10 +72,11 @@ describe('order purpose', () => {
     for (const purpose of ORDER_PURPOSES as readonly OrderPurpose[]) {
       const creates = orderPurposeCreatesNewService(purpose);
       const targets = orderPurposeTargetsExistingService(purpose);
-      expect(
-        { purpose, creates, targets },
-        `${purpose} must be on exactly one side`,
-      ).toEqual({ purpose, creates: !targets, targets: !creates });
+      expect({ purpose, creates, targets }, `${purpose} must be on exactly one side`).toEqual({
+        purpose,
+        creates: !targets,
+        targets: !creates,
+      });
     }
   });
 

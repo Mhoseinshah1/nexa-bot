@@ -102,39 +102,44 @@ interleaving requires two statements to commit between — which is precisely
 what having one statement makes impossible. So the test counts the statements,
 which is the only form of the rule a test can hold.
 
-## Codex C4: money that arrived, for a service that could not be created
+## Codex C4: money that arrived, for a service that could not be created — RETIRED
 
-The fifth confirmed finding of the same review, fixed separately because it
-needed a state. Every rule the fix introduces is mutated here, against the live
-database.
+The fifth confirmed finding of the same review. Its fix introduced
+`PAID_UNFULFILLED`, an operator retry and a panel reassignment, and every rule
+of it was mutated against the live database: eight rows, seven KILLED and one
+HELD as the bound of another.
 
-| #        | Rule                                                             | Mutation                                                | Named test                                                                | Result |
-| -------- | ---------------------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------- | ------ |
-| F6B-C4-1 | a confirmation that cannot be fulfilled still records the money  | `settling` pinned to `SETTLE`                           | _keeps the payment CONFIRMED when the hold expired and the panel is full_ | KILLED |
-| F6B-C4-2 | a WALLET settlement is refused instead, because nothing has left | the wallet branch strands too                           | _refuses a WALLET settlement instead, because that money has not left_    | KILLED |
-| F6B-C4-3 | only an order that CREATES a service consults fulfilment at all  | the purpose predicate inverted                          | _strands the order when the panel was DISABLED after the transfer_        | KILLED |
-| F6B-C4-4 | the retry is authorized BEFORE the replay lookup                 | that check deleted                                      | _refuses a REPLAY from an administrator without orders.fulfil_            | KILLED |
-| F6B-C4-5 | a reassignment names a panel this tenant can see                 | the unknown-panel refusal removed                       | _refuses a reassignment to another tenant s panel as UNKNOWN_             | KILLED |
-| F6B-C4-6 | fulfilment CLOSES the condition the settlement opened            | `recoversCode` and `recoversDedupeKey` dropped          | _fulfils a stranded order once the panel is usable again_                 | KILLED |
-| F6B-C4-7 | `panel_id` moves only out of `PAID_UNFULFILLED` and into `PAID`  | migration 0083 reverted to 0033's broad freeze, in situ | _reassigns a stranded order to another panel, and says the panel changed_ | KILLED |
-| F6B-C4-8 | and moves in no other direction                                  | (the bound of the same exception)                       | _refuses to re-point a PAID order's panel, which is still frozen_         | HELD   |
+**All eight are retired, and the tests they named are deleted.** The owner
+removed the state and everything built on it in favour of one automatic
+outcome, so the rules those rows certified no longer exist to be falsified —
+`settling` cannot be pinned to `SETTLE` when there is no second edge to pin it
+away from, and `panel_id` has no exception to bound. Keeping them as rows
+citing tests that are gone is exactly the failure this document's own checker
+exists to catch, and keeping them as prose claiming a coverage nothing holds
+would be worse.
 
-F6B-C4-4 is the row that earned the pass. It SURVIVED: the comment above the
-check said an unauthorized caller replaying somebody else's key would be handed
-their order, and no test could see it, because the one permission case in the
-file used a fresh key — which `runAuthorizedMutation` refuses whether or not the
-early check exists. The test named in the row was written for the mutation and
-kills it.
+What C4 established SURVIVES, in a different shape, and is re-falsified in
+**The owner's decision** below: recording the receipt of money is still
+independent of the ability to fulfil it, a wallet settlement is still refused
+rather than recorded, and an order that creates no service still never consults
+the create path. Three of the eight rules are those three, mutated again
+against the code that replaced them.
 
-F6B-C4-7 is the only mutation in this document applied to the DATABASE rather
-than the tree: the rule is a trigger body, so the function was replaced with the
-pre-0083 form, the test run, and `0083` re-applied. The suite is green again
-afterwards, asserted by re-running it.
+Two things about the retired rows are worth keeping, because they are about how
+the pass was run rather than about the feature:
 
-F6B-C4-8 is HELD rather than KILLED because it is not a separate rule — it is
-the bound of F6B-C4-7, and the mutation that widens the exception is the fix
-itself. What the row records is that the narrowing is asserted in both
-directions rather than only the one the feature needed.
+**F6B-C4-4 earned its test by surviving first.** The comment above the check
+said an unauthorized caller replaying somebody else's key would be handed their
+order, and no test could see it, because the one permission case in the file
+used a fresh key — which `runAuthorizedMutation` refuses whether or not the
+early check exists. The test was written for the mutation. The same shape is
+now held by _refuses the confirmation to an administrator a custom role could
+not authorise_.
+
+**F6B-C4-7 was the only mutation in this document applied to the DATABASE
+rather than the tree.** The rule was a trigger body, so the function was
+replaced with the pre-0083 form, the test run, and `0083` re-applied. Migration
+0085 has since restored that function to what 0033 froze, permanently.
 
 ## The second Codex round: four more, two of them P1
 
@@ -144,36 +149,24 @@ to the capacity work earlier on this branch.
 
 | #       | Rule                                                           | Mutation                                | Named test                                                                            | Result   |
 | ------- | -------------------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------- | -------- |
-| F6B-N1a | a refund closes the order only once the money has LEFT         | the `COMPLETED` check dropped           | _leaves a stranded order fulfillable while its refund is still awaiting the bank_     | SURVIVED |
-| F6B-N1b | and the wallet branch is the only one that closes at `request` | the call moved out of `if (immediate)`  | _leaves a stranded order fulfillable while its refund is still awaiting the bank_     | SURVIVED |
-| F6B-N1c | the two together                                               | both removed                            | _closes the order when the refund actually completes, and fulfilment is then refused_ | KILLED   |
-| F6B-N1d | a completed refund TRANSITIONS the order                       | the transition skipped                  | _closes the order when the refund actually completes, and fulfilment is then refused_ | KILLED   |
-| F6B-N1e | and closes the condition the settlement opened                 | `recoversCode` dropped                  | _closes the order when the refund actually completes, and fulfilment is then refused_ | KILLED   |
-| F6B-N2a | the card is drawn only for `PAID_UNFULFILLED`                  | drawn for every state                   | _draws no fulfilment card for an order that is not stranded_                          | KILLED   |
-| F6B-N2b | an empty box RETRIES rather than reassigning to nothing        | `panelId` always sent                   | _retries a stranded order on its own panel_                                           | KILLED   |
-| F6B-N2c | `orders.fulfil` is said, not assumed                           | the permission ignored                  | _says why rather than hiding the card, without orders.fulfil_                         | KILLED   |
-| F6B-N2d | a malformed panel id cannot be submitted                       | the `disabled` guard removed            | _refuses a malformed panel id without asking the server_                              | KILLED   |
 | F6B-N3a | the catalogue scan widens until the bound is filled            | back to one round of `PRODUCT_PAGE_MAX` | _reaches an eligible product past EVERY former scan ceiling_                          | KILLED   |
 | F6B-N4a | a changed connection identity starts a new streak              | increment across the change, as before  | _starts a NEW streak when the connection identity changed_                            | KILLED   |
 
-Three rows need their result explained rather than counted.
+**N1 and N2 are retired with the feature, and nine rows went with them.** N1
+was "a completed refund closes a `PAID_UNFULFILLED` order" and N2 was the Web
+Admin control for retrying one; neither rule survives the owner's decision, and
+their tests are deleted. Two notes from running them are worth keeping, because
+they are about method rather than about the feature:
 
-**F6B-N1a and F6B-N1b survived, and that is the honest record of a rule held
-twice.** A refund closes a stranded order only where the money has actually
-left, and that is enforced at the CALL SITE (`request` calls the closer only on
-the wallet channel, which is born `COMPLETED`) and again INSIDE it (the state is
-re-checked). Removing either leaves the other holding, so neither mutation alone
-can fail a test. F6B-N1c removes both and both refund cases fail, which is what
-establishes the tests are load-bearing rather than decorative.
-
-**F6B-N2d took three attempts and the first two found a bad TEST, not a bad
-rule.** As written, the case asserted "no `/fulfil` call" synchronously after
-the click — no request could have been issued by then either way, so it passed
-with both input guards removed. It now asserts the disabled control directly and
-follows the bad value with a good one, so the "exactly one call" assertion is
-measured against a request that really happens. The submit-handler guard behind
-the disabled attribute is deliberately NOT claimed as separately falsified: with
-the attribute in place no test here can reach it.
+- F6B-N1a and F6B-N1b SURVIVED individually and F6B-N1c, which applied both
+  mutations, killed. That is the honest record of a rule held in two places at
+  once — removing either left the other holding — and it is why a mutation pass
+  reports what survived instead of reporting only the kills.
+- F6B-N2d took three attempts and the first two found a bad TEST, not a bad
+  rule: the case asserted "no request" synchronously after a click, and no
+  request could have been issued by then either way, so it passed with the
+  guards removed. A negative assertion measured against a moment when nothing
+  could have happened is not an assertion.
 
 **F6B-N3a is the second round of F6B-C4.** The first fix scanned one page and
 cut to the caller's bound, which moved the cliff from twenty products to a
@@ -189,11 +182,11 @@ reproduced with a real deadlock before anything was changed.
 
 | #       | Rule                                                                 | Mutation                                              | Named test                                                                       | Result   |
 | ------- | -------------------------------------------------------------------- | ----------------------------------------------------- | -------------------------------------------------------------------------------- | -------- |
-| F6B-M2a | a permission whose prerequisite is missing is not held               | drop the `PERMISSION_REQUIRES` pass from resolution   | _drops orders.fulfil from an administrator who cannot view orders_               | KILLED   |
-| F6B-M2b | the same, through a DENY override rather than a role                 | the same mutation                                     | _takes orders.fulfil with it when an override DENIES the read_                   | KILLED   |
-| F6B-M2c | the same, for a GRANT override onto a role that cannot read          | the same mutation                                     | _drops a GRANTED orders.fulfil when the role cannot read orders_                 | KILLED   |
-| F6B-M2d | the route refuses a caller the rule narrowed                         | the same mutation                                     | _refuses the fulfil route to an administrator a custom role could not authorise_ | KILLED   |
-| F6B-M2e | nobody is told about an order they cannot open                       | the same mutation                                     | _tells only the administrators who can open the order it is about_               | KILLED   |
+| F6B-M2a | a permission whose prerequisite is missing is not held               | drop the `PERMISSION_REQUIRES` pass from resolution   | _drops receipts.review from an administrator who cannot view payments_           | KILLED   |
+| F6B-M2b | the same, through a DENY override rather than a role                 | the same mutation                                     | _takes receipts.review with it when an override DENIES the read_                 | KILLED   |
+| F6B-M2c | the same, for a GRANT override onto a role that cannot read          | the same mutation                                     | _drops a GRANTED receipts.review when the role cannot read payments_             | KILLED   |
+| F6B-M2d | the write refuses a caller the rule narrowed                         | the same mutation                                     | _refuses the confirmation to an administrator a custom role could not authorise_ | KILLED   |
+| F6B-M2e | the narrowing reaches the session's own list, not just the guard     | the same mutation                                     | _does not let a custom role hold receipts.review without payments.view_          | KILLED   |
 | F6B-M3a | every path takes the ORDER lock before the panel and the reservation | remove both `OrderRepository.lock` calls              | _lets exactly one of a settlement and a cancellation win, three times over_      | KILLED   |
 | F6B-M3b | the same, with no scripted holder                                    | the same mutation                                     | _survives a cancellation and a settlement started together, five times_          | SURVIVED |
 | F6B-M3c | the expiry sweep passes over a locked order rather than waiting      | drop `skipLocked` from `expireDue`                    | _passes over an order another transaction holds rather than queueing behind it_  | KILLED   |
