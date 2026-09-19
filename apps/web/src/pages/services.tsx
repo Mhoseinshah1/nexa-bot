@@ -93,7 +93,7 @@ import {
  * and false statement.
  */
 
-const STATE_LABELS: Readonly<Record<ServiceState, WebKey>> = {
+export const STATE_LABELS: Readonly<Record<ServiceState, WebKey>> = {
   PENDING_PROVISION: 'web.service_state_pending_provision',
   ACTIVE: 'web.service_state_active',
   SUSPENDED: 'web.service_state_suspended',
@@ -102,7 +102,7 @@ const STATE_LABELS: Readonly<Record<ServiceState, WebKey>> = {
   UNRECONCILED: 'web.service_state_unreconciled',
 };
 
-const STATE_TONES: Readonly<Record<ServiceState, Tone>> = {
+export const STATE_TONES: Readonly<Record<ServiceState, Tone>> = {
   PENDING_PROVISION: 'info',
   ACTIVE: 'ok',
   SUSPENDED: 'warn',

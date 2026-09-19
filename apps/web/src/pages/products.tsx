@@ -71,12 +71,12 @@ import {
  * that has not shipped, and a disabled control for one would claim the feature exists.
  */
 
-const STATUS_LABELS: Readonly<Record<ProductStatus, WebKey>> = {
+export const STATUS_LABELS: Readonly<Record<ProductStatus, WebKey>> = {
   ACTIVE: 'web.product_status_active',
   INACTIVE: 'web.product_status_inactive',
 };
 
-const STATUS_TONES: Readonly<Record<ProductStatus, Tone>> = {
+export const STATUS_TONES: Readonly<Record<ProductStatus, Tone>> = {
   ACTIVE: 'ok',
   INACTIVE: 'neutral',
 };

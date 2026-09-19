@@ -1673,6 +1673,13 @@ export const productListQuerySchema = z.object({
   status: z.enum(PRODUCT_STATUSES).optional(),
   audience: z.enum(PRODUCT_AUDIENCES).optional(),
   title: z.string().max(PRODUCT_TITLE_MAX_LENGTH).optional(),
+  /*
+   * An id, validated HERE, for the reason the write schema above states at
+   * length: `products.panel_id` is a `uuid` column, so an unvalidated string
+   * reaches PostgreSQL as `invalid input syntax for type uuid` and is answered
+   * 500. `serviceListQuerySchema` already carries this filter and this rule.
+   */
+  panelId: uuidV7Schema.optional(),
 });
 export type ProductListQuery = z.infer<typeof productListQuerySchema>;
 

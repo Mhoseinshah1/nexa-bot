@@ -57,6 +57,7 @@ export class ProductsController {
       ...(query.status === undefined ? {} : { status: query.status }),
       ...(query.audience === undefined ? {} : { audience: query.audience }),
       ...(query.title === undefined ? {} : { title: query.title }),
+      ...(query.panelId === undefined ? {} : { panelId: query.panelId }),
     });
     const result = await this.container.products.list(scope, actor, {
       ...(page.limit === undefined ? {} : { limit: page.limit }),
@@ -67,6 +68,7 @@ export class ProductsController {
         ...(page.status === undefined ? {} : { status: page.status }),
         ...(page.audience === undefined ? {} : { audience: page.audience }),
         ...(page.title === undefined ? {} : { titlePrefix: page.title }),
+        ...(page.panelId === undefined ? {} : { panelId: page.panelId as PanelId }),
       },
     });
     return {

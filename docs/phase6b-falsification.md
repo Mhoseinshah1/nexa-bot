@@ -367,6 +367,38 @@ coverage that had been run and thrown away, and the next reader believed it.
 | a reservation cannot outlive its order's payment window | `expires_at` is the order's own `expires_at`, passed in by the caller rather than computed in the repository                   |
 | no surface can read a capacity it was not scoped to     | every query in the repository carries `tenant_id`, and `counts nothing across the tenant boundary` asserts it end to end       |
 
+## The Web Admin: nine more
+
+The panel detail's workload tab and the second press on archive. Mutations
+against `apps/web/src/pages/panels.tsx`,
+`apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository.ts`
+and `apps/api/src/surfaces/web/products.controller.ts`, run against
+`tests/web/panels.test.tsx` and `tests/integration/products-http.test.ts`.
+
+| #      | Rule                                                             | Mutation                                        | Named test                                                                          | Result |
+| ------ | ---------------------------------------------------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------- | ------ |
+| F6B-W1 | the product list honours a panel filter in SQL                   | the condition dropped from the repository       | _narrows the list to one panel, and excludes a product that names no panel_         | KILLED |
+| F6B-W2 | the controller forwards the filter it parsed                     | the field dropped from the parsed query         | _narrows the list to one panel, and excludes a product that names no panel_         | KILLED |
+| F6B-W3 | archiving asks before it writes                                  | the first press wired straight to the mutation  | _does not archive on the first press_                                               | KILLED |
+| F6B-W4 | a refused archive takes its own question down                    | `setArchiveAsked(false)` deleted from `onError` | _leaves no confirmed-looking screen behind when the archive is refused_             | KILLED |
+| F6B-W5 | the products list says "there is more" only on a cursor          | the guard inverted                              | _says there is more on each list the server truncated, and only those_              | KILLED |
+| F6B-W6 | and so does the services list                                    | the guard inverted                              | _says there is more on each list the server truncated, and only those_              | KILLED |
+| F6B-W7 | neither says it without one                                      | the guard replaced with `true`                  | _claims no completeness it was not given: neither list says there is more_          | KILLED |
+| F6B-W8 | the workload asks for THIS panel                                 | `panelId` dropped from the services query       | _asks the server for this panel only, and never for the whole catalogue_            | KILLED |
+| F6B-W9 | a listed service shows its username, never the panel's id for it | the cell fed `providerUserId`                   | _carries no subscription URL, subscription ref or client id for a service it lists_ | KILLED |
+
+F6B-W5 through F6B-W7 are one rule in three rows because the first version of
+the test could not tell them apart. Two cards each carry their own truncation
+notice from their own response, and `findByText` is satisfied by either — so
+inverting the PRODUCTS guard left the case green on the strength of the
+SERVICES notice. The test asserts the COUNT now, and a third case asserts that
+an untruncated pair shows none.
+
+F6B-W2 is worth its own row even though it dies to the same test as F6B-W1.
+The controller parses the query and then builds the search separately, so the
+filter can be validated, accepted and silently not passed on — which is a
+surface that appears to filter and returns everything.
+
 ## How the mutations were run
 
 Each mutation is applied to the working tree, the named test is run alone
