@@ -107,6 +107,16 @@ describe('a provisioned service announces itself', () => {
     ctx = await createTestContext({
       PANEL_HTTP_ALLOW_LOOPBACK: 'true',
       TELEGRAM_API_BASE_URL: `http://127.0.0.1:${String(address.port)}`,
+      /*
+       * The schema's floor, because one case here waits out a real deadline.
+       *
+       * `refunds nothing while the outcome is UNKNOWN` needs a create that times out
+       * rather than one that is refused, and a timeout is only observable by waiting
+       * for it. Every other case answers on loopback in single-digit milliseconds, so
+       * a one-second bound is three orders of magnitude of headroom for them and the
+       * difference between a 1-second case and an 11-second one for that.
+       */
+      PANEL_HTTP_TIMEOUT_MS: '1000',
     });
   }, 120_000);
 
@@ -849,6 +859,84 @@ describe('a provisioned service announces itself', () => {
       'a non-retryable failure is terminal at once, not after four more logins',
     ).toBe('FAILED');
     expect(create?.attempts, 'and it spent exactly the one attempt it was given').toBe(1);
+
+    /*
+     * And the customer is not left paying for it while an operator finds the typo.
+     *
+     * The third of the three terminal branches that refund — this one is
+     * `persistFailure`, where the panel ANSWERED and the answer was definitive. The
+     * capability case above is `refuse`, where nothing was contacted, and the
+     * reconcile-cycle case is the ceiling that leaves no terminal row at all. Each
+     * is asserted where it happens, because a refund wired into one of the three
+     * looks exactly like a refund wired into all of them until a panel fails the
+     * other way.
+     */
+    const row = (await ctx.container.database.db.execute(
+      sql`SELECT o.state, r.state AS refund_state, r.reason
+            FROM orders o LEFT JOIN refunds r ON r.order_id = o.id
+           WHERE o.id = ${orderId}` as never,
+    )) as unknown as {
+      rows: { state: string; refund_state: string | null; reason: string | null }[];
+    };
+    expect(row.rows).toEqual([
+      { state: 'REFUNDED', refund_state: 'COMPLETED', reason: 'UNDELIVERABLE' },
+    ]);
+    expect(
+      (await services.findByOrderId(tenantA, orderId))?.state,
+      'and the slot is back, because nothing was created to hold it',
+    ).toBe('TERMINATED');
+  });
+
+  it('refunds nothing while the outcome is UNKNOWN, and waits for the read', async () => {
+    /*
+     * The rule the whole lane turns on, asserted at the moment it would be broken.
+     *
+     * A create whose answer was lost MAY have taken effect. Refunding it gives the
+     * money back for an account the customer is holding — so `persistFailure` refunds
+     * on `FAILED` and never on `UNKNOWN`, and that check is SEPARATE from `!retryable`,
+     * which is true for an `UNKNOWN` too. Collapsing the two is a one-word edit, and
+     * this case is what dies when somebody makes it.
+     *
+     * `add-client-hang` is the shape that produces the ambiguity honestly: the panel
+     * STORES the client and then never answers, so the request times out — `TIMEOUT`,
+     * which `SAFE_TO_REPLAY_FAILURE_KINDS` deliberately excludes — and the account the
+     * customer paid for really is on the panel. A refund here would be money returned
+     * for a working service. The reconcile that follows asks, finds it PRESENT, and
+     * the order is fulfilled: the outcome UNKNOWN was always waiting for.
+     */
+    const orderId = await paidOrder('unknown-not-refunded');
+    panel.setBehaviour('add-client-hang');
+
+    await ctx.container.provisionerLoop.tick();
+
+    const serviceId = (await services.findByOrderId(tenantA, orderId))?.id ?? '';
+    const ops = await operations.listForService(tenantA, serviceId, 10);
+    const create = ops.find((operation) => operation.type === 'PROVISION');
+    expect(create?.failureKind, 'the answer was lost, not refused').toBe('TIMEOUT');
+    expect(create?.state, 'and a lost answer is never a definitive failure').not.toBe('FAILED');
+    expect(
+      ops.some((operation) => operation.type === 'RECONCILE'),
+      'the remedy for an unknown is a read, and it was planned',
+    ).toBe(true);
+    expect(panel.clients.size, 'the account the customer paid for really is there').toBe(1);
+
+    /*
+     * Which the read then finds — so the money stays where the customer put it and the
+     * service is delivered. Both halves are asserted, because "no refund" alone is
+     * also what a stuck lane produces.
+     */
+    const refunds = (await ctx.container.database.db.execute(
+      sql`SELECT count(*)::int AS n FROM refunds WHERE order_id = ${orderId}` as never,
+    )) as unknown as { rows: { n: number }[] };
+    expect(refunds.rows[0]?.n, 'and nothing went back for an account that exists').toBe(0);
+    const order = (await ctx.container.database.db.execute(
+      sql`SELECT state FROM orders WHERE id = ${orderId}` as never,
+    )) as unknown as { rows: { state: string }[] };
+    expect(order.rows[0]?.state, 'the order was paid and stays paid').toBe('PAID');
+    expect(
+      (await services.findByOrderId(tenantA, orderId))?.state,
+      "the reconcile found the account and the service is the customer's",
+    ).toBe('ACTIVE');
   });
 
   it('does not announce twice when the sender dies between the send and the record', async () => {
