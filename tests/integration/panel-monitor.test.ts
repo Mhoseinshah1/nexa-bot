@@ -1,11 +1,22 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { and, eq, isNull, sql } from 'drizzle-orm';
-import { errors } from '@nexa/contracts';
-import type { ProviderProbeOutcome, ProviderType, TenantContext } from '@nexa/contracts';
+import { and, eq, isNull, like, sql } from 'drizzle-orm';
+import { errors, money } from '@nexa/contracts';
+import type {
+  ActorContext,
+  BotInstanceId,
+  CorrelationId,
+  PanelId,
+  ProductId,
+  ProviderProbeOutcome,
+  ProviderType,
+  TenantContext,
+  UserId,
+} from '@nexa/contracts';
 import type { PanelRepository } from '../../apps/api/src/modules/platform/panels/application/ports';
 import {
   auditLogs,
   operationalEvents,
+  panelCapacityReservations,
   panels,
   panelHealth,
   panelMonitorSchedule,
@@ -25,6 +36,7 @@ import {
   DrizzlePanelRepository,
 } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel.repository';
 import { DrizzleOperationalConditionReader } from '../../apps/api/src/modules/platform/opslog/infrastructure/drizzle-operational-event.reader';
+import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { DrizzlePanelCredentialStore } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel-credentials';
 import { SafeHttpClient } from '../../apps/api/src/infrastructure/net/safe-http';
 import {
@@ -41,6 +53,7 @@ import {
   createAdmin,
   createTestContext,
   validatePanelConnection,
+  SEED_IDS,
   tenantA,
   tenantB,
   type SeededAdmin,
@@ -182,6 +195,9 @@ describe('the panel health monitor', () => {
       {
         discovery:
           options.discovery ?? new DrizzlePanelMonitorRepository(ctx.container.database.db),
+        // The container's own capacity repository, not a stand-in: a capacity
+        // alert that agreed with a fake would prove the fake.
+        capacity: ctx.container.panelCapacity,
         probe: probeDeps(options.probe ?? {}),
         guard: ctx.container.guard,
         scopeActivity: ctx.container.tenants,
@@ -359,6 +375,7 @@ describe('the panel health monitor', () => {
       const service = new PanelMonitorService(
         {
           discovery: new DrizzlePanelMonitorRepository(ctx.container.database.db),
+          capacity: ctx.container.panelCapacity,
           scopeActivity: ctx.container.tenants,
           conditions: new DrizzleOperationalConditionReader(ctx.container.database.db),
           probe: watched,
@@ -3265,6 +3282,309 @@ describe('the panel health monitor', () => {
   // ===========================================================================
   // 54-61. Both providers, through the same core, with no branching
   // ===========================================================================
+
+  // =========================================================================
+  // Capacity conditions (Phase 6B)
+  // =========================================================================
+
+  /**
+   * The monitor's HALF of the capacity alert: does a tick read the real
+   * repository, record what it decides, dedupe it, and resolve it.
+   *
+   * The DECISION — which of the three conditions an occupancy earns — is
+   * `capacityAlertFor`, and every branch of it is pinned in
+   * `tests/unit/panel-capacity-alerts.test.ts`, where a branch costs a line
+   * rather than an order, a product and a customer. That the repository counts
+   * real reservations and real services is `panel-capacity.test.ts`'s 21 cases.
+   * This file owns the composition, which is the part neither of those can see.
+   */
+  describe('capacity conditions', () => {
+    /**
+     * A job actor, because placing a hold means drafting a real order and an
+     * order is a customer's. Nothing here is the thing under test — the tick is
+     * — but the counts it reads have to be counts of real rows, which is the
+     * rule this whole feature turns on: `panel-capacity.test.ts` proves the
+     * repository counts holds and services, so a fixture that wrote a number
+     * into a column would be testing the number.
+     */
+    const systemActor = (idempotencyKey: string): ActorContext => ({
+      type: 'SYSTEM_JOB',
+      id: null,
+      label: 'panel-monitor:capacity',
+      surface: 'TELEGRAM',
+      correlationId: idempotencyKey as CorrelationId,
+    });
+
+    const products = (): DrizzleProductRepository =>
+      new DrizzleProductRepository(ctx.container.database.db);
+
+    /** The customer every hold below belongs to. */
+    let occupant: UserId;
+
+    beforeEach(async () => {
+      const { customer } = await ctx.container.customers.resolveFromUpdate(
+        tenantA,
+        systemActor('capacity-occupant'),
+        {
+          idempotencyKey: 'capacity-occupant',
+          telegramUserId: '900991',
+          from: { id: 900_991, first_name: 'مینا' },
+          botInstanceId: SEED_IDS.botA1 as BotInstanceId,
+        },
+      );
+      occupant = customer.id;
+    });
+
+    /** An ACTIVE, priced, panel-bound product: the minimum an order may name. */
+    const sellableProduct = async (panelId: string): Promise<ProductId> => {
+      const created = await products().create(tenantA, {
+        id: ctx.container.ids.uuid() as ProductId,
+        draft: {
+          title: 'پلن ظرفیت',
+          description: null,
+          audience: 'EVERYONE',
+          sortOrder: 10,
+          panelId: panelId as PanelId,
+          specification: { durationDays: 30, trafficBytes: 0n, deviceLimit: 1 },
+          price: money(120_000n, 'IRT'),
+        },
+        now: clock.now(),
+      });
+      await products().setStatus(tenantA, created.id, 'INACTIVE', 'ACTIVE', clock.now());
+      return created.id;
+    };
+
+    const setCap = (panelId: string, maxServices: number | null) =>
+      ctx.container.database.db.update(panels).set({ maxServices }).where(eq(panels.id, panelId));
+
+    const probeOnce = async (panelId: string) => {
+      await makeDueNow(panelId, tenantA.tenantId);
+      return tick();
+    };
+
+    /** Every capacity row for tenant A, open or resolved. */
+    const capacityRows = async () =>
+      ctx.container.database.db
+        .select({
+          code: operationalEvents.code,
+          severity: operationalEvents.severity,
+          occurrences: operationalEvents.occurrenceCount,
+          resolvedAt: operationalEvents.resolvedAt,
+          context: operationalEvents.context,
+        })
+        .from(operationalEvents)
+        .where(
+          and(
+            eq(operationalEvents.tenantId, tenantA.tenantId),
+            like(operationalEvents.code, 'panel.capacity.%'),
+          ),
+        );
+
+    /** The OPEN capacity conditions, as `code:occurrences`. */
+    const openCapacity = async () =>
+      (await capacityRows())
+        .filter((row) => row.resolvedAt === null)
+        .map((row) => `${row.code}:${String(row.occurrences)}`)
+        .sort();
+
+    /**
+     * Occupy slots with RESERVATIONS, which are occupants in their own right.
+     *
+     * A hold is half of `used` and the cheaper half to place: a service row
+     * needs a provisioned account's worth of columns, while a hold needs a real
+     * order and an expiry. Which of the two fills a slot is
+     * `panel-capacity.test.ts`'s question and is settled there; what this suite
+     * needs is a panel whose REAL counts put it over the line.
+     */
+    const occupy = async (panelId: string, count: number): Promise<void> => {
+      if (count === 0) return;
+      const product = await sellableProduct(panelId);
+      for (let index = 0; index < count; index += 1) {
+        const k = key();
+        const order = await ctx.container.orders.createDraft(tenantA, systemActor(k), {
+          idempotencyKey: k,
+          customerId: occupant,
+          productId: product,
+        });
+        await ctx.container.database.db.insert(panelCapacityReservations).values({
+          id: ctx.container.ids.uuid(),
+          tenantId: tenantA.tenantId,
+          panelId,
+          orderId: order.id,
+          // Far beyond anything this suite advances the clock to: an expired
+          // hold stops counting, and a fixture that expired mid-test would
+          // read exactly like the observer failing to see occupancy.
+          expiresAt: new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000),
+        });
+      }
+    };
+
+    /** Frees every hold on a panel: the drain a termination or an expiry causes. */
+    const drain = (panelId: string) =>
+      ctx.container.database.db
+        .delete(panelCapacityReservations)
+        .where(eq(panelCapacityReservations.panelId, panelId));
+
+    it('says nothing about an uncapped panel, in either direction', async () => {
+      /*
+       * A `null` cap is unlimited, so there is no threshold to cross and
+       * nothing to resolve. This is the DEFAULT for every panel in this
+       * installation, which is why silence rather than an INFO row is the only
+       * tolerable answer: one row per tick per panel is an operations log
+       * nobody reads.
+       */
+      const panelId = await createPanel(ownerA, tenantA, 'Uncapped');
+      await occupy(panelId, 3);
+      await probeOnce(panelId);
+
+      expect(await capacityRows()).toEqual([]);
+    });
+
+    it('says nothing about a capped panel that is comfortably below the line', async () => {
+      // The steady state of a healthy installation, and the assertion that
+      // stops this observer from becoming the noise it is meant to replace.
+      const panelId = await createPanel(ownerA, tenantA, 'Roomy');
+      await setCap(panelId, 10);
+      await occupy(panelId, 1);
+      await probeOnce(panelId);
+      await probeOnce(panelId);
+
+      expect(await capacityRows()).toEqual([]);
+    });
+
+    it('records the condition its own evaluator decided, from the real counts', async () => {
+      /*
+       * The composition, which is the part neither the unit test nor the
+       * capacity suite can see: the tick reads the REAL repository — two holds
+       * against a cap of two — decides from it, and writes the row.
+       */
+      const panelId = await createPanel(ownerA, tenantA, 'Full');
+      await setCap(panelId, 2);
+      await occupy(panelId, 2);
+      await probeOnce(panelId);
+
+      expect(await openCapacity()).toEqual(['panel.capacity.full:1']);
+      const [row] = await capacityRows();
+      expect(row?.severity).toBe('ERROR');
+      expect(row?.context).toMatchObject({ panelId, used: 2, reservations: 2, maxServices: 2 });
+    });
+
+    it('counts a second tick on an unchanged panel as a REPEAT, not a second alert', async () => {
+      /*
+       * The dedupe rule, which is why these are `operational_events` rows
+       * rather than messages: an open condition's occurrence counter is what
+       * says it happened again. A second CODE for "it happened twice" would be
+       * a row nothing can resolve, and `operational_events` cannot rewrite a
+       * code.
+       */
+      const panelId = await createPanel(ownerA, tenantA, 'Still full');
+      await setCap(panelId, 1);
+      await occupy(panelId, 1);
+      await probeOnce(panelId);
+      await probeOnce(panelId);
+
+      expect(await openCapacity()).toEqual(['panel.capacity.full:2']);
+      // And the repeat resolved nothing — a row that named its own code would
+      // have closed the condition it had just reopened.
+      expect((await capacityRows()).every((row) => row.resolvedAt === null)).toBe(true);
+    });
+
+    it('closes the ERROR when the panel drains, leaving one open recovery', async () => {
+      /*
+       * The failure this whole shape exists to prevent. `recoversCode` closes
+       * ONE code, so a full panel that drains must be met by a recovery that
+       * names `full` — otherwise an ERROR describing a panel that is fine
+       * stands for ever, and there is no other path that can close it.
+       */
+      const panelId = await createPanel(ownerA, tenantA, 'Drained');
+      await setCap(panelId, 1);
+      await occupy(panelId, 1);
+      await probeOnce(panelId);
+      expect(await openCapacity()).toEqual(['panel.capacity.full:1']);
+
+      await drain(panelId);
+      await probeOnce(panelId);
+
+      expect(await openCapacity()).toEqual(['panel.capacity.recovered:1']);
+      const full = (await capacityRows()).find((row) => row.code === 'panel.capacity.full');
+      expect(full?.resolvedAt).not.toBeNull();
+    });
+
+    it('warns on the way up and closes the warning when the panel fills', async () => {
+      /*
+       * The transition between the two conditions, which is the one a single
+       * `recoversCode` makes easy to get wrong: at most ONE capacity row is
+       * open per panel, so the ERROR has to close the WARN it supersedes —
+       * otherwise an operator sees two rows for one panel and the recovery that
+       * follows can only close one of them.
+       */
+      const panelId = await createPanel(ownerA, tenantA, 'Filling');
+      await setCap(panelId, 5);
+      await occupy(panelId, 4);
+      await probeOnce(panelId);
+      expect(await openCapacity()).toEqual(['panel.capacity.warning:1']);
+
+      await occupy(panelId, 1);
+      await probeOnce(panelId);
+
+      expect(await openCapacity()).toEqual(['panel.capacity.full:1']);
+      const warning = (await capacityRows()).find((row) => row.code === 'panel.capacity.warning');
+      expect(warning?.resolvedAt).not.toBeNull();
+    });
+
+    it('stops reporting a condition the moment the cap is removed', async () => {
+      /*
+       * The operator's own remedy, and the direction the sales gate cannot see:
+       * a cap change, with no purchase involved. Removing the cap does not make
+       * the observer silent — it makes the condition false, and a false
+       * condition has to be closed.
+       */
+      const panelId = await createPanel(ownerA, tenantA, 'Uncapped again');
+      await setCap(panelId, 1);
+      await occupy(panelId, 1);
+      await probeOnce(panelId);
+      expect(await openCapacity()).toEqual(['panel.capacity.full:1']);
+
+      await setCap(panelId, null);
+      await probeOnce(panelId);
+
+      expect(await openCapacity()).toEqual(['panel.capacity.recovered:1']);
+    });
+
+    it('writes no health, status or credential change while recording one', async () => {
+      /*
+       * The rule CLAUDE.md states about a probe result, asserted from the other
+       * side: a capacity observation is a SECOND, independent condition
+       * recorded from the same loop, and it touches nothing the probe owns.
+       */
+      const panelId = await createPanel(ownerA, tenantA, 'Independent');
+      await setCap(panelId, 1);
+      await occupy(panelId, 1);
+      await probeOnce(panelId);
+
+      expect(await openCapacity()).toEqual(['panel.capacity.full:1']);
+      expect(await healthOf(panelId).then((row) => row?.state)).toBe('HEALTHY');
+      const view = await ctx.container.panels.get(tenantA, adminActorFor(ownerA), panelId);
+      expect(view.panel.status).toBe('ACTIVE');
+      expect(view.panel.maxServices).toBe(1);
+    });
+
+    it('counts nothing across the tenant boundary', async () => {
+      /*
+       * Tenant A's panel is capped at 1 and EMPTY while tenant B's is capped at
+       * 1 and full. A count that leaked would make A's panel full too — and A
+       * is the tenant whose rows are asserted, so a leak in either direction
+       * shows up here.
+       */
+      const theirs = await createPanel(ownerB, tenantB, 'Theirs');
+      await setCap(theirs, 1);
+      const mine = await createPanel(ownerA, tenantA, 'Mine');
+      await setCap(mine, 1);
+      await probeOnce(mine);
+
+      expect(await capacityRows()).toEqual([]);
+    });
+  });
 
   describe('providers', () => {
     async function createSanaei(name: string, credentials: Record<string, string>) {
