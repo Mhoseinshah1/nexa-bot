@@ -1096,6 +1096,42 @@ export const TEMPLATES = [
     ],
   },
   {
+    key: 'bot.admin.order_unfulfilled',
+    description:
+      'Sent to each administrator with Telegram access who may retry or reassign a paid '
+      + 'order, when one is settled and could not be fulfilled on its panel. Carries the '
+      + 'order reference, the amount and the reason the panel refused it, so the reader '
+      + 'knows whether the answer is "fix the panel", "move it" or "refund it". No '
+      + 'buttons: the decision has an amount attached and belongs where the panel, the '
+      + 'customer and the refund option are visible together.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description: 'The order id, which is what an operator searches by.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'total',
+        type: 'MONEY',
+        description: 'The amount this installation has taken and not yet delivered for.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'reason',
+        type: 'STRING',
+        description:
+          'Why the panel could not take it, already rendered — DISABLED, ARCHIVED, '
+          + 'UNHEALTHY or AT_CAPACITY. A vocabulary word, never a provider message.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
     key: 'bot.wallet.insufficient',
     description:
       'Shown when a wallet settlement is refused for want of funds. Carries the ' +

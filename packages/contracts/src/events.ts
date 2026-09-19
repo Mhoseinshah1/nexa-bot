@@ -98,6 +98,17 @@ export const EVENT_TYPES = [
   'CustomerUnblocked',
   'OrderConfirmed',
   'OrderSettled',
+  /**
+   * The money arrived and the thing it bought could not be created.
+   *
+   * A SEPARATE event from `OrderSettled` rather than a field on it, because a
+   * consumer that acts on a settlement — anything that expects a service to follow —
+   * must not act on this one. The reason travels with it so an operations projection
+   * can say WHY without joining the order back.
+   */
+  'OrderPaidUnfulfilled',
+  /** An operator got a stranded paid order fulfilled, on its panel or another. */
+  'OrderFulfilled',
   'OrderCancelled',
   'OrderRefunded',
   'PaymentConfirmed',
@@ -221,6 +232,23 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     paymentId: z.string(),
     totalMinor: z.string(),
     currency: z.string(),
+  }),
+  OrderPaidUnfulfilled: z.object({
+    customerId: z.string(),
+    paymentId: z.string(),
+    panelId: z.string(),
+    /** A `PanelEligibility` reason: why the panel could not take it. */
+    reason: z.string(),
+    totalMinor: z.string(),
+    currency: z.string(),
+  }),
+  OrderFulfilled: z.object({
+    customerId: z.string(),
+    serviceId: z.string(),
+    /** The panel it was finally created on, which may not be the one it was sold on. */
+    panelId: z.string(),
+    /** True when an operator moved it to a different panel to get it out. */
+    reassigned: z.boolean(),
   }),
   OrderCancelled: z.object({ customerId: z.string(), byOperator: z.boolean() }),
   OrderRefunded: z.object({

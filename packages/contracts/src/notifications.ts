@@ -46,6 +46,21 @@ export const NOTIFICATION_KINDS = [
    * button on a notification would make the message the only way in.
    */
   'RECEIPT_AWAITING_REVIEW',
+  /**
+   * An order was paid for and could not be fulfilled (Phase 6B, Codex C4).
+   *
+   * Addressed to the administrators who may do something about it — the holders of
+   * `orders.fulfil` — for the reason `RECEIPT_AWAITING_REVIEW` is addressed to
+   * reviewers: an operations-channel message is read by whoever happens to be
+   * looking, and money this installation owes for is not that kind of news.
+   *
+   * A POKE, not the work, and the same rule applies: what makes a stranded order
+   * actionable is the orders list and the open `order.fulfilment_failed` condition,
+   * both of which survive a message nobody delivers. It carries no buttons — retrying
+   * is a decision with an amount attached, and it belongs where the operator can see
+   * the panel, the customer and the refund option together.
+   */
+  'ORDER_PAID_UNFULFILLED',
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 

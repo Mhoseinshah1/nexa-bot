@@ -242,6 +242,18 @@ export type OperationalScope = (typeof OPERATIONAL_SCOPES)[number];
  */
 export const MANAGEMENT_CONDITION_FAILURE_CODES = [
   'panel.monitor.tenant_budget_exceeded',
+  /**
+   * An order was paid for and could not be fulfilled on its panel.
+   *
+   * A CONDITION and not a one-shot, because it is a state somebody has to act on and
+   * something later resolves: the order is owed until an operator fulfils it or
+   * refunds it. Keyed per ORDER, so ten stranded orders are ten rows an operator can
+   * work through rather than one counter.
+   *
+   * ERROR rather than WARN: this installation is holding money for something it has
+   * not delivered.
+   */
+  'order.fulfilment_failed',
   'settings.stored_value_invalid',
   /**
    * A backup run failed, at whatever stage.
@@ -297,6 +309,8 @@ export const MANAGEMENT_CONDITION_FAILURE_CODES = [
  */
 export const MANAGEMENT_CONDITION_RECOVERY_CODES = [
   'panel.monitor.tenant_budget_ok',
+  /** A stranded order was fulfilled or refunded, closing `order.fulfilment_failed`. */
+  'order.fulfilment_ok',
   'settings.stored_value_valid',
   /** A backup run succeeded, closing `backup.run_failed`. */
   'backup.run_ok',

@@ -55,6 +55,15 @@ export const PERMISSIONS = [
   // Orders
   p('orders.view', 'View orders', 'LOW'),
   p('orders.cancel', 'Cancel an order', 'HIGH'),
+  /*
+   * Retry or reassign the fulfilment of an order that is PAID and unfulfilled.
+   *
+   * HIGH, and its own key rather than `orders.cancel` or `services.edit`: the holder
+   * decides what happens to money this installation has already taken, and the
+   * alternative to pressing it is a refund. That is why Finance holds it — the two
+   * ways out of a stranded order are theirs to choose between.
+   */
+  p('orders.fulfil', 'Retry or reassign fulfilment of a paid order', 'HIGH'),
   p('orders.manual.create', 'Create a manual order', 'HIGH'),
 
   // Payments, receipts, refunds — four separate concepts, four separate keys
@@ -273,6 +282,10 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       'receipts.review',
       'refunds.view',
       'refunds.issue',
+      // The other way out of a paid order nobody could fulfil. Granted with
+      // `refunds.issue` deliberately: whoever may refund the customer should be
+      // able to try delivering what they paid for first.
+      'orders.fulfil',
       // Finance is the role that owns where money arrives. Without the edit key the
       // only account holder able to change a blocked card would be the owner.
       'payments.accounts.view',
