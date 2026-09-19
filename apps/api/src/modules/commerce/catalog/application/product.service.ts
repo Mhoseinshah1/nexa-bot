@@ -66,15 +66,6 @@ export const PRODUCT_EDIT_PERMISSION: PermissionKey = 'catalog.edit';
  * and nothing else, and the check is made for `SYSTEM_JOB` like every other actor
  * because `nexa-conventions` forbids an actor-type exemption.
  */
-/**
- * How far `browse` will read to fill a customer's page, in rows, in order.
- *
- * Two rounds rather than one, because one page of `PRODUCT_PAGE_MAX` still hid an
- * eligible product behind a hundred ineligible ones. Two rather than unbounded,
- * because this runs inside a customer's request.
- */
-const CATALOGUE_SCAN_LIMITS = [PRODUCT_PAGE_MAX, PRODUCT_PAGE_MAX * 5] as const;
-
 export const CATALOG_BROWSE_PERMISSION: PermissionKey = 'maintenance.run';
 
 export interface ProductServiceDeps {
@@ -163,75 +154,40 @@ export class ProductService {
     const bounded = Math.min(Math.max(limit, 1), PRODUCT_PAGE_MAX);
 
     /*
-     * Scanned until the caller's bound is FILLED with eligible products, the catalogue
-     * is exhausted, or the scan ceiling is reached — whichever comes first.
+     * The fleet filter is decided FIRST, and goes into the query.
      *
-     * Fetching only `bounded` rows and filtering them made a screenful of ineligible
-     * products hide the eligible ones behind it: twenty products on disabled or full
-     * panels and an eligible twenty-first produced an EMPTY catalogue, and the bot's
-     * bound is a bound rather than a cursor, so the customer had no way to reach past
-     * it. Found by the Codex review of this branch.
+     * Filtering what a bounded query returned is the shape this was twice, and each
+     * time it left a number at which the catalogue silently emptied: with the bound
+     * applied first, twenty ineligible products hid an eligible twenty-first; scanning
+     * `PRODUCT_PAGE_MAX` moved that to a hundred; widening to `PRODUCT_PAGE_MAX * 5`
+     * moved it to five hundred. Any filter applied after a LIMIT can be defeated by
+     * enough ineligible rows in front of the eligible one, so the ceiling was never
+     * going to be removed by raising it. Found, and then found again twice, by the
+     * Codex review of this branch.
      *
-     * Scanning ONE page of `PRODUCT_PAGE_MAX` did not finish the job and was reported
-     * again on the next round: it only moved the cliff from twenty products to a
-     * hundred. So the scan widens until it has enough.
+     * So the eligible panels are read once — the fleet is small, operator-provisioned
+     * and bounded by nothing the catalogue controls — and handed to the repository as
+     * a WHERE clause. The LIMIT then applies to products that are already sellable,
+     * which makes the first eligible product reachable however many ineligible ones
+     * precede it.
      *
-     * ## Why a widening re-scan and not a cursor
+     * ## Where the counting happens, and where it must not
      *
-     * `listCatalog` deliberately has no cursor, and `drizzle-product.repository.ts`
-     * records why: the catalogue is ordered by `sort_order` FIRST, that column is
-     * mutable, and a keyset over it can silently skip a product an operator reorders
-     * mid-traversal. Each round here is therefore one query from the start of the
-     * ordering — a fresh, self-consistent snapshot — rather than a continuation of the
-     * last one. The cost of re-reading the rows already seen is what buys the absence
-     * of a skip.
+     * `eligiblePanelIds` counts services and unexpired holds, inside `PanelSalesGate`,
+     * which is the one evaluator with four callers. The catalogue query itself still
+     * counts nothing: it is given ids. A predicate that counted services in the
+     * product query would be the second implementation of that rule and would drift
+     * from it silently.
      *
-     * ## Why a ceiling at all
+     * ## Still a snapshot, and still not trusted
      *
-     * This runs inside a customer's request. `CATALOGUE_SCAN_LIMITS` bounds the work
-     * at two queries and `PRODUCT_PAGE_MAX * 5` rows; beyond that, a catalogue whose
-     * first five hundred listed products are ALL ineligible is a fleet-wide outage and
-     * not a paging problem, and `hasMore` stays true so nothing claims otherwise.
+     * A panel can fill between this read and the customer's tap, and a product id
+     * travels in a screenshot. Confirmation re-decides under the panel's lock and
+     * settlement re-decides again; this is the courtesy filter, unchanged in status
+     * by becoming correct.
      */
-    const eligible: ProductRecord[] = [];
-    let exhausted = false;
-
-    for (const scan of CATALOGUE_SCAN_LIMITS) {
-      const page = await this.deps.repository.listCatalog(scope, scan);
-
-      /*
-       * The fleet filter, applied AFTER the database's membership filter.
-       *
-       * The repository answers "is this product listed, priced and bound to a panel".
-       * This answers "and is that panel able to take one more today", which is a fact
-       * about the fleet and cannot be a predicate in that query without teaching the
-       * catalogue to count services.
-       */
-      const panelIds = page.items.flatMap((item) => (item.panelId === null ? [] : [item.panelId]));
-      const verdicts = await this.deps.panelSales.evaluateMany(scope, panelIds);
-
-      eligible.length = 0;
-      for (const item of page.items) {
-        if (item.panelId !== null && verdicts.get(item.panelId)?.eligible === true) {
-          eligible.push(item);
-        }
-      }
-
-      exhausted = !page.hasMore;
-      // Enough to fill the caller's bound, or there is nothing further to read.
-      if (eligible.length > bounded || exhausted) break;
-    }
-
-    return {
-      items: eligible.slice(0, bounded),
-      /*
-       * An OR of the two ways there can be more, and never a count of what survived
-       * the filter alone: more ELIGIBLE products than the caller asked for, or a scan
-       * that stopped short of the end of the catalogue. Reporting only the first would
-       * claim there is nothing further whenever the tail happened to be all-ineligible.
-       */
-      hasMore: eligible.length > bounded || !exhausted,
-    };
+    const eligiblePanelIds = await this.deps.panelSales.eligiblePanelIds(scope);
+    return this.deps.repository.listCatalog(scope, bounded, eligiblePanelIds);
   }
 
   /** Creates an INACTIVE product. Idempotent, audited. */

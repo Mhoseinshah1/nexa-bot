@@ -1,4 +1,4 @@
-import { and, asc, eq, getTableColumns, isNotNull, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, getTableColumns, inArray, isNotNull, sql, type SQL } from 'drizzle-orm';
 import { money } from '@nexa/contracts';
 import type {
   CurrencyCode,
@@ -207,9 +207,19 @@ export class DrizzleProductRepository implements ProductRepository {
   async listCatalog(
     scope: TenantContext,
     limit: number,
+    eligiblePanelIds: readonly string[],
     tx?: unknown,
   ): Promise<{ readonly items: readonly ProductRecord[]; readonly hasMore: boolean }> {
     const tenantId = requireTenantId(scope);
+    /*
+     * No eligible panel means no catalogue, and saying so costs nothing.
+     *
+     * `inArray` with an empty list is a predicate some builders render as `false`
+     * and others refuse outright; answering here makes the empty case explicit
+     * rather than dependent on that. It is also the honest answer: `hasMore` is
+     * false because there is nothing further to reach, not because a bound was hit.
+     */
+    if (eligiblePanelIds.length === 0) return { items: [], hasMore: false };
     const rows = await this.exec(tx)
       .select()
       .from(products)
@@ -217,6 +227,15 @@ export class DrizzleProductRepository implements ProductRepository {
         and(
           eq(products.tenantId, tenantId),
           eq(products.status, 'ACTIVE'),
+          /*
+           * The fleet filter, BEFORE the limit.
+           *
+           * This is the whole of the fix for the catalogue ceiling: the LIMIT now
+           * applies to products that are already sellable, so the hundredth
+           * ineligible product in front of an eligible one costs a row of index
+           * scan rather than a customer-visible empty shop.
+           */
+          inArray(products.panelId, [...eligiblePanelIds]),
           /*
            * Neither HIDDEN nor RESELLERS_ONLY.
            *

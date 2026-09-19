@@ -833,7 +833,7 @@ describe('an order paid for and not fulfilled', () => {
     const result = await ctx.container.auth.login(
       scope,
       {
-        type: 'ANONYMOUS' as const,
+        type: 'API' as const,
         id: null,
         label: null,
         surface: 'WEB' as const,
