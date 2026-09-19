@@ -102,6 +102,40 @@ interleaving requires two statements to commit between — which is precisely
 what having one statement makes impossible. So the test counts the statements,
 which is the only form of the rule a test can hold.
 
+## Codex C4: money that arrived, for a service that could not be created
+
+The fifth confirmed finding of the same review, fixed separately because it
+needed a state. Every rule the fix introduces is mutated here, against the live
+database.
+
+| #        | Rule                                                             | Mutation                                                | Named test                                                                | Result |
+| -------- | ---------------------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------- | ------ |
+| F6B-C4-1 | a confirmation that cannot be fulfilled still records the money  | `settling` pinned to `SETTLE`                           | _keeps the payment CONFIRMED when the hold expired and the panel is full_ | KILLED |
+| F6B-C4-2 | a WALLET settlement is refused instead, because nothing has left | the wallet branch strands too                           | _refuses a WALLET settlement instead, because that money has not left_    | KILLED |
+| F6B-C4-3 | only an order that CREATES a service consults fulfilment at all  | the purpose predicate inverted                          | _strands the order when the panel was DISABLED after the transfer_        | KILLED |
+| F6B-C4-4 | the retry is authorized BEFORE the replay lookup                 | that check deleted                                      | _refuses a REPLAY from an administrator without orders.fulfil_            | KILLED |
+| F6B-C4-5 | a reassignment names a panel this tenant can see                 | the unknown-panel refusal removed                       | _refuses a reassignment to another tenant s panel as UNKNOWN_             | KILLED |
+| F6B-C4-6 | fulfilment CLOSES the condition the settlement opened            | `recoversCode` and `recoversDedupeKey` dropped          | _fulfils a stranded order once the panel is usable again_                 | KILLED |
+| F6B-C4-7 | `panel_id` moves only out of `PAID_UNFULFILLED` and into `PAID`  | migration 0083 reverted to 0033's broad freeze, in situ | _reassigns a stranded order to another panel, and says the panel changed_ | KILLED |
+| F6B-C4-8 | and moves in no other direction                                  | (the bound of the same exception)                       | _refuses to re-point a PAID order's panel, which is still frozen_         | HELD   |
+
+F6B-C4-4 is the row that earned the pass. It SURVIVED: the comment above the
+check said an unauthorized caller replaying somebody else's key would be handed
+their order, and no test could see it, because the one permission case in the
+file used a fresh key — which `runAuthorizedMutation` refuses whether or not the
+early check exists. The test named in the row was written for the mutation and
+kills it.
+
+F6B-C4-7 is the only mutation in this document applied to the DATABASE rather
+than the tree: the rule is a trigger body, so the function was replaced with the
+pre-0083 form, the test run, and `0083` re-applied. The suite is green again
+afterwards, asserted by re-running it.
+
+F6B-C4-8 is HELD rather than KILLED because it is not a separate rule — it is
+the bound of F6B-C4-7, and the mutation that widens the exception is the fix
+itself. What the row records is that the narrowing is asserted in both
+directions rather than only the one the feature needed.
+
 ## Rules held by a mechanism rather than by a mutation
 
 | Rule                                                    | What holds it                                                                                                                  |

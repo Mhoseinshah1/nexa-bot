@@ -233,8 +233,10 @@ describe('an order paid for and not fulfilled', () => {
     )) as unknown as {
       rows: {
         state: string;
-        settled_at: Date | null;
-        unfulfilled_at: Date | null;
+        // Raw `execute` bypasses drizzle's column mapping, so these arrive as the
+        // driver's own text form rather than a Date. Typed as they actually are.
+        settled_at: string | null;
+        unfulfilled_at: string | null;
         unfulfilled_reason: string | null;
         panel_id: string;
       }[];
@@ -371,6 +373,64 @@ describe('an order paid for and not fulfilled', () => {
      * nothing it cannot address.
      */
     expect(rows.rows.every((row) => row.dedupe_key.startsWith('order.unfulfilled:'))).toBe(true);
+  });
+
+  it('strands ONCE when the same confirmation is delivered twice', async () => {
+    /*
+     * The duplicate an operator's double-click, or a retried request, produces. A
+     * replay is answered from the idempotency store before the settling transaction
+     * opens, so nothing downstream of it may run a second time: not a second
+     * condition, not a second notification, not a second reservation attempt, and
+     * above all not a second stamp over `unfulfilled_at`.
+     *
+     * The second half is the other caller — a fresh key against a payment that is
+     * already CONFIRMED — which the payment state machine refuses outright.
+     */
+    const order = await awaitingPayment(panelA);
+    const paymentId = await pendingTransfer(order);
+    await setStatus(panelA, 'DISABLED');
+    const idempotencyKey = key();
+    const confirm = (k: string) =>
+      ctx.container.payments.confirmManualTransfer(tenantA, finance, paymentId, {
+        idempotencyKey: k,
+        note: 'کارت به کارت',
+      });
+
+    const first = await confirm(idempotencyKey);
+    const afterFirst = await orderRow(order.id);
+    const replay = await confirm(idempotencyKey);
+    const afterReplay = await orderRow(order.id);
+
+    expect(first.payment.state).toBe('CONFIRMED');
+    expect(replay.payment.state).toBe('CONFIRMED');
+    expect(afterReplay?.state).toBe('PAID_UNFULFILLED');
+    expect(afterReplay?.unfulfilled_at, 'the replay did not re-stamp the order').toBe(
+      afterFirst?.unfulfilled_at,
+    );
+    expect(await openConditions('order.fulfilment_failed'), 'one condition, not two').toBe(1);
+    expect(await countOf('services')).toBe(0);
+    const paid = (await ctx.container.database.db.execute(
+      sql`SELECT count(*)::int AS n FROM payments WHERE state = 'CONFIRMED'` as never,
+    )) as unknown as { rows: { n: number }[] };
+    expect(paid.rows[0]?.n, 'one payment, not two').toBe(1);
+    const events = (await ctx.container.database.db.execute(
+      sql`SELECT count(*)::int AS n FROM outbox_messages
+           WHERE event_type = 'OrderPaidUnfulfilled'` as never,
+    )) as unknown as { rows: { n: number }[] };
+    expect(events.rows[0]?.n, 'and one event').toBe(1);
+
+    /*
+     * And the other caller: a FRESH key against a payment that is already CONFIRMED.
+     * `confirmManualTransfer` answers that with the end state rather than an error —
+     * two operators pressing approve must not be told the payment is broken — so what
+     * is asserted is that it changes nothing, which is the part that matters here.
+     */
+    const second = await confirm(key());
+    expect(second.payment.state).toBe('CONFIRMED');
+    expect(second.order?.state).toBe('PAID_UNFULFILLED');
+    expect((await orderRow(order.id))?.unfulfilled_at).toBe(afterFirst?.unfulfilled_at);
+    expect(await openConditions('order.fulfilment_failed'), 'still one condition').toBe(1);
+    expect(await countOf('services')).toBe(0);
   });
 
   it('refuses a WALLET settlement instead, because that money has not left', async () => {
@@ -550,6 +610,29 @@ describe('an order paid for and not fulfilled', () => {
       sql`SELECT count(*)::int AS n FROM outbox_messages WHERE event_type = 'OrderFulfilled'` as never,
     )) as unknown as { rows: { n: number }[] };
     expect(fulfilments.rows[0]?.n, 'and one event').toBe(1);
+  });
+
+  it('refuses a REPLAY from an administrator without orders.fulfil', async () => {
+    /*
+     * The replay path never reaches `runAuthorizedMutation` — it is answered from
+     * the idempotency store, before the transaction opens — so the permission check
+     * the service makes BEFORE that lookup is the only thing standing between an
+     * unauthorized caller and somebody else's order. Without it this returns the
+     * order; the test above cannot see that, because a fresh key is refused by the
+     * mutation guard whether or not the early check exists.
+     */
+    const order = await stranded();
+    await setStatus(panelA, 'ACTIVE');
+    const idempotencyKey = key();
+
+    await ctx.container.orderFulfilment.fulfil(tenantA, finance, {
+      idempotencyKey,
+      orderId: order.id,
+    });
+
+    await expect(
+      ctx.container.orderFulfilment.fulfil(tenantA, support, { idempotencyKey, orderId: order.id }),
+    ).rejects.toMatchObject({ kind: 'PERMISSION_DENIED' });
   });
 
   it('refuses a second retry under a DIFFERENT key, because the order already moved', async () => {
