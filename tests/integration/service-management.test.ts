@@ -919,6 +919,77 @@ describe('a customer manages the service they bought', () => {
     return { orderId: order.id, paymentId: payment.id };
   }
 
+  it('answers a second ask with a verdict when the caller can refund, and throws when it cannot', async () => {
+    /*
+     * Codex on PR #50, raised against `STRAND` and outliving the design it named.
+     *
+     * `planCommercialAction` asks the three settlement refusals a SECOND time, after
+     * `confirmAndSettle` has already asked them and already moved the order. Under
+     * READ COMMITTED that second read takes a fresh snapshot, so a settlement for
+     * another order on the same service, committed in between, is invisible to the
+     * first and visible to this one — and the two can disagree.
+     *
+     * It used to answer that disagreement by throwing, whatever the caller was doing.
+     * For a bank transfer that unwound a transaction which had already confirmed
+     * money that arrived days ago, leaving it as a `PENDING` payment: neither
+     * confirmable nor refundable, which is the exact state the two-outcome design
+     * exists to make unreachable.
+     *
+     * So the disposition is the CALLER's. This case asserts both halves of it
+     * directly, because the window itself is only reachable through a real
+     * interleaving: the refusal is real — an operation for this service really is
+     * outstanding — and the only thing under test is what the method DOES with it.
+     *
+     * `REFUSE` still throws, and that is not an oversight: a wallet settlement dies
+     * with its transaction, so a credit there would be a credit for money that never
+     * left. The asymmetry is the same one `PaymentService` draws one call earlier.
+     */
+    const service = await activeService('second-ask');
+    await buy(service.id, 'RENEW', null, 'second-ask-first');
+    const outstanding = await operationOf(service.id, 'RENEW');
+    expect(outstanding, 'the fixture must leave an operation in flight').toBeDefined();
+
+    const { orderId } = await buyByTransfer(service.id, 'RENEW', 'second-ask-loser');
+    const order = await ctx.container.orders.get(tenantA, owner, orderId);
+    const plan = {
+      serviceId: service.id,
+      kind: 'RENEW' as const,
+      purchasedTrafficBytes: 0n,
+      purchasedDurationDays: 30,
+    };
+
+    const verdict = await ctx.container.uow.run(tenantA, async (tx) =>
+      ctx.container.provisioning.planCommercialAction(
+        tenantA,
+        systemActor('second-ask'),
+        order,
+        plan,
+        new Date(),
+        tx,
+        'REFUND',
+      ),
+    );
+    expect(verdict, 'a caller that can refund is told, not thrown at').toEqual({
+      outcome: 'UNFULFILLABLE',
+      reason: 'ACTION_IN_PROGRESS',
+    });
+
+    await expect(
+      ctx.container.uow.run(tenantA, async (tx) =>
+        ctx.container.provisioning.planCommercialAction(
+          tenantA,
+          systemActor('second-ask'),
+          order,
+          plan,
+          new Date(),
+          tx,
+          'REFUSE',
+        ),
+      ),
+      'and a caller that cannot refund still dies with its transaction',
+    ).rejects.toThrow();
+  });
+
   /*
    * Codex N4-N1 on PR #50: a capacity slot belongs to an order that CREATES a
    * service, and to no other.

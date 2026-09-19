@@ -2644,64 +2644,18 @@ export class PaymentService {
       throw errors.notFound(COMMERCE_ERROR_CODES.ORDER_NOT_FOUND, 'Unknown order.');
     }
 
-    await this.deps.audit.record(
-      scope,
-      actor,
-      {
-        action,
-        entityType: 'Payment',
-        entityId: confirmed.id,
-        before: { state: payment.state },
-        after: {
-          state: confirmed.state,
-          evidenceKind: confirmed.evidenceKind,
-          orderId: settled.id,
-          orderState: settled.state,
-          amountMinor: confirmed.amount.amountMinor.toString(),
-          currency: confirmed.amount.currency,
-        },
-        result: 'SUCCESS',
-      },
-      tx,
-    );
-
-    await this.deps.outbox.write(tx, actor, {
-      eventType: 'PaymentConfirmed',
-      aggregateType: 'Payment',
-      aggregateId: confirmed.id,
-      payload: {
-        customerId: confirmed.customerId,
-        orderId: confirmed.orderId,
-        method: confirmed.method,
-        evidenceKind: confirmed.evidenceKind,
-        amountMinor: confirmed.amount.amountMinor.toString(),
-        currency: confirmed.amount.currency,
-      },
-    });
-
     /*
-     * `OrderSettled` is what a consumer acts on when a service is coming, so an order
-     * that produced none must not emit it: the two are different facts and a flag on
-     * one event would be read by exactly the handlers that should not have run. The
-     * refunded order's own event is `OrderRefunded`, written by
-     * `UndeliverableOrderRefunder` in this same transaction.
+     * THE WORK, BEFORE THE EVENTS THAT ANNOUNCE IT.
+     *
+     * This block used to sit after the audit record and both outbox writes, and that
+     * ordering was load-bearing in the wrong direction: the commercial arm can still
+     * discover, on its second ask, that the order cannot be delivered after all — and
+     * an `OrderSettled` already written is a promise to every consumer that a service
+     * is coming. Planning first means the refund below happens before anything has
+     * said otherwise, and `OrderSettled` is emitted only by a settlement that really
+     * produced work.
      */
-    if (!undeliverable) {
-      await this.deps.outbox.write(tx, actor, {
-        eventType: 'OrderSettled',
-        aggregateType: 'Order',
-        aggregateId: settled.id,
-        payload: {
-          customerId: settled.customerId,
-          // Required by the frozen event, and it is always present: an order settles
-          // only through a confirmed payment, which is what `settlementIsFunded` says.
-          paymentId: confirmed.id,
-          totalMinor: settled.totals.total.amountMinor.toString(),
-          currency: settled.totals.currency,
-        },
-      });
-    }
-
+    let lateRefund = false;
     /*
      * What the customer just bought, recorded in THIS transaction — and WHICH of the two
      * it was, read off the order rather than guessed.
@@ -2758,7 +2712,18 @@ export class PaymentService {
           `order ${settled.id} is ${settled.purpose} and carries no commercial action`,
         );
       }
-      await this.deps.provisioning.planCommercialAction(
+      /*
+       * The SECOND ask, and the one that can disagree with the first.
+       *
+       * `onIneligible` is the caller's, not this method's: under READ COMMITTED
+       * this read takes a fresh snapshot, so a settlement for another order on the
+       * same service that committed between the two asks is invisible to the first
+       * and visible to this one. It used to throw, unwinding a transaction that had
+       * already confirmed an arrived bank transfer and leaving the money as a
+       * `PENDING` payment — Codex's `STRAND` finding on PR #50, which outlived the
+       * design it was raised against.
+       */
+      const planned = await this.deps.provisioning.planCommercialAction(
         scope,
         actor,
         settled,
@@ -2770,9 +2735,107 @@ export class PaymentService {
         },
         now,
         tx,
+        onIneligible,
       );
+      if (planned.outcome === 'UNFULFILLABLE') {
+        /*
+         * From `PAID` this time, not from `AWAITING_PAYMENT`: the order reached
+         * `PAID` a few statements ago because the first ask said it could be
+         * delivered. This is the same late-discovery path the provisioner takes when
+         * a panel refuses an operation it accepted the order for, and it is the same
+         * collaborator, so there is one credit path rather than two.
+         *
+         * `false` means somebody else moved the order between the settle and this,
+         * which `changed` below refuses for exactly the same reason the first
+         * transition does.
+         */
+        lateRefund = await this.deps.undeliverable.refund(
+          scope,
+          actor,
+          { order: settled, from: 'PAID', payment: confirmed, reason: planned.reason, now },
+          tx,
+        );
+        if (!lateRefund) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.SETTLEMENT_NOT_FUNDED,
+            'That order is no longer awaiting payment.',
+            { reason: 'ORDER_NOT_AWAITING_PAYMENT' },
+          );
+        }
+      }
     } else {
       await this.deps.provisioning.planForSettledOrder(scope, actor, settled, now, tx);
+    }
+
+    /*
+     * The order as it ACTUALLY ended, which after a late refund is not `settled`.
+     *
+     * `settled` was read when the order reached `PAID`, and the commercial arm may
+     * have moved it to `REFUNDED` since. The audit record and this method's return
+     * value are both read by somebody deciding what happened, so both have to carry
+     * the state the transaction is about to commit rather than the one it passed
+     * through.
+     */
+    const outcome = lateRefund
+      ? ((await this.deps.orders.findById(scope, order.id, tx)) ?? settled)
+      : settled;
+
+    await this.deps.audit.record(
+      scope,
+      actor,
+      {
+        action,
+        entityType: 'Payment',
+        entityId: confirmed.id,
+        before: { state: payment.state },
+        after: {
+          state: confirmed.state,
+          evidenceKind: confirmed.evidenceKind,
+          orderId: outcome.id,
+          orderState: outcome.state,
+          amountMinor: confirmed.amount.amountMinor.toString(),
+          currency: confirmed.amount.currency,
+        },
+        result: 'SUCCESS',
+      },
+      tx,
+    );
+
+    await this.deps.outbox.write(tx, actor, {
+      eventType: 'PaymentConfirmed',
+      aggregateType: 'Payment',
+      aggregateId: confirmed.id,
+      payload: {
+        customerId: confirmed.customerId,
+        orderId: confirmed.orderId,
+        method: confirmed.method,
+        evidenceKind: confirmed.evidenceKind,
+        amountMinor: confirmed.amount.amountMinor.toString(),
+        currency: confirmed.amount.currency,
+      },
+    });
+
+    /*
+     * `OrderSettled` is what a consumer acts on when a service is coming, so an order
+     * that produced none must not emit it: the two are different facts and a flag on
+     * one event would be read by exactly the handlers that should not have run. The
+     * refunded order's own event is `OrderRefunded`, written by
+     * `UndeliverableOrderRefunder` in this same transaction.
+     */
+    if (!undeliverable && !lateRefund) {
+      await this.deps.outbox.write(tx, actor, {
+        eventType: 'OrderSettled',
+        aggregateType: 'Order',
+        aggregateId: settled.id,
+        payload: {
+          customerId: settled.customerId,
+          // Required by the frozen event, and it is always present: an order settles
+          // only through a confirmed payment, which is what `settlementIsFunded` says.
+          paymentId: confirmed.id,
+          totalMinor: settled.totals.total.amountMinor.toString(),
+          currency: settled.totals.currency,
+        },
+      });
     }
 
     if (remember !== undefined) {
@@ -2787,7 +2850,7 @@ export class PaymentService {
       );
     }
 
-    return { payment: confirmed, order: settled };
+    return { payment: confirmed, order: outcome };
   }
 
   /**

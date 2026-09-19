@@ -955,18 +955,41 @@ export class ProvisioningService {
     },
     now: Date,
     tx: TransactionScope,
-  ): Promise<OperationRecord> {
+    onIneligible: 'REFUSE' | 'REFUND' = 'REFUSE',
+  ): Promise<
+    | { readonly outcome: 'PLANNED'; readonly operation: OperationRecord }
+    | { readonly outcome: 'UNFULFILLABLE'; readonly reason: string }
+  > {
     /*
-     * The three settlement-time refusals, in ONE implementation.
+     * The three settlement-time refusals, in ONE implementation — asked a SECOND
+     * time, and the caller's disposition carried into the answer.
      *
      * `prepareCommercialAction` owns them because `confirmAndSettle` has to ask the
-     * same question BEFORE it decides how to settle — a bank transfer that has already
-     * arrived is recorded and owed rather than rolled back. `REFUSE` here keeps this
-     * method's contract exactly as it was: it throws, and the transaction unwinds.
+     * same question BEFORE it decides how to settle: a bank transfer that has already
+     * arrived is recorded and owed rather than rolled back.
+     *
+     * ## Why the disposition is a parameter and not `REFUSE`
+     *
+     * Under READ COMMITTED this second call takes a FRESH snapshot, so it can
+     * disagree with the first: a settlement for another order on the same service,
+     * committed in between, is invisible to the first read and visible to this one.
+     * Hard-coding `REFUSE` meant that disagreement threw — unwinding a transaction
+     * that had already confirmed a bank transfer and left the arrived money as a
+     * `PENDING` payment, which is the exact state the two-outcome design exists to
+     * make unreachable. Reported by Codex on PR #50 against the `STRAND` design, and
+     * it outlived the design it was written against.
+     *
+     * So the caller says what an ineligible answer MEANS to it. `REFUSE` is still the
+     * default and still throws, because a wallet settlement dies with its transaction
+     * and a credit for money that never left would be wrong. A bank transfer passes
+     * `REFUND`, gets a verdict instead of an exception, and gives the money back.
      */
-    const usable = await this.prepareCommercialAction(scope, action, tx, 'REFUSE');
+    const usable = await this.prepareCommercialAction(scope, action, tx, onIneligible);
     if (usable.outcome !== 'FULFILLABLE') {
-      throw new Error('prepareCommercialAction returned UNFULFILLABLE under REFUSE');
+      if (onIneligible === 'REFUSE') {
+        throw new Error('prepareCommercialAction returned UNFULFILLABLE under REFUSE');
+      }
+      return usable;
     }
 
     const service = await this.deps.services.findById(scope, action.serviceId, tx);
@@ -1078,7 +1101,7 @@ export class ProvisioningService {
       tx,
     );
 
-    return operation;
+    return { outcome: 'PLANNED', operation };
   }
 
   /** Whether a service is in a state where re-sending its configuration means anything. */
