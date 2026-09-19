@@ -37,7 +37,7 @@ import type { ScopeActivityReader } from '../../../platform/system/application/r
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { WalletRepository } from '../../wallet/application/ports.js';
 import type { OrderRepository } from '../../orders/application/ports.js';
-import { UnfulfilledOrderReporter } from '../../orders/application/unfulfilled-order-reporter.js';
+import type { UnfulfilledOrderReporter } from '../../orders/application/unfulfilled-order-reporter.js';
 import type { PaymentRecord, PaymentRepository } from './ports.js';
 import type { RefundRecord, RefundRepository } from './refund-ports.js';
 
