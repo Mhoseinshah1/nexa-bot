@@ -1,4 +1,5 @@
 import {
+  orderPurposeCreatesNewService,
   COMMERCE_ERROR_CODES,
   MAX_ORDER_QUANTITY,
   ORDER_MACHINE,
@@ -464,22 +465,50 @@ export class OrderService {
          */
         await this.deps.repository.lock(scope, orderId, tx);
 
-        const eligible = await this.deps.panelSales.acquire(
-          scope,
-          before.line.panelId,
-          orderId,
-          tx,
-          before.expiresAt,
-        );
-        if (!eligible.eligible) {
-          throw errors.preconditionFailed(
-            COMMERCE_ERROR_CODES.PANEL_NOT_ELIGIBLE,
-            'This plan cannot be bought right now.',
-            // The REASON, for the operator reading the audit trail and the
-            // operations log. The customer's message says none of it — which of
-            // somebody's machines is full is not a fact a buyer is owed.
-            { reason: eligible.reason },
+        /*
+         * A slot is taken ONLY by an order that creates a service.
+         *
+         * `acquire` used to run for every purpose, and Codex found what that cost:
+         * a `RENEW`, `ADD_TRAFFIC` or `ADD_TIME` order took a capacity reservation
+         * that nothing ever consumed — commercial settlement creates no service and
+         * so never calls `consume` — so the hold sat there until the order's deadline,
+         * understating the panel's free capacity. Worse in the other direction: a
+         * customer whose panel was AT its cap could not renew the service they
+         * already had, because `decideEligibility` counts capacity and answered
+         * `AT_CAPACITY` for a purchase that needed no new slot at all.
+         *
+         * `orderPurposeCreatesNewService` is a positively-named exhaustive predicate
+         * for exactly this reason: the rule it replaced was a negation that read the
+         * other way round, and this line is one of the three places that misread it.
+         *
+         * ## What a commercial order is still subject to
+         *
+         * Everything that genuinely applies, and none of it is capacity.
+         * `CommercialActionService` asks `panels.operability` for the action's kind
+         * before it writes the order at all, and settlement asks the same question
+         * again — with the service's own lifecycle state and any outstanding action —
+         * inside the transaction that takes the money. Eligibility was never the
+         * right question here: `PanelSalesGate`'s own docblock says `decideEligibility`
+         * asks whether we may take money for a NEW account, and a renewal is not one.
+         */
+        if (orderPurposeCreatesNewService(before.purpose)) {
+          const eligible = await this.deps.panelSales.acquire(
+            scope,
+            before.line.panelId,
+            orderId,
+            tx,
+            before.expiresAt,
           );
+          if (!eligible.eligible) {
+            throw errors.preconditionFailed(
+              COMMERCE_ERROR_CODES.PANEL_NOT_ELIGIBLE,
+              'This plan cannot be bought right now.',
+              // The REASON, for the operator reading the audit trail and the
+              // operations log. The customer's message says none of it — which of
+              // somebody's machines is full is not a fact a buyer is owed.
+              { reason: eligible.reason },
+            );
+          }
         }
 
         /*

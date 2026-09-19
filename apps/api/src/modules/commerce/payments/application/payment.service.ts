@@ -2,7 +2,8 @@ import {
   COMMERCE_ERROR_CODES,
   PAYMENT_RECEIPT_MAX_PER_PAYMENT,
   PAYMENT_WINDOW_MINUTES_MIN,
-  orderPurposeNeedsService,
+  orderPurposeCreatesNewService,
+  orderPurposeTargetsExistingService,
   ORDER_MACHINE,
   PAYMENT_PAGE_DEFAULT,
   PAYMENT_PAGE_MAX,
@@ -1067,7 +1068,7 @@ export class PaymentService {
    *
    * - **There is no order, and nothing is provisioned.** `orderId` is null, which is
    *   what `confirmAndCredit` dispatches on; no service is created, no panel is
-   *   contacted, and `orderPurposeNeedsService` is never consulted because there is no
+   *   contacted, and neither purpose predicate is consulted, because there is no
    *   purpose to consult it about.
    * - **The amount comes from `wallet.topup.presets`**, matched exactly, in the currency
    *   this installation sells in. The tap's own figure is evidence of which button was
@@ -2548,12 +2549,6 @@ export class PaymentService {
      * already exists and consumes no slot; `planCommercialAction` below is its path.
      */
     /*
-     * `orderPurposeNeedsService` is true for the purposes that NAME an existing
-     * service — a renewal, an add-on — so the branch that CREATES one is its
-     * negation. Read the predicate's own docblock before changing this: the name
-     * says "needs a service to act on", not "needs a service created".
-     */
-    /*
      * The ORDER's lock, before `prepareFulfilment`/`prepareCommercialSettlement`
      * reach for the panel and the reservation below.
      *
@@ -2573,7 +2568,7 @@ export class PaymentService {
      */
     await this.deps.orders.lock(scope, order.id, tx);
 
-    const createsNewService = !orderPurposeNeedsService(order.purpose);
+    const createsNewService = orderPurposeCreatesNewService(order.purpose);
     /*
      * Whether money that has already moved is at stake, decided from the EVIDENCE
      * rather than from the caller.
@@ -2741,7 +2736,7 @@ export class PaymentService {
      * The discriminator is `orders.purpose`, a column, rather than "does a service
      * already exist for this customer" — inference would make the settlement path depend
      * on the order things happen to be read in, and a column makes it a decision
-     * somebody made. `orderPurposeNeedsService` is the contract's own predicate, derived
+     * somebody made. `orderPurposeTargetsExistingService` is the contract's own predicate, derived
      * by exclusion, so a purpose added without a thought lands on the side that does NOT
      * provision.
      *
@@ -2775,7 +2770,7 @@ export class PaymentService {
         fulfilment.reason,
         tx,
       );
-    } else if (orderPurposeNeedsService(settled.purpose)) {
+    } else if (orderPurposeTargetsExistingService(settled.purpose)) {
       const action = await this.deps.commercialActions.findByOrderId(scope, settled.id, tx);
       if (action === null) {
         /*

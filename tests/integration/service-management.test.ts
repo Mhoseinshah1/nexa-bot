@@ -869,12 +869,19 @@ describe('a customer manages the service they bought', () => {
     kind: 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME',
     key: string,
     customerId: UserId = customerA,
+    /** `RENEW` prices itself from the product; the two add-ons need an offered one. */
+    addonId: string | null = null,
   ): Promise<{ orderId: OrderId; paymentId: string }> {
     const { order } = await ctx.container.commercialActions.draft(
       tenantA,
       systemActor(key),
       customerId,
-      { serviceId, kind, idempotencyKey: `xfer-${key}-quote` },
+      {
+        serviceId,
+        kind,
+        ...(addonId === null ? {} : { addonId }),
+        idempotencyKey: `xfer-${key}-quote`,
+      },
     );
     await ctx.container.commercialActions.confirm(tenantA, systemActor(key), customerId, {
       orderId: order.id,
@@ -887,6 +894,60 @@ describe('a customer manages the service they bought', () => {
       { idempotencyKey: `xfer-${key}-manual`, orderId: order.id },
     );
     return { orderId: order.id, paymentId: payment.id };
+  }
+
+  /*
+   * Codex N4-N1 on PR #50: a capacity slot belongs to an order that CREATES a
+   * service, and to no other.
+   *
+   * `OrderService.confirm` called `acquire` for every purpose, so a renewal took a
+   * reservation that commercial settlement never consumed — it creates no service and
+   * so never calls `consume`. Two consequences, and these cases hold both: the hold
+   * leaked until the order's deadline, understating free capacity; and a customer
+   * whose panel was AT its cap could not renew the service they already had, because
+   * `decideEligibility` counts capacity and answered `AT_CAPACITY` for a purchase that
+   * needed no new slot.
+   *
+   * The other half — a `NEW_SERVICE` order still reserving exactly once — is
+   * `panel-capacity.test.ts`'s _takes exactly one slot when an order is confirmed_,
+   * where the fixtures for it already live. Without that case these would pass
+   * against `acquire` deleted outright rather than branched.
+   */
+  const holdsFor = async (orderId: string): Promise<number> => {
+    const rows = (await ctx.container.database.db.execute(
+      sql`SELECT count(*)::int AS n FROM panel_capacity_reservations
+           WHERE order_id = ${orderId}` as never,
+    )) as unknown as { rows: { n: number }[] };
+    return rows.rows[0]?.n ?? 0;
+  };
+
+  for (const kind of ['RENEW', 'ADD_TRAFFIC', 'ADD_TIME'] as const) {
+    it(`takes no capacity slot to confirm a ${kind}, by wallet or by transfer`, async () => {
+      // `RENEW` prices itself from the product; the two add-ons need an offered one.
+      const addon =
+        kind === 'RENEW'
+          ? null
+          : await offeredAddon(
+              kind,
+              kind === 'ADD_TRAFFIC' ? { trafficBytes: 10_000_000_000n } : { durationDays: 15 },
+              `no-slot-${kind}`,
+            );
+
+      const transferService = await activeService(`no-slot-x-${kind}`);
+      const transfer = await buyByTransfer(
+        transferService.id,
+        kind,
+        `no-slot-x-${kind}`,
+        customerA,
+        addon,
+      );
+      expect(await holdsFor(transfer.orderId), 'a transfer-paid commercial order').toBe(0);
+
+      const walletService = await activeService(`no-slot-w-${kind}`);
+      await fund(`no-slot-w-${kind}`);
+      const walletOrderId = await buy(walletService.id, kind, addon, `no-slot-w-${kind}`);
+      expect(await holdsFor(walletOrderId), 'a wallet-paid commercial order').toBe(0);
+    });
   }
 
   it('records a transfer for a RENEW whose service was terminated while it waited', async () => {
