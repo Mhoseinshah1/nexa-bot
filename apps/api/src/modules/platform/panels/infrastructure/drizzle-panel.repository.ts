@@ -478,8 +478,30 @@ export class DrizzlePanelRepository implements PanelRepository {
            *
            * It rides the same `setWhere` as everything else, so a probe whose
            * answer arrives out of order advances nothing.
+           *
+           * ## A new connection starts a new streak
+           *
+           * Codex C4-N4 on PR #50. `validated_identity` is provider, address,
+           * activation and the three credential timestamps, so it CHANGES when an
+           * operator fixes a password or moves a panel. Without the CASE, two
+           * failures of the old configuration plus the first failure of the new one
+           * reached `PANEL_UNHEALTHY_AFTER_FAILURES` and emptied the catalogue — the
+           * hysteresis exists precisely so one failed probe does not condemn a panel,
+           * and inheriting a dead configuration's count spends it before the new one
+           * has been tried.
+           *
+           * Still ONE statement, and still derived from the stored value: on a
+           * conflict, an unqualified column in `SET` is the EXISTING row's, so this
+           * compares what is stored against what this probe validated without a
+           * second read.
            */
-          unusableStreak: unusable ? sql`${panelHealth.unusableStreak} + 1` : sql`0`,
+          unusableStreak: unusable
+            ? sql`CASE
+                     WHEN ${panelHealth.validatedIdentity} IS DISTINCT FROM ${validatedIdentity}
+                       THEN 1
+                     ELSE ${panelHealth.unusableStreak} + 1
+                   END`
+            : sql`0`,
         },
         // Two conditions, and the second is the interesting one.
         //
