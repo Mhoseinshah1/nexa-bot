@@ -1467,6 +1467,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const panelMonitor = new PanelMonitorService(
     {
       discovery: new DrizzlePanelMonitorRepository(database.db),
+      // How full each panel is, so the tick can say so. The SAME repository the
+      // sales gate and the Web Admin's capacity card read — one set of counts,
+      // three readers, so an alert cannot disagree with the card beside it.
+      capacity: panelCapacity,
       // The tenant kill switch the monitor reads before it dials and again
       // before it writes. Same reader the control-plane services use.
       scopeActivity: tenants,
