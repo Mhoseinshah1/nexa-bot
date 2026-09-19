@@ -1,4 +1,4 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, sql, type SQL } from 'drizzle-orm';
 import { SERVICE_CAPACITY_STATES, type TenantContext } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
@@ -77,15 +77,56 @@ export class DrizzlePanelCapacityRepository implements PanelCapacityRepository {
     now: Date,
     tx?: TransactionScope,
   ): Promise<ReadonlyMap<string, PanelCapacity>> {
-    const found = new Map<string, PanelCapacity>();
     const unique = [...new Set(panelIds)];
-    if (unique.length === 0) return found;
+    if (unique.length === 0) return new Map<string, PanelCapacity>();
+    /*
+     * ONE bind parameter for the whole list, not one per panel.
+     *
+     * The previous form built `p.id IN ($1::uuid, $2::uuid, ...)`, which is
+     * correct and unbounded: the caller is the eligibility evaluator reading a
+     * tenant's fleet, so the parameter count is the fleet size. Past
+     * PostgreSQL's 65535-parameter ceiling the statement does not slow down, it
+     * fails — and it fails inside the read every catalogue page and every
+     * confirmation makes. An array bound once is one parameter at any size, and
+     * `= ANY` on an indexed column plans the same as `IN`.
+     */
+    return this.readWhere(scope, sql` AND p.id = ANY(${sql.param(unique)}::uuid[])`, now, tx);
+  }
+
+  /**
+   * Every panel this tenant has, in the SAME one statement `readMany` uses.
+   *
+   * Through the shared body rather than as a second query of its own shape: the
+   * one-statement property is the whole point of this read — the cap and both
+   * counts have to come from one snapshot or `used` can be understated by a
+   * settlement committing between them — and a copy is a copy that will be
+   * changed on one side only.
+   */
+  async readAll(
+    scope: TenantContext,
+    now: Date,
+    tx?: TransactionScope,
+  ): Promise<ReadonlyMap<string, PanelCapacity>> {
+    return this.readWhere(scope, sql``, now, tx);
+  }
+
+  /**
+   * The statement itself. One place, so the two readers above cannot diverge.
+   *
+   * Raw SQL rather than the query builder, deliberately: the drizzle version of
+   * this shape was wrong in a way a green `psql` session did not show — two
+   * un-aliased aggregate subqueries in a `select()` object returned zeros,
+   * because they do not survive the driver's column mapping.
+   */
+  private async readWhere(
+    scope: TenantContext,
+    narrowing: SQL,
+    now: Date,
+    tx?: TransactionScope,
+  ): Promise<ReadonlyMap<string, PanelCapacity>> {
+    const found = new Map<string, PanelCapacity>();
     const exec = executorOf(this.db, tx);
 
-    const ids = sql.join(
-      unique.map((id) => sql`${id}::uuid`),
-      sql`, `,
-    );
     const occupying = sql.join(
       OCCUPYING_STATES.map((state) => sql`${state}`),
       sql`, `,
@@ -102,8 +143,7 @@ export class DrizzlePanelCapacityRepository implements PanelCapacityRepository {
                  AND r.panel_id = p.id
                  AND r.expires_at > ${now}) AS reservations
         FROM panels p
-       WHERE p.tenant_id = ${scope.tenantId}::uuid
-         AND p.id IN (${ids})
+       WHERE p.tenant_id = ${scope.tenantId}::uuid${narrowing}
     `)) as unknown as {
       rows: {
         id: string;

@@ -156,6 +156,7 @@ import { TelegramReceiptFiles } from './modules/commerce/payments/infrastructure
 import { PaymentService } from './modules/commerce/payments/application/payment.service.js';
 import { RefundService } from './modules/commerce/payments/application/refund.service.js';
 import { DrizzleRefundRepository } from './modules/commerce/payments/infrastructure/drizzle-refund.repository.js';
+import { SalesCurrencyChangeGuard } from './modules/commerce/payments/application/sales-currency-change.guard.js';
 import { PaymentExpiryService } from './modules/commerce/payments/application/payment-expiry.service.js';
 import {
   PaymentExpiryLoop,
@@ -186,6 +187,7 @@ import { I18nTemplateCatalogue } from './modules/control/templates/infrastructur
 import { TemplateManagementService } from './modules/control/templates/application/template-management.service.js';
 import { DrizzleNotificationRepository } from './modules/control/notifications/infrastructure/drizzle-notification.repository.js';
 import { NotificationService } from './modules/control/notifications/application/notification.service.js';
+import { UndeliverableOrderRefunder } from './modules/commerce/orders/application/undeliverable-order-refunder.js';
 import { NotificationDispatcher } from './modules/control/notifications/application/notification-dispatcher.js';
 import { NotifyingOperationalEventRecorder } from './modules/control/notifications/application/operational-event-projector.js';
 import { TelegramNotificationTransport } from './modules/control/notifications/infrastructure/telegram-transport.js';
@@ -1151,7 +1153,81 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     settings: settingsResolver,
   });
 
+  /**
+   * The reporter that says this installation took money it could not deliver for.
+   *
+   * Its notification lane is reached through a REF for the reason `opsLogRef` above
+   * is: `NotificationService` is constructed further down — it needs the projection
+   * settings and the feature resolver — and payment settlement is constructed here.
+   * A façade with a stable identity is what lets both hold the same lane without
+   * reordering half this file. The forwarding drops nothing, `tx` included, because
+   * dropping it is exactly how a notification queued inside a settling transaction
+   * came to survive that transaction rolling back.
+   */
+  const notificationsRef: { current: NotificationService | null } = { current: null };
+
+  /*
+   * One instance, shared by the refund service and the `sales.currency` guard.
+   *
+   * The guard asks it how much money could still go back in the currency an operator
+   * is trying to leave; the service is what would write those credits. Same reader,
+   * same answer.
+   */
+  const refundRepository = new DrizzleRefundRepository(database.db);
+
+  const refundService = new RefundService({
+    repository: refundRepository,
+    /*
+     * The payment READ only, narrowed by `RefundServiceDeps`.
+     *
+     * A refund is bounded by what a payment says was paid, and a module that could also
+     * write a payment could move that bound — so the one thing this module must not
+     * reach is the write half of the repository it derives its limit from.
+     */
+    payments: paymentRepository,
+    /*
+     * The ledger, `append` and `lockCustomer` only. No balance read: a customer who has
+     * already spent a refunded payment is still owed the refund, so nothing here may
+     * consult what the wallet currently holds.
+     */
+    wallet: walletRepository,
+    guard,
+    uow,
+    audit,
+    opsLog: opsLogWriter,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
+
+  /**
+   * The order's second terminal outcome, wired once and used by both lanes.
+   *
+   * After `refundService`, because it calls the one credit path rather than writing
+   * a ledger entry of its own, and before `paymentService`, because settlement is
+   * the first of the two lanes that reaches it. The provisioner is the second.
+   */
+  const undeliverableOrders = new UndeliverableOrderRefunder({
+    /*
+     * The order READ and the one edge, narrowed by the dependency's own type, so the
+     * lane that gives money back cannot become a second place orders are managed
+     * from.
+     */
+    orders: orderRepository,
+    // `refundUndeliverable` alone: the money, and nothing about the order.
+    refunds: refundService,
+    // `release` alone. A refunded order holds no capacity.
+    panelSales: panelSalesGate,
+    notifier: customerNotifier,
+    opsLog,
+    outbox,
+    clock,
+  });
+
   const paymentService = new PaymentService({
+    undeliverable: undeliverableOrders,
     repository: paymentRepository,
     /*
      * The two READ methods only. This module consults a route and cannot configure one
@@ -1206,33 +1282,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
     operationId: (key) => operationIdFor('payment', key),
-  });
-
-  const refundService = new RefundService({
-    repository: new DrizzleRefundRepository(database.db),
-    /*
-     * The payment READ only, narrowed by `RefundServiceDeps`.
-     *
-     * A refund is bounded by what a payment says was paid, and a module that could also
-     * write a payment could move that bound — so the one thing this module must not
-     * reach is the write half of the repository it derives its limit from.
-     */
-    payments: paymentRepository,
-    /*
-     * The ledger, `append` and `lockCustomer` only. No balance read: a customer who has
-     * already spent a refunded payment is still owed the refund, so nothing here may
-     * consult what the wallet currently holds.
-     */
-    wallet: walletRepository,
-    guard,
-    uow,
-    audit,
-    opsLog: opsLogWriter,
-    sessions,
-    idempotency,
-    scopeActivity: tenants,
-    clock,
-    ids,
   });
 
   /*
@@ -1431,6 +1480,15 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     opsLogWriter,
     // For the mutation-time session-revocation check.
     sessions,
+    /*
+     * The vetoes other modules hold over one key each.
+     *
+     * `control` declares the port and knows nothing about money; commerce knows why
+     * `sales.currency` cannot move while refundable payments are denominated in it.
+     * Here is the only place the two meet, which is what keeps the dependency
+     * pointing inward.
+     */
+    [new SalesCurrencyChangeGuard(refundRepository)],
   );
 
   const featureFlagRepository = new DrizzleFeatureFlagRepository(database.db);
@@ -1739,6 +1797,18 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         return order?.line.specification ?? null;
       },
     },
+    /*
+     * The order READ and the confirmed payment READ, both narrowed.
+     *
+     * The provisioner asks two questions when a paid operation definitively fails —
+     * what was bought, and what was paid for it — and answers them by giving the
+     * money back through the same collaborator settlement uses. It must not be able
+     * to settle an order or confirm a payment: nothing a panel says is evidence that
+     * money arrived.
+     */
+    orders: orderRepository,
+    payments: paymentRepository,
+    undeliverable: undeliverableOrders,
     panels: panelRepository,
     credentials: panelCredentials,
     adapters: providerServiceAdapter,
@@ -1865,6 +1935,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // For the mutation-time session-revocation check.
     sessions,
   );
+
+  // And the stranded-order reporter's lane, for the same reason and in the same
+  // breath: constructed above, wired here, used only from a request or a worker
+  // tick — both of which happen after this line.
+  notificationsRef.current = notifications;
 
   // Recording and announcing become one call from here on. Everything that
   // already holds `opsLog` holds the façade, so this reaches them too.

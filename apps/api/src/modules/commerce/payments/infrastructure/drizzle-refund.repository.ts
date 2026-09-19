@@ -187,6 +187,43 @@ export class DrizzleRefundRepository implements RefundRepository {
     };
   }
 
+  /**
+   * How many CONFIRMED payments in one currency still have money that could go back.
+   *
+   * Asked before `sales.currency` is allowed to change. A wallet credit is written in
+   * the PAYMENT's frozen currency, and every wallet read — balance, history,
+   * settlement — is denominated in the currency the tenant sells in TODAY. So a
+   * currency change with refundable exposure behind it produces credits the customer
+   * is told about and can neither see nor spend, which is the condition
+   * `confirmAndCredit` already refuses for a top-up.
+   *
+   * A COUNT rather than the rows: the answer is a yes/no about whether the change is
+   * safe, and the operator is told how many stand in the way, not which.
+   *
+   * `REFUND_CONSUMING_STATES` is the same set the refundable balance uses, so a
+   * payment fully covered by an in-flight refund does not count as exposure.
+   */
+  async refundableExposureIn(
+    scope: TenantContext,
+    currency: CurrencyCode,
+    tx?: unknown,
+  ): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    const consuming = [...REFUND_CONSUMING_STATES];
+    const rows = (await this.exec(tx).execute(sql`
+      SELECT count(*)::int AS n
+        FROM ${payments} p
+       WHERE p.tenant_id = ${tenantId}
+         AND p.state = 'CONFIRMED'
+         AND p.currency = ${currency}
+         AND p.amount > coalesce((SELECT sum(r.amount) FROM ${refunds} r
+                                   WHERE r.payment_id = p.id
+                                     AND r.tenant_id = p.tenant_id
+                                     AND r.state = ANY(${sql.param(consuming)}::text[])), 0)
+    `)) as unknown as { rows: { n: number }[] };
+    return Number(rows.rows[0]?.n ?? 0);
+  }
+
   async lockPayment(scope: TenantContext, paymentId: PaymentId, tx: unknown): Promise<boolean> {
     const tenantId = requireTenantId(scope);
     const rows = await this.exec(tx)

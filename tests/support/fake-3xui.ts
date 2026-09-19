@@ -151,6 +151,18 @@ export type Behaviour =
    */
   | 'add-client-lost-reply'
   /**
+   * `clients/add` RECORDS the client and then never answers at all.
+   *
+   * The twin of `add-client-lost-reply`, and NOT a duplicate of it: a destroyed socket
+   * is `UNREACHABLE`, which the taxonomy calls safe to replay, while a request left
+   * open until the client's own deadline is `TIMEOUT`, which it does not. Those two
+   * transport shapes are the difference between a create that is retried and a create
+   * that becomes `UNKNOWN` — the one outcome that must never be refunded, because the
+   * account it may have made is the one the customer is holding. Here it really was
+   * made, so a reconcile that ASKS finds it PRESENT.
+   */
+  | 'add-client-hang'
+  /**
    * `clients/add` answers 500 and stores NOTHING.
    *
    * The other half of the same uncertainty: a 5xx may or may not have committed a
@@ -614,6 +626,11 @@ export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake
         if (behaviour === 'add-client-lost-reply') {
           // Stored, and the answer never arrives. The client IS on the panel.
           request.socket.destroy();
+          return;
+        }
+        if (behaviour === 'add-client-hang') {
+          // Stored, and the request is left open until the caller's own deadline.
+          // Deliberately NOT a destroyed socket: that is a different failure kind.
           return;
         }
         return void json(200, envelope(true, null, 'Client added Successfully'));

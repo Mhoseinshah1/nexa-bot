@@ -24,6 +24,11 @@ outcomes an operator or a deadline produces; 4H the customer notification lane
 Telegram bootstrap surface; 4J the final hardening pass
 (`docs/phase4j-audit.md`).
 
+**An order the installation cannot deliver is refunded, not queued.** The owner
+removed `PAID_UNFULFILLED` and everything built on it — the operator retry, the
+reassignment, `orders.fulfil` — in favour of one automatic outcome. See the four
+money rules below.
+
 **Marzban is the supported mutable provider.** 3X-UI keeps the five
 capabilities it has — of which only `CREATE_USER` mutates anything — and gains
 no new mutable scope: the owner's correction, recorded in
@@ -107,6 +112,32 @@ Four Phase 6B rules, each naming a way to oversell or mis-sell a panel:
   timestamps — deliberately NOT `configurationFingerprint`, which carries
   `status` and `updated_at` and would be invalidated by the act it authorises.
   Lowering a cap below current usage is accepted and terminates nothing.
+
+Four rules about money the owner decided, and each one is a way to lose some:
+
+- An order has **two terminal outcomes and no third**: FULFILLED, or REFUNDED
+  for the exact amount to the customer's wallet, automatically, in the
+  transaction that discovers it cannot be delivered. `PAID_UNFULFILLED`, the
+  operator retry and the reassignment are gone. Never add a state, a queue or a
+  button for "paid, undelivered, somebody will decide later" — what that
+  produced was a list that only grew and a customer with neither an answer nor
+  their money.
+- There is **one credit path**, `RefundService.refundUndeliverable`, and the
+  settlement lane and the provisioner both call it. It locks the payment, sums
+  what is already committed and writes at most one ledger entry. A second writer
+  would be a second answer to "how much did we give back", and the point of a
+  ledger is that there is one.
+- A **wallet purchase is refused, never refunded**. The debit is written in the
+  settling transaction and dies with it, so crediting it back would be a credit
+  for money that never left. The asymmetry with a bank transfer is deliberate:
+  that money has already moved, so it is confirmed and then returned.
+- **UNKNOWN is never refunded.** A create whose answer was lost may have taken
+  effect, so the service goes to `UNRECONCILED` and a READ decides first.
+  Refunding an ambiguous timeout gives money back for an account the customer is
+  holding. `PURCHASED_AS` is the other half of that care: an operation carries
+  `order_id` whenever its service has one, so a failed SUSPEND names the order
+  that created the service, and only an operation matching what the order BOUGHT
+  may refund it.
 
 Four Phase 4 rules that are easy to break by accident:
 

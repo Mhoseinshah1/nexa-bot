@@ -350,6 +350,26 @@ export type ManagementAdminEventCode = (typeof MANAGEMENT_ADMIN_EVENT_CODES)[num
 export const MANAGEMENT_ONE_SHOT_CODES = [
   'access.permission_denied',
   'auth.login_locked_out',
+  /**
+   * An order could not be delivered and its money went back to the wallet.
+   *
+   * A ONE-SHOT, and the classification is the decision rather than a detail. The
+   * pair this replaces — `order.fulfilment_failed` and `order.fulfilment_ok` — was
+   * a CONDITION, because an order that was paid and undelivered was a state somebody
+   * had to act on. Nobody acts on this one: the refund is on the ledger, the
+   * customer has been told, and the order is terminal. Filed as a condition it would
+   * be an open ERROR per refunded order with no recovery that could ever close it,
+   * which is the queue-that-only-grows the state was removed for.
+   *
+   * What an operator DOES have to fix — a panel at capacity, unhealthy, or refusing
+   * every create — raises its own condition from `PanelSalesGate` and the
+   * provisioner, with its own recovery. This says what it cost.
+   *
+   * Introduced and retired in the same release as the pair it replaces, which is the
+   * one circumstance `CLAUDE.md` permits an operational code to be renamed in: no
+   * installation carries an open row under either name.
+   */
+  'order.refunded_undeliverable',
   // DERIVED, not re-typed. `MANAGEMENT_ADMIN_EVENT_CODES` is what types
   // `AdminManagementService.recordAdminChange`, and its whole reason for
   // existing is that the service cannot record a code this scope does not

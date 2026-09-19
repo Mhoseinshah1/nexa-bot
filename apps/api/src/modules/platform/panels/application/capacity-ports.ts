@@ -101,6 +101,26 @@ export interface PanelCapacityRepository {
   ): Promise<ReadonlyMap<string, PanelCapacity>>;
 
   /**
+   * The same, for every panel this tenant has, without being told their ids.
+   *
+   * Exists so the catalogue can decide WHICH panels are sellable before it asks
+   * for products, rather than asking for products and discarding the ones whose
+   * panel turned out not to be — which is what put a correctness ceiling on the
+   * catalogue and hid an eligible product behind a screenful of ineligible ones.
+   *
+   * Unbounded, and deliberately the only unbounded read on that path. A tenant's
+   * panels are infrastructure an operator provisions by hand, not catalogue rows:
+   * the set is the fleet, it is one indexed statement, and every PRODUCT query
+   * downstream stays bounded by the caller's own limit. Bounding this instead
+   * would move the ceiling rather than remove it.
+   */
+  readAll(
+    scope: TenantContext,
+    now: Date,
+    tx?: TransactionScope,
+  ): Promise<ReadonlyMap<string, PanelCapacity>>;
+
+  /**
    * Take one slot for this order, or report why not.
    *
    * MUST run inside a transaction, and takes the panel's row lock as its first

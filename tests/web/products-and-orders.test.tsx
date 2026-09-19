@@ -467,6 +467,41 @@ describe('the order detail', () => {
   };
 
   /*
+   * The retry-and-reassign card is gone with the state it served, and so is every
+   * route it called. What replaced it is a REFUNDED order, which this page renders
+   * like any other terminal state — so the assertion that matters is the negative
+   * one: no write reaches the orders surface from here at all.
+   *
+   * Asserted on the REQUESTS rather than on a missing button, because a control that
+   * renders and posts nothing is the same defect in the other direction, and the
+   * four cases this replaces were written for exactly that reason.
+   */
+  it('renders a refunded order and posts nothing', async () => {
+    const api = stubApi([
+      {
+        url: '/orders/019230ab',
+        body: {
+          order: order({
+            state: 'REFUNDED',
+            settledAt: '2026-09-10T12:40:00.000Z',
+          }),
+        },
+      },
+    ]);
+    renderPage(
+      <OrderDetailPage
+        id="019230ab-cdef-7012-8345-6789abcdef01"
+        denied={false}
+        mayViewPayments={false}
+      />,
+    );
+
+    await screen.findByText('بازپرداخت‌شده');
+    expect(api.calls.filter((call) => call.method !== 'GET')).toHaveLength(0);
+    expect(api.calls.some((call) => call.url.includes('/fulfil'))).toBe(false);
+  });
+
+  /*
    * Payments are a SEPARATE permission, and the absence is a decision rather than a
    * failed request.
    *

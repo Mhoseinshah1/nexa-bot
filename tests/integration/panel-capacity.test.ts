@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   money,
   PANEL_UNHEALTHY_AFTER_FAILURES,
+  PRODUCT_PAGE_MAX,
   type ActorContext,
   type BotInstanceId,
   type CorrelationId,
@@ -593,8 +594,123 @@ describe('panel capacity and sales eligibility', () => {
     expect(browsed.hasMore, 'and nothing further is claimed, because there is none').toBe(false);
   });
 
+  /**
+   * Many ACTIVE products on one panel, in one statement.
+   *
+   * Through `products.create` a row at a time, a five-hundred-product fixture is a
+   * thousand round trips and a test nobody will wait for — so these go straight in.
+   * Everything the catalogue's membership rule reads is set explicitly; the point of
+   * the fixture is the COUNT in front of the eligible product, not the rows.
+   */
+  const bulkActiveProducts = async (panelId: string, count: number, from = 0): Promise<void> => {
+    const values = sql.join(
+      Array.from(
+        { length: count },
+        (_unused, index) =>
+          sql`(${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${`bulk ${String(from + index)}`},
+             'EVERYONE', 'ACTIVE', ${from + index}, ${panelId}, 30, 0, 1, 120000, 'IRT',
+             ${ctx.container.clock.now()}, ${ctx.container.clock.now()})`,
+      ),
+      sql`, `,
+    );
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO products (id, tenant_id, title, audience, status, sort_order, panel_id,
+                            duration_days, traffic_bytes, device_limit,
+                            price_amount, price_currency, created_at, updated_at)
+      VALUES ${values}`);
+  };
+
+  it('reaches an eligible product past EVERY former scan ceiling', async () => {
+    /*
+     * Codex C4-N3 / M4 on PR #50 — the same finding three times, and the third time
+     * with the point that the first two fixes missed.
+     *
+     * Both earlier attempts filtered eligibility out of a page the database had
+     * already bounded. That can always be defeated by putting enough ineligible
+     * products in front of the eligible one: the bound started at the caller's own
+     * (twenty products hid the twenty-first), moved to `PRODUCT_PAGE_MAX` (a hundred
+     * hid the hundred-and-first), then to `PRODUCT_PAGE_MAX * 5`. Each fix moved the
+     * number at which a customer sees an empty shop; none removed it.
+     *
+     * 501 is deliberately one past the LAST of those ceilings, so this case fails
+     * against every version of the scan that has existed on this branch and passes
+     * only for a filter the database applies BEFORE its LIMIT.
+     */
+    const roomy = ctx.container.ids.uuid();
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
+      VALUES (${roomy}, ${tenantA.tenantId}, 'Panel D', 'sanaei', 'https://d.example.test', 'ACTIVE')`);
+    await bulkActiveProducts(panelA, PRODUCT_PAGE_MAX * 5 + 1);
+    const wanted = await activeProduct(roomy);
+    await setStatus(panelA, 'DISABLED');
+
+    const browsed = await ctx.container.products.browse(tenantA, systemActor(key()), 20);
+
+    expect(browsed.items.map((item) => item.id)).toEqual([wanted.id]);
+    expect(browsed.hasMore, 'the catalogue was reached to its end').toBe(false);
+  }, 60_000);
+
+  it('reaches eligible products behind every KIND of unsellable panel at once', async () => {
+    /*
+     * Disabled, archived, confirmed-unhealthy and full, each with products in front
+     * of the eligible one. Four reasons rather than one, because `decideEligibility`
+     * decides them in an order and a filter built from only the first would pass a
+     * test that used only disabled panels.
+     */
+    const disabled = ctx.container.ids.uuid();
+    const archived = ctx.container.ids.uuid();
+    const unhealthy = ctx.container.ids.uuid();
+    const full = ctx.container.ids.uuid();
+    const roomy = ctx.container.ids.uuid();
+    for (const [index, id] of [disabled, archived, unhealthy, full, roomy].entries()) {
+      await ctx.container.database.db.execute(sql`
+        INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status, max_services)
+        VALUES (${id}, ${tenantA.tenantId}, ${`Panel ${String(index)}`}, 'sanaei',
+                ${`https://p${String(index)}.example.test`}, 'ACTIVE', NULL)`);
+    }
+    for (const id of [disabled, archived, unhealthy, full]) await bulkActiveProducts(id, 30);
+    const wanted = await activeProduct(roomy);
+
+    await setStatus(disabled, 'DISABLED');
+    await setStatus(archived, 'ARCHIVED');
+    await setHealth(unhealthy, 'UNREACHABLE', PANEL_UNHEALTHY_AFTER_FAILURES);
+    // Full is cap ONE and a service occupying it — `panels_max_services_check`
+    // refuses a cap of zero, and a real occupant is the state being tested anyway.
+    await setCap(full, 1);
+    await placeService(full, 'ACTIVE');
+
+    const browsed = await ctx.container.products.browse(tenantA, systemActor(key()), 20);
+    expect(browsed.items.map((item) => item.id)).toEqual([wanted.id]);
+  }, 60_000);
+
+  it('pages across eligible products, in the catalogue s own order, ties and all', async () => {
+    /*
+     * Ordering is `sort_order`, then `created_at`, then `id`, and the tie is the part
+     * worth asserting: two products at the same `sort_order` must come back in a
+     * stable order rather than whichever the planner happened to emit.
+     */
+    const a = await activeProduct(panelA);
+    const b = await activeProduct(panelA);
+    const c = await activeProduct(panelA);
+    const inOrder = [a, b, c]
+      .slice()
+      .sort(
+        (left, right) =>
+          left.createdAt.getTime() - right.createdAt.getTime() || left.id.localeCompare(right.id),
+      )
+      .map((item) => item.id);
+
+    const first = await ctx.container.products.browse(tenantA, systemActor(key()), 2);
+    expect(first.items.map((item) => item.id)).toEqual(inOrder.slice(0, 2));
+    expect(first.hasMore, 'two of three asked for, so there are more').toBe(true);
+
+    const all = await ctx.container.products.browse(tenantA, systemActor(key()), 3);
+    expect(all.items.map((item) => item.id)).toEqual(inOrder);
+    expect(all.hasMore, 'all three asked for and all three returned').toBe(false);
+  });
+
   it('still bounds the catalogue, and says so when there are more', async () => {
-    // The other half of the same rule: scanning further must not turn the
+    // The other half of the same rule: filtering in the query must not turn the
     // caller's bound into a suggestion. Two eligible products, one asked for.
     await activeProduct(panelA);
     await activeProduct(panelA);
@@ -603,6 +719,159 @@ describe('panel capacity and sales eligibility', () => {
     expect(browsed.items).toHaveLength(1);
     expect(browsed.hasMore).toBe(true);
   });
+
+  it('never reaches another tenant s eligible products', async () => {
+    /*
+     * The eligible-panel set is read per tenant and then used as a WHERE clause, so a
+     * leak here would be a panel id from tenant B admitting tenant B's products into
+     * tenant A's shop. Asserted in both directions, and with tenant A's own product
+     * present, so an empty answer cannot pass it.
+     */
+    const mine = await activeProduct(panelA);
+    const theirs = await products.create(tenantB, {
+      id: ctx.container.ids.uuid() as ProductId,
+      draft: {
+        title: 'پلن همسایه',
+        description: null,
+        audience: 'EVERYONE',
+        sortOrder: 10,
+        panelId: panelForeign as PanelId,
+        specification: { durationDays: 30, trafficBytes: 0n, deviceLimit: 1 },
+        price: money(120_000n, 'IRT'),
+      },
+      now: ctx.container.clock.now(),
+    });
+    await products.setStatus(tenantB, theirs.id, 'INACTIVE', 'ACTIVE', ctx.container.clock.now());
+
+    // Both directions, and both non-empty, so neither can pass by returning nothing.
+    expect(
+      (await ctx.container.products.browse(tenantA, systemActor(key()), 20)).items.map(
+        (item) => item.id,
+      ),
+    ).toEqual([mine.id]);
+    expect(
+      (await ctx.container.products.browse(tenantB, systemActor(key()), 20)).items.map(
+        (item) => item.id,
+      ),
+    ).toEqual([theirs.id]);
+  });
+
+  it('drops a product from the catalogue as soon as its panel fills', async () => {
+    /*
+     * The catalogue is a SNAPSHOT, and it becomes wrong the moment capacity changes.
+     * That is why it is a courtesy and why confirmation re-decides — but the snapshot
+     * must at least be current as of the read, and a set of eligible panel ids
+     * computed once per request is exactly where a stale answer would hide.
+     */
+    const product = await activeProduct(panelA);
+    expect(
+      (await ctx.container.products.browse(tenantA, systemActor(key()), 20)).items.map(
+        (item) => item.id,
+      ),
+    ).toEqual([product.id]);
+
+    await setCap(panelA, 1);
+    await placeService(panelA, 'ACTIVE');
+
+    expect((await ctx.container.products.browse(tenantA, systemActor(key()), 20)).items).toEqual(
+      [],
+    );
+  });
+
+  it('asks the database a fixed number of times, whatever the catalogue holds', async () => {
+    /*
+     * The N+1 guard. Eligibility is per PANEL and the catalogue is per PRODUCT, so
+     * the shape this design must never take is one eligibility read per row — which
+     * is what the first version of `evaluateMany` replaced, and what a later edit
+     * could quietly reintroduce.
+     *
+     * Counted rather than reasoned about: three statements for the whole request —
+     * the fleet's capacity, the panels, the products — and the SAME three whether
+     * the catalogue holds one product or a hundred.
+     */
+    const pool = ctx.container.database.pool as unknown as {
+      query: (...args: unknown[]) => unknown;
+    };
+    const real = pool.query.bind(pool) as (...args: unknown[]) => unknown;
+    let statements = 0;
+    pool.query = (...args: unknown[]) => {
+      statements += 1;
+      return real(...args);
+    };
+    const counted = async (): Promise<number> => {
+      statements = 0;
+      await ctx.container.products.browse(tenantA, systemActor(key()), 100);
+      return statements;
+    };
+
+    await activeProduct(panelA);
+    const forOne = await counted();
+
+    await bulkActiveProducts(panelA, 99, 1000);
+    const forAHundred = await counted();
+    pool.query = real;
+
+    expect(forOne, 'the fleet capacity, the panels, the products').toBe(3);
+    expect(forAHundred).toBe(forOne);
+  }, 60_000);
+
+  it('sends the fleet as ONE bind parameter, however many panels it holds', async () => {
+    /*
+     * A fixed number of STATEMENTS is not a bound on the request. The case above
+     * counts three either way; this one counts what each of those three carries.
+     *
+     * Both reads that take the eligible fleet used to expand it one placeholder per
+     * panel — `IN ($1, $2, ... $n)` — so the parameter count was the tenant's fleet
+     * size. Past PostgreSQL's 65535-parameter ceiling that is not a slow catalogue,
+     * it is a failed one: the bind is rejected by the server, the shop is empty, and
+     * nothing in the response says the fleet outgrew the query. Both now bind the
+     * list once as a `uuid[]` and match with `= ANY`.
+     *
+     * The proof is the WIDEST statement of the whole request, measured at the pool,
+     * with the fleet grown by an order of magnitude between the two measurements. A
+     * width that tracks the fleet is the defect; a width that does not is the fix.
+     * Ten panels and a hundred is enough to tell those apart — the failing form
+     * would report 10-ish and then 100-ish — and does not need a fixture nobody
+     * will wait for.
+     */
+    const pool = ctx.container.database.pool as unknown as {
+      query: (...args: unknown[]) => unknown;
+    };
+    const real = pool.query.bind(pool) as (...args: unknown[]) => unknown;
+    let widest = 0;
+    pool.query = (...args: unknown[]) => {
+      const values = args[1];
+      if (Array.isArray(values)) widest = Math.max(widest, values.length);
+      return real(...args);
+    };
+    const widestBind = async (): Promise<number> => {
+      widest = 0;
+      await ctx.container.products.browse(tenantA, systemActor(key()), 100);
+      return widest;
+    };
+
+    const fleet = async (count: number): Promise<void> => {
+      for (let index = 0; index < count; index += 1) {
+        const id = ctx.container.ids.uuid();
+        await ctx.container.database.db.execute(sql`
+          INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
+          VALUES (${id}, ${tenantA.tenantId}, ${`fleet ${id}`}, 'sanaei',
+                  ${`https://${id}.example.test`}, 'ACTIVE')`);
+        await bulkActiveProducts(id, 1, index + 5000);
+      }
+    };
+
+    await fleet(10);
+    const forTen = await widestBind();
+    await fleet(90);
+    const forAHundred = await widestBind();
+    pool.query = real;
+
+    expect(forAHundred, 'the width does not follow the fleet').toBe(forTen);
+    expect(forTen, 'and it is small: the array is one parameter, not one per panel').toBeLessThan(
+      10,
+    );
+  }, 120_000);
 
   it('hides a product whose panel is disabled, and refuses it if asked anyway', async () => {
     const product = await activeProduct(panelA);

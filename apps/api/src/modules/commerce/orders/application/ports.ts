@@ -63,7 +63,12 @@ export interface OrderRecord {
    */
   readonly expiresAt: Date | null;
   readonly confirmedAt: Date | null;
-  /** When the money arrived. Bound to PAID by `orders_settled_at_check`. */
+  /**
+   * When the money arrived. Bound to the SETTLED states by
+   * `orders_settled_at_check`, which since this release includes
+   * `PAID_UNFULFILLED`: money that arrived is money that arrived, whether or not
+   * anything could be created for it.
+   */
   readonly settledAt: Date | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
@@ -116,6 +121,31 @@ export interface OrderRepository {
 
   findById(scope: TenantContext, id: OrderId, tx?: unknown): Promise<OrderRecord | null>;
 
+  /**
+   * Takes the ORDER's row lock for the rest of the transaction.
+   *
+   * THE outermost lock of this domain, and the reason it exists as its own method
+   * rather than being implied by the UPDATE that follows. Four transactions touch one
+   * order's three rows — the order, its panel and its capacity reservation — and
+   * before this they did not agree on the sequence: confirmation and settlement took
+   * the panel and the reservation first and the order last, while cancellation and
+   * the expiry sweep took the order first. That is a cycle, and PostgreSQL resolves a
+   * cycle by aborting somebody with `40P01` — a customer's purchase failing with a
+   * serialization error instead of the answer the product has for that race, which is
+   * that one of the two wins cleanly.
+   *
+   * The canonical order is **order → panel → reservation**. The two release paths
+   * already obey it and the expiry sweep cannot do otherwise — `expireDue` discovers
+   * and transitions due orders in ONE statement, so it holds order locks before it
+   * can know which reservations to release. So the two acquisition paths take this
+   * first instead, which costs them a lock they were going to take anyway, later.
+   *
+   * False for an order this tenant does not have. `tests/integration/lock-order.test.ts`
+   * reproduces the deadlock this prevents, deterministically, and reverting either
+   * call site brings it back.
+   */
+  lock(scope: TenantContext, id: OrderId, tx: unknown): Promise<boolean>;
+
   list(
     scope: TenantContext,
     search: OrderSearch,
@@ -160,6 +190,13 @@ export interface OrderRepository {
       readonly confirmedAt?: Date;
       readonly settledAt?: Date;
       readonly cancelledAt?: Date;
+      /**
+       * `REFUNDED`'s own stamp, and `orders_refunded_at_check` is an EQUALITY —
+       * `(state = 'REFUNDED') = (refunded_at IS NOT NULL)` — so the edge cannot be
+       * taken without it. Until a refund drove that edge nothing passed this, which
+       * is how `REFUND` came to be a declared transition no caller could complete.
+       */
+      readonly refundedAt?: Date;
     },
     now: Date,
     tx?: unknown,

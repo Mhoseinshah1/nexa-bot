@@ -1880,10 +1880,10 @@ export const orderSummarySchema = z.object({
   /**
    * When the money arrived, and NOTHING about a service.
    *
-   * `orders_settled_at_check` binds this to `PAID` or `REFUNDED`, so a non-null value
-   * here is the database's own statement that the order is financially settled. It says
-   * nothing about delivery: no phase before 4D provisions anything, and an operator
-   * reading a settled order must not infer one from a timestamp.
+   * `orders_settled_at_check` binds this to the settled states — `PAID` and
+   * `REFUNDED` — so a non-null value here is the database's own statement that the
+   * order was financially settled. A `REFUNDED` order keeps it: the money really did
+   * arrive, and the refund is a second movement rather than an erasure of the first.
    */
   settledAt: z.iso.datetime().nullable(),
   createdAt: z.iso.datetime(),
