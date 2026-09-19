@@ -62,6 +62,14 @@ export interface RefundConsumption {
 }
 
 export interface RefundRepository {
+  /**
+   * How many CONFIRMED payments in this currency still have refundable money.
+   *
+   * Read by the guard that refuses a `sales.currency` change: a credit written in a
+   * currency the tenant no longer sells in is one the customer cannot see or spend.
+   */
+  refundableExposureIn(scope: TenantContext, currency: CurrencyCode, tx?: unknown): Promise<number>;
+
   /** Every refund against one payment, oldest first — the order a history reads in. */
   listForPayment(
     scope: TenantContext,

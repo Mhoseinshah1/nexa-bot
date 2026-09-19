@@ -227,6 +227,13 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     customerId: z.string(),
     amountMinor: z.string(),
     currency: z.string(),
+    /**
+     * Why the money went back — `UNDELIVERABLE` for the automatic lane, or an
+     * operator's own reason. Nullable because a refund an operator requested
+     * carries their words and this event carries a closed vocabulary; the two
+     * are different things and folding them would put free text on an event.
+     */
+    reason: z.string().nullable(),
   }),
   PaymentConfirmed: z.object({
     customerId: z.string(),

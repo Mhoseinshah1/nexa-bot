@@ -170,6 +170,10 @@ const RECORDED_BY: Readonly<Record<string, { file: string; needle: string }>> = 
     file: 'apps/api/src/modules/platform/panels/application/panel-monitor.service.ts',
     needle: "const TENANT_BUDGET_RESOLVED = 'panel.monitor.tenant_budget_ok'",
   },
+  'order.refunded_undeliverable': {
+    file: 'apps/api/src/modules/commerce/orders/application/undeliverable-order-refunder.ts',
+    needle: "export const ORDER_REFUNDED_CODE = 'order.refunded_undeliverable'",
+  },
   'settings.stored_value_invalid': {
     file: 'apps/api/src/modules/control/settings/application/settings-resolver.ts',
     needle: 'code: INVALID_STORED_SETTING_CODE',

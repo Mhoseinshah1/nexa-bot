@@ -135,6 +135,39 @@ export const REFUND_METHOD_SUPPORT: {
 };
 
 /**
+ * The channel an automatic refund travels on, whatever the money arrived by.
+ *
+ * `REFUND_METHOD_SUPPORT` above answers a different question — how an OPERATOR'S
+ * refund of a given method is expected to travel — and deliberately refuses to let
+ * one person credit a wallet for money that came from a bank. This is not that. An
+ * order this installation took money for and cannot deliver has exactly two
+ * outcomes (`ORDER_MACHINE`), the second is "the money goes back", and it has to
+ * happen in the transaction that discovers the first is impossible, with nobody
+ * present. A bank transfer cannot be reversed from inside a transaction and a
+ * gateway reversal has no adapter, so the only channel that can honour that
+ * promise unattended is the wallet.
+ *
+ * The consequence is stated rather than hidden: money that arrived as a bank
+ * transfer comes back as store credit, not as a transfer. That is a product
+ * decision, and the alternative it replaced was a queue of undelivered paid orders
+ * waiting for somebody to notice. An operator who wants to send the money out of
+ * the wallet still can, through `ADMIN_DEBIT` and their own bank.
+ */
+export const AUTOMATIC_REFUND_CHANNEL = 'WALLET_CREDIT' satisfies RefundChannel;
+
+/**
+ * The reason recorded on every automatic refund, and the one `OrderRefunded` carries.
+ *
+ * A CONSTANT rather than a sentence assembled at the call site, because
+ * `refunds.reason` is otherwise an operator's own words and a reader has to be able
+ * to tell the two apart — a reconciliation that counts "how much did this
+ * installation give back because it could not deliver" is a filter on this value,
+ * not a LIKE over free text. What specifically went wrong is on the operation row
+ * and in the operational event; this says which lane produced the refund.
+ */
+export const AUTOMATIC_REFUND_REASON = 'UNDELIVERABLE';
+
+/**
  * The transitions a refund may make, and nothing else.
  *
  * Written as a map from state to its permitted successors, checked by the service before

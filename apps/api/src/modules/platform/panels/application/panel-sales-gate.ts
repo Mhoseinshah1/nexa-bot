@@ -1,9 +1,9 @@
 import { PANEL_RESERVATION_TTL_MS, type TenantContext } from '@nexa/contracts';
 import type { Clock, IdGenerator } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
-import type { PanelCapacityRepository } from './capacity-ports.js';
+import type { PanelCapacity, PanelCapacityRepository } from './capacity-ports.js';
 import { decideEligibility, type PanelEligibility } from './panel-eligibility.js';
-import type { PanelRepository } from './ports.js';
+import type { PanelRepository, PanelView } from './ports.js';
 
 export interface PanelSalesGateDeps {
   readonly panels: PanelRepository;
@@ -82,6 +82,45 @@ export class PanelSalesGate {
     // round trip per row.
     const capacities = await this.deps.capacity.readMany(scope, unique, now, tx);
     const views = await this.deps.panels.findMany(scope, unique, tx);
+    for (const [id, verdict] of this.verdictsOver(views, capacities, now)) {
+      verdicts.set(id, verdict);
+    }
+    return verdicts;
+  }
+
+  /**
+   * Which of this tenant's panels may be sold onto right now.
+   *
+   * The catalogue's read, and the reason it exists rather than the catalogue
+   * filtering what it fetched: eligibility has to be known BEFORE the product
+   * query applies its LIMIT, or a screenful of products on dead panels hides
+   * every eligible product behind it and the customer is shown an empty shop.
+   * Two rounds of "scan further and filter again" only moved that cliff — from
+   * twenty rows to a hundred, then to five hundred — because filtering after a
+   * bound can always be defeated by enough ineligible rows in front.
+   *
+   * Still TWO reads, the same two `evaluateMany` makes, and through the same
+   * `decideEligibility` — the one evaluator with four callers. This is a wider
+   * question asked of it, not a second answer to the same one.
+   */
+  async eligiblePanelIds(scope: TenantContext, tx?: TransactionScope): Promise<readonly string[]> {
+    const now = this.deps.clock.now();
+    const capacities = await this.deps.capacity.readAll(scope, now, tx);
+    const views = await this.deps.panels.findMany(scope, [...capacities.keys()], tx);
+    const eligible: string[] = [];
+    for (const [id, verdict] of this.verdictsOver(views, capacities, now)) {
+      if (verdict.eligible) eligible.push(id);
+    }
+    return eligible;
+  }
+
+  /** The mapping from rows to verdicts. One place, so the two readers agree. */
+  private verdictsOver(
+    views: readonly PanelView[],
+    capacities: ReadonlyMap<string, PanelCapacity>,
+    now: Date,
+  ): ReadonlyMap<string, PanelEligibility> {
+    const verdicts = new Map<string, PanelEligibility>();
     for (const view of views) {
       const capacity = capacities.get(view.panel.id);
       verdicts.set(

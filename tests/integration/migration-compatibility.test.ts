@@ -218,11 +218,61 @@ describe('migration compatibility across the rollback window', () => {
     // unsound. This is the mechanical half of expand/deploy/contract: the
     // test above proves THIS transition, and this one states the rule the next
     // migration has to obey.
-    for (const entry of incoming) {
-      const sql = readFileSync(join(__dirname, `../../apps/api/drizzle/${entry.tag}.sql`), 'utf8')
+    const sqlOf = (tag: string): string =>
+      readFileSync(join(__dirname, `../../apps/api/drizzle/${tag}.sql`), 'utf8')
         // Comments explain the rule and would otherwise trip it.
         .replace(/^\s*--.*$/gm, '')
         .toUpperCase();
+
+    /*
+     * Every `TABLE.COLUMN` this release ADDS, across the whole incoming batch.
+     *
+     * `DROP COLUMN` is the one shape whose soundness cannot be decided from a
+     * single file, and the reason is the same one the `DROP CONSTRAINT` rule
+     * below gives for its own exception. The rule this test enforces is about
+     * the PREVIOUS release: release N-1's code must keep working against
+     * release N's schema. A column that release N-1 never had cannot be a
+     * column release N-1 still needs — so a drop of a column ADDED by this
+     * same unreleased batch narrows nothing, while a drop of anything the
+     * boundary already carried is exactly the defect this file exists for.
+     *
+     * Scoped to the batch and not to one file, because the add and the removal
+     * are ordinarily two migrations: 0081 added `orders.unfulfilled_at` and
+     * `orders.unfulfilled_reason` for a state the owner then removed, and 0084
+     * drops them forward rather than editing 0081, which is the forward-only
+     * rule `0002_drop_callback_refs` states. Both are after
+     * `PREVIOUS_RELEASE_LAST`, so no released installation has ever had the
+     * columns, and the behavioural replay above is what proves the transition
+     * itself.
+     */
+    const added = new Set<string>();
+    for (const entry of incoming) {
+      for (const match of sqlOf(entry.tag).matchAll(
+        /ALTER TABLE\s+"?([A-Z0-9_]+)"?\s+ADD COLUMN\s+(?:IF NOT EXISTS\s+)?"?([A-Z0-9_]+)"?/g,
+      )) {
+        added.add(`${String(match[1])}.${String(match[2])}`);
+      }
+    }
+
+    /*
+     * Every constraint name the PREVIOUS release's schema carries.
+     *
+     * Collected by NAME from the migrations up to and including the boundary,
+     * which catches both `ADD CONSTRAINT "x"` and the inline `CONSTRAINT "x"`
+     * of a `CREATE TABLE`. It also catches a `DROP CONSTRAINT "x"` there, and
+     * that over-inclusion is deliberate: it can only make the rule below
+     * stricter — demand a re-add for a constraint the boundary might not have
+     * — which is the direction a check about rollback safety should fail in.
+     */
+    const atBoundary = new Set<string>();
+    for (const entry of previous) {
+      for (const match of sqlOf(entry.tag).matchAll(/CONSTRAINT\s+"?([A-Z0-9_]+)"?/g)) {
+        atBoundary.add(String(match[1]));
+      }
+    }
+
+    for (const entry of incoming) {
+      const sql = sqlOf(entry.tag);
       // A unique index and a CHECK are additions that NARROW: rows the
       // previous release could write may stop being writable. They are allowed
       // — 0015 adds one — but only because the behavioural replay above proves
@@ -230,7 +280,6 @@ describe('migration compatibility across the rollback window', () => {
       // release this file ships with, so the rule is: the shapes below are
       // never acceptable, and a narrowing addition has to survive the replay.
       for (const forbidden of [
-        'DROP COLUMN',
         'DROP TABLE',
         'SET NOT NULL',
         'DROP DEFAULT',
@@ -259,10 +308,40 @@ describe('migration compatibility across the rollback window', () => {
       // the previous release produces. A re-add that narrowed would fail there.
       const dropped = [...sql.matchAll(/DROP CONSTRAINT\s+"?([A-Z0-9_]+)"?/g)].map((m) => m[1]);
       for (const name of dropped) {
+        /*
+         * A constraint the boundary never carried is nothing the previous
+         * release can lose. `orders_unfulfilled_at_check` is the case: 0081
+         * added it with the two columns for a state the owner then removed,
+         * and 0084 takes constraint and columns away together. Requiring a
+         * re-add there would require re-adding a CHECK on a column that no
+         * longer exists.
+         *
+         * Decided against the BOUNDARY rather than against the incoming batch,
+         * and that difference is the whole of the rule. A redefinition re-adds
+         * its own name, so "some incoming migration adds it" is true of every
+         * constraint 0084 rewrites — and would quietly excuse a later
+         * migration from dropping `orders_state_check`, which the previous
+         * release does carry and does need.
+         */
+        if (!atBoundary.has(String(name))) continue;
         expect(
           sql,
           `${entry.tag} drops constraint ${name} without re-adding it, so the previous release loses it`,
         ).toMatch(new RegExp(`ADD CONSTRAINT\\s+"?${name}"?`));
+      }
+
+      // `DROP COLUMN` is handled the same way and for the same reason: a
+      // column this unreleased batch also created is not a column the previous
+      // release can miss. Anything else is the contract half of
+      // expand/deploy/contract and belongs in the NEXT release.
+      for (const match of sql.matchAll(
+        /ALTER TABLE\s+"?([A-Z0-9_]+)"?\s+DROP COLUMN\s+(?:IF EXISTS\s+)?"?([A-Z0-9_]+)"?/g,
+      )) {
+        const column = `${String(match[1])}.${String(match[2])}`;
+        expect(
+          added,
+          `${entry.tag} drops ${column}, which the previous release may still need: no incoming migration adds it`,
+        ).toContain(column);
       }
     }
   });

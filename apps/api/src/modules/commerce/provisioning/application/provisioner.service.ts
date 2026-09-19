@@ -21,6 +21,9 @@ import {
   type OperationId,
   type OperationState,
   type OperationTarget,
+  type OperationType,
+  type OrderId,
+  type OrderPurpose,
   type ProviderAdapter,
   type ProviderFailureKind,
   type ProviderRemovalOutcome,
@@ -43,6 +46,9 @@ import type {
 import { toProviderCredentials } from '../../../platform/panels/application/probe-core.js';
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import { decideOperability } from './panel-operability.js';
+import type { OrderRecord, OrderRepository } from '../../orders/application/ports.js';
+import type { UndeliverableOrderRefunder } from '../../orders/application/undeliverable-order-refunder.js';
+import type { PaymentRepository } from '../../payments/application/ports.js';
 import {
   backoffMs,
   expiryFor,
@@ -173,6 +179,27 @@ export interface ProvisionerDeps {
   readonly operations: OperationRepository;
   readonly services: ServiceRepository;
   readonly purchases: PurchaseSnapshotReader;
+  /**
+   * The ORDER a failed operation was bought by, read to decide whether money is owed
+   * back. `findById` alone: this lane never manages an order, it asks one question.
+   */
+  readonly orders: Pick<OrderRepository, 'findById'>;
+  /**
+   * The confirmed payment behind that order, which is what bounds the refund.
+   *
+   * One read, narrowed. A provisioner that could write a payment would be a
+   * provisioner that could confirm one, and nothing on a panel is evidence that
+   * money arrived.
+   */
+  readonly payments: Pick<PaymentRepository, 'findConfirmedForOrder'>;
+  /**
+   * Gives the customer their money back when a paid operation definitively failed.
+   *
+   * The SAME collaborator the settlement lane uses, so there is one implementation of
+   * "the order is refunded and closed" and one wallet credit path. See
+   * `UndeliverableOrderRefunder`.
+   */
+  readonly undeliverable: UndeliverableOrderRefunder;
   readonly panels: PanelRepository;
   readonly credentials: PanelCredentialStore;
   readonly adapters: (type: ProviderType) => ProviderAdapter;
@@ -1223,6 +1250,31 @@ export class ProvisionerService {
             },
             tx,
           );
+          /*
+           * And the money goes back, because nothing else will move this order.
+           *
+           * The other two lanes refund from a terminal FAILED. This one has no such
+           * row: the cycle deliberately leaves the service `PENDING_PROVISION` with
+           * nothing claimable, which is what makes it a dead end rather than a loop.
+           * A dead end that keeps the customer's money is the state this product
+           * removed, so the create the reconcile just proved absent is settled here
+           * as the definitive failure it is. `purchasedAs` says PROVISION because
+           * that is what the customer bought; the operation in hand is a read.
+           */
+          await this.refundPurchase(
+            scope,
+            {
+              orderId: operation.orderId,
+              purchasedAs: 'PROVISION',
+              // The row as this transaction has just left it, so the TERMINATE below
+              // transitions from the state actually written rather than from the
+              // `UNRECONCILED` it held on entry.
+              service: { ...service, state: 'PENDING_PROVISION' },
+              reason: 'PROVISION_CYCLE_EXHAUSTED',
+              now,
+            },
+            tx,
+          );
         } else {
           await this.deps.operations.plan(
             scope,
@@ -1425,6 +1477,7 @@ export class ProvisionerService {
       await this.recordManagementFailure(
         scope,
         operation,
+        service,
         outcome,
         changed.failure,
         failureNote(changed.failure, changed.status),
@@ -1460,6 +1513,7 @@ export class ProvisionerService {
       await this.recordManagementFailure(
         scope,
         operation,
+        service,
         'FAILED',
         null,
         'the panel does not have this service’s account',
@@ -1575,6 +1629,7 @@ export class ProvisionerService {
       await this.recordManagementFailure(
         scope,
         operation,
+        service,
         outcome,
         changed.failure,
         failureNote(changed.failure, changed.status),
@@ -1600,6 +1655,7 @@ export class ProvisionerService {
       await this.recordManagementFailure(
         scope,
         operation,
+        service,
         'FAILED',
         null,
         'the panel does not have this service’s account',
@@ -1756,6 +1812,7 @@ export class ProvisionerService {
       await this.recordManagementFailure(
         scope,
         operation,
+        service,
         outcome,
         removed.failure,
         failureNote(removed.failure, removed.status),
@@ -1844,6 +1901,7 @@ export class ProvisionerService {
   private async recordManagementFailure(
     scope: TenantContext,
     operation: OperationRecord,
+    service: ServiceRecord,
     outcome: OperationState,
     failure: ProviderFailureKind | null,
     message: string,
@@ -1868,6 +1926,30 @@ export class ProvisionerService {
         now,
         tx,
       );
+      /*
+       * Three of the five types that reach here are nobody's purchase — a `SUSPEND`,
+       * a `RESUME` and a `TERMINATE` are operator or customer decisions about a
+       * service that has already been paid for, and every one of them carries the
+       * `order_id` of the purchase that created it. `PURCHASED_AS` is what stops that
+       * id being read as "refund this": it refunds only when the failed operation is
+       * the operation the order was BOUGHT as, which for this method means the three
+       * commercial kinds and nothing else.
+       *
+       * `FAILED` and not `UNKNOWN`, for the reason `persistFailure` states at length.
+       */
+      if (!retryable && outcome === 'FAILED') {
+        await this.refundPurchase(
+          scope,
+          {
+            orderId: operation.orderId,
+            purchasedAs: operation.type,
+            service,
+            reason: failure ?? message,
+            now,
+          },
+          tx,
+        );
+      }
     });
   }
 
@@ -1996,6 +2078,157 @@ export class ProvisionerService {
     });
   }
 
+  /**
+   * The operation type each order purpose is bought as, and nothing else.
+   *
+   * Written out rather than inferred, because the question this answers decides
+   * whether MONEY moves and getting it wrong in either direction is expensive. An
+   * operation carries `order_id` whenever the service it acts on has one — a failed
+   * `SUSPEND` on a two-year-old service names the order that bought it — so "this
+   * operation has an order" is emphatically not "this operation is what that order
+   * bought". Refunding on the first reading would give a customer their original
+   * purchase price back because an operator's suspend button hit a 403.
+   *
+   * `SYNC_USAGE`, `RECONCILE`, `SUSPEND`, `RESUME` and `TERMINATE` are absent, which
+   * is the whole content of this table: none of them is something a customer paid
+   * for, so none of them failing is something to refund.
+   */
+  private static readonly PURCHASED_AS: Readonly<Record<OrderPurpose, OperationType>> = {
+    NEW_SERVICE: 'PROVISION',
+    RENEW: 'RENEW',
+    ADD_TRAFFIC: 'ADD_TRAFFIC',
+    ADD_TIME: 'ADD_TIME',
+  };
+
+  /**
+   * A paid operation has definitively failed, so the customer gets their money back.
+   *
+   * The second lane into `UndeliverableOrderRefunder`. The first is settlement
+   * discovering it cannot deliver before it commits; this one is the provisioner
+   * discovering it afterwards, once the panel has answered for the last time.
+   *
+   * ## Only on a DEFINITIVE failure, never on an unknown one
+   *
+   * Callers reach this from the branches that write a terminal `FAILED`, and never
+   * from `UNKNOWN`. That separation is the load-bearing part: an `UNKNOWN` create may
+   * have taken effect on the panel, so refunding it would give back money for an
+   * account the customer is holding. `UNKNOWN` goes to `UNRECONCILED` and is resolved
+   * by a READ first; whichever way that lands is a definitive answer, and a
+   * `RECONCILE_FAILED` reaches here through the ordinary terminal path.
+   *
+   * ## What it changes, in order
+   *
+   * A `PROVISION` that never produced an account leaves a `PENDING_PROVISION`
+   * service, and that row occupies a slot (`SERVICE_CAPACITY_STATES` counts every
+   * non-terminal state). So it is TERMINATED first: the customer has no account, has
+   * their money back, and the panel has its slot. A commercial operation touches no
+   * service state at all — the service is alive and keeps exactly the allowance it
+   * had, because the renewal that was not applied is the thing being refunded.
+   *
+   * Then `UndeliverableOrderRefunder` does the rest, in this same transaction.
+   *
+   * ## Why a missing payment declines rather than throws
+   *
+   * `settlementIsFunded` makes a settled order imply a confirmed payment, so null
+   * here is a broken database. Throwing would roll back the operation's own terminal
+   * transition, leaving the row claimable and the same impossible state to be met
+   * again on the next tick, for ever. Declining leaves the `provisioning.stalled`
+   * ERROR the caller already recorded, which is the right place for an operator to
+   * meet it.
+   */
+  private async refundPurchase(
+    scope: TenantContext,
+    input: {
+      readonly orderId: OrderId | null;
+      /**
+       * The operation the order was BOUGHT as, named by the caller.
+       *
+       * Passed rather than read off the operation, because one caller is a
+       * `RECONCILE` that has just proved the account absent for the last time: the
+       * operation in hand is a read, and what failed is the create it was
+       * reconciling. A method that inferred this from `operation.type` would decline
+       * exactly the case that needs it, silently.
+       */
+      readonly purchasedAs: OperationType;
+      readonly service: ServiceRecord;
+      readonly reason: string;
+      readonly now: Date;
+    },
+    tx: TransactionScope,
+  ): Promise<void> {
+    const { orderId, purchasedAs, service, reason, now } = input;
+    if (orderId === null) return;
+
+    const order: OrderRecord | null = await this.deps.orders.findById(scope, orderId, tx);
+    /*
+     * `PAID` and nothing else. A refunded order is a replay and writes nothing twice;
+     * an order in any other state did not pay for this operation.
+     */
+    if (order === null || order.state !== 'PAID') return;
+    if (ProvisionerService.PURCHASED_AS[order.purpose] !== purchasedAs) return;
+
+    const payment = await this.deps.payments.findConfirmedForOrder(scope, orderId, tx);
+    if (payment === null) return;
+
+    if (purchasedAs === 'PROVISION') {
+      /*
+       * Conditional on the state actually read, like every transition here. A service
+       * that moved on between the claim and this — terminated by its customer, or
+       * adopted by a reconcile — is not this transaction's to end, and `refund`
+       * below is still conditional on the ORDER, so the money side stays correct.
+       */
+      await this.deps.services.transition(
+        scope,
+        service.id,
+        service.state,
+        'TERMINATED',
+        null,
+        now,
+        tx,
+      );
+    }
+
+    /*
+     * And the stalled condition closes WITH the refund, because nothing else can ever
+     * close it.
+     *
+     * Both callers open `provisioning.stalled:<serviceId>` before they get here — an
+     * ERROR telling an operator a paid service could not be created. Its only two
+     * recoveries are `PROVISIONING_DELIVERED_CODE` events: a service adopted on its
+     * panel, or a service created on it. A service this method has just TERMINATED,
+     * for an order it has just REFUNDED, can produce neither. So every definitive
+     * failure left an open ERROR keyed on a dead service, unresolvable by fixing the
+     * panel (the key is the service, not the panel) and unresolvable by retrying
+     * (there is nothing left to retry) — an ever-growing operator queue, which is the
+     * exact thing the two-outcome decision was made to delete. Found by Codex.
+     *
+     * Passed to the refunder rather than recorded here, so the recovery rides on the
+     * ONE `order.refunded_undeliverable` row that already states this outcome. A
+     * second row under the same code would be the same fact twice, and the refunder
+     * writes nothing at all when another transaction moved the order first — which is
+     * precisely when the condition must stay open.
+     *
+     * The panel problem itself is not lost: it has its own health condition with its
+     * own recovery.
+     */
+    await this.deps.undeliverable.refund(
+      scope,
+      this.actor(),
+      {
+        order,
+        from: 'PAID',
+        payment,
+        reason,
+        now,
+        recovers: {
+          code: PROVISIONING_STALLED_CODE,
+          dedupeKey: provisioningConditionKey(service.id),
+        },
+      },
+      tx,
+    );
+  }
+
   /** A refusal: nothing was contacted, so nothing about a provider is recorded. */
   private async refuse(
     scope: TenantContext,
@@ -2029,6 +2262,17 @@ export class ProvisionerService {
             context: { serviceId: service.id, panelId: service.panelId, reason },
             dedupeKey: provisioningConditionKey(service.id),
           },
+          tx,
+        );
+        /*
+         * Nothing was contacted, so nothing can be uncertain: a permanent refusal is
+         * as definitive as an answer from the panel, and the customer's money goes
+         * back. The condition above stays open — it names the panel an operator has
+         * to fix so the next purchase does not land here too.
+         */
+        await this.refundPurchase(
+          scope,
+          { orderId: operation.orderId, purchasedAs: operation.type, service, reason, now },
           tx,
         );
       }
@@ -2147,6 +2391,29 @@ export class ProvisionerService {
           },
           tx,
         );
+        /*
+         * `FAILED` and not `UNKNOWN`, and the two are never folded together here.
+         *
+         * A definitive failure changed nothing on the panel, so the customer has no
+         * account and is owed their money. An `UNKNOWN` create may have taken
+         * effect — that is the whole reason the service went to `UNRECONCILED` two
+         * statements up — and refunding it would give money back for an account the
+         * customer is holding. The reconcile answers first; whichever way it lands
+         * comes back through this same branch with a definitive outcome.
+         */
+        if (outcome === 'FAILED') {
+          await this.refundPurchase(
+            scope,
+            {
+              orderId: operation.orderId,
+              purchasedAs: operation.type,
+              service,
+              reason: failure,
+              now,
+            },
+            tx,
+          );
+        }
       }
     });
   }

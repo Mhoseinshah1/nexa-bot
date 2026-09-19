@@ -20,20 +20,21 @@ import { currentCorrelationId, newCorrelationId } from '../../infrastructure/log
 import type { OrderCursor, OrderRecord } from '../../modules/commerce/orders/application/ports.js';
 
 /**
- * Orders over HTTP, at `/orders`. TWO ROUTES, both reads.
+ * Orders over HTTP, at `/orders`. Two reads and NO writes.
  *
- * There is no cancel, no mark-paid, no refund and no settle, and the absence is still
- * the point rather than an unfinished edge — but the reason has changed with 4C and is
- * restated rather than left stale. A payment record now EXISTS, so "there is nothing to
- * settle with" is no longer why:
+ * There is no cancel, no mark-paid, no refund, no settle and no fulfil, and the
+ * absence is the point rather than an unfinished edge:
  *
  * - **mark-paid** would be an operator asserting money arrived, which is exactly what
  *   `settlementIsFunded` refuses to take anyone's word for. Settling happens through a
  *   confirmed payment, at `POST /payments/:id/confirm`, where the evidence and the
  *   reviewer are recorded with it.
- * - **cancel** and **refund** have no producer in this release; `REFUNDED` is a frozen
- *   state with nothing that reaches it, and `docs/open-questions.md` OQ-4C-02 records
- *   what a refund has to be before one is built.
+ * - **refund** is the payments surface's, at `POST /payments/:id/refunds`, because a
+ *   refund is bounded by a payment and not by an order.
+ * - **fulfil** existed for one release and is gone with the state it served. An order
+ *   this installation cannot deliver is refunded automatically, in the transaction
+ *   that discovers it — so there is no stranded order for an operator to retry, and a
+ *   button that retried one would be a button for a state no row can hold.
  *
  * A "mark paid" button with nothing behind it is the legacy silent-success pattern, and
  * it is the single easiest thing to add here by accident.

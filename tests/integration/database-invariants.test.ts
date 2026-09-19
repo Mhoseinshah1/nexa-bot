@@ -107,6 +107,88 @@ describe('database invariants', () => {
     });
   });
 
+  describe('what the schema says about money going back', () => {
+    /*
+     * An automatic refund is completed by nobody, because nobody decided it — and
+     * an operator's refund still names who did. Migration 0086 split one check into
+     * two so that both could be true, and the pair is asserted here because the
+     * alternative the split rejected is the one a future edit will reach for: write
+     * the confirming operator's id onto the refund and keep a single check. That is
+     * a fabricated actor on a money record, and it says a person decided to return
+     * this money when what they decided was to approve a bank transfer.
+     *
+     * Inserted directly, because what is under test is the CONSTRAINT: a test that
+     * went through `RefundService` would be testing the service's choice of
+     * arguments rather than the schema's refusal of the others.
+     */
+    const TENANT = '01900000-0000-7000-8000-000000000001';
+    const CUSTOMER = '01900000-0000-7000-8000-0000000ef001';
+    const ADMIN = '01900000-0000-7000-8000-0000000ef002';
+
+    const seedPaymentAndAdmin = async (paymentId: string) => {
+      await query(`
+        INSERT INTO customers (id, tenant_id, telegram_user_id, first_name, status)
+        VALUES ('${CUSTOMER}', '${TENANT}', '770001', 'ز', 'ACTIVE')
+        ON CONFLICT DO NOTHING`);
+      await query(`
+        INSERT INTO admins (id, tenant_id, username, display_name, password_hash, status, password_updated_at)
+        VALUES ('${ADMIN}', '${TENANT}', 'refund-check', 'refund-check', 'x', 'ACTIVE', now())
+        ON CONFLICT DO NOTHING`);
+      await query(`
+        INSERT INTO payments (id, tenant_id, customer_id, order_id, method, state,
+                              amount, currency, reference)
+        VALUES ('${paymentId}', '${TENANT}', '${CUSTOMER}', NULL,
+                'MANUAL_TRANSFER', 'PENDING', 250000, 'IRT', 'ref-${paymentId.slice(-6)}')`);
+    };
+
+    const insertRefund = (
+      id: string,
+      paymentId: string,
+      requestedBy: string,
+      completedBy: string,
+      completedAt = 'now()',
+    ) =>
+      query(`
+        INSERT INTO refunds (id, tenant_id, payment_id, customer_id, order_id, state,
+                             channel, amount, currency, reason,
+                             requested_by_admin_id, completed_by_admin_id, completed_at)
+        VALUES ('${id}', '${TENANT}', '${paymentId}', '${CUSTOMER}', NULL, 'COMPLETED',
+                'WALLET_CREDIT', 250000, 'IRT', 'UNDELIVERABLE',
+                ${requestedBy}, ${completedBy}, ${completedAt})`);
+
+    it('accepts an automatic refund that names nobody on either side', async () => {
+      const payment = '01900000-0000-7000-8000-0000000ef010';
+      await seedPaymentAndAdmin(payment);
+      await expect(
+        insertRefund('01900000-0000-7000-8000-0000000ef011', payment, 'NULL', 'NULL'),
+      ).resolves.toBeDefined();
+    });
+
+    it('refuses an automatic refund that names an administrator who did not decide it', async () => {
+      const payment = '01900000-0000-7000-8000-0000000ef020';
+      await seedPaymentAndAdmin(payment);
+      await expect(
+        insertRefund('01900000-0000-7000-8000-0000000ef021', payment, 'NULL', `'${ADMIN}'`),
+      ).rejects.toThrowError(/refunds_operator_completion_check/);
+    });
+
+    it("refuses an operator's completed refund that names nobody", async () => {
+      const payment = '01900000-0000-7000-8000-0000000ef030';
+      await seedPaymentAndAdmin(payment);
+      await expect(
+        insertRefund('01900000-0000-7000-8000-0000000ef031', payment, `'${ADMIN}'`, 'NULL'),
+      ).rejects.toThrowError(/refunds_operator_completion_check/);
+    });
+
+    it('still refuses a COMPLETED refund with no time, whoever asked for it', async () => {
+      const payment = '01900000-0000-7000-8000-0000000ef040';
+      await seedPaymentAndAdmin(payment);
+      await expect(
+        insertRefund('01900000-0000-7000-8000-0000000ef041', payment, 'NULL', 'NULL', 'NULL'),
+      ).rejects.toThrowError(/refunds_completed_check/);
+    });
+  });
+
   describe('numeric precision', () => {
     it('returns int8 as bigint, exactly, above the safe integer range', async () => {
       // node-postgres returns int8 as a string by default. Parsing it to bigint

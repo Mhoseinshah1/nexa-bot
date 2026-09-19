@@ -22,6 +22,7 @@ import { encodeKeysetToken } from '../../apps/api/src/surfaces/telegram/keyset-t
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
 import { DrizzleOperationRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-operation.repository';
+import { SUPERSEDED_BY_AUTOMATIC_REFUND } from '../../apps/api/src/modules/commerce/payments/application/refund.service';
 import { CANARY, startFake3xUi, type Fake3xUi } from '../support/fake-3xui';
 import {
   adminActorFor,
@@ -107,6 +108,16 @@ describe('a provisioned service announces itself', () => {
     ctx = await createTestContext({
       PANEL_HTTP_ALLOW_LOOPBACK: 'true',
       TELEGRAM_API_BASE_URL: `http://127.0.0.1:${String(address.port)}`,
+      /*
+       * The schema's floor, because one case here waits out a real deadline.
+       *
+       * `refunds nothing while the outcome is UNKNOWN` needs a create that times out
+       * rather than one that is refused, and a timeout is only observable by waiting
+       * for it. Every other case answers on loopback in single-digit milliseconds, so
+       * a one-second bound is three orders of magnitude of headroom for them and the
+       * difference between a 1-second case and an 11-second one for that.
+       */
+      PANEL_HTTP_TIMEOUT_MS: '1000',
     });
   }, 120_000);
 
@@ -211,6 +222,54 @@ describe('a provisioned service announces itself', () => {
       orderId: confirmed.id,
     });
     return confirmed.id;
+  }
+
+  /**
+   * The same order, paid by BANK TRANSFER rather than from the wallet.
+   *
+   * Which channel the money arrived through is what decides the shape of an
+   * operator's refund of it: `REFUND_METHOD_SUPPORT` resolves `MANUAL_TRANSFER` to
+   * `EXTERNAL_MANUAL`, so the refund is born `AWAITING_EXTERNAL` and waits for a
+   * human to send the money and record it. A wallet payment's refund is
+   * `WALLET_CREDIT` and COMPLETED the moment it is written, which is why
+   * `paidOrder` cannot produce the state the case below needs.
+   */
+  async function transferPaidOrder(key: string): Promise<{ orderId: OrderId; paymentId: string }> {
+    const product = await products.create(tenantA, {
+      id: ctx.container.ids.uuid() as ProductId,
+      draft: {
+        title: 'پلن پایه',
+        description: null,
+        audience: 'EVERYONE',
+        sortOrder: 10,
+        panelId: panelId as PanelId,
+        specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: 2 },
+        price: money(250_000n, 'IRT'),
+      },
+      now: ctx.container.clock.now(),
+    });
+    await products.setStatus(tenantA, product.id, 'INACTIVE', 'ACTIVE', ctx.container.clock.now());
+    const draft = await ctx.container.orders.createDraft(tenantA, systemActor(key), {
+      idempotencyKey: `${key}-draft`,
+      customerId: customerA,
+      productId: product.id,
+    });
+    const confirmed = await ctx.container.orders.confirm(tenantA, systemActor(key), {
+      idempotencyKey: `${key}-confirm`,
+      customerId: customerA,
+      orderId: draft.id,
+    });
+    const { payment } = await ctx.container.payments.requestManualTransfer(
+      tenantA,
+      systemActor(key),
+      customerA,
+      { idempotencyKey: `${key}-manual`, orderId: confirmed.id },
+    );
+    await ctx.container.payments.confirmManualTransfer(tenantA, owner, payment.id, {
+      idempotencyKey: `${key}-confirm-transfer`,
+      note: 'کارت به کارت',
+    });
+    return { orderId: confirmed.id, paymentId: payment.id };
   }
 
   /** How many times the panel was asked to create a client. The provider-call count. */
@@ -789,17 +848,28 @@ describe('a provisioned service announces itself', () => {
       await ctx.container.provisionerLoop.tick();
 
       const service = await services.findByOrderId(tenantA, orderId);
-      expect(
-        service?.state,
-        'nothing is created, because what would be created is not what was sold',
-      ).toBe('PENDING_PROVISION');
-      expect(addClientCalls(), 'and the panel was never dialled').toBe(0);
+      expect(addClientCalls(), 'the panel was never dialled').toBe(0);
 
       const ops = await operations.listForService(tenantA, service?.id ?? '', 10);
       expect(
         ops[0]?.state,
         'CAPABILITY_UNSUPPORTED is permanent: no retry teaches an adapter a field',
       ).toBe('FAILED');
+      /*
+       * And the customer gets their money back rather than a row nobody will move.
+       *
+       * This case used to assert the service stayed `PENDING_PROVISION` — which was
+       * the truthful description of a service that was never created, and also a row
+       * holding a capacity slot on a panel that can never fill it, for an order that
+       * was paid for. There is no state for that any more: the create failed
+       * definitively, so the service is terminated and the order is refunded in the
+       * transaction that records the failure.
+       */
+      expect(service?.state, 'nothing was created, and nothing holds a slot').toBe('TERMINATED');
+      const order = (await ctx.container.database.db.execute(
+        sql`SELECT state FROM orders WHERE id = ${orderId}` as never,
+      )) as unknown as { rows: { state: string }[] };
+      expect(order.rows[0]?.state).toBe('REFUNDED');
     } finally {
       Object.defineProperty(descriptor, 'capabilities', {
         value: original,
@@ -838,6 +908,226 @@ describe('a provisioned service announces itself', () => {
       'a non-retryable failure is terminal at once, not after four more logins',
     ).toBe('FAILED');
     expect(create?.attempts, 'and it spent exactly the one attempt it was given').toBe(1);
+
+    /*
+     * And the customer is not left paying for it while an operator finds the typo.
+     *
+     * The third of the three terminal branches that refund — this one is
+     * `persistFailure`, where the panel ANSWERED and the answer was definitive. The
+     * capability case above is `refuse`, where nothing was contacted, and the
+     * reconcile-cycle case is the ceiling that leaves no terminal row at all. Each
+     * is asserted where it happens, because a refund wired into one of the three
+     * looks exactly like a refund wired into all of them until a panel fails the
+     * other way.
+     */
+    const row = (await ctx.container.database.db.execute(
+      sql`SELECT o.state, r.state AS refund_state, r.reason
+            FROM orders o LEFT JOIN refunds r ON r.order_id = o.id
+           WHERE o.id = ${orderId}` as never,
+    )) as unknown as {
+      rows: { state: string; refund_state: string | null; reason: string | null }[];
+    };
+    expect(row.rows).toEqual([
+      { state: 'REFUNDED', refund_state: 'COMPLETED', reason: 'UNDELIVERABLE' },
+    ]);
+    expect(
+      (await services.findByOrderId(tenantA, orderId))?.state,
+      'and the slot is back, because nothing was created to hold it',
+    ).toBe('TERMINATED');
+  });
+
+  it('credits only what is LEFT when an operator already returned part of it', async () => {
+    /*
+     * There is one answer to "how much did we give back", and it is a sum.
+     *
+     * `refundUndeliverable` locks the payment, sums the refunds already committed
+     * against it, and credits the REMAINDER — it does not credit the price. Nothing
+     * else could: an operator may have returned part of a purchase for their own
+     * reason before the provisioner ever dialled, and a second writer that credits
+     * the full amount hands the customer more than they paid, in two rows that each
+     * look correct on their own. That is the defect a ledger exists to make
+     * impossible, so it is asserted as a ledger: two refunds, one total.
+     *
+     * The order is the correctness and it is asserted as one: the partial goes in
+     * FIRST, while the order is still PAID and deliverable, and the create fails
+     * afterwards.
+     */
+    const orderId = await paidOrder('partial-then-failed');
+    const paymentRow = (await ctx.container.database.db.execute(
+      sql`SELECT id FROM payments WHERE order_id = ${orderId}` as never,
+    )) as unknown as { rows: { id: string }[] };
+    await ctx.container.refunds.request(tenantA, owner, {
+      idempotencyKey: 'partial-refund',
+      paymentId: paymentRow.rows[0]?.id ?? '',
+      amountMinor: 100_000n,
+      reason: 'GOODWILL',
+    });
+
+    // And now it cannot be delivered at all.
+    await ctx.container.panels.setCredentials(tenantA, owner, panelId, {
+      credentials: { password: 'not-the-panel-password' },
+      idempotencyKey: 'wrong-password-partial',
+    });
+    await ctx.container.provisionerLoop.tick();
+
+    const ledger = (await ctx.container.database.db.execute(
+      sql`SELECT amount::text AS amount, reason, requested_by_admin_id IS NULL AS automatic
+            FROM refunds WHERE order_id = ${orderId} ORDER BY amount` as never,
+    )) as unknown as {
+      rows: { amount: string; reason: string; automatic: boolean }[];
+    };
+    expect(ledger.rows, 'the remainder, not the price').toEqual([
+      { amount: '100000', reason: 'GOODWILL', automatic: false },
+      { amount: '150000', reason: 'UNDELIVERABLE', automatic: true },
+    ]);
+
+    const credited = (await ctx.container.database.db.execute(
+      sql`SELECT coalesce(sum(amount), 0)::text AS total FROM wallet_entries
+           WHERE customer_id = ${customerA} AND reason = 'REFUND'` as never,
+    )) as unknown as { rows: { total: string }[] };
+    expect(
+      credited.rows[0]?.total,
+      'and the wallet got back exactly the price, once, across both',
+    ).toBe('250000');
+  });
+
+  it('abandons an operator s unsent refund and returns the whole amount', async () => {
+    /*
+     * An amount RESERVED by a refund that has not happened is not an amount returned.
+     *
+     * `REFUND_CONSUMING_STATES` counts `REQUESTED` and `AWAITING_EXTERNAL` against the
+     * refundable balance, which is right for the operator path — it is what stops two
+     * operators each refunding one payment in full. Applied to the automatic refund it
+     * produced the defect this case names: the operator's unsent 100,000 was subtracted,
+     * the customer was credited 150,000, and the order went terminal. When the operator
+     * then marked that transfer FAILED — because they never sent it — its amount became
+     * refundable again with no path left to return it. The customer was permanently
+     * 100,000 short, and every row involved looked correct. Found by Codex.
+     *
+     * So the unfinished ones are FAILED here, in this transaction, BEFORE the sum — and
+     * the customer gets the whole 250,000 in one credit.
+     *
+     * Paid by transfer rather than from the wallet, because that is what produces an
+     * `AWAITING_EXTERNAL` refund at all: a wallet refund is COMPLETED when written, and
+     * a COMPLETED one is money that really moved, so it is subtracted — which the case
+     * above asserts and this one must not contradict.
+     */
+    const { orderId, paymentId } = await transferPaidOrder('unsent-then-failed');
+    const unsent = await ctx.container.refunds.request(tenantA, owner, {
+      idempotencyKey: 'unsent-refund',
+      paymentId,
+      amountMinor: 100_000n,
+      reason: 'GOODWILL',
+    });
+    expect(unsent.state, 'the operator has recorded an intention, not a transfer').toBe(
+      'AWAITING_EXTERNAL',
+    );
+
+    // And now the account cannot be created at all.
+    await ctx.container.panels.setCredentials(tenantA, owner, panelId, {
+      credentials: { password: 'not-the-panel-password' },
+      idempotencyKey: 'wrong-password-unsent',
+    });
+    await ctx.container.provisionerLoop.tick();
+
+    const ledger = (await ctx.container.database.db.execute(
+      sql`SELECT amount::text AS amount, state, channel, reason, completion_note
+            FROM refunds WHERE order_id = ${orderId} ORDER BY amount` as never,
+    )) as unknown as {
+      rows: {
+        amount: string;
+        state: string;
+        channel: string;
+        reason: string;
+        completion_note: string | null;
+      }[];
+    };
+    expect(
+      ledger.rows,
+      'the unsent one is abandoned and says why; the whole price goes back',
+    ).toEqual([
+      {
+        amount: '100000',
+        state: 'FAILED',
+        channel: 'EXTERNAL_MANUAL',
+        reason: 'GOODWILL',
+        completion_note: SUPERSEDED_BY_AUTOMATIC_REFUND,
+      },
+      {
+        amount: '250000',
+        state: 'COMPLETED',
+        channel: 'WALLET_CREDIT',
+        reason: 'UNDELIVERABLE',
+        completion_note: null,
+      },
+    ]);
+
+    const credited = (await ctx.container.database.db.execute(
+      sql`SELECT coalesce(sum(amount), 0)::text AS total, count(*)::int AS n
+            FROM wallet_entries
+           WHERE customer_id = ${customerA} AND reason = 'REFUND'` as never,
+    )) as unknown as { rows: { total: string; n: number }[] };
+    expect(
+      credited.rows[0],
+      'the customer is whole, in one entry — not short by an amount nobody sent',
+    ).toEqual({ total: '250000', n: 1 });
+
+    const order = (await ctx.container.database.db.execute(
+      sql`SELECT state FROM orders WHERE id = ${orderId}` as never,
+    )) as unknown as { rows: { state: string }[] };
+    expect(order.rows[0]?.state).toBe('REFUNDED');
+  });
+
+  it('refunds nothing while the outcome is UNKNOWN, and waits for the read', async () => {
+    /*
+     * The rule the whole lane turns on, asserted at the moment it would be broken.
+     *
+     * A create whose answer was lost MAY have taken effect. Refunding it gives the
+     * money back for an account the customer is holding — so `persistFailure` refunds
+     * on `FAILED` and never on `UNKNOWN`, and that check is SEPARATE from `!retryable`,
+     * which is true for an `UNKNOWN` too. Collapsing the two is a one-word edit, and
+     * this case is what dies when somebody makes it.
+     *
+     * `add-client-hang` is the shape that produces the ambiguity honestly: the panel
+     * STORES the client and then never answers, so the request times out — `TIMEOUT`,
+     * which `SAFE_TO_REPLAY_FAILURE_KINDS` deliberately excludes — and the account the
+     * customer paid for really is on the panel. A refund here would be money returned
+     * for a working service. The reconcile that follows asks, finds it PRESENT, and
+     * the order is fulfilled: the outcome UNKNOWN was always waiting for.
+     */
+    const orderId = await paidOrder('unknown-not-refunded');
+    panel.setBehaviour('add-client-hang');
+
+    await ctx.container.provisionerLoop.tick();
+
+    const serviceId = (await services.findByOrderId(tenantA, orderId))?.id ?? '';
+    const ops = await operations.listForService(tenantA, serviceId, 10);
+    const create = ops.find((operation) => operation.type === 'PROVISION');
+    expect(create?.failureKind, 'the answer was lost, not refused').toBe('TIMEOUT');
+    expect(create?.state, 'and a lost answer is never a definitive failure').not.toBe('FAILED');
+    expect(
+      ops.some((operation) => operation.type === 'RECONCILE'),
+      'the remedy for an unknown is a read, and it was planned',
+    ).toBe(true);
+    expect(panel.clients.size, 'the account the customer paid for really is there').toBe(1);
+
+    /*
+     * Which the read then finds — so the money stays where the customer put it and the
+     * service is delivered. Both halves are asserted, because "no refund" alone is
+     * also what a stuck lane produces.
+     */
+    const refunds = (await ctx.container.database.db.execute(
+      sql`SELECT count(*)::int AS n FROM refunds WHERE order_id = ${orderId}` as never,
+    )) as unknown as { rows: { n: number }[] };
+    expect(refunds.rows[0]?.n, 'and nothing went back for an account that exists').toBe(0);
+    const order = (await ctx.container.database.db.execute(
+      sql`SELECT state FROM orders WHERE id = ${orderId}` as never,
+    )) as unknown as { rows: { state: string }[] };
+    expect(order.rows[0]?.state, 'the order was paid and stays paid').toBe('PAID');
+    expect(
+      (await services.findByOrderId(tenantA, orderId))?.state,
+      "the reconcile found the account and the service is the customer's",
+    ).toBe('ACTIVE');
   });
 
   it('does not announce twice when the sender dies between the send and the record', async () => {
@@ -975,45 +1265,99 @@ describe('a provisioned service announces itself', () => {
 
     const stalled = await services.findByOrderId(tenantA, orderId);
     const serviceId = stalled?.id ?? '';
-    expect(stalled?.state, 'left where a retry can reach it').toBe('PENDING_PROVISION');
     expect(
       await operations.findOpen(tenantA, serviceId, 'PROVISION'),
-      'and with nothing claimable, so the loop cannot restart itself',
+      'nothing claimable, so the loop cannot restart itself',
     ).toBeNull();
     expect(await operations.findOpen(tenantA, serviceId, 'RECONCILE')).toBeNull();
 
-    // An operator has a row to act on.
-    const events = await ctx.container.database.db.execute(
-      sql`SELECT code, context FROM operational_events WHERE code = 'provisioning.stalled'`,
-    );
-    expect(events.rows, 'the operator is told').toHaveLength(1);
-
-    // Another tick changes nothing at all: no operation, no call.
-    await ctx.container.provisionerLoop.tick();
-    expect(addClientCalls(), 'and it stays stopped').toBe(3);
+    /*
+     * An operator was told — and then told it was over.
+     *
+     * `provisioning.stalled` is an ERROR keyed on the SERVICE, and its only recoveries
+     * are deliveries of that service. A service this lane has terminated, for an order
+     * it has refunded, can never produce one: before the refund recorded its own
+     * recovery, every definitive failure left an open ERROR nobody and nothing could
+     * ever close — an operator queue that only grows, which is the exact thing the
+     * two-outcome decision deleted. Found by Codex.
+     *
+     * So the assertion is both halves. The row exists, because the operator needs to
+     * know a paid service could not be created; and it is RESOLVED, because the
+     * product has already answered it by giving the money back. The panel's OWN
+     * condition is a different code with its own recovery and stays open — the panel
+     * is still broken.
+     */
+    const events = (await ctx.container.database.db.execute(
+      sql`SELECT code, resolved_at IS NOT NULL AS closed FROM operational_events
+           WHERE code IN ('provisioning.stalled', 'order.refunded_undeliverable')
+           ORDER BY code` as never,
+    )) as unknown as { rows: { code: string; closed: boolean }[] };
+    expect(events.rows, 'told, then told it was answered — in two rows, not three').toEqual([
+      { code: 'order.refunded_undeliverable', closed: false },
+      { code: 'provisioning.stalled', closed: true },
+    ]);
 
     /*
-     * And the deliberate way back in still works.
+     * And the CUSTOMER is not left in the ceiling with it.
      *
-     * `retryProvisioning` is the remedy the stalled condition points at, and the panel
-     * having recovered is exactly when an operator presses it.
+     * This is the case the cycle bound was hardest on before: nothing claimable,
+     * nothing in the reconcile queue, and a `PENDING_PROVISION` row holding a
+     * capacity slot for an order that was paid for — a dead end whose only exit was
+     * an operator noticing the condition. The exits are now the two the product has.
+     * The create the reconcile proved absent three times is settled as the definitive
+     * failure it is: the service is terminated, the slot is back, and the money is on
+     * the customer's wallet.
+     *
+     * The panel's condition stays open, because the panel is still broken and the
+     * next purchase would land in the same place.
+     */
+    expect(stalled?.state, 'the service is ended, not parked').toBe('TERMINATED');
+    const order = (await ctx.container.database.db.execute(
+      sql`SELECT state FROM orders WHERE id = ${orderId}` as never,
+    )) as unknown as { rows: { state: string }[] };
+    expect(order.rows[0]?.state).toBe('REFUNDED');
+    const refunds = (await ctx.container.database.db.execute(
+      sql`SELECT state, reason FROM refunds WHERE order_id = ${orderId}` as never,
+    )) as unknown as { rows: { state: string; reason: string }[] };
+    expect(refunds.rows, 'one refund, for the lane that had nobody in it').toEqual([
+      { state: 'COMPLETED', reason: 'UNDELIVERABLE' },
+    ]);
+
+    // Another tick changes nothing at all: no operation, no call, no second refund.
+    await ctx.container.provisionerLoop.tick();
+    expect(addClientCalls(), 'and it stays stopped').toBe(3);
+    expect((await refundsFor(orderId)).length, 'and refunds once').toBe(1);
+
+    /*
+     * `retryProvisioning` is no longer the way back in, and the refusal is the point.
+     *
+     * It used to be the remedy the stalled condition pointed at. A terminated service
+     * cannot be provisioned — `OPERATION_LEGAL_FROM.PROVISION` is `PENDING_PROVISION`
+     * alone — so pressing it against a refunded order is refused rather than creating
+     * an account for money that has gone back. The customer buys again; the operator
+     * fixes the panel.
      */
     panel.setBehaviour('healthy');
-    await ctx.container.provisioning.retryProvisioning(tenantA, owner, serviceId, {
-      idempotencyKey: 'operator-retry-absent',
-    });
-    await ctx.container.provisionerLoop.tick();
-
-    const active = await services.findByOrderId(tenantA, orderId);
-    expect(active?.state).toBe('ACTIVE');
-    expect(panel.clients.size, 'one account, for one paid order').toBe(1);
-    expect(addClientCalls(), 'the three that failed, and the one that worked').toBe(4);
+    await expect(
+      ctx.container.provisioning.retryProvisioning(tenantA, owner, serviceId, {
+        idempotencyKey: 'operator-retry-absent',
+      }),
+    ).rejects.toMatchObject({ code: expect.any(String) });
+    expect(panel.clients.size, 'and no account was created for a refunded order').toBe(0);
 
     const rows = await ctx.container.database.db.execute(
       sql`SELECT count(*)::int AS n FROM services WHERE order_id = ${orderId}`,
     );
     expect((rows.rows[0] as { n: number }).n).toBe(1);
   });
+
+  /** Every refund against one order, so "exactly one" is asserted and not assumed. */
+  async function refundsFor(orderId: string): Promise<readonly { state: string }[]> {
+    const rows = (await ctx.container.database.db.execute(
+      sql`SELECT state FROM refunds WHERE order_id = ${orderId}` as never,
+    )) as unknown as { rows: { state: string }[] };
+    return rows.rows;
+  }
 
   it('holds off a stopped tenant without spending an attempt on it', async () => {
     const orderId = await paidOrder('stopped-provision');

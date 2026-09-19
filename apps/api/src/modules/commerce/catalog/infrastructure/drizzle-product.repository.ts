@@ -208,9 +208,19 @@ export class DrizzleProductRepository implements ProductRepository {
   async listCatalog(
     scope: TenantContext,
     limit: number,
+    eligiblePanelIds: readonly string[],
     tx?: unknown,
   ): Promise<{ readonly items: readonly ProductRecord[]; readonly hasMore: boolean }> {
     const tenantId = requireTenantId(scope);
+    /*
+     * No eligible panel means no catalogue, and saying so costs nothing.
+     *
+     * `= ANY(...)` over an empty array is a perfectly good `false`, so this is
+     * not a correctness guard — it is the honest answer given without a round
+     * trip: `hasMore` is false because there is nothing further to reach, not
+     * because a bound was hit.
+     */
+    if (eligiblePanelIds.length === 0) return { items: [], hasMore: false };
     const rows = await this.exec(tx)
       .select()
       .from(products)
@@ -218,6 +228,23 @@ export class DrizzleProductRepository implements ProductRepository {
         and(
           eq(products.tenantId, tenantId),
           eq(products.status, 'ACTIVE'),
+          /*
+           * The fleet filter, BEFORE the limit.
+           *
+           * This is the whole of the fix for the catalogue ceiling: the LIMIT now
+           * applies to products that are already sellable, so the hundredth
+           * ineligible product in front of an eligible one costs a row of index
+           * scan rather than a customer-visible empty shop.
+           *
+           * ONE bind parameter, not one per panel. `inArray` expands to `IN ($1,
+           * $2, ... $n)`, and n here is the tenant's whole eligible fleet — so a
+           * large enough fleet stops being a slow query and becomes a FAILED one,
+           * at PostgreSQL's 65535-parameter ceiling, with the catalogue empty and
+           * nothing in the shop to explain it. An array bound once and cast to
+           * `uuid[]` is a single parameter whatever the fleet size, and the planner
+           * still uses the index on `panel_id`.
+           */
+          sql`${products.panelId} = ANY(${sql.param([...eligiblePanelIds])}::uuid[])`,
           /*
            * Neither HIDDEN nor RESELLERS_ONLY.
            *

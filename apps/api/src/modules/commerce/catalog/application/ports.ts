@@ -205,6 +205,21 @@ export interface ProductRepository {
   listCatalog(
     scope: TenantContext,
     limit: number,
+    /**
+     * The panels that may be sold onto right now — the fleet filter, applied in
+     * the WHERE clause so it precedes the LIMIT.
+     *
+     * Passed IN rather than computed here, because deciding it means counting
+     * services and unexpired holds, and a catalogue query that counted services
+     * would be the second implementation of a rule `PanelSalesGate` already owns.
+     * The caller reads it once from that evaluator and hands the ids over.
+     *
+     * Filtering after the limit instead is what put a correctness ceiling on the
+     * catalogue: enough ineligible products in front of an eligible one emptied
+     * the shop, and every widening of the scan only moved the number at which
+     * that happened.
+     */
+    eligiblePanelIds: readonly string[],
     tx?: unknown,
   ): Promise<{ readonly items: readonly ProductRecord[]; readonly hasMore: boolean }>;
 }
