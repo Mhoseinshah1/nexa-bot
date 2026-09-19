@@ -216,7 +216,10 @@ export class ProvisioningService {
     order: OrderRecord,
     tx: TransactionScope,
     onIneligible: 'REFUSE' | 'STRAND',
-  ): Promise<{ readonly outcome: 'FULFILLABLE' } | { readonly outcome: 'UNFULFILLABLE'; readonly reason: string }> {
+  ): Promise<
+    | { readonly outcome: 'FULFILLABLE' }
+    | { readonly outcome: 'UNFULFILLABLE'; readonly reason: string }
+  > {
     const alreadyProvisioned =
       (await this.deps.services.findByOrderId(scope, order.id, tx)) !== null;
     const eligible = await this.deps.panelSales.consume(
