@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ORDER_STATES,
   UNLIMITED_DURATION_DAYS,
@@ -9,9 +9,11 @@ import {
   type OrderSummaryResponse,
   type PaymentState,
 } from '@nexa/contracts';
-import { fetchOrder, fetchOrders, fetchPayments } from '../api/client';
+import { fetchOrder, fetchOrders, fetchPayments, fulfilOrder } from '../api/client';
 import { formatNumber, formatTimestamp, splitBytes } from '../format';
 import { mayRequest, queryState } from '../view-state';
+import { useSubmissionKey } from '../submission-key';
+import { messageFor } from './settings';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
 import {
@@ -29,6 +31,7 @@ import {
   PageHead,
   Pills,
   StateSwitch,
+  useToast,
   type Column,
   type Tone,
 } from '../ui/kit';
@@ -36,11 +39,17 @@ import {
 /**
  * Orders — what a customer asked to buy, and what they were quoted for it.
  *
- * This page READS. There is no cancel, no mark-paid, no refund and no settle, and the
- * absence is deliberate: each is a real operator action whose meaning depends on a
- * payment record this release does not have, and a button for one would be the legacy
+ * This page reads, and writes exactly ONE thing. There is no cancel, no mark-paid, no
+ * refund and no settle, and the absence is deliberate: each is a real operator action
+ * whose meaning depends on a payment record, and a button for one would be the legacy
  * system's silent-success pattern. `orders.controller.ts` has no route to call either,
  * so this is not the UI declining to offer something the server permits.
+ *
+ * The one write is fulfilment of a `PAID_UNFULFILLED` order — retry, or reassign to
+ * another panel — and it is not an exception to any of that: it asserts nothing about
+ * money. The payment is already CONFIRMED and it is the SERVICE that could not be
+ * created. Without it the `orders.fulfil` permission and the notification sent to
+ * everyone holding it named a recovery with nowhere to perform it.
  *
  * Every `line*` field is the SNAPSHOT taken when the order was made. That is the whole
  * reason this surface can be trusted: the legacy «محصول حذف‌شده» is what a screen that
@@ -403,10 +412,12 @@ export function OrderDetailPage({
   id,
   denied,
   mayViewPayments,
+  mayFulfil,
 }: {
   id: string;
   denied: boolean;
   mayViewPayments: boolean;
+  mayFulfil: boolean;
 }) {
   const onLink = useLinkHandler();
   const order = useQuery({
@@ -549,6 +560,15 @@ export function OrderDetailPage({
               />
             </Card>
 
+            {row.state === 'PAID_UNFULFILLED' && (
+              <OrderFulfilment
+                id={row.id}
+                panelId={row.panelId}
+                reason={row.unfulfilledReason}
+                mayFulfil={mayFulfil}
+              />
+            )}
+
             <OrderPayments orderId={row.id} mayView={mayViewPayments} />
 
             <Card title={t('web.orders_scope_title')}>
@@ -558,6 +578,136 @@ export function OrderDetailPage({
         )}
       </StateSwitch>
     </>
+  );
+}
+
+/**
+ * The two ways out of `PAID_UNFULFILLED`, for an operator who holds `orders.fulfil`.
+ *
+ * Codex C4-N2 on PR #50. The state, the permission, the route and the notification to
+ * everyone holding that permission all shipped together — and the operator surface drew
+ * a badge. An administrator told "you can retry or reassign this" had to hand-craft an
+ * HTTP request while the customer's money sat in the account.
+ *
+ * ## Retry and reassign are one request
+ *
+ * `POST /orders/:id/fulfil` takes an optional `panelId`, so this is one mutation with
+ * two entry points rather than two routes. Leaving the box empty retries the panel the
+ * order was sold on; typing a panel id moves it. There is no dropdown of panels: the
+ * eligible-panel list is not a read this surface has, and inventing one that disagreed
+ * with the server's own evaluation at settlement is the "two surfaces recompute the
+ * same concept" failure this repository has a measured example of. The server decides,
+ * and says why when it refuses.
+ *
+ * ## Why no typed confirmation
+ *
+ * Fulfilling is the outcome the customer already paid for, and the failure mode is a
+ * refusal rather than a loss: an ineligible panel is refused inside the transaction
+ * under its own lock. `TERMINATE` costs a typed phrase because it deletes an account on
+ * a provider; pricing this the same would teach an operator to type past both.
+ *
+ * The permission is reported as a sentence rather than by hiding the card, which is the
+ * rule the services surface states: an absent control says nothing about why.
+ */
+function OrderFulfilment({
+  id,
+  panelId,
+  reason,
+  mayFulfil,
+}: {
+  id: string;
+  panelId: string;
+  reason: string | null;
+  mayFulfil: boolean;
+}) {
+  const toast = useToast();
+  const submission = useSubmissionKey();
+  const queryClient = useQueryClient();
+  const [target, setTarget] = useState('');
+
+  const trimmed = target.trim();
+  // Validated HERE as well as at the server, so a typo is a sentence on the form rather
+  // than a 400 from a route the operator cannot see.
+  const targetValid = trimmed === '' || uuidV7Schema.safeParse(trimmed).success;
+
+  const fulfil = useMutation({
+    mutationFn: () =>
+      fulfilOrder({
+        id,
+        idempotencyKey: submission.current({ command: 'orders.fulfil', id, panelId: trimmed }),
+        ...(trimmed === '' ? {} : { panelId: trimmed }),
+      }),
+    onSuccess: (result) => {
+      submission.settle();
+      setTarget('');
+      void queryClient.invalidateQueries({ queryKey: ['order', id] });
+      /*
+       * "Fulfilled", and it is the truthful word here rather than "recorded".
+       *
+       * Unlike the service actions, this one does not PLAN a provider call: the order
+       * reaches `PAID` and the service row exists when the response arrives. What is
+       * still asynchronous is the provisioning of that service on the panel, which the
+       * services surface owns and reports.
+       */
+      toast({
+        tone: 'ok',
+        message:
+          result.order.panelId === panelId
+            ? t('web.order_fulfil_done')
+            : t('web.order_fulfil_reassigned'),
+      });
+    },
+    onError: (error: unknown) => {
+      submission.settleOn(error);
+      toast({ tone: 'danger', message: messageFor(error) });
+    },
+  });
+
+  return (
+    <Card title={t('web.order_fulfil_title')} hint={t('web.order_fulfil_hint')}>
+      <Banner tone="danger" title={t('web.order_fulfil_banner_title')}>
+        {t('web.order_fulfil_banner_body')}
+      </Banner>
+
+      <KV
+        items={[
+          [t('web.order_unfulfilled_reason'), reason === null ? <Dash key="r" /> : reason],
+          [t('web.product_panel'), <Copyable key="p" value={panelId} />],
+        ]}
+      />
+
+      {!mayFulfil ? (
+        <Banner tone="neutral">{t('web.order_fulfil_denied')}</Banner>
+      ) : (
+        <form
+          className="stack"
+          onSubmit={(event: FormEvent) => {
+            event.preventDefault();
+            if (!targetValid) return;
+            fulfil.mutate();
+          }}
+        >
+          <Field
+            label={t('web.order_fulfil_panel_label')}
+            hint={t('web.order_fulfil_panel_hint')}
+            {...(targetValid ? {} : { error: t('web.order_fulfil_panel_invalid') })}
+          >
+            <input
+              className="input"
+              value={target}
+              onChange={(event) => setTarget(event.target.value)}
+              placeholder={panelId}
+              dir="ltr"
+            />
+          </Field>
+          <div className="btn-group">
+            <button type="submit" className="btn sm" disabled={!targetValid || fulfil.isPending}>
+              {trimmed === '' ? t('web.order_fulfil_retry') : t('web.order_fulfil_reassign')}
+            </button>
+          </div>
+        </form>
+      )}
+    </Card>
   );
 }
 
