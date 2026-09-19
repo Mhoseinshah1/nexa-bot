@@ -138,6 +138,15 @@ export interface RefundLedgerView {
  * which is `CLAUDE.md`'s rule and the reason the legacy mutable balance column is the
  * failure it names.
  */
+/**
+ * What an automatic refund records on an operator's refund it had to abandon.
+ *
+ * A constant rather than a sentence at the call site, because it is the one note a
+ * reader will find on a refund nobody decided to fail, and it has to say who did.
+ */
+export const SUPERSEDED_BY_AUTOMATIC_REFUND =
+  'Superseded by the automatic refund of an order that could not be delivered.';
+
 export class RefundService {
   constructor(private readonly deps: RefundServiceDeps) {}
 
@@ -628,6 +637,45 @@ export class RefundService {
     const payment = input.payment;
     if (!(await this.deps.repository.lockPayment(scope, payment.id, tx))) {
       throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
+    }
+
+    /*
+     * AN OPERATOR'S UNFINISHED REFUND IS SUPERSEDED, NOT SUBTRACTED.
+     *
+     * `REFUND_CONSUMING_STATES` counts `REQUESTED` and `AWAITING_EXTERNAL` against the
+     * refundable balance, and for the OPERATOR path that is exactly right: it stops two
+     * operators each refunding the same payment in full. Here it was wrong. An external
+     * refund that has not happened yet reserved its amount, this method credited only
+     * the remainder, and the caller then made the order terminal — so when the operator
+     * later marked that transfer `FAILED`, its amount became refundable again with no
+     * path left to return it. The customer was permanently short, and nothing in the
+     * system said so. Found by Codex.
+     *
+     * So the unfinished ones are FAILED here, in this transaction, freeing their
+     * amounts before the sum below. `REFUND_TRANSITIONS` allows both edges, and the
+     * transition is conditional on the state just read, so a concurrent completion
+     * wins and its amount stays consumed.
+     *
+     * The cost is stated rather than hidden: an operator who has ALREADY sent the bank
+     * transfer this refund describes, but not yet recorded it, will find the refund
+     * abandoned and the whole amount returned to the wallet instead. That is
+     * recoverable — they record what they sent — where a customer silently short of
+     * their own money is not, and it is the direction this product's money rules
+     * choose everywhere else.
+     */
+    for (const open of await this.deps.repository.listForPayment(scope, payment.id, tx)) {
+      if (open.state !== 'REQUESTED' && open.state !== 'AWAITING_EXTERNAL') continue;
+      await this.deps.repository.transition(
+        scope,
+        open.id,
+        {
+          from: open.state,
+          to: 'FAILED',
+          completionNote: SUPERSEDED_BY_AUTOMATIC_REFUND,
+        },
+        input.now,
+        tx,
+      );
     }
 
     const consumption = await this.deps.repository.consumptionFor(scope, payment.id, tx);

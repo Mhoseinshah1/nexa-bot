@@ -804,6 +804,87 @@ describe('an order that cannot be delivered is refunded', () => {
   });
 
   // -------------------------------------------------------------------------
+  // The currency the credit would be denominated in
+  // -------------------------------------------------------------------------
+
+  /**
+   * `sales.currency`, moved through the real write path so the veto is exercised.
+   *
+   * Direct SQL into `setting_values` would bypass `SettingsService.set` entirely,
+   * which is where the guard runs — and a case that wrote the row itself would pass
+   * whether the guard existed or not.
+   */
+  const changeSalesCurrency = (to: string, expectedVersion: number | null = null) =>
+    ctx.container.settingsService.set(tenantA, owner, {
+      key: 'sales.currency',
+      value: to,
+      expectedVersion,
+      idempotencyKey: key(),
+    });
+
+  it('refuses to retire a currency that still has money owed in it', async () => {
+    /*
+     * An automatic refund credits the wallet in the PAYMENT's currency — it has to,
+     * because that is the amount that arrived, and converting it would be the implicit
+     * FX conversion at a rate nobody chose that `FBR-010` refuses.
+     *
+     * Every wallet READ, though, resolves `sales.currency` as it is TODAY. So after a
+     * currency change, an undeliverable older order credited a balance the customer was
+     * TOLD about by `ORDER_REFUNDED_TO_WALLET` and could then neither see nor spend:
+     * money returned in name only, with the notification lane vouching for it. Found
+     * by Codex.
+     *
+     * The operator is stopped at the moment the problem is still cheap, and the
+     * refusal names how many payments stand in the way. `confirmAndCredit` already
+     * refuses the same condition for a top-up, which is the precedent.
+     */
+    const order = await awaitingPayment(panelA);
+    const paymentId = await pendingTransfer(order);
+    await confirmTransfer(paymentId);
+
+    await expect(changeSalesCurrency('IRR')).rejects.toMatchObject({
+      code: 'control.invalid_value',
+      message: expect.stringContaining('1 confirmed payment(s) in IRT'),
+    });
+
+    const stored = (await ctx.container.database.db.execute(
+      sql`SELECT count(*)::int AS n FROM setting_values
+           WHERE setting_key = 'sales.currency' AND tenant_id = ${tenantA.tenantId}` as never,
+    )) as unknown as { rows: { n: number }[] };
+    expect(stored.rows[0]?.n, 'and nothing was written').toBe(0);
+  });
+
+  it('allows the change once nothing is left to refund', async () => {
+    /*
+     * The other half, and the one that makes the refusal a GUARD rather than a ban.
+     * The exposure is bounded and temporary: it clears as those payments are settled
+     * or refunded. A case that asserted only the refusal would pass for a rule that
+     * refused for ever.
+     *
+     * Here the whole payment goes back automatically, so nothing remains refundable
+     * and the currency moves.
+     */
+    const order = await awaitingPayment(panelA);
+    const paymentId = await pendingTransfer(order);
+    await setStatus(panelA, 'DISABLED');
+    await confirmTransfer(paymentId);
+    await assertRefunded(order.id, { services: 0 });
+
+    const result = await changeSalesCurrency('IRR');
+    expect(result.setting.value, 'the whole payment went back, so nothing is owed in IRT').toBe(
+      'IRR',
+    );
+    expect(result.changed).toBe(true);
+  });
+
+  it('leaves an installation that has never taken money free to choose', async () => {
+    // No payments at all, so no exposure — and a guard that refused here would make
+    // a fresh installation unable to set its own currency.
+    const result = await changeSalesCurrency('IRR');
+    expect(result.setting.value).toBe('IRR');
+  });
+
+  // -------------------------------------------------------------------------
   // The permission that cannot be held alone, against real sessions
   // -------------------------------------------------------------------------
 

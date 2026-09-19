@@ -22,6 +22,7 @@ import { encodeServiceCursor } from '../../apps/api/src/surfaces/telegram/servic
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
 import { DrizzleOperationRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-operation.repository';
+import { SUPERSEDED_BY_AUTOMATIC_REFUND } from '../../apps/api/src/modules/commerce/payments/application/refund.service';
 import { CANARY, startFake3xUi, type Fake3xUi } from '../support/fake-3xui';
 import {
   adminActorFor,
@@ -221,6 +222,54 @@ describe('a provisioned service announces itself', () => {
       orderId: confirmed.id,
     });
     return confirmed.id;
+  }
+
+  /**
+   * The same order, paid by BANK TRANSFER rather than from the wallet.
+   *
+   * Which channel the money arrived through is what decides the shape of an
+   * operator's refund of it: `REFUND_METHOD_SUPPORT` resolves `MANUAL_TRANSFER` to
+   * `EXTERNAL_MANUAL`, so the refund is born `AWAITING_EXTERNAL` and waits for a
+   * human to send the money and record it. A wallet payment's refund is
+   * `WALLET_CREDIT` and COMPLETED the moment it is written, which is why
+   * `paidOrder` cannot produce the state the case below needs.
+   */
+  async function transferPaidOrder(key: string): Promise<{ orderId: OrderId; paymentId: string }> {
+    const product = await products.create(tenantA, {
+      id: ctx.container.ids.uuid() as ProductId,
+      draft: {
+        title: 'پلن پایه',
+        description: null,
+        audience: 'EVERYONE',
+        sortOrder: 10,
+        panelId: panelId as PanelId,
+        specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: 2 },
+        price: money(250_000n, 'IRT'),
+      },
+      now: ctx.container.clock.now(),
+    });
+    await products.setStatus(tenantA, product.id, 'INACTIVE', 'ACTIVE', ctx.container.clock.now());
+    const draft = await ctx.container.orders.createDraft(tenantA, systemActor(key), {
+      idempotencyKey: `${key}-draft`,
+      customerId: customerA,
+      productId: product.id,
+    });
+    const confirmed = await ctx.container.orders.confirm(tenantA, systemActor(key), {
+      idempotencyKey: `${key}-confirm`,
+      customerId: customerA,
+      orderId: draft.id,
+    });
+    const { payment } = await ctx.container.payments.requestManualTransfer(
+      tenantA,
+      systemActor(key),
+      customerA,
+      { idempotencyKey: `${key}-manual`, orderId: confirmed.id },
+    );
+    await ctx.container.payments.confirmManualTransfer(tenantA, owner, payment.id, {
+      idempotencyKey: `${key}-confirm-transfer`,
+      note: 'کارت به کارت',
+    });
+    return { orderId: confirmed.id, paymentId: payment.id };
   }
 
   /** How many times the panel was asked to create a client. The provider-call count. */
@@ -940,6 +989,93 @@ describe('a provisioned service announces itself', () => {
       credited.rows[0]?.total,
       'and the wallet got back exactly the price, once, across both',
     ).toBe('250000');
+  });
+
+  it('abandons an operator s unsent refund and returns the whole amount', async () => {
+    /*
+     * An amount RESERVED by a refund that has not happened is not an amount returned.
+     *
+     * `REFUND_CONSUMING_STATES` counts `REQUESTED` and `AWAITING_EXTERNAL` against the
+     * refundable balance, which is right for the operator path — it is what stops two
+     * operators each refunding one payment in full. Applied to the automatic refund it
+     * produced the defect this case names: the operator's unsent 100,000 was subtracted,
+     * the customer was credited 150,000, and the order went terminal. When the operator
+     * then marked that transfer FAILED — because they never sent it — its amount became
+     * refundable again with no path left to return it. The customer was permanently
+     * 100,000 short, and every row involved looked correct. Found by Codex.
+     *
+     * So the unfinished ones are FAILED here, in this transaction, BEFORE the sum — and
+     * the customer gets the whole 250,000 in one credit.
+     *
+     * Paid by transfer rather than from the wallet, because that is what produces an
+     * `AWAITING_EXTERNAL` refund at all: a wallet refund is COMPLETED when written, and
+     * a COMPLETED one is money that really moved, so it is subtracted — which the case
+     * above asserts and this one must not contradict.
+     */
+    const { orderId, paymentId } = await transferPaidOrder('unsent-then-failed');
+    const unsent = await ctx.container.refunds.request(tenantA, owner, {
+      idempotencyKey: 'unsent-refund',
+      paymentId,
+      amountMinor: 100_000n,
+      reason: 'GOODWILL',
+    });
+    expect(unsent.state, 'the operator has recorded an intention, not a transfer').toBe(
+      'AWAITING_EXTERNAL',
+    );
+
+    // And now the account cannot be created at all.
+    await ctx.container.panels.setCredentials(tenantA, owner, panelId, {
+      credentials: { password: 'not-the-panel-password' },
+      idempotencyKey: 'wrong-password-unsent',
+    });
+    await ctx.container.provisionerLoop.tick();
+
+    const ledger = (await ctx.container.database.db.execute(
+      sql`SELECT amount::text AS amount, state, channel, reason, completion_note
+            FROM refunds WHERE order_id = ${orderId} ORDER BY amount` as never,
+    )) as unknown as {
+      rows: {
+        amount: string;
+        state: string;
+        channel: string;
+        reason: string;
+        completion_note: string | null;
+      }[];
+    };
+    expect(
+      ledger.rows,
+      'the unsent one is abandoned and says why; the whole price goes back',
+    ).toEqual([
+      {
+        amount: '100000',
+        state: 'FAILED',
+        channel: 'EXTERNAL_MANUAL',
+        reason: 'GOODWILL',
+        completion_note: SUPERSEDED_BY_AUTOMATIC_REFUND,
+      },
+      {
+        amount: '250000',
+        state: 'COMPLETED',
+        channel: 'WALLET_CREDIT',
+        reason: 'UNDELIVERABLE',
+        completion_note: null,
+      },
+    ]);
+
+    const credited = (await ctx.container.database.db.execute(
+      sql`SELECT coalesce(sum(amount), 0)::text AS total, count(*)::int AS n
+            FROM wallet_entries
+           WHERE customer_id = ${customerA} AND reason = 'REFUND'` as never,
+    )) as unknown as { rows: { total: string; n: number }[] };
+    expect(
+      credited.rows[0],
+      'the customer is whole, in one entry — not short by an amount nobody sent',
+    ).toEqual({ total: '250000', n: 1 });
+
+    const order = (await ctx.container.database.db.execute(
+      sql`SELECT state FROM orders WHERE id = ${orderId}` as never,
+    )) as unknown as { rows: { state: string }[] };
+    expect(order.rows[0]?.state).toBe('REFUNDED');
   });
 
   it('refunds nothing while the outcome is UNKNOWN, and waits for the read', async () => {

@@ -47,6 +47,7 @@ import { toProviderCredentials } from '../../../platform/panels/application/prob
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import { decideOperability } from './panel-operability.js';
 import type { OrderRecord, OrderRepository } from '../../orders/application/ports.js';
+import { ORDER_REFUNDED_CODE } from '../../orders/application/undeliverable-order-refunder.js';
 import type { UndeliverableOrderRefunder } from '../../orders/application/undeliverable-order-refunder.js';
 import type { PaymentRepository } from '../../payments/application/ports.js';
 import {
@@ -2188,12 +2189,49 @@ export class ProvisionerService {
       );
     }
 
-    await this.deps.undeliverable.refund(
+    const refunded = await this.deps.undeliverable.refund(
       scope,
       this.actor(),
       { order, from: 'PAID', payment, reason, now },
       tx,
     );
+
+    /*
+     * And the condition closes with it, because nothing else can ever close it.
+     *
+     * Both callers open `provisioning.stalled:<serviceId>` before they get here — an
+     * ERROR telling an operator a paid service could not be created. Its only two
+     * recoveries are `PROVISIONING_DELIVERED_CODE` events: a service adopted on its
+     * panel, or a service created on it. A service this method has just TERMINATED,
+     * for an order it has just REFUNDED, can produce neither. So every definitive
+     * failure left an open ERROR keyed on a dead service, unresolvable by fixing the
+     * panel (the key is the service, not the panel) and unresolvable by retrying
+     * (there is nothing left to retry) — an ever-growing operator queue, which is the
+     * exact thing the two-outcome decision was made to delete. Found by Codex.
+     *
+     * Conditional on the refund having HAPPENED. `refund` returns false when another
+     * transaction moved the order first, and `refundPurchase` declines earlier for an
+     * order this operation did not buy; in both cases nothing is terminal here and the
+     * operator still needs the condition.
+     *
+     * The panel problem itself is not lost: it has its own health condition with its
+     * own recovery, and the order's outcome is recorded by the one-shot
+     * `order.refunded_undeliverable` the refunder writes.
+     */
+    if (refunded) {
+      await this.deps.opsLog.record(
+        scope,
+        {
+          code: ORDER_REFUNDED_CODE,
+          severity: 'INFO',
+          message: 'A paid service that could not be created was refunded and closed.',
+          context: { serviceId: service.id, panelId: service.panelId, reason },
+          recoversCode: PROVISIONING_STALLED_CODE,
+          recoversDedupeKey: provisioningConditionKey(service.id),
+        },
+        tx,
+      );
+    }
   }
 
   /** A refusal: nothing was contacted, so nothing about a provider is recorded. */

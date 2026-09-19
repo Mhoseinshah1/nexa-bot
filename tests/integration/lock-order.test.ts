@@ -160,6 +160,29 @@ describe('the order in which an order, its panel and its reservation are locked'
       note: 'fixture',
     });
 
+  /** A manual transfer awaiting review — the money is in the bank by now. */
+  const pendingTransfer = async (order: OrderRecord): Promise<string> => {
+    const k = key();
+    const { payment } = await ctx.container.payments.requestManualTransfer(
+      tenantA,
+      systemActor(k),
+      customerA,
+      { idempotencyKey: `${k}-manual`, orderId: order.id },
+    );
+    return payment.id;
+  };
+
+  const confirmTransfer = (paymentId: string) =>
+    ctx.container.payments
+      .confirmManualTransfer(tenantA, owner, paymentId, {
+        idempotencyKey: key(),
+        note: 'کارت به کارت',
+      })
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+
   /**
    * Waits until PostgreSQL reports `count` backends of this database blocked on a lock.
    *
@@ -422,6 +445,93 @@ describe('the order in which an order, its panel and its reservation are locked'
     for (const outcome of [first, second]) expect(codeOf(outcome)).not.toBe(DEADLOCK);
     expect([first, second].filter((outcome) => outcome === null)).toHaveLength(1);
     expect(await stateOf(order.id)).toBe('PAID');
+  }, 60_000);
+
+  /*
+   * The SECOND cycle on the same three-transaction graph, and a different pair of rows:
+   * the CUSTOMER and the PANEL.
+   *
+   * `settleFromWallet` locks the customer before it goes anywhere near a panel, because
+   * it is about to debit that wallet. The manual-transfer settlement reached the same
+   * customer row only through `RefundService.creditWallet` on its refunding branch —
+   * which runs AFTER `prepareFulfilment` has taken the panel's row. So the two
+   * settlement paths took `customer -> panel` and `panel -> customer`, and a wallet
+   * purchase racing an operator's review of a transfer for the same customer on the
+   * same panel closed the cycle. `DrizzleUnitOfWork` has no retry, so one of the two
+   * failed outright with `40P01`: a customer's payment request answered with a
+   * serialization error, or an arrived transfer left neither confirmed nor refunded.
+   * Found by Codex.
+   *
+   * The holder scripts the wallet side exactly — customer first, panel second — and the
+   * other side is the real `confirmManualTransfer`, on a panel that has been DISABLED
+   * so it takes the refunding branch, which is the branch that reaches the customer at
+   * all. It passes only because `confirmAndSettle` now takes the customer lock
+   * unconditionally, before `prepareFulfilment`.
+   */
+  it('does not deadlock when a wallet settlement holds the customer and wants the panel', async () => {
+    for (let round = 0; round < 3; round += 1) {
+      // The previous round left it DISABLED, and a disabled panel refuses the
+      // confirmation that starts this one.
+      await ctx.container.database.db.execute(
+        sql`UPDATE panels SET status = 'ACTIVE' WHERE id = ${panelA}`,
+      );
+      const order = await awaitingPayment();
+      const paymentId = await pendingTransfer(order);
+      // DISABLED, so the settlement cannot deliver and must refund — the only branch
+      // of this path that credits the wallet, and so the only one that used to reach
+      // the customer's row after the panel's.
+      await ctx.container.database.db.execute(
+        sql`UPDATE panels SET status = 'DISABLED' WHERE id = ${panelA}`,
+      );
+
+      let release: () => void = () => undefined;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let holding: () => void = () => undefined;
+      const locked = new Promise<void>((resolve) => {
+        holding = resolve;
+      });
+
+      const holder = ctx.container.uow
+        .run(tenantA, async (tx) => {
+          // 1. The customer, exactly as `WalletRepository.lockCustomer` takes it.
+          await tx.tx.execute(sql`SELECT id FROM customers WHERE id = ${customerA} FOR UPDATE`);
+          holding();
+          await held;
+          // 2. The panel, exactly as `PanelSalesGate.consume` takes it.
+          await tx.tx.execute(sql`SELECT id FROM panels WHERE id = ${panelA} FOR UPDATE`);
+        })
+        .then(
+          () => null,
+          (error: unknown) => error,
+        );
+
+      await locked;
+      const racing = confirmTransfer(paymentId);
+      /*
+       * Which row the confirmation blocks on is the whole finding.
+       *
+       * With the fix it blocks on the CUSTOMER, holding no panel — so step 2 above
+       * walks straight through. Without it, it blocks on the customer while ALREADY
+       * HOLDING the panel, and step 2 completes the cycle. The barrier is satisfied
+       * either way, which is what makes this a reproduction rather than a
+       * coincidence: the two worlds differ only in the outcome asserted below.
+       */
+      await awaitBlocked();
+      release();
+
+      const [holderOutcome, confirmOutcome] = await Promise.all([holder, racing]);
+      expect(codeOf(holderOutcome), `round ${String(round)}: the wallet side deadlocked`).not.toBe(
+        DEADLOCK,
+      );
+      expect(
+        codeOf(confirmOutcome),
+        `round ${String(round)}: the transfer confirmation deadlocked`,
+      ).not.toBe(DEADLOCK);
+      expect(confirmOutcome, `round ${String(round)}: and it really did settle`).toBeNull();
+      expect(await stateOf(order.id), 'the money arrived and went straight back').toBe('REFUNDED');
+    }
   }, 60_000);
 
   /*

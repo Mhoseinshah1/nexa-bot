@@ -156,6 +156,7 @@ import { TelegramReceiptFiles } from './modules/commerce/payments/infrastructure
 import { PaymentService } from './modules/commerce/payments/application/payment.service.js';
 import { RefundService } from './modules/commerce/payments/application/refund.service.js';
 import { DrizzleRefundRepository } from './modules/commerce/payments/infrastructure/drizzle-refund.repository.js';
+import { SalesCurrencyChangeGuard } from './modules/commerce/payments/application/sales-currency-change.guard.js';
 import { PaymentExpiryService } from './modules/commerce/payments/application/payment-expiry.service.js';
 import {
   PaymentExpiryLoop,
@@ -1165,8 +1166,17 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    */
   const notificationsRef: { current: NotificationService | null } = { current: null };
 
+  /*
+   * One instance, shared by the refund service and the `sales.currency` guard.
+   *
+   * The guard asks it how much money could still go back in the currency an operator
+   * is trying to leave; the service is what would write those credits. Same reader,
+   * same answer.
+   */
+  const refundRepository = new DrizzleRefundRepository(database.db);
+
   const refundService = new RefundService({
-    repository: new DrizzleRefundRepository(database.db),
+    repository: refundRepository,
     /*
      * The payment READ only, narrowed by `RefundServiceDeps`.
      *
@@ -1470,6 +1480,15 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     opsLogWriter,
     // For the mutation-time session-revocation check.
     sessions,
+    /*
+     * The vetoes other modules hold over one key each.
+     *
+     * `control` declares the port and knows nothing about money; commerce knows why
+     * `sales.currency` cannot move while refundable payments are denominated in it.
+     * Here is the only place the two meet, which is what keeps the dependency
+     * pointing inward.
+     */
+    [new SalesCurrencyChangeGuard(refundRepository)],
   );
 
   const featureFlagRepository = new DrizzleFeatureFlagRepository(database.db);

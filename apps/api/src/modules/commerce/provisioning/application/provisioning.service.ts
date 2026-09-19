@@ -4,6 +4,7 @@ import {
   extendedExpiry,
   errors,
   MAX_TRAFFIC_BYTES,
+  NexaError,
   SUBSCRIPTION_REF_BYTES,
   providerUsernameFor,
   SERVICE_PAGE_MAX,
@@ -174,6 +175,23 @@ export const OPERATOR_OPERATION_PERMISSION: Readonly<
   SYNC_USAGE: 'services.edit',
   RECONCILE: 'services.edit',
 };
+
+/**
+ * The ONE refusal `operations.plan` raises that a refunding caller can absorb.
+ *
+ * Matched on `code`, not on the message: the message is customer-facing text and a
+ * reword would silently turn this catch into a rethrow. `NexaError` is imported from
+ * the frozen contracts, so `instanceof` is the same class the repository threw.
+ *
+ * Everything else — a collided primary key, a concurrent delete, a driver fault —
+ * rethrows untouched. A catch that swallowed those would turn a broken database into
+ * a refund, which is the failure this whole lane is supposed to be the opposite of.
+ */
+function isActionInProgress(error: unknown): boolean {
+  return (
+    error instanceof NexaError && error.code === COMMERCE_ERROR_CODES.SERVICE_ACTION_IN_PROGRESS
+  );
+}
 
 export class ProvisioningService {
   constructor(private readonly deps: ProvisioningServiceDeps) {}
@@ -1055,27 +1073,54 @@ export class ProvisioningService {
       );
     }
 
-    const operation = await this.deps.operations.plan(
-      scope,
-      {
-        id: this.deps.ids.uuid(),
-        /*
-         * Derived from the ORDER, which is what makes a replayed settlement plan the
-         * same operation rather than a second one. The order id is the only thing that
-         * is the same for both attempts and different for a genuine second purchase.
-         */
-        operationId: this.deps.operationId(`${service.id}:${action.kind}:${order.id}`),
-        serviceId: service.id,
-        orderId: order.id,
-        /* The customer bought this. They are owed the outcome, and this is what says so. */
-        requestedByCustomerId: service.customerId,
-        panelId: service.panelId,
-        type: action.kind,
-        target,
-      },
-      now,
-      tx,
-    );
+    /*
+     * The INSERT can lose the same race the read above just won, and that loss has to
+     * reach the caller as the same verdict.
+     *
+     * `provisioning_operations_open_commercial_key` admits one open commercial action
+     * per service, and the repository turns a loss on it into a NAMED refusal rather
+     * than an idempotent win — correctly, because the loser asked for a renewal and
+     * the winner may be somebody else's top-up. But under READ COMMITTED both callers
+     * can pass `findOpenCommercial` before either row exists, so for a bank transfer
+     * the refusal used to arrive as a throw AFTER the disposition had already been
+     * honoured one statement earlier. The transfer had arrived; the transaction
+     * unwound anyway. Codex found the read half of this and then, a round later, that
+     * the fix stopped at the read.
+     *
+     * The conflict is a domain error rather than a raw `23505` — the insert is
+     * `ON CONFLICT DO NOTHING` and the refusal is raised from a read that follows —
+     * so the transaction is still usable here and this catch is not swallowing an
+     * aborted one. Anything that is NOT that refusal rethrows untouched.
+     */
+    let operation: OperationRecord;
+    try {
+      operation = await this.deps.operations.plan(
+        scope,
+        {
+          id: this.deps.ids.uuid(),
+          /*
+           * Derived from the ORDER, which is what makes a replayed settlement plan the
+           * same operation rather than a second one. The order id is the only thing that
+           * is the same for both attempts and different for a genuine second purchase.
+           */
+          operationId: this.deps.operationId(`${service.id}:${action.kind}:${order.id}`),
+          serviceId: service.id,
+          orderId: order.id,
+          /* The customer bought this. They are owed the outcome, and this is what says so. */
+          requestedByCustomerId: service.customerId,
+          panelId: service.panelId,
+          type: action.kind,
+          target,
+        },
+        now,
+        tx,
+      );
+    } catch (error) {
+      if (onIneligible === 'REFUND' && isActionInProgress(error)) {
+        return { outcome: 'UNFULFILLABLE', reason: 'ACTION_IN_PROGRESS' };
+      }
+      throw error;
+    }
 
     await this.deps.audit.record(
       scope,

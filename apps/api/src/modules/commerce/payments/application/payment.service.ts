@@ -2569,6 +2569,29 @@ export class PaymentService {
      */
     await this.deps.orders.lock(scope, order.id, tx);
 
+    /*
+     * And the CUSTOMER before the panel, which `settleFromWallet` already does.
+     *
+     * This path can credit the wallet — the automatic refund below does, through
+     * `RefundService.creditWallet`, which locks the customer as every write to that
+     * ledger must. But it reached that lock only AFTER `prepareFulfilment` had taken
+     * the panel's row, so the two settlement paths took `customer -> panel` and
+     * `panel -> customer` respectively: a cycle, aborted by PostgreSQL with `40P01`,
+     * and `DrizzleUnitOfWork` has no retry, so one customer's payment request fails
+     * outright instead of producing either its settlement or its refund. Found by
+     * Codex; the same shape as the `order -> panel -> reservation` cycle above.
+     *
+     * Taken unconditionally rather than only on the refunding branch, because which
+     * branch runs is not known until `prepareFulfilment` has already answered — and
+     * by then the panel is held. A lock taken and not needed costs one row lock on a
+     * customer this transaction is already about to write against.
+     *
+     * The canonical order is now `order -> customer -> panel -> reservation`.
+     */
+    if (!(await this.deps.wallet.lockCustomer(scope, order.customerId, tx))) {
+      throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
+    }
+
     const createsNewService = orderPurposeCreatesNewService(order.purpose);
     /*
      * Whether money that has already moved is at stake, decided from the EVIDENCE
