@@ -26,14 +26,40 @@ import type { ProductSpecification } from './catalog.js';
  *
  * - `DRAFT` — the customer is looking at a summary. Nothing is owed.
  * - `AWAITING_PAYMENT` — confirmed by the customer, priced, and waiting for money.
- * - `PAID` — settled. The only state provisioning will act on.
+ * - `PAID` — settled, and what was bought is being delivered or has been.
  * - `CANCELLED` — withdrawn before settlement, by the customer or an operator.
  * - `EXPIRED` — nobody withdrew it and nobody paid; the window closed.
- * - `REFUNDED` — settled and then reversed. Terminal, and a ledger fact, never an edit.
+ * - `REFUNDED` — the money went back. Terminal, and a ledger fact, never an edit.
  *
  * `EXPIRED` and `CANCELLED` are not merged. "The customer changed their mind" and
  * "we stopped waiting" are different facts about the same row, and a tenant looking at
  * abandonment rates needs them apart.
+ *
+ * ## Two outcomes for money that arrived, and no third
+ *
+ * A customer whose money this installation has taken ends in exactly one of two
+ * places: they got what they bought, or they got the money back. There is no state
+ * for "paid, undelivered, somebody will decide later".
+ *
+ * There used to be — `PAID_UNFULFILLED`, with an operator retry and a reassignment —
+ * and the owner removed it. The argument for it was that an operator looking at a
+ * stranded order should choose between delivering late and giving the money back;
+ * what it produced was a queue that only grows while nobody is looking, a customer
+ * with no answer and no money, and two surfaces that had to explain a third thing.
+ * The replacement is not a policy an operator applies: a purchase this installation
+ * cannot deliver is refunded to the customer's wallet, automatically, for the exact
+ * amount, in the transaction that discovers it cannot be delivered.
+ *
+ * So a bank transfer whose panel filled up while the receipt sat in the queue is
+ * CONFIRMED — the money really did move and pretending otherwise is what left it
+ * `PENDING`, neither confirmable nor refundable — and then immediately reversed onto
+ * the wallet. `AWAITING_PAYMENT -> REFUNDED` is that edge, and it carries the same
+ * `settlementIsFunded` guard as `SETTLE`, because it is the same claim: money that
+ * has really arrived is what makes either legal.
+ *
+ * A wallet purchase never reaches it. The debit is written in the same transaction,
+ * so a refusal costs the customer nothing, and refusing is stricter: an installation
+ * that cannot deliver does not take the money in the first place.
  */
 export const ORDER_STATES = [
   'DRAFT',
@@ -47,6 +73,18 @@ export type OrderState = (typeof ORDER_STATES)[number];
 export const orderStateSchema = z.enum(ORDER_STATES);
 
 export const ORDER_TERMINAL_STATES = ['CANCELLED', 'EXPIRED', 'REFUNDED'] as const;
+
+/**
+ * The states that mean the money for this order has been received.
+ *
+ * For reconciliation and for every reader that asks "what did we take", which must
+ * include an order whose money has since gone back: a refund is a second movement and
+ * not an erasure of the first. `settled_at` is non-null exactly on these, and
+ * `orders_settled_at_check` is built from this list so the constraint and the
+ * predicate cannot drift apart.
+ */
+export const ORDER_SETTLED_STATES = ['PAID', 'REFUNDED'] as const;
+export type OrderSettledState = (typeof ORDER_SETTLED_STATES)[number];
 
 export const ORDER_EVENTS = ['CONFIRM', 'SETTLE', 'CANCEL', 'EXPIRE', 'REFUND'] as const;
 export type OrderEvent = (typeof ORDER_EVENTS)[number];
@@ -79,6 +117,24 @@ export const ORDER_MACHINE: StateMachineDefinition<OrderState, OrderEvent> = {
      * step earlier.
      */
     { from: 'AWAITING_PAYMENT', to: 'PAID', on: 'SETTLE', guard: 'settlementIsFunded' },
+    /*
+     * The same guard, and that is the point: money that has already moved is what
+     * makes this edge legal, exactly as it makes `SETTLE` legal. What differs is
+     * whether what it bought could be delivered — a question about a PANEL, never
+     * about the payment.
+     *
+     * Reaching `REFUNDED` without passing through `PAID` is deliberate. `PAID` is
+     * the state provisioning acts on, and an order that momentarily wore it would be
+     * an order a provisioner could claim; the service would then be created for money
+     * this transaction is in the middle of giving back. One edge, one commit, and no
+     * window in which both are true.
+     */
+    {
+      from: 'AWAITING_PAYMENT',
+      to: 'REFUNDED',
+      on: 'REFUND',
+      guard: 'settlementIsFunded',
+    },
     { from: 'AWAITING_PAYMENT', to: 'CANCELLED', on: 'CANCEL' },
     { from: 'AWAITING_PAYMENT', to: 'EXPIRED', on: 'EXPIRE' },
     { from: 'PAID', to: 'REFUNDED', on: 'REFUND' },
@@ -132,7 +188,8 @@ export interface OrderLineSnapshot {
  * - `ADD_TIME` — more window, likewise.
  *
  * The last three each name a `service_id` and produce NO service. The first names none
- * and produces exactly one. `orderPurposeNeedsService` is that rule, and the schema
+ * and produces exactly one. `orderPurposeCreatesNewService` and
+ * `orderPurposeTargetsExistingService` are that rule from both sides, and the schema
  * carries it as a CHECK so a row cannot exist in the shape the settlement path would
  * misread.
  *
@@ -157,9 +214,64 @@ export const COMMERCIAL_ORDER_PURPOSES = ORDER_PURPOSES.filter(
   (purpose) => purpose !== 'NEW_SERVICE',
 ) as readonly OrderPurpose[];
 
-/** Whether this purpose names an existing service rather than producing one. */
-export function orderPurposeNeedsService(purpose: OrderPurpose): boolean {
-  return purpose !== 'NEW_SERVICE';
+/**
+ * Whether this purpose CREATES a remote service — and therefore consumes one
+ * panel-capacity slot.
+ *
+ * Exhaustive by `switch`, not by inequality, and that is the whole point of it
+ * existing. Its predecessor was `orderPurposeNeedsService`, which returned
+ * `purpose !== 'NEW_SERVICE'` and read as "needs a service to be created" when it
+ * meant "NAMES a service that already exists". That reading cost this branch three
+ * defects: commercial orders reserved capacity nothing ever released, commercial
+ * settlement lost its disposition, and a stranded renewal recovered by provisioning a
+ * second account. Every one of them was a caller reasoning about a negation.
+ *
+ * So there are two positively-named predicates, each total over the union, and a
+ * purpose added without being classified fails to compile — the `never` arm below is
+ * what makes that true, and `classifies every order purpose, exhaustively` is what
+ * makes it true for anyone reading the enum rather than the compiler.
+ *
+ * The safe side of the mistake is unchanged: nothing here lets a new purpose default
+ * into provisioning. An operation that refuses is a bug report; a second provider
+ * account is a customer paying twice.
+ */
+export function orderPurposeCreatesNewService(purpose: OrderPurpose): boolean {
+  switch (purpose) {
+    case 'NEW_SERVICE':
+      return true;
+    case 'RENEW':
+    case 'ADD_TRAFFIC':
+    case 'ADD_TIME':
+      return false;
+    default: {
+      const unclassified: never = purpose;
+      throw new Error(`Unclassified order purpose: ${String(unclassified)}`);
+    }
+  }
+}
+
+/**
+ * Whether this purpose acts on a service that ALREADY exists — and therefore must
+ * neither reserve nor consume a capacity slot.
+ *
+ * The complement of `orderPurposeCreatesNewService` over this union, written as its
+ * own exhaustive switch rather than as its negation. A negation would put both
+ * questions in one place again and re-create the ambiguity the pair exists to end;
+ * `the two purpose predicates partition the union` asserts they stay complementary.
+ */
+export function orderPurposeTargetsExistingService(purpose: OrderPurpose): boolean {
+  switch (purpose) {
+    case 'RENEW':
+    case 'ADD_TRAFFIC':
+    case 'ADD_TIME':
+      return true;
+    case 'NEW_SERVICE':
+      return false;
+    default: {
+      const unclassified: never = purpose;
+      throw new Error(`Unclassified order purpose: ${String(unclassified)}`);
+    }
+  }
 }
 
 /**

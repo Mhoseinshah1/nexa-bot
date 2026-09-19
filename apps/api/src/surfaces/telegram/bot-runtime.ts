@@ -4595,7 +4595,7 @@ export class BotRuntime {
  * its absence. It could be: no test in this repository settles a RENEW over Telegram,
  * so an unconditional follow-up stayed green until this function existed.
  *
- * `NEW_SERVICE` is the only purpose that PROVISIONS. `orderPurposeNeedsService` states
+ * `NEW_SERVICE` is the only purpose that PROVISIONS. `orderPurposeTargetsExistingService` states
  * the same rule from the other side and `COMMERCIAL_ORDER_PURPOSES` derives itself by
  * exclusion, so a purpose added without thought lands on the safe side — as one that
  * does not provision. A renewal settles and CHANGES a service that already exists;

@@ -56,6 +56,7 @@ import {
   SERVICE_ADDON_STATUSES,
   COMMERCIAL_ORDER_PURPOSES,
   ORDER_PURPOSES,
+  ORDER_SETTLED_STATES,
   ORDER_STATES,
   PAYMENT_GATEWAY_PROVIDERS,
   REFUND_CHANNELS,
@@ -2639,9 +2640,21 @@ export const orders = pgTable(
     check('orders_discount_bounded_check', sql`discount_amount <= subtotal_amount`),
     check('orders_quantity_check', sql`line_quantity >= 1`),
     /** Each lifecycle timestamp exists exactly when its state has been reached. */
+    /*
+     * Built from `ORDER_SETTLED_STATES`, not from a list typed out here.
+     *
+     * The contract's own predicate for "the money for this order arrived", so a
+     * reconciliation query and this constraint cannot come to disagree about which
+     * states that is — and a state added to one without the other fails the drift
+     * check rather than quietly excluding revenue from a report.
+     */
     check(
       'orders_settled_at_check',
-      sql`(state = 'PAID' OR state = 'REFUNDED') = (settled_at IS NOT NULL)`,
+      // Through `enumCheck`, which is the codebase's one `sql.raw` and the only
+      // form that reaches the generated migration as LITERALS. A `sql` template
+      // with parameters generates `state IN ($1, $2, $3)` into the DDL, which is
+      // a constraint no database will ever evaluate the way it reads.
+      sql`(${enumCheck('state', ORDER_SETTLED_STATES)}) = (settled_at IS NOT NULL)`,
     ),
     check('orders_refunded_at_check', sql`(state = 'REFUNDED') = (refunded_at IS NOT NULL)`),
     check('orders_cancelled_at_check', sql`(state = 'CANCELLED') = (cancelled_at IS NOT NULL)`),
@@ -3258,16 +3271,37 @@ export const refunds = pgTable(
       sql`external_reference IS NULL OR length(btrim(external_reference)) BETWEEN 1 AND 140`,
     ),
     /**
-     * COMPLETED means completed BY somebody AT a time — all three or none.
+     * COMPLETED means completed AT a time. Always.
      *
      * The rule `payments_confirmed_check` states for a confirmation, applied to the one
-     * transition that means money is gone. Without it a row could claim COMPLETED with
-     * no operator and no timestamp, which is precisely the "money marked returned
-     * because a refund was requested" defect this whole lifecycle exists to prevent.
+     * transition that means money is gone: a row cannot claim COMPLETED with no
+     * timestamp, which is the "money marked returned because a refund was requested"
+     * defect this whole lifecycle exists to prevent.
+     */
+    check('refunds_completed_check', sql`(state = 'COMPLETED') = (completed_at IS NOT NULL)`),
+    /**
+     * And BY somebody, when somebody asked for it.
+     *
+     * Split from the check above, because the two halves stopped being one rule.
+     * A refund an OPERATOR requested is completed by an operator, and naming them is
+     * the whole audit value — that half is unchanged and is enforced here.
+     *
+     * An AUTOMATIC refund has no operator on either side. Nobody requested it: a
+     * settlement or a provisioner discovered that what a customer paid for cannot be
+     * delivered, and the money went back in that transaction.
+     * `requested_by_admin_id IS NULL` is what identifies one, and it cannot be an
+     * operator's refund with the field forgotten — `RefundService.request` is guarded
+     * by `refunds.issue`, which `SYSTEM_JOB_PERMISSIONS` does not carry, so every
+     * operator refund has an administrator behind it by construction.
+     *
+     * Writing an admin id into an automatic refund to satisfy the old single check
+     * was the alternative, and it is the one this codebase forbids outright: a
+     * fabricated actor on a money record, attributing a decision to whoever happened
+     * to press approve on an unrelated transfer.
      */
     check(
-      'refunds_completed_check',
-      sql`(state = 'COMPLETED') = (completed_at IS NOT NULL AND completed_by_admin_id IS NOT NULL)`,
+      'refunds_operator_completion_check',
+      sql`(state = 'COMPLETED' AND requested_by_admin_id IS NOT NULL) = (completed_by_admin_id IS NOT NULL)`,
     ),
     foreignKey({
       name: 'refunds_payment_fk',
@@ -3776,10 +3810,35 @@ export const services = pgTable(
     check('services_traffic_check', sql`traffic_limit_bytes >= 0 AND traffic_used_bytes >= 0`),
     /** The format the panels accept, pinned so a bad generator fails at the write. */
     check('services_subscription_ref_check', sql`subscription_ref ~ '^[0-9a-f]{32}$'`),
-    /** A provisioned service has a time; one that never was does not. */
+    /**
+     * A provisioned service has a time; one that never was does not — and a
+     * TERMINATED one may be either.
+     *
+     * The equality without that third clause is a rule `SERVICE_MACHINE`
+     * contradicts. The machine has `PENDING_PROVISION -> TERMINATED` and
+     * `UNRECONCILED -> TERMINATED`, and `OPERATION_LEGAL_FROM.TERMINATE` names both
+     * states deliberately — "a service an operator or a customer has decided to end
+     * must be endable whatever went wrong on the way, including one stuck in
+     * `UNRECONCILED` after a lost create". Both of those states have a null
+     * `provisioned_at` by this very check, so taking either edge moved the state to
+     * one side of the equality and left the timestamp on the other, and the UPDATE
+     * raised.
+     *
+     * Nothing had taken those edges. The automatic refund is the first caller: a
+     * create that definitively failed leaves a `PENDING_PROVISION` row occupying a
+     * capacity slot, and terminating it is how the panel gets the slot back. The
+     * suite found this on the first full run, which is the argument for running it.
+     *
+     * The clause is a carve-out for TERMINATED rather than a loosening of the whole
+     * rule: for every state a service can be USED in, the equality still holds, and
+     * `services_terminated_at_check` still forces `terminated_at`. What a terminated
+     * service's null `provisioned_at` now says is true and worth saying — this one
+     * never reached a panel.
+     */
     check(
       'services_provisioned_at_check',
-      sql`(state = 'PENDING_PROVISION' OR state = 'UNRECONCILED') = (provisioned_at IS NULL)`,
+      sql`state = 'TERMINATED'
+          OR (state = 'PENDING_PROVISION' OR state = 'UNRECONCILED') = (provisioned_at IS NULL)`,
     ),
     check(
       'services_terminated_at_check',

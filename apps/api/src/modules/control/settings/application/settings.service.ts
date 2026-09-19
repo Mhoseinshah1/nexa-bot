@@ -130,6 +130,28 @@ export interface SetSettingResult {
   readonly replayed: boolean;
 }
 
+/**
+ * A veto another module holds over ONE setting's value changing.
+ *
+ * Declared here and implemented outward, which is the direction this codebase's
+ * dependencies run: `control` owns settings and knows nothing about commerce, and
+ * commerce knows why `sales.currency` cannot move while money is still owed in it.
+ * The container is where the two meet.
+ *
+ * It answers with a REASON to refuse or `null` to allow, runs inside the write's own
+ * transaction, and is asked only when the value is really changing — a no-op write
+ * and a replay must not be refused by a condition that has nothing to do with them.
+ */
+export interface SettingChangeGuard {
+  /** The one key this guard speaks for. */
+  readonly key: string;
+  refuseChange(
+    scope: ScopeContext,
+    change: { readonly from: unknown; readonly to: unknown },
+    tx: TransactionScope,
+  ): Promise<string | null>;
+}
+
 export class SettingsService {
   constructor(
     private readonly guard: PermissionGuard,
@@ -153,6 +175,11 @@ export class SettingsService {
     private readonly opsLog: OperationalEventRecorder,
     /** For the mutation-time session-revocation check. */
     private readonly sessions: SessionRepository,
+    /**
+     * The vetoes other modules hold, by key. Empty by default so a caller that
+     * registers none behaves exactly as before.
+     */
+    private readonly changeGuards: readonly SettingChangeGuard[] = [],
   ) {}
 
   /**
@@ -290,6 +317,23 @@ export class SettingsService {
             tx,
           );
           return { setting: before, changed: false };
+        }
+
+        /*
+         * The value is really changing, so anybody holding a veto over this key
+         * gets asked — inside this transaction, so what they count cannot move
+         * between their answer and the write.
+         *
+         * After the no-op shortcut deliberately: a write that changes nothing is
+         * not a change, and refusing it would make an idempotent replay fail for a
+         * reason that has nothing to do with the request.
+         */
+        for (const veto of this.changeGuards) {
+          if (veto.key !== key) continue;
+          const refusal = await veto.refuseChange(scope, { from: before.value, to: value }, tx);
+          if (refusal !== null) {
+            throw errors.conflict(CONTROL_ERROR_CODES.INVALID_VALUE, refusal, { key });
+          }
         }
 
         const written = await this.settings.upsert(

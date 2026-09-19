@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq, isNull, sql } from 'drizzle-orm';
-import { errors } from '@nexa/contracts';
+import { errors, PANEL_UNHEALTHY_AFTER_FAILURES } from '@nexa/contracts';
 import type { ProviderProbeOutcome, ProviderType, TenantContext } from '@nexa/contracts';
 import type { PanelRepository } from '../../apps/api/src/modules/platform/panels/application/ports';
 import {
@@ -2651,6 +2651,66 @@ describe('the panel health monitor', () => {
       const after = await healthOf(panelId);
       expect(after?.state).toBe('HEALTHY');
       expect(after?.checkedAt.getTime()).toBe(fresh?.checkedAt.getTime());
+    });
+
+    it('starts a NEW streak when the connection identity changed', async () => {
+      /*
+       * Codex C4-N4 on PR #50.
+       *
+       * `unusable_streak` is the hysteresis that stops one failed probe emptying the
+       * catalogue, and `validated_identity` changes when an operator fixes a password
+       * or moves a panel. Incrementing across that change spent the allowance on a
+       * configuration that no longer exists: two failures of the old credentials plus
+       * the FIRST failure of the new ones reached the threshold, and the panel stopped
+       * selling on its first try rather than its third.
+       *
+       * Written against the repository because what is under test is the arithmetic of
+       * one statement, not how a probe produces its argument.
+       */
+      const panelId = await createPanel(ownerA, tenantA, 'identity-streak');
+      await tick();
+      const repository = new DrizzlePanelRepository(ctx.container.database.db);
+      const base = (await healthOf(panelId))!.checkedAt.getTime();
+      const failing = (at: number, identity: string) =>
+        ctx.container.uow.run(tenantA, (tx) =>
+          repository.recordHealth(
+            tenantA,
+            panelId,
+            {
+              state: 'AUTH_FAILED',
+              checkedAt: new Date(base + at),
+              latencyMs: 1,
+              failure: 'AUTHENTICATION_FAILED',
+              statusCode: 401,
+              providerVersion: null,
+              lastHealthyAt: null,
+            },
+            identity,
+            tx,
+          ),
+        );
+
+      await failing(1_000, 'identity-before');
+      await failing(2_000, 'identity-before');
+      expect((await healthOf(panelId))?.unusableStreak, 'two failures of the old one').toBe(2);
+
+      // The operator fixes the password; the next probe validates a DIFFERENT identity
+      // and fails once.
+      await failing(3_000, 'identity-after');
+
+      const after = await healthOf(panelId);
+      expect(after?.unusableStreak, 'the new configuration has failed once, not three times').toBe(
+        1,
+      );
+      expect(
+        after!.unusableStreak < PANEL_UNHEALTHY_AFTER_FAILURES,
+        'so the panel is still sellable',
+      ).toBe(true);
+
+      // And the ordinary case is untouched: a second failure of the SAME identity
+      // still advances.
+      await failing(4_000, 'identity-after');
+      expect((await healthOf(panelId))?.unusableStreak).toBe(2);
     });
 
     it('announces nothing for a result the storage discarded', async () => {

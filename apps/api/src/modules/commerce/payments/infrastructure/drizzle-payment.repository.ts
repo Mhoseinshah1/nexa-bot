@@ -1,4 +1,15 @@
-import { and, asc, eq, getTableColumns, isNotNull, isNull, lte, sql, type SQL } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  getTableColumns,
+  isNotNull,
+  isNull,
+  lte,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
 import { money } from '@nexa/contracts';
 import type {
   CurrencyCode,
@@ -470,6 +481,33 @@ export class DrizzlePaymentRepository implements PaymentRepository {
       .returning();
 
     return rows.map((row) => toRecord(row as Row));
+  }
+
+  async findConfirmedForOrder(
+    scope: TenantContext,
+    orderId: OrderId,
+    tx: unknown,
+  ): Promise<PaymentRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .select()
+      .from(payments)
+      .where(
+        and(
+          eq(payments.tenantId, tenantId),
+          eq(payments.orderId, orderId),
+          eq(payments.state, 'CONFIRMED'),
+        ),
+      )
+      /*
+       * Newest first, and bounded to one. At most one confirmation can be standing —
+       * `settlementIsFunded` sees to that — and the ordering is what makes the answer
+       * deterministic rather than whatever the planner returns first if that rule is
+       * ever loosened.
+       */
+      .orderBy(desc(payments.confirmedAt), desc(payments.id))
+      .limit(1);
+    return row === undefined ? null : toRecord(row as Row);
   }
 }
 
