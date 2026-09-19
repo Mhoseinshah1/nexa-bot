@@ -1142,6 +1142,61 @@ describe('panels', () => {
     ).toBe('sub-a.example.test');
   });
 
+  it('refuses to replay a create whose cap differs', async () => {
+    const idempotencyKey = key();
+    const base = {
+      name: 'Capped',
+      providerType: 'marzban' as const,
+      baseUrl: 'https://panel.example.test',
+      credentials: { username: USERNAME, password: PASSWORD },
+      idempotencyKey,
+    };
+    await ctx.container.panels.create(tenantA, adminActorFor(owner), {
+      ...base,
+      maxServices: 50,
+    });
+
+    /*
+     * The same key, a DIFFERENT cap. The cap decides whether the panel takes
+     * new sales at all, and the request an operator makes SECOND — after an
+     * ambiguous answer — is usually the lower, safer number. Left out of the
+     * hash, this matched the first request, was reported as a success, and left
+     * the panel selling to fifty. Found by the Codex review of this branch.
+     */
+    await expect(
+      ctx.container.panels.create(tenantA, adminActorFor(owner), { ...base, maxServices: 5 }),
+    ).rejects.toThrow();
+
+    const rows = await ctx.container.database.db.select().from(panels);
+    expect(rows, 'and no second panel was written either').toHaveLength(1);
+    expect(rows[0]?.maxServices, 'and the first cap is untouched').toBe(50);
+  });
+
+  it('refuses to replay an update whose cap differs', async () => {
+    const { view } = await create(owner, tenantA, { name: 'Cap edited' });
+    const panelId = view.panel.id;
+    const idempotencyKey = key();
+    await ctx.container.panels.update(tenantA, adminActorFor(owner), panelId, {
+      idempotencyKey,
+      maxServices: 40,
+    });
+
+    // The same key with a different cap is a different instruction, on the
+    // path an operator actually uses to STOP a panel taking new sales.
+    await expect(
+      ctx.container.panels.update(tenantA, adminActorFor(owner), panelId, {
+        idempotencyKey,
+        maxServices: 4,
+      }),
+    ).rejects.toThrow();
+
+    const [row] = await ctx.container.database.db
+      .select()
+      .from(panels)
+      .where(eq(panels.id, panelId));
+    expect(row?.maxServices).toBe(40);
+  });
+
   it('replays a create whose credentials differ, because the values are not in the hash', async () => {
     const idempotencyKey = key();
     const base = {

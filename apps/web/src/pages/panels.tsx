@@ -664,6 +664,29 @@ export function PanelDetailPage({
   );
 }
 
+/**
+ * A cap input box that will not be sent at all.
+ *
+ * Not `null`, which is a real instruction — "remove the cap" — and not a
+ * number. Distinguishing the three is the whole point: guessing which one a bad
+ * value meant is how a limit disappears without anybody choosing to remove it.
+ */
+const INVALID_CAP = Symbol('invalid cap');
+
+/**
+ * What the cap box is asking for, parsed ONCE for both readers.
+ *
+ * The overwrite notice and the submit handler ask the same question of the same
+ * box, and a notice that parsed it differently from the request would warn
+ * about a value the save does not carry — or stay silent about one it does.
+ */
+function capFromInput(raw: string): number | null | typeof INVALID_CAP {
+  const trimmed = raw.trim();
+  if (trimmed === '') return null;
+  const value = Number(trimmed);
+  return Number.isInteger(value) && value >= 1 ? value : INVALID_CAP;
+}
+
 function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit: boolean }) {
   const client = useQueryClient();
   const toast = useToast();
@@ -788,9 +811,29 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
       return a === b;
     }
   };
+  /*
+   * The cap, asked the same three questions as the two text fields.
+   *
+   * It cannot go through `overwrites`, which compares strings — but it is the
+   * field where the warning matters MOST, because the value decides whether the
+   * panel accepts new sales at all. Without this, an administrator who lowered
+   * a cap while a colleague had the form open was told the panel was
+   * "untouched" and then replaced their number.
+   *
+   * An INVALID box is excluded because `onSubmit` refuses to send it, and a
+   * warning about a value that will never leave the browser is the false
+   * positive the whole notice was rewritten to remove.
+   */
+  const draftCap = capFromInput(maxServices);
+  const overwritesCap =
+    remote.maxServices &&
+    draftCap !== INVALID_CAP &&
+    draftCap !== basis.capacity.maxServices &&
+    draftCap !== panel.capacity.maxServices;
   const willOverwrite =
     overwrites(name, basis.name, panel.name, remote.name, (a, b) => a.trim() === b.trim()) ||
-    overwrites(baseUrl, basis.baseUrl, panel.baseUrl, remote.baseUrl, sameUrl);
+    overwrites(baseUrl, basis.baseUrl, panel.baseUrl, remote.baseUrl, sameUrl) ||
+    overwritesCap;
 
   /**
    * Every identity control, not just the Save button.
@@ -991,9 +1034,8 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
      * guessing which one a bad value meant is how a limit disappears without
      * anybody choosing to remove it.
      */
-    const trimmedCap = maxServices.trim();
-    const capValue = trimmedCap === '' ? null : Number(trimmedCap);
-    if (capValue !== null && (!Number.isInteger(capValue) || capValue < 1)) {
+    const capValue = capFromInput(maxServices);
+    if (capValue === INVALID_CAP) {
       toast({ tone: 'danger', message: t('web.panel_max_services_hint') });
       return;
     }
