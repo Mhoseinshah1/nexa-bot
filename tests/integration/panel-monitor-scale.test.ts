@@ -167,6 +167,12 @@ describe('the panel monitor scheduler at scale', () => {
         capacity: {
           read: async () => null,
           readMany: async () => new Map(),
+          /*
+           * The fleet read the catalogue uses, answered empty for the same
+           * reason as `readMany`: this harness has no capacity rows, and an
+           * absent entry is what an uncapped panel means.
+           */
+          readAll: async () => new Map(),
           reserve: () => {
             throw new Error('the scale harness does not reserve');
           },
