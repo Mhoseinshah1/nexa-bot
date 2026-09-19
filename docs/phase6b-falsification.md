@@ -240,16 +240,17 @@ exact amount, to the customer's wallet, in the transaction that discovers it.
 What C4 established survives in that shape, and these are the rules that hold
 it, each reverted and watched to fail.
 
-| #   | Rule                                                             | Mutation applied                                                   | Result | Named test                                                                      |
-| --- | ---------------------------------------------------------------- | ------------------------------------------------------------------ | ------ | ------------------------------------------------------------------------------- |
-| 1   | a wallet purchase is REFUSED, never refunded                     | `onIneligible` made `'REFUND'` unconditionally                     | KILLED | _refuses a WALLET settlement instead, and debits nothing_                       |
-| 2   | the automatic credit is what is LEFT, not the price              | `outstanding` set to `payment.amount.amountMinor`                  | KILLED | _credits only what is LEFT when an operator already returned part of it_        |
-| 3   | a create whose outcome is UNKNOWN is never refunded              | the refund branch widened from `FAILED` to `FAILED \|\| UNKNOWN`   | KILLED | _refunds nothing while the outcome is UNKNOWN, and waits for the read_          |
-| 4   | only an operation matching what the order BOUGHT may refund it   | the `PURCHASED_AS` guard deleted                                   | KILLED | _never reports a suspend that suspended nothing_                                |
-| 5   | the customer is told, in the transaction that made it true       | the `notifier.notify` call deleted                                 | KILLED | _refunds when the panel was ARCHIVED after the transfer_                        |
-| 6   | `receipts.review` cannot be held without `payments.view`         | the `PERMISSION_REQUIRES` entry deleted                            | KILLED | _does not let a custom role hold receipts.review without payments.view_         |
-| 7   | 0085 retires `orders.fulfil` from every role that was granted it | the `DELETE FROM "role_permissions"` statement commented out       | KILLED | _never backfills a pair the frozen contract does not assign_                    |
-| 8   | an automatic refund names nobody, and an operator's names both   | `refunds_operator_completion_check` DROPped from the live database | KILLED | _refuses an automatic refund that names an administrator who did not decide it_ |
+| #   | Rule                                                             | Mutation applied                                                   | Result | Named test                                                                                  |
+| --- | ---------------------------------------------------------------- | ------------------------------------------------------------------ | ------ | ------------------------------------------------------------------------------------------- |
+| 1   | a wallet purchase is REFUSED, never refunded                     | `onIneligible` made `'REFUND'` unconditionally                     | KILLED | _refuses a WALLET settlement instead, and debits nothing_                                   |
+| 2   | the automatic credit is what is LEFT, not the price              | `outstanding` set to `payment.amount.amountMinor`                  | KILLED | _credits only what is LEFT when an operator already returned part of it_                    |
+| 3   | a create whose outcome is UNKNOWN is never refunded              | the refund branch widened from `FAILED` to `FAILED \|\| UNKNOWN`   | KILLED | _refunds nothing while the outcome is UNKNOWN, and waits for the read_                      |
+| 4   | only an operation matching what the order BOUGHT may refund it   | the `PURCHASED_AS` guard deleted                                   | KILLED | _never reports a suspend that suspended nothing_                                            |
+| 5   | the customer is told, in the transaction that made it true       | the `notifier.notify` call deleted                                 | KILLED | _refunds when the panel was ARCHIVED after the transfer_                                    |
+| 6   | `receipts.review` cannot be held without `payments.view`         | the `PERMISSION_REQUIRES` entry deleted                            | KILLED | _does not let a custom role hold receipts.review without payments.view_                     |
+| 7   | 0085 retires `orders.fulfil` from every role that was granted it | the `DELETE FROM "role_permissions"` statement commented out       | KILLED | _never backfills a pair the frozen contract does not assign_                                |
+| 8   | an automatic refund names nobody, and an operator's names both   | `refunds_operator_completion_check` DROPped from the live database | KILLED | _refuses an automatic refund that names an administrator who did not decide it_             |
+| 9   | the second settlement ask carries the CALLER's disposition       | `onIneligible` replaced with a hard-coded `'REFUSE'`               | KILLED | _answers a second ask with a verdict when the caller can refund, and throws when it cannot_ |
 
 Row 8 is the second mutation in this document applied to the DATABASE rather
 than to the tree, for the same reason as F6B-C4-7: the rule is a CHECK
@@ -257,6 +258,27 @@ constraint, so reverting it in the schema file would prove nothing about the
 database the tests run against. The constraint was dropped, the four cases run,
 and migration 0086's exact definition re-applied; the file is byte-identical
 and all 28 invariants are green again.
+
+Row 9 is Codex's `STRAND` finding, which outlived the design it was raised
+against. `confirmAndSettle` asks whether a commercial order can be delivered,
+moves the order, and then `planCommercialAction` asks the same three refusals
+again — and under READ COMMITTED that second read takes a fresh snapshot, so a
+settlement for another order on the same service committed in between is
+invisible to the first and visible to this one. Hard-coded `REFUSE` turned that
+disagreement into a throw, unwinding a transaction that had already confirmed
+money which arrived days ago. Removing `PAID_UNFULFILLED` did not touch it: that
+work changed what happens when a settlement DECIDES it cannot deliver, not what
+happens when the second check contradicts the first.
+
+The row asserts both halves of the disposition, and it asserts them directly
+rather than through the race. The window is only reachable by a real
+interleaving, which `docs/phase4b-falsification.md` M05 records as something
+`Promise.all` does not reliably produce; the refusal in the test is genuine — an
+operation for that service really is outstanding — and what is under test is
+what the method DOES with it. **What has no test is the suppression that went
+with it**: planning moved ahead of the audit record and both outbox writes so a
+late refund cannot follow an `OrderSettled`, and only the race can reach that
+ordering. It is stated here rather than claimed as covered.
 
 **Two mutations SURVIVED, and both are recorded rather than papered over.**
 
