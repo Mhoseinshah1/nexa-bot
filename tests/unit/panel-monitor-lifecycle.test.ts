@@ -113,11 +113,13 @@ describe('the panel monitor timer lifecycle', () => {
   function monitor(): PanelMonitorService {
     const deps: PanelMonitorDeps = {
       discovery: discovery(),
+      capacity: unreachable('the capacity repository'),
       probe: unreachable('the probe core'),
       guard: unreachable('the permission guard'),
       scopeActivity: { scopeIsActive: async () => true },
       conditions: {
         openTenantConditions: async () => [],
+        openConditions: async () => [],
         tenantConditionIsOpen: async () => false,
         systemConditionIsOpen: async () => false,
       },

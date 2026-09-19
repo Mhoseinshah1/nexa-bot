@@ -76,6 +76,23 @@ export interface OperationalConditionReader {
    * caller has already refused or committed.
    */
   tenantConditionIsOpen(tenantId: string, code: string, tx?: TransactionScope): Promise<boolean>;
+  /**
+   * Which of these SUBJECTS' conditions are open, answered as codes.
+   *
+   * One query for a set of dedupe keys, because the caller asking it is
+   * deciding what a single event should close and needs the answer before it
+   * writes: a condition with three states and one `recoversCode` can only keep
+   * at most one row open per subject if it knows which row the subject is
+   * leaving. Keyed on `dedupe_key`, exactly as the recorder dedupes, so the
+   * answer is about the rows a recovery would actually resolve — and taking the
+   * caller's transaction is what stops two ticks both reading "nothing open"
+   * and both opening one.
+   */
+  openConditions(
+    scope: ScopeContext,
+    dedupeKeys: readonly string[],
+    tx?: TransactionScope,
+  ): Promise<string[]>;
   /** Whether the installation-wide (tenant-less) condition of this code is open. */
   systemConditionIsOpen(code: string): Promise<boolean>;
 }

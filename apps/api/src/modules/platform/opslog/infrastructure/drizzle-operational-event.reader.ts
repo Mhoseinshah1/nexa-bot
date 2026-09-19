@@ -231,6 +231,25 @@ export class DrizzleOperationalConditionReader implements OperationalConditionRe
     return rows.length > 0;
   }
 
+  async openConditions(
+    scope: ScopeContext,
+    dedupeKeys: readonly string[],
+    tx?: TransactionScope,
+  ): Promise<string[]> {
+    if (dedupeKeys.length === 0) return [];
+    const rows = await (tx?.tx ?? this.db)
+      .select({ code: operationalEvents.code })
+      .from(operationalEvents)
+      .where(
+        and(
+          eq(operationalEvents.dedupeScope, scopeRef(scope, 'OPSLOG')),
+          inArray(operationalEvents.dedupeKey, [...dedupeKeys]),
+          isNull(operationalEvents.resolvedAt),
+        ),
+      );
+    return rows.map((row) => row.code);
+  }
+
   async systemConditionIsOpen(code: string): Promise<boolean> {
     const rows = await this.db
       .select({ id: operationalEvents.id })

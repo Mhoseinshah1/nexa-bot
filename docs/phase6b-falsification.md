@@ -185,6 +185,54 @@ A cursor that encodes and does not decode is a button whose only answer is the
 unsupported-input fallback, which is exactly what a "the button is there" test
 cannot see.
 
+## The capacity conditions: twelve more
+
+Mutations against `panel-capacity-alerts.ts` and `panel-monitor.service.ts`,
+run against `tests/unit/panel-capacity-alerts.test.ts` and
+`tests/integration/panel-monitor.test.ts`.
+
+| #       | Rule                                                    | Mutation                                | Named test                                                                   | Result |
+| ------- | ------------------------------------------------------- | --------------------------------------- | ---------------------------------------------------------------------------- | ------ |
+| F6B-O1  | an uncapped panel earns no condition                    | the `null` cap answered with a full row | _says nothing about an uncapped panel, whatever is on it_                    | KILLED |
+| F6B-O2  | full is `used >= cap`, not `used > cap`                 | the comparison weakened                 | _is FULL when every slot is taken, and says so as an ERROR_                  | KILLED |
+| F6B-O3  | the warning threshold is the ceiling of the percentage  | the threshold raised by one             | _WARNS at the threshold and not before it_                                   | KILLED |
+| F6B-O4  | a quiet panel earns silence, not an INFO row per tick   | the recovery recorded unconditionally   | _does not record a recovery when there is nothing standing to close_         | KILLED |
+| F6B-O5  | a recovery CLOSES the condition that was standing       | the closing pair dropped                | _recovers a drained panel, closing whichever condition it had_               | KILLED |
+| F6B-O6  | every row is keyed to ONE panel and condition           | the panel dropped from the dedupe key   | _keys every row to ONE panel and condition_                                  | KILLED |
+| F6B-O7  | a condition closes the other capacity row it supersedes | the superseded row never looked for     | _closes the warning a panel has just passed, when it fills_                  | KILLED |
+| F6B-O8  | and never names its OWN code, which would resolve it    | the same-code guard removed             | _never points a repeat of a condition at its own code_                       | KILLED |
+| F6B-O9  | a monitor tick observes capacity                        | the call deleted                        | _records the condition its own evaluator decided, from the real counts_      | KILLED |
+| F6B-O10 | from the open rows, not from an assumption              | the open set replaced with an empty one | _closes the ERROR when the panel drains, leaving one open recovery_          | KILLED |
+| F6B-O11 | the row is deduped, so a second tick is an occurrence   | the dedupe key made unique per call     | _counts a second tick on an unchanged panel as a REPEAT, not a second alert_ | KILLED |
+| F6B-O12 | a full panel is an ERROR, because it is refusing money  | the severity lowered to WARN            | _records the condition its own evaluator decided, from the real counts_      | KILLED |
+
+Two of these rows are the same rule from opposite sides, and both are needed.
+`recoversCode` is SINGULAR in the recorder while a capacity condition has three
+states, so the only way at most one row stays open per panel is for each event
+to close the one the panel is leaving — O7 says it does, O8 says it does not
+close itself, and O10 says the answer comes from the rows rather than from a
+process's memory. Drop any one of the three and an operations log grows a
+permanent ERROR for a panel that is fine, which is the exact shape
+`panel.health.retired` was introduced to stop elsewhere.
+
+The evidence is split across three files ON PURPOSE, and the split is what makes
+each part falsifiable at a sane cost:
+
+- the DECISION is pure — occupancy and the open set in, one event or nothing
+  out — so all of its branches are unit rows, where a branch costs a line rather
+  than an order, a product and a customer;
+- the COMPOSITION — a real tick reading the real repository and the real open
+  rows, recording, deduping, superseding and resolving — is six integration rows
+  against a real PostgreSQL and the real monitor, with occupancy placed as real
+  reservations against real orders;
+- that the counts themselves are real is `panel-capacity.test.ts`'s twenty-one
+  cases, which this feature reuses rather than re-proves.
+
+What no test here asserts, and the record says so rather than implying
+otherwise: a full panel's ERROR row reaching an operator's eye. That is the
+alerts page and the acceptance checklist, and `docs/phase6b-audit.md` lists it
+as the one capacity item a test cannot close.
+
 ## How the mutations were run
 
 Each mutation is applied to the working tree, the named test is run alone

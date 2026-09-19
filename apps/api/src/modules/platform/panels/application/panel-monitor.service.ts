@@ -39,6 +39,8 @@ import {
   scheduleAfterProbe,
 } from '../domain/monitor-cadence.js';
 import type { DuePanel, PanelHealthRecord, PanelMonitorRepository, PanelView } from './ports.js';
+import type { PanelCapacityRepository } from './capacity-ports.js';
+import { CAPACITY_CODES, capacityAlertFor, capacityConditionKey } from './panel-capacity-alerts.js';
 
 /**
  * The permission the monitor acts under.
@@ -154,6 +156,16 @@ export const PANEL_MONITOR_JOB_ID = 'panel-health-monitor';
 export interface PanelMonitorDeps {
   readonly discovery: PanelMonitorRepository;
   readonly probe: ProbeCoreDeps;
+  /**
+   * How full each panel is, read in the transaction that records the answer.
+   *
+   * Phase 6B. The monitor observes capacity because it is the only PERIODIC
+   * observer of a panel: occupancy rises on a purchase — which the sales gate
+   * sees — and falls on a termination, an expiry and a raised cap, which it does
+   * not. One rule in one place, run per tick, covers every direction; the gate
+   * would need the rule in four places and would still miss the fourth.
+   */
+  readonly capacity: PanelCapacityRepository;
   readonly guard: PermissionGuard;
   /**
    * Whether this tenant is still accepting work.
@@ -985,6 +997,24 @@ export class PanelMonitorService {
         // already been opened and cannot be un-opened.
         if (!(await this.deps.scopeActivity.scopeIsActive(tenant, tx))) return;
 
+        /*
+         * The panel's OCCUPANCY, observed before the probe result is applied
+         * and independent of it.
+         *
+         * Deliberately not downstream of `outcome !== 'APPLIED'`, and not
+         * inside the transition branch: capacity has nothing to do with what a
+         * probe found. A tick whose probe result lost a race to a faster one
+         * has still read the panel's occupancy as it is NOW, and that is the
+         * only reading from which the condition can be true.
+         *
+         * This widens what a monitor tick DOES, and it does not touch the rule
+         * stated just below: no capacity observation writes `panel_health`,
+         * changes a status or reads a credential. It is a second, independent
+         * condition recorded from the same loop, and `docs/phase6b-audit.md`
+         * records why the loop rather than the sales gate is where it lives.
+         */
+        await this.observeCapacity(tenant, candidate.panelId, tx);
+
         // A probe result changes health and NOTHING else. No status, no
         // credential, no address.
         const {
@@ -1071,6 +1101,64 @@ export class PanelMonitorService {
         // started.
         await this.deps.opsLog.record(tenant, buildEvent(locked, event), tx);
       },
+    );
+  }
+
+  /**
+   * One panel's occupancy, as an operational condition.
+   *
+   * Silence is the steady state and the recovery is conditional, which is the
+   * part worth reading twice: an observer that recorded something every tick
+   * would fill the operations log with panels that are fine, and one that never
+   * recorded a recovery would leave an ERROR standing for ever on a panel that
+   * has since drained. `capacityAlertFor` decides which of those a panel has
+   * earned, from its occupancy AND from what it already has open, and this
+   * method is the wiring: read, read, decide, record.
+   *
+   * Recorded with the caller's transaction, which is what makes this an alert
+   * rather than a hope: the event and the decision to tell somebody are one
+   * commit. A process that died between them would lose it permanently, because
+   * the condition's next occurrence is a REPEAT of an open row rather than a
+   * new one — so nothing would announce it until it resolved and came back.
+   */
+  private async observeCapacity(
+    tenant: TenantContext,
+    panelId: string,
+    tx: TransactionScope,
+  ): Promise<void> {
+    const capacity = await this.deps.capacity.read(tenant, panelId, this.deps.clock.now(), tx);
+    if (capacity === null) return;
+    /*
+     * What this panel already has standing, read inside the same transaction
+     * that will write. Outside it, two ticks on one panel both see nothing open
+     * and both open a condition — and the second one closes nothing, because
+     * the row it would have closed was not committed when it looked.
+     */
+    const open = await this.deps.conditions.openConditions(
+      tenant,
+      CAPACITY_CODES.map((code) => capacityConditionKey(code, panelId)),
+      tx,
+    );
+    const alert = capacityAlertFor(panelId, capacity, open);
+    if (alert === null) return;
+    await this.deps.opsLog.record(
+      tenant,
+      {
+        code: alert.code,
+        severity: alert.severity,
+        message: alert.message,
+        dedupeKey: alert.dedupeKey,
+        context: { panelId, ...alert.context },
+        // Absent when the panel has nothing open to close, and `undefined` is
+        // not the same as absent here: the recorder treats a present
+        // `recoversCode` as "resolve rows of this code", so spreading the pair
+        // conditionally is what keeps a first condition from resolving nothing
+        // noisily and a repeat from resolving itself.
+        ...(alert.recoversCode === undefined
+          ? {}
+          : { recoversCode: alert.recoversCode, recoversDedupeKey: alert.recoversDedupeKey }),
+      },
+      tx,
     );
   }
 }

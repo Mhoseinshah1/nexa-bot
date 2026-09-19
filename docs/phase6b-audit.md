@@ -237,3 +237,86 @@ and it is why the refusal exists rather than a log line.
 A settlement REPLAY skips the decision entirely (`alreadyProvisioned`). Judging
 a replay would refuse a transaction whose money has already moved, for a
 customer who already has what they paid for.
+
+## What 6B built, against the table at the top of this file
+
+The table above is a snapshot at `155ac67`, and three of its rows are no longer
+true. Corrected here rather than edited in place, because the snapshot is what
+made the plan and rewriting it would erase the reason each item was picked:
+
+| # in the table | Was     | Is now                                                                                                                                               |
+| -------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 9 capacity     | ABSENT  | `panels.max_services` plus `panel_capacity_reservations`: an atomic slot, not a count. `NULL` is unlimited                                           |
+| 10 eligibility | PARTIAL | `decideEligibility`, one evaluator with four callers — catalogue, confirmation, settlement, release — with health hysteresis and a structured reason |
+| 11 inbounds    | ABSENT  | STILL ABSENT, and still on purpose. See below                                                                                                        |
+
+Plus two things the table had no row for, because nothing suggested they were
+missing: a panel could not be enabled without a connection test that vouches
+for its current identity, and there was no panels surface in Telegram at all.
+
+## Operational alerts: what already existed, and the three 6B adds
+
+Phase 3C built the alert mechanism and six of the conditions, so 6B adds to it
+rather than building a second one. All of them are `operational_events` rows,
+which dedupe by `(code, dedupe_key)` and resolve through `recoversCode` — and
+every one is recorded with the caller's transaction, so the event and the
+decision to tell somebody are one commit. A process that died between them
+would lose the alert permanently: the condition's next occurrence is a REPEAT,
+not a new one, so nothing would announce it until it resolved and came back.
+
+| Condition                | Code                                        | Since | Raised by                        |
+| ------------------------ | ------------------------------------------- | ----- | -------------------------------- |
+| panel failing            | `panel.health.unreachable` and eight others | 3C    | the monitor, per failure kind    |
+| panel recovered          | `panel.health.recovered`                    | 3C    | the monitor, on a healthy probe  |
+| repeated failure         | the occurrence counter on the open row      | 3C    | the same row, incremented        |
+| panel retired / restored | `panel.health.retired` / `.restored`        | 3C    | `setStatus`                      |
+| tenant probe budget      | `panel.monitor.tenant_budget_exceeded`      | 3C    | the monitor's own capacity sweep |
+| **capacity warning**     | `panel.capacity.warning`                    | 6B    | the monitor's per-panel tick     |
+| **capacity full**        | `panel.capacity.full`                       | 6B    | the same                         |
+| **capacity back below**  | `panel.capacity.recovered`                  | 6B    | the same                         |
+
+"Repeated failure" is not a fourth code and must not become one. An open
+condition's occurrence counter is what says it happened again —
+`operational_events` is append-only on identity and a second code for "it
+happened twice" would be a row nothing can resolve.
+
+The three capacity conditions are observed by the MONITOR rather than by the
+sales gate, and the choice is worth stating because the other one looks
+natural. Capacity changes on a purchase, so the gate is where a crossing UP is
+visible — but it drops on a termination, an expiry and a raised cap, none of
+which the gate sees. A periodic observer catches every direction with one rule;
+the gate would need the rule in four places and would still miss the fourth.
+
+This widens what a monitor tick DOES, and CLAUDE.md's rule — "a probe result
+changes health and nothing else" — is about the probe's RESULT, which is
+untouched: no capacity observation writes `panel_health`, changes a status or
+reads a credential. It is a second, independent condition recorded from the same
+loop.
+
+Two properties of the capacity trio are easy to lose in a later edit, and both
+are the difference between an alert and a permanent lie on the alerts page:
+
+- **At most ONE capacity row is open per panel, and each event closes the one
+  the panel is leaving.** `recoversCode` is singular in the recorder while the
+  condition has three states, so a full panel that drains has to be met by a
+  recovery naming `panel.capacity.full` — the first draft of this closed the
+  warning unconditionally, which left an ERROR standing for ever on a panel that
+  was fine, with no path able to close it. Which row is open is read from the
+  ROWS, inside the writing transaction, exactly as `panel.monitor.tenant_budget_*`
+  does and for the reason recorded there: a process that decides from a field it
+  initialised on startup cannot resolve what it did not itself open.
+- **Silence is the steady state.** A capped panel under the threshold with
+  nothing open records nothing at all, and the recovery is written only when
+  there is something standing to close. An INFO row per tick per panel — ten
+  minutes apart, for every panel in the installation — is the legacy log group
+  this table exists to replace, and it would also spend the panel's single
+  recovery row long before the next real condition needed it.
+
+## Still evidence-blocked, and what would unblock each
+
+| Item                                   | Why it is not built                                                                                                                                                                                                                                                                                                                                             |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| inbound DISCOVERY                      | No evidence of either panel's inbounds route in a shape this repository has verified. Building it would mean writing an adapter method and a fake route that agree with each other and prove nothing — the failure `docs/real-panel-acceptance.md` records four instances of. Unblocked by a disposable panel of each kind and one acceptance case per provider |
+| panel-reported capacity                | Neither provider is known to report a limit. `max_services` is deliberately the OPERATOR's number and is documented as such: a cap Nexa was told rather than one it discovered                                                                                                                                                                                  |
+| 3X-UI mutable operations beyond create | The owner's correction in `docs/phase4e-audit.md`: 3X-UI keeps the five capabilities it has and gains no new mutable scope. Not evidence-blocked — decided                                                                                                                                                                                                      |
+| capacity alerts on a real panel        | The three conditions are asserted against a real PostgreSQL and a real monitor tick. What no test can assert is that an operator ACTS on them, which is the acceptance checklist's job                                                                                                                                                                          |

@@ -157,6 +157,23 @@ describe('the panel monitor scheduler at scale', () => {
     const clock = { now: () => options.clockRef() };
     return new PanelMonitorService(
       {
+        /*
+         * A stand-in, and the only place in the suite where one is right: this
+         * harness measures the SCHEDULER against thousands of synthetic panels
+         * that have no capacity rows, and a real read per panel would be
+         * measuring PostgreSQL rather than the loop. `null` is what an
+         * uncapped panel answers, which the observer says nothing about.
+         */
+        capacity: {
+          read: async () => null,
+          readMany: async () => new Map(),
+          reserve: () => {
+            throw new Error('the scale harness does not reserve');
+          },
+          release: () => {
+            throw new Error('the scale harness does not release');
+          },
+        },
         discovery: {
           claimTenants: async () => [tenantId],
           dueForTenants: options.discovery.dueForTenants.bind(options.discovery),

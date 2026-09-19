@@ -195,6 +195,26 @@ export const PANEL_PAGE_DEFAULT = 50;
 export const PANEL_UNHEALTHY_AFTER_FAILURES = 3;
 
 /**
+ * How full a capped panel gets before the operations log says so.
+ *
+ * A percentage of the operator's own cap, because the cap is the only number
+ * that means anything here: "ten slots left" is nearly empty on a panel of two
+ * hundred and an emergency on a panel of twelve.
+ *
+ * Eighty is the number for a reason worth stating: what an operator DOES about
+ * a filling panel — raise the cap, add a panel, withdraw the plan — takes
+ * longer than the gap between the warning and the panel refusing money, and a
+ * threshold set higher turns the warning into a second notice for something
+ * that has already happened. The remaining fifth of a cap is the notice period.
+ *
+ * A CONSTANT rather than a setting, deliberately and reversibly: nothing has
+ * asked for it to differ per installation, and `docs/conventions.md` is
+ * explicit that a parameter belongs in the settings registry the moment one
+ * does. Until then a registry entry nobody sets is a surface with no reader.
+ */
+export const PANEL_CAPACITY_WARNING_PERCENT = 80;
+
+/**
  * The health states that make a panel unusable, as opposed to merely worrying.
  *
  * `DEGRADED` is deliberately ABSENT, and the definition of that state at
