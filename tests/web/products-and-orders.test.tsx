@@ -551,7 +551,17 @@ describe('the order detail', () => {
   });
 
   it('refuses a malformed panel id without asking the server', async () => {
+    /*
+     * The absence is proven against a request that DOES happen, rather than asserted
+     * straight after the click.
+     *
+     * The first version of this case clicked with a bad id and asserted no `/fulfil`
+     * call — synchronously, before any fetch could have been issued, so it passed with
+     * both guards removed. Correcting the value and clicking again gives the assertion
+     * something to be relative to: exactly one call, carrying the id that was valid.
+     */
     const api = stubApi([
+      { url: '/orders/019230ab/fulfil', body: { order: order({ state: 'PAID' }) } },
       {
         url: '/orders/019230ab',
         body: {
@@ -575,10 +585,22 @@ describe('the order detail', () => {
 
     const box = await screen.findByPlaceholderText('01a05e35-c9ad-7e93-bef3-1ed9b55292c8');
     fireEvent.change(box, { target: { value: 'not-a-uuid' } });
-
     await screen.findByText('شناسهٔ پنل معتبر نیست.');
+    // The control itself, asserted directly: this is the property a test can hold,
+    // and it is what actually stops the request. Clicking a disabled button and then
+    // asserting no call is not evidence — the call would not have been issued yet.
+    expect(screen.getByRole('button', { name: 'انتقال به پنل دیگر' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'انتقال به پنل دیگر' }));
-    expect(api.calls.some((call) => call.url.includes('/fulfil'))).toBe(false);
+
+    fireEvent.change(box, { target: { value: '01a05e35-c9ad-7e93-bef3-1ed9b55292c9' } });
+    fireEvent.click(screen.getByRole('button', { name: 'انتقال به پنل دیگر' }));
+
+    await waitFor(() => {
+      expect(api.calls.filter((call) => call.url.includes('/fulfil'))).toHaveLength(1);
+    });
+    expect(api.calls.find((call) => call.url.includes('/fulfil'))?.body).toMatchObject({
+      panelId: '01a05e35-c9ad-7e93-bef3-1ed9b55292c9',
+    });
   });
 
   it('says why rather than hiding the card, without orders.fulfil', async () => {
