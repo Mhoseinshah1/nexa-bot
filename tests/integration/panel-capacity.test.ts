@@ -815,6 +815,64 @@ describe('panel capacity and sales eligibility', () => {
     expect(forAHundred).toBe(forOne);
   }, 60_000);
 
+  it('sends the fleet as ONE bind parameter, however many panels it holds', async () => {
+    /*
+     * A fixed number of STATEMENTS is not a bound on the request. The case above
+     * counts three either way; this one counts what each of those three carries.
+     *
+     * Both reads that take the eligible fleet used to expand it one placeholder per
+     * panel — `IN ($1, $2, ... $n)` — so the parameter count was the tenant's fleet
+     * size. Past PostgreSQL's 65535-parameter ceiling that is not a slow catalogue,
+     * it is a failed one: the bind is rejected by the server, the shop is empty, and
+     * nothing in the response says the fleet outgrew the query. Both now bind the
+     * list once as a `uuid[]` and match with `= ANY`.
+     *
+     * The proof is the WIDEST statement of the whole request, measured at the pool,
+     * with the fleet grown by an order of magnitude between the two measurements. A
+     * width that tracks the fleet is the defect; a width that does not is the fix.
+     * Ten panels and a hundred is enough to tell those apart — the failing form
+     * would report 10-ish and then 100-ish — and does not need a fixture nobody
+     * will wait for.
+     */
+    const pool = ctx.container.database.pool as unknown as {
+      query: (...args: unknown[]) => unknown;
+    };
+    const real = pool.query.bind(pool) as (...args: unknown[]) => unknown;
+    let widest = 0;
+    pool.query = (...args: unknown[]) => {
+      const values = args[1];
+      if (Array.isArray(values)) widest = Math.max(widest, values.length);
+      return real(...args);
+    };
+    const widestBind = async (): Promise<number> => {
+      widest = 0;
+      await ctx.container.products.browse(tenantA, systemActor(key()), 100);
+      return widest;
+    };
+
+    const fleet = async (count: number): Promise<void> => {
+      for (let index = 0; index < count; index += 1) {
+        const id = ctx.container.ids.uuid();
+        await ctx.container.database.db.execute(sql`
+          INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
+          VALUES (${id}, ${tenantA.tenantId}, ${`fleet ${id}`}, 'sanaei',
+                  ${`https://${id}.example.test`}, 'ACTIVE')`);
+        await bulkActiveProducts(id, 1, index + 5000);
+      }
+    };
+
+    await fleet(10);
+    const forTen = await widestBind();
+    await fleet(90);
+    const forAHundred = await widestBind();
+    pool.query = real;
+
+    expect(forAHundred, 'the width does not follow the fleet').toBe(forTen);
+    expect(forTen, 'and it is small: the array is one parameter, not one per panel').toBeLessThan(
+      10,
+    );
+  }, 120_000);
+
   it('hides a product whose panel is disabled, and refuses it if asked anyway', async () => {
     const product = await activeProduct(panelA);
     await setStatus(panelA, 'DISABLED');

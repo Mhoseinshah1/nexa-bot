@@ -1,4 +1,4 @@
-import { and, asc, eq, getTableColumns, inArray, isNotNull, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, getTableColumns, isNotNull, sql, type SQL } from 'drizzle-orm';
 import { money } from '@nexa/contracts';
 import type {
   CurrencyCode,
@@ -214,10 +214,10 @@ export class DrizzleProductRepository implements ProductRepository {
     /*
      * No eligible panel means no catalogue, and saying so costs nothing.
      *
-     * `inArray` with an empty list is a predicate some builders render as `false`
-     * and others refuse outright; answering here makes the empty case explicit
-     * rather than dependent on that. It is also the honest answer: `hasMore` is
-     * false because there is nothing further to reach, not because a bound was hit.
+     * `= ANY(...)` over an empty array is a perfectly good `false`, so this is
+     * not a correctness guard — it is the honest answer given without a round
+     * trip: `hasMore` is false because there is nothing further to reach, not
+     * because a bound was hit.
      */
     if (eligiblePanelIds.length === 0) return { items: [], hasMore: false };
     const rows = await this.exec(tx)
@@ -234,8 +234,16 @@ export class DrizzleProductRepository implements ProductRepository {
            * applies to products that are already sellable, so the hundredth
            * ineligible product in front of an eligible one costs a row of index
            * scan rather than a customer-visible empty shop.
+           *
+           * ONE bind parameter, not one per panel. `inArray` expands to `IN ($1,
+           * $2, ... $n)`, and n here is the tenant's whole eligible fleet — so a
+           * large enough fleet stops being a slow query and becomes a FAILED one,
+           * at PostgreSQL's 65535-parameter ceiling, with the catalogue empty and
+           * nothing in the shop to explain it. An array bound once and cast to
+           * `uuid[]` is a single parameter whatever the fleet size, and the planner
+           * still uses the index on `panel_id`.
            */
-          inArray(products.panelId, [...eligiblePanelIds]),
+          sql`${products.panelId} = ANY(${sql.param([...eligiblePanelIds])}::uuid[])`,
           /*
            * Neither HIDDEN nor RESELLERS_ONLY.
            *

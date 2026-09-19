@@ -1,4 +1,4 @@
-import { and, eq, inArray, ne, sql, type SQL } from 'drizzle-orm';
+import { and, eq, ne, sql, type SQL } from 'drizzle-orm';
 import {
   errors,
   PANEL_ERROR_CODES,
@@ -93,6 +93,23 @@ function rethrowNameConflict(error: unknown, message: string): never {
   throw error;
 }
 
+/**
+ * `panels.id` is one of these, as ONE bind parameter rather than one per id.
+ *
+ * `inArray` expands to `IN ($1, $2, ... $n)`, and one of this module's two
+ * callers passes the tenant's whole eligible FLEET — so the parameter count was
+ * the fleet size, and past PostgreSQL's 65535-parameter ceiling the statement
+ * does not slow down, it is rejected. What a customer would see is an empty
+ * shop with nothing in the response saying why.
+ *
+ * The other caller passes one page and is bounded already. It uses this too, so
+ * there is one form here rather than two: the next author who copies a line
+ * from this file copies the bounded one whichever line they take.
+ */
+function idIsOneOf(ids: readonly string[]): SQL {
+  return sql`${panels.id} = ANY(${sql.param([...ids])}::uuid[])`;
+}
+
 export class DrizzlePanelRepository implements PanelRepository {
   constructor(private readonly db: Database) {}
 
@@ -172,7 +189,7 @@ export class DrizzlePanelRepository implements PanelRepository {
         // even if a future author adds a field to the view type.
         .leftJoin(panelCredentials, eq(panelCredentials.panelId, panels.id))
         .leftJoin(panelHealth, eq(panelHealth.panelId, panels.id))
-        .where(and(eq(panels.tenantId, scope.tenantId), inArray(panels.id, [...ids])))
+        .where(and(eq(panels.tenantId, scope.tenantId), idIsOneOf([...ids])))
     );
   }
 
@@ -274,7 +291,7 @@ export class DrizzlePanelRepository implements PanelRepository {
       .from(panels)
       .leftJoin(panelCredentials, eq(panelCredentials.panelId, panels.id))
       .leftJoin(panelHealth, eq(panelHealth.panelId, panels.id))
-      .where(and(inArray(panels.id, unique), eq(panels.tenantId, scope.tenantId)));
+      .where(and(idIsOneOf(unique), eq(panels.tenantId, scope.tenantId)));
     return rows.map(toView);
   }
 

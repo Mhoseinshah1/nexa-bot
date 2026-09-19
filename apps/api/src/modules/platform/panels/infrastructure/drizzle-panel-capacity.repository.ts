@@ -79,11 +79,18 @@ export class DrizzlePanelCapacityRepository implements PanelCapacityRepository {
   ): Promise<ReadonlyMap<string, PanelCapacity>> {
     const unique = [...new Set(panelIds)];
     if (unique.length === 0) return new Map<string, PanelCapacity>();
-    const ids = sql.join(
-      unique.map((id) => sql`${id}::uuid`),
-      sql`, `,
-    );
-    return this.readWhere(scope, sql` AND p.id IN (${ids})`, now, tx);
+    /*
+     * ONE bind parameter for the whole list, not one per panel.
+     *
+     * The previous form built `p.id IN ($1::uuid, $2::uuid, ...)`, which is
+     * correct and unbounded: the caller is the eligibility evaluator reading a
+     * tenant's fleet, so the parameter count is the fleet size. Past
+     * PostgreSQL's 65535-parameter ceiling the statement does not slow down, it
+     * fails — and it fails inside the read every catalogue page and every
+     * confirmation makes. An array bound once is one parameter at any size, and
+     * `= ANY` on an indexed column plans the same as `IN`.
+     */
+    return this.readWhere(scope, sql` AND p.id = ANY(${sql.param(unique)}::uuid[])`, now, tx);
   }
 
   /**
