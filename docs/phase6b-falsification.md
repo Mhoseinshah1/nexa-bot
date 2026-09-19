@@ -153,7 +153,7 @@ to the capacity work earlier on this branch.
 | F6B-N2b | an empty box RETRIES rather than reassigning to nothing        | `panelId` always sent                   | _retries a stranded order on its own panel_                                           | KILLED   |
 | F6B-N2c | `orders.fulfil` is said, not assumed                           | the permission ignored                  | _says why rather than hiding the card, without orders.fulfil_                         | KILLED   |
 | F6B-N2d | a malformed panel id cannot be submitted                       | the `disabled` guard removed            | _refuses a malformed panel id without asking the server_                              | KILLED   |
-| F6B-N3a | the catalogue scan widens until the bound is filled            | back to one round of `PRODUCT_PAGE_MAX` | _reaches an eligible product past the FIRST hundred, which one scan could not_        | KILLED   |
+| F6B-N3a | the catalogue scan widens until the bound is filled            | back to one round of `PRODUCT_PAGE_MAX` | _reaches an eligible product past EVERY former scan ceiling_        | KILLED   |
 | F6B-N4a | a changed connection identity starts a new streak              | increment across the change, as before  | _starts a NEW streak when the connection identity changed_                            | KILLED   |
 
 Three rows need their result explained rather than counted.
@@ -180,6 +180,52 @@ cut to the caller's bound, which moved the cliff from twenty products to a
 hundred rather than removing it; the reviewer said so and was right. The row
 above is the widened scan, and the test uses 101 products precisely so it fails
 against the one-page version.
+
+## The third Codex round: a permission, a lock order and the same ceiling again
+
+Three findings, and the third of them was the catalogue ceiling for the third
+time. Two of the three are fixed by a rule in a single place; the lock order was
+reproduced with a real deadlock before anything was changed.
+
+| #        | Rule                                                                | Mutation                                                | Named test                                                                               | Result   |
+| -------- | ------------------------------------------------------------------- | ------------------------------------------------------- | ----------------------------------------------------------------------------------------- | -------- |
+| F6B-M2a  | a permission whose prerequisite is missing is not held               | drop the `PERMISSION_REQUIRES` pass from resolution      | _drops orders.fulfil from an administrator who cannot view orders_                          | KILLED   |
+| F6B-M2b  | the same, through a DENY override rather than a role                 | the same mutation                                        | _takes orders.fulfil with it when an override DENIES the read_                              | KILLED   |
+| F6B-M2c  | the same, for a GRANT override onto a role that cannot read          | the same mutation                                        | _drops a GRANTED orders.fulfil when the role cannot read orders_                            | KILLED   |
+| F6B-M2d  | the route refuses a caller the rule narrowed                         | the same mutation                                        | _refuses the fulfil route to an administrator a custom role could not authorise_            | KILLED   |
+| F6B-M2e  | nobody is told about an order they cannot open                       | the same mutation                                        | _tells only the administrators who can open the order it is about_                          | KILLED   |
+| F6B-M3a  | every path takes the ORDER lock before the panel and the reservation | remove both `OrderRepository.lock` calls                 | _lets exactly one of a settlement and a cancellation win, three times over_                 | KILLED   |
+| F6B-M3b  | the same, with no scripted holder                                    | the same mutation                                        | _survives a cancellation and a settlement started together, five times_                     | SURVIVED |
+| F6B-M3c  | the expiry sweep passes over a locked order rather than waiting      | drop `skipLocked` from `expireDue`                       | _passes over an order another transaction holds rather than queueing behind it_             | KILLED   |
+| F6B-M4a  | eligibility is applied before the LIMIT, not after it                | filter the bounded page, as both earlier versions did    | _reaches an eligible product past EVERY former scan ceiling_                                | KILLED   |
+| F6B-M4b  | the same, against four different reasons a panel is unsellable       | the same mutation                                        | _reaches eligible products behind every KIND of unsellable panel at once_                   | KILLED   |
+| F6B-M4c  | eligibility costs a fixed number of queries                          | evaluate each returned product's panel individually      | _asks the database a fixed number of times, whatever the catalogue holds_                   | KILLED   |
+
+Two rows need saying plainly.
+
+**F6B-M2a…e are one mutation, five kills, and that is the point of where it
+lives.** `resolveEffectivePermissions` is the single rule the request guard, the
+Web Admin's session and the notification lane all read, so removing it is
+visible at all three — the resolver, the route and the recipient list. A fix in
+a role editor would have bound only the first of the three shapes and there is
+no role editor to put it in.
+
+**F6B-M3b SURVIVED, and it is kept anyway.** Two real requests started together
+with `Promise.all` do not reliably interleave into the cycle — the lesson
+`financial-concurrency.test.ts` states at the top of the file and
+`docs/phase4b-falsification.md` records as M05. It is the realistic shape (a
+customer double-tapping two buttons) and it did fail against the unfixed code on
+the first run of this file, but it cannot be relied on to, so F6B-M3a is the row
+that establishes the rule: the same race with the interleaving MADE, three
+rounds, killed.
+
+**On M3 the reproduction came before the fix, and corrected it twice.** The
+static reading said settlement and the expiry sweep could deadlock; the
+reproduction showed the sweep can never be the waiting party, because
+`expireDue` uses `FOR UPDATE SKIP LOCKED` and passes over a held order. It also
+showed settlement reaches the order earlier than the new lock anyway, through
+the foreign key on `payments.order_id` taking `FOR KEY SHARE`. Both are in the
+test's own comments, because both contradict what the fix's first draft claimed.
 
 ## Rules held by a mechanism rather than by a mutation
 
