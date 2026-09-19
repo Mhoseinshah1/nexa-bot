@@ -504,6 +504,21 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.order.refunded_to_wallet',
+    description:
+      'Told to a customer whose money arrived and whose order this installation ' +
+      'could not deliver: the amount is back on their wallet and they may buy ' +
+      'again or withdraw it. The only sentence that follows a paid order which ' +
+      'produced no service, because there is no third outcome — the product has ' +
+      'no “we owe you one, an operator will look at it” state, and the sentence ' +
+      'that used to stand in for one told a customer nothing they could act on. ' +
+      'It carries no amount: `CUSTOMER_NOTIFICATION_KINDS` renders one frozen ' +
+      'template with no payload (ADR 0030 §1), and the figure is on the wallet ' +
+      'page this sends them to.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.order.cancel_button',
     description:
       'The label on the button a customer presses to withdraw an order they have not ' +

@@ -83,6 +83,21 @@ export const CUSTOMER_NOTIFICATION_KINDS = [
    * shape `PAYMENT_TRANSFER_RECORDED` has.
    */
   'WALLET_TOPUP_CREDITED',
+  /**
+   * The order's money went back to the wallet because it could not be delivered.
+   * `orders.id` is the subject.
+   *
+   * The second of the product's two terminal outcomes for money that arrived, and
+   * the one the customer would otherwise learn about by waiting for a service that
+   * is never coming. `ORDER_MACHINE` has no state for "paid and undelivered", so
+   * there is no later moment at which somebody decides what to tell them: the
+   * refund and this row commit in the same transaction as the state change.
+   *
+   * A fact about an entity with an id, with no payload — the amount is the exact
+   * one they paid and is on the wallet page. Terminal, so its precondition is
+   * `false`: a refund cannot stop having happened.
+   */
+  'ORDER_REFUNDED_TO_WALLET',
 ] as const;
 export type CustomerNotificationKind = (typeof CUSTOMER_NOTIFICATION_KINDS)[number];
 export const customerNotificationKindSchema = z.enum(CUSTOMER_NOTIFICATION_KINDS);
@@ -133,6 +148,12 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
    * A credit cannot stop having happened, and a late copy of the sentence is still true.
    */
   WALLET_TOPUP_CREDITED: false,
+  /*
+   * `false`, for the reason above it: the ledger entry is append-only and the
+   * order is terminal. Nothing can make a refunded order un-refunded, so a late
+   * copy of the sentence is still true.
+   */
+  ORDER_REFUNDED_TO_WALLET: false,
 };
 
 /**
@@ -166,6 +187,7 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
   PAYMENT_TRANSFER_RECORDED: 'bot.payment.received_for_review',
   ORDER_CANCELLED: 'bot.order.cancelled',
   WALLET_TOPUP_CREDITED: 'bot.wallet.topup_credited',
+  ORDER_REFUNDED_TO_WALLET: 'bot.order.refunded_to_wallet',
 };
 
 /**

@@ -1873,48 +1873,16 @@ export const orderSummarySchema = z.object({
   /**
    * When the money arrived, and NOTHING about a service.
    *
-   * `orders_settled_at_check` binds this to the settled states — `PAID`,
-   * `PAID_UNFULFILLED` and `REFUNDED` — so a non-null value here is the database's own
-   * statement that the order is financially settled. It says nothing about delivery,
-   * and `PAID_UNFULFILLED` is the state where that distinction is the whole point: the
-   * money arrived and there is no service.
+   * `orders_settled_at_check` binds this to the settled states — `PAID` and
+   * `REFUNDED` — so a non-null value here is the database's own statement that the
+   * order was financially settled. A `REFUNDED` order keeps it: the money really did
+   * arrive, and the refund is a second movement rather than an erasure of the first.
    */
   settledAt: z.iso.datetime().nullable(),
-  /**
-   * Why the panel could not take this order, when it is `PAID_UNFULFILLED`.
-   *
-   * A `PanelEligibility` reason — DISABLED, ARCHIVED, UNHEALTHY, AT_CAPACITY — and
-   * never a provider's own text. Retained after a retry succeeds: what went wrong once
-   * is history an operator reading the order a week later needs.
-   */
-  unfulfilledReason: z.string().nullable(),
-  unfulfilledAt: z.iso.datetime().nullable(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
 });
 export type OrderSummaryResponse = z.infer<typeof orderSummarySchema>;
-
-/**
- * Retry the fulfilment of a paid order, optionally on a DIFFERENT panel.
- *
- * `panelId` absent means "try the panel it was sold on again", which is the case
- * after an operator re-enables a panel or raises its cap. Present means reassign, and
- * that is a deliberate edit of a snapshot: `orders.panel_id` is normally frozen so a
- * later re-point of the product cannot move an existing service, and this is the one
- * act that is allowed to move it — an operator choosing, for an order that has no
- * service, where the thing the customer paid for will be created. It is audited as
- * such, and the event says `reassigned`.
- */
-export const fulfilOrderRequestSchema = z.object({
-  idempotencyKey: z.string().min(8).max(255),
-  /*
-   * A `uuid` column, so an unparseable value must be refused HERE. `products`
-   * records the same rule: reaching PostgreSQL with `?panelId=abc` is a 500 that
-   * tells an operator nothing about what they typed.
-   */
-  panelId: uuidV7Schema.optional(),
-});
-export type FulfilOrderRequest = z.infer<typeof fulfilOrderRequestSchema>;
 
 /**
  * How an operator narrows the list.
@@ -1963,12 +1931,6 @@ export type OrderResponse = z.infer<typeof orderResponseSchema>;
 export const ORDER_ROUTES = {
   list: '/orders',
   detail: (id: string) => `/orders/${encodeURIComponent(id)}`,
-  /**
-   * The one WRITE on this surface, and it exists because the alternative to it is a
-   * refund. Everything else an operator might do to an order — mark it paid, cancel
-   * it, settle it — is deliberately absent; see the controller's docblock.
-   */
-  fulfil: (id: string) => `/orders/${encodeURIComponent(id)}/fulfil`,
 } as const;
 
 // --- Wallet and payments (Phase 4C) -----------------------------------------

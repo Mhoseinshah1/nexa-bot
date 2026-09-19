@@ -55,15 +55,6 @@ export const PERMISSIONS = [
   // Orders
   p('orders.view', 'View orders', 'LOW'),
   p('orders.cancel', 'Cancel an order', 'HIGH'),
-  /*
-   * Retry or reassign the fulfilment of an order that is PAID and unfulfilled.
-   *
-   * HIGH, and its own key rather than `orders.cancel` or `services.edit`: the holder
-   * decides what happens to money this installation has already taken, and the
-   * alternative to pressing it is a refund. That is why Finance holds it — the two
-   * ways out of a stranded order are theirs to choose between.
-   */
-  p('orders.fulfil', 'Retry or reassign fulfilment of a paid order', 'HIGH'),
   p('orders.manual.create', 'Create a manual order', 'HIGH'),
 
   // Payments, receipts, refunds — four separate concepts, four separate keys
@@ -282,10 +273,6 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       'receipts.review',
       'refunds.view',
       'refunds.issue',
-      // The other way out of a paid order nobody could fulfil. Granted with
-      // `refunds.issue` deliberately: whoever may refund the customer should be
-      // able to try delivering what they paid for first.
-      'orders.fulfil',
       // Finance is the role that owns where money arrives. Without the edit key the
       // only account holder able to change a blocked card would be the owner.
       'payments.accounts.view',
@@ -423,21 +410,20 @@ export interface PermissionOverride {
  * permission without its read is a grant that authorises a request nobody can
  * reach, and the surface that offers it necessarily lies about one of the two.
  *
- * The catalogue has made this mistake once before, in exactly this shape. The
- * `receipt_reviewer` role held `receipts.review` and could not open a single
- * payment, because the decision is made ON a payment and `payments.view` is what
- * reads one — "a permission catalogue promising something the seeded role cannot
- * do, which is the legacy defect this catalogue exists to end". That was repaired
- * by editing one seed, which repairs exactly the installations whose roles match
- * the seed and no others.
+ * The catalogue has made this mistake once, and the repair it got is why this
+ * table exists. The `receipt_reviewer` role held `receipts.review` and could not
+ * open a single payment, because the decision is made ON a payment and
+ * `payments.view` is what reads one — "a permission catalogue promising something
+ * the seeded role cannot do, which is the legacy defect this catalogue exists to
+ * end". That was repaired by editing the seed and backfilling it (migration
+ * 0055), which repairs exactly the installations whose roles match the seed and
+ * no others.
  *
- * `orders.fulfil` is the same shape and is declared rather than repaired, because
- * a seed edit could not have fixed it. The stranded-order reporter tells everyone
- * holding `orders.fulfil`, the order detail page is gated on `orders.view`, and
- * the two disagree for any administrator whose permissions were not composed from
- * a seed — a custom role, a GRANT override, or a DENY override subtracting the
- * read from a role that has both. Only a rule applied at RESOLUTION sees all
- * three.
+ * The shapes a seed edit CANNOT reach are the ones this table is for: a custom
+ * role, a GRANT override handing out the action alone, or a DENY override
+ * subtracting the read from a role that has both. Only a rule applied at
+ * RESOLUTION sees all three, and the notification lane, the request guard and the
+ * Web Admin's rendered chrome all read the resolution.
  *
  * Adding a key here NARROWS what somebody holds; it can never widen it. That
  * direction is the whole design (see `resolveEffectivePermissions`), and it is
@@ -448,14 +434,16 @@ export interface PermissionOverride {
  */
 export const PERMISSION_REQUIRES: Readonly<Record<string, PermissionKey>> = {
   /*
-   * Retrying or reassigning a stranded order is a decision made ON that order,
-   * and the alternative to making it is a refund. The operator needs the
-   * customer, the total, the panel it was sold on and the reason it failed — the
-   * order detail, which is what `orders.view` reads. A projection exposing all
-   * of that under a second key would be the order detail under another name, and
-   * a second read model for one concept is the failure this codebase measures.
+   * Approving or rejecting a receipt is a decision made ON a payment, and the
+   * reviewer needs the customer, the amount, the method and the destination it
+   * should have arrived in — the payment detail, which is what `payments.view`
+   * reads. `receipts.view` is not a substitute: it reads the FILE, and 5R gave it
+   * its own producer precisely so that reading a receipt stayed separate from
+   * deciding on one. A projection exposing the payment under the review key would
+   * be the payment detail under another name, and a second read model for one
+   * concept is the failure this codebase measures.
    */
-  'orders.fulfil': 'orders.view' as PermissionKey,
+  'receipts.review': 'payments.view' as PermissionKey,
 };
 
 /**

@@ -26,42 +26,45 @@ import type { ProductSpecification } from './catalog.js';
  *
  * - `DRAFT` — the customer is looking at a summary. Nothing is owed.
  * - `AWAITING_PAYMENT` — confirmed by the customer, priced, and waiting for money.
- * - `PAID` — settled. The only state provisioning will act on.
- * - `PAID_UNFULFILLED` — the money arrived and the thing it bought could not be
- *   created. Settled, and owed.
+ * - `PAID` — settled, and what was bought is being delivered or has been.
  * - `CANCELLED` — withdrawn before settlement, by the customer or an operator.
  * - `EXPIRED` — nobody withdrew it and nobody paid; the window closed.
- * - `REFUNDED` — settled and then reversed. Terminal, and a ledger fact, never an edit.
+ * - `REFUNDED` — the money went back. Terminal, and a ledger fact, never an edit.
  *
  * `EXPIRED` and `CANCELLED` are not merged. "The customer changed their mind" and
  * "we stopped waiting" are different facts about the same row, and a tenant looking at
  * abandonment rates needs them apart.
  *
- * ## Why `PAID_UNFULFILLED` is a state and not an absence
+ * ## Two outcomes for money that arrived, and no third
  *
- * A bank transfer is money that has ALREADY MOVED. When an operator confirms one, the
- * only question left is what this installation owes for it — and the answer cannot be
- * "nothing, because the panel filled up while the receipt sat in the queue". Before
- * this state the confirmation simply refused: the payment stayed `PENDING`, the
- * operator could not confirm it and could not refund it either, because a refund needs
- * a confirmed payment. The customer's money sat in the bank with no record of what it
- * was for.
+ * A customer whose money this installation has taken ends in exactly one of two
+ * places: they got what they bought, or they got the money back. There is no state
+ * for "paid, undelivered, somebody will decide later".
  *
- * So recording the RECEIPT of money is now independent of the ability to fulfil it.
- * `PAID_UNFULFILLED` is an order that is financially settled and operationally owed:
- * no service was created, nothing was provisioned onto a panel that cannot take it,
- * and both ways out stay open — an operator retries or reassigns it, or refunds it
- * through the ordinary refund lane.
+ * There used to be — `PAID_UNFULFILLED`, with an operator retry and a reassignment —
+ * and the owner removed it. The argument for it was that an operator looking at a
+ * stranded order should choose between delivering late and giving the money back;
+ * what it produced was a queue that only grows while nobody is looking, a customer
+ * with no answer and no money, and two surfaces that had to explain a third thing.
+ * The replacement is not a policy an operator applies: a purchase this installation
+ * cannot deliver is refunded to the customer's wallet, automatically, for the exact
+ * amount, in the transaction that discovers it cannot be delivered.
  *
- * It is deliberately NOT a flavour of `PAID`. `PAID` is the state provisioning acts
- * on, and the one thing this must never do is let an order with no service look like
- * one that has a service coming.
+ * So a bank transfer whose panel filled up while the receipt sat in the queue is
+ * CONFIRMED — the money really did move and pretending otherwise is what left it
+ * `PENDING`, neither confirmable nor refundable — and then immediately reversed onto
+ * the wallet. `AWAITING_PAYMENT -> REFUNDED` is that edge, and it carries the same
+ * `settlementIsFunded` guard as `SETTLE`, because it is the same claim: money that
+ * has really arrived is what makes either legal.
+ *
+ * A wallet purchase never reaches it. The debit is written in the same transaction,
+ * so a refusal costs the customer nothing, and refusing is stricter: an installation
+ * that cannot deliver does not take the money in the first place.
  */
 export const ORDER_STATES = [
   'DRAFT',
   'AWAITING_PAYMENT',
   'PAID',
-  'PAID_UNFULFILLED',
   'CANCELLED',
   'EXPIRED',
   'REFUNDED',
@@ -75,31 +78,15 @@ export const ORDER_TERMINAL_STATES = ['CANCELLED', 'EXPIRED', 'REFUNDED'] as con
  * The states that mean the money for this order has been received.
  *
  * For reconciliation and for every reader that asks "what did we take", which must
- * include an order whose fulfilment is still owed: money that arrived is revenue and a
- * report that omits it under-states what this installation holds. `settled_at` is
- * non-null exactly on these, and `orders_settled_at_check` is built from this list so
- * the constraint and the predicate cannot drift apart.
+ * include an order whose money has since gone back: a refund is a second movement and
+ * not an erasure of the first. `settled_at` is non-null exactly on these, and
+ * `orders_settled_at_check` is built from this list so the constraint and the
+ * predicate cannot drift apart.
  */
-export const ORDER_SETTLED_STATES = ['PAID', 'PAID_UNFULFILLED', 'REFUNDED'] as const;
+export const ORDER_SETTLED_STATES = ['PAID', 'REFUNDED'] as const;
 export type OrderSettledState = (typeof ORDER_SETTLED_STATES)[number];
 
-export const ORDER_EVENTS = [
-  'CONFIRM',
-  'SETTLE',
-  /**
-   * The money arrived and the order cannot be fulfilled on its panel.
-   *
-   * A SEPARATE event from `SETTLE` rather than a flag on it, because the two produce
-   * different obligations and a reader of the machine has to see that. Same guard:
-   * an order reaches either state only on money that is real.
-   */
-  'SETTLE_UNFULFILLED',
-  /** An operator got a stranded order fulfilled, on its panel or another. */
-  'FULFIL',
-  'CANCEL',
-  'EXPIRE',
-  'REFUND',
-] as const;
+export const ORDER_EVENTS = ['CONFIRM', 'SETTLE', 'CANCEL', 'EXPIRE', 'REFUND'] as const;
 export type OrderEvent = (typeof ORDER_EVENTS)[number];
 
 /**
@@ -133,36 +120,24 @@ export const ORDER_MACHINE: StateMachineDefinition<OrderState, OrderEvent> = {
     /*
      * The same guard, and that is the point: money that has already moved is what
      * makes this edge legal, exactly as it makes `SETTLE` legal. What differs is
-     * whether a service could be created for it, which is a question about a PANEL
-     * and never about the payment.
+     * whether what it bought could be delivered — a question about a PANEL, never
+     * about the payment.
      *
-     * There is deliberately no edge from `PAID` to here. An order that reached `PAID`
-     * has a service row written in the same transaction, and a path back would be a
-     * settled order whose service exists while its state says it does not.
+     * Reaching `REFUNDED` without passing through `PAID` is deliberate. `PAID` is
+     * the state provisioning acts on, and an order that momentarily wore it would be
+     * an order a provisioner could claim; the service would then be created for money
+     * this transaction is in the middle of giving back. One edge, one commit, and no
+     * window in which both are true.
      */
     {
       from: 'AWAITING_PAYMENT',
-      to: 'PAID_UNFULFILLED',
-      on: 'SETTLE_UNFULFILLED',
+      to: 'REFUNDED',
+      on: 'REFUND',
       guard: 'settlementIsFunded',
     },
     { from: 'AWAITING_PAYMENT', to: 'CANCELLED', on: 'CANCEL' },
     { from: 'AWAITING_PAYMENT', to: 'EXPIRED', on: 'EXPIRE' },
     { from: 'PAID', to: 'REFUNDED', on: 'REFUND' },
-    /*
-     * The two ways out of owing somebody a service, and both are operator acts.
-     *
-     * `FULFIL` is the retry: the panel recovered, an operator raised the cap, or they
-     * reassigned the order to another panel. It is the ONLY edge into `PAID` that does
-     * not come from `AWAITING_PAYMENT`, and it carries the same obligation — a service
-     * row is written in the transaction that takes it.
-     *
-     * `REFUND` mirrors the edge out of `PAID` and exists for the same reason: the
-     * refund lane is payment-side and does not read the order's state, so this edge
-     * records what a refund MEANS for the order rather than driving it.
-     */
-    { from: 'PAID_UNFULFILLED', to: 'PAID', on: 'FULFIL' },
-    { from: 'PAID_UNFULFILLED', to: 'REFUNDED', on: 'REFUND' },
   ],
 };
 
