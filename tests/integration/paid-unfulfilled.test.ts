@@ -773,6 +773,192 @@ describe('an order paid for and not fulfilled', () => {
     expect(page.items.filter((item) => item.state === 'CONFIRMED')).toHaveLength(1);
   });
 
+  // -------------------------------------------------------------------------
+  // Who is told, and can they act on being told
+  // -------------------------------------------------------------------------
+
+  /**
+   * An administrator composed OUTSIDE the seeded roles.
+   *
+   * Every fixture above reaches for `roleKeys`, and every seeded role that holds
+   * `orders.fulfil` holds `orders.view` beside it — which is exactly why the defect
+   * Codex found could not be reproduced with one. A custom role is not an exotic
+   * configuration here: `roles` is tenant data with a `is_system` flag, the schema
+   * has always permitted a tenant's own role, and an installation is one INSERT from
+   * having one.
+   */
+  const customRole = async (
+    scope: typeof tenantA,
+    key: string,
+    permissions: readonly string[],
+  ): Promise<string> => {
+    const roleId = ctx.container.ids.uuid();
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO roles (id, tenant_id, key, name, is_system)
+      VALUES (${roleId}, ${scope.tenantId}, ${key}, ${key}, false)`);
+    for (const permission of permissions) {
+      await ctx.container.database.db.execute(sql`
+        INSERT INTO role_permissions (tenant_id, role_id, permission_key)
+        VALUES (${scope.tenantId}, ${roleId}, ${permission})`);
+    }
+    return roleId;
+  };
+
+  const withCustomRole = async (
+    scope: typeof tenantA,
+    username: string,
+    roleId: string,
+    telegramUserId: string | null,
+  ): Promise<{ readonly actor: ActorContext; readonly username: string; readonly password: string }> => {
+    const admin = await createAdmin(ctx.container, scope, { username, telegramUserId });
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO admin_roles (tenant_id, admin_id, role_id)
+      VALUES (${scope.tenantId}, ${admin.id}, ${roleId})`);
+    return { actor: adminActorFor(admin), username: admin.username, password: admin.password };
+  };
+
+  /**
+   * What this administrator's Web Admin session would actually carry.
+   *
+   * Through `login` rather than the resolver directly, deliberately. The finding is
+   * that the notification and the page disagree, and the page decides what to draw
+   * from THIS list — so a rule that narrowed the guard while leaving the session's
+   * list intact would still render a control that then answered 403, which is the
+   * divergence rather than the fix.
+   */
+  const held = async (
+    scope: typeof tenantA,
+    who: { readonly username: string; readonly password: string },
+  ): Promise<readonly string[]> => {
+    const result = await ctx.container.auth.login(
+      scope,
+      {
+        type: 'ANONYMOUS' as const,
+        id: null,
+        label: null,
+        surface: 'WEB' as const,
+        correlationId: 'test-correlation' as never,
+      },
+      { username: who.username, password: who.password },
+      { ip: '203.0.113.10', userAgent: 'vitest' },
+    );
+    return [...result.permissions].sort();
+  };
+
+  const notifiedAdminIds = async (): Promise<readonly string[]> => {
+    const rows = (await ctx.container.database.db.execute(
+      sql`SELECT dedupe_key FROM notifications
+           WHERE kind = 'ORDER_PAID_UNFULFILLED' ORDER BY dedupe_key` as never,
+    )) as unknown as { rows: { dedupe_key: string }[] };
+    // `order.unfulfilled:<orderId>:<adminId>` — the reader is the last segment.
+    return rows.rows.map((row) => row.dedupe_key.slice(row.dedupe_key.lastIndexOf(':') + 1));
+  };
+
+  it('does not let a custom role hold orders.fulfil without orders.view', async () => {
+    const roleId = await customRole(tenantA, 'fulfil_only', ['users.view', 'orders.fulfil']);
+    const who = await withCustomRole(tenantA, 'fulfil-only-a', roleId, null);
+
+    const permissions = await held(tenantA, who);
+    expect(permissions).toContain('users.view');
+    expect(permissions).not.toContain('orders.fulfil');
+    expect(permissions).not.toContain('orders.view');
+  });
+
+  it('leaves orders.view alone for a custom role that cannot fulfil', async () => {
+    const roleId = await customRole(tenantA, 'view_only', ['orders.view']);
+    const who = await withCustomRole(tenantA, 'view-only-a', roleId, null);
+
+    expect(await held(tenantA, who)).toEqual(['orders.view']);
+  });
+
+  it('keeps both for a custom role granted both', async () => {
+    const roleId = await customRole(tenantA, 'fulfil_and_view', ['orders.view', 'orders.fulfil']);
+    const who = await withCustomRole(tenantA, 'both-a', roleId, null);
+
+    expect(await held(tenantA, who)).toEqual(['orders.fulfil', 'orders.view']);
+  });
+
+  it('gives neither to a custom role granted neither', async () => {
+    const roleId = await customRole(tenantA, 'unrelated', ['users.view']);
+    const who = await withCustomRole(tenantA, 'neither-a', roleId, null);
+
+    expect(await held(tenantA, who)).toEqual(['users.view']);
+  });
+
+  /*
+   * The shape no check in a role editor could have caught, and the reason the rule
+   * is applied at RESOLUTION rather than at assignment: the ROLE is coherent and the
+   * override is what breaks it. Finance holds both keys by seed.
+   */
+  it('takes orders.fulfil away when an override DENIES the read', async () => {
+    const admin = await createAdmin(ctx.container, tenantA, {
+      username: 'finance-denied-read',
+      roleKeys: ['finance'],
+    });
+    expect(await held(tenantA, admin)).toContain('orders.fulfil');
+
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO admin_permission_overrides (tenant_id, admin_id, permission_key, effect, reason)
+      VALUES (${tenantA.tenantId}, ${admin.id}, 'orders.view', 'DENY', 'under review')`);
+
+    const after = await held(tenantA, admin);
+    expect(after).not.toContain('orders.view');
+    expect(after).not.toContain('orders.fulfil');
+  });
+
+  it('refuses the fulfil route to an administrator a custom role could not authorise', async () => {
+    const order = await stranded();
+    await setStatus(panelA, 'ACTIVE');
+    const roleId = await customRole(tenantA, 'fulfil_only', ['users.view', 'orders.fulfil']);
+    const { actor } = await withCustomRole(tenantA, 'fulfil-only-route', roleId, null);
+
+    await expect(
+      ctx.container.orderFulfilment.fulfil(tenantA, actor, {
+        idempotencyKey: key(),
+        orderId: order.id,
+      }),
+    ).rejects.toMatchObject({ kind: 'PERMISSION_DENIED' });
+    expect((await orderRow(order.id))?.state).toBe('PAID_UNFULFILLED');
+    expect(await countOf('services')).toBe(0);
+  });
+
+  /*
+   * The finding itself: every administrator the lane addresses must be able to OPEN
+   * what it is telling them about. Asserted as an exact set rather than "the custom
+   * role is absent", so a fix that stopped telling ANYBODY would fail here too —
+   * powerful-but-untold is the state this feature exists to end, and silence would
+   * satisfy a weaker assertion.
+   */
+  it('tells only the administrators who can open the order it is about', async () => {
+    const fulfilOnly = await customRole(tenantA, 'fulfil_only', ['users.view', 'orders.fulfil']);
+    await withCustomRole(tenantA, 'fulfil-only-told', fulfilOnly, '900001');
+    const both = await customRole(tenantA, 'fulfil_and_view', ['orders.view', 'orders.fulfil']);
+    const canOpen = (await withCustomRole(tenantA, 'both-told', both, '900002')).actor;
+    const viewOnly = await customRole(tenantA, 'view_only', ['orders.view']);
+    await withCustomRole(tenantA, 'view-only-told', viewOnly, '900003');
+
+    await stranded();
+
+    expect(await notifiedAdminIds()).toEqual([canOpen.id]);
+  });
+
+  it('tells nobody in another tenant, whatever they hold there', async () => {
+    /*
+     * Asserted as the exact set INCLUDING this tenant's own recipient, not as "the
+     * other tenant's administrator is absent". An empty result satisfies the weaker
+     * reading, and an empty result is also what a lane broken in any other way
+     * produces — so it would pass for the wrong reason on the day it mattered.
+     */
+    const foreign = await customRole(tenantB, 'fulfil_and_view', ['orders.view', 'orders.fulfil']);
+    await withCustomRole(tenantB, 'both-other-tenant', foreign, '900004');
+    const local = await customRole(tenantA, 'fulfil_and_view', ['orders.view', 'orders.fulfil']);
+    const ours = (await withCustomRole(tenantA, 'both-this-tenant', local, '900005')).actor;
+
+    await stranded();
+
+    expect(await notifiedAdminIds()).toEqual([ours.id]);
+  });
+
   it('keeps one tenant s stranded order out of another tenant s reach', async () => {
     const order = await stranded();
     const outsider = adminActorFor(
