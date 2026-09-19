@@ -672,6 +672,16 @@ export class PanelService {
       providerType,
       baseUrl,
       activation: command.activation,
+      /*
+       * And the cap, for the same reason and with more at stake. It decides
+       * whether the panel accepts new sales at all, so two requests under one
+       * key that differ only in it are two different asks — and the one an
+       * operator makes SECOND, after an ambiguous answer, is usually the lower
+       * and safer number. Omitted here, that retry is answered with the first
+       * request's panel, reported as a success, and leaves the higher cap
+       * standing.
+       */
+      maxServices: command.maxServices,
     });
     const existing = await this.deps.idempotency.find<{ panelId: string }>(
       scope,
@@ -849,6 +859,9 @@ export class PanelService {
       name: command.name,
       baseUrl,
       activation: command.activation,
+      // The cap, which is the field on this path most likely to be retried with
+      // a different value: it is how an operator stops a panel taking new sales.
+      maxServices: command.maxServices,
     });
     const existing = await this.deps.idempotency.find<{ panelId: string }>(
       scope,
