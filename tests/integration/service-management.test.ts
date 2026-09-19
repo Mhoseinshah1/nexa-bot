@@ -541,6 +541,29 @@ describe('a customer manages the service they bought', () => {
     expect(operation?.failureMessage).toContain('does not have');
     expect(operation?.failureKind, 'not a wire failure, so no failure kind').toBeNull();
     expect((await services.findById(tenantA, service.id))?.state).toBe('ACTIVE');
+
+    /*
+     * And nobody is given their purchase price back for failing to pause it.
+     *
+     * A terminal `FAILED` is what the refund lane acts on, and this operation carries
+     * the `order_id` of the purchase that CREATED the service — every SUSPEND, RESUME
+     * and TERMINATE does. `PURCHASED_AS` is the one thing standing between that id and
+     * a credit: it refunds only when the failed operation is the operation the order
+     * was bought AS, which for a `NEW_SERVICE` order is `PROVISION` and nothing else.
+     *
+     * Without it a customer who asks to pause a working service, on a panel that has
+     * quietly lost the account, is handed the whole price of it — while the service
+     * stays ACTIVE, as the line above asserts. That is the shape this reads for:
+     * money back, service kept.
+     */
+    const settled = (await ctx.container.database.db.execute(
+      sql`SELECT o.state, (SELECT count(*)::int FROM refunds r WHERE r.order_id = o.id) AS refunds
+            FROM orders o JOIN services s ON s.order_id = o.id
+           WHERE s.id = ${service.id}` as never,
+    )) as unknown as { rows: { state: string; refunds: number }[] };
+    expect(settled.rows, 'the purchase that made this service is untouched').toEqual([
+      { state: 'PAID', refunds: 0 },
+    ]);
   });
 
   it('treats an account the panel has already lost as a terminate that succeeded', async () => {
