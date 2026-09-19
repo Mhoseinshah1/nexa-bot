@@ -24,6 +24,7 @@ import { singleValued } from './query.js';
 import { decodeKeysetCursor, encodeKeysetCursor } from './keyset-cursor.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type { PanelView } from '../../modules/platform/panels/application/ports.js';
+import type { PanelWithCapacity } from '../../modules/platform/panels/application/capacity-ports.js';
 
 /**
  * Panels over HTTP.
@@ -172,7 +173,7 @@ export class PanelsController {
    * key id. The legacy web admin rendered a panel's stored password as readable
    * text on its detail page (WEB-BR-007); this shape has nowhere to put one.
    */
-  private toSummary(view: PanelView): PanelSummaryResponse {
+  private toSummary(view: PanelWithCapacity): PanelSummaryResponse {
     const descriptor = providerDescriptor(view.panel.providerType);
     return {
       id: view.panel.id,
@@ -198,6 +199,15 @@ export class PanelsController {
        */
       activation: toActivation(view.panel.activation),
       health: this.toHealth(view),
+      /*
+       * Computed by the service, never by this file.
+       *
+       * `available` in particular: the floor at zero is a rule about what a cap
+       * lowered below usage means, and a surface that did the subtraction itself
+       * would be the second place that rule lives — and the one that forgot it,
+       * because the arithmetic looks obvious.
+       */
+      capacity: view.capacity,
       createdAt: view.panel.createdAt.toISOString(),
       updatedAt: view.panel.updatedAt.toISOString(),
     };

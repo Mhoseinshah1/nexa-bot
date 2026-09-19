@@ -32,6 +32,14 @@ import BASELINE_PAIRS from '../fixtures/role-seed-pairs-at-identity-release.json
  * frozen contract does not assign. That is the privilege-amplification side —
  * a migration is not a licence to widen a role past `ROLE_SEEDS`.
  *
+ * RETIREMENT is part of the same arithmetic and is replayed here rather than
+ * excepted. A permission the catalogue drops leaves rows behind that name a key
+ * nothing declares, so the release that drops it also DELETEs them (0085 is the
+ * worked example). Without replaying those deletes this file would read the
+ * standing INSERT in an earlier migration and report a widening that no
+ * installation actually holds — and the obvious repair, editing the old
+ * migration, is the one thing forward-only forbids.
+ *
  * NOTE for a release that adds a brand-new seeded role: its pairs need no
  * backfill to be correct (the role does not exist yet, so `ensureSystemRoles`
  * creates it complete), but list them in the backfill anyway. Against a role
@@ -58,6 +66,8 @@ const MIGRATIONS_DIR = join(__dirname, '../../apps/api/drizzle');
 interface Backfill {
   readonly file: string;
   readonly pairs: readonly string[];
+  /** Permission keys this migration DELETES from `role_permissions`, if any. */
+  readonly retired: readonly string[];
 }
 
 /**
@@ -76,20 +86,45 @@ function readBackfills(): Backfill[] {
     .filter((f) => f.endsWith('.sql'))
     .sort()) {
     const sql = readFileSync(join(MIGRATIONS_DIR, file), 'utf8');
+    const retired = [
+      ...sql.matchAll(
+        /DELETE\s+FROM\s+"role_permissions"\s+WHERE\s+"permission_key"\s*=\s*'([a-z][a-z0-9_.]*)'/g,
+      ),
+    ].map((m) => m[1] as string);
     const start = sql.indexOf('INSERT INTO "role_permissions"');
-    if (start < 0) continue;
+    if (start < 0) {
+      if (retired.length > 0) found.push({ file, pairs: [], retired });
+      continue;
+    }
     const end = sql.indexOf(';', start);
     const statement = sql.slice(start, end < 0 ? undefined : end);
     const pairs = [
       ...statement.matchAll(/\(\s*'([a-z][a-z0-9_]*)'\s*,\s*'([a-z][a-z0-9_.]*)'\s*\)/g),
     ].map((m) => `${m[1]}:${m[2]}`);
-    found.push({ file, pairs });
+    found.push({ file, pairs, retired });
   }
   return found;
 }
 
 const backfills = readBackfills();
-const backfilled = new Set(backfills.flatMap((b) => b.pairs));
+
+/**
+ * What an existing installation ends up holding, replayed in migration order.
+ *
+ * A REPLAY and not a union, because order is the whole content of a retirement:
+ * 0082 inserts `orders.fulfil` and 0085 deletes it, so the standing set has
+ * neither. Reading them as a set would report a permission every installation
+ * has already lost.
+ */
+const backfilled = new Set<string>();
+for (const { pairs, retired } of backfills) {
+  for (const pair of pairs) backfilled.add(pair);
+  for (const key of retired) {
+    for (const pair of [...backfilled]) {
+      if (pair.endsWith(`:${key}`)) backfilled.delete(pair);
+    }
+  }
+}
 
 const seeded = new Set(
   ROLE_SEEDS.flatMap((role) => role.permissions.map((key) => `${role.key}:${key}`)),
@@ -100,11 +135,15 @@ describe('role seed backfill coverage', () => {
     // The parser failing open is the one way this whole file could be green and
     // meaningless, so it is asserted directly rather than assumed.
     expect(backfills.length).toBeGreaterThanOrEqual(2);
-    for (const { file, pairs } of backfills) {
-      expect(pairs.length, `${file} writes role_permissions but yielded no pairs`).toBeGreaterThan(
-        0,
-      );
+    for (const { file, pairs, retired } of backfills) {
+      expect(
+        pairs.length + retired.length,
+        `${file} writes role_permissions but yielded neither a pair nor a retirement`,
+      ).toBeGreaterThan(0);
     }
+    // At least one retirement is parsed, so a regex that silently stopped
+    // matching would fail here rather than quietly restoring a retired pair.
+    expect(backfills.flatMap((b) => b.retired)).toContain('orders.fulfil');
     expect(backfilled.size).toBeGreaterThanOrEqual(13);
   });
 

@@ -9,6 +9,7 @@ import {
   type UnitOfWork,
 } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
+import type { PanelSalesGate } from '../../../platform/panels/application/panel-sales-gate.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { OrderRepository } from '../../orders/application/ports.js';
 import type { CustomerNotifier } from '../../messaging/application/customer-notifier.js';
@@ -48,6 +49,8 @@ export interface PaymentExpiryServiceDeps {
    */
   readonly notifier: CustomerNotifier;
   readonly scopeActivity: ScopeActivityReader;
+  /** Gives back the panel slot an expired order was holding. */
+  readonly panelSales: PanelSalesGate;
   readonly clock: Clock;
   readonly ids: IdGenerator;
 }
@@ -215,6 +218,15 @@ export class PaymentExpiryService {
 
       const orders = await this.deps.orders.expireDue(scope, now, PAYMENT_EXPIRY_SWEEP_LIMIT, tx);
       for (const order of orders) {
+        /*
+         * The slot, back in the transaction that ended the order.
+         *
+         * The reservation's own `expires_at` is the backstop and already stops it
+         * being COUNTED — but the row would linger until something removed it, and
+         * "nothing removes it" is how a table nobody sweeps grows for ever. This is
+         * the sweep, and it is the one that knows which orders just ended.
+         */
+        await this.deps.panelSales.release(scope, order.id, tx);
         await this.deps.audit.record(
           scope,
           actor,

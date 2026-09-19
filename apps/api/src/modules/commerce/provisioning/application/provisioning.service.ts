@@ -4,6 +4,7 @@ import {
   extendedExpiry,
   errors,
   MAX_TRAFFIC_BYTES,
+  NexaError,
   SUBSCRIPTION_REF_BYTES,
   providerUsernameFor,
   SERVICE_PAGE_MAX,
@@ -23,6 +24,7 @@ import {
 } from '@nexa/contracts';
 import { OPERATION_LEGAL_FROM } from './provision-executor.js';
 import { serviceIdOrNotFound } from './service-id.js';
+import type { PanelSalesGate } from '../../../platform/panels/application/panel-sales-gate.js';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
@@ -66,6 +68,13 @@ export interface ProvisioningServiceDeps {
   readonly scopeActivity: ScopeActivityReader;
   /** Unguessable values for the two identities that are capabilities, not ids. */
   readonly secrets: ServiceSecretSource;
+  /**
+   * The holder of the panel slot this order took at confirmation.
+   *
+   * Settlement is where that hold becomes a service, and the handover happens in
+   * this transaction or not at all — see `planForSettledOrder`.
+   */
+  readonly panelSales: PanelSalesGate;
 }
 
 /**
@@ -167,8 +176,89 @@ export const OPERATOR_OPERATION_PERMISSION: Readonly<
   RECONCILE: 'services.edit',
 };
 
+/**
+ * The ONE refusal `operations.plan` raises that a refunding caller can absorb.
+ *
+ * Matched on `code`, not on the message: the message is customer-facing text and a
+ * reword would silently turn this catch into a rethrow. `NexaError` is imported from
+ * the frozen contracts, so `instanceof` is the same class the repository threw.
+ *
+ * Everything else — a collided primary key, a concurrent delete, a driver fault —
+ * rethrows untouched. A catch that swallowed those would turn a broken database into
+ * a refund, which is the failure this whole lane is supposed to be the opposite of.
+ */
+function isActionInProgress(error: unknown): boolean {
+  return (
+    error instanceof NexaError && error.code === COMMERCE_ERROR_CODES.SERVICE_ACTION_IN_PROGRESS
+  );
+}
+
 export class ProvisioningService {
   constructor(private readonly deps: ProvisioningServiceDeps) {}
+
+  /**
+   * Whether this order can be fulfilled on its panel — and the slot handover.
+   *
+   * Split out of `planForSettledOrder` because the ANSWER now decides which state the
+   * order settles into, and that decision has to be made before the transition rather
+   * than discovered after it. `SETTLE` and `SETTLE_UNFULFILLED` are different edges of
+   * `ORDER_MACHINE` and there is deliberately no path from `PAID` back.
+   *
+   * `consume` takes the panel's lock, deletes the order's hold, and — on a first
+   * settlement only — decides eligibility again with that hold no longer counted.
+   * Releasing before counting is what stops the order's own reservation refusing the
+   * order's own service on the last slot; the lock is held across the gap and the
+   * service is written before this transaction commits, so nothing else can see it
+   * free. When the hold has EXPIRED or was already released, the release is a no-op
+   * and the count that follows is a fresh acquisition under the same lock: the order
+   * competes for a slot exactly as a new one would, and wins or does not.
+   *
+   * ## `onIneligible`, and why the caller decides
+   *
+   * `REFUSE` throws, which rolls the whole transaction back. Right when the money is
+   * still reversible IN this transaction — a wallet debit written moments ago — and
+   * the only honest outcome, because an installation that cannot deliver must not keep
+   * money it can still decline.
+   *
+   * `REFUND` returns the refusal, and the caller confirms the payment and gives the
+   * money back. Right when the money has ALREADY MOVED: a bank transfer sitting in
+   * the account cannot be un-received by throwing, and the refusal that used to
+   * happen here left the payment `PENDING` — unconfirmable, and unrefundable,
+   * because a refund needs a confirmed payment. Codex C4 on PR #50 found that; the
+   * owner then removed the third outcome the fix had introduced, so the answer to
+   * "we cannot deliver this" is now the money, not a queue.
+   *
+   * A REPLAY skips the decision entirely: the customer already has their service, and
+   * re-judging would refuse a transaction whose money has already moved.
+   */
+  async prepareFulfilment(
+    scope: TenantContext,
+    order: OrderRecord,
+    tx: TransactionScope,
+    onIneligible: 'REFUSE' | 'REFUND',
+  ): Promise<
+    | { readonly outcome: 'FULFILLABLE' }
+    | { readonly outcome: 'UNFULFILLABLE'; readonly reason: string }
+  > {
+    const alreadyProvisioned =
+      (await this.deps.services.findByOrderId(scope, order.id, tx)) !== null;
+    const eligible = await this.deps.panelSales.consume(
+      scope,
+      order.line.panelId,
+      order.id,
+      tx,
+      alreadyProvisioned,
+    );
+    if (eligible.eligible) return { outcome: 'FULFILLABLE' };
+    if (onIneligible === 'REFUND') {
+      return { outcome: 'UNFULFILLABLE', reason: eligible.reason };
+    }
+    throw errors.preconditionFailed(
+      COMMERCE_ERROR_CODES.PANEL_NOT_ELIGIBLE,
+      'This order cannot be fulfilled on its panel.',
+      { reason: eligible.reason },
+    );
+  }
 
   /**
    * Records that a settled order is owed a service, and plans the work.
@@ -184,6 +274,9 @@ export class ProvisioningService {
    * idempotency key, and that is deliberate. The service id is stable across replays
    * because the insert is idempotent; a per-request key is not, so two settlements of
    * one order would derive two operation ids and plan two creates.
+   *
+   * The slot was handed over by `prepareFulfilment`, which the caller runs FIRST and
+   * under the panel's lock. This method writes; it does not decide.
    */
   async planForSettledOrder(
     scope: TenantContext,
@@ -754,6 +847,93 @@ export class ProvisioningService {
   }
 
   /**
+   * Whether a settled COMMERCIAL order can be applied, without throwing if it cannot.
+   *
+   * Codex M1 on PR #50, and the same defect C4 fixed for a new service, still live on
+   * the other branch. `confirmAndSettle` skipped `prepareFulfilment` entirely for
+   * `RENEW`, `ADD_TRAFFIC` and `ADD_TIME` — those orders create no service and consume
+   * no slot, which is true and was the wrong conclusion. `planCommercialAction` has
+   * three refusals of its own, all of which can become true in the window between a
+   * customer's confirmation and an operator's review of their bank transfer:
+   *
+   *   - the service left a state the action is legal from (terminated, expired),
+   *   - the panel it lives on stopped being operable for that action,
+   *   - another commercial action for the same service is still outstanding.
+   *
+   * Each threw, which rolled the settlement back and left a bank transfer that had
+   * already arrived as a `PENDING` payment — neither confirmable nor refundable. So the
+   * three checks live here, and the caller says what an ineligible answer means to it:
+   * `REFUSE` keeps the old behaviour for money that has not irreversibly moved, and
+   * `REFUND` confirms the payment and gives the money back.
+   *
+   * The third refusal is TRANSIENT, and refunding is still the answer. The
+   * alternative is holding a customer's money against an action that MIGHT become
+   * possible when somebody else's finishes — which is a wait with no deadline and
+   * nobody watching it. A refunded customer can buy the same renewal again a minute
+   * later, and the outstanding action is by then either applied or refunded too.
+   */
+  async prepareCommercialAction(
+    scope: TenantContext,
+    action: {
+      readonly serviceId: string;
+      readonly kind: 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME';
+    },
+    tx: TransactionScope,
+    onIneligible: 'REFUSE' | 'REFUND',
+  ): Promise<
+    | { readonly outcome: 'FULFILLABLE' }
+    | { readonly outcome: 'UNFULFILLABLE'; readonly reason: string }
+  > {
+    const refuse = (
+      code: string,
+      message: string,
+      reason: string,
+    ): { readonly outcome: 'UNFULFILLABLE'; readonly reason: string } => {
+      if (onIneligible === 'REFUND') return { outcome: 'UNFULFILLABLE', reason };
+      throw errors.conflict(code, message, { reason });
+    };
+
+    const service = await this.deps.services.findById(scope, action.serviceId, tx);
+    if (service === null) {
+      /*
+       * Unreachable and still not stranded: `service_commercial_actions_service_fk`
+       * requires the row, so its absence is a broken database rather than a condition
+       * an operator could retry out of. Throwing is the honest answer to a state that
+       * cannot happen.
+       */
+      throw new Error(`commercial action names service ${action.serviceId}, which is not there`);
+    }
+
+    if (!OPERATION_LEGAL_FROM[action.kind].includes(service.state)) {
+      return refuse(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
+        'That service is not in a state this action can be taken from.',
+        `SERVICE_${service.state}`,
+      );
+    }
+
+    const operable = await this.deps.panels.operability(scope, service.panelId, action.kind, tx);
+    if (!operable.ok) {
+      return refuse(
+        COMMERCE_ERROR_CODES.PANEL_NOT_OPERABLE,
+        'The panel this service lives on cannot perform that action.',
+        operable.reason ?? 'UNKNOWN',
+      );
+    }
+
+    const outstanding = await this.deps.operations.findOpenCommercial(scope, service.id, tx);
+    if (outstanding !== null) {
+      return refuse(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_IN_PROGRESS,
+        'This service already has an action waiting to be applied.',
+        'ACTION_IN_PROGRESS',
+      );
+    }
+
+    return { outcome: 'FULFILLABLE' };
+  }
+
+  /**
    * Plans the operation a settled COMMERCIAL order bought.
    *
    * Called from inside the settling transaction, exactly where `planForSettledOrder` is
@@ -793,85 +973,46 @@ export class ProvisioningService {
     },
     now: Date,
     tx: TransactionScope,
-  ): Promise<OperationRecord> {
+    onIneligible: 'REFUSE' | 'REFUND' = 'REFUSE',
+  ): Promise<
+    | { readonly outcome: 'PLANNED'; readonly operation: OperationRecord }
+    | { readonly outcome: 'UNFULFILLABLE'; readonly reason: string }
+  > {
+    /*
+     * The three settlement-time refusals, in ONE implementation — asked a SECOND
+     * time, and the caller's disposition carried into the answer.
+     *
+     * `prepareCommercialAction` owns them because `confirmAndSettle` has to ask the
+     * same question BEFORE it decides how to settle: a bank transfer that has already
+     * arrived is recorded and owed rather than rolled back.
+     *
+     * ## Why the disposition is a parameter and not `REFUSE`
+     *
+     * Under READ COMMITTED this second call takes a FRESH snapshot, so it can
+     * disagree with the first: a settlement for another order on the same service,
+     * committed in between, is invisible to the first read and visible to this one.
+     * Hard-coding `REFUSE` meant that disagreement threw — unwinding a transaction
+     * that had already confirmed a bank transfer and left the arrived money as a
+     * `PENDING` payment, which is the exact state the two-outcome design exists to
+     * make unreachable. Reported by Codex on PR #50 against the `STRAND` design, and
+     * it outlived the design it was written against.
+     *
+     * So the caller says what an ineligible answer MEANS to it. `REFUSE` is still the
+     * default and still throws, because a wallet settlement dies with its transaction
+     * and a credit for money that never left would be wrong. A bank transfer passes
+     * `REFUND`, gets a verdict instead of an exception, and gives the money back.
+     */
+    const usable = await this.prepareCommercialAction(scope, action, tx, onIneligible);
+    if (usable.outcome !== 'FULFILLABLE') {
+      if (onIneligible === 'REFUSE') {
+        throw new Error('prepareCommercialAction returned UNFULFILLABLE under REFUSE');
+      }
+      return usable;
+    }
+
     const service = await this.deps.services.findById(scope, action.serviceId, tx);
     if (service === null) {
-      /*
-       * Unreachable: `service_commercial_actions_service_fk` requires the service to
-       * exist and the row was written in the transaction that created this order. A
-       * refusal rather than a default, because planning against a service that is not
-       * there would mean planning against nothing while the customer's money has moved.
-       */
       throw new Error(`order ${order.id} names service ${action.serviceId}, which is not there`);
-    }
-
-    /*
-     * Re-checked at SETTLEMENT, because the window between confirmation and payment is
-     * real: a customer can confirm a renewal and pay for it minutes later, and the
-     * service can be terminated in between.
-     *
-     * The refusal is loud rather than silent. Money has already moved in this
-     * transaction, so a plan that quietly did nothing would leave a paid order with no
-     * operation behind it and nothing to tell an operator why. Throwing rolls the
-     * settlement back, which is the same choice `settlementRefusal` makes for the same
-     * reason: "money moved but the order did not" must be unrepresentable.
-     */
-    if (!OPERATION_LEGAL_FROM[action.kind].includes(service.state)) {
-      throw errors.conflict(
-        COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
-        'That service is not in a state this action can be taken from.',
-        { state: service.state },
-      );
-    }
-
-    /*
-     * And the PANEL, re-read here for the same window and the same reason.
-     *
-     * `CommercialActionService` checks operability when the quote is drawn and again
-     * when the order is confirmed, and neither is the one that counts: a panel can be
-     * disabled, archived, have its credentials rotated or lose the capability between
-     * the confirmation and the payment, and this is the transaction the money moves in.
-     *
-     * Without it the debit commits, the operation is planned, and the provisioner
-     * refuses it as `CAPABILITY_UNSUPPORTED` — which is PERMANENT — leaving a paid
-     * order that can never be applied and an operator with no way to make it apply. The
-     * refusal here rolls the settlement back instead, which is the same choice the
-     * lifecycle check above makes: "money moved but the order did not" must be
-     * unrepresentable.
-     */
-    const operable = await this.deps.panels.operability(scope, service.panelId, action.kind, tx);
-    if (!operable.ok) {
-      throw errors.conflict(
-        COMMERCE_ERROR_CODES.PANEL_NOT_OPERABLE,
-        'The panel this service lives on cannot perform that action.',
-        { reason: operable.reason ?? 'UNKNOWN' },
-      );
-    }
-
-    /*
-     * ONE outstanding commercial action per service, refused by NAME here and by
-     * `provisioning_operations_open_commercial_key` underneath.
-     *
-     * The target below is ABSOLUTE and is computed from the two columns this service
-     * row carries RIGHT NOW. A second purchase that settles before the first reaches
-     * the panel reads the same two numbers and plans the same target: two five-gigabyte
-     * packages against a ten-gigabyte service each plan fifteen, the customer is charged
-     * twice, and the account ends where one purchase would have left it.
-     *
-     * Serialising EXECUTION does not fix it and already happens — `claimDue` refuses to
-     * run two operations for one service at once. The rows were wrong before either ran.
-     *
-     * TRANSIENT, and said so: the customer's next step is to wait a moment, which is
-     * why `SERVICE_ACTION_IN_PROGRESS` is its own code rather than folded into the
-     * lifecycle refusal above.
-     */
-    const outstanding = await this.deps.operations.findOpenCommercial(scope, service.id, tx);
-    if (outstanding !== null) {
-      throw errors.conflict(
-        COMMERCE_ERROR_CODES.SERVICE_ACTION_IN_PROGRESS,
-        'This service already has an action waiting to be applied.',
-        { operationId: outstanding.operationId },
-      );
     }
 
     /*
@@ -932,27 +1073,54 @@ export class ProvisioningService {
       );
     }
 
-    const operation = await this.deps.operations.plan(
-      scope,
-      {
-        id: this.deps.ids.uuid(),
-        /*
-         * Derived from the ORDER, which is what makes a replayed settlement plan the
-         * same operation rather than a second one. The order id is the only thing that
-         * is the same for both attempts and different for a genuine second purchase.
-         */
-        operationId: this.deps.operationId(`${service.id}:${action.kind}:${order.id}`),
-        serviceId: service.id,
-        orderId: order.id,
-        /* The customer bought this. They are owed the outcome, and this is what says so. */
-        requestedByCustomerId: service.customerId,
-        panelId: service.panelId,
-        type: action.kind,
-        target,
-      },
-      now,
-      tx,
-    );
+    /*
+     * The INSERT can lose the same race the read above just won, and that loss has to
+     * reach the caller as the same verdict.
+     *
+     * `provisioning_operations_open_commercial_key` admits one open commercial action
+     * per service, and the repository turns a loss on it into a NAMED refusal rather
+     * than an idempotent win — correctly, because the loser asked for a renewal and
+     * the winner may be somebody else's top-up. But under READ COMMITTED both callers
+     * can pass `findOpenCommercial` before either row exists, so for a bank transfer
+     * the refusal used to arrive as a throw AFTER the disposition had already been
+     * honoured one statement earlier. The transfer had arrived; the transaction
+     * unwound anyway. Codex found the read half of this and then, a round later, that
+     * the fix stopped at the read.
+     *
+     * The conflict is a domain error rather than a raw `23505` — the insert is
+     * `ON CONFLICT DO NOTHING` and the refusal is raised from a read that follows —
+     * so the transaction is still usable here and this catch is not swallowing an
+     * aborted one. Anything that is NOT that refusal rethrows untouched.
+     */
+    let operation: OperationRecord;
+    try {
+      operation = await this.deps.operations.plan(
+        scope,
+        {
+          id: this.deps.ids.uuid(),
+          /*
+           * Derived from the ORDER, which is what makes a replayed settlement plan the
+           * same operation rather than a second one. The order id is the only thing that
+           * is the same for both attempts and different for a genuine second purchase.
+           */
+          operationId: this.deps.operationId(`${service.id}:${action.kind}:${order.id}`),
+          serviceId: service.id,
+          orderId: order.id,
+          /* The customer bought this. They are owed the outcome, and this is what says so. */
+          requestedByCustomerId: service.customerId,
+          panelId: service.panelId,
+          type: action.kind,
+          target,
+        },
+        now,
+        tx,
+      );
+    } catch (error) {
+      if (onIneligible === 'REFUND' && isActionInProgress(error)) {
+        return { outcome: 'UNFULFILLABLE', reason: 'ACTION_IN_PROGRESS' };
+      }
+      throw error;
+    }
 
     await this.deps.audit.record(
       scope,
@@ -978,7 +1146,7 @@ export class ProvisioningService {
       tx,
     );
 
-    return operation;
+    return { outcome: 'PLANNED', operation };
   }
 
   /** Whether a service is in a state where re-sending its configuration means anything. */

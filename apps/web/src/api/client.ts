@@ -1095,6 +1095,15 @@ export function updatePanel(input: {
   id: string;
   name?: string;
   baseUrl?: string;
+  /**
+   * Absent leaves the cap; `null` removes it; a positive integer sets one.
+   *
+   * `number | null | undefined` rather than `number | undefined`, because the
+   * three states are three different instructions and the server reads them
+   * that way. Collapsing null into undefined would make "remove the cap"
+   * unsendable from this client.
+   */
+  maxServices?: number | null;
   idempotencyKey: string;
 }): Promise<PanelResponse> {
   const { id, ...body } = input;

@@ -26,8 +26,12 @@ The **connection half** only: authenticate, and read what the panel says about
 itself. Creating clients, mutating inbounds, resetting traffic, delivering
 subscriptions and scheduling background health are all later phases.
 
-**The declared capability set is therefore exactly `HEALTH_CHECK`** — and so is
-Marzban's. `ProviderDescriptor.capabilities` means "the operations this release
+**The declared capability set was therefore exactly `HEALTH_CHECK`** when this
+document was written, and so was Marzban's. Neither is still true: Phase 4
+added `CREATE_USER`, `READ_USAGE` and `DELIVER_SUBSCRIPTION_LINK` to both and
+`LIMIT_DEVICES` to this one — five in all — while Marzban went to ten. The
+sentence above describes Phase 3B and is kept because the REASONING it
+introduces has not changed. `ProviderDescriptor.capabilities` means "the operations this release
 can execute for this provider", never a feature matrix of what the panel could
 do one day: `supports()` answers from that array and the providers endpoint
 publishes it verbatim, so an entry there is a promise the product makes to an

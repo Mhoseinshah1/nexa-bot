@@ -1045,6 +1045,28 @@ export const panelHealthSchema = z.object({
 });
 export type PanelHealthResponse = z.infer<typeof panelHealthSchema>;
 
+/**
+ * A panel's occupancy, as the API states it.
+ *
+ * `services` and `reservations` are kept apart rather than summed away because
+ * they resolve differently: a service leaves only when it is terminated, a
+ * reservation leaves on its own when its order is paid, cancelled or expires.
+ * `used` is nevertheless returned rather than left to the client to add, so no
+ * surface gets its own opinion about what counts.
+ */
+export const panelCapacitySchema = z.object({
+  /** The operator's cap, or null for no limit. Never zero: `DISABLED` says that. */
+  maxServices: z.number().int().positive().nullable(),
+  /** Services on this panel that occupy a slot — everything but TERMINATED. */
+  services: z.number().int().nonnegative(),
+  /** Slots held for an order that has neither settled nor lapsed. */
+  reservations: z.number().int().nonnegative(),
+  used: z.number().int().nonnegative(),
+  /** `maxServices - used`, floored at zero; null when there is no cap. */
+  available: z.number().int().nonnegative().nullable(),
+});
+export type PanelCapacityResponse = z.infer<typeof panelCapacitySchema>;
+
 export const panelSummarySchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -1087,6 +1109,22 @@ export const panelSummarySchema = z.object({
    */
   activation: z.record(z.string(), z.unknown()).nullable(),
   health: panelHealthSchema,
+  /**
+   * How full this panel is, and how full it is allowed to get.
+   *
+   * Four numbers, because one would not answer the question an operator is
+   * actually asking. "Used 8 of 8" does not say whether raising the cap is the
+   * remedy or whether six of those eight are holds that will lapse in an hour,
+   * and an operator who cannot tell those apart terminates a customer's service
+   * to make room that was about to free itself.
+   *
+   * `available` is computed by the server and floored at zero. A cap lowered
+   * below current usage is explicitly allowed — it refuses new sales and
+   * terminates nothing — so the arithmetic is legitimately negative for a while,
+   * and a screen reading "-3 available" is indistinguishable from a broken
+   * counter. The honest number of slots left is none.
+   */
+  capacity: panelCapacitySchema,
   createdAt: isoTimestamp,
   updatedAt: isoTimestamp,
 });
@@ -1238,12 +1276,33 @@ export const panelActivationInputSchema = z.union([
 ]);
 export type PanelActivationInput = z.infer<typeof panelActivationInputSchema>;
 
+/**
+ * The cap, as a request states it.
+ *
+ * Three states, the same tri-state `activation` and every credential field use:
+ * absent leaves whatever is stored, `null` removes the cap, a positive integer
+ * sets one. An operator renaming a panel must not silently uncap it by not
+ * mentioning the cap.
+ *
+ * Zero is refused rather than read as "sell nothing". `DISABLED` already means
+ * that, it stops the probes, and it reads as a decision somebody made — whereas
+ * a zero cap would be a second spelling that nothing else in the system
+ * recognises: the panel would still be probed, still report `HEALTHY`, and the
+ * catalogue would go quiet with no state anywhere naming why. The CHECK
+ * constraint says the same thing one layer down.
+ */
+export const panelMaxServicesInputSchema = z.union([
+  z.number().int().positive().max(1_000_000),
+  z.null(),
+]);
+
 export const createPanelRequestSchema = z.object({
   name: panelNameSchema,
   providerType: z.enum(PROVIDER_TYPES),
   baseUrl: panelBaseUrlSchema,
   credentials: panelCredentialsInputSchema.optional(),
   activation: panelActivationInputSchema.optional(),
+  maxServices: panelMaxServicesInputSchema.optional(),
   idempotencyKey: z.string().min(8).max(255),
 });
 export type CreatePanelRequest = z.infer<typeof createPanelRequestSchema>;
@@ -1274,6 +1333,16 @@ export const updatePanelRequestSchema = z.object({
    * would be a third place to forget the tenant check.
    */
   activation: panelActivationInputSchema.optional(),
+  /**
+   * `panels.edit`, alongside the name — not a permission of its own.
+   *
+   * Lowering a cap below current usage is deliberately allowed and deliberately
+   * harmless: it refuses NEW sales and terminates nothing. A limit that could
+   * delete a customer's service because somebody mistyped a number is not a
+   * limit, it is an outage with a form field, so this needs no more authority
+   * than renaming the panel does.
+   */
+  maxServices: panelMaxServicesInputSchema.optional(),
   idempotencyKey: z.string().min(8).max(255),
 });
 export type UpdatePanelRequest = z.infer<typeof updatePanelRequestSchema>;
@@ -1804,10 +1873,10 @@ export const orderSummarySchema = z.object({
   /**
    * When the money arrived, and NOTHING about a service.
    *
-   * `orders_settled_at_check` binds this to `PAID` or `REFUNDED`, so a non-null value
-   * here is the database's own statement that the order is financially settled. It says
-   * nothing about delivery: no phase before 4D provisions anything, and an operator
-   * reading a settled order must not infer one from a timestamp.
+   * `orders_settled_at_check` binds this to the settled states — `PAID` and
+   * `REFUNDED` — so a non-null value here is the database's own statement that the
+   * order was financially settled. A `REFUNDED` order keeps it: the money really did
+   * arrive, and the refund is a second movement rather than an erasure of the first.
    */
   settledAt: z.iso.datetime().nullable(),
   createdAt: z.iso.datetime(),

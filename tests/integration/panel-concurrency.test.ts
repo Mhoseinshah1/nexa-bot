@@ -333,6 +333,7 @@ describe('panel service under concurrency', () => {
     idempotency: IdempotencyStore = ctx.container.idempotency,
   ): PanelService {
     return new PanelService({
+      capacity: ctx.container.panelCapacity,
       repository: new DrizzlePanelRepository(ctx.container.database.db),
       credentials: new DrizzlePanelCredentialStore(ctx.container.database.db, ctx.container.cipher),
       guard: ctx.container.guard,

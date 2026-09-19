@@ -142,6 +142,39 @@ function FailureBadge({ failure }: { failure: string | null }) {
   );
 }
 
+/**
+ * Occupancy in one cell, without lying about any of the three numbers.
+ *
+ * `used / cap` is the headline because that is the comparison that decides
+ * whether the panel sells. The reservation count is appended only when there IS
+ * one, so the ordinary row stays a single fraction and the interesting row says
+ * why it is bigger than the service count — an operator seeing "8 / 8" with no
+ * explanation terminates a service to make room that was about to free itself.
+ *
+ * `∞` for no cap rather than a blank: blank reads as "not loaded", and an
+ * uncapped panel is a deliberate state.
+ */
+function CapacityCell({ capacity }: { capacity: PanelSummaryResponse['capacity'] }) {
+  return (
+    <Ltr mono={false}>
+      <Num value={capacity.used} />
+      {' / '}
+      {capacity.maxServices === null ? (
+        <span title={t('web.panel_capacity_unlimited')}>∞</span>
+      ) : (
+        <Num value={capacity.maxServices} />
+      )}
+      {capacity.reservations > 0 && (
+        <span className="faint" title={t('web.panel_capacity_reservations')}>
+          {' ('}
+          <Num value={capacity.reservations} />
+          {')'}
+        </span>
+      )}
+    </Ltr>
+  );
+}
+
 export function PanelsPage({
   route,
   mayEdit,
@@ -274,6 +307,12 @@ export function PanelsPage({
             <Num value={row.health.latencyMs} /> ms
           </Ltr>
         ),
+    },
+    {
+      key: 'capacity',
+      header: t('web.panel_capacity'),
+      align: 'end',
+      render: (row) => <CapacityCell capacity={row.capacity} />,
     },
     {
       key: 'status',
@@ -598,6 +637,29 @@ export function PanelDetailPage({
   );
 }
 
+/**
+ * A cap input box that will not be sent at all.
+ *
+ * Not `null`, which is a real instruction — "remove the cap" — and not a
+ * number. Distinguishing the three is the whole point: guessing which one a bad
+ * value meant is how a limit disappears without anybody choosing to remove it.
+ */
+const INVALID_CAP = Symbol('invalid cap');
+
+/**
+ * What the cap box is asking for, parsed ONCE for both readers.
+ *
+ * The overwrite notice and the submit handler ask the same question of the same
+ * box, and a notice that parsed it differently from the request would warn
+ * about a value the save does not carry — or stay silent about one it does.
+ */
+function capFromInput(raw: string): number | null | typeof INVALID_CAP {
+  const trimmed = raw.trim();
+  if (trimmed === '') return null;
+  const value = Number(trimmed);
+  return Number.isInteger(value) && value >= 1 ? value : INVALID_CAP;
+}
+
 function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit: boolean }) {
   const client = useQueryClient();
   const toast = useToast();
@@ -619,6 +681,18 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
   const [basis, setBasis] = useState(panel);
   const [name, setName] = useState(panel.name);
   const [baseUrl, setBaseUrl] = useState(panel.baseUrl);
+  /**
+   * The cap, as TEXT.
+   *
+   * Empty string is "no cap", which is the state the API spells `null` — and a
+   * `number | null` field would have to represent the operator midway through
+   * clearing it as something, which is the same three-state problem the request
+   * schema solves with a tri-state. Text keeps the input honest and the
+   * conversion happens once, on submit.
+   */
+  const [maxServices, setMaxServices] = useState(
+    panel.capacity.maxServices === null ? '' : String(panel.capacity.maxServices),
+  );
   /**
    * The newest revision THIS session's own writes have stored.
    *
@@ -643,6 +717,7 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
   const remote = {
     name: basis.name !== panel.name,
     baseUrl: basis.baseUrl !== panel.baseUrl,
+    maxServices: basis.capacity.maxServices !== panel.capacity.maxServices,
   };
   /*
    * Sent AND different from what is stored now.
@@ -709,9 +784,29 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
       return a === b;
     }
   };
+  /*
+   * The cap, asked the same three questions as the two text fields.
+   *
+   * It cannot go through `overwrites`, which compares strings — but it is the
+   * field where the warning matters MOST, because the value decides whether the
+   * panel accepts new sales at all. Without this, an administrator who lowered
+   * a cap while a colleague had the form open was told the panel was
+   * "untouched" and then replaced their number.
+   *
+   * An INVALID box is excluded because `onSubmit` refuses to send it, and a
+   * warning about a value that will never leave the browser is the false
+   * positive the whole notice was rewritten to remove.
+   */
+  const draftCap = capFromInput(maxServices);
+  const overwritesCap =
+    remote.maxServices &&
+    draftCap !== INVALID_CAP &&
+    draftCap !== basis.capacity.maxServices &&
+    draftCap !== panel.capacity.maxServices;
   const willOverwrite =
     overwrites(name, basis.name, panel.name, remote.name, (a, b) => a.trim() === b.trim()) ||
-    overwrites(baseUrl, basis.baseUrl, panel.baseUrl, remote.baseUrl, sameUrl);
+    overwrites(baseUrl, basis.baseUrl, panel.baseUrl, remote.baseUrl, sameUrl) ||
+    overwritesCap;
 
   /**
    * Every identity control, not just the Save button.
@@ -728,6 +823,10 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
     setBasis(fresh);
     setName(fresh.name);
     setBaseUrl(fresh.baseUrl);
+    // The cap too, or "load the fresh value" would re-sync two of the three
+    // fields and leave the third holding a number the server no longer has —
+    // which the next save would then write back over somebody else's change.
+    setMaxServices(fresh.capacity.maxServices === null ? '' : String(fresh.capacity.maxServices));
   };
 
   const refresh = async () => {
@@ -747,8 +846,12 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
     // key was minted for rather than whatever the fields hold 500 ms later.
     // Both optional: an ABSENT field is one the operator did not change, and
     // the request carries only what actually differs.
-    mutationFn: (command: { idempotencyKey: string; name?: string; baseUrl?: string }) =>
-      updatePanel({ id: panel.id, ...command }),
+    mutationFn: (command: {
+      idempotencyKey: string;
+      name?: string;
+      baseUrl?: string;
+      maxServices?: number | null;
+    }) => updatePanel({ id: panel.id, ...command }),
     onSuccess: async (result) => {
       submission.settle();
       // The basis follows what was actually stored, so the next edit is
@@ -873,7 +976,7 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
    * NEWER than this operator's write — is never suppressed by it.
    */
   const behind = written !== null && Date.parse(panel.updatedAt) < Date.parse(written);
-  const changedElsewhere = !behind && (remote.name || remote.baseUrl);
+  const changedElsewhere = !behind && (remote.name || remote.baseUrl || remote.maxServices);
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
@@ -883,9 +986,25 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
     // change nobody made — the service's empty-edit guard cannot see it,
     // because the request is not empty.
     // Against the BASIS, not the latest query result — see `basis` above.
+    /*
+     * The cap, converted once and only when it MOVED.
+     *
+     * An empty box is `null` — remove the cap — and a number is a number. A box
+     * holding something that is not a positive integer is not sent at all and
+     * the operator is told, rather than being silently uncapped by a typo: the
+     * tri-state means "absent" and "null" are different instructions, and
+     * guessing which one a bad value meant is how a limit disappears without
+     * anybody choosing to remove it.
+     */
+    const capValue = capFromInput(maxServices);
+    if (capValue === INVALID_CAP) {
+      toast({ tone: 'danger', message: t('web.panel_max_services_hint') });
+      return;
+    }
     const command = {
       ...(name === basis.name ? {} : { name }),
       ...(baseUrl === basis.baseUrl ? {} : { baseUrl }),
+      ...(capValue === basis.capacity.maxServices ? {} : { maxServices: capValue }),
     };
     if (Object.keys(command).length === 0) {
       toast({ tone: 'warn', message: t('web.no_changes') });
@@ -918,6 +1037,49 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
         />
       </Card>
 
+      {/*
+        The three numbers, kept apart.
+        
+        An operator looking at a full panel needs to know whether it is full of
+        SERVICES, which they resolve by raising the cap or terminating something,
+        or full of HOLDS, which resolve themselves when the orders behind them
+        settle or lapse. One `used` figure cannot answer that, and the operator
+        who cannot tell the two apart terminates a customer's service to make
+        room that was about to free itself.
+      */}
+      <Card title={t('web.panel_capacity_title')} hint={t('web.panel_capacity_hint')}>
+        <KV
+          items={[
+            [t('web.panel_capacity_services'), <Num key="s" value={panel.capacity.services} />],
+            [
+              t('web.panel_capacity_reservations'),
+              <Num key="r" value={panel.capacity.reservations} />,
+            ],
+            [t('web.panel_capacity_used'), <Num key="u" value={panel.capacity.used} />],
+            [
+              t('web.panel_max_services'),
+              panel.capacity.maxServices === null ? (
+                <span key="m" className="faint">
+                  {t('web.panel_capacity_unlimited')}
+                </span>
+              ) : (
+                <Num key="m" value={panel.capacity.maxServices} />
+              ),
+            ],
+            [
+              t('web.panel_capacity_available'),
+              panel.capacity.available === null ? (
+                <span key="a" className="faint">
+                  {t('web.panel_capacity_unlimited')}
+                </span>
+              ) : (
+                <Num key="a" value={panel.capacity.available} />
+              ),
+            ],
+          ]}
+        />
+      </Card>
+
       <Card title={t('web.panel_configuration')} hint={t('web.panel_configuration_hint')}>
         <form onSubmit={onSubmit} className="form-grid">
           <Field label={t('web.panel_name')} htmlFor={`name-${panel.id}`}>
@@ -939,6 +1101,20 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
               className="input ltr mono"
               value={baseUrl}
               onChange={(event) => setBaseUrl(event.target.value)}
+              disabled={!mayWrite}
+            />
+          </Field>
+          <Field
+            label={t('web.panel_max_services')}
+            hint={t('web.panel_max_services_hint')}
+            htmlFor={`cap-${panel.id}`}
+          >
+            <input
+              id={`cap-${panel.id}`}
+              className="input ltr"
+              inputMode="numeric"
+              value={maxServices}
+              onChange={(event) => setMaxServices(event.target.value)}
               disabled={!mayWrite}
             />
           </Field>

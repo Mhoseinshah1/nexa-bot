@@ -19,6 +19,7 @@ import {
   createAdmin,
   migrateOnce,
   resetDatabase,
+  validatePanelConnection,
   tenantA,
   tenantB,
   testConfig,
@@ -1693,6 +1694,13 @@ describe('panel HTTP surface', () => {
     expect(disabled.panel.status).toBe('DISABLED');
     expect(disabled.panel.health.state).toBe('DISABLED');
 
+    // Re-enabling needs a connection test that vouches for the panel's current
+    // identity. Written through the production digest rather than the HTTP test
+    // route, because this case's subject is the PROJECTION and standing up a
+    // reachable fake panel to prove it would be a second suite's worth of
+    // machinery for one precondition.
+    await validatePanelConnection(api.container, tenantA, id);
+
     // Re-enabling restores the underlying state with no health write, which is
     // the point of projecting it.
     const enabled = panelResponseSchema.parse(
@@ -1703,7 +1711,13 @@ describe('panel HTTP surface', () => {
         })
       ).json(),
     );
-    expect(enabled.panel.health.state).toBe('UNCHECKED');
+    // HEALTHY, which is what the probe above actually stored — and a STRONGER
+    // statement of the rule than the `UNCHECKED` this asserted before the panel
+    // had to be validated to be enabled. `DISABLED` was projected OVER a real
+    // stored state and re-enabling revealed it unchanged, which is precisely
+    // what "projected rather than stored" means; the old version could not tell
+    // a projection from a panel that had simply never been probed.
+    expect(enabled.panel.health.state).toBe('HEALTHY');
   });
 
   it('refuses to test a panel that has no credentials', async () => {
