@@ -1271,11 +1271,31 @@ describe('a provisioned service announces itself', () => {
     ).toBeNull();
     expect(await operations.findOpen(tenantA, serviceId, 'RECONCILE')).toBeNull();
 
-    // An operator has a row to act on: the PANEL is what needs fixing.
-    const events = await ctx.container.database.db.execute(
-      sql`SELECT code, context FROM operational_events WHERE code = 'provisioning.stalled'`,
-    );
-    expect(events.rows, 'the operator is told').toHaveLength(1);
+    /*
+     * An operator was told — and then told it was over.
+     *
+     * `provisioning.stalled` is an ERROR keyed on the SERVICE, and its only recoveries
+     * are deliveries of that service. A service this lane has terminated, for an order
+     * it has refunded, can never produce one: before the refund recorded its own
+     * recovery, every definitive failure left an open ERROR nobody and nothing could
+     * ever close — an operator queue that only grows, which is the exact thing the
+     * two-outcome decision deleted. Found by Codex.
+     *
+     * So the assertion is both halves. The row exists, because the operator needs to
+     * know a paid service could not be created; and it is RESOLVED, because the
+     * product has already answered it by giving the money back. The panel's OWN
+     * condition is a different code with its own recovery and stays open — the panel
+     * is still broken.
+     */
+    const events = (await ctx.container.database.db.execute(
+      sql`SELECT code, resolved_at IS NOT NULL AS closed FROM operational_events
+           WHERE code IN ('provisioning.stalled', 'order.refunded_undeliverable')
+           ORDER BY code` as never,
+    )) as unknown as { rows: { code: string; closed: boolean }[] };
+    expect(events.rows, 'told, then told it was answered — in two rows, not three').toEqual([
+      { code: 'order.refunded_undeliverable', closed: false },
+      { code: 'provisioning.stalled', closed: true },
+    ]);
 
     /*
      * And the CUSTOMER is not left in the ceiling with it.

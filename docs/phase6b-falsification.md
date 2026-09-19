@@ -308,6 +308,56 @@ guard needs two settlements interleaved inside one transaction's lifetime, and
 second line of defence — a replay past the transition credits the remainder,
 which is nothing.
 
+## The fifth Codex round: five ways the refund gave back less than it promised
+
+All five were validated as CONFIRMED against the code before anything was
+written. Three are money the customer did not get, one is the request that would
+have returned it dying with a serialization error, and one is an operator queue
+that only grew.
+
+| #   | Rule                                                                       | Mutation applied                                                  | Result | Named test                                                                          |
+| --- | -------------------------------------------------------------------------- | ----------------------------------------------------------------- | ------ | ----------------------------------------------------------------------------------- |
+| F2  | an operator's UNFINISHED refund is superseded, never subtracted            | the supersede loop short-circuited with `if (true) continue`      | KILLED | _abandons an operator s unsent refund and returns the whole amount_                 |
+| F3a | `sales.currency` cannot retire while refundable money is denominated in it | the guard loop in `SettingsService.set` short-circuited           | KILLED | _refuses to retire a currency that still has money owed in it_                      |
+| F3b | and it is a guard, not a ban: zero exposure allows the change              | `exposed === 0` changed to `exposed === -1`, so it always refuses | KILLED | _allows the change once nothing is left to refund_                                  |
+| F4  | the CUSTOMER is locked before the PANEL on every settlement path           | the `lockCustomer` call deleted from `confirmAndSettle`           | KILLED | _does not deadlock when a wallet settlement holds the customer and wants the panel_ |
+| F5  | the refund CLOSES the stalled condition it can never otherwise close       | the `recovers` pointer removed from the refunder call             | KILLED | _bounds the create-reconcile-absent cycle instead of dialling for ever_             |
+
+F4's mutation does not merely fail an expectation: it fails with the literal
+`40P01` the finding names, on round 0 of 3, which is the difference between a
+test that describes a deadlock and a test that produces one.
+
+F5 was rewritten mid-pass because of what the first version's mutation showed.
+The recovery was originally a SECOND `order.refunded_undeliverable` row written
+by the provisioner, and the test that caught the missing recovery caught the
+duplicate too: two rows under one code, stating the same fact twice, in a log
+whose whole purpose is that it does not do that. The recovery now rides on the
+one row the refunder already writes, passed in as `recovers`. That also fixed a
+correctness problem the duplicate had: the refunder writes nothing at all when
+another transaction moved the order first, which is exactly when the condition
+must stay open — the old version recorded the recovery on a `refunded` boolean
+the provisioner had to re-derive.
+
+**F1's fix has NO test, and the reason is the other fix in this same round.**
+
+`planCommercialAction` now converts a lost INSERT on
+`provisioning_operations_open_commercial_key` into the same `UNFULFILLABLE`
+verdict its READ already returns. The fix is right — a read and an index that
+enforce one rule must produce one answer, and the read-then-insert window is real
+under READ COMMITTED. But the mutation (`if (false && …)`) SURVIVED five suites,
+173 tests, and it survives because the window is no longer reachable through any
+wired caller: `planCommercialAction` has exactly one, `prepareCommercialSettlement`,
+reached only from `confirmAndSettle` — which F4 just made take the CUSTOMER's row
+lock before it plans anything. Two commercial settlements of one service are two
+settlements for one customer, so they now serialise on that row, and the loser's
+`findOpenCommercial` sees the winner's committed row and refuses through the read.
+
+So the catch is defence for a caller that does not exist yet: anything that plans
+a targeted operation without holding the customer's lock. It is kept because the
+invariant is worth stating in code, and it is recorded here as untested rather
+than described as covered — a commit message on the deployment branch once cited
+coverage that had been run and thrown away, and the next reader believed it.
+
 ## Rules held by a mechanism rather than by a mutation
 
 | Rule                                                    | What holds it                                                                                                                  |

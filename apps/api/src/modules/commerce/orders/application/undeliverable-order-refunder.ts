@@ -125,10 +125,28 @@ export class UndeliverableOrderRefunder {
       /** WHY it could not be delivered — a closed vocabulary, never a provider's text. */
       readonly reason: string;
       readonly now: Date;
+      /**
+       * An operator condition this refund ANSWERS, if the caller opened one.
+       *
+       * Carried into the event row this method already writes rather than recorded
+       * as a second one: both would be `ORDER_REFUNDED_CODE`, and the same fact
+       * twice in an operations log is what that log exists not to be.
+       *
+       * The provisioner passes `provisioning.stalled` for the service it has just
+       * terminated. That ERROR's only recoveries are DELIVERIES of that service, so
+       * nothing left could ever close it and every definitive failure added one to a
+       * queue that only grew — the shape the two-outcome decision deleted. Found by
+       * Codex. The settlement lane passes nothing: it refunds before any service
+       * exists, so there is no condition open.
+       */
+      readonly recovers?: {
+        readonly code: string;
+        readonly dedupeKey: string;
+      };
     },
     tx: TransactionScope,
   ): Promise<boolean> {
-    const { order, from, payment, reason, now } = input;
+    const { order, from, payment, reason, now, recovers } = input;
     const orderId = order.id as OrderId;
 
     const to = nextState(ORDER_MACHINE, from, 'REFUND');
@@ -182,6 +200,9 @@ export class UndeliverableOrderRefunder {
           amountMinor: credited.amountMinor.toString(),
           currency: credited.currency,
         },
+        ...(recovers === undefined
+          ? {}
+          : { recoversCode: recovers.code, recoversDedupeKey: recovers.dedupeKey }),
         correlationId: actor.correlationId,
       },
       tx,
