@@ -218,8 +218,8 @@ describe('a permission that cannot be held alone', () => {
     expect(incoherentPermissionGrants(['orders.fulfil' as PermissionKey])).toEqual([
       { permission: 'orders.fulfil', requires: 'orders.view' },
     ]);
-    expect(
-      incoherentPermissionGrants(['orders.fulfil', 'orders.view'] as PermissionKey[]),
-    ).toEqual([]);
+    expect(incoherentPermissionGrants(['orders.fulfil', 'orders.view'] as PermissionKey[])).toEqual(
+      [],
+    );
   });
 });

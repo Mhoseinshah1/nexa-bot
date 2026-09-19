@@ -604,8 +604,10 @@ describe('panel capacity and sales eligibility', () => {
    */
   const bulkActiveProducts = async (panelId: string, count: number, from = 0): Promise<void> => {
     const values = sql.join(
-      Array.from({ length: count }, (_unused, index) =>
-        sql`(${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${`bulk ${String(from + index)}`},
+      Array.from(
+        { length: count },
+        (_unused, index) =>
+          sql`(${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${`bulk ${String(from + index)}`},
              'EVERYONE', 'ACTIVE', ${from + index}, ${panelId}, 30, 0, 1, 120000, 'IRT',
              ${ctx.container.clock.now()}, ${ctx.container.clock.now()})`,
       ),
@@ -692,7 +694,10 @@ describe('panel capacity and sales eligibility', () => {
     const c = await activeProduct(panelA);
     const inOrder = [a, b, c]
       .slice()
-      .sort((left, right) => (left.createdAt.getTime() - right.createdAt.getTime()) || left.id.localeCompare(right.id))
+      .sort(
+        (left, right) =>
+          left.createdAt.getTime() - right.createdAt.getTime() || left.id.localeCompare(right.id),
+      )
       .map((item) => item.id);
 
     const first = await ctx.container.products.browse(tenantA, systemActor(key()), 2);

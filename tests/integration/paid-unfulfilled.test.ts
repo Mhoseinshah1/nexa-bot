@@ -809,7 +809,11 @@ describe('an order paid for and not fulfilled', () => {
     username: string,
     roleId: string,
     telegramUserId: string | null,
-  ): Promise<{ readonly actor: ActorContext; readonly username: string; readonly password: string }> => {
+  ): Promise<{
+    readonly actor: ActorContext;
+    readonly username: string;
+    readonly password: string;
+  }> => {
     const admin = await createAdmin(ctx.container, scope, { username, telegramUserId });
     await ctx.container.database.db.execute(sql`
       INSERT INTO admin_roles (tenant_id, admin_id, role_id)

@@ -125,7 +125,9 @@ describe('the customer catalogue', () => {
   };
 
   const catalogueIds = async (scope: typeof tenantA, limit = 50) =>
-    (await repository.listCatalog(scope, limit, await eligiblePanels(scope))).items.map((p) => p.id);
+    (await repository.listCatalog(scope, limit, await eligiblePanels(scope))).items.map(
+      (p) => p.id,
+    );
 
   // -------------------------------------------------------------------------
   // The two predicates, and where they disagree
