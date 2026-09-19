@@ -1778,6 +1778,18 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         return order?.line.specification ?? null;
       },
     },
+    /*
+     * The order READ and the confirmed payment READ, both narrowed.
+     *
+     * The provisioner asks two questions when a paid operation definitively fails —
+     * what was bought, and what was paid for it — and answers them by giving the
+     * money back through the same collaborator settlement uses. It must not be able
+     * to settle an order or confirm a payment: nothing a panel says is evidence that
+     * money arrived.
+     */
+    orders: orderRepository,
+    payments: paymentRepository,
+    undeliverable: undeliverableOrders,
     panels: panelRepository,
     credentials: panelCredentials,
     adapters: providerServiceAdapter,

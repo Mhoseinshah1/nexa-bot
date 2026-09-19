@@ -352,4 +352,29 @@ export interface PaymentRepository {
     now: Date,
     tx: unknown,
   ): Promise<readonly PaymentId[]>;
+
+  /**
+   * The CONFIRMED payment that settled one order, or null.
+   *
+   * For the lane that discovers, after the fact, that a paid order cannot be
+   * delivered: it holds the operation and the service and has to find the money.
+   * `settlementIsFunded` is what makes at most one exist — an order reaches a settled
+   * state only through a confirmed payment, and `confirmAndSettle` is the one place
+   * that happens.
+   *
+   * Null is a broken invariant rather than an ordinary case, and the caller treats it
+   * as one: it declines to refund and leaves the operator's condition open, because
+   * an order that says it was paid and has no payment is not a thing to move money
+   * on. It is deliberately NOT an exception here — a read that threw would make the
+   * absence of a row a 500 on every path that consults it.
+   *
+   * Newest first and one row, for the same reason `listForPayment` orders at all: a
+   * rejected-then-reconfirmed history is possible, and the answer wanted is the
+   * confirmation that is standing now.
+   */
+  findConfirmedForOrder(
+    scope: TenantContext,
+    orderId: OrderId,
+    tx: unknown,
+  ): Promise<PaymentRecord | null>;
 }
