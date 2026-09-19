@@ -186,8 +186,7 @@ import { I18nTemplateCatalogue } from './modules/control/templates/infrastructur
 import { TemplateManagementService } from './modules/control/templates/application/template-management.service.js';
 import { DrizzleNotificationRepository } from './modules/control/notifications/infrastructure/drizzle-notification.repository.js';
 import { NotificationService } from './modules/control/notifications/application/notification.service.js';
-import { UnfulfilledOrderReporter } from './modules/commerce/orders/application/unfulfilled-order-reporter.js';
-import { OrderFulfilmentService } from './modules/commerce/orders/application/order-fulfilment.service.js';
+import { UndeliverableOrderRefunder } from './modules/commerce/orders/application/undeliverable-order-refunder.js';
 import { NotificationDispatcher } from './modules/control/notifications/application/notification-dispatcher.js';
 import { NotifyingOperationalEventRecorder } from './modules/control/notifications/application/operational-event-projector.js';
 import { TelegramNotificationTransport } from './modules/control/notifications/infrastructure/telegram-transport.js';
@@ -370,8 +369,6 @@ export interface Container {
   readonly receipts: ReceiptService;
   readonly receiptFiles: TelegramReceiptFiles;
   readonly orders: OrderService;
-  /** Retry or reassign an order that was paid for and could not be fulfilled. */
-  readonly orderFulfilment: OrderFulfilmentService;
   readonly botRuntime: BotRuntime;
 
   // Control plane — Phase 2
@@ -1167,44 +1164,60 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * came to survive that transaction rolling back.
    */
   const notificationsRef: { current: NotificationService | null } = { current: null };
-  const unfulfilledOrders = new UnfulfilledOrderReporter({
-    opsLog,
-    notifications: {
-      queue: async (scope, input, tx) => {
-        const lane = notificationsRef.current;
-        /* istanbul ignore next -- filled below, before any request is served. */
-        if (lane === null) throw new Error('the notification lane is not wired yet');
-        return lane.queue(scope, input, tx);
-      },
-    },
-    recipients: telegramAdmins,
-  });
 
-  /**
-   * The operator's way out of a stranded order: deliver it late, here or elsewhere.
-   *
-   * Constructed beside the reporter because they are two halves of one story — the
-   * reporter opens the condition and this closes it — and a future reader looking for
-   * "what happens to a PAID_UNFULFILLED order" finds both in one place.
-   */
-  const orderFulfilment = new OrderFulfilmentService({
-    repository: orderRepository,
-    provisioning: provisioningService,
-    panels: panelRepository,
-    unfulfilled: unfulfilledOrders,
+  const refundService = new RefundService({
+    repository: new DrizzleRefundRepository(database.db),
+    /*
+     * The payment READ only, narrowed by `RefundServiceDeps`.
+     *
+     * A refund is bounded by what a payment says was paid, and a module that could also
+     * write a payment could move that bound — so the one thing this module must not
+     * reach is the write half of the repository it derives its limit from.
+     */
+    payments: paymentRepository,
+    /*
+     * The ledger, `append` and `lockCustomer` only. No balance read: a customer who has
+     * already spent a refunded payment is still owed the refund, so nothing here may
+     * consult what the wallet currently holds.
+     */
+    wallet: walletRepository,
     guard,
     uow,
     audit,
-    opsLog,
+    opsLog: opsLogWriter,
     sessions,
     idempotency,
     scopeActivity: tenants,
+    clock,
+    ids,
+  });
+
+  /**
+   * The order's second terminal outcome, wired once and used by both lanes.
+   *
+   * After `refundService`, because it calls the one credit path rather than writing
+   * a ledger entry of its own, and before `paymentService`, because settlement is
+   * the first of the two lanes that reaches it. The provisioner is the second.
+   */
+  const undeliverableOrders = new UndeliverableOrderRefunder({
+    /*
+     * The order READ and the one edge, narrowed by the dependency's own type, so the
+     * lane that gives money back cannot become a second place orders are managed
+     * from.
+     */
+    orders: orderRepository,
+    // `refundUndeliverable` alone: the money, and nothing about the order.
+    refunds: refundService,
+    // `release` alone. A refunded order holds no capacity.
+    panelSales: panelSalesGate,
+    notifier: customerNotifier,
+    opsLog,
     outbox,
     clock,
   });
 
   const paymentService = new PaymentService({
-    unfulfilled: unfulfilledOrders,
+    undeliverable: undeliverableOrders,
     repository: paymentRepository,
     /*
      * The two READ methods only. This module consults a route and cannot configure one
@@ -1259,40 +1272,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
     operationId: (key) => operationIdFor('payment', key),
-  });
-
-  const refundService = new RefundService({
-    repository: new DrizzleRefundRepository(database.db),
-    /*
-     * The payment READ only, narrowed by `RefundServiceDeps`.
-     *
-     * A refund is bounded by what a payment says was paid, and a module that could also
-     * write a payment could move that bound — so the one thing this module must not
-     * reach is the write half of the repository it derives its limit from.
-     */
-    payments: paymentRepository,
-    /*
-     * The ledger, `append` and `lockCustomer` only. No balance read: a customer who has
-     * already spent a refunded payment is still owed the refund, so nothing here may
-     * consult what the wallet currently holds.
-     */
-    wallet: walletRepository,
-    /*
-     * The order write, narrowed to the one edge a refund drives: a completed refund
-     * closes a `PAID_UNFULFILLED` order, so the money cannot go back AND the service
-     * still be created. Codex C4-N1.
-     */
-    orders: orderRepository,
-    unfulfilled: unfulfilledOrders,
-    guard,
-    uow,
-    audit,
-    opsLog: opsLogWriter,
-    sessions,
-    idempotency,
-    scopeActivity: tenants,
-    clock,
-    ids,
   });
 
   /*
@@ -2401,7 +2380,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     provisionerLoop,
     delivery: deliveryService,
     orders: orderService,
-    orderFulfilment,
     botRuntime: new BotRuntime({
       /*
        * The main menu's routing table, built HERE because this is the only layer

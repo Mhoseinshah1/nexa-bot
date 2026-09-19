@@ -209,9 +209,6 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.receipt_awaiting':
     'رسید تازه‌ای برای بررسی ثبت شد.\nکد پیگیری: {reference}\nمبلغ: {total}\nاز بخش «رسید های تایید نشده» در پنل مدیریت آن را بررسی کنید.',
 
-  'bot.admin.order_unfulfilled':
-    'سفارشی پرداخت شد اما روی پنل قابل تحویل نبود.\nشناسه سفارش: {reference}\nمبلغ: {total}\nعلت: {reason}\nاز بخش سفارش‌ها آن را دوباره تلاش کنید، به پنل دیگری منتقل کنید یا مبلغ را بازگردانید.',
-
   'bot.wallet.balance': 'موجودی کیف پول شما: {balance}',
   'bot.wallet.insufficient': 'موجودی کیف پول کافی نیست. کمبود: {shortfall}',
   'bot.wallet.topup_button': '➕ شارژ کیف پول',

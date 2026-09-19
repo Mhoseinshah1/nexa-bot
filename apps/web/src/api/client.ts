@@ -712,30 +712,6 @@ export function fetchOrder(id: string): Promise<OrderResponse> {
   return authedGet(ORDER_ROUTES.detail(id), orderResponseSchema);
 }
 
-/**
- * Retry the fulfilment of a paid order, optionally on a DIFFERENT panel.
- *
- * The orders surface's only write, and it asserts nothing about money: the payment is
- * already CONFIRMED and it is the SERVICE that could not be created. `panelId` is left
- * out entirely rather than sent as null when the operator did not choose one, because
- * the server reads its presence as "reassign" and a null would be a panel id it cannot
- * find.
- */
-export function fulfilOrder(input: {
-  id: string;
-  idempotencyKey: string;
-  panelId?: string;
-}): Promise<OrderResponse> {
-  return post(
-    ORDER_ROUTES.fulfil(input.id),
-    {
-      idempotencyKey: input.idempotencyKey,
-      ...(input.panelId === undefined ? {} : { panelId: input.panelId }),
-    },
-    orderResponseSchema,
-  );
-}
-
 /*
  * Wallet and payments (Phase 4C).
  *

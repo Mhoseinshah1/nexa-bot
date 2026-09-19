@@ -622,12 +622,6 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
            * to ask.
            */
           mayViewPayments={may('payments.view')}
-          /*
-           * `orders.fulfil` is its OWN permission and is decided here, like payments
-           * above: an operator may read every order and not be the person who may
-           * retry a stranded one. The card renders either way and says which it is.
-           */
-          mayFulfil={may('orders.fulfil')}
         />
       ),
       crumbs: [nav('orders'), { label: t('web.order_detail') }],

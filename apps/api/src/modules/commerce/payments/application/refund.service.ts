@@ -1,6 +1,7 @@
 import {
+  AUTOMATIC_REFUND_CHANNEL,
+  AUTOMATIC_REFUND_REASON,
   COMMERCE_ERROR_CODES,
-  ORDER_MACHINE,
   REFUND_METHOD_SUPPORT,
   errors,
   money,
@@ -16,14 +17,12 @@ import {
   type IdempotencyStore,
   type Money,
   type OperationalEventRecorder,
-  type OrderId,
   type PaymentId,
   type PermissionKey,
   type RefundChannel,
   type RefundId,
   type TenantContext,
   type UnitOfWork,
-  nextState,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import {
@@ -36,8 +35,6 @@ import type { SessionRepository } from '../../../platform/identity/application/p
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { WalletRepository } from '../../wallet/application/ports.js';
-import type { OrderRepository } from '../../orders/application/ports.js';
-import type { UnfulfilledOrderReporter } from '../../orders/application/unfulfilled-order-reporter.js';
 import type { PaymentRecord, PaymentRepository } from './ports.js';
 import type { RefundRecord, RefundRepository } from './refund-ports.js';
 
@@ -82,16 +79,6 @@ export interface RefundServiceDeps {
    * anything: a refund is bounded by the PAYMENT, never by what the wallet holds.
    */
   readonly wallet: Pick<WalletRepository, 'append' | 'lockCustomer'>;
-  /**
-   * The order WRITE, narrowed to the one edge a refund drives.
-   *
-   * A refund that completes against a `PAID_UNFULFILLED` order must close it — see
-   * `closeUnfulfilledOrder`. Narrowed to `findById` and `transition` so this module
-   * cannot grow into a second place orders are managed from.
-   */
-  readonly orders: Pick<OrderRepository, 'findById' | 'transition'>;
-  /** To close the condition the settlement opened, when the money goes back instead. */
-  readonly unfulfilled: UnfulfilledOrderReporter;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly audit: AuditWriter;
@@ -332,7 +319,6 @@ export class RefundService {
 
         if (immediate) {
           await this.creditWallet(scope, created, actor, now, tx);
-          await this.closeUnfulfilledOrder(scope, actor, created, now, tx);
         }
 
         await this.deps.audit.record(
@@ -437,8 +423,6 @@ export class RefundService {
             { reason: 'STATE_RACE' },
           );
         }
-
-        await this.closeUnfulfilledOrder(scope, actor, after, now, tx);
 
         await this.deps.audit.record(
           scope,
@@ -593,74 +577,123 @@ export class RefundService {
   }
 
   /**
-   * The money went back, so the order stops waiting to be fulfilled.
+   * The whole of a payment's remaining balance, back on the wallet, unattended.
    *
-   * Codex C4-N1 on PR #50. `PAID_UNFULFILLED -> REFUNDED on REFUND` was a declared
-   * edge of `ORDER_MACHINE` that NOTHING drove, so a refunded stranded order kept its
-   * state, kept its open ERROR condition, and stayed acceptable to
-   * `OrderFulfilmentService.fulfil` — which would have created the service after the
-   * customer's money had already been returned. Both losses, on one order.
+   * The money half of the product's second terminal outcome. `ORDER_MACHINE` has no
+   * state for a paid order nobody delivered, so when a settlement or a provisioner
+   * discovers it cannot deliver, the money goes back in the SAME transaction that
+   * records that. This is the one implementation of that credit: the settlement lane
+   * and the provisioner lane both call it, and neither writes a ledger entry of its
+   * own. A second credit path would be a second answer to "how much did we give
+   * back", and the whole point of a ledger is that there is one.
    *
-   * ## Why COMPLETED rather than "a refund exists"
+   * ## What makes it exactly once
    *
-   * Requesting a manual refund is a DECISION; the bank transfer has not happened, and
-   * `fail` can still undo it. An operator who finds the panel working again in that
-   * window may legitimately fulfil instead. So this runs where the refund actually
-   * becomes effective, and there are exactly two such places: the wallet channel, born
-   * `COMPLETED` because the ledger entry commits in the same transaction, and
-   * `complete`, which is a person saying the transfer left.
+   * The payment row is locked and the consumption summed AFTER the lock — the same
+   * two steps, in the same order, that bound an operator's refund. A replay finds
+   * `refundableMinor` at zero and returns `null` without writing anything, so a
+   * settlement replayed after the refund committed credits nothing a second time.
+   * The wallet's own `ON CONFLICT (tenant_id, reference) DO NOTHING` on
+   * `<refundId>:refund` is the backstop underneath that, and neither is the other's
+   * excuse: the lock is what stops two concurrent callers, the reference is what
+   * stops one caller's retry.
    *
-   * ## Why any completed refund closes it, not only a full one
+   * ## What it deliberately does NOT do
    *
-   * A `PAID_UNFULFILLED` order has no service, so there is nothing a partial refund
-   * could be partial payment FOR. Leaving such an order open to `fulfil` because only
-   * some of the money went back is the reading that costs a customer; closing it leaves
-   * the operator the ordinary remedy of refunding the rest. `settled_at` and the
-   * `unfulfilled_*` stamps all survive, so what happened stays readable.
+   * It does not touch the order, release a capacity slot or tell the customer —
+   * `UndeliverableOrderRefunder` does those, and calls this for the money. It does
+   * not check a permission either: it runs inside a caller that has already
+   * authorized, and a background lane that had to hold `refunds.issue` would be a
+   * background lane an operator could accidentally revoke the refund of.
    *
-   * Anything else — a `PAID` order, a top-up with no order at all — is left alone. A
-   * refund against a delivered service is a financial record and not a lifecycle event,
-   * and changing that is not this finding's business.
+   * ## Why it ignores `REFUND_METHOD_SUPPORT`
+   *
+   * `AUTOMATIC_REFUND_CHANNEL` states the reason in the contract: a bank transfer
+   * cannot be reversed from inside a transaction and a gateway reversal has no
+   * adapter, so the wallet is the only channel that can honour this promise with
+   * nobody present. `GATEWAY` is `supported: false` there and refundable here, and
+   * that is not an inconsistency — the table answers what an OPERATOR'S refund of a
+   * method does, and an operator picking a wallet credit for a card payment is the
+   * thing it exists to refuse.
    */
-  private async closeUnfulfilledOrder(
+  async refundUndeliverable(
     scope: TenantContext,
     actor: ActorContext,
-    refund: RefundRecord,
-    now: Date,
+    input: {
+      readonly payment: PaymentRecord;
+      readonly now: Date;
+    },
     tx: TransactionScope,
-  ): Promise<void> {
-    if (refund.state !== 'COMPLETED' || refund.orderId === null) return;
-
-    const orderId = refund.orderId as OrderId;
-    const order = await this.deps.orders.findById(scope, orderId, tx);
-    if (order === null || order.state !== 'PAID_UNFULFILLED') return;
-
-    const to = nextState(ORDER_MACHINE, 'PAID_UNFULFILLED', 'REFUND');
-    if (to === null) {
-      throw new Error('ORDER_MACHINE no longer allows REFUND from PAID_UNFULFILLED.');
+  ): Promise<RefundRecord | null> {
+    const payment = input.payment;
+    if (!(await this.deps.repository.lockPayment(scope, payment.id, tx))) {
+      throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
     }
-    /*
-     * Conditional on the state we read, like every other transition in this codebase:
-     * a `fulfil` that committed between the read and this UPDATE wins, and this one
-     * writes nothing rather than dragging a fulfilled order into REFUNDED.
-     */
-    const moved = await this.deps.orders.transition(
-      scope,
-      orderId,
-      'PAID_UNFULFILLED',
-      to,
-      { refundedAt: now },
-      now,
-      tx,
-    );
-    if (!moved) return;
 
-    await this.deps.unfulfilled.resolve(
+    const consumption = await this.deps.repository.consumptionFor(scope, payment.id, tx);
+    if (consumption.currency !== null && consumption.currency !== payment.amount.currency) {
+      /*
+       * The same fail-closed the operator path takes, and for the same reason:
+       * summing across denominations is the implicit conversion at a rate nobody
+       * chose that `FBR-010` refuses. Throwing rolls the settlement back, which is
+       * right — a transaction that cannot work out what it owes must not commit a
+       * state change claiming it paid it.
+       */
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.REFUND_NOT_PERMITTED,
+        'This payment has refunds in another currency.',
+        { reason: 'CURRENCY_MISMATCH' },
+      );
+    }
+
+    const outstanding = refundableMinor(payment.amount.amountMinor, consumption.consumedMinor);
+    if (outstanding <= 0n) return null;
+
+    const created = await this.deps.repository.create(
       scope,
-      { id: orderId, correlationId: actor.correlationId },
-      `refunded (${refund.id})`,
+      {
+        id: this.deps.ids.uuid() as RefundId,
+        paymentId: payment.id,
+        customerId: payment.customerId,
+        orderId: payment.orderId,
+        // Born COMPLETED because the ledger entry commits in this same transaction.
+        // The ledger IS the wallet, so there is no later moment at which it arrives.
+        state: 'COMPLETED',
+        channel: AUTOMATIC_REFUND_CHANNEL,
+        amount: money(outstanding, payment.amount.currency),
+        reason: AUTOMATIC_REFUND_REASON,
+        /*
+         * Null on both, whoever the actor is, and that is the record being truthful.
+         * Nobody decided this refund: an operator confirming a transfer set a
+         * settlement in motion, and the settlement discovered it could not deliver.
+         * Naming them as the requester would put their id on a decision they did not
+         * take, which is what `refunds.requested_by_admin_id` exists to say.
+         */
+        requestedByAdminId: null,
+        completedByAdminId: null,
+        completedAt: input.now,
+        now: input.now,
+      },
       tx,
     );
+
+    await this.creditWallet(scope, created, actor, input.now, tx);
+
+    await this.deps.audit.record(
+      scope,
+      actor,
+      {
+        action: 'refund.automatic',
+        entityType: 'Refund',
+        entityId: created.id,
+        before: null,
+        after: auditView(created),
+        result: 'SUCCESS',
+      },
+      tx,
+    );
+
+    return created;
   }
 
   /**

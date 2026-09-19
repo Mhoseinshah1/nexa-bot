@@ -58,7 +58,7 @@ import type { ScopeActivityReader } from '../../../platform/system/application/r
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { OrderRecord, OrderRepository } from '../../orders/application/ports.js';
-import type { UnfulfilledOrderReporter } from '../../orders/application/unfulfilled-order-reporter.js';
+import type { UndeliverableOrderRefunder } from '../../orders/application/undeliverable-order-refunder.js';
 import type { CustomerRepository } from '../../customers/application/ports.js';
 import type { WalletRepository } from '../../wallet/application/ports.js';
 import { canCover, shortfallMinor } from '../../wallet/domain/balance.js';
@@ -203,13 +203,14 @@ export interface PaymentServiceDeps {
    */
   readonly notifier: CustomerNotifier;
   /**
-   * Says that this installation took money it could not deliver for — and, later,
-   * that the debt is settled.
+   * Gives the money back when this installation cannot deliver what was bought.
    *
-   * One collaborator rather than three deps, because the condition, the notification
-   * and their symmetry belong together: see `UnfulfilledOrderReporter`.
+   * One collaborator rather than five calls, because the state change, the ledger
+   * entry, the released slot, the event and the customer's message all have to
+   * happen together and there are two lanes that need them: see
+   * `UndeliverableOrderRefunder`.
    */
-  readonly unfulfilled: UnfulfilledOrderReporter;
+  readonly undeliverable: UndeliverableOrderRefunder;
   readonly opsLog: OperationalEventRecorder;
   readonly sessions: SessionRepository;
   readonly idempotency: IdempotencyStore;
@@ -1466,15 +1467,15 @@ export class PaymentService {
    *
    * A thin adapter over `ProvisioningService.prepareCommercialAction` that finds the
    * invoice line first. The missing line stays a THROW under both dispositions — it
-   * means `service_commercial_actions_order_key` is broken, which no operator retry
-   * fixes, and stranding an order whose purchase nothing describes would record money
-   * against work nobody can name.
+   * means `service_commercial_actions_order_key` is broken, which no retry fixes, and
+   * refunding an order whose purchase nothing describes would move money on the
+   * strength of a row that should have been impossible.
    */
   private async prepareCommercialSettlement(
     scope: TenantContext,
     order: OrderRecord,
     tx: TransactionScope,
-    onIneligible: 'REFUSE' | 'STRAND',
+    onIneligible: 'REFUSE' | 'REFUND',
   ): Promise<
     | { readonly outcome: 'FULFILLABLE' }
     | { readonly outcome: 'UNFULFILLABLE'; readonly reason: string }
@@ -2575,12 +2576,16 @@ export class PaymentService {
      *
      * `WALLET_DEBIT` is written in this transaction and dies with it, so a refusal
      * costs the customer nothing and keeps the stricter rule: an installation that
-     * cannot deliver does not take the money. `OPERATOR_REVIEW` is a bank transfer that
-     * arrived days ago — throwing cannot un-receive it, and the refusal it used to
-     * produce left the payment PENDING, which is neither confirmable nor refundable.
-     * Codex C4 on PR #50.
+     * cannot deliver does not take the money in the first place. Refunding a debit
+     * this transaction is about to roll back would be a credit for money that never
+     * left, so the wallet lane refuses and never refunds.
+     *
+     * `OPERATOR_REVIEW` is a bank transfer that arrived days ago — throwing cannot
+     * un-receive it, and the refusal it used to produce left the payment PENDING,
+     * which is neither confirmable nor refundable (Codex C4 on PR #50). So the
+     * transfer is confirmed and the money goes straight back to the wallet.
      */
-    const onIneligible = confirmation.evidenceKind === 'WALLET_DEBIT' ? 'REFUSE' : 'STRAND';
+    const onIneligible = confirmation.evidenceKind === 'WALLET_DEBIT' ? 'REFUSE' : 'REFUND';
     /*
      * BOTH branches ask, and that is Codex M1.
      *
@@ -2597,38 +2602,36 @@ export class PaymentService {
       ? await this.deps.provisioning.prepareFulfilment(scope, order, tx, onIneligible)
       : await this.prepareCommercialSettlement(scope, order, tx, onIneligible);
 
-    const settling = fulfilment.outcome === 'FULFILLABLE' ? 'SETTLE' : 'SETTLE_UNFULFILLED';
-    const to = nextState(ORDER_MACHINE, 'AWAITING_PAYMENT', settling);
-    if (to === null) {
-      throw new Error(`ORDER_MACHINE no longer allows ${settling} from AWAITING_PAYMENT.`);
-    }
-
-    const changed = await this.deps.orders.transition(
-      scope,
-      order.id,
-      'AWAITING_PAYMENT',
-      to,
-      {
-        settledAt: now,
-        /*
-         * Both stamps, because `orders_unfulfilled_*_check` require them of a row in
-         * `PAID_UNFULFILLED` — the same reason `settledAt` travels with `SETTLE`.
-         */
-        ...(fulfilment.outcome === 'UNFULFILLABLE'
-          ? { unfulfilledAt: now, unfulfilledReason: fulfilment.reason }
-          : {}),
-      },
-      now,
-      tx,
-    );
+    const undeliverable = fulfilment.outcome === 'UNFULFILLABLE';
+    /*
+     * The order moving out of `AWAITING_PAYMENT`, to one of the two places it can go.
+     *
+     * Both edges are conditional on `AWAITING_PAYMENT`, and the failure of either
+     * means the same thing: somebody moved the order between the read and this
+     * UPDATE. A confirmed payment against an order that is no longer awaiting one is
+     * exactly what `settlementIsFunded` exists to refuse, so it rolls back with the
+     * refusal the guard would have given had it seen the newer row.
+     *
+     * `REFUND` reaches `REFUNDED` WITHOUT passing through `PAID`, which `ORDER_MACHINE`
+     * states the reason for: `PAID` is the state the provisioner claims work from, and
+     * an order that momentarily wore it would be one a provisioner could pick up while
+     * this transaction is in the middle of giving the money back.
+     */
+    const changed = undeliverable
+      ? await this.deps.undeliverable.refund(
+          scope,
+          actor,
+          {
+            order,
+            from: 'AWAITING_PAYMENT',
+            payment: confirmed,
+            reason: fulfilment.reason,
+            now,
+          },
+          tx,
+        )
+      : await this.settleOrder(scope, order.id, now, tx);
     if (!changed) {
-      /*
-       * The order moved out of `AWAITING_PAYMENT` between the read and this UPDATE.
-       *
-       * A confirmed payment against an order that is no longer awaiting one is exactly
-       * what `settlementIsFunded` exists to refuse, so this rolls back with the same
-       * refusal the guard would have given had it seen the newer row.
-       */
       throw errors.conflict(
         COMMERCE_ERROR_CODES.SETTLEMENT_NOT_FUNDED,
         'That order is no longer awaiting payment.',
@@ -2677,27 +2680,13 @@ export class PaymentService {
     });
 
     /*
-     * WHICH event, decided by what actually happened.
-     *
      * `OrderSettled` is what a consumer acts on when a service is coming, so an order
-     * that has none must not emit it: the two are different facts and a flag on one
-     * event would be read by exactly the handlers that should not have run.
+     * that produced none must not emit it: the two are different facts and a flag on
+     * one event would be read by exactly the handlers that should not have run. The
+     * refunded order's own event is `OrderRefunded`, written by
+     * `UndeliverableOrderRefunder` in this same transaction.
      */
-    if (fulfilment.outcome === 'UNFULFILLABLE') {
-      await this.deps.outbox.write(tx, actor, {
-        eventType: 'OrderPaidUnfulfilled',
-        aggregateType: 'Order',
-        aggregateId: settled.id,
-        payload: {
-          customerId: settled.customerId,
-          paymentId: confirmed.id,
-          panelId: settled.line.panelId,
-          reason: fulfilment.reason,
-          totalMinor: settled.totals.total.amountMinor.toString(),
-          currency: settled.totals.currency,
-        },
-      });
-    } else {
+    if (!undeliverable) {
       await this.deps.outbox.write(tx, actor, {
         eventType: 'OrderSettled',
         aggregateType: 'Order',
@@ -2743,33 +2732,16 @@ export class PaymentService {
      * Nothing on either branch contacts a provider. Rows are written and the
      * `provisioner` role picks the work up afterwards, outside every transaction.
      */
-    if (fulfilment.outcome === 'UNFULFILLABLE') {
+    if (undeliverable) {
       /*
-       * The money is recorded and the service is OWED. No service row, no operation,
-       * and nothing provisioned onto a panel that cannot take it.
+       * Nothing. The refund already happened, above, in this same transaction — the
+       * order is `REFUNDED`, the slot is back, the ledger has the credit and the
+       * customer has been told.
        *
-       * The condition and the notification are written here, in the settling
-       * transaction, for the reason every other alert in this codebase is: a process
-       * that died between the state change and the telling would leave an order
-       * stranded with nobody told, and the condition is deduplicated per order, so
-       * nothing would ever say it again.
-       *
-       * No automatic refund. The money arrived and what to do about it — deliver it
-       * late, move it to another panel, or give it back — is a decision with an
-       * amount attached, and this transaction is not where it is taken.
+       * No service row and no operation, which is the point: there is no state in
+       * which this installation owes a service it has been paid for, so there is
+       * nothing here for a later lane to pick up.
        */
-      await this.deps.unfulfilled.strand(
-        scope,
-        {
-          id: settled.id,
-          customerId: settled.customerId,
-          panelId: settled.line.panelId,
-          total: settled.totals.total,
-          correlationId: actor.correlationId,
-        },
-        fulfilment.reason,
-        tx,
-      );
     } else if (orderPurposeTargetsExistingService(settled.purpose)) {
       const action = await this.deps.commercialActions.findByOrderId(scope, settled.id, tx);
       if (action === null) {
@@ -2816,6 +2788,37 @@ export class PaymentService {
     }
 
     return { payment: confirmed, order: settled };
+  }
+
+  /**
+   * `AWAITING_PAYMENT -> PAID`. False when somebody else moved the order first.
+   *
+   * A method rather than four lines inline, so the deliverable branch and the
+   * refunded one read as the two symmetric halves they are — one call each, both
+   * conditional on `AWAITING_PAYMENT`, both answering the same boolean. Inline, the
+   * refunded branch was five lines and the settled one twenty, and the asymmetry
+   * read as a difference in kind.
+   */
+  private async settleOrder(
+    scope: TenantContext,
+    orderId: OrderId,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean> {
+    const to = nextState(ORDER_MACHINE, 'AWAITING_PAYMENT', 'SETTLE');
+    /* istanbul ignore next -- the edge is frozen; this is the assertion that says so. */
+    if (to === null) {
+      throw new Error('ORDER_MACHINE no longer allows SETTLE from AWAITING_PAYMENT.');
+    }
+    return this.deps.orders.transition(
+      scope,
+      orderId,
+      'AWAITING_PAYMENT',
+      to,
+      { settledAt: now },
+      now,
+      tx,
+    );
   }
 
   /**

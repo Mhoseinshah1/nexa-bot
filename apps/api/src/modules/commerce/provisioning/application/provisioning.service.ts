@@ -202,11 +202,13 @@ export class ProvisioningService {
    * the only honest outcome, because an installation that cannot deliver must not keep
    * money it can still decline.
    *
-   * `STRAND` returns the refusal, and the caller records the money and owes the
-   * service. Right when the money has ALREADY MOVED: a bank transfer sitting in the
-   * account cannot be un-received by throwing, and the refusal that used to happen
-   * here left the payment `PENDING` — unconfirmable, and unrefundable, because a
-   * refund needs a confirmed payment. Codex C4 on PR #50.
+   * `REFUND` returns the refusal, and the caller confirms the payment and gives the
+   * money back. Right when the money has ALREADY MOVED: a bank transfer sitting in
+   * the account cannot be un-received by throwing, and the refusal that used to
+   * happen here left the payment `PENDING` — unconfirmable, and unrefundable,
+   * because a refund needs a confirmed payment. Codex C4 on PR #50 found that; the
+   * owner then removed the third outcome the fix had introduced, so the answer to
+   * "we cannot deliver this" is now the money, not a queue.
    *
    * A REPLAY skips the decision entirely: the customer already has their service, and
    * re-judging would refuse a transaction whose money has already moved.
@@ -215,7 +217,7 @@ export class ProvisioningService {
     scope: TenantContext,
     order: OrderRecord,
     tx: TransactionScope,
-    onIneligible: 'REFUSE' | 'STRAND',
+    onIneligible: 'REFUSE' | 'REFUND',
   ): Promise<
     | { readonly outcome: 'FULFILLABLE' }
     | { readonly outcome: 'UNFULFILLABLE'; readonly reason: string }
@@ -230,7 +232,7 @@ export class ProvisioningService {
       alreadyProvisioned,
     );
     if (eligible.eligible) return { outcome: 'FULFILLABLE' };
-    if (onIneligible === 'STRAND') {
+    if (onIneligible === 'REFUND') {
       return { outcome: 'UNFULFILLABLE', reason: eligible.reason };
     }
     throw errors.preconditionFailed(
@@ -844,11 +846,13 @@ export class ProvisioningService {
    * already arrived as a `PENDING` payment — neither confirmable nor refundable. So the
    * three checks live here, and the caller says what an ineligible answer means to it:
    * `REFUSE` keeps the old behaviour for money that has not irreversibly moved, and
-   * `STRAND` records the money and owes the work.
+   * `REFUND` confirms the payment and gives the money back.
    *
-   * The third refusal is TRANSIENT and stranding is still right for it: an operator's
-   * retry through `orders.fulfil` succeeds once the outstanding action has been
-   * applied, which is a better place to wait than a payment that cannot be confirmed.
+   * The third refusal is TRANSIENT, and refunding is still the answer. The
+   * alternative is holding a customer's money against an action that MIGHT become
+   * possible when somebody else's finishes — which is a wait with no deadline and
+   * nobody watching it. A refunded customer can buy the same renewal again a minute
+   * later, and the outstanding action is by then either applied or refunded too.
    */
   async prepareCommercialAction(
     scope: TenantContext,
@@ -857,7 +861,7 @@ export class ProvisioningService {
       readonly kind: 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME';
     },
     tx: TransactionScope,
-    onIneligible: 'REFUSE' | 'STRAND',
+    onIneligible: 'REFUSE' | 'REFUND',
   ): Promise<
     | { readonly outcome: 'FULFILLABLE' }
     | { readonly outcome: 'UNFULFILLABLE'; readonly reason: string }
@@ -867,7 +871,7 @@ export class ProvisioningService {
       message: string,
       reason: string,
     ): { readonly outcome: 'UNFULFILLABLE'; readonly reason: string } => {
-      if (onIneligible === 'STRAND') return { outcome: 'UNFULFILLABLE', reason };
+      if (onIneligible === 'REFUND') return { outcome: 'UNFULFILLABLE', reason };
       throw errors.conflict(code, message, { reason });
     };
 
