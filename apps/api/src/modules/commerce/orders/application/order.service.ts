@@ -1,4 +1,5 @@
 import {
+  orderPurposeCreatesNewService,
   COMMERCE_ERROR_CODES,
   MAX_ORDER_QUANTITY,
   ORDER_MACHINE,
@@ -27,6 +28,7 @@ import {
 } from '../../../platform/access/application/authorized-mutation.js';
 import { rememberOnce } from '../../../platform/idempotency/application/remember-once.js';
 import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
+import type { PanelSalesGate } from '../../../platform/panels/application/panel-sales-gate.js';
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
@@ -122,6 +124,16 @@ export interface OrderServiceDeps {
   readonly sessions: SessionRepository;
   readonly idempotency: IdempotencyStore;
   readonly scopeActivity: ScopeActivityReader;
+  /**
+   * Whether the panel behind the product may be sold onto, and the holder of the
+   * slot this order takes.
+   *
+   * A port into the panels module rather than a rule here. `catalog-visibility`
+   * already answers "is this product sellable in principle"; this answers "is the
+   * machine behind it able to take one more today", which is a fact about the
+   * fleet and not about the catalogue.
+   */
+  readonly panelSales: PanelSalesGate;
   readonly clock: Clock;
   readonly ids: IdGenerator;
 }
@@ -418,6 +430,88 @@ export class OrderService {
         this.assertOrderable(product);
 
         /*
+         * The panel is re-decided here, and the SLOT is taken here.
+         *
+         * This is the moment money starts: the next state is `AWAITING_PAYMENT`,
+         * and from here on a customer may pay at any time. Whatever the catalogue
+         * showed a minute ago is a snapshot — `PanelSalesGate` says why it is
+         * never trusted — so the panel is evaluated again inside this
+         * transaction, under its own row lock, and the hold is taken in the same
+         * lock.
+         *
+         * Taking the slot BEFORE the transition rather than after is what makes
+         * the last slot exclusive. Between confirmation and settlement there is no
+         * service row, so two customers reaching for the last slot would both
+         * count the same n-1 and both be sold it — and the second would discover
+         * it after paying.
+         *
+         * The hold expires with the ORDER, so an abandoned checkout frees the slot
+         * without anything having to run.
+         */
+        /*
+         * The ORDER's lock FIRST, before the panel and the reservation below.
+         *
+         * `order → panel → reservation` is the canonical order of this domain, and
+         * this is one of the two places that used to take it last. Cancellation and
+         * the expiry sweep take the order first and the reservation second; a path
+         * that took them the other way round closed a cycle, and PostgreSQL answered
+         * a customer's confirmation with `40P01` instead of an outcome. Found by the
+         * Codex review of this branch and reproduced in
+         * `tests/integration/lock-order.test.ts`.
+         *
+         * It authorizes nothing and decides nothing: the conditional UPDATE naming
+         * its `from` state is still what makes the transition exclusive. All this
+         * does is take a lock the transaction was going to take anyway, earlier.
+         */
+        await this.deps.repository.lock(scope, orderId, tx);
+
+        /*
+         * A slot is taken ONLY by an order that creates a service.
+         *
+         * `acquire` used to run for every purpose, and Codex found what that cost:
+         * a `RENEW`, `ADD_TRAFFIC` or `ADD_TIME` order took a capacity reservation
+         * that nothing ever consumed — commercial settlement creates no service and
+         * so never calls `consume` — so the hold sat there until the order's deadline,
+         * understating the panel's free capacity. Worse in the other direction: a
+         * customer whose panel was AT its cap could not renew the service they
+         * already had, because `decideEligibility` counts capacity and answered
+         * `AT_CAPACITY` for a purchase that needed no new slot at all.
+         *
+         * `orderPurposeCreatesNewService` is a positively-named exhaustive predicate
+         * for exactly this reason: the rule it replaced was a negation that read the
+         * other way round, and this line is one of the three places that misread it.
+         *
+         * ## What a commercial order is still subject to
+         *
+         * Everything that genuinely applies, and none of it is capacity.
+         * `CommercialActionService` asks `panels.operability` for the action's kind
+         * before it writes the order at all, and settlement asks the same question
+         * again — with the service's own lifecycle state and any outstanding action —
+         * inside the transaction that takes the money. Eligibility was never the
+         * right question here: `PanelSalesGate`'s own docblock says `decideEligibility`
+         * asks whether we may take money for a NEW account, and a renewal is not one.
+         */
+        if (orderPurposeCreatesNewService(before.purpose)) {
+          const eligible = await this.deps.panelSales.acquire(
+            scope,
+            before.line.panelId,
+            orderId,
+            tx,
+            before.expiresAt,
+          );
+          if (!eligible.eligible) {
+            throw errors.preconditionFailed(
+              COMMERCE_ERROR_CODES.PANEL_NOT_ELIGIBLE,
+              'This plan cannot be bought right now.',
+              // The REASON, for the operator reading the audit trail and the
+              // operations log. The customer's message says none of it — which of
+              // somebody's machines is full is not a fact a buyer is owed.
+              { reason: eligible.reason },
+            );
+          }
+        }
+
+        /*
          * The target comes from the FROZEN machine, not from a literal.
          *
          * `nextState(ORDER_MACHINE, 'DRAFT', 'CONFIRM')` is `AWAITING_PAYMENT` because
@@ -702,6 +796,21 @@ export class OrderService {
             'This order can no longer be cancelled.',
           );
         }
+
+        /*
+         * The slot goes back, in the transaction that ends the order.
+         *
+         * Unconditional, including on the second tap that found the order already
+         * `CANCELLED`: the release is idempotent, and a first attempt that
+         * cancelled the order but died before this line would otherwise leave the
+         * hold standing until its deadline. A slot given back late is a panel that
+         * refuses a sale it could have taken.
+         *
+         * Here and not in a handler on `OrderCancelled`, for the reason settlement
+         * writes its service here: one transaction, one outcome. A handler would
+         * make "a cancelled order holds no slot" depend on the handler having run.
+         */
+        await this.deps.panelSales.release(scope, orderId, tx);
 
         await this.deps.audit.record(
           scope,

@@ -1464,6 +1464,17 @@ export const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
   [COMMERCE_ERROR_CODES.PRODUCT_NOT_FOR_AUDIENCE]: 'bot.order.unavailable',
   [COMMERCE_ERROR_CODES.PRODUCT_NOT_PRICED]: 'bot.order.unavailable',
   [COMMERCE_ERROR_CODES.PRODUCT_NOT_FULFILLABLE]: 'bot.order.unavailable',
+  /*
+   * The panel is archived, disabled, confirmed down, or full — and the customer is
+   * told none of that.
+   *
+   * The same sentence as the four above, for the reason `PRODUCT_NOT_FOR_AUDIENCE`
+   * gets it: which of somebody's machines is full, or unreachable, is an operational
+   * fact about the seller's infrastructure. What the buyer needs is that this plan
+   * cannot be bought right now, which is what the template says. The REASON is in the
+   * refusal's detail, the audit row and the operations log, where an operator looks.
+   */
+  [COMMERCE_ERROR_CODES.PANEL_NOT_ELIGIBLE]: 'bot.order.unavailable',
   // An order that is gone, or that belongs to somebody else — the service answers both
   // the same way on purpose, so this does too.
   [COMMERCE_ERROR_CODES.ORDER_NOT_FOUND]: 'bot.order.unavailable',
@@ -4108,7 +4119,7 @@ export class BotRuntime {
  * its absence. It could be: no test in this repository settles a RENEW over Telegram,
  * so an unconditional follow-up stayed green until this function existed.
  *
- * `NEW_SERVICE` is the only purpose that PROVISIONS. `orderPurposeNeedsService` states
+ * `NEW_SERVICE` is the only purpose that PROVISIONS. `orderPurposeTargetsExistingService` states
  * the same rule from the other side and `COMMERCIAL_ORDER_PURPOSES` derives itself by
  * exclusion, so a purpose added without thought lands on the safe side — as one that
  * does not provision. A renewal settles and CHANGES a service that already exists;

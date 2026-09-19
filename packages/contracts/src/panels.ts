@@ -172,3 +172,97 @@ export const PANEL_HEALTH_FRESH_FOR_MS = 15 * 60 * 1000;
  */
 export const PANEL_PAGE_MAX = 200;
 export const PANEL_PAGE_DEFAULT = 50;
+
+/**
+ * How many consecutive failing probes make a panel ineligible to sell onto.
+ *
+ * Phase 6B, and the number is the whole point: ONE failed probe is not a
+ * verdict. A panel that answers a single request badly — a restart, a moment of
+ * packet loss, an upstream hiccup — is a panel that will very likely serve the
+ * next customer, and removing its products from the catalogue on that evidence
+ * turns every blip into an outage of the shop.
+ *
+ * Three is the smallest count that cannot be one bad moment. Below it the
+ * catalogue tracks noise; far above it the installation keeps taking money for
+ * something it cannot deliver, which is the failure this threshold exists to
+ * stop.
+ *
+ * It is a count and not a duration because the monitor's cadence already backs
+ * off: three consecutive failures is three DECISIONS by the probe lane, not
+ * three ticks of a clock, so a panel that is only probed rarely is not declared
+ * unhealthy faster than one that is probed often.
+ */
+export const PANEL_UNHEALTHY_AFTER_FAILURES = 3;
+
+/**
+ * The health states that make a panel unusable, as opposed to merely worrying.
+ *
+ * `DEGRADED` is deliberately ABSENT, and the definition of that state at
+ * `PANEL_HEALTH_STATES` is the reason: the credentials were accepted and the
+ * panel is up, and only the follow-up status read failed. Such a panel "may
+ * still be serving customers" and will very likely accept a create. Refusing to
+ * sell onto it would be this installation declining business over a diagnostic
+ * it could not read.
+ *
+ * `UNREACHABLE` and `AUTH_FAILED` are different in kind. One means nothing
+ * answered; the other means something answered and refused us. In both the very
+ * next provisioning call is known to fail, and taking a customer's money first
+ * is the thing 6B exists to stop.
+ */
+export const PANEL_UNUSABLE_HEALTH_STATES: readonly PanelHealthState[] = [
+  'UNREACHABLE',
+  'AUTH_FAILED',
+];
+
+/**
+ * Why a panel may not take new business right now.
+ *
+ * Separate from `PanelOperabilityRefusal`, which answers a different question,
+ * and the separation is load-bearing. Operability asks "can this OPERATION run
+ * against this panel" and is checked at the moment of the provider call;
+ * eligibility asks "may we SELL onto this panel" and is checked before a
+ * customer is charged. A panel can be eligible and inoperable — a fresh one
+ * whose credentials are missing — and it can be operable and ineligible, which
+ * is exactly the case this vocabulary adds: full, or failing every probe.
+ */
+export const PANEL_INELIGIBILITY_REASONS = [
+  /** Archived. The panel is finished and its name has been released. */
+  'ARCHIVED',
+  /** The operator said stop using this for now. Their decision, not a measurement. */
+  'DISABLED',
+  /**
+   * `PANEL_UNHEALTHY_AFTER_FAILURES` consecutive failing probes, measured
+   * recently enough to still be believed.
+   *
+   * All three qualifiers matter. Consecutive, so one blip is not a verdict.
+   * Failing rather than degraded, so a panel that is up but undiagnosable keeps
+   * selling. Recent, so a health row nobody has refreshed — a stopped monitor,
+   * a restored database — stops being evidence instead of freezing the
+   * catalogue shut. A panel nobody has ever probed is NOT this: `UNCHECKED` is
+   * the absence of evidence and a fresh installation must be able to sell.
+   */
+  'UNHEALTHY',
+  /**
+   * The panel is at its operator-set cap.
+   *
+   * Counted as live services plus reservations nobody has released yet, so two
+   * customers reaching for the last slot cannot both be sold it.
+   */
+  'AT_CAPACITY',
+] as const;
+export type PanelIneligibilityReason = (typeof PANEL_INELIGIBILITY_REASONS)[number];
+
+/**
+ * How long a capacity reservation is held before it expires on its own.
+ *
+ * A reservation is taken before the customer pays and released when they do,
+ * when they do not, or when the order is cancelled or rejected. This bound is
+ * what makes the fourth case — the one nobody tells us about — recoverable: a
+ * customer who abandons a checkout must not hold somebody else's slot for ever.
+ *
+ * Longer than the order-expiry window it shadows, deliberately. The release is
+ * driven by the order lifecycle; this is the BACKSTOP for a release that never
+ * ran, and a backstop that fires before the thing it backs up would hand the
+ * slot away while the customer was still paying.
+ */
+export const PANEL_RESERVATION_TTL_MS = 2 * 60 * 60 * 1000;

@@ -24,6 +24,11 @@ outcomes an operator or a deadline produces; 4H the customer notification lane
 Telegram bootstrap surface; 4J the final hardening pass
 (`docs/phase4j-audit.md`).
 
+**An order the installation cannot deliver is refunded, not queued.** The owner
+removed `PAID_UNFULFILLED` and everything built on it — the operator retry, the
+reassignment, `orders.fulfil` — in favour of one automatic outcome. See the four
+money rules below.
+
 **Marzban is the supported mutable provider.** 3X-UI keeps the five
 capabilities it has — of which only `CREATE_USER` mutates anything — and gains
 no new mutable scope: the owner's correction, recorded in
@@ -83,6 +88,56 @@ Four more from Phase 3C:
 - Nothing about a probe is decided in a process. The per-panel claim and the
   budget are conditional writes; **two monitor replicas are the normal case**,
   briefly, on every rolling update.
+
+Four Phase 6B rules, each naming a way to oversell or mis-sell a panel:
+
+- A capacity slot is a **RESERVATION ROW**, not a count. Between a confirmation
+  and a payment there is no service, so counting services sells the last slot
+  twice and the second customer finds out after paying. `reserve` takes the
+  panel's row lock FIRST and counts AFTERWARDS — a count issued before the wait,
+  or the subqueries of a single `INSERT ... SELECT`, see the state the loser
+  started from.
+- **Operability and eligibility are different questions** and disagree in both
+  directions. `decideOperability` asks whether one operation may run and ignores
+  health; `decideEligibility` asks whether we may take money for a new account
+  and ignores capabilities. A full panel is operable; a panel whose adapter
+  cannot suspend is sellable.
+- Eligibility is decided by **one evaluator with four callers** — catalogue,
+  confirmation, settlement, release. Catalogue filtering is a courtesy and is
+  never trusted: confirmation re-decides inside its transaction under the panel's
+  lock, and settlement re-decides again. A predicate copied into four places
+  disagrees with itself invisibly.
+- **Enabling a panel requires a connection test bound to what it is NOW.**
+  `validated_identity` is provider, address, activation and the three credential
+  timestamps — deliberately NOT `configurationFingerprint`, which carries
+  `status` and `updated_at` and would be invalidated by the act it authorises.
+  Lowering a cap below current usage is accepted and terminates nothing.
+
+Four rules about money the owner decided, and each one is a way to lose some:
+
+- An order has **two terminal outcomes and no third**: FULFILLED, or REFUNDED
+  for the exact amount to the customer's wallet, automatically, in the
+  transaction that discovers it cannot be delivered. `PAID_UNFULFILLED`, the
+  operator retry and the reassignment are gone. Never add a state, a queue or a
+  button for "paid, undelivered, somebody will decide later" — what that
+  produced was a list that only grew and a customer with neither an answer nor
+  their money.
+- There is **one credit path**, `RefundService.refundUndeliverable`, and the
+  settlement lane and the provisioner both call it. It locks the payment, sums
+  what is already committed and writes at most one ledger entry. A second writer
+  would be a second answer to "how much did we give back", and the point of a
+  ledger is that there is one.
+- A **wallet purchase is refused, never refunded**. The debit is written in the
+  settling transaction and dies with it, so crediting it back would be a credit
+  for money that never left. The asymmetry with a bank transfer is deliberate:
+  that money has already moved, so it is confirmed and then returned.
+- **UNKNOWN is never refunded.** A create whose answer was lost may have taken
+  effect, so the service goes to `UNRECONCILED` and a READ decides first.
+  Refunding an ambiguous timeout gives money back for an account the customer is
+  holding. `PURCHASED_AS` is the other half of that care: an operation carries
+  `order_id` whenever its service has one, so a failed SUSPEND names the order
+  that created the service, and only an operation matching what the order BOUGHT
+  may refund it.
 
 Four Phase 4 rules that are easy to break by accident:
 

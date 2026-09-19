@@ -115,6 +115,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    */
   'bot.order.settled': 'پرداخت با موفقیت تأیید شد و سفارش شما پرداخت‌شده است.',
   'bot.order.cancelled': 'سفارش لغو شد.',
+  'bot.order.refunded_to_wallet':
+    'این سفارش قابل تحویل نبود و مبلغ پرداختی به‌طور کامل به کیف پول شما بازگشت. موجودی را با /wallet ببینید.',
   'bot.order.cancel_button': 'لغو سفارش',
   /*
    * The two things the customer cannot take back, said before the destructive tap.

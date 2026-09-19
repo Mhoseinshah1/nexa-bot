@@ -1089,6 +1089,75 @@ describe('the panel detail', () => {
    * save carries `name`, so the other administrator's rename really is about to
    * be replaced, and the notice has to say so rather than reassure.
    */
+  /**
+   * The cap is a field of the same form and gets the same warning.
+   *
+   * It is the field where the notice matters MOST: the value decides whether
+   * the panel accepts new sales at all. `willOverwrite` checked only `name` and
+   * `baseUrl`, so an administrator who lowered a cap while a colleague had the
+   * form open was told the panel was "untouched" — and then replaced their
+   * number. Found by the Codex review of this branch.
+   */
+  it('promises an overwrite when the concurrent change is the CAP', async () => {
+    const id = panel().id as string;
+    const capped = (maxServices: number | null) =>
+      panel({
+        capacity: { maxServices, services: 0, reservations: 0, used: 0, available: maxServices },
+      });
+    const route = { url: `/panels/${id}`, body: { panel: capped(50) } as unknown };
+    const api = stubApi([route, { url: `/panels/${id}/status`, body: { panel: capped(50) } }]);
+    renderPage(<PanelDetailPage id={id} mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    // This operator types their own cap...
+    fireEvent.change(screen.getByLabelText('سقف سرویس'), { target: { value: '10' } });
+    // ...while somebody else lowers it to something different again.
+    route.body = { panel: capped(20) };
+    fireEvent.click(screen.getByRole('button', { name: 'غیرفعال‌سازی' }));
+
+    const notice = await screen.findByText(/جای دیگری تغییر کرده/);
+    expect(notice.textContent ?? '').toContain('بازنویسی می‌کند');
+
+    // And the save really does carry the cap, so the promise is not a scare:
+    // asserting the message alone would stay green for a notice about a field
+    // the request does not include.
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
+    await waitFor(() => {
+      const write = api.calls.find(
+        (call) => call.method === 'POST' && call.url.endsWith(`/panels/${id}`),
+      );
+      expect((write?.body as Record<string, unknown> | undefined)?.['maxServices']).toBe(10);
+    });
+  });
+
+  it('does not call a cap an overwrite when this operator typed the stored one', async () => {
+    /*
+     * The other side, and the reason this cannot be `!== basis` alone: two
+     * administrators reacting to the same full panel type the same lower cap.
+     * Warning the second one sends them to "load the fresh value", which resets
+     * the whole form and loses their unsaved edits to avoid a write that would
+     * have stored the identical number.
+     */
+    const id = panel().id as string;
+    const capped = (maxServices: number | null) =>
+      panel({
+        capacity: { maxServices, services: 0, reservations: 0, used: 0, available: maxServices },
+      });
+    const route = { url: `/panels/${id}`, body: { panel: capped(50) } as unknown };
+    stubApi([route, { url: `/panels/${id}/status`, body: { panel: capped(50) } }]);
+    renderPage(<PanelDetailPage id={id} mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    fireEvent.change(screen.getByLabelText('سقف سرویس'), { target: { value: '20' } });
+    route.body = { panel: capped(20) };
+    fireEvent.click(screen.getByRole('button', { name: 'غیرفعال‌سازی' }));
+
+    const notice = await screen.findByText(/جای دیگری تغییر کرده/);
+    expect(notice.textContent ?? '', 'the same number is not a replacement').not.toContain(
+      'بازنویسی می‌کند',
+    );
+  });
+
   it('promises an overwrite only when the save will actually make one', async () => {
     const id = panel().id as string;
     const route = { url: `/panels/${id}`, body: { panel: panel() } as unknown };

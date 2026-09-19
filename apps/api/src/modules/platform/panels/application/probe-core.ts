@@ -21,10 +21,12 @@ import {
 
 import type { SafeHttpClient } from '../../../../infrastructure/net/safe-http.js';
 import type { MonitorCadence } from '../domain/monitor-cadence.js';
+import { connectionIdentityOf } from './panel-eligibility.js';
 import type {
   HealthWriteOutcome,
   PanelCredentialStore,
   PanelHealthRecord,
+  PanelHealthSnapshot,
   PanelRepository,
   PanelView,
   ProbeBudget,
@@ -312,7 +314,32 @@ export async function persistProbeResult(
   // The configuration recheck above catches a panel that CHANGED during the
   // probe; this catches a probe that was simply overtaken by a newer one of the
   // same configuration, which the recheck cannot see.
-  const outcome = await deps.repository.recordHealth(tenant, panelId, health, tx);
+  const outcome = await deps.repository.recordHealth(
+    tenant,
+    panelId,
+    health,
+    /*
+     * The identity of the row read UNDER THE LOCK, not of the view the probe
+     * started from.
+     *
+     * The comparison above already established those are the same
+     * CONFIGURATION, so this could be derived from either — and deriving it
+     * from `current` is still what the rule says: what is recorded is what the
+     * panel is at the moment the answer is stored. The two digests differ in
+     * what they cover (`configurationOf` carries `status` and `updatedAt`
+     * because it exists to cancel an in-flight probe), so they are not
+     * interchangeable and neither can be dropped for the other.
+     */
+    connectionIdentityOf({
+      providerType: current.panel.providerType,
+      baseUrl: current.panel.baseUrl,
+      activation: current.panel.activation,
+      usernameSetAt: current.credentials.usernameSetAt,
+      passwordSetAt: current.credentials.passwordSetAt,
+      apiTokenSetAt: current.credentials.apiTokenSetAt,
+    }),
+    tx,
+  );
   return { view: current, outcome, previous };
 }
 
@@ -325,7 +352,7 @@ export async function persistProbeResult(
 export interface ProbePersistence {
   readonly view: PanelView;
   readonly outcome: HealthWriteOutcome;
-  readonly previous: PanelHealthRecord | null;
+  readonly previous: PanelHealthSnapshot | null;
 }
 
 /** Thrown inside the permission transaction to roll it back; never escapes this module. */

@@ -343,7 +343,7 @@ describe('orders, up to the payment boundary', () => {
      * because the id in this very test is all it takes to order one.
      */
     const product = await productIn(tenantA, 'ACTIVE', panelA, { audience: 'RESELLERS_ONLY' });
-    expect((await products.listCatalog(tenantA, 50)).items).toHaveLength(0);
+    expect((await products.listCatalog(tenantA, 50, [panelA])).items).toHaveLength(0);
 
     await expect(createDraft(tenantA, customerA, product.id, 'no-4')).rejects.toMatchObject({
       code: 'commerce.product_not_for_audience',
@@ -359,7 +359,7 @@ describe('orders, up to the payment boundary', () => {
      * `catalog.ts` says.
      */
     const product = await productIn(tenantA, 'ACTIVE', panelA, { audience: 'HIDDEN' });
-    expect((await products.listCatalog(tenantA, 50)).items).toHaveLength(0);
+    expect((await products.listCatalog(tenantA, 50, [panelA])).items).toHaveLength(0);
     const order = await createDraft(tenantA, customerA, product.id, 'hidden-ok');
     expect(order.state).toBe('DRAFT');
   });

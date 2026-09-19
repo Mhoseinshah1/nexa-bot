@@ -539,6 +539,23 @@ export const PANEL_ERROR_CODES = {
    * cannot debug.
    */
   PANEL_CAPABILITY_UNSUPPORTED: 'panel.capability_unsupported',
+  /**
+   * A panel was asked to be enabled without a connection test that vouches for
+   * what it is now.
+   *
+   * Enabling is the act that puts a panel in front of customers: the monitor
+   * begins probing it and the catalogue begins selling onto it. Doing that on
+   * an address nobody has reached, or on credentials replaced since the last
+   * green test, is how an installation comes to offer a product it cannot
+   * deliver — and the customer finds out after paying, which is the one moment
+   * at which this is expensive.
+   *
+   * A test that SUCCEEDED against a DIFFERENT configuration is the case this
+   * exists for, and it is why the check is an identity comparison rather than
+   * "has this panel ever been healthy". The remedy is always the same and the
+   * message says it: run the connection test again.
+   */
+  PANEL_NOT_VALIDATED: 'panel.not_validated',
 } as const;
 
 /**
@@ -713,6 +730,25 @@ export const COMMERCE_ERROR_CODES = {
    * an operator to two different screens.
    */
   PANEL_NOT_OPERABLE: 'commerce.panel_not_operable',
+
+  /**
+   * The panel this order was promised on may not be SOLD onto right now.
+   *
+   * A different question from `PANEL_NOT_OPERABLE`, and the two disagree in both
+   * directions. Operability asks whether one operation can run against a panel —
+   * the adapter, the capability, the activation — and deliberately ignores health.
+   * This asks whether the installation may take money for a NEW account on it, and
+   * ignores capabilities: a panel that is archived, that is confirmed unreachable,
+   * or that is full is perfectly capable of performing an operation and must not be
+   * sold.
+   *
+   * The `reason` detail carries which of the four it is
+   * (`PANEL_INELIGIBILITY_REASONS`), because the operator's next move differs for
+   * each: restore it, enable it, fix it, or raise the cap. The customer is told
+   * only that the product is unavailable — a capacity figure is an operational
+   * fact about somebody's machine and not something a buyer is owed.
+   */
+  PANEL_NOT_ELIGIBLE: 'commerce.panel_not_eligible',
 
   /**
    * The service exists, the customer owns it, and this action cannot be taken on it

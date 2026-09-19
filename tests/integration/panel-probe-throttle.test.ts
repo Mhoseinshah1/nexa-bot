@@ -91,6 +91,7 @@ describe('the panel connection-test throttle', () => {
     repository: PanelRepository = new DrizzlePanelRepository(ctx.container.database.db),
   ) =>
     new PanelService({
+      capacity: ctx.container.panelCapacity,
       repository,
       credentials: new DrizzlePanelCredentialStore(ctx.container.database.db, ctx.container.cipher),
       guard: ctx.container.guard,
@@ -178,6 +179,7 @@ describe('the panel connection-test throttle', () => {
       ...real,
       list: real.list.bind(real),
       find: real.find.bind(real),
+      findMany: real.findMany.bind(real),
       lockPanel: real.lockPanel.bind(real),
       create: real.create.bind(real),
       update: real.update.bind(real),

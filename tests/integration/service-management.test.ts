@@ -541,6 +541,29 @@ describe('a customer manages the service they bought', () => {
     expect(operation?.failureMessage).toContain('does not have');
     expect(operation?.failureKind, 'not a wire failure, so no failure kind').toBeNull();
     expect((await services.findById(tenantA, service.id))?.state).toBe('ACTIVE');
+
+    /*
+     * And nobody is given their purchase price back for failing to pause it.
+     *
+     * A terminal `FAILED` is what the refund lane acts on, and this operation carries
+     * the `order_id` of the purchase that CREATED the service — every SUSPEND, RESUME
+     * and TERMINATE does. `PURCHASED_AS` is the one thing standing between that id and
+     * a credit: it refunds only when the failed operation is the operation the order
+     * was bought AS, which for a `NEW_SERVICE` order is `PROVISION` and nothing else.
+     *
+     * Without it a customer who asks to pause a working service, on a panel that has
+     * quietly lost the account, is handed the whole price of it — while the service
+     * stays ACTIVE, as the line above asserts. That is the shape this reads for:
+     * money back, service kept.
+     */
+    const settled = (await ctx.container.database.db.execute(
+      sql`SELECT o.state, (SELECT count(*)::int FROM refunds r WHERE r.order_id = o.id) AS refunds
+            FROM orders o JOIN services s ON s.order_id = o.id
+           WHERE s.id = ${service.id}` as never,
+    )) as unknown as { rows: { state: string; refunds: number }[] };
+    expect(settled.rows, 'the purchase that made this service is untouched').toEqual([
+      { state: 'PAID', refunds: 0 },
+    ]);
   });
 
   it('treats an account the panel has already lost as a terminate that succeeded', async () => {
@@ -862,6 +885,185 @@ describe('a customer manages the service they bought', () => {
     });
     return order.id;
   }
+
+  /** Quote, confirm, then pay by BANK TRANSFER an operator reviews later. */
+  async function buyByTransfer(
+    serviceId: string,
+    kind: 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME',
+    key: string,
+    customerId: UserId = customerA,
+    /** `RENEW` prices itself from the product; the two add-ons need an offered one. */
+    addonId: string | null = null,
+  ): Promise<{ orderId: OrderId; paymentId: string }> {
+    const { order } = await ctx.container.commercialActions.draft(
+      tenantA,
+      systemActor(key),
+      customerId,
+      {
+        serviceId,
+        kind,
+        ...(addonId === null ? {} : { addonId }),
+        idempotencyKey: `xfer-${key}-quote`,
+      },
+    );
+    await ctx.container.commercialActions.confirm(tenantA, systemActor(key), customerId, {
+      orderId: order.id,
+      idempotencyKey: `xfer-${key}-confirm`,
+    });
+    const { payment } = await ctx.container.payments.requestManualTransfer(
+      tenantA,
+      systemActor(key),
+      customerId,
+      { idempotencyKey: `xfer-${key}-manual`, orderId: order.id },
+    );
+    return { orderId: order.id, paymentId: payment.id };
+  }
+
+  /*
+   * Codex N4-N1 on PR #50: a capacity slot belongs to an order that CREATES a
+   * service, and to no other.
+   *
+   * `OrderService.confirm` called `acquire` for every purpose, so a renewal took a
+   * reservation that commercial settlement never consumed — it creates no service and
+   * so never calls `consume`. Two consequences, and these cases hold both: the hold
+   * leaked until the order's deadline, understating free capacity; and a customer
+   * whose panel was AT its cap could not renew the service they already had, because
+   * `decideEligibility` counts capacity and answered `AT_CAPACITY` for a purchase that
+   * needed no new slot.
+   *
+   * The other half — a `NEW_SERVICE` order still reserving exactly once — is
+   * `panel-capacity.test.ts`'s _takes exactly one slot when an order is confirmed_,
+   * where the fixtures for it already live. Without that case these would pass
+   * against `acquire` deleted outright rather than branched.
+   */
+  const holdsFor = async (orderId: string): Promise<number> => {
+    const rows = (await ctx.container.database.db.execute(
+      sql`SELECT count(*)::int AS n FROM panel_capacity_reservations
+           WHERE order_id = ${orderId}` as never,
+    )) as unknown as { rows: { n: number }[] };
+    return rows.rows[0]?.n ?? 0;
+  };
+
+  for (const kind of ['RENEW', 'ADD_TRAFFIC', 'ADD_TIME'] as const) {
+    it(`takes no capacity slot to confirm a ${kind}, by wallet or by transfer`, async () => {
+      // `RENEW` prices itself from the product; the two add-ons need an offered one.
+      const addon =
+        kind === 'RENEW'
+          ? null
+          : await offeredAddon(
+              kind,
+              kind === 'ADD_TRAFFIC' ? { trafficBytes: 10_000_000_000n } : { durationDays: 15 },
+              `no-slot-${kind}`,
+            );
+
+      const transferService = await activeService(`no-slot-x-${kind}`);
+      const transfer = await buyByTransfer(
+        transferService.id,
+        kind,
+        `no-slot-x-${kind}`,
+        customerA,
+        addon,
+      );
+      expect(await holdsFor(transfer.orderId), 'a transfer-paid commercial order').toBe(0);
+
+      const walletService = await activeService(`no-slot-w-${kind}`);
+      await fund(`no-slot-w-${kind}`);
+      const walletOrderId = await buy(walletService.id, kind, addon, `no-slot-w-${kind}`);
+      expect(await holdsFor(walletOrderId), 'a wallet-paid commercial order').toBe(0);
+    });
+  }
+
+  it('refunds a transfer for a RENEW whose service was terminated while it waited', async () => {
+    /*
+     * Codex M1 on PR #50, under the outcome the owner chose afterwards. C4 gave a
+     * manual transfer for a NEW service somewhere to go when the panel became
+     * unusable; a commercial order skipped that question entirely, because it creates
+     * no service and consumes no slot — true, and the wrong conclusion.
+     * `planCommercialAction` has three refusals of its own, all of them can become
+     * true while the receipt sits in the review queue, and each one threw INSIDE the
+     * settling transaction: the confirmation rolled back and the bank money stayed a
+     * `PENDING` payment, neither confirmable nor refundable.
+     *
+     * The money still arrives and the payment is still CONFIRMED. What changed is
+     * where the order goes: there is no third state to hold it, so the exact amount
+     * goes back to the wallet in the same transaction.
+     */
+    const service = await activeService('renew-stranded');
+    const { orderId, paymentId } = await buyByTransfer(service.id, 'RENEW', 'renew-stranded');
+    const before = await ctx.container.wallet.balance(tenantA, owner, customerA);
+
+    // The customer's service is terminated before the operator gets to the receipt.
+    await ctx.container.database.db.execute(
+      sql`UPDATE services SET state = 'TERMINATED', terminated_at = now() WHERE id = ${service.id}`,
+    );
+
+    const { payment, order } = await ctx.container.payments.confirmManualTransfer(
+      tenantA,
+      owner,
+      paymentId,
+      { idempotencyKey: `xfer-renew-stranded-confirm-op`, note: 'کارت به کارت' },
+    );
+
+    expect(payment.state, 'the money arrived and the row says so').toBe('CONFIRMED');
+    expect(order?.state).toBe('REFUNDED');
+    const row = (await ctx.container.database.db.execute(
+      sql`SELECT settled_at, refunded_at, total_amount::text AS total
+            FROM orders WHERE id = ${orderId}` as never,
+    )) as unknown as {
+      rows: { settled_at: string | null; refunded_at: string | null; total: string }[];
+    };
+    expect(row.rows[0]?.settled_at, 'the receipt of money survives the reversal').not.toBeNull();
+    expect(row.rows[0]?.refunded_at).not.toBeNull();
+
+    const after = await ctx.container.wallet.balance(tenantA, owner, customerA);
+    expect(
+      after.amountMinor - before.amountMinor,
+      'the exact amount, and nothing else, is back',
+    ).toBe(BigInt(row.rows[0]?.total as string));
+    // And nothing was planned against a service that cannot take it.
+    expect(await operationOf(service.id, 'RENEW')).toBeUndefined();
+  });
+
+  it('still REFUSES the same renewal paid from the wallet, because nothing left', async () => {
+    /*
+     * The asymmetry, asserted as a pair. A wallet debit is written in the settling
+     * transaction and dies with it, so refusing costs the customer nothing — and an
+     * installation that cannot deliver does not take money it can still decline.
+     */
+    const service = await activeService('renew-wallet-refused');
+    await fund('renew-wallet-refused');
+    const { order } = await ctx.container.commercialActions.draft(
+      tenantA,
+      systemActor('renew-wallet-refused'),
+      customerA,
+      { serviceId: service.id, kind: 'RENEW', idempotencyKey: 'wal-renew-quote' },
+    );
+    await ctx.container.commercialActions.confirm(
+      tenantA,
+      systemActor('renew-wallet-refused'),
+      customerA,
+      { orderId: order.id, idempotencyKey: 'wal-renew-confirm' },
+    );
+    await ctx.container.database.db.execute(
+      sql`UPDATE services SET state = 'TERMINATED', terminated_at = now() WHERE id = ${service.id}`,
+    );
+
+    await expect(
+      ctx.container.payments.settleFromWallet(
+        tenantA,
+        systemActor('renew-wallet-refused'),
+        customerA,
+        { idempotencyKey: 'wal-renew-pay', orderId: order.id },
+      ),
+    ).rejects.toMatchObject({ code: 'commerce.service_action_not_allowed' });
+
+    const row = (await ctx.container.database.db.execute(
+      sql`SELECT state FROM orders WHERE id = ${order.id}` as never,
+    )) as unknown as { rows: { state: string }[] };
+    expect(row.rows[0]?.state, 'still awaiting payment, and refundable by not paying').toBe(
+      'AWAITING_PAYMENT',
+    );
+  });
 
   it('renews a service: charged once, applied once, and the panel ends up holding it', async () => {
     const service = await activeService('renew-happy');

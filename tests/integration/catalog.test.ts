@@ -108,8 +108,26 @@ describe('the customer catalogue', () => {
     return after;
   }
 
+  /**
+   * Every panel this tenant has, which is what `listCatalog`'s new argument wants.
+   *
+   * Deliberately not `PanelSalesGate.eligiblePanelIds`. This file tests the
+   * MEMBERSHIP predicate — listed, priced, fulfillable — and `catalog.test.ts` says
+   * so at the top; eligibility is the fleet question and it is tested where the fleet
+   * is, in `panel-capacity.test.ts`. Passing the whole fleet here holds eligibility
+   * constant so a failure in this file means the membership rule moved.
+   */
+  const eligiblePanels = async (scope: typeof tenantA): Promise<string[]> => {
+    const rows = (await ctx.container.database.db.execute(
+      sql`SELECT id FROM panels WHERE tenant_id = ${scope.tenantId}` as never,
+    )) as unknown as { rows: { id: string }[] };
+    return rows.rows.map((row) => row.id);
+  };
+
   const catalogueIds = async (scope: typeof tenantA, limit = 50) =>
-    (await repository.listCatalog(scope, limit)).items.map((p) => p.id);
+    (await repository.listCatalog(scope, limit, await eligiblePanels(scope))).items.map(
+      (p) => p.id,
+    );
 
   // -------------------------------------------------------------------------
   // The two predicates, and where they disagree
@@ -264,7 +282,7 @@ describe('the customer catalogue', () => {
     for (let i = 0; i < 4; i += 1) {
       await productIn(tenantA, 'ACTIVE', { sortOrder: i, title: `plan ${String(i)}` });
     }
-    const page = await repository.listCatalog(tenantA, 2);
+    const page = await repository.listCatalog(tenantA, 2, await eligiblePanels(tenantA));
     expect(page.items).toHaveLength(2);
     /*
      * `hasMore`, not a cursor.
@@ -275,7 +293,7 @@ describe('the customer catalogue', () => {
      */
     expect(page.hasMore).toBe(true);
 
-    const whole = await repository.listCatalog(tenantA, 50);
+    const whole = await repository.listCatalog(tenantA, 50, await eligiblePanels(tenantA));
     expect(whole.items).toHaveLength(4);
     expect(whole.hasMore).toBe(false);
   });
@@ -302,7 +320,7 @@ describe('the customer catalogue', () => {
     // A product NAMES a panel. The panel's address and credentials belong to `/panels`
     // behind its own permission, and a catalogue read by a customer must not carry them.
     await productIn(tenantA, 'ACTIVE');
-    const [row] = (await repository.listCatalog(tenantA, 10)).items;
+    const [row] = (await repository.listCatalog(tenantA, 10, await eligiblePanels(tenantA))).items;
     const serialised = JSON.stringify(row, (_key, value: unknown) =>
       typeof value === 'bigint' ? value.toString() : value,
     );

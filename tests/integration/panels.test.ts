@@ -33,6 +33,7 @@ import {
   adminActorFor,
   createAdmin,
   createTestContext,
+  validatePanelConnection,
   tenantA,
   tenantB,
   testConfig,
@@ -220,6 +221,7 @@ describe('panels', () => {
       const panelId = view.panel.id;
 
       const service = new PanelService({
+        capacity: ctx.container.panelCapacity,
         repository: new DrizzlePanelRepository(ctx.container.database.db),
         credentials: new DrizzlePanelCredentialStore(
           ctx.container.database.db,
@@ -974,6 +976,88 @@ describe('panels', () => {
     ).rejects.toMatchObject({ code: 'panel.request_invalid' });
   });
 
+  // -------------------------------------------------------------------------
+  // Enabling requires a connection test that vouches for what the panel IS NOW
+  // -------------------------------------------------------------------------
+
+  describe('the enable gate', () => {
+    const disable = (panelId: string) =>
+      ctx.container.panels.setStatus(tenantA, adminActorFor(owner), panelId, {
+        status: 'DISABLED',
+        idempotencyKey: key(),
+      });
+    const enable = (panelId: string) =>
+      ctx.container.panels.setStatus(tenantA, adminActorFor(owner), panelId, {
+        status: 'ACTIVE',
+        idempotencyKey: key(),
+      });
+
+    it('refuses to enable a panel nobody has successfully tested', async () => {
+      const { view } = await create(owner, tenantA, { credentials: { password: PASSWORD } });
+      await disable(view.panel.id);
+
+      await expect(enable(view.panel.id)).rejects.toMatchObject({
+        code: 'panel.not_validated',
+      });
+    });
+
+    it('enables on the strength of a test against the panel as it is now', async () => {
+      const { view } = await create(owner, tenantA, { credentials: { password: PASSWORD } });
+      await disable(view.panel.id);
+      await validatePanelConnection(ctx.container, tenantA, view.panel.id);
+
+      await expect(enable(view.panel.id)).resolves.toMatchObject({
+        panel: { status: 'ACTIVE' },
+      });
+    });
+
+    it('stops counting a green test once the credential it used is replaced', async () => {
+      // THE case the gate exists for, and the one an identity comparison is
+      // needed to catch: test, find the password wrong, fix it, enable. The
+      // green test proves the OLD password reached the panel and nothing about
+      // the new one.
+      const { view } = await create(owner, tenantA, { credentials: { password: PASSWORD } });
+      await disable(view.panel.id);
+      await validatePanelConnection(ctx.container, tenantA, view.panel.id);
+
+      await ctx.container.panels.setCredentials(tenantA, adminActorFor(owner), view.panel.id, {
+        credentials: { password: 'a-different-password-entirely' },
+        idempotencyKey: key(),
+      });
+
+      await expect(enable(view.panel.id)).rejects.toMatchObject({
+        code: 'panel.not_validated',
+      });
+    });
+
+    it('does not demand a fresh test to re-save an already ACTIVE panel', async () => {
+      // Re-saving ACTIVE is not an enable. Without this exclusion a panel that
+      // has been serving for a month becomes un-re-confirmable, and an operator
+      // has to probe it to leave it exactly as it was.
+      const { view } = await create(owner, tenantA, { credentials: { password: PASSWORD } });
+
+      await expect(enable(view.panel.id)).resolves.toMatchObject({
+        panel: { status: 'ACTIVE' },
+      });
+    });
+
+    it('does not make an archived panel unrestorable', async () => {
+      // `testConnection` refuses an ARCHIVED panel, so gating this transition
+      // would leave an operator unable to test to satisfy the gate and unable
+      // to enable without satisfying it — the panel would be unrestorable by
+      // any sequence of requests.
+      const { view } = await create(owner, tenantA, { credentials: { password: PASSWORD } });
+      await ctx.container.panels.setStatus(tenantA, adminActorFor(owner), view.panel.id, {
+        status: 'ARCHIVED',
+        idempotencyKey: key(),
+      });
+
+      await expect(enable(view.panel.id)).resolves.toMatchObject({
+        panel: { status: 'ACTIVE' },
+      });
+    });
+  });
+
   it('restores an archived panel and keeps its credentials', async () => {
     const { view } = await create(owner, tenantA, { credentials: { password: PASSWORD } });
     const actor = adminActorFor(owner);
@@ -1056,6 +1140,61 @@ describe('panels', () => {
       (rows[0]?.activation as { subscriptionDomain?: string } | null)?.subscriptionDomain,
       'and the first activation is untouched',
     ).toBe('sub-a.example.test');
+  });
+
+  it('refuses to replay a create whose cap differs', async () => {
+    const idempotencyKey = key();
+    const base = {
+      name: 'Capped',
+      providerType: 'marzban' as const,
+      baseUrl: 'https://panel.example.test',
+      credentials: { username: USERNAME, password: PASSWORD },
+      idempotencyKey,
+    };
+    await ctx.container.panels.create(tenantA, adminActorFor(owner), {
+      ...base,
+      maxServices: 50,
+    });
+
+    /*
+     * The same key, a DIFFERENT cap. The cap decides whether the panel takes
+     * new sales at all, and the request an operator makes SECOND — after an
+     * ambiguous answer — is usually the lower, safer number. Left out of the
+     * hash, this matched the first request, was reported as a success, and left
+     * the panel selling to fifty. Found by the Codex review of this branch.
+     */
+    await expect(
+      ctx.container.panels.create(tenantA, adminActorFor(owner), { ...base, maxServices: 5 }),
+    ).rejects.toThrow();
+
+    const rows = await ctx.container.database.db.select().from(panels);
+    expect(rows, 'and no second panel was written either').toHaveLength(1);
+    expect(rows[0]?.maxServices, 'and the first cap is untouched').toBe(50);
+  });
+
+  it('refuses to replay an update whose cap differs', async () => {
+    const { view } = await create(owner, tenantA, { name: 'Cap edited' });
+    const panelId = view.panel.id;
+    const idempotencyKey = key();
+    await ctx.container.panels.update(tenantA, adminActorFor(owner), panelId, {
+      idempotencyKey,
+      maxServices: 40,
+    });
+
+    // The same key with a different cap is a different instruction, on the
+    // path an operator actually uses to STOP a panel taking new sales.
+    await expect(
+      ctx.container.panels.update(tenantA, adminActorFor(owner), panelId, {
+        idempotencyKey,
+        maxServices: 4,
+      }),
+    ).rejects.toThrow();
+
+    const [row] = await ctx.container.database.db
+      .select()
+      .from(panels)
+      .where(eq(panels.id, panelId));
+    expect(row?.maxServices).toBe(40);
   });
 
   it('replays a create whose credentials differ, because the values are not in the hash', async () => {
@@ -1213,6 +1352,7 @@ describe('panels', () => {
     };
 
     const service = new PanelService({
+      capacity: ctx.container.panelCapacity,
       repository: new DrizzlePanelRepository(ctx.container.database.db),
       credentials: counting,
       guard: ctx.container.guard,
@@ -1403,6 +1543,7 @@ describe('panels', () => {
     adapterOverrides: Partial<ProviderConnectionAdapter> = {},
   ) {
     const scripted = new PanelService({
+      capacity: ctx.container.panelCapacity,
       repository: new DrizzlePanelRepository(ctx.container.database.db),
       credentials: new DrizzlePanelCredentialStore(ctx.container.database.db, ctx.container.cipher),
       guard: ctx.container.guard,

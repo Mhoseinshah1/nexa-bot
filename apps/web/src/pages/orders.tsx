@@ -36,21 +36,27 @@ import {
 /**
  * Orders — what a customer asked to buy, and what they were quoted for it.
  *
- * This page READS. There is no cancel, no mark-paid, no refund and no settle, and the
- * absence is deliberate: each is a real operator action whose meaning depends on a
- * payment record this release does not have, and a button for one would be the legacy
- * system's silent-success pattern. `orders.controller.ts` has no route to call either,
- * so this is not the UI declining to offer something the server permits.
+ * This page READS. There is no cancel, no mark-paid, no refund, no settle and no
+ * fulfil, and the absence is deliberate: each is a real operator action whose meaning
+ * depends on a payment record, and a button for one would be the legacy system's
+ * silent-success pattern. `orders.controller.ts` has no route to call either, so this
+ * is not the UI declining to offer something the server permits.
+ *
+ * A retry-or-reassign card lived here for one release, for an order that was paid and
+ * undelivered. There is no such order any more: one that cannot be delivered is
+ * refunded to the customer's wallet in the transaction that discovers it, and
+ * `REFUNDED` is what this page shows for it. A control that retried one would be a
+ * control for a state no row can hold.
  *
  * Every `line*` field is the SNAPSHOT taken when the order was made. That is the whole
  * reason this surface can be trusted: the legacy «محصول حذف‌شده» is what a screen that
  * joins on today's product row shows for anything since renamed or deleted, and a report
  * built on it rewrites its own history every time somebody edits a plan.
  *
- * Two of the six states are unreachable in this release and the page still renders them.
- * `PAID` and `REFUNDED` need a payment; the filter offers them because an operator
- * filtering for "paid" and getting nothing has been told something true, while a filter
- * that hid the option would leave them wondering whether the product has the concept.
+ * All six states are reachable and the filter offers every one of them. `REFUNDED` is
+ * now the ordinary end of an undeliverable purchase rather than a frozen label, so an
+ * operator asking "what did we give back this week" is asking a question this page
+ * answers.
  */
 
 const STATE_LABELS: Readonly<Record<OrderState, WebKey>> = {

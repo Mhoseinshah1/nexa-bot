@@ -286,17 +286,18 @@ running from the pinned commit. The OBSERVER is
 `tests/acceptance/real-marzban-harness.ts`, on plain `fetch` with its own
 token, sharing no code with the adapter.
 
-Sixteen cases, in seven groups:
+Twenty-seven cases, in eight groups:
 
-| Group | What it establishes                                                                                     |
-| ----- | ------------------------------------------------------------------------------------------------------- |
-| A1    | A and B are created, are distinct accounts, and each subscription carries **its own** credential        |
-| A2    | A lookup finds A; an absent name is ABSENT; unlimited reads back as no limit, never as zero             |
-| A3    | Suspending A disables A, leaves B serving, does not rewrite A's allowance, and is idempotent            |
-| A4    | Resuming A re-enables A, leaves B alone, is idempotent, and an account the panel lacks is `found:false` |
-| A5    | Terminating A removes A, leaves B serving, and a replayed terminate succeeds with `wasPresent:false`    |
-| A6    | A username shaped like a path cannot reach B, through terminate or through suspend                      |
-| A7    | No outcome — success or failure — carries the password, the username or an authorization header         |
+| Group | What it establishes                                                                                                       |
+| ----- | ------------------------------------------------------------------------------------------------------------------------- |
+| A1    | A and B are created, are distinct accounts, and each subscription carries **its own** credential                          |
+| A2    | A lookup finds A; an absent name is ABSENT; unlimited reads back as no limit, never as zero                               |
+| A3    | Suspending A disables A, leaves B serving, does not rewrite A's allowance, and is idempotent                              |
+| A4    | Resuming A re-enables A, leaves B alone, is idempotent, and an account the panel lacks is `found:false`                   |
+| A5    | Terminating A removes A, leaves B serving, and a replayed terminate succeeds with `wasPresent:false`                      |
+| A6    | A username shaped like a path cannot reach B, through terminate or through suspend                                        |
+| A7    | No outcome — success or failure — carries the password, the username or an authorization header                           |
+| A8    | `applyAllowance` leaves the panel holding the TARGET — renew, add traffic and add time — and moves only the account named |
 
 ## Standing one up
 

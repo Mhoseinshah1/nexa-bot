@@ -27,6 +27,7 @@ import { rememberOnce } from '../../../platform/idempotency/application/remember
 import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
+import type { PanelSalesGate } from '../../../platform/panels/application/panel-sales-gate.js';
 import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
 import type { OperationalEventRecorder } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
@@ -71,6 +72,16 @@ export interface ProductServiceDeps {
   readonly repository: ProductRepository;
   /** Membership only — see `PanelDirectory`. Never a panel projection. */
   readonly panels: PanelDirectory;
+  /**
+   * Whether the panel behind a product can take one more service today.
+   *
+   * Used by `browse` and nowhere else in this service. The catalogue is the one
+   * place this is a UX question: an ineligible panel is hidden rather than shown
+   * and then refused, because a customer who taps a plan and is told no learns
+   * nothing and tries again. Every place it MATTERS re-decides for itself — see
+   * `PanelSalesGate`.
+   */
+  readonly panelSales: PanelSalesGate;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly audit: AuditWriter;
@@ -141,7 +152,42 @@ export class ProductService {
   ): Promise<{ readonly items: readonly ProductRecord[]; readonly hasMore: boolean }> {
     await this.deps.guard.check(scope, actor, CATALOG_BROWSE_PERMISSION);
     const bounded = Math.min(Math.max(limit, 1), PRODUCT_PAGE_MAX);
-    return this.deps.repository.listCatalog(scope, bounded);
+
+    /*
+     * The fleet filter is decided FIRST, and goes into the query.
+     *
+     * Filtering what a bounded query returned is the shape this was twice, and each
+     * time it left a number at which the catalogue silently emptied: with the bound
+     * applied first, twenty ineligible products hid an eligible twenty-first; scanning
+     * `PRODUCT_PAGE_MAX` moved that to a hundred; widening to `PRODUCT_PAGE_MAX * 5`
+     * moved it to five hundred. Any filter applied after a LIMIT can be defeated by
+     * enough ineligible rows in front of the eligible one, so the ceiling was never
+     * going to be removed by raising it. Found, and then found again twice, by the
+     * Codex review of this branch.
+     *
+     * So the eligible panels are read once — the fleet is small, operator-provisioned
+     * and bounded by nothing the catalogue controls — and handed to the repository as
+     * a WHERE clause. The LIMIT then applies to products that are already sellable,
+     * which makes the first eligible product reachable however many ineligible ones
+     * precede it.
+     *
+     * ## Where the counting happens, and where it must not
+     *
+     * `eligiblePanelIds` counts services and unexpired holds, inside `PanelSalesGate`,
+     * which is the one evaluator with four callers. The catalogue query itself still
+     * counts nothing: it is given ids. A predicate that counted services in the
+     * product query would be the second implementation of that rule and would drift
+     * from it silently.
+     *
+     * ## Still a snapshot, and still not trusted
+     *
+     * A panel can fill between this read and the customer's tap, and a product id
+     * travels in a screenshot. Confirmation re-decides under the panel's lock and
+     * settlement re-decides again; this is the courtesy filter, unchanged in status
+     * by becoming correct.
+     */
+    const eligiblePanelIds = await this.deps.panelSales.eligiblePanelIds(scope);
+    return this.deps.repository.listCatalog(scope, bounded, eligiblePanelIds);
   }
 
   /** Creates an INACTIVE product. Idempotent, audited. */

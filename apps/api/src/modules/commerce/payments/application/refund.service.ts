@@ -1,4 +1,6 @@
 import {
+  AUTOMATIC_REFUND_CHANNEL,
+  AUTOMATIC_REFUND_REASON,
   COMMERCE_ERROR_CODES,
   REFUND_METHOD_SUPPORT,
   errors,
@@ -572,6 +574,126 @@ export class RefundService {
       },
       tx,
     );
+  }
+
+  /**
+   * The whole of a payment's remaining balance, back on the wallet, unattended.
+   *
+   * The money half of the product's second terminal outcome. `ORDER_MACHINE` has no
+   * state for a paid order nobody delivered, so when a settlement or a provisioner
+   * discovers it cannot deliver, the money goes back in the SAME transaction that
+   * records that. This is the one implementation of that credit: the settlement lane
+   * and the provisioner lane both call it, and neither writes a ledger entry of its
+   * own. A second credit path would be a second answer to "how much did we give
+   * back", and the whole point of a ledger is that there is one.
+   *
+   * ## What makes it exactly once
+   *
+   * The payment row is locked and the consumption summed AFTER the lock — the same
+   * two steps, in the same order, that bound an operator's refund. A replay finds
+   * `refundableMinor` at zero and returns `null` without writing anything, so a
+   * settlement replayed after the refund committed credits nothing a second time.
+   * The wallet's own `ON CONFLICT (tenant_id, reference) DO NOTHING` on
+   * `<refundId>:refund` is the backstop underneath that, and neither is the other's
+   * excuse: the lock is what stops two concurrent callers, the reference is what
+   * stops one caller's retry.
+   *
+   * ## What it deliberately does NOT do
+   *
+   * It does not touch the order, release a capacity slot or tell the customer —
+   * `UndeliverableOrderRefunder` does those, and calls this for the money. It does
+   * not check a permission either: it runs inside a caller that has already
+   * authorized, and a background lane that had to hold `refunds.issue` would be a
+   * background lane an operator could accidentally revoke the refund of.
+   *
+   * ## Why it ignores `REFUND_METHOD_SUPPORT`
+   *
+   * `AUTOMATIC_REFUND_CHANNEL` states the reason in the contract: a bank transfer
+   * cannot be reversed from inside a transaction and a gateway reversal has no
+   * adapter, so the wallet is the only channel that can honour this promise with
+   * nobody present. `GATEWAY` is `supported: false` there and refundable here, and
+   * that is not an inconsistency — the table answers what an OPERATOR'S refund of a
+   * method does, and an operator picking a wallet credit for a card payment is the
+   * thing it exists to refuse.
+   */
+  async refundUndeliverable(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly payment: PaymentRecord;
+      readonly now: Date;
+    },
+    tx: TransactionScope,
+  ): Promise<RefundRecord | null> {
+    const payment = input.payment;
+    if (!(await this.deps.repository.lockPayment(scope, payment.id, tx))) {
+      throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
+    }
+
+    const consumption = await this.deps.repository.consumptionFor(scope, payment.id, tx);
+    if (consumption.currency !== null && consumption.currency !== payment.amount.currency) {
+      /*
+       * The same fail-closed the operator path takes, and for the same reason:
+       * summing across denominations is the implicit conversion at a rate nobody
+       * chose that `FBR-010` refuses. Throwing rolls the settlement back, which is
+       * right — a transaction that cannot work out what it owes must not commit a
+       * state change claiming it paid it.
+       */
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.REFUND_NOT_PERMITTED,
+        'This payment has refunds in another currency.',
+        { reason: 'CURRENCY_MISMATCH' },
+      );
+    }
+
+    const outstanding = refundableMinor(payment.amount.amountMinor, consumption.consumedMinor);
+    if (outstanding <= 0n) return null;
+
+    const created = await this.deps.repository.create(
+      scope,
+      {
+        id: this.deps.ids.uuid() as RefundId,
+        paymentId: payment.id,
+        customerId: payment.customerId,
+        orderId: payment.orderId,
+        // Born COMPLETED because the ledger entry commits in this same transaction.
+        // The ledger IS the wallet, so there is no later moment at which it arrives.
+        state: 'COMPLETED',
+        channel: AUTOMATIC_REFUND_CHANNEL,
+        amount: money(outstanding, payment.amount.currency),
+        reason: AUTOMATIC_REFUND_REASON,
+        /*
+         * Null on both, whoever the actor is, and that is the record being truthful.
+         * Nobody decided this refund: an operator confirming a transfer set a
+         * settlement in motion, and the settlement discovered it could not deliver.
+         * Naming them as the requester would put their id on a decision they did not
+         * take, which is what `refunds.requested_by_admin_id` exists to say.
+         */
+        requestedByAdminId: null,
+        completedByAdminId: null,
+        completedAt: input.now,
+        now: input.now,
+      },
+      tx,
+    );
+
+    await this.creditWallet(scope, created, actor, input.now, tx);
+
+    await this.deps.audit.record(
+      scope,
+      actor,
+      {
+        action: 'refund.automatic',
+        entityType: 'Refund',
+        entityId: created.id,
+        before: null,
+        after: auditView(created),
+        result: 'SUCCESS',
+      },
+      tx,
+    );
+
+    return created;
   }
 
   /**

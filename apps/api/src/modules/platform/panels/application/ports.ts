@@ -47,6 +47,8 @@ export interface PanelRecord {
    * Every reader parses it; `decideOperability` is the one that decides.
    */
   readonly activation: unknown;
+  /** The operator's cap on services this panel may carry, or null for no limit. */
+  readonly maxServices: number | null;
   readonly archivedAt: Date | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
@@ -67,6 +69,30 @@ export interface PanelHealthRecord {
   readonly statusCode: number | null;
   readonly providerVersion: string | null;
   readonly lastHealthyAt: Date | null;
+}
+
+/**
+ * A stored health row: what the probe said, plus the two facts only the STORE
+ * knows.
+ *
+ * Kept apart from `PanelHealthRecord`, which is what a probe PRODUCES, because
+ * neither of these is something a probe can produce. The streak is a property of
+ * the sequence of probes and is derived by the write itself; the identity is
+ * supplied by the caller from the row it holds the lock on. A prober asked for
+ * either would have to invent one, and `toHealthRecord` would need a
+ * previous-row argument it has no business reading.
+ */
+export interface PanelHealthSnapshot extends PanelHealthRecord {
+  /**
+   * Consecutive probes that concluded an UNUSABLE state; zero after any that
+   * did not. What `decideEligibility` applies hysteresis to.
+   */
+  readonly unusableStreak: number;
+  /**
+   * The connection identity this probe ran against, or null for a row written
+   * before the column existed. What an enable may be authorised on.
+   */
+  readonly validatedIdentity: string | null;
 }
 
 /**
@@ -102,7 +128,7 @@ export interface PanelView {
   readonly panel: PanelRecord;
   readonly credentials: PanelCredentialSummary;
   /** Null when this panel has never been probed. Absence IS the state. */
-  readonly health: PanelHealthRecord | null;
+  readonly health: PanelHealthSnapshot | null;
 }
 
 export interface CreatePanelInput {
@@ -112,6 +138,8 @@ export interface CreatePanelInput {
   readonly baseUrl: string;
   /** The per-panel provider configuration, when the create carried one. */
   readonly activation?: PanelActivation;
+  /** The cap this panel is created with. Absent means uncapped. */
+  readonly maxServices?: number | null;
   /**
    * From the `Clock` port, not the database's `now()`.
    *
@@ -130,6 +158,8 @@ export interface UpdatePanelInput {
   readonly baseUrl?: string;
   /** Absent leaves it; `null` clears it; an object replaces it. */
   readonly activation?: PanelActivation | null;
+  /** Absent leaves it; `null` removes the cap; a positive integer sets one. */
+  readonly maxServices?: number | null;
 }
 
 /**
@@ -228,6 +258,18 @@ export interface PanelRepository {
   ): Promise<{ panels: PanelView[]; nextCursor: PanelCursor | null }>;
   find(scope: TenantContext, panelId: string, tx?: TransactionScope): Promise<PanelView | null>;
   /**
+   * The same, for many panels at once. Absent ids are simply missing.
+   *
+   * Exists because the catalogue asks whether EVERY product's panel may be sold
+   * onto, and a `find` per product is one round trip per row on a page — the
+   * N+1 the panel list's own keyset index exists to avoid one query over.
+   */
+  findMany(
+    scope: TenantContext,
+    panelIds: readonly string[],
+    tx?: TransactionScope,
+  ): Promise<PanelView[]>;
+  /**
    * Takes the panel's row lock for the rest of the transaction.
    *
    * THE serialization point for everything a probe's answer depends on. A
@@ -295,6 +337,17 @@ export interface PanelRepository {
     scope: TenantContext,
     panelId: string,
     health: PanelHealthRecord,
+    /**
+     * The connection identity the probe ran against, from the row the caller
+     * holds the lock on.
+     *
+     * Written on EVERY probe, not only a successful one, because it records
+     * which configuration was tested and not whether the test passed. What an
+     * enable needs — that the test both passed and ran against what the panel
+     * is now — is two conditions, and folding them into one column would make a
+     * failed probe indistinguishable from no probe at all.
+     */
+    validatedIdentity: string,
     tx: TransactionScope,
   ): Promise<HealthWriteOutcome>;
   /** The monitor's bookkeeping for one panel, or null if it has no schedule row. */

@@ -134,6 +134,31 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
       'ON "provisioning_operations" USING btree ("tenant_id","completed_at") ' +
       "WHERE (announced_at IS NULL) AND (state = ANY (ARRAY['SUCCEEDED','ABANDONED']))",
   },
+  {
+    /*
+     * The capacity count: for ONE panel, the services that occupy a slot.
+     *
+     * Read on every catalogue browse, every order confirmation and every panel
+     * list, and the rows it wants are a small fraction of a mature
+     * installation's `services` table — a tenant has a handful of panels and
+     * years of terminated accounts. `services_tenant_state_idx` cannot serve it:
+     * it leads with the state, so counting one panel's services means walking
+     * every service of that state the tenant has and filtering by panel.
+     *
+     * PARTIAL on `state <> 'TERMINATED'`, which is how the contract DERIVES
+     * `SERVICE_CAPACITY_STATES` — so a state added to the machine is inside this
+     * index automatically, for the same reason it is inside the count.
+     * Enumerating the five would put a second opinion in an index predicate,
+     * where a disagreement shows up as an undercount rather than as an error.
+     *
+     * CONCURRENTLY, for the reason this whole file exists: `botctl update`
+     * migrates while the outgoing release is still serving, and `services` is
+     * the table every provisioning write touches.
+     */
+    name: 'services_panel_capacity_idx',
+    definition:
+      'ON "services" USING btree ("tenant_id","panel_id") ' + "WHERE (state <> 'TERMINATED'::text)",
+  },
 ];
 
 /** Index names are code constants; this refuses one that stopped being one. */

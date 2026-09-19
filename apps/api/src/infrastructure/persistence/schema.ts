@@ -56,6 +56,7 @@ import {
   SERVICE_ADDON_STATUSES,
   COMMERCIAL_ORDER_PURPOSES,
   ORDER_PURPOSES,
+  ORDER_SETTLED_STATES,
   ORDER_STATES,
   PAYMENT_GATEWAY_PROVIDERS,
   REFUND_CHANNELS,
@@ -1290,6 +1291,19 @@ export const panels = pgTable(
      * panel is in and which `PANEL_NOT_OPERABLE` names rather than guesses past.
      */
     activation: jsonb('activation'),
+    /**
+     * The most services this panel may carry, or NULL for no limit.
+     *
+     * Phase 6B, and NULL is the honest default rather than a large number: this
+     * installation does not know what any given panel can take. The number is an
+     * operator's judgement about their own machine, so the absence of one means
+     * "nobody has said", not "unlimited is proven safe".
+     *
+     * A SOFT cap. Lowering it below current usage refuses new sales and terminates
+     * nothing — a limit that could delete a customer's service because somebody
+     * mistyped a number is not a limit, it is an outage with a form field.
+     */
+    maxServices: integer('max_services'),
     /** Set when the panel is archived, so the event has a time and not just a state. */
     archivedAt: timestamptz('archived_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
@@ -1326,6 +1340,17 @@ export const panels = pgTable(
     check('panels_provider_type_check', enumCheck('provider_type', PROVIDER_TYPES)),
     /** An archived panel has a time; a live one does not. Neither state can lie. */
     check('panels_archived_at_check', sql`(status = 'ARCHIVED') = (archived_at IS NOT NULL)`),
+    /**
+     * A cap is a positive number or it is absent.
+     *
+     * Zero is the interesting case and it is refused rather than accepted as "sell
+     * nothing": an operator who wants a panel to stop taking business has
+     * `DISABLED`, which says so, stops the probes and reads as a decision. A zero
+     * cap would be a second way to spell it that nothing else in the system
+     * recognises — the health view would still say `HEALTHY`, the panel would still
+     * be probed, and the catalogue would go quiet with no state anywhere naming why.
+     */
+    check('panels_max_services_check', sql`max_services IS NULL OR max_services > 0`),
     /**
      * Redundant against the primary key, and the target of a composite
      * reference rather than a lookup path.
@@ -1459,6 +1484,43 @@ export const panelHealth = pgTable(
      * state and completely different problems.
      */
     lastHealthyAt: timestamptz('last_healthy_at'),
+    /**
+     * Consecutive probes that concluded an UNUSABLE state, reset to zero by any
+     * probe that did not.
+     *
+     * Named for what it measures rather than `consecutive_failures`, and that is
+     * deliberate: `panel_monitor_schedule` already has a column by that name whose
+     * own docblock calls it "scheduler state, not health" and which is discarded
+     * whenever the health row does not describe a failure. Two columns with one
+     * name in one module, meaning different things and reset on different rules, is
+     * how the wrong one comes to answer the question.
+     *
+     * UNUSABLE, not failing: `PANEL_UNUSABLE_HEALTH_STATES` is `UNREACHABLE` and
+     * `AUTH_FAILED` only. A `DEGRADED` probe RESETS this, because that state means
+     * the credentials were accepted and the panel is up — it is worrying, not
+     * unusable, and a panel that is up must keep selling.
+     *
+     * Written by the same conditional upsert that guards `checked_at`, so a probe
+     * whose answer arrives out of order cannot advance it.
+     */
+    unusableStreak: integer('unusable_streak').notNull().default(0),
+    /**
+     * The connection identity this probe ran against, or NULL for a row written
+     * before the column existed.
+     *
+     * What `panels.status` may be enabled on the strength of. A test that
+     * succeeded against one base URL, one activation and one set of credentials
+     * says nothing about a different one, and an operator who fixes a password
+     * after a green test must not be able to enable on the strength of the test
+     * that preceded the fix.
+     *
+     * NOT `configurationFingerprint`, which exists for a different job — cancelling
+     * an in-flight probe whose panel changed under it — and which includes `status`
+     * and `updated_at`. Both of those move when a panel is enabled, so reusing it
+     * here would invalidate every validation the moment it was acted on, and force
+     * a fresh probe on every routine re-enable after maintenance.
+     */
+    validatedIdentity: text('validated_identity'),
   },
   (table) => [
     index('panel_health_tenant_idx').on(table.tenantId),
@@ -1482,6 +1544,88 @@ export const panelHealth = pgTable(
     check(
       'panel_health_failure_presence_check',
       sql`(state IN ('HEALTHY', 'DEGRADED')) = (failure IS NULL)`,
+    ),
+  ],
+);
+
+/**
+ * A slot on a panel, held for one order while the customer decides whether to pay.
+ *
+ * Phase 6B. The alternative — counting services and comparing against the cap —
+ * is wrong in exactly one place and it is the place that matters: between a
+ * customer confirming an order and their payment settling there is no service
+ * row, so two customers reaching for the last slot both count the same n-1 and
+ * are both sold it. The row is what makes the last slot exclusive, and it exists
+ * for precisely the window in which nothing else represents that customer's
+ * claim on the panel.
+ *
+ * It is released the moment something else does represent it. Settlement writes
+ * the service inside the same transaction that deletes this row, so the slot is
+ * held continuously and counted once, never twice and never briefly by nobody.
+ * Every other exit — the payment expiring, being rejected, the order cancelled —
+ * deletes it and gives the slot back.
+ *
+ * DELETED rather than marked, and that is the design. A `RELEASED` state would
+ * make the capacity query filter on it, and a query that must exclude rows is a
+ * query one caller will forget to write that way; a row that is gone cannot be
+ * counted by accident. What the release MEANT is in the audit trail and the
+ * order's own history, which is where a reader looks for it anyway.
+ */
+export const panelCapacityReservations = pgTable(
+  'panel_capacity_reservations',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    panelId: uuid('panel_id').notNull(),
+    /**
+     * The order this slot is being held for. UNIQUE, and that is the idempotency.
+     *
+     * A confirmation replayed by a retry, a double-tapped button or a second
+     * replica collides here rather than taking a second slot from a panel that
+     * may only have one left.
+     */
+    orderId: uuid('order_id').notNull(),
+    /**
+     * When this hold stops counting, whatever else has happened.
+     *
+     * The backstop for the release that never ran — a process killed between the
+     * payment and the delete, a lane that lost its work. Without it an abandoned
+     * checkout holds somebody else's slot until an operator notices, which on a
+     * single-slot panel means the panel is full and nothing says why.
+     *
+     * The capacity query filters on this rather than a sweep deleting rows,
+     * because a sweep is a process and this must be true without one running.
+     */
+    expiresAt: timestamptz('expires_at').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    /** A child row may not name another tenant's panel. */
+    foreignKey({
+      columns: [table.tenantId, table.panelId],
+      foreignColumns: [panels.tenantId, panels.id],
+      name: 'panel_capacity_reservations_tenant_panel_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.orderId],
+      foreignColumns: [orders.tenantId, orders.id],
+      name: 'panel_capacity_reservations_order_fk',
+    }),
+    /** One slot per order. The collision IS the replay defence. */
+    uniqueIndex('panel_capacity_reservations_order_key').on(table.tenantId, table.orderId),
+    /**
+     * The counting scan: for ONE panel, the holds that have not expired.
+     *
+     * Leads with the panel because that is what capacity is asked about, and
+     * carries `expires_at` so the predicate is served by the same index rather
+     * than by a filter over every hold the panel has ever taken.
+     */
+    index('panel_capacity_reservations_panel_idx').on(
+      table.tenantId,
+      table.panelId,
+      table.expiresAt,
     ),
   ],
 );
@@ -2496,9 +2640,21 @@ export const orders = pgTable(
     check('orders_discount_bounded_check', sql`discount_amount <= subtotal_amount`),
     check('orders_quantity_check', sql`line_quantity >= 1`),
     /** Each lifecycle timestamp exists exactly when its state has been reached. */
+    /*
+     * Built from `ORDER_SETTLED_STATES`, not from a list typed out here.
+     *
+     * The contract's own predicate for "the money for this order arrived", so a
+     * reconciliation query and this constraint cannot come to disagree about which
+     * states that is — and a state added to one without the other fails the drift
+     * check rather than quietly excluding revenue from a report.
+     */
     check(
       'orders_settled_at_check',
-      sql`(state = 'PAID' OR state = 'REFUNDED') = (settled_at IS NOT NULL)`,
+      // Through `enumCheck`, which is the codebase's one `sql.raw` and the only
+      // form that reaches the generated migration as LITERALS. A `sql` template
+      // with parameters generates `state IN ($1, $2, $3)` into the DDL, which is
+      // a constraint no database will ever evaluate the way it reads.
+      sql`(${enumCheck('state', ORDER_SETTLED_STATES)}) = (settled_at IS NOT NULL)`,
     ),
     check('orders_refunded_at_check', sql`(state = 'REFUNDED') = (refunded_at IS NOT NULL)`),
     check('orders_cancelled_at_check', sql`(state = 'CANCELLED') = (cancelled_at IS NOT NULL)`),
@@ -3115,16 +3271,37 @@ export const refunds = pgTable(
       sql`external_reference IS NULL OR length(btrim(external_reference)) BETWEEN 1 AND 140`,
     ),
     /**
-     * COMPLETED means completed BY somebody AT a time — all three or none.
+     * COMPLETED means completed AT a time. Always.
      *
      * The rule `payments_confirmed_check` states for a confirmation, applied to the one
-     * transition that means money is gone. Without it a row could claim COMPLETED with
-     * no operator and no timestamp, which is precisely the "money marked returned
-     * because a refund was requested" defect this whole lifecycle exists to prevent.
+     * transition that means money is gone: a row cannot claim COMPLETED with no
+     * timestamp, which is the "money marked returned because a refund was requested"
+     * defect this whole lifecycle exists to prevent.
+     */
+    check('refunds_completed_check', sql`(state = 'COMPLETED') = (completed_at IS NOT NULL)`),
+    /**
+     * And BY somebody, when somebody asked for it.
+     *
+     * Split from the check above, because the two halves stopped being one rule.
+     * A refund an OPERATOR requested is completed by an operator, and naming them is
+     * the whole audit value — that half is unchanged and is enforced here.
+     *
+     * An AUTOMATIC refund has no operator on either side. Nobody requested it: a
+     * settlement or a provisioner discovered that what a customer paid for cannot be
+     * delivered, and the money went back in that transaction.
+     * `requested_by_admin_id IS NULL` is what identifies one, and it cannot be an
+     * operator's refund with the field forgotten — `RefundService.request` is guarded
+     * by `refunds.issue`, which `SYSTEM_JOB_PERMISSIONS` does not carry, so every
+     * operator refund has an administrator behind it by construction.
+     *
+     * Writing an admin id into an automatic refund to satisfy the old single check
+     * was the alternative, and it is the one this codebase forbids outright: a
+     * fabricated actor on a money record, attributing a decision to whoever happened
+     * to press approve on an unrelated transfer.
      */
     check(
-      'refunds_completed_check',
-      sql`(state = 'COMPLETED') = (completed_at IS NOT NULL AND completed_by_admin_id IS NOT NULL)`,
+      'refunds_operator_completion_check',
+      sql`(state = 'COMPLETED' AND requested_by_admin_id IS NOT NULL) = (completed_by_admin_id IS NOT NULL)`,
     ),
     foreignKey({
       name: 'refunds_payment_fk',
@@ -3633,10 +3810,35 @@ export const services = pgTable(
     check('services_traffic_check', sql`traffic_limit_bytes >= 0 AND traffic_used_bytes >= 0`),
     /** The format the panels accept, pinned so a bad generator fails at the write. */
     check('services_subscription_ref_check', sql`subscription_ref ~ '^[0-9a-f]{32}$'`),
-    /** A provisioned service has a time; one that never was does not. */
+    /**
+     * A provisioned service has a time; one that never was does not — and a
+     * TERMINATED one may be either.
+     *
+     * The equality without that third clause is a rule `SERVICE_MACHINE`
+     * contradicts. The machine has `PENDING_PROVISION -> TERMINATED` and
+     * `UNRECONCILED -> TERMINATED`, and `OPERATION_LEGAL_FROM.TERMINATE` names both
+     * states deliberately — "a service an operator or a customer has decided to end
+     * must be endable whatever went wrong on the way, including one stuck in
+     * `UNRECONCILED` after a lost create". Both of those states have a null
+     * `provisioned_at` by this very check, so taking either edge moved the state to
+     * one side of the equality and left the timestamp on the other, and the UPDATE
+     * raised.
+     *
+     * Nothing had taken those edges. The automatic refund is the first caller: a
+     * create that definitively failed leaves a `PENDING_PROVISION` row occupying a
+     * capacity slot, and terminating it is how the panel gets the slot back. The
+     * suite found this on the first full run, which is the argument for running it.
+     *
+     * The clause is a carve-out for TERMINATED rather than a loosening of the whole
+     * rule: for every state a service can be USED in, the equality still holds, and
+     * `services_terminated_at_check` still forces `terminated_at`. What a terminated
+     * service's null `provisioned_at` now says is true and worth saying — this one
+     * never reached a panel.
+     */
     check(
       'services_provisioned_at_check',
-      sql`(state = 'PENDING_PROVISION' OR state = 'UNRECONCILED') = (provisioned_at IS NULL)`,
+      sql`state = 'TERMINATED'
+          OR (state = 'PENDING_PROVISION' OR state = 'UNRECONCILED') = (provisioned_at IS NULL)`,
     ),
     check(
       'services_terminated_at_check',

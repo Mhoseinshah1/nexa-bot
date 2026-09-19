@@ -1,5 +1,10 @@
-import { and, eq, inArray, ne, sql, type SQL } from 'drizzle-orm';
-import { errors, PANEL_ERROR_CODES, PANEL_PAGE_DEFAULT } from '@nexa/contracts';
+import { and, eq, ne, sql, type SQL } from 'drizzle-orm';
+import {
+  errors,
+  PANEL_ERROR_CODES,
+  PANEL_PAGE_DEFAULT,
+  PANEL_UNUSABLE_HEALTH_STATES,
+} from '@nexa/contracts';
 import type {
   MonitorDeferralReason,
   PanelHealthState,
@@ -88,6 +93,23 @@ function rethrowNameConflict(error: unknown, message: string): never {
   throw error;
 }
 
+/**
+ * `panels.id` is one of these, as ONE bind parameter rather than one per id.
+ *
+ * `inArray` expands to `IN ($1, $2, ... $n)`, and one of this module's two
+ * callers passes the tenant's whole eligible FLEET — so the parameter count was
+ * the fleet size, and past PostgreSQL's 65535-parameter ceiling the statement
+ * does not slow down, it is rejected. What a customer would see is an empty
+ * shop with nothing in the response saying why.
+ *
+ * The other caller passes one page and is bounded already. It uses this too, so
+ * there is one form here rather than two: the next author who copies a line
+ * from this file copies the bounded one whichever line they take.
+ */
+function idIsOneOf(ids: readonly string[]): SQL {
+  return sql`${panels.id} = ANY(${sql.param([...ids])}::uuid[])`;
+}
+
 export class DrizzlePanelRepository implements PanelRepository {
   constructor(private readonly db: Database) {}
 
@@ -167,7 +189,7 @@ export class DrizzlePanelRepository implements PanelRepository {
         // even if a future author adds a field to the view type.
         .leftJoin(panelCredentials, eq(panelCredentials.panelId, panels.id))
         .leftJoin(panelHealth, eq(panelHealth.panelId, panels.id))
-        .where(and(eq(panels.tenantId, scope.tenantId), inArray(panels.id, [...ids])))
+        .where(and(eq(panels.tenantId, scope.tenantId), idIsOneOf([...ids])))
     );
   }
 
@@ -250,6 +272,29 @@ export class DrizzlePanelRepository implements PanelRepository {
     return row === undefined ? null : toView(row);
   }
 
+  async findMany(
+    scope: TenantContext,
+    panelIds: readonly string[],
+    tx?: TransactionScope,
+  ): Promise<PanelView[]> {
+    const unique = [...new Set(panelIds)];
+    if (unique.length === 0) return [];
+    const rows = await executorOf(this.db, tx)
+      .select({
+        panel: panels,
+        // FLAT, not a nested group. See `toView` for why.
+        usernameSetAt: panelCredentials.usernameSetAt,
+        passwordSetAt: panelCredentials.passwordSetAt,
+        apiTokenSetAt: panelCredentials.apiTokenSetAt,
+        health: panelHealth,
+      })
+      .from(panels)
+      .leftJoin(panelCredentials, eq(panelCredentials.panelId, panels.id))
+      .leftJoin(panelHealth, eq(panelHealth.panelId, panels.id))
+      .where(and(idIsOneOf(unique), eq(panels.tenantId, scope.tenantId)));
+    return rows.map(toView);
+  }
+
   async create(
     scope: TenantContext,
     input: CreatePanelInput,
@@ -267,6 +312,11 @@ export class DrizzlePanelRepository implements PanelRepository {
           baseUrl: input.baseUrl,
           status: 'ACTIVE',
           ...(input.activation === undefined ? {} : { activation: input.activation }),
+          // `null` and absent mean the same thing on a CREATE — uncapped — so
+          // this could be unconditional. Spelled the same way as `activation`
+          // so a reader does not have to work out whether the two tri-states
+          // differ here, and so an added column inherits the shape.
+          ...(input.maxServices === undefined ? {} : { maxServices: input.maxServices }),
           createdAt: input.at,
           updatedAt: input.at,
         })
@@ -293,6 +343,9 @@ export class DrizzlePanelRepository implements PanelRepository {
     if (input.baseUrl !== undefined) changes['baseUrl'] = input.baseUrl;
     // `null` is a VALUE here, not an absence: it clears the stored activation.
     if (input.activation !== undefined) changes['activation'] = input.activation;
+    // Also a VALUE: `null` removes the cap. Lowering it below current usage is
+    // allowed and terminates nothing — see `panels.max_services`.
+    if (input.maxServices !== undefined) changes['maxServices'] = input.maxServices;
 
     let row;
     try {
@@ -401,8 +454,18 @@ export class DrizzlePanelRepository implements PanelRepository {
     scope: TenantContext,
     panelId: string,
     health: PanelHealthRecord,
+    validatedIdentity: string,
     tx: TransactionScope,
   ): Promise<HealthWriteOutcome> {
+    /*
+     * Whether THIS answer is one that stops a panel selling.
+     *
+     * `PANEL_UNUSABLE_HEALTH_STATES` and not "did the probe fail": `DEGRADED`
+     * is a failure of the diagnostic read and a success of the login, so it
+     * RESETS the streak. The panel answered, the credentials were accepted, and
+     * a panel that is up must keep taking business.
+     */
+    const unusable = PANEL_UNUSABLE_HEALTH_STATES.includes(health.state);
     const columns = {
       state: health.state,
       checkedAt: health.checkedAt,
@@ -411,13 +474,52 @@ export class DrizzlePanelRepository implements PanelRepository {
       statusCode: health.statusCode,
       providerVersion: health.providerVersion,
       lastHealthyAt: health.lastHealthyAt,
+      validatedIdentity,
     };
     const written = await tx.tx
       .insert(panelHealth)
-      .values({ panelId, tenantId: scope.tenantId, ...columns })
+      .values({ panelId, tenantId: scope.tenantId, ...columns, unusableStreak: unusable ? 1 : 0 })
       .onConflictDoUpdate({
         target: panelHealth.panelId,
-        set: columns,
+        set: {
+          ...columns,
+          /*
+           * Derived from the STORED value in the same statement, never read and
+           * written by the caller.
+           *
+           * The read would be a separate statement, and between it and this one
+           * another prober could land — so two overlapping failures would both
+           * write 1 and a panel that has been down for an hour would never cross
+           * the threshold. Incrementing in place makes the count a property of
+           * what actually reached the row.
+           *
+           * It rides the same `setWhere` as everything else, so a probe whose
+           * answer arrives out of order advances nothing.
+           *
+           * ## A new connection starts a new streak
+           *
+           * Codex C4-N4 on PR #50. `validated_identity` is provider, address,
+           * activation and the three credential timestamps, so it CHANGES when an
+           * operator fixes a password or moves a panel. Without the CASE, two
+           * failures of the old configuration plus the first failure of the new one
+           * reached `PANEL_UNHEALTHY_AFTER_FAILURES` and emptied the catalogue — the
+           * hysteresis exists precisely so one failed probe does not condemn a panel,
+           * and inheriting a dead configuration's count spends it before the new one
+           * has been tried.
+           *
+           * Still ONE statement, and still derived from the stored value: on a
+           * conflict, an unqualified column in `SET` is the EXISTING row's, so this
+           * compares what is stored against what this probe validated without a
+           * second read.
+           */
+          unusableStreak: unusable
+            ? sql`CASE
+                     WHEN ${panelHealth.validatedIdentity} IS DISTINCT FROM ${validatedIdentity}
+                       THEN 1
+                     ELSE ${panelHealth.unusableStreak} + 1
+                   END`
+            : sql`0`,
+        },
         // Two conditions, and the second is the interesting one.
         //
         // The tenant predicate is belt and braces on a conflict path: the row
@@ -1092,6 +1194,7 @@ function toRecord(row: typeof panels.$inferSelect): PanelRecord {
     providerType: row.providerType as ProviderType,
     baseUrl: row.baseUrl,
     status: row.status as PanelStatus,
+    maxServices: row.maxServices,
     // Passed through unnarrowed: the shape is per provider and the application layer
     // owns the schema that decides it. See `PanelRecord.activation`.
     activation: row.activation,
@@ -1147,6 +1250,8 @@ function toView(row: Row): PanelView {
             statusCode: row.health.statusCode,
             providerVersion: row.health.providerVersion,
             lastHealthyAt: row.health.lastHealthyAt,
+            unusableStreak: row.health.unusableStreak,
+            validatedIdentity: row.health.validatedIdentity,
           },
   };
 }
