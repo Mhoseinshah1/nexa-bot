@@ -415,6 +415,72 @@ export interface PermissionOverride {
   readonly expiresAt: Date | null;
 }
 
+/**
+ * Permissions that cannot be held alone, and the permission each one needs.
+ *
+ * A key here is an ACTION whose holder must also be able to READ the thing the
+ * action is performed on. Not a convenience and not a grouping: an action
+ * permission without its read is a grant that authorises a request nobody can
+ * reach, and the surface that offers it necessarily lies about one of the two.
+ *
+ * The catalogue has made this mistake once before, in exactly this shape. The
+ * `receipt_reviewer` role held `receipts.review` and could not open a single
+ * payment, because the decision is made ON a payment and `payments.view` is what
+ * reads one — "a permission catalogue promising something the seeded role cannot
+ * do, which is the legacy defect this catalogue exists to end". That was repaired
+ * by editing one seed, which repairs exactly the installations whose roles match
+ * the seed and no others.
+ *
+ * `orders.fulfil` is the same shape and is declared rather than repaired, because
+ * a seed edit could not have fixed it. The stranded-order reporter tells everyone
+ * holding `orders.fulfil`, the order detail page is gated on `orders.view`, and
+ * the two disagree for any administrator whose permissions were not composed from
+ * a seed — a custom role, a GRANT override, or a DENY override subtracting the
+ * read from a role that has both. Only a rule applied at RESOLUTION sees all
+ * three.
+ *
+ * Adding a key here NARROWS what somebody holds; it can never widen it. That
+ * direction is the whole design (see `resolveEffectivePermissions`), and it is
+ * why this is safe to apply to permission sets that already exist. It also means
+ * adding an entry is a real behaviour change for any installation already in the
+ * incoherent state, so an entry belongs here only when holding the action without
+ * the read is genuinely unusable rather than merely unusual.
+ */
+export const PERMISSION_REQUIRES: Readonly<Record<string, PermissionKey>> = {
+  /*
+   * Retrying or reassigning a stranded order is a decision made ON that order,
+   * and the alternative to making it is a refund. The operator needs the
+   * customer, the total, the panel it was sold on and the reason it failed — the
+   * order detail, which is what `orders.view` reads. A projection exposing all
+   * of that under a second key would be the order detail under another name, and
+   * a second read model for one concept is the failure this codebase measures.
+   */
+  'orders.fulfil': 'orders.view' as PermissionKey,
+};
+
+/**
+ * Resolution: effective = (role permissions ∪ GRANT overrides) − DENY overrides,
+ * then MINUS every dependent permission whose prerequisite did not survive that.
+ *
+ * DENY always wins, anything not listed is denied, and the dependency pass only
+ * ever removes. Those three together are what make this the single place the
+ * question is answered: the request guard, the Web Admin's rendered chrome and
+ * the notification lane's recipient list all read this function's output, so a
+ * permission this drops is one no surface offers, no request accepts and no
+ * message advertises. A check added to a role editor instead would bind only the
+ * shapes that editor produced — not a DENY override, and not a row already in the
+ * table.
+ *
+ * Dropping rather than refusing is deliberate. This runs on every request; the
+ * caller is asking what an actor may do, and there is no answer to that question
+ * that is safe to express as an exception. Fail closed, and let the coherence of
+ * the GRANT be somebody's problem at the point it is written.
+ *
+ * One pass, not a fixpoint. `PERMISSION_REQUIRES` is asserted acyclic and only
+ * one level deep by a unit test, so a second pass could not remove anything the
+ * first did not — and a silent multi-level cascade is a worse thing to own than
+ * the assertion.
+ */
 export function resolveEffectivePermissions(
   rolePermissions: readonly PermissionKey[],
   overrides: readonly PermissionOverride[],
@@ -430,5 +496,33 @@ export function resolveEffectivePermissions(
   for (const override of active) {
     if (override.effect === 'DENY') effective.delete(override.permissionKey);
   }
+  for (const [dependent, prerequisite] of Object.entries(PERMISSION_REQUIRES)) {
+    if (effective.has(dependent as PermissionKey) && !effective.has(prerequisite)) {
+      effective.delete(dependent as PermissionKey);
+    }
+  }
   return effective;
+}
+
+/**
+ * The permissions in `granted` that `PERMISSION_REQUIRES` would drop, and why.
+ *
+ * Written for whoever composes a permission set — a future role editor, and the
+ * seed-coherence test that stops a seed shipping in this state. It answers the
+ * question `resolveEffectivePermissions` deliberately refuses to raise, at the
+ * point where raising it is useful: BEFORE the grant is stored, where there is
+ * still somebody to tell.
+ */
+export function incoherentPermissionGrants(
+  granted: readonly PermissionKey[],
+): readonly { readonly permission: PermissionKey; readonly requires: PermissionKey }[] {
+  const held = new Set<PermissionKey>(granted);
+  const found: { permission: PermissionKey; requires: PermissionKey }[] = [];
+  for (const [dependent, prerequisite] of Object.entries(PERMISSION_REQUIRES)) {
+    const permission = dependent as PermissionKey;
+    if (held.has(permission) && !held.has(prerequisite)) {
+      found.push({ permission, requires: prerequisite });
+    }
+  }
+  return found;
 }
