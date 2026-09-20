@@ -26,8 +26,22 @@
  * `provider_username` keeps whatever length it has; this contract binds names being
  * minted and nothing else.
  */
-ALTER TABLE "panels" RENAME COLUMN "allow_random_username" TO "allow_automatic_username";--> statement-breakpoint
+/*
+ * ADD, BACKFILL, DROP — never RENAME. `tests/integration/migration-compatibility.test.ts`
+ * forbids `RENAME COLUMN` outright, and it is right to: a rename is invisible to
+ * release N-1's code, which goes on writing the old name for as long as the rollback
+ * window lasts. The first draft of this file renamed, and the reasoning behind it
+ * checked the wrong thing — that no released installation holds DATA in the column,
+ * rather than that no released CODE writes to it.
+ *
+ * The drop below is permitted by that same test's batch-scoped exemption:
+ * `allow_random_username` was added by 0088, after the compatibility boundary, so no
+ * released code has ever known it. The end state is identical to the rename's.
+ */
+ALTER TABLE "panels" ADD COLUMN "allow_automatic_username" boolean DEFAULT true NOT NULL;--> statement-breakpoint
+UPDATE "panels" SET "allow_automatic_username" = "allow_random_username";--> statement-breakpoint
 ALTER TABLE "panels" DROP CONSTRAINT "panels_username_policy_check";--> statement-breakpoint
+ALTER TABLE "panels" DROP COLUMN "allow_random_username";--> statement-breakpoint
 ALTER TABLE "service_username_reservations" DROP CONSTRAINT "service_username_reservations_mode_check";--> statement-breakpoint
 ALTER TABLE "panels" ADD COLUMN "username_strategy" text DEFAULT 'PREFIX_RANDOM' NOT NULL;--> statement-breakpoint
 ALTER TABLE "panels" ADD COLUMN "username_prefix" text;--> statement-breakpoint

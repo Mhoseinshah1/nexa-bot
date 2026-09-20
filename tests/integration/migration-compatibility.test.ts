@@ -220,8 +220,17 @@ describe('migration compatibility across the rollback window', () => {
     // migration has to obey.
     const sqlOf = (tag: string): string =>
       readFileSync(join(__dirname, `../../apps/api/drizzle/${tag}.sql`), 'utf8')
-        // Comments explain the rule and would otherwise trip it.
-        .replace(/^\s*--.*$/gm, '')
+        /*
+         * Comments explain the rule and would otherwise trip it.
+         *
+         * BLOCK comments too, and that is not a nicety: 0094's header says in terms
+         * why it does not `RENAME COLUMN`, and a scanner that reads its own rule out
+         * of a paragraph explaining the rule fails the file that obeys it. The `--`
+         * strip below is anchored to the line start so it leaves the trailing
+         * `--> statement-breakpoint` markers this file splits on.
+         */
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^\s*--(?!>).*$/gm, '')
         .toUpperCase();
 
     /*
@@ -255,6 +264,23 @@ describe('migration compatibility across the rollback window', () => {
     }
 
     /*
+     * Every TABLE this unreleased batch creates.
+     *
+     * Same batch-scoped reasoning as `added` above, one level up: release N-1 cannot
+     * still need a column of a table it has never had. Collected separately because a
+     * column of a table created here never appears in an `ADD COLUMN` — it is inside
+     * the `CREATE TABLE` — so `added` alone would not see it.
+     */
+    const createdTables = new Set<string>();
+    for (const entry of incoming) {
+      for (const match of sqlOf(entry.tag).matchAll(
+        /CREATE TABLE\s+(?:IF NOT EXISTS\s+)?"?([A-Z0-9_]+)"?/g,
+      )) {
+        createdTables.add(String(match[1]));
+      }
+    }
+
+    /*
      * Every constraint name the PREVIOUS release's schema carries.
      *
      * Collected by NAME from the migrations up to and including the boundary,
@@ -281,7 +307,6 @@ describe('migration compatibility across the rollback window', () => {
       // never acceptable, and a narrowing addition has to survive the replay.
       for (const forbidden of [
         'DROP TABLE',
-        'SET NOT NULL',
         'DROP DEFAULT',
         'RENAME COLUMN',
         'RENAME TO',
@@ -291,6 +316,40 @@ describe('migration compatibility across the rollback window', () => {
           sql,
           `${entry.tag} contains ${forbidden}, which the previous release may still need`,
         ).not.toContain(forbidden);
+      }
+
+      /*
+       * `SET NOT NULL` is handled separately, for the reason `DROP COLUMN` is.
+       *
+       * Narrowing a column release N-1 writes is exactly the defect this file exists
+       * for: N-1 inserts a NULL and the insert now fails. But a column release N-1 has
+       * never had cannot be one it writes — whether the column was ADDed by this batch
+       * or arrived inside a table this batch CREATEs. 0091 is the second case:
+       * `service_reminders` is created by 0090, both after `PREVIOUS_RELEASE_LAST`.
+       *
+       * Fail-closed in two directions, and both matter. The exemption is granted per
+       * STATEMENT, not per file, so one legal `SET NOT NULL` does not license another
+       * on a boundary table in the same migration. And an occurrence this pattern
+       * cannot parse — a form the generator has not produced before — is counted as
+       * unexempted and fails, rather than slipping through a regex that did not match.
+       */
+      const statements = sql.split('--> STATEMENT-BREAKPOINT');
+      for (const statement of statements) {
+        if (!statement.includes('SET NOT NULL')) continue;
+        const parsed =
+          /ALTER TABLE\s+"?([A-Z0-9_]+)"?\s+ALTER COLUMN\s+"?([A-Z0-9_]+)"?\s+SET NOT NULL/.exec(
+            statement,
+          );
+        const table = parsed === null ? null : String(parsed[1]);
+        const column = parsed === null ? null : String(parsed[2]);
+        const introducedHere =
+          table !== null && (createdTables.has(table) || added.has(`${table}.${String(column)}`));
+        expect(
+          introducedHere,
+          `${entry.tag} sets NOT NULL on ${table ?? 'an unparseable target'}.${column ?? '?'}, ` +
+            'which the previous release may still write. Only a column this unreleased ' +
+            'batch introduced may be narrowed.',
+        ).toBe(true);
       }
 
       // `DROP CONSTRAINT` is handled separately, because two different things
