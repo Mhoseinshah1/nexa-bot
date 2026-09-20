@@ -2,12 +2,35 @@ import type { ServiceReminderKind, TenantContext, UserId } from '@nexa/contracts
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 
 /**
+ * The period a reminder was raised against, as the DATABASE renders it.
+ *
+ * `expiresAt` is TEXT and not a `Date`, and that is load-bearing rather than lazy.
+ * Postgres stores `timestamptz` to the microsecond; a JavaScript `Date` holds
+ * milliseconds. Reading a deadline into a `Date` and writing it back as the basis
+ * would store a value a thousandth of a second away from the column it was copied
+ * from, `IS NOT DISTINCT FROM` would be false for ever, and the candidate query would
+ * hand the same service back on every pass — a customer told they have three days
+ * left, every fifteen minutes, until they blocked the bot.
+ *
+ * So the text crosses the boundary untouched and is cast back on the way in. It is
+ * opaque: nothing outside the repository parses it or compares it.
+ */
+export interface ServiceReminderBasis {
+  readonly expiresAt: string | null;
+  readonly trafficLimitBytes: bigint;
+}
+
+/**
  * A service one reminder pass may have something to say about.
  *
- * Five fields and no more. The sweep needs the customer to address the message, the
- * deadline and the allowance to decide what is due, and the id to name the row — it
- * has no business with a subscription URL or a provider client id, and a background
- * loop that held them is a background loop that could log them.
+ * The sweep needs the customer to address the message, the deadline and the allowance
+ * to decide what is due, the basis to write, and the id to name the row — and nothing
+ * else. It has no business with a subscription URL or a provider client id, and a
+ * background loop that held them is a background loop that could log them.
+ *
+ * `expiresAt` is the millisecond-truncated `Date` the THRESHOLD decision uses, which is
+ * all a comparison against "three days from now" needs. The exact value lives in
+ * `basis` and is never reconstructed from this one.
  */
 export interface ServiceReminderCandidate {
   readonly serviceId: string;
@@ -15,6 +38,7 @@ export interface ServiceReminderCandidate {
   readonly expiresAt: Date | null;
   readonly trafficLimitBytes: bigint;
   readonly trafficUsedBytes: bigint;
+  readonly basis: ServiceReminderBasis;
 }
 
 /** One occurrence, as the sweep asks for it to be written. */
@@ -22,8 +46,7 @@ export interface ServiceReminderRaise {
   readonly id: string;
   readonly serviceId: string;
   readonly kind: ServiceReminderKind;
-  readonly basisExpiresAt: Date | null;
-  readonly basisTrafficLimitBytes: bigint;
+  readonly basis: ServiceReminderBasis;
 }
 
 /**

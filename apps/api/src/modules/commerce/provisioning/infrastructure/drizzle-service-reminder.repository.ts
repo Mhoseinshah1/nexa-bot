@@ -10,7 +10,6 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
-import { serviceReminders } from '../../../../infrastructure/persistence/schema.js';
 import type {
   ServiceReminderCandidate,
   ServiceReminderRaise,
@@ -21,26 +20,33 @@ import type {
 interface CandidateRow {
   readonly id: string;
   readonly customer_id: string;
-  readonly expires_at: Date | null;
+  readonly expires_at: string | null;
   readonly traffic_limit_bytes: string;
   readonly traffic_used_bytes: string;
 }
 
 function toCandidate(row: CandidateRow): ServiceReminderCandidate {
+  const limit = BigInt(row.traffic_limit_bytes);
   return {
     serviceId: row.id,
     customerId: row.customer_id as UserId,
-    expiresAt: row.expires_at,
     /*
-     * `node-postgres` hands back `int8` as a STRING, which is the parser decision
-     * `docs/conventions.md` records and the reason every money column in this codebase
-     * is read the same way. `BigInt('123')` is exact; `Number('123')` is exact until it
-     * is not, and an allowance in bytes passes 2^53 at nine petabytes — far off, but the
-     * comparison this feeds is `used * 100 >= limit * percent`, where a rounded operand
-     * is a customer told at the wrong moment or not at all.
+     * A `Date` for the DECISION only, and the text beside it for the basis.
+     *
+     * `execute` returns every column as the string Postgres rendered, so this parse is
+     * the only one — and it loses the microseconds, which is why it is not what gets
+     * written back. See `ServiceReminderBasis`.
      */
-    trafficLimitBytes: BigInt(row.traffic_limit_bytes),
+    expiresAt: row.expires_at === null ? null : new Date(row.expires_at),
+    /*
+     * `BigInt('123')` is exact; `Number('123')` is exact until it is not, and the
+     * comparison this feeds is `used * 100 >= limit * percent`, where a rounded operand
+     * is a customer told at the wrong moment or not at all. The same rule money follows,
+     * for the same reason.
+     */
+    trafficLimitBytes: limit,
     trafficUsedBytes: BigInt(row.traffic_used_bytes),
+    basis: { expiresAt: row.expires_at, trafficLimitBytes: limit },
   };
 }
 
@@ -57,7 +63,7 @@ export class DrizzleServiceReminderRepository implements ServiceReminderReposito
   constructor(private readonly db: Database) {}
 
   private exec(tx?: unknown): Executor {
-    return (tx as Executor | undefined) ?? this.db;
+    return (tx as TransactionScope | undefined)?.tx ?? this.db;
   }
 
   /**
@@ -93,7 +99,7 @@ export class DrizzleServiceReminderRepository implements ServiceReminderReposito
       SELECT s.id, s.customer_id, s.expires_at, s.traffic_limit_bytes, s.traffic_used_bytes
       FROM services s
       WHERE s.tenant_id = ${tenantId}
-        AND s.state = ANY(${[...EXPIRY_REMINDER_STATES]})
+        AND s.state = ANY(${sql.param([...EXPIRY_REMINDER_STATES])}::text[])
         AND s.expires_at IS NOT NULL
         AND s.expires_at <= ${bounds.threeDaysAt}
         AND NOT EXISTS (
@@ -144,7 +150,7 @@ export class DrizzleServiceReminderRepository implements ServiceReminderReposito
       SELECT s.id, s.customer_id, s.expires_at, s.traffic_limit_bytes, s.traffic_used_bytes
       FROM services s
       WHERE s.tenant_id = ${tenantId}
-        AND s.state = ANY(${[...USAGE_REMINDER_STATES]})
+        AND s.state = ANY(${sql.param([...USAGE_REMINDER_STATES])}::text[])
         AND s.traffic_limit_bytes > 0
         AND s.usage_synced_at IS NOT NULL
         AND s.traffic_used_bytes * 100 >= s.traffic_limit_bytes * ${percent.lowest}
@@ -187,27 +193,15 @@ export class DrizzleServiceReminderRepository implements ServiceReminderReposito
     tx: TransactionScope,
   ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
-    const inserted = await this.exec(tx)
-      .insert(serviceReminders)
-      .values({
-        id: row.id,
-        tenantId,
-        serviceId: row.serviceId,
-        kind: row.kind,
-        basisExpiresAt: row.basisExpiresAt,
-        basisTrafficLimitBytes: row.basisTrafficLimitBytes,
-        raisedAt: now,
-      })
-      .onConflictDoNothing({
-        target: [
-          serviceReminders.tenantId,
-          serviceReminders.serviceId,
-          serviceReminders.kind,
-          serviceReminders.basisExpiresAt,
-          serviceReminders.basisTrafficLimitBytes,
-        ],
-      })
-      .returning({ id: serviceReminders.id });
-    return inserted.length > 0;
+    const inserted = await this.exec(tx).execute(sql`
+      INSERT INTO service_reminders (id, tenant_id, service_id, kind, basis_expires_at,
+                                     basis_traffic_limit_bytes, raised_at)
+      VALUES (${row.id}, ${tenantId}, ${row.serviceId}, ${row.kind},
+              ${row.basis.expiresAt}::timestamptz, ${row.basis.trafficLimitBytes}, ${now})
+      ON CONFLICT (tenant_id, service_id, kind, basis_expires_at, basis_traffic_limit_bytes)
+        DO NOTHING
+      RETURNING id
+    `);
+    return inserted.rows.length > 0;
   }
 }
