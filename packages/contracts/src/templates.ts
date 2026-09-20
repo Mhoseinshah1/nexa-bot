@@ -380,6 +380,72 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.username.choose',
+    description:
+      'Asks which of the two username modes the customer wants. Sent only when the ' +
+      "panel's policy allows both; with one enabled the question has no answer to " +
+      'give and that mode runs directly.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.username.custom_button',
+    description: 'The button that starts the custom-username prompt.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.username.random_button',
+    description: 'The button that has the installation generate the username.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.username.instructions',
+    description:
+      'States the whole custom-username rule before the customer types: length, the ' +
+      'accepted characters, the letter-and-digit requirement, and that case is not ' +
+      'distinguished. Carries no payload, so a rule change is a copy change and the ' +
+      'shared validator stays the single decider.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.username.invalid',
+    description:
+      'Refuses a username that does not satisfy the stated rule. Deliberately does ' +
+      'not name which clause failed — the rule is shown in full beforehand, and a ' +
+      'per-clause answer is a probe.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.username.taken',
+    description:
+      'Refuses a username already held on the same provider namespace, and says no ' +
+      'money moved. Sent before any debit, so the statement is a fact about the ' +
+      'order rather than a reassurance.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.username.confirmed',
+    description:
+      'Shows the name the service will actually carry, in the confirmation summary ' +
+      'before payment. The value is the canonical lowercase form, not what the ' +
+      'customer typed, so the summary and the panel account cannot disagree.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'username',
+        type: 'STRING',
+        description: 'The canonical username reserved for this order.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
     key: 'bot.order.summary',
     description:
       'The server-calculated order summary a customer confirms. Every figure in it ' +

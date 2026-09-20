@@ -91,6 +91,30 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.catalog.empty': 'در حال حاضر سرویسی برای فروش تنظیم نشده است.',
   'bot.catalog.heading': 'سرویس‌های قابل خرید:',
 
+  // The username a customer's service is known by on the panel. The panel's policy
+  // decides which of the two modes they are offered; with one enabled the choice is
+  // skipped and that flow runs directly.
+  'bot.username.choose': 'یوزرنیم سرویس‌تان را چطور انتخاب می‌کنید؟',
+  'bot.username.custom_button': '✍️ انتخاب یوزرنیم دلخواه',
+  'bot.username.random_button': '🎲 یوزرنیم تصادفی',
+  // The rule, stated once and in full, because a customer who is refused twice for two
+  // different reasons they were never told stops buying. Every clause here is one the
+  // shared validator actually enforces.
+  'bot.username.instructions':
+    'یوزرنیم دلخواه‌تان را بفرستید.\n' +
+    '• بین ۸ تا ۱۶ نویسه\n' +
+    '• فقط حروف انگلیسی (a تا z)، رقم انگلیسی (0 تا 9)، خط تیره (-) و زیرخط (_)\n' +
+    '• حداقل یک حرف انگلیسی و حداقل یک رقم داشته باشد\n' +
+    '• حروف بزرگ و کوچک فرقی ندارند و در نهایت با حروف کوچک ذخیره می‌شود\n' +
+    '• حرف و رقم فارسی، فاصله، نقطه، @ و ایموجی پذیرفته نمی‌شود',
+  'bot.username.invalid':
+    'این یوزرنیم پذیرفته نشد. لطفاً با توجه به شرایط بالا یک یوزرنیم دیگر بفرستید.',
+  'bot.username.taken':
+    'این یوزرنیم قبلاً گرفته شده است. لطفاً یوزرنیم دیگری بفرستید. هیچ مبلغی کسر نشده است.',
+  // Shown in the confirmation summary BEFORE payment, so the customer sees the exact
+  // name their service will carry — the canonical lowercase form, not what they typed.
+  'bot.username.confirmed': 'یوزرنیم سرویس شما: {username}',
+
   'bot.order.summary':
     'سفارش شما\nسرویس: {productTitle}\nمدت: {durationDays}\nحجم: {trafficBytes}\nمبلغ قابل پرداخت: {total}',
   'bot.order.confirm_button': 'تأیید و ثبت سفارش',
