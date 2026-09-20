@@ -502,6 +502,24 @@ export const PANEL_ERROR_CODES = {
    */
   PANEL_PROBE_LIMITED: 'panel.probe_limited',
   /**
+   * Moving this panel to that address would collide with a username held there.
+   *
+   * A username reservation is unique per NAMESPACE — provider plus host, and
+   * deliberately not per panel, because two panels pointing at one machine share
+   * its account namespace. The key is frozen on the reservation row, so changing a
+   * panel's address moves the panel out from under every name it is holding: the
+   * holds keep counting in the namespace of the OLD host while settlement creates
+   * accounts on the new one.
+   *
+   * So an address change carries its panel's reservations with it, and this is what
+   * the operator is told when it cannot: some name this panel holds is already
+   * reserved at the destination, by another panel that was already there. Refusing
+   * the edit is the only answer that keeps the guarantee — the alternative is two
+   * orders holding one name on one machine, discovered by the second provider create
+   * after both customers have paid.
+   */
+  PANEL_NAMESPACE_CONFLICT: 'panel.namespace_conflict',
+  /**
    * The panel changed while its connection test was in flight.
    *
    * A probe reads a panel's address and credentials, then spends as long as the
