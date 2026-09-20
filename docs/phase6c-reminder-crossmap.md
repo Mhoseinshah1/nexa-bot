@@ -10,14 +10,14 @@ absence is a decision with a reason, not an oversight.
 
 ## The reminder rows
 
-| Legacy row | What it did | Nexa | Where |
-| --- | --- | --- | --- |
-| `🕚 کرون زمان` | one configurable threshold, in days, before a service's time expires | TWO thresholds — `reminders.expiry_first_days` (3) and `reminders.expiry_second_days` (1) — plus an expired notice | `service_expiry_reminders`, `service_expired_notice` |
-| `🔋 کرون حجم` | one configurable threshold, as a percentage of traffic used | THREE thresholds — `reminders.usage_first_percent` (80), `_second_` (95), `_final_` (100) | `service_usage_reminders` |
-| `🕚 کرون اولین اتصال` | chased customers whose service was bought and never activated (`on_hold`), threshold 4 days, OFF | **DEFERRED** — see below | — |
-| `🧯 متصل نبودن کاربر` | chased customers with a live service who stopped connecting, threshold 3 days, ON | **DEFERRED** — see below | — |
-| `❌ کرون حذف` | DELETED accounts N days after their time expired (3) | **DEFERRED, and deliberately** | — |
-| `❌ کرون حذف حجم` | DELETED accounts N days after last connection when traffic ran out (2), Marzban only | **DEFERRED, and deliberately** | — |
+| Legacy row            | What it did                                                                                      | Nexa                                                                                                               | Where                                                |
+| --------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------- |
+| `🕚 کرون زمان`        | one configurable threshold, in days, before a service's time expires                             | TWO thresholds — `reminders.expiry_first_days` (3) and `reminders.expiry_second_days` (1) — plus an expired notice | `service_expiry_reminders`, `service_expired_notice` |
+| `🔋 کرون حجم`         | one configurable threshold, as a percentage of traffic used                                      | THREE thresholds — `reminders.usage_first_percent` (80), `_second_` (95), `_final_` (100)                          | `service_usage_reminders`                            |
+| `🕚 کرون اولین اتصال` | chased customers whose service was bought and never activated (`on_hold`), threshold 4 days, OFF | **DEFERRED** — see below                                                                                           | —                                                    |
+| `🧯 متصل نبودن کاربر` | chased customers with a live service who stopped connecting, threshold 3 days, ON                | **DEFERRED** — see below                                                                                           | —                                                    |
+| `❌ کرون حذف`         | DELETED accounts N days after their time expired (3)                                             | **DEFERRED, and deliberately**                                                                                     | —                                                    |
+| `❌ کرون حذف حجم`     | DELETED accounts N days after last connection when traffic ran out (2), Marzban only             | **DEFERRED, and deliberately**                                                                                     | —                                                    |
 
 Sources: `docs/research/mirzabotbotcapabilitiesinvestigationcompletev2/bot-capabilities-knowledge/business-rules.md`
 CBR-003 (twelve capabilities carry nested configuration, six of them crons),

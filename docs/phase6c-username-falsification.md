@@ -24,8 +24,8 @@ Eleven mutations, run against `tests/integration/service-username.test.ts`.
 | F6C-06 | a name may be chosen only while the order is a DRAFT            | the state guard deleted from `assertNameable`            | _refuses to change a name once the order is past DRAFT_              | KILLED |
 | F6C-07 | a panel must allow at least one username mode                   | the neither-mode guard replaced with `false`             | _refuses a panel policy with neither mode_                           | KILLED |
 | F6C-08 | a template that cannot render a legal name is refused at save   | the verdict check replaced with `false`                  | _refuses a template that cannot produce a unique name_               | KILLED |
-| F6C-09 | a legacy-policy panel mints `nx` plus 32 hex                    | the random draw shortened from 16 bytes to 4             | _mints the legacy shape when the panel has no template_              | KILLED |
-| F6C-10 | a template's `{random10}` renders ten characters                | the draw shortened to four                               | _renders the panel template for a RANDOM name_                       | KILLED |
+| F6C-09 | an unconfigured panel mints the default preset                  | the random draw shortened from 16 bytes to 4             | _mints the DEFAULT preset on a panel nobody has configured_          | KILLED |
+| F6C-10 | a template's `{random10}` renders ten characters                | the draw shortened to four                               | _renders the panel template for an AUTOMATIC name_                   | KILLED |
 | F6C-11 | a typed name is validated before it is folded or stored         | `isValidCustomUsername` replaced with `false`            | _refuses a name that breaks the rule, and reserves nothing_          | KILLED |
 
 ## What the pass changed
@@ -42,14 +42,39 @@ nothing and both try to take a name; the conditional insert is what makes
 exactly one win. The early read was an optimisation wearing a rule's clothes and
 is gone. With one mechanism left, the mutation kills.
 
+## Round two — the universal contract, and the four presets
+
+Run after the owner's correction replaced the 34-character ceiling with one
+universal contract. Same standard: commit first, revert exactly one production
+rule, watch the named test fail, restore byte-for-byte. Every row KILLED on the
+first attempt.
+
+| #    | Rule reverted                                          | Mutation                                                          | Named test                                                                           | Result |
+| ---- | ------------------------------------------------------ | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ------ |
+| U-01 | a new name is at most twenty characters                | `PROVIDER_USERNAME_PATTERN` widened back to `{4,34}`              | _is longer than every NEW name, which is why it needs its own predicate_             | KILLED |
+| U-02 | a template's SHORTEST render must still reach four     | the `TOO_SHORT` issue deleted                                     | _refuses a template whose best case falls under four_                                | KILLED |
+| U-03 | `PREFIX_RANDOM` never overruns twenty                  | `prefixRandomLength` returns the target, ignoring the room left   | _PREFIX_RANDOM always leaves at least six random characters and stays inside twenty_ | KILLED |
+| U-04 | `{order4}` is unique but NOT redrawable                | `order4` added to `USERNAME_REDRAWN_TOKENS`                       | _names order4 as unique but NOT as redrawable_                                       | KILLED |
+| U-05 | `{tg4}` is exactly four, padded for a short id         | `padStart` deleted from `telegramIdSuffix4`                       | _takes the LAST four digits of a Telegram id, padded when it is shorter_             | KILLED |
+| U-06 | a RENDER is checked, not only the template             | `assertNewProviderUsername` deleted from `renderUsernameTemplate` | _refuses a render that a bad VALUE made illegal_                                     | KILLED |
+| U-07 | a preset with no configuration behind it is refused    | both `STRATEGY_CONFIGURATION` branches replaced with `if (false)` | _refuses a preset with no configuration behind it_                                   | KILLED |
+| U-08 | a typed name needs a digit as well as a letter         | the digit test replaced with `true`                               | _requires at least one English letter and at least one digit_                        | KILLED |
+| U-09 | the adapter refuses an illegal name before any request | `assertNewProviderUsername` deleted from Marzban's `createUser`   | _refuses on Marzban, and makes no request_                                           | KILLED |
+
+U-01 killed three tests rather than one, and U-03 and U-07 two each. That is
+reported as it happened rather than trimmed: a rule with several consequences
+has several tests, and pretending each mutation kills exactly one would be the
+tidier claim and the less true one.
+
 ## What is NOT covered here, and why
 
-**The provider's real maximum username length.** `PROVEN_PROVIDER_USERNAME_MAX_LENGTH`
-is 34 because that is the shape both real-panel acceptance suites have actually
-created accounts with — not because either provider has been measured. The true
-limit is UNKNOWN (`docs/open-questions.md`, OQ-6C-01), and raising the constant
-is a real-panel acceptance task rather than an edit. Nothing in this table
-claims otherwise.
+**The provider's real maximum username length.** Twenty is a product decision,
+not a measurement. It is comfortably inside every provider username field this
+product has driven, and every preset is built to fit it — but neither provider's
+true limit has been measured, and it stays UNKNOWN
+(`docs/open-questions.md`, OQ-6C-01). The number this section used to defend —
+34, "proven" because it was the length our own generator happened to produce —
+was evidence about this codebase rather than about a panel, and it is gone.
 
 **That a panel accepts a custom or templated name at all.** Every case here ends
 at rows this installation writes. A fake this repository wrote and an adapter

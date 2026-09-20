@@ -319,12 +319,12 @@ beside a strategy called RANDOM is two different things with one name — so the
 mode is `AUTOMATIC` and the panel's `username_strategy` decides which preset
 produces the value.
 
-| Preset | Renders | Configuration |
-| --- | --- | --- |
-| `RANDOM` | 12 lowercase alphanumerics | none |
-| `PREFIX_RANDOM` | a saved prefix + `min(10, 20 − prefix)` random | `username_prefix` |
-| `TELEGRAM_ID_RANDOM` | `{telegram_id}_{random6}`, id in FULL | none |
-| `CUSTOM_TEMPLATE` | the constrained template grammar | `username_template` |
+| Preset               | Renders                                        | Configuration       |
+| -------------------- | ---------------------------------------------- | ------------------- |
+| `RANDOM`             | 12 lowercase alphanumerics                     | none                |
+| `PREFIX_RANDOM`      | a saved prefix + `min(10, 20 − prefix)` random | `username_prefix`   |
+| `TELEGRAM_ID_RANDOM` | `{telegram_id}_{random6}`, id in FULL          | none                |
+| `CUSTOM_TEMPLATE`    | the constrained template grammar               | `username_template` |
 
 The default is `PREFIX_RANDOM` with the prefix `nx`, which renders `nx` plus ten
 — twelve characters, `DEFAULT_USERNAME_PATTERN`. It is a real default rather than
@@ -335,19 +335,19 @@ falls back to.
 
 ### 6-3. Where each rule is enforced, and by what
 
-| Rule | Enforced by |
-| --- | --- |
-| 4–20, `[a-z0-9_-]`, for any new name | `isNewProviderUsername`; `assertNewProviderUsername` at both adapters |
-| a customer's typed name, letter AND digit | `isValidCustomUsername`, on the RAW input |
-| case is input, not identity | `canonicalizeCustomUsername`, after validation |
-| at least one customer choice is on | `validateUsernamePolicy` + `panels_username_policy_check` |
-| a preset has the configuration it needs | `validateUsernamePolicy` + two biconditional CHECKs |
-| a template's best AND worst render fit | `validateUsernameTemplate`, at the operator's save |
-| a per-order uniqueness token | `USERNAME_UNIQUENESS_TOKENS` |
-| a redraw changes only randomness | `USERNAME_REDRAWN_TOKENS`; `{order4}` is absent |
-| at most five candidates, then refuse | `RANDOM_USERNAME_MAX_ATTEMPTS`, one when nothing redraws |
-| the name is reserved before payment | `service_username_reservations`, two unique indexes |
-| a funded name is never re-judged | `PanelUsernameLane.stillUsable`, fenced on `funded_at` |
+| Rule                                      | Enforced by                                                           |
+| ----------------------------------------- | --------------------------------------------------------------------- |
+| 4–20, `[a-z0-9_-]`, for any new name      | `isNewProviderUsername`; `assertNewProviderUsername` at both adapters |
+| a customer's typed name, letter AND digit | `isValidCustomUsername`, on the RAW input                             |
+| case is input, not identity               | `canonicalizeCustomUsername`, after validation                        |
+| at least one customer choice is on        | `validateUsernamePolicy` + `panels_username_policy_check`             |
+| a preset has the configuration it needs   | `validateUsernamePolicy` + two biconditional CHECKs                   |
+| a template's best AND worst render fit    | `validateUsernameTemplate`, at the operator's save                    |
+| a per-order uniqueness token              | `USERNAME_UNIQUENESS_TOKENS`                                          |
+| a redraw changes only randomness          | `USERNAME_REDRAWN_TOKENS`; `{order4}` is absent                       |
+| at most five candidates, then refuse      | `RANDOM_USERNAME_MAX_ATTEMPTS`, one when nothing redraws              |
+| the name is reserved before payment       | `service_username_reservations`, two unique indexes                   |
+| a funded name is never re-judged          | `PanelUsernameLane.stillUsable`, fenced on `funded_at`                |
 
 ### 6-4. What a stale draft does, and what a funded one does not
 
