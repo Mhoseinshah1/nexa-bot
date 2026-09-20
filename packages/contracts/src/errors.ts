@@ -514,6 +514,22 @@ export const PANEL_ERROR_CODES = {
    */
   PANEL_CONFIGURATION_CHANGED: 'panel.configuration_changed',
   /**
+   * A username policy that leaves a customer no way to name their service.
+   *
+   * Both modes off is not a strict configuration, it is a panel nothing can be bought
+   * from — and it would fail at the customer's purchase rather than at the operator's
+   * save, which is the class of defect `docs/conventions.md` calls a write-only setting.
+   */
+  PANEL_USERNAME_POLICY_EMPTY: 'panel.username_policy_empty',
+  /**
+   * The RANDOM template cannot produce a name this provider will accept.
+   *
+   * Raised at panel create and update, never deferred to a purchase. The detail carries
+   * every issue at once — unknown token, no uniqueness token, illegal character, too
+   * long — because an operator fixing one per round trip gives up.
+   */
+  PANEL_USERNAME_TEMPLATE_INVALID: 'panel.username_template_invalid',
+  /**
    * A persisted provider type that this release has no adapter for.
    *
    * Reached only when a value gets past the CHECK constraint — a migration, a
@@ -798,6 +814,32 @@ export const COMMERCE_ERROR_CODES = {
    * check alone.
    */
   SERVICE_ACTION_IN_PROGRESS: 'commerce.service_action_in_progress',
+  /**
+   * The customer asked for a username mode this panel does not offer.
+   *
+   * Checked server-side even though the surface only draws the buttons the policy
+   * allows, for the reason `CLAUDE.md` states about never enforcing by not drawing a
+   * button: a callback is a string somebody can send twice, or send after the operator
+   * turned that mode off.
+   */
+  SERVICE_USERNAME_MODE_UNAVAILABLE: 'commerce.service_username_mode_unavailable',
+  /**
+   * A typed username that does not satisfy the CUSTOM baseline.
+   *
+   * 8 to 16 characters, lowercase letters, digits and underscore, letter-first. The
+   * customer is told which rule they broke and asked again; nothing is reserved and no
+   * payment is started.
+   */
+  SERVICE_USERNAME_INVALID: 'commerce.service_username_invalid',
+  /**
+   * The name is legal and somebody else has it, or is part-way through buying it.
+   *
+   * Raised BEFORE any debit and before a manual transfer is requested. A RANDOM
+   * candidate that collides is regenerated up to `RANDOM_USERNAME_MAX_ATTEMPTS` times
+   * before this is raised; a CUSTOM one is raised at once, because there is nothing to
+   * regenerate and the customer is the only one who can choose again.
+   */
+  SERVICE_USERNAME_TAKEN: 'commerce.service_username_taken',
 
   /**
    * There is not enough of the order's own window left to pay out of band inside it.

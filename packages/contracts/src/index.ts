@@ -57,6 +57,7 @@ export * from './payment-gateways.js';
 export * from './refunds.js';
 export * from './payment-receipts.js';
 export * from './provisioning.js';
+export * from './service-username.js';
 export * from './promotions.js';
 export * from './templates.js';
 export * from './settings.js';
