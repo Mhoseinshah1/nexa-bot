@@ -1747,12 +1747,6 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
-    key: 'bot.admin.username_saved',
-    description: 'The username policy was written. The section is re-rendered beneath it.',
-    format: 'PLAIN_TEXT',
-    placeholders: [],
-  },
-  {
     key: 'bot.admin.username_refused',
     description:
       'The username policy was refused and NOTHING was written \u2014 both choices off, ' +

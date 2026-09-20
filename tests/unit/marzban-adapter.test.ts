@@ -1,7 +1,14 @@
 import { createServer, type Server } from 'node:http';
 import { once } from 'node:events';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { PROVIDER_TYPES, type ProviderTarget } from '@nexa/contracts';
+import {
+  PROVIDER_TYPES,
+  PROVIDER_USERNAME_MAX_LENGTH,
+  type CreateProviderUserInput,
+  type ProviderHttpClient,
+  type ProviderServiceTarget,
+  type ProviderTarget,
+} from '@nexa/contracts';
 import { SafeHttpClient } from '../../apps/api/src/infrastructure/net/safe-http';
 import { MarzbanAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/marzban.adapter';
 import {
@@ -302,5 +309,80 @@ describe('the adapter registry', () => {
     } catch (error) {
       expect(String(error)).not.toMatch(/password|token|https?:\/\//i);
     }
+  });
+});
+
+/**
+ * The third and last place the username contract is checked.
+ *
+ * `assertNewProviderUsername` runs at the top of `createUser`, BEFORE
+ * authentication and therefore before any request leaves this process. The HTTP
+ * client here throws if it is used at all, so a test that reaches it fails with
+ * that error rather than the contract's — which is what makes this a proof about
+ * ordering and not only about the refusal.
+ *
+ * It is an assertion rather than a refusal on purpose: the surface and the
+ * allocator have both already validated, so a name arriving here illegal is our
+ * defect. What must not happen is that it reaches somebody's panel.
+ */
+describe('the adapter boundary refuses an illegal new username before any request', () => {
+  const NEVER_CALLED: ProviderHttpClient = {
+    send: () => {
+      throw new Error('no request may be made for a username the contract refuses');
+    },
+  };
+
+  const CREATE = {
+    serviceId: '0192ab34-cd56-7890-1234-5678901234ef',
+    username: 'a'.repeat(PROVIDER_USERNAME_MAX_LENGTH + 1),
+    subscriptionRef: 'ref',
+    clientId: '0192ab34-cd56-7890-1234-5678901234ee',
+    volumeBytes: 1n,
+    durationDays: 30,
+    expiresAt: new Date('2026-12-01T00:00:00.000Z'),
+    deviceLimit: 2,
+  } as unknown as CreateProviderUserInput;
+
+  it('refuses on Marzban, and makes no request', async () => {
+    const target = {
+      baseUrl: 'https://panel.example.test',
+      credentials: { username: 'u', password: 'p' },
+      activation: { proxyProtocols: ['vless'], inboundTags: { vless: ['in'] } },
+    } as unknown as ProviderServiceTarget;
+    await expect(new MarzbanAdapter().createUser(target, NEVER_CALLED, CREATE)).rejects.toThrow(
+      /4-20 characters/,
+    );
+  });
+
+  it('refuses on 3X-UI, and makes no request', async () => {
+    const target = {
+      baseUrl: 'https://panel.example.test',
+      credentials: { username: 'u', password: 'p' },
+      activation: { subscriptionDomain: 'sub.example.test', inboundId: 1 },
+    } as unknown as ProviderServiceTarget;
+    await expect(new SanaeiAdapter().createUser(target, NEVER_CALLED, CREATE)).rejects.toThrow(
+      /4-20 characters/,
+    );
+  });
+
+  it('does NOT throw the contract error for a name inside the contract', async () => {
+    /*
+     * The other half, and what makes the two above mean something. The same call
+     * with a legal name gets PAST the assertion: it goes on to the adapter's own
+     * handling and answers with an outcome — here `UNSUPPORTED_CAPABILITY`, because
+     * this synthetic target carries no usable credentials. What matters is that it
+     * does not throw, so the refusals above were the contract's and not a coincidence
+     * of the fixture.
+     */
+    const target = {
+      baseUrl: 'https://panel.example.test',
+      credentials: { username: 'u', password: 'p' },
+      activation: { proxyProtocols: ['vless'], inboundTags: { vless: ['in'] } },
+    } as unknown as ProviderServiceTarget;
+    const outcome = await new MarzbanAdapter().createUser(target, NEVER_CALLED, {
+      ...CREATE,
+      username: 'ali_2026',
+    });
+    expect(outcome.ok).toBe(false);
   });
 });

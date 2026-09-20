@@ -666,6 +666,13 @@
       "when": 1789927600098,
       "tag": "0094_username_contract",
       "breakpoints": true
+    },
+    {
+      "idx": 95,
+      "version": "7",
+      "when": 1789929408472,
+      "tag": "0095_username_prefix_default",
+      "breakpoints": true
     }
   ]
 }

@@ -75,6 +75,7 @@ import {
   CUSTOMER_NOTIFICATION_STATES,
   SERVICE_STATES,
   SERVICE_REMINDER_KINDS,
+  DEFAULT_USERNAME_PREFIX,
   DEFAULT_USERNAME_STRATEGY,
   SERVICE_USERNAME_MODES,
   USERNAME_STRATEGIES,
@@ -1333,8 +1334,16 @@ export const panels = pgTable(
      * `DEFAULT_USERNAME_PATTERN`. Existing services are not renamed.
      */
     usernameStrategy: text('username_strategy').notNull().default(DEFAULT_USERNAME_STRATEGY),
-    /** The `PREFIX_RANDOM` prefix. NULL under any other strategy. */
-    usernamePrefix: text('username_prefix'),
+    /**
+     * The `PREFIX_RANDOM` prefix. NULL under any other strategy.
+     *
+     * Defaulted, and it HAS to be: `username_strategy` defaults to PREFIX_RANDOM, and
+     * `panels_username_prefix_check` is a biconditional, so a prefix with no default
+     * makes a panel created without a policy unstorable. 0095 is that correction —
+     * found by the integration case that creates a panel and names no policy, which
+     * is the commonest way an operator makes one.
+     */
+    usernamePrefix: text('username_prefix').default(DEFAULT_USERNAME_PREFIX),
     /** The `CUSTOM_TEMPLATE` template. NULL under any other strategy. */
     usernameTemplate: text('username_template'),
     /** Set when the panel is archived, so the event has a time and not just a state. */

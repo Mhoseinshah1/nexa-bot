@@ -240,7 +240,13 @@ export function panel(overrides: Record<string, unknown> = {}): Record<string, u
      * username policy for looks like, and what migration 0088 gave every panel that
      * existed before the policy did.
      */
-    usernamePolicy: { allowCustom: true, allowRandom: true, template: null },
+    usernamePolicy: {
+      allowCustom: true,
+      allowAutomatic: true,
+      strategy: 'PREFIX_RANDOM',
+      prefix: 'nx',
+      template: null,
+    },
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     ...overrides,

@@ -187,10 +187,12 @@ export class UsernameAllocator {
    * Looping would be pretending that a deterministic function might come out
    * differently, and mutating the order's identity to make it do so would be worse.
    *
-   * Every exit is BEFORE any debit. `SERVICE_USERNAME_TAKEN` says the names are
-   * occupied; `SERVICE_USERNAME_UNGENERATABLE` says no redraw could have helped and
-   * the operator is the one who fixes it. Collapsing the two would tell a customer to
-   * try again at something that cannot succeed.
+   * Every exit is BEFORE any debit, and there are two of them because they are two
+   * different answers. `SERVICE_USERNAME_EXHAUSTED` says the drawn names were all
+   * held — nothing the customer chose, so nothing they can choose differently.
+   * `SERVICE_USERNAME_UNGENERATABLE` says no redraw could have helped at all and the
+   * operator is the one who fixes it. Neither is `SERVICE_USERNAME_TAKEN`, which
+   * answers a name the customer typed.
    */
   private async allocateAutomatic(
     scope: TenantContext,
@@ -205,7 +207,7 @@ export class UsernameAllocator {
       if (reserved !== null) return reserved;
     }
     throw errors.conflict(
-      COMMERCE_ERROR_CODES.SERVICE_USERNAME_TAKEN,
+      COMMERCE_ERROR_CODES.SERVICE_USERNAME_EXHAUSTED,
       'A username could not be generated for this plan right now.',
     );
   }

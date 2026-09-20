@@ -1988,6 +1988,21 @@ interface PendingReply {
  * log. The webhook's catch records it and still answers 200.
  */
 export const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
+  /*
+   * The five username refusals, and they are five sentences rather than one.
+   *
+   * `INVALID` and `TAKEN` answer a name the customer TYPED, so both end with "send
+   * another one" and only those two do. `EXHAUSTED` and `UNGENERATABLE` answer a name
+   * they never saw — there is nothing for them to choose differently, and telling them
+   * to try a different name would be advice they cannot follow. `STALE` is the one
+   * that asks them to choose again for a reason that is nobody's fault. All five are
+   * raised before any debit and every body says so.
+   */
+  [COMMERCE_ERROR_CODES.SERVICE_USERNAME_INVALID]: 'bot.username.invalid',
+  [COMMERCE_ERROR_CODES.SERVICE_USERNAME_TAKEN]: 'bot.username.taken',
+  [COMMERCE_ERROR_CODES.SERVICE_USERNAME_EXHAUSTED]: 'bot.username.exhausted',
+  [COMMERCE_ERROR_CODES.SERVICE_USERNAME_UNGENERATABLE]: 'bot.username.unavailable',
+  [COMMERCE_ERROR_CODES.SERVICE_USERNAME_STALE]: 'bot.username.stale',
   [COMMERCE_ERROR_CODES.PRODUCT_NOT_FOUND]: 'bot.order.unavailable',
   [COMMERCE_ERROR_CODES.PRODUCT_NOT_PURCHASABLE]: 'bot.order.unavailable',
   // The SAME sentence as the others, deliberately. A customer told "this is for
@@ -4897,19 +4912,17 @@ export class BotRuntime {
       return this.orderSummary(order, result.reservation.username);
     } catch (error) {
       /*
-       * The two refusals the customer can act on, and NOTHING about the window.
+       * Every refusal through the shared table, and NOTHING about the window.
        *
-       * Both leave it open — `submitTypedUsername` closes it only for an accepted name
-       * — so the customer types another and is answered again. Any other error falls
-       * through to the ordinary refusal mapping, because a failure that is not about
-       * the name they chose is not a failure they can fix by choosing another.
+       * The two the customer can act on — an invalid name and a taken one — leave the
+       * window OPEN, because `submitTypedUsername` closes it only for an accepted
+       * name, so they type another and are answered again.
+       *
+       * They used to be mapped by two branches here rather than in `REFUSAL_REPLIES`,
+       * which meant the same refusal arriving through the AUTOMATIC path had no entry
+       * at all and `refusal` rethrew it. One table for all five is what makes the two
+       * paths answer alike.
        */
-      if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.SERVICE_USERNAME_INVALID) {
-        return { key: 'bot.username.invalid', values: {}, buttons: [], orderId: null };
-      }
-      if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.SERVICE_USERNAME_TAKEN) {
-        return { key: 'bot.username.taken', values: {}, buttons: [], orderId: null };
-      }
       return refusal(error);
     }
   }

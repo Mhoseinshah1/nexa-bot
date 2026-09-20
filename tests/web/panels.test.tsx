@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { PanelsPage, PanelDetailPage, NewPanelPage } from '../../apps/web/src/pages/panels';
-import { t } from '../../apps/web/src/i18n/web.fa';
+import {
+  USERNAME_PREFIX_MAX_LENGTH,
+  USERNAME_STRATEGIES,
+  validateUsernamePolicy,
+} from '@nexa/contracts';
+import { t, type WebKey } from '../../apps/web/src/i18n/web.fa';
 import { panel, product, renderPage, stubApi } from './harness';
 
 /** The panels list reads its archive filter from the URL, as `/system` does. */
@@ -302,30 +307,72 @@ describe('the panel detail', () => {
    * their panel will call a customer's service.
    */
   describe('the username policy', () => {
-    it('renders the stored policy rather than a default', async () => {
+    it('renders every stored value rather than a default', async () => {
       /*
        * The read-back half of `docs/conventions.md`'s write-only rule. A policy an
        * operator can set and cannot see is the legacy screen where "the only way to
        * read a price is to overwrite it" — and here the consequence is worse than a
-       * price, because the mode decides whether a customer is even asked.
+       * price, because the preset decides what every future customer is called.
        */
       stubApi(
         detail({
-          usernamePolicy: { allowCustom: false, allowRandom: true, template: 'nx{random10}' },
+          usernamePolicy: {
+            allowCustom: false,
+            allowAutomatic: true,
+            strategy: 'CUSTOM_TEMPLATE',
+            prefix: null,
+            template: 'z{tg4}_{random6}',
+          },
         }),
       );
       renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
       await screen.findByText('Frankfurt A');
 
       const custom = screen.getByLabelText(t('web.panel_username_custom')) as HTMLInputElement;
-      const random = screen.getByLabelText(t('web.panel_username_random')) as HTMLInputElement;
+      const automatic = screen.getByLabelText(
+        t('web.panel_username_automatic'),
+      ) as HTMLInputElement;
+      const strategy = screen.getByLabelText(t('web.panel_username_strategy')) as HTMLSelectElement;
       const template = screen.getByLabelText(t('web.panel_username_template')) as HTMLInputElement;
       expect(custom.checked).toBe(false);
-      expect(random.checked).toBe(true);
-      expect(template.value).toBe('nx{random10}');
+      expect(automatic.checked).toBe(true);
+      expect(strategy.value).toBe('CUSTOM_TEMPLATE');
+      expect(template.value).toBe('z{tg4}_{random6}');
     });
 
-    it('sends the policy as a whole, with an empty template meaning the legacy generator', async () => {
+    it('shows a preset the operator can read in Persian, not its enum name', async () => {
+      stubApi(detail());
+      renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+      await screen.findByText('Frankfurt A');
+
+      const strategy = screen.getByLabelText(t('web.panel_username_strategy')) as HTMLSelectElement;
+      // Every preset is offered, and each option carries the Persian label rather than
+      // the constant — the machine value stays in `value`, where a customer never sees it.
+      for (const option of USERNAME_STRATEGIES) {
+        const rendered = [...strategy.options].find((each) => each.value === option);
+        expect(rendered, option).toBeTruthy();
+        expect(rendered?.textContent).toBe(t(`web.panel_username_strategy_${option}` as WebKey));
+      }
+    });
+
+    it('previews the name this policy would produce, without reserving one', async () => {
+      /*
+       * The whole answer to the write-only screen: an operator sees the SHAPE before
+       * saving. `previewUsername` renders from fixed synthetic values, so looking at
+       * this line draws no randomness and takes no name out of the namespace — which
+       * is why it can be recomputed on every keystroke.
+       */
+      stubApi(detail());
+      renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+      await screen.findByText('Frankfurt A');
+
+      const shown = await screen.findByText((text) =>
+        text.includes(t('web.panel_username_preview')),
+      );
+      expect(shown.textContent).toMatch(/nx[a-z0-9]{10}/);
+    });
+
+    it('sends the policy as a whole, including the preset nobody touched', async () => {
       const api = stubApi([...detail(), { url: `/panels/${PANEL_ID}`, body: { panel: panel() } }]);
       renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
       await screen.findByText('Frankfurt A');
@@ -338,23 +385,29 @@ describe('the panel detail', () => {
       });
       const write = api.calls.filter((call) => call.method === 'POST').at(-1);
       /*
-       * BOTH switches and the template, although only one switch was touched. The rule
-       * the policy has is about the pair, so a request carrying half of it could only
-       * be validated against whatever happens to be stored — and two operators each
-       * disabling the mode the other left on would both be accepted.
+       * Both switches, the preset and both configuration fields, although only one
+       * switch was touched. Three CHECK constraints are about combinations of these
+       * columns, so a request carrying half of the policy could only be validated
+       * against whatever happens to be stored.
        */
       expect(write?.body).toMatchObject({
-        usernamePolicy: { allowCustom: false, allowRandom: true, template: null },
+        usernamePolicy: {
+          allowCustom: false,
+          allowAutomatic: true,
+          strategy: 'PREFIX_RANDOM',
+          prefix: 'nx',
+          template: null,
+        },
       });
     });
 
-    it('refuses a policy with neither mode, before it is sent', async () => {
+    it('refuses a policy with neither choice, before it is sent', async () => {
       const api = stubApi([...detail(), { url: `/panels/${PANEL_ID}`, body: { panel: panel() } }]);
       renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
       await screen.findByText('Frankfurt A');
 
       fireEvent.click(screen.getByLabelText(t('web.panel_username_custom')));
-      fireEvent.click(screen.getByLabelText(t('web.panel_username_random')));
+      fireEvent.click(screen.getByLabelText(t('web.panel_username_automatic')));
       // The banner appears while they are still looking at the switches, and the CHECK
       // constraint says the same thing one layer down — this is the courtesy, not the
       // authority.
@@ -366,27 +419,59 @@ describe('the panel detail', () => {
       });
     });
 
-    it('shows the WORST rendered length, not a sample', async () => {
+    it('shows BOTH rendered bounds, not a sample', async () => {
       /*
-       * `nx_{order_id}` is 3 + 32 = 35, one over the 34 this product has evidence a
-       * real panel accepts. A template measured on a typical value passes at save time
+       * `{telegram_id}_{random6}` renders 8 characters for a one-digit id and 23 for a
+       * sixteen-digit one. A template measured on a typical value passes at save time
        * and then produces a name the panel refuses for one customer — after their
-       * money moved.
+       * money moved — so both numbers are shown and the worst one is refused.
        */
-      stubApi(detail());
+      stubApi(
+        detail({
+          usernamePolicy: {
+            allowCustom: true,
+            allowAutomatic: true,
+            strategy: 'CUSTOM_TEMPLATE',
+            prefix: null,
+            template: 'z{tg4}_{random6}',
+          },
+        }),
+      );
       renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
       await screen.findByText('Frankfurt A');
 
       fireEvent.change(screen.getByLabelText(t('web.panel_username_template')), {
-        target: { value: 'nx_{order_id}' },
+        target: { value: '{telegram_id}_{random6}' },
+      });
+      const verdict = await screen.findByText((text) => text.includes('23') && text.includes('20'));
+      expect(verdict.textContent).toContain(t('web.panel_username_issue_TOO_LONG'));
+    });
+
+    it('refuses a prefix that would leave too little randomness, with the shared reason', async () => {
+      const api = stubApi([...detail(), { url: `/panels/${PANEL_ID}`, body: { panel: panel() } }]);
+      renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+      await screen.findByText('Frankfurt A');
+
+      fireEvent.change(screen.getByLabelText(t('web.panel_username_prefix')), {
+        target: { value: 'a'.repeat(USERNAME_PREFIX_MAX_LENGTH + 1) },
       });
       /*
-       * The worst-case line names BOTH numbers — what this template can produce and
-       * what the product has evidence a panel accepts — so an operator reading it can
-       * tell how much they have to cut rather than only that it is too long.
+       * The words come from `validateUsernamePolicy`, the same function the server
+       * refuses with, so the two surfaces cannot explain one refusal differently.
        */
-      const verdict = await screen.findByText((text) => text.includes('35') && text.includes('34'));
-      expect(verdict.textContent).toContain(t('web.panel_username_issue_TOO_LONG'));
+      const reason = validateUsernamePolicy({
+        allowCustom: true,
+        allowAutomatic: true,
+        strategy: 'PREFIX_RANDOM',
+        prefix: 'a'.repeat(USERNAME_PREFIX_MAX_LENGTH + 1),
+        template: null,
+      }).reason;
+      expect(await screen.findByText(reason ?? '')).toBeTruthy();
+
+      fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+      await waitFor(() => {
+        expect(api.calls.filter((call) => call.method === 'POST')).toHaveLength(0);
+      });
     });
   });
 

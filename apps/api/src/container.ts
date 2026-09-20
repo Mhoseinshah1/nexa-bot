@@ -198,6 +198,7 @@ import { CustomerNotifier } from './modules/commerce/messaging/application/custo
 import { OperationOutcomeAnnouncer } from './modules/commerce/messaging/application/operation-outcome-announcer.js';
 import { DrizzleNotificationSubjectReader } from './modules/commerce/messaging/infrastructure/drizzle-notification-subject.reader.js';
 import { BotRuntime } from './surfaces/telegram/bot-runtime.js';
+import type { BotRuntimeDeps } from './surfaces/telegram/bot-runtime.js';
 import { I18nTemplateCatalogue } from './modules/control/templates/infrastructure/i18n-template-catalogue.js';
 import { TemplateManagementService } from './modules/control/templates/application/template-management.service.js';
 import { DrizzleNotificationRepository } from './modules/control/notifications/infrastructure/drizzle-notification.repository.js';
@@ -398,6 +399,8 @@ export interface Container {
 
   // Control plane — Phase 2
   readonly panels: PanelService;
+  /** The Telegram admin section's reminder seam. See the construction site. */
+  readonly reminderConfig: BotRuntimeDeps['reminderConfig'];
   /**
    * The background health loop. Started only by the `monitor` entrypoint.
    *
@@ -2456,6 +2459,88 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     });
   };
 
+  /**
+   * The reminder configuration seam, named so BOTH surfaces and the test can hold it.
+   *
+   * Both halves go through the SAME application services the Web Admin uses, so the
+   * two surfaces cannot drift: `list` charges `settings.view` and `features.view`,
+   * `set` charges `settings.edit` and runs `ReminderThresholdsGuard` inside its own
+   * transaction. Nothing here re-implements a rule, and nothing here is authorized by
+   * holding the port — every call still takes the caller's actor.
+   *
+   * A named const rather than an inline literal on `BotRuntime`, because an
+   * integration test that asserts "both surfaces obey one path" has to be able to
+   * read the bot's path, and reading it through a hand-built copy would assert
+   * nothing about the one the bot actually uses.
+   */
+  const reminderConfig: BotRuntimeDeps['reminderConfig'] = {
+    read: async (scope, actor) => {
+      const [values, flags] = await Promise.all([
+        settingsService.list(scope, actor),
+        featureFlags.list(scope, actor),
+      ]);
+      const number = (key: string, fallback: number): number => {
+        const found = values.find((one) => one.key === key);
+        return typeof found?.value === 'number' ? found.value : fallback;
+      };
+      const on = (key: string, fallback: boolean): boolean =>
+        flags.find((one) => one.key === key)?.enabled ?? fallback;
+      return {
+        expiryEnabled: on('service_expiry_reminders', SERVICE_REMINDER_DEFAULTS.expiryEnabled),
+        expiredNoticeEnabled: on(
+          'service_expired_notice',
+          SERVICE_REMINDER_DEFAULTS.expiredNoticeEnabled,
+        ),
+        usageEnabled: on('service_usage_reminders', SERVICE_REMINDER_DEFAULTS.usageEnabled),
+        expiryFirstDays: number(
+          'reminders.expiry_first_days',
+          SERVICE_REMINDER_DEFAULTS.expiryFirstDays,
+        ),
+        expirySecondDays: number(
+          'reminders.expiry_second_days',
+          SERVICE_REMINDER_DEFAULTS.expirySecondDays,
+        ),
+        usageFirstPercent: number(
+          'reminders.usage_first_percent',
+          SERVICE_REMINDER_DEFAULTS.usageFirstPercent,
+        ),
+        usageSecondPercent: number(
+          'reminders.usage_second_percent',
+          SERVICE_REMINDER_DEFAULTS.usageSecondPercent,
+        ),
+        usageFinalPercent: number(
+          'reminders.usage_final_percent',
+          SERVICE_REMINDER_DEFAULTS.usageFinalPercent,
+        ),
+      };
+    },
+    write: async (scope, actor, key, value, idempotencyKey) => {
+      try {
+        await settingsService.set(scope, actor, {
+          idempotencyKey,
+          key,
+          value,
+          expectedVersion: null,
+        });
+        return { ok: true };
+      } catch (error: unknown) {
+        /*
+         * ONLY the combination refusal becomes a value.
+         *
+         * `INVALID_VALUE` is what `ReminderThresholdsGuard` raises, and its message
+         * is the Persian sentence an operator has to read. Everything else — a
+         * denial, a stopped tenant, a lost connection — rethrows and is handled the
+         * way it is everywhere else, because swallowing those would report a write
+         * that did not happen as one that did, which is `SOURCE_BUG-002` exactly.
+         */
+        if (isNexaError(error) && error.code === CONTROL_ERROR_CODES.INVALID_VALUE) {
+          return { ok: false, reason: error.message };
+        }
+        throw error;
+      }
+    },
+  };
+
   return {
     config,
     logger,
@@ -2676,79 +2761,19 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
        * transaction. Nothing here re-implements a rule, and nothing here is authorized
        * by holding the port.
        */
-      reminderConfig: {
-        read: async (scope, actor) => {
-          const [values, flags] = await Promise.all([
-            settingsService.list(scope, actor),
-            featureFlags.list(scope, actor),
-          ]);
-          const number = (key: string, fallback: number): number => {
-            const found = values.find((one) => one.key === key);
-            return typeof found?.value === 'number' ? found.value : fallback;
-          };
-          const on = (key: string, fallback: boolean): boolean =>
-            flags.find((one) => one.key === key)?.enabled ?? fallback;
-          return {
-            expiryEnabled: on('service_expiry_reminders', SERVICE_REMINDER_DEFAULTS.expiryEnabled),
-            expiredNoticeEnabled: on(
-              'service_expired_notice',
-              SERVICE_REMINDER_DEFAULTS.expiredNoticeEnabled,
-            ),
-            usageEnabled: on('service_usage_reminders', SERVICE_REMINDER_DEFAULTS.usageEnabled),
-            expiryFirstDays: number(
-              'reminders.expiry_first_days',
-              SERVICE_REMINDER_DEFAULTS.expiryFirstDays,
-            ),
-            expirySecondDays: number(
-              'reminders.expiry_second_days',
-              SERVICE_REMINDER_DEFAULTS.expirySecondDays,
-            ),
-            usageFirstPercent: number(
-              'reminders.usage_first_percent',
-              SERVICE_REMINDER_DEFAULTS.usageFirstPercent,
-            ),
-            usageSecondPercent: number(
-              'reminders.usage_second_percent',
-              SERVICE_REMINDER_DEFAULTS.usageSecondPercent,
-            ),
-            usageFinalPercent: number(
-              'reminders.usage_final_percent',
-              SERVICE_REMINDER_DEFAULTS.usageFinalPercent,
-            ),
-          };
-        },
-        write: async (scope, actor, key, value, idempotencyKey) => {
-          try {
-            await settingsService.set(scope, actor, {
-              idempotencyKey,
-              key,
-              value,
-              expectedVersion: null,
-            });
-            return { ok: true };
-          } catch (error: unknown) {
-            /*
-             * ONLY the combination refusal becomes a value.
-             *
-             * `INVALID_VALUE` is what `ReminderThresholdsGuard` raises, and its message
-             * is the Persian sentence an operator has to read. Everything else — a
-             * denial, a stopped tenant, a lost connection — rethrows and is handled the
-             * way it is everywhere else, because swallowing those would report a write
-             * that did not happen as one that did, which is `SOURCE_BUG-002` exactly.
-             */
-            if (isNexaError(error) && error.code === CONTROL_ERROR_CODES.INVALID_VALUE) {
-              return { ok: false, reason: error.message };
-            }
-            throw error;
-          }
-        },
-      },
+      reminderConfig,
       purchaseTitle: async (scope, orderId) => {
         const order = await orderRepository.findById(scope, orderId);
         return order?.line.title ?? null;
       },
     }),
     panels: panelService,
+    /*
+     * The bot's own reminder-configuration seam, exposed so a test can read the path
+     * the SURFACE uses rather than a copy of it. Nothing else holds it: the HTTP
+     * surface reaches the same services directly.
+     */
+    reminderConfig,
     settingsService,
     settingsResolver,
     featureFlags,

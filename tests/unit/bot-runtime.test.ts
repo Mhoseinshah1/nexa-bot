@@ -773,12 +773,15 @@ describe('profile metadata, normalised before it is ever stored', () => {
        * `bot.unknown_command`, and none claims an effect that did not happen. A refusal
        * leaves the window OPEN, so "send another" is true when it is said.
        */
+      'bot.username.automatic_button',
       'bot.username.choose',
       'bot.username.custom_button',
+      'bot.username.exhausted',
       'bot.username.instructions',
       'bot.username.invalid',
-      'bot.username.random_button',
+      'bot.username.stale',
       'bot.username.taken',
+      'bot.username.unavailable',
       'bot.wallet.balance',
       'bot.wallet.insufficient',
       /*
@@ -918,6 +921,14 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.admin.services_none',
       'bot.admin.services_section',
       'bot.admin.usage',
+      'bot.admin.username_automatic_button',
+      'bot.admin.username_button',
+      'bot.admin.username_custom_button',
+      'bot.admin.username_refused',
+      'bot.admin.username_section',
+      'bot.admin.username_strategy_prefix_random',
+      'bot.admin.username_strategy_random',
+      'bot.admin.username_strategy_telegram_id_random',
     ]);
 
     /*

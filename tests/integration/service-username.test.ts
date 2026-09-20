@@ -1,6 +1,11 @@
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
 import {
+  DEFAULT_USERNAME_PATTERN,
+  RANDOM_STRATEGY_LENGTH,
+  isNewProviderUsername,
+  usernameDigest4,
   COMMERCE_ERROR_CODES,
   PANEL_ERROR_CODES,
   money,
@@ -54,12 +59,15 @@ const systemActor = (correlationId: string): ActorContext => ({
   correlationId: correlationId as CorrelationId,
 });
 
+/** The SAME hasher the container binds, so `{order4}` renders identically here. */
+const sha256 = (input: string): string => createHash('sha256').update(input).digest('hex');
+
 describe('the name a service is sold under', () => {
   let ctx: TestContext;
   let products: DrizzleProductRepository;
-  /** Legacy policy: both modes, derived generator — what migration 0088 gave everyone. */
+  /** The default policy: both choices, `nx` plus ten — what 0094 gave every panel. */
   let panelLegacy: string;
-  /** A panel with a template, so RANDOM renders rather than deriving. */
+  /** A panel on CUSTOM_TEMPLATE, so a template renders rather than the default preset. */
   let panelTemplated: string;
   /** Another tenant's panel on the SAME host as `panelLegacy`. See the namespace case. */
   let panelShared: string;
@@ -90,13 +98,17 @@ describe('the name a service is sold under', () => {
      */
     await ctx.container.database.db.execute(sql`
       INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status,
-                          allow_custom_username, allow_random_username, username_template)
+                          allow_custom_username, allow_automatic_username,
+                          username_strategy, username_prefix, username_template)
       VALUES (${panelLegacy}, ${tenantA.tenantId}, 'Legacy', 'sanaei',
-              'https://shared.example.test', 'ACTIVE', true, true, NULL),
+              'https://shared.example.test', 'ACTIVE', true, true,
+              'PREFIX_RANDOM', 'nx', NULL),
              (${panelTemplated}, ${tenantA.tenantId}, 'Templated', 'sanaei',
-              'https://t.example.test', 'ACTIVE', true, true, 'nx{random10}'),
+              'https://t.example.test', 'ACTIVE', true, true,
+              'CUSTOM_TEMPLATE', NULL, 'nx{random10}'),
              (${panelShared}, ${tenantB.tenantId}, 'Shared host', 'sanaei',
-              'https://shared.example.test', 'ACTIVE', true, true, NULL)`);
+              'https://shared.example.test', 'ACTIVE', true, true,
+              'PREFIX_RANDOM', 'nx', NULL)`);
     customerA = await customer(tenantA, '900901');
     customerB = await customer(tenantA, '900902');
     owner = adminActorFor(
@@ -156,7 +168,7 @@ describe('the name a service is sold under', () => {
       idempotencyKey: key(),
       customerId: who,
       orderId: order.id,
-      choice: raw === null ? { mode: 'RANDOM' } : { mode: 'CUSTOM', raw },
+      choice: raw === null ? { mode: 'AUTOMATIC' } : { mode: 'CUSTOM', raw },
     });
 
   const confirm = (order: OrderRecord, who: UserId = customerA) =>
@@ -166,12 +178,43 @@ describe('the name a service is sold under', () => {
       orderId: order.id,
     });
 
-  const setPolicy = (panelId: string, custom: boolean, random: boolean, template: string | null) =>
+  /**
+   * Writes the policy columns directly, which is deliberate for a FIXTURE.
+   *
+   * The service is what a test of the service uses; this is for arranging a panel a
+   * case needs, and going through the service would make every arrangement also a
+   * test of the validator. The two biconditional CHECK constraints still apply, so
+   * the strategy and its configuration are written together.
+   */
+  const setPolicy = (
+    panelId: string,
+    custom: boolean,
+    automatic: boolean,
+    template: string | null,
+  ) =>
     ctx.container.database.db.execute(sql`
       UPDATE panels SET allow_custom_username = ${custom},
-                        allow_random_username = ${random},
+                        allow_automatic_username = ${automatic},
+                        username_strategy = ${template === null ? 'PREFIX_RANDOM' : 'CUSTOM_TEMPLATE'},
+                        username_prefix = ${template === null ? 'nx' : null},
                         username_template = ${template}
        WHERE id = ${panelId}`);
+
+  /** Puts a panel on one preset with its configuration, both written together. */
+  const setStrategy = (panelId: string, strategy: string, prefix: string | null) =>
+    ctx.container.database.db.execute(sql`
+      UPDATE panels SET username_strategy = ${strategy},
+                        username_prefix = ${prefix},
+                        username_template = NULL
+       WHERE id = ${panelId}`);
+
+  /** Every payment row this order produced. Used to prove a refusal charged nothing. */
+  const payments = async (orderId: string) =>
+    (
+      await ctx.container.database.db.execute(
+        sql`SELECT id FROM payments WHERE order_id = ${orderId}`,
+      )
+    ).rows;
 
   const reservations = async (orderId: string) =>
     (
@@ -214,8 +257,12 @@ describe('the name a service is sold under', () => {
 
   it('refuses a name that breaks the rule, and reserves nothing', async () => {
     const order = await drafted(panelLegacy);
-    // No digit, Persian digits, whitespace, and too short: four refusals, one code.
-    for (const raw of ['alialiali', 'ali_۱۴۰۳', ' ali_2026 ', 'ali_20']) {
+    /*
+     * No digit, Persian digits, whitespace, too short and too long: five refusals,
+     * one code. `a1` is three characters under the floor and the 21-character one is
+     * a character over the ceiling — the two boundaries the universal contract moved.
+     */
+    for (const raw of ['alialiali', 'ali_۱۴۰۳', ' ali_2026 ', 'a1', `${'a'.repeat(20)}1`]) {
       await expect(choose(order, raw)).rejects.toMatchObject({
         code: COMMERCE_ERROR_CODES.SERVICE_USERNAME_INVALID,
       });
@@ -239,22 +286,23 @@ describe('the name a service is sold under', () => {
   // What the installation generates
   // -------------------------------------------------------------------------
 
-  it('renders the panel template for a RANDOM name', async () => {
+  it('renders the panel template for an AUTOMATIC name', async () => {
     const order = await drafted(panelTemplated);
     const reserved = await choose(order, null);
     expect(reserved.username).toMatch(/^nx[a-z0-9]{10}$/);
-    expect((await reservations(order.id))[0]?.mode).toBe('RANDOM');
+    expect((await reservations(order.id))[0]?.mode).toBe('AUTOMATIC');
   });
 
-  it('mints the legacy shape when the panel has no template', async () => {
+  it('mints the DEFAULT preset on a panel nobody has configured', async () => {
     /*
-     * `nx` plus 32 hex — the same shape, length and pattern every panel produced
-     * before this policy existed, so nothing an operator reads changes. What changed
-     * is that the name now exists BEFORE the money does.
+     * `nx` plus ten, twelve characters — and emphatically NOT the 34-character
+     * derived shape this release removed. The name exists before the money does,
+     * and it fits inside the universal contract like every other new name.
      */
     const order = await drafted(panelLegacy);
     const reserved = await choose(order, null);
-    expect(reserved.username).toMatch(/^nx[0-9a-f]{32}$/);
+    expect(reserved.username).toMatch(DEFAULT_USERNAME_PATTERN);
+    expect(isNewProviderUsername(reserved.username)).toBe(true);
   });
 
   // -------------------------------------------------------------------------
@@ -397,6 +445,121 @@ describe('the name a service is sold under', () => {
   // The policy itself
   // -------------------------------------------------------------------------
 
+  // -------------------------------------------------------------------------
+  // The four presets, against real rows
+  // -------------------------------------------------------------------------
+
+  it('mints twelve characters on RANDOM, and the whole Telegram id on TELEGRAM_ID_RANDOM', async () => {
+    await setStrategy(panelTemplated, 'RANDOM', null);
+    const first = await choose(await drafted(panelTemplated), null);
+    expect(first.username).toHaveLength(RANDOM_STRATEGY_LENGTH);
+    expect(isNewProviderUsername(first.username)).toBe(true);
+
+    await setStrategy(panelTemplated, 'TELEGRAM_ID_RANDOM', null);
+    const second = await choose(await drafted(panelTemplated), null);
+    // `customerA` is Telegram 900901, rendered in FULL and never truncated.
+    expect(second.username.startsWith('900901_')).toBe(true);
+    expect(second.username).toHaveLength('900901_'.length + 6);
+    expect(isNewProviderUsername(second.username)).toBe(true);
+  });
+
+  it('refuses a purchase TELEGRAM_ID_RANDOM cannot name, before any debit', async () => {
+    /*
+     * A thirteen-digit id renders 13 + 1 + 6 = 20 and fits; a fourteen-digit one
+     * renders 21 and does not. The refusal names no panel and no preset to the
+     * customer, and it is a DIFFERENT code from a collision because no redraw could
+     * have helped — the operator is the one who fixes it.
+     */
+    await setStrategy(panelTemplated, 'TELEGRAM_ID_RANDOM', null);
+    const long = await customer(tenantA, '99999999999999');
+    const order = await drafted(panelTemplated, long);
+    await expect(choose(order, null, long)).rejects.toMatchObject({
+      code: COMMERCE_ERROR_CODES.SERVICE_USERNAME_UNGENERATABLE,
+    });
+    expect(await reservations(order.id)).toHaveLength(0);
+    expect(await payments(order.id)).toHaveLength(0);
+  });
+
+  it('refuses rather than redrawing when the template has no random component', async () => {
+    /*
+     * `{order4}` is a deterministic function of the order, so the second attempt
+     * renders exactly what the first did. Regenerating it would mean changing the
+     * order's identity to hide a name clash, so there is ONE attempt and then a
+     * refusal — and the refusal is EXHAUSTED rather than TAKEN, because the customer
+     * chose nothing and has nothing to choose differently.
+     *
+     * The collision is arranged by taking the name first with a CUSTOM reservation on
+     * the same panel, which is the same namespace row the redraw would contend with.
+     */
+    await ctx.container.database.db.execute(sql`
+      UPDATE panels SET username_strategy = 'CUSTOM_TEMPLATE', username_prefix = NULL,
+                        username_template = 'u{order4}'
+       WHERE id = ${panelTemplated}`);
+    const victim = await drafted(panelTemplated);
+    const rendered = `u${usernameDigest4(victim.id, sha256)}`;
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO service_username_reservations
+        (id, tenant_id, namespace_key, username, panel_id, order_id, customer_id, mode, expires_at)
+      SELECT ${ctx.container.ids.uuid()}, ${tenantA.tenantId}, 'sanaei:t.example.test',
+             ${rendered}, ${panelTemplated}, id, ${customerA}, 'CUSTOM', now() + interval '1 hour'
+        FROM orders WHERE id = ${(await drafted(panelTemplated)).id}`);
+
+    await expect(choose(victim, null)).rejects.toMatchObject({
+      code: COMMERCE_ERROR_CODES.SERVICE_USERNAME_EXHAUSTED,
+    });
+    expect(await reservations(victim.id)).toHaveLength(0);
+    expect(await payments(victim.id), 'nothing was charged').toHaveLength(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // A frozen name, and what may re-judge it
+  // -------------------------------------------------------------------------
+
+  it('releases an UNFUNDED draft whose frozen name the contract no longer accepts', async () => {
+    /*
+     * A draft frozen under the old 34-character shape, confirmed after this release.
+     * No money has moved and nothing exists on a panel, so the hold is released ONCE
+     * and the customer chooses again — which is the only safe answer, and the reason
+     * it is fenced by `funded_at` in the case below.
+     */
+    const order = await drafted(panelLegacy);
+    await choose(order, null);
+    await ctx.container.database.db.execute(sql`
+      UPDATE service_username_reservations
+         SET username = ${`nx${'a'.repeat(32)}`}
+       WHERE order_id = ${order.id}`);
+
+    await expect(confirm(order)).rejects.toMatchObject({
+      code: COMMERCE_ERROR_CODES.SERVICE_USERNAME_STALE,
+    });
+    expect(await reservations(order.id), 'the hold is gone, not rewritten').toHaveLength(0);
+  });
+
+  it('never re-judges a FUNDED name, whatever it looks like', async () => {
+    /*
+     * The asymmetry that matters. Money has moved and an account may already exist
+     * under that name; renaming it would leave this installation addressing an
+     * account by a name the panel does not know it by. An ambiguous outcome is
+     * reconciliation's problem and a definitive non-delivery is the refund's.
+     */
+    const order = await drafted(panelLegacy);
+    await choose(order, null);
+    const legacyName = `nx${'b'.repeat(32)}`;
+    await ctx.container.database.db.execute(sql`
+      UPDATE service_username_reservations
+         SET username = ${legacyName}, funded_at = now()
+       WHERE order_id = ${order.id}`);
+
+    /*
+     * Confirmation succeeds and the name is untouched — no refusal, no rewrite. The
+     * unfunded case above is the only path that may release one.
+     */
+    const confirmed = await confirm(order);
+    expect(confirmed.state).toBe('AWAITING_PAYMENT');
+    const [row] = await reservations(order.id);
+    expect(row?.username).toBe(legacyName);
+  });
+
   it('refuses a panel policy with neither mode', async () => {
     const created = await ctx.container.panels.create(tenantA, owner, {
       name: 'Policy panel',
@@ -406,7 +569,13 @@ describe('the name a service is sold under', () => {
     });
     await expect(
       ctx.container.panels.update(tenantA, owner, created.view.panel.id, {
-        usernamePolicy: { allowCustom: false, allowRandom: false, template: null },
+        usernamePolicy: {
+          allowCustom: false,
+          allowAutomatic: false,
+          strategy: 'RANDOM',
+          prefix: null,
+          template: null,
+        },
         idempotencyKey: key(),
       }),
     ).rejects.toMatchObject({ code: PANEL_ERROR_CODES.PANEL_USERNAME_POLICY_EMPTY });
@@ -426,7 +595,13 @@ describe('the name a service is sold under', () => {
     });
     await expect(
       ctx.container.panels.update(tenantA, owner, created.view.panel.id, {
-        usernamePolicy: { allowCustom: true, allowRandom: true, template: 'everyone' },
+        usernamePolicy: {
+          allowCustom: true,
+          allowAutomatic: true,
+          strategy: 'CUSTOM_TEMPLATE',
+          prefix: null,
+          template: 'everyone',
+        },
         idempotencyKey: key(),
       }),
     ).rejects.toMatchObject({ code: PANEL_ERROR_CODES.PANEL_USERNAME_TEMPLATE_INVALID });
@@ -439,17 +614,25 @@ describe('the name a service is sold under', () => {
       name: 'Readback panel',
       providerType: 'sanaei',
       baseUrl: 'https://readback.example.test',
-      usernamePolicy: { allowCustom: false, allowRandom: true, template: 'a{random6}' },
+      usernamePolicy: {
+        allowCustom: false,
+        allowAutomatic: true,
+        strategy: 'CUSTOM_TEMPLATE',
+        prefix: null,
+        template: 'a{random6}',
+      },
       idempotencyKey: key(),
     });
     expect(created.view.panel.usernamePolicy).toEqual({
       allowCustom: false,
-      allowRandom: true,
+      allowAutomatic: true,
+      strategy: 'CUSTOM_TEMPLATE',
+      prefix: null,
       template: 'a{random6}',
     });
   });
 
-  it('gives a panel created without a policy the legacy behaviour', async () => {
+  it('gives a panel created without a policy the DEFAULT preset', async () => {
     const created = await ctx.container.panels.create(tenantA, owner, {
       name: 'Default panel',
       providerType: 'sanaei',
@@ -458,7 +641,9 @@ describe('the name a service is sold under', () => {
     });
     expect(created.view.panel.usernamePolicy).toEqual({
       allowCustom: true,
-      allowRandom: true,
+      allowAutomatic: true,
+      strategy: 'PREFIX_RANDOM',
+      prefix: 'nx',
       template: null,
     });
   });

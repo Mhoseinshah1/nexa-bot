@@ -304,7 +304,6 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.username_strategy_random': 'تصادفی ۱۲ نویسه‌ای',
   'bot.admin.username_strategy_prefix_random': 'پیشوند + تصادفی',
   'bot.admin.username_strategy_telegram_id_random': 'شناسهٔ تلگرام + تصادفی',
-  'bot.admin.username_saved': 'تنظیمات یوزرنیم این پنل ذخیره شد.',
   'bot.admin.username_refused': 'ذخیره نشد: {reason}',
   'bot.admin.section':
     'ادمین‌هایی که دسترسی تلگرام دارند در فهرست زیر آمده‌اند.\n\nبرای دادن دسترسی تلگرام به یک ادمین موجود:\n/link <شناسهٔ عددی تلگرام> <نام کاربری ادمین>\n\nبرای تعیین نقش یک ادمین:\n/role <نام کاربری ادمین> <کلید نقش>',

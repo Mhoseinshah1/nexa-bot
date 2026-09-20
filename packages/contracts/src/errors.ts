@@ -891,6 +891,17 @@ export const COMMERCE_ERROR_CODES = {
    */
   SERVICE_USERNAME_UNGENERATABLE: 'commerce.service_username_ungeneratable',
   /**
+   * The automatic generator drew its bounded number of candidates and every one was
+   * held.
+   *
+   * Distinct from `SERVICE_USERNAME_TAKEN`, and the difference is whose problem it is.
+   * `TAKEN` answers a name the CUSTOMER chose, so "choose another" is the remedy. This
+   * answers a name they never saw, so there is nothing for them to choose differently
+   * and telling them to try again at a different name would be advice they cannot
+   * follow. Raised BEFORE any debit.
+   */
+  SERVICE_USERNAME_EXHAUSTED: 'commerce.service_username_exhausted',
+  /**
    * An UNFUNDED draft is holding a name that the current contract would not mint.
    *
    * A draft frozen before the four-to-twenty contract, or before a panel's strategy
