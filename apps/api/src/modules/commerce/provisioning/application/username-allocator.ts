@@ -86,10 +86,17 @@ export class UsernameAllocator {
   /**
    * Take a name for this order, before any money moves.
    *
-   * Idempotent by the `(tenant_id, order_id)` index rather than by asking first: a
-   * question issued before the insert sees the state the loser started from, and this
-   * path is reachable from a Telegram callback Telegram will redeliver. A second call
-   * finds the row the first wrote and returns it, so a double tap produces one name.
+   * Idempotent by the `(tenant_id, order_id)` index and by NOTHING ELSE, which is a
+   * correction this file earned. It began with a `findByOrder` here as well, and the
+   * mutation pass then could not kill either mechanism: each covered for the other, so
+   * the suite could not tell which one was doing the work and a later edit could have
+   * removed the load-bearing half in silence.
+   *
+   * The index is the half that survives concurrency. A read issued before the insert
+   * sees the state the loser started from, so two simultaneous taps would both find
+   * nothing and both try to take a name; the conditional insert is what makes exactly
+   * one of them win, and `reserve` reads the winner's row back BY ORDER and returns it.
+   * A double tap therefore produces one name, and the redundant read is gone.
    *
    * The mode is checked against the PANEL, not against what the surface offered. A
    * callback carrying `CUSTOM` for a panel that allows only RANDOM is refused here —
@@ -101,9 +108,6 @@ export class UsernameAllocator {
     input: AllocateUsernameInput,
     tx: TransactionScope,
   ): Promise<UsernameReservation> {
-    const held = await this.deps.repository.findByOrder(scope, input.orderId, tx);
-    if (held !== null) return held;
-
     if (!modesOffered(input.policy).includes(input.mode)) {
       throw errors.preconditionFailed(
         COMMERCE_ERROR_CODES.SERVICE_USERNAME_MODE_UNAVAILABLE,
