@@ -452,3 +452,43 @@ satisfied, because `features.view` is in no catalogue and no role can be granted
 it. Feature flags are not separately permissioned in this product:
 `FeatureFlagsService` charges `settings.view` to read and `settings.edit` to
 write, deliberately and in terms. The gate now says the same.
+
+### 6-9. The coverage cell nothing filled: a refunded RENEW at the provisioner
+
+Not a defect. A rule that was correct, load-bearing, and untested, which is one
+release away from being the same thing.
+
+`ProvisionerService.refundPurchase` gives the money back for a paid operation
+the panel definitively refused, and one line in it decides what happens to the
+service:
+
+```ts
+if (purchasedAs === 'PROVISION') {
+  await this.deps.services.transition(scope, service.id, service.state, 'TERMINATED', …);
+}
+```
+
+A `PROVISION` that failed leaves a `PENDING_PROVISION` row holding a capacity
+slot for an account that will never exist, so it is ended. A `RENEW`,
+`ADD_TRAFFIC` or `ADD_TIME` that failed must not be: the customer's service is
+alive, they are using it, and what is being refunded is the month that was not
+added.
+
+Both halves of that sentence were already asserted — and never together. The
+existing proofs that a failed renewal leaves the service alone
+(`automatic-refund.test.ts`, and the stranded-transfer case in
+`service-management.test.ts`) all end at SETTLEMENT, before an operation is
+planned, and therefore never reach this method. The existing proofs that reach
+this method (`provisioning-delivery.test.ts`) all buy a NEW service, where the
+condition is true. Replacing the condition with `true` left 49 cases in
+`service-management.test.ts` and all 66 in `automatic-refund.test.ts` and
+`provisioning-delivery.test.ts` green.
+
+`refunds a renewal the panel definitively refused, and leaves the service
+ACTIVE` is that cell: a bank-transfer RENEW confirmed against an operable panel,
+whose credentials then stop working before the provisioner dials. The failure is
+terminal on the first attempt (`AUTHENTICATION_FAILED` is not retryable, so the
+bot does not spend four more failed logins on the operator's panel), the order is
+REFUNDED once for the exact total through the one credit path, and the service is
+still ACTIVE with the allowance and window it had — on the row and on the panel.
+Recorded as U-11 in `docs/phase6c-username-falsification.md`.

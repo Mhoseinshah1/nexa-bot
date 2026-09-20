@@ -72,13 +72,25 @@ Round two proved what a name may BE. These are about what happens to the row
 that holds it, and one about the scanner that decides whether a migration is
 safe to roll back onto.
 
-| #    | Rule                                 | Mutation                                                           | Test that dies                     | Verdict |
-| ---- | ------------------------------------ | ------------------------------------------------------------------ | ---------------------------------- | ------- |
-| U-10 | a boundary table may not be narrowed | `SET NOT NULL` on `tenants.slug` appended to an incoming migration | _the incoming migrations only ADD_ | KILLED  |
+| #    | Rule                                                 | Mutation                                                                         | Test that dies                                                                    | Verdict |
+| ---- | ---------------------------------------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ------- |
+| U-10 | a boundary table may not be narrowed                 | `SET NOT NULL` on `tenants.slug` appended to an incoming migration               | _the incoming migrations only ADD_                                                | KILLED  |
+| U-11 | a refunded RENEW must not end the service it renewed | `if (purchasedAs === 'PROVISION')` in `refundPurchase` replaced with `if (true)` | _refunds a renewal the panel definitively refused, and leaves the service ACTIVE_ | KILLED  |
 
-U-10 is the one recorded from an actual run in this pass, and it is recorded
-because the exemption it guards is new: `SET NOT NULL` is now permitted on a
-column this unreleased batch introduced, which is the same batch-scoped
+U-11 measured the gap as well as closing it. Under the mutation the other 49
+cases in `service-management.test.ts` and all 66 in `automatic-refund.test.ts`
+and `provisioning-delivery.test.ts` together stayed green: every existing proof
+that a failed renewal leaves the service alone ends BEFORE an operation is
+planned — at settlement, where the panel was already refusing. Nothing reached the provisioner's own refund with a commercial
+purchase, so the one line that distinguishes "the account was never created" from
+"the account exists and the customer is using it" could be deleted without a
+single failure. The new case is a bank-transfer RENEW on an operable panel whose
+credentials stop working before the provisioner dials: terminal
+`AUTHENTICATION_FAILED` on the first attempt, the order REFUNDED once for the
+exact total, and the service still ACTIVE with the allowance and window it had.
+
+U-10 is recorded because the exemption it guards is new: `SET NOT NULL` is now
+permitted on a column this unreleased batch introduced, which is the same batch-scoped
 reasoning `DROP COLUMN` already had. An exemption is only as good as the case it
 still refuses, so the case it still refuses was run: appending
 `ALTER TABLE "tenants" ALTER COLUMN "slug" SET NOT NULL` to 0095 fails the named
