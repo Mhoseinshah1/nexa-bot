@@ -101,11 +101,16 @@ describe('a Telegram turn, decided before any I/O', () => {
     );
   });
 
-  it('answers a menu label it was not given as an unknown command', () => {
+  it('answers a menu label it was not given as ordinary text', () => {
     // The map is the whole authority. Without it — a bot with no keyboard configured —
-    // the label is ordinary text and gets the answer ordinary text has always got.
+    // the label is ordinary text and takes the path ordinary text takes.
+    //
+    // That path is `USERNAME_TEXT` since the username step, and the CUSTOMER-visible
+    // answer is unchanged: the handler asks the database whether a typing window is
+    // open, is told no for every message but one, and returns `bot.unknown_command`.
+    // Asserted at the parse layer, which is what this file tests.
     expect(intentOf({ message: { text: CATALOGUE_FA['bot.menu.catalog'] } }).intent).toBe(
-      'UNSUPPORTED',
+      'USERNAME_TEXT',
     );
   });
 
@@ -115,11 +120,21 @@ describe('a Telegram turn, decided before any I/O', () => {
     );
     // No fuzzy matching, no prefix matching, no case folding: the menu is a closed set
     // of exact strings and everything else is what it was before the menu existed.
-    expect(intentOf({ message: { text: 'سلام' } }, menu).intent).toBe('UNSUPPORTED');
-    expect(intentOf({ message: { text: 'خرید' } }, menu).intent).toBe('UNSUPPORTED');
+    expect(intentOf({ message: { text: 'سلام' } }, menu).intent).toBe('USERNAME_TEXT');
+    expect(intentOf({ message: { text: 'خرید' } }, menu).intent).toBe('USERNAME_TEXT');
     expect(
       intentOf({ message: { text: `${CATALOGUE_FA['bot.menu.catalog']} extra` } }, menu).intent,
-    ).toBe('UNSUPPORTED');
+    ).toBe('USERNAME_TEXT');
+
+    /*
+     * And the text is carried UNTOUCHED, which is the half that matters.
+     *
+     * `isValidCustomUsername` is asked of the raw input and refuses whitespace rather
+     * than trimming it — the owner's rule: nothing is rewritten but ASCII case. A
+     * surface that tidied the text here would make that rule unreachable, and the
+     * customer would be given a name they did not type.
+     */
+    expect(intentOf({ message: { text: '  Ali_2026  ' } }, menu).args).toEqual(['  Ali_2026  ']);
   });
 
   it('offers exactly the four top-level actions this release can perform', () => {
@@ -198,8 +213,15 @@ describe('a Telegram turn, decided before any I/O', () => {
   });
 
   it('treats anything else as unsupported rather than as an error', () => {
-    expect(intentOf({ message: { text: 'hello' } }).intent).toBe('UNSUPPORTED');
-    expect(intentOf({ message: { text: '/startle' } }).intent).toBe('UNSUPPORTED');
+    /*
+     * TEXT takes the username path; everything that is not text stays `UNSUPPORTED`.
+     *
+     * The split is the point. Only a message a customer TYPED can be a username, so
+     * only text is offered to the window — a message with no text at all has nothing to
+     * offer and never reaches the database.
+     */
+    expect(intentOf({ message: { text: 'hello' } }).intent).toBe('USERNAME_TEXT');
+    expect(intentOf({ message: { text: '/startle' } }).intent).toBe('USERNAME_TEXT');
     expect(intentOf({ message: {} }).intent).toBe('UNSUPPORTED');
     expect(intentOf({}).intent).toBe('UNSUPPORTED');
     expect(intentOf(null).intent).toBe('UNSUPPORTED');
@@ -724,6 +746,39 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.start.welcome',
       'bot.start.welcome_back',
       'bot.unknown_command',
+      /*
+       * Five joined with the username step. Reviewed, one at a time:
+       *
+       *   `bot.username.choose`        asks which mode, and is sent ONLY when the panel
+       *                                offers both. One button is a tap that teaches
+       *                                nothing, so a single-mode panel skips it.
+       *   `bot.username.custom_button` opens the typing window, and the window is what
+       *                                makes the next ordinary message mean something.
+       *                                Nothing opens one the customer did not ask for.
+       *   `bot.username.random_button` has the installation draw the name instead.
+       *   `bot.username.instructions`  states the WHOLE rule before they type — length,
+       *                                the character set, letter-and-digit, and that
+       *                                case is not distinguished. It is why the refusal
+       *                                below names no clause.
+       *   `bot.username.invalid`       refuses without saying which rule was broken. The
+       *                                rule was shown in full, so naming the clause adds
+       *                                nothing they did not have and turns each attempt
+       *                                into a probe of the validator.
+       *   `bot.username.taken`         says the name is gone AND that no money moved,
+       *                                which is a fact rather than a reassurance: it is
+       *                                raised before any debit and before a transfer is
+       *                                requested.
+       *
+       * None instructs a customer to do something that can only answer
+       * `bot.unknown_command`, and none claims an effect that did not happen. A refusal
+       * leaves the window OPEN, so "send another" is true when it is said.
+       */
+      'bot.username.choose',
+      'bot.username.custom_button',
+      'bot.username.instructions',
+      'bot.username.invalid',
+      'bot.username.random_button',
+      'bot.username.taken',
       'bot.wallet.balance',
       'bot.wallet.insufficient',
       /*

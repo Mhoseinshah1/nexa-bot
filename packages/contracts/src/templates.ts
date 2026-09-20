@@ -429,23 +429,6 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
-    key: 'bot.username.confirmed',
-    description:
-      'Shows the name the service will actually carry, in the confirmation summary ' +
-      'before payment. The value is the canonical lowercase form, not what the ' +
-      'customer typed, so the summary and the panel account cannot disagree.',
-    format: 'PLAIN_TEXT',
-    placeholders: [
-      {
-        token: 'username',
-        type: 'STRING',
-        description: 'The canonical username reserved for this order.',
-        required: true,
-        repeatable: false,
-      },
-    ],
-  },
-  {
     key: 'bot.order.summary',
     description:
       'The server-calculated order summary a customer confirms. Every figure in it ' +
@@ -477,6 +460,24 @@ export const TEMPLATES = [
         token: 'trafficBytes',
         type: 'BYTES',
         description: 'Traffic allowance in bytes, or 0 for unlimited. The renderer owns the unit.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        /*
+         * The name the service will carry, in the summary the customer AGREES to.
+         *
+         * Optional because a tenant may have overridden this body before the username
+         * step existed, and a required token would then throw in the resolver rather
+         * than degrade — an order a customer cannot place at all, over a line of copy.
+         *
+         * The value is the CANONICAL lowercase form and never what they typed. Showing
+         * the typed spelling here would mean the summary and the panel account say two
+         * different things for every customer who used a capital.
+         */
+        token: 'username',
+        type: 'STRING',
+        description: 'The canonical username reserved for this order.',
         required: false,
         repeatable: false,
       },

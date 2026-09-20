@@ -52,7 +52,7 @@ export interface OrderUsernameLane {
   modesFor(
     scope: TenantContext,
     panelId: string,
-    tx: TransactionScope,
+    tx?: TransactionScope,
   ): Promise<readonly ServiceUsernameMode[]>;
   /** Take the name the customer chose. Idempotent per order. */
   choose(
@@ -65,7 +65,7 @@ export interface OrderUsernameLane {
   held(
     scope: TenantContext,
     orderId: string,
-    tx: TransactionScope,
+    tx?: TransactionScope,
   ): Promise<UsernameReservation | null>;
   /** At the money boundary: a name must exist. See the implementation. */
   require(
@@ -134,7 +134,7 @@ export class PanelUsernameLane implements OrderUsernameLane {
   async modesFor(
     scope: TenantContext,
     panelId: string,
-    tx: TransactionScope,
+    tx?: TransactionScope,
   ): Promise<readonly ServiceUsernameMode[]> {
     return modesOffered((await this.panel(scope, panelId, tx)).usernamePolicy);
   }
@@ -142,7 +142,7 @@ export class PanelUsernameLane implements OrderUsernameLane {
   async held(
     scope: TenantContext,
     orderId: string,
-    tx: TransactionScope,
+    tx?: TransactionScope,
   ): Promise<UsernameReservation | null> {
     return this.deps.repository.findByOrder(scope, orderId, tx);
   }
@@ -265,7 +265,7 @@ export class PanelUsernameLane implements OrderUsernameLane {
     return this.deps.captures.close(scope, id, reason, at, tx);
   }
 
-  private async panel(scope: TenantContext, panelId: string, tx: TransactionScope) {
+  private async panel(scope: TenantContext, panelId: string, tx?: TransactionScope) {
     const view = await this.deps.panels.find(scope, panelId, tx);
     if (view === null) {
       throw errors.notFound(PANEL_ERROR_CODES.PANEL_NOT_FOUND, 'Unknown panel.');

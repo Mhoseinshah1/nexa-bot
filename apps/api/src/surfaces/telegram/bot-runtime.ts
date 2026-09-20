@@ -43,6 +43,7 @@ import type { CustomerRecord } from '../../modules/commerce/customers/applicatio
 import type { ProductService } from '../../modules/commerce/catalog/application/product.service.js';
 import type { CommercialActionService } from '../../modules/commerce/commercial/application/commercial-action.service.js';
 import type { OrderService } from '../../modules/commerce/orders/application/order.service.js';
+import type { OrderRecord } from '../../modules/commerce/orders/application/ports.js';
 import type {
   ManualTransferInstruction,
   PaymentService,
@@ -112,6 +113,18 @@ export const BOT_INTENTS = [
   'SERVICE_BUY_TRAFFIC',
   'SERVICE_BUY_TIME',
   'SERVICE_ACTION_CONFIRM',
+  /*
+   * The three the username step needs (Deliverable A).
+   *
+   * `USERNAME_TEXT` is the only intent in this vocabulary produced by an ORDINARY
+   * message rather than a command or a button, and that is exactly the shape
+   * INCIDENT-FIN-001 warns about. It is safe here because it decides nothing: the
+   * handler asks the database whether a window is open, and `NO_WINDOW` — the answer
+   * for almost every message — falls through to the same fallback as before.
+   */
+  'USERNAME_CUSTOM',
+  'USERNAME_RANDOM',
+  'USERNAME_TEXT',
   'HELP',
   'RECEIPT_UPLOAD',
   /*
@@ -444,6 +457,17 @@ export const SERVICE_ADD_TIME_CALLBACK_PREFIX = 'h:';
 export const SERVICE_BUY_TRAFFIC_CALLBACK_PREFIX = 'a:';
 export const SERVICE_BUY_TIME_CALLBACK_PREFIX = 'b:';
 export const SERVICE_ACTION_CONFIRM_CALLBACK_PREFIX = 'q:';
+
+/**
+ * The two username-mode buttons.
+ *
+ * Both carry the ORDER, not the mode-plus-order: the mode is which button was tapped,
+ * and a callback that carried it as data would be a mode a client could choose for
+ * itself. The server re-checks the chosen mode against the panel's policy anyway —
+ * a button drawn before an operator changed the policy is not authorisation.
+ */
+export const USERNAME_CUSTOM_CALLBACK_PREFIX = 'j:';
+export const USERNAME_RANDOM_CALLBACK_PREFIX = 'Z:';
 
 /**
  * The management panel's prefixes (Phase 5T), deliberately UPPERCASE.
@@ -981,6 +1005,20 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
         callbackQueryId: id,
       };
     }
+    if (data.startsWith(USERNAME_CUSTOM_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'USERNAME_CUSTOM',
+        data.slice(USERNAME_CUSTOM_CALLBACK_PREFIX.length),
+        id,
+      );
+    }
+    if (data.startsWith(USERNAME_RANDOM_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'USERNAME_RANDOM',
+        data.slice(USERNAME_RANDOM_CALLBACK_PREFIX.length),
+        id,
+      );
+    }
     if (data.startsWith(SERVICE_ACTION_CONFIRM_CALLBACK_PREFIX)) {
       return callbackCommand(
         'SERVICE_ACTION_CONFIRM',
@@ -1153,7 +1191,20 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
       callbackQueryId: null,
     };
   }
-  return UNSUPPORTED;
+  /*
+   * Anything else MIGHT be a username, and only the database knows.
+   *
+   * This is the last branch on purpose: every command above is matched first, so a
+   * `/start` typed while a window is open is still `/start`. The text is carried
+   * UNTOUCHED — not trimmed, not lowercased — because `isValidCustomUsername` is asked
+   * of the raw input and a surface that tidied it first would be deciding what the
+   * customer typed.
+   *
+   * It is `USERNAME_TEXT` rather than `UNSUPPORTED` only as a routing label. The
+   * handler asks whether a window is open and, for almost every message, is told no
+   * and answers exactly as `UNSUPPORTED` always did.
+   */
+  return { intent: 'USERNAME_TEXT', targetId: null, args: [text], callbackQueryId: null };
 }
 
 const UNSUPPORTED: BotCommand = { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: null };
@@ -3133,6 +3184,41 @@ export class BotRuntime {
     if (command.intent === 'CONFIRM' && command.targetId !== null) {
       return this.confirm(scope, actor, command.targetId, customer, input.idempotencyKey);
     }
+    if (command.intent === 'USERNAME_CUSTOM' && command.targetId !== null) {
+      return this.customUsername(
+        scope,
+        actor,
+        command.targetId,
+        customer,
+        input.botInstanceId,
+        input.idempotencyKey,
+      );
+    }
+    if (command.intent === 'USERNAME_RANDOM' && command.targetId !== null) {
+      return this.randomUsername(scope, actor, command.targetId, customer, input.idempotencyKey);
+    }
+    /*
+     * The one intent produced by an ordinary message, and the one place this surface
+     * asks the database what an ordinary message meant.
+     *
+     * `args[0]` is the raw text, untouched: `isValidCustomUsername` is asked of the raw
+     * input, and a surface that trimmed it first would be deciding what the customer
+     * typed. `NO_WINDOW` returns the same fallback any unrecognised string has always
+     * got, which is what makes routing plain text here safe.
+     */
+    if (command.intent === 'USERNAME_TEXT') {
+      const text = command.args?.[0];
+      if (text !== undefined) {
+        return this.typedUsername(
+          scope,
+          actor,
+          text,
+          customer,
+          input.botInstanceId,
+          input.idempotencyKey,
+        );
+      }
+    }
     if (command.intent === 'WALLET') return this.walletBalance(scope, actor, customer);
     if (command.intent === 'TOPUP_MENU') return this.topupMenu(scope);
     if (command.intent === 'TOPUP_PICK' && command.targetId !== null) {
@@ -3880,6 +3966,186 @@ export class BotRuntime {
     return { key: 'bot.catalog.heading', values: {}, buttons, orderId: null };
   }
 
+  /**
+   * The summary a customer confirms, with the name their service will carry.
+   *
+   * One builder for every path that reaches it — the draft, the two mode buttons and
+   * the typed name — because the summary is the thing the customer AGREES to, and four
+   * copies of it are four chances for one of them to show a figure the order does not
+   * have. `username` is omitted rather than blanked when there is none: the placeholder
+   * is optional, so a body that renders it simply does not, and a body a tenant
+   * overrode before this step existed is unaffected.
+   */
+  private orderSummary(order: OrderRecord, username: string | null): PendingReply {
+    return {
+      key: 'bot.order.summary',
+      // From the ORDER's own snapshot, not from the product and not from the callback
+      // data. `templates.ts` says so in terms: "Every figure in it comes from the price
+      // quote, never from callback data."
+      values: {
+        productTitle: order.line.title,
+        total: order.totals.total,
+        durationDays: order.line.specification.durationDays,
+        trafficBytes: order.line.specification.trafficBytes,
+        // The CANONICAL form the allocator returned, never what the customer typed.
+        ...(username === null ? {} : { username }),
+      },
+      buttons: [
+        {
+          label: { kind: 'TEMPLATE', key: 'bot.order.confirm_button' },
+          data: `${CONFIRM_CALLBACK_PREFIX}${order.id}`,
+        },
+      ],
+      orderId: order.id,
+    };
+  }
+
+  /**
+   * What to show once a draft exists: the summary, or the username question first.
+   *
+   * The question is skipped in two cases and both are deliberate. A name already
+   * reserved — a redelivered tap, a customer who came back — goes straight to the
+   * summary carrying it, because asking again would suggest the first answer did not
+   * take. And a panel offering only RANDOM has no question to ask: one button is a tap
+   * that teaches nothing, so the name is drawn and the summary shows it.
+   *
+   * A panel offering only CUSTOM still shows this screen rather than opening the
+   * window unasked. The window makes an ordinary message mean something, and opening
+   * one the customer did not ask for is the half of INCIDENT-FIN-001 that is about
+   * surprise rather than duration.
+   */
+  private async afterDraft(
+    scope: TenantContext,
+    actor: ActorContext,
+    order: OrderRecord,
+    customer: CustomerRecord,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    const step = await this.deps.orders.usernameStep(scope, actor, {
+      customerId: customer.id,
+      orderId: order.id,
+    });
+    if (step.reservation !== null) return this.orderSummary(order, step.reservation.username);
+    if (step.modes.length === 0) return this.orderSummary(order, null);
+    if (step.modes.length === 1 && step.modes[0] === 'RANDOM') {
+      return this.randomUsername(scope, actor, order.id, customer, idempotencyKey);
+    }
+
+    const buttons: CustomerButton[] = [];
+    if (step.modes.includes('CUSTOM')) {
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.username.custom_button' },
+        data: `${USERNAME_CUSTOM_CALLBACK_PREFIX}${order.id}`,
+      });
+    }
+    if (step.modes.includes('RANDOM')) {
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.username.random_button' },
+        data: `${USERNAME_RANDOM_CALLBACK_PREFIX}${order.id}`,
+      });
+    }
+    return { key: 'bot.username.choose', values: {}, buttons, orderId: order.id };
+  }
+
+  /** The installation draws a name, and the summary shows the one it drew. */
+  private async randomUsername(
+    scope: TenantContext,
+    actor: ActorContext,
+    orderId: string,
+    customer: CustomerRecord,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    try {
+      const reservation = await this.deps.orders.chooseUsername(scope, actor, {
+        idempotencyKey: `${idempotencyKey}:username`,
+        customerId: customer.id,
+        orderId,
+        choice: { mode: 'RANDOM' },
+      });
+      const order = await this.deps.orders.get(scope, actor, orderId);
+      return this.orderSummary(order, reservation.username);
+    } catch (error) {
+      return refusal(error);
+    }
+  }
+
+  /**
+   * Open the typing window and state the whole rule.
+   *
+   * The rule is sent in FULL, once, before the customer types, which is why
+   * `bot.username.invalid` names no clause: a refusal that said which rule was broken
+   * would add nothing they were not already told and would turn each attempt into a
+   * probe of the validator.
+   */
+  private async customUsername(
+    scope: TenantContext,
+    actor: ActorContext,
+    orderId: string,
+    customer: CustomerRecord,
+    botInstanceId: string,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    try {
+      await this.deps.orders.beginUsernameEntry(scope, actor, {
+        idempotencyKey: `${idempotencyKey}:username-entry`,
+        botInstanceId,
+        customerId: customer.id,
+        orderId,
+      });
+      return { key: 'bot.username.instructions', values: {}, buttons: [], orderId };
+    } catch (error) {
+      return refusal(error);
+    }
+  }
+
+  /**
+   * An ordinary message, which is a username only if a window says so.
+   *
+   * `NO_WINDOW` is the answer for almost every message this bot receives, and it
+   * returns the same fallback the surface has always given. That is the whole safety
+   * argument for routing plain text here at all: the decision is the database's, the
+   * default is unchanged, and nothing about this path can reach anything but one draft
+   * order of one customer.
+   */
+  private async typedUsername(
+    scope: TenantContext,
+    actor: ActorContext,
+    text: string,
+    customer: CustomerRecord,
+    botInstanceId: string,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    try {
+      const result = await this.deps.orders.submitTypedUsername(scope, actor, {
+        idempotencyKey: `${idempotencyKey}:username-text`,
+        botInstanceId,
+        customerId: customer.id,
+        text,
+      });
+      if (result.outcome === 'NO_WINDOW') {
+        return { key: 'bot.unknown_command', values: {}, buttons: [], orderId: null };
+      }
+      const order = await this.deps.orders.get(scope, actor, result.reservation.orderId);
+      return this.orderSummary(order, result.reservation.username);
+    } catch (error) {
+      /*
+       * The two refusals the customer can act on, and NOTHING about the window.
+       *
+       * Both leave it open — `submitTypedUsername` closes it only for an accepted name
+       * — so the customer types another and is answered again. Any other error falls
+       * through to the ordinary refusal mapping, because a failure that is not about
+       * the name they chose is not a failure they can fix by choosing another.
+       */
+      if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.SERVICE_USERNAME_INVALID) {
+        return { key: 'bot.username.invalid', values: {}, buttons: [], orderId: null };
+      }
+      if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.SERVICE_USERNAME_TAKEN) {
+        return { key: 'bot.username.taken', values: {}, buttons: [], orderId: null };
+      }
+      return refusal(error);
+    }
+  }
+
   /** The summary a customer confirms. Every figure comes from the ORDER, never the tap. */
   private async draft(
     scope: TenantContext,
@@ -3899,25 +4165,7 @@ export class BotRuntime {
         customerId: customer.id,
         productId,
       });
-      return {
-        key: 'bot.order.summary',
-        // From the ORDER's own snapshot, not from the product and not from the callback
-        // data. `templates.ts` says so in terms: "Every figure in it comes from the price
-        // quote, never from callback data."
-        values: {
-          productTitle: order.line.title,
-          total: order.totals.total,
-          durationDays: order.line.specification.durationDays,
-          trafficBytes: order.line.specification.trafficBytes,
-        },
-        buttons: [
-          {
-            label: { kind: 'TEMPLATE', key: 'bot.order.confirm_button' },
-            data: `${CONFIRM_CALLBACK_PREFIX}${order.id}`,
-          },
-        ],
-        orderId: order.id,
-      };
+      return this.afterDraft(scope, actor, order, customer, idempotencyKey);
     } catch (error) {
       return refusal(error);
     }

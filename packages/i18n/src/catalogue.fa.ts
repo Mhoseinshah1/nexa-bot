@@ -111,12 +111,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'این یوزرنیم پذیرفته نشد. لطفاً با توجه به شرایط بالا یک یوزرنیم دیگر بفرستید.',
   'bot.username.taken':
     'این یوزرنیم قبلاً گرفته شده است. لطفاً یوزرنیم دیگری بفرستید. هیچ مبلغی کسر نشده است.',
-  // Shown in the confirmation summary BEFORE payment, so the customer sees the exact
-  // name their service will carry — the canonical lowercase form, not what they typed.
-  'bot.username.confirmed': 'یوزرنیم سرویس شما: {username}',
-
   'bot.order.summary':
-    'سفارش شما\nسرویس: {productTitle}\nمدت: {durationDays}\nحجم: {trafficBytes}\nمبلغ قابل پرداخت: {total}',
+    'سفارش شما\nسرویس: {productTitle}\nمدت: {durationDays}\nحجم: {trafficBytes}\nیوزرنیم: {username}\nمبلغ قابل پرداخت: {total}',
   'bot.order.confirm_button': 'تأیید و ثبت سفارش',
   'bot.order.unavailable': 'این سرویس در حال حاضر قابل خرید نیست.',
   'bot.order.expired': 'مهلت این سفارش به پایان رسیده است. لطفاً دوباره سفارش دهید.',

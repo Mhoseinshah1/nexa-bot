@@ -57,7 +57,7 @@ export interface ServiceUsernameRepository {
   findByOrder(
     scope: TenantContext,
     orderId: string,
-    tx: TransactionScope,
+    tx?: TransactionScope,
   ): Promise<UsernameReservation | null>;
 
   /**

@@ -12,6 +12,7 @@ import {
   userIdSchema,
   type ActorContext,
   type AuditWriter,
+  type ServiceUsernameMode,
   type Clock,
   type IdGenerator,
   type IdempotencyStore,
@@ -439,6 +440,46 @@ export class OrderService {
         return reservation;
       },
     );
+  }
+
+  /**
+   * What this order's username step looks like right now.
+   *
+   * A READ, and the one the Telegram flow asks before drawing anything: which modes the
+   * order's panel offers, and whether a name is already held. Both come from the same
+   * place the write path uses, so a surface cannot draw a button for a mode the
+   * allocator would refuse — and the allocator re-checks anyway, because a button drawn
+   * a minute ago is not authorisation.
+   */
+  async usernameStep(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: { readonly customerId: string; readonly orderId: string },
+  ): Promise<{
+    readonly modes: readonly ServiceUsernameMode[];
+    readonly reservation: UsernameReservation | null;
+  }> {
+    const customerId = this.customerId(input.customerId);
+    const orderId = this.orderId(input.orderId);
+    await this.deps.guard.check(scope, actor, ORDER_PLACE_PERMISSION);
+
+    const order = await this.deps.repository.findById(scope, orderId);
+    // Another customer's order is UNKNOWN, not FORBIDDEN. See `confirm`.
+    if (order === null || order.customerId !== customerId) {
+      throw errors.notFound(COMMERCE_ERROR_CODES.ORDER_NOT_FOUND, 'Unknown order.');
+    }
+    /*
+     * A commercial order has no step at all, and says so with an empty list rather than
+     * a refusal. The surface is asking what to draw, and "nothing" is a legitimate
+     * answer — `RENEW` acts on a service that already has a name.
+     */
+    if (!orderPurposeCreatesNewService(order.purpose)) {
+      return { modes: [], reservation: null };
+    }
+    return {
+      modes: await this.deps.usernames.modesFor(scope, order.line.panelId),
+      reservation: await this.deps.usernames.held(scope, orderId),
+    };
   }
 
   /**

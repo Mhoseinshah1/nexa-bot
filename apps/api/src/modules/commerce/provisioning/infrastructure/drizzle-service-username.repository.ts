@@ -45,9 +45,9 @@ export class DrizzleServiceUsernameRepository implements ServiceUsernameReposito
   async findByOrder(
     scope: TenantContext,
     orderId: string,
-    tx: TransactionScope,
+    tx?: TransactionScope,
   ): Promise<UsernameReservation | null> {
-    const [row] = await tx.tx
+    const [row] = await (tx?.tx ?? this.db)
       .select()
       .from(serviceUsernameReservations)
       .where(
