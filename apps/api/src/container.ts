@@ -113,6 +113,7 @@ import { DrizzleSettingRepository } from './modules/control/settings/infrastruct
 import { SettingsResolver } from './modules/control/settings/application/settings-resolver.js';
 import { SettingsService } from './modules/control/settings/application/settings.service.js';
 import { ReminderThresholdsGuard } from './modules/control/settings/application/reminder-thresholds.guard.js';
+import { CONTROL_ERROR_CODES, SERVICE_REMINDER_DEFAULTS, isNexaError } from '@nexa/contracts';
 import { DrizzleFeatureFlagRepository } from './modules/control/features/infrastructure/drizzle-feature-flags.repository.js';
 import {
   FeatureFlagResolver,
@@ -2663,6 +2664,82 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
        * at confirmation, so it is the only copy that still says what the customer
        * agreed to.
        */
+      /*
+       * The reminder configuration seam for the Telegram admin section.
+       *
+       * Both halves go through the SAME application services the Web Admin uses, so the
+       * two surfaces cannot drift: `list` charges `settings.view` and `features.view`,
+       * `set` charges `settings.edit` and runs `ReminderThresholdsGuard` inside its own
+       * transaction. Nothing here re-implements a rule, and nothing here is authorized
+       * by holding the port.
+       */
+      reminderConfig: {
+        read: async (scope, actor) => {
+          const [values, flags] = await Promise.all([
+            settingsService.list(scope, actor),
+            featureFlags.list(scope, actor),
+          ]);
+          const number = (key: string, fallback: number): number => {
+            const found = values.find((one) => one.key === key);
+            return typeof found?.value === 'number' ? found.value : fallback;
+          };
+          const on = (key: string, fallback: boolean): boolean =>
+            flags.find((one) => one.key === key)?.enabled ?? fallback;
+          return {
+            expiryEnabled: on('service_expiry_reminders', SERVICE_REMINDER_DEFAULTS.expiryEnabled),
+            expiredNoticeEnabled: on(
+              'service_expired_notice',
+              SERVICE_REMINDER_DEFAULTS.expiredNoticeEnabled,
+            ),
+            usageEnabled: on('service_usage_reminders', SERVICE_REMINDER_DEFAULTS.usageEnabled),
+            expiryFirstDays: number(
+              'reminders.expiry_first_days',
+              SERVICE_REMINDER_DEFAULTS.expiryFirstDays,
+            ),
+            expirySecondDays: number(
+              'reminders.expiry_second_days',
+              SERVICE_REMINDER_DEFAULTS.expirySecondDays,
+            ),
+            usageFirstPercent: number(
+              'reminders.usage_first_percent',
+              SERVICE_REMINDER_DEFAULTS.usageFirstPercent,
+            ),
+            usageSecondPercent: number(
+              'reminders.usage_second_percent',
+              SERVICE_REMINDER_DEFAULTS.usageSecondPercent,
+            ),
+            usageFinalPercent: number(
+              'reminders.usage_final_percent',
+              SERVICE_REMINDER_DEFAULTS.usageFinalPercent,
+            ),
+          };
+        },
+        write: async (scope, actor, key, value, idempotencyKey) => {
+          try {
+            await settingsService.set(scope, actor, {
+              idempotencyKey,
+              key,
+              value,
+              expectedVersion: null,
+            });
+            return { ok: true };
+          } catch (error: unknown) {
+            /*
+             * ONLY the combination refusal becomes a value.
+             *
+             * `INVALID_VALUE` is what `ReminderThresholdsGuard` raises, and its message
+             * is the Persian sentence an operator has to read. Everything else — a
+             * denial, a stopped tenant, a lost connection — rethrows and is handled the
+             * way it is everywhere else, because swallowing those would report a write
+             * that did not happen as one that did, which is `SOURCE_BUG-002` exactly.
+             */
+            if (isNexaError(error) && error.code === CONTROL_ERROR_CODES.INVALID_VALUE) {
+              return { ok: false, reason: error.message };
+            }
+            throw error;
+          }
+        },
+      },
       purchaseTitle: async (scope, orderId) => {
         const order = await orderRepository.findById(scope, orderId);
         return order?.line.title ?? null;

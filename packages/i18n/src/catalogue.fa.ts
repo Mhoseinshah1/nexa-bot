@@ -208,6 +208,34 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * Phase 6B — the panels section. No address, no credential, no provider body:
    * a chat message is forwardable and stays in that chat for ever.
    */
+  /*
+   * The reminder settings section.
+   *
+   * Every value is PRINTED before anything is editable — the cure for BC-SB-003, where
+   * seven of twelve legacy screens ask for a new value without showing the old one.
+   */
+  'bot.admin.reminders_button': 'یادآورهای سرویس',
+  'bot.admin.reminders_section':
+    'تنظیمات یادآور سرویس‌ها\n\n' +
+    'یادآور پیش از انقضا: {expiry}\n' +
+    '  • یادآور اول: {firstDays} روز پیش از پایان\n' +
+    '  • یادآور دوم: {secondDays} روز پیش از پایان\n' +
+    'اعلام پایان اعتبار: {expired}\n\n' +
+    'یادآور مصرف حجم: {usage}\n' +
+    '  • آستانه اول: {firstPercent}٪\n' +
+    '  • آستانه دوم: {secondPercent}٪\n' +
+    '  • آستانه پایانی: {finalPercent}٪\n\n' +
+    'برای تغییر هر مقدار، دکمهٔ آن را بزنید. روشن و خاموش کردن خودِ یادآورها از پنل وب ' +
+    'انجام می‌شود، چون دامنهٔ اثر آن کل مشتریان است و به تأیید نوشتاری و ثبت دلیل نیاز دارد.',
+  'bot.admin.reminder_expiry_first_button': 'یادآور اول انقضا',
+  'bot.admin.reminder_expiry_second_button': 'یادآور دوم انقضا',
+  'bot.admin.reminder_usage_first_button': 'آستانه اول مصرف',
+  'bot.admin.reminder_usage_second_button': 'آستانه دوم مصرف',
+  'bot.admin.reminder_usage_final_button': 'آستانه پایانی مصرف',
+  'bot.admin.reminder_choose':
+    'تنظیم: <code>{setting}</code>\nمقدار فعلی: {current}\n\nمقدار تازه را انتخاب کنید.',
+  'bot.admin.reminder_saved': 'ذخیره شد.\n<code>{setting}</code> از این پس {value} است.',
+  'bot.admin.reminder_refused': 'این مقدار پذیرفته نشد.\n\n{reason}',
   'bot.admin.panels_button': '🛰 پنل‌ها',
   'bot.admin.panels_section':
     'پنل‌های در سرویس، از تازه‌ترین. برای دیدن وضعیت و ظرفیت هر پنل، روی نامش بزنید.',

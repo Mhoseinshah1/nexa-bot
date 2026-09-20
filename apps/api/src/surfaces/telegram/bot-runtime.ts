@@ -8,6 +8,8 @@ import {
   PAYMENT_RECEIPT_MAX_PER_PAYMENT,
   plainAmount,
   uuidV7Schema,
+  USAGE_REMINDER_PERCENT_MAX,
+  USAGE_REMINDER_PERCENT_MIN,
 } from '@nexa/contracts';
 import type {
   ActorContext,
@@ -23,6 +25,8 @@ import type {
   PermissionKey,
   ServiceActionAvailability,
   ServiceOperatorAction,
+  ServiceReminderThresholds,
+  SettingKey,
   TemplateKey,
   TemplateValues,
   TenantContext,
@@ -184,6 +188,23 @@ export const BOT_INTENTS = [
   'ADMIN_PANEL_DISABLE',
   'ADMIN_PANEL_ARCHIVE_ASK',
   'ADMIN_PANEL_ARCHIVE',
+  /*
+   * Phase 6C — the reminder settings section.
+   *
+   * Three intents and no fourth, because there is no typed-value turn: `ADMIN_REMINDERS`
+   * is the whole configuration printed at once, `ADMIN_REMINDER_EDIT` is one setting and
+   * the values it may take, and `ADMIN_REMINDER_SET` is a tap on one of them. The value
+   * travels in the callback data, so this section has no pending prompt and therefore no
+   * way to swallow an unrelated message (INCIDENT-FIN-001).
+   *
+   * There is deliberately no intent for turning a reminder family off. All three flags
+   * are TENANT_WIDE, and ADR-0010 asks for a typed confirmation and a recorded reason at
+   * that blast radius — a button that supplied either would be the safeguard removed
+   * rather than satisfied, so the section says where to do it instead.
+   */
+  'ADMIN_REMINDERS',
+  'ADMIN_REMINDER_EDIT',
+  'ADMIN_REMINDER_SET',
   'ADMIN_LINK',
   'ADMIN_ROLE',
   'UNSUPPORTED',
@@ -540,6 +561,8 @@ const SERVICES_TERMINATE_PERMISSION = 'services.terminate' as PermissionKey;
  * touches a credential: `panels.credentials.rotate` has no button in Telegram at all.
  */
 const PANELS_VIEW_PERMISSION = 'panels.view' as PermissionKey;
+const SETTINGS_VIEW_PERMISSION = 'settings.view' as PermissionKey;
+const FEATURES_VIEW_PERMISSION = 'features.view' as PermissionKey;
 const PANELS_EDIT_PERMISSION = 'panels.edit' as PermissionKey;
 
 /**
@@ -598,6 +621,105 @@ export const ADMIN_PANEL_ARCHIVE_ASK_CALLBACK_PREFIX = 'W:';
 /** The one archiving callback. Produced by the confirmation screen alone. */
 export const ADMIN_PANEL_ARCHIVE_CALLBACK_PREFIX = 'X:';
 export const ADMIN_PANELS_PAGE_CALLBACK_PREFIX = 'Y:';
+
+/**
+ * The reminder settings section.
+ *
+ * DIGITS, because every one of the fifty-two single letters is already a prefix. The
+ * shape is unchanged — one character, a colon, then the payload — and a digit cannot
+ * collide with a letter, so the dispatch order below stays unambiguous.
+ */
+export const ADMIN_REMINDERS_CALLBACK_PREFIX = '0:';
+export const ADMIN_REMINDER_EDIT_CALLBACK_PREFIX = '1:';
+export const ADMIN_REMINDER_SET_CALLBACK_PREFIX = '2:';
+
+/**
+ * The five editable thresholds, as the two-letter codes the callback data carries.
+ *
+ * A closed map rather than the registry key itself, because `callback_data` is capped
+ * at 64 bytes and `reminders.usage_second_percent` is half of it before a value is
+ * appended. It is also the VALIDATION: a code that is not in this map is refused at the
+ * boundary, so no client-supplied string ever reaches the settings service as a key.
+ */
+export const REMINDER_SETTING_CODES = {
+  ef: 'reminders.expiry_first_days',
+  es: 'reminders.expiry_second_days',
+  uf: 'reminders.usage_first_percent',
+  us: 'reminders.usage_second_percent',
+  un: 'reminders.usage_final_percent',
+} as const satisfies Record<string, SettingKey>;
+export type ReminderSettingCode = keyof typeof REMINDER_SETTING_CODES;
+
+/** The button label for each code's chooser. One template per setting, so each names itself. */
+const REMINDER_SETTING_BUTTONS = {
+  ef: 'bot.admin.reminder_expiry_first_button',
+  es: 'bot.admin.reminder_expiry_second_button',
+  uf: 'bot.admin.reminder_usage_first_button',
+  us: 'bot.admin.reminder_usage_second_button',
+  un: 'bot.admin.reminder_usage_final_button',
+} as const satisfies Record<ReminderSettingCode, TemplateKey>;
+
+/**
+ * The values a tap may choose, per family.
+ *
+ * A SMALL MENU OF SCALARS, which is CBR-011's shape (B) and the one Mirza uses for the
+ * settings that are not free text. Every entry is inside the contract's own bounds, so
+ * a tap cannot propose a value the schema would reject — the schema still checks, and
+ * the combination guard still checks, but an operator never meets a refusal they could
+ * not have avoided.
+ */
+const REMINDER_DAY_OPTIONS = [1, 2, 3, 5, 7, 10, 14, 30] as const;
+const REMINDER_PERCENT_OPTIONS = [50, 60, 70, 75, 80, 85, 90, 95, 100] as const;
+
+function reminderOptionsFor(code: ReminderSettingCode): readonly number[] {
+  return code === 'ef' || code === 'es' ? REMINDER_DAY_OPTIONS : REMINDER_PERCENT_OPTIONS;
+}
+
+/** The order the section draws its five buttons in: expiry first, then usage. */
+const REMINDER_SETTING_CODE_ORDER = [
+  'ef',
+  'es',
+  'uf',
+  'us',
+  'un',
+] as const satisfies readonly ReminderSettingCode[];
+
+/** The value a code currently names, so the chooser can print it before replacing it. */
+function reminderValueOf(config: ServiceReminderThresholds, code: ReminderSettingCode): number {
+  switch (code) {
+    case 'ef':
+      return config.expiryFirstDays;
+    case 'es':
+      return config.expirySecondDays;
+    case 'uf':
+      return config.usageFirstPercent;
+    case 'us':
+      return config.usageSecondPercent;
+    case 'un':
+      return config.usageFinalPercent;
+  }
+}
+
+/**
+ * A switch, as the section prints it.
+ *
+ * A SYMBOL and not a word, and that is the whole reason this compiles: `check:i18n`
+ * refuses hard-coded customer-facing strings in a surface, and «روشن»/«خاموش» here was
+ * exactly that — a translatable sentence fragment living outside the catalogue. An
+ * earlier revision of this function had them with a comment explaining why it was
+ * acceptable; the comment was wrong and the check said so.
+ *
+ * The pair is also the vocabulary an operator already reads: Mirza's capability list
+ * marks every toggle ✅ or ❌ (CBR-009), so this says the same thing the same way.
+ */
+function onOff(enabled: boolean): string {
+  return enabled ? '\u2705' : '\u274c';
+}
+
+/** Unknown codes fail closed, which is what makes the map above a boundary check. */
+function isReminderSettingCode(value: string): value is ReminderSettingCode {
+  return Object.prototype.hasOwnProperty.call(REMINDER_SETTING_CODES, value);
+}
 
 /**
  * Each services-section prefix and the intent it parses to, in ONE place.
@@ -1070,6 +1192,52 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
     if (data === ADMIN_PANELS_CALLBACK_PREFIX) {
       return { intent: 'ADMIN_PANELS', targetId: null, callbackQueryId: id };
     }
+    if (data === ADMIN_REMINDERS_CALLBACK_PREFIX) {
+      return { intent: 'ADMIN_REMINDERS', targetId: null, callbackQueryId: id };
+    }
+    if (data.startsWith(ADMIN_REMINDER_EDIT_CALLBACK_PREFIX)) {
+      /*
+       * The setting code, validated HERE against the closed map.
+       *
+       * `callback_data` is client-supplied text, so an unknown code must be UNSUPPORTED
+       * at the boundary rather than a settings key assembled from it downstream. The
+       * same rule the UUID paths above follow, for the same reason.
+       */
+      const code = data.slice(ADMIN_REMINDER_EDIT_CALLBACK_PREFIX.length);
+      if (!isReminderSettingCode(code)) {
+        return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      }
+      return { intent: 'ADMIN_REMINDER_EDIT', targetId: code, callbackQueryId: id };
+    }
+    if (data.startsWith(ADMIN_REMINDER_SET_CALLBACK_PREFIX)) {
+      const [code, raw] = data.slice(ADMIN_REMINDER_SET_CALLBACK_PREFIX.length).split(':');
+      /*
+       * BOTH halves validated, and the value against the widest bound any of the five
+       * keys declares rather than against the option list.
+       *
+       * The list is what a tap can produce; the bound is what the contract permits. A
+       * value outside the bound is a crafted callback and is refused here; one inside
+       * it but not on the list is still checked by the key's own schema and by the
+       * combination guard, so nothing downstream trusts this number — it is only
+       * stopped from being a string, a float or a megabyte of digits.
+       */
+      const value = raw === undefined ? Number.NaN : Number(raw);
+      if (
+        code === undefined ||
+        !isReminderSettingCode(code) ||
+        !Number.isInteger(value) ||
+        value < USAGE_REMINDER_PERCENT_MIN ||
+        value > USAGE_REMINDER_PERCENT_MAX
+      ) {
+        return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      }
+      return {
+        intent: 'ADMIN_REMINDER_SET',
+        targetId: code,
+        args: [String(value)],
+        callbackQueryId: id,
+      };
+    }
     if (data.startsWith(ADMIN_PANELS_PAGE_CALLBACK_PREFIX)) {
       /*
        * The panels section's own page button, decoded HERE for the reason
@@ -1460,6 +1628,40 @@ export interface BotRuntimeDeps {
    * keyboard and unchanged slash commands, which is what every test that does not care
    * about the menu gets.
    */
+  /**
+   * The reminder configuration, read and written through the ONE application path.
+   *
+   * A narrow port rather than `SettingsService` and `FeatureFlagsService`, for the
+   * reason every other port on this interface gives: handing a Telegram surface the
+   * settings service would hand it every key in the registry, including the operations
+   * chat id and the sales currency. This one can read the eight reminder values and
+   * write the five numbers, and nothing else.
+   *
+   * Neither method is authorized by HAVING the port. `read` charges `settings.view` and
+   * `features.view`, `write` charges `settings.edit`, and both go through the same
+   * guard, the same audit row and the same combination validation the Web Admin does —
+   * which is the "one application service and one authorization/audit path" the surface
+   * is required to share with it.
+   */
+  readonly reminderConfig: {
+    read: (scope: TenantContext, actor: ActorContext) => Promise<ServiceReminderThresholds>;
+    /**
+     * Writes one threshold, or reports why the combination was refused.
+     *
+     * A refusal is a VALUE and not an exception, because it is an ordinary answer an
+     * operator caused and must read: `ReminderThresholdsGuard` returns Persian prose
+     * naming which of the five is wrong. An exception here would be caught by the
+     * generic handler and rendered as "something went wrong", which is Mirza's
+     * `⭕️ ورودی نا معتبر` with extra steps.
+     */
+    write: (
+      scope: TenantContext,
+      actor: ActorContext,
+      key: SettingKey,
+      value: number,
+      idempotencyKey: string,
+    ) => Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: string }>;
+  };
   readonly mainMenu: MainMenuRoutes;
   readonly queueRateLimitedFact: (
     scope: TenantContext,
@@ -2162,7 +2364,16 @@ export class BotRuntime {
     const maySeeAdmins = permissions.has(ADMINS_VIEW_PERMISSION);
     const maySeeServices = permissions.has(SERVICES_VIEW_PERMISSION);
     const maySeePanels = permissions.has(PANELS_VIEW_PERMISSION);
-    if (!mayReview && !maySeeAdmins && !maySeeServices && !maySeePanels) return null;
+    /*
+     * The reminder section needs BOTH read permissions, because it prints both halves:
+     * the five settings and the three switches. Drawing it for an administrator who
+     * holds only one would produce a screen that denies itself on arrival.
+     */
+    const maySeeReminders =
+      permissions.has(SETTINGS_VIEW_PERMISSION) && permissions.has(FEATURES_VIEW_PERMISSION);
+    if (!mayReview && !maySeeAdmins && !maySeeServices && !maySeePanels && !maySeeReminders) {
+      return null;
+    }
 
     try {
       switch (command.intent) {
@@ -2201,6 +2412,17 @@ export class BotRuntime {
                         key: 'bot.admin.panels_button' as const,
                       },
                       data: ADMIN_PANELS_CALLBACK_PREFIX,
+                    },
+                  ]
+                : []),
+              ...(maySeeReminders
+                ? [
+                    {
+                      label: {
+                        kind: 'TEMPLATE' as const,
+                        key: 'bot.admin.reminders_button' as const,
+                      },
+                      data: ADMIN_REMINDERS_CALLBACK_PREFIX,
                     },
                   ]
                 : []),
@@ -2288,6 +2510,33 @@ export class BotRuntime {
               );
         case 'ADMIN_PANELS':
           return await this.adminPanels(scope, adminActor, null);
+        case 'ADMIN_REMINDERS':
+          return await this.adminReminders(scope, adminActor);
+        case 'ADMIN_REMINDER_EDIT':
+          /*
+           * The cast is safe because the BOUNDARY validated it: `callbackCommand`
+           * refuses any code not in `REMINDER_SETTING_CODES` before an intent is
+           * produced, so `targetId` here is one of the five or the intent is
+           * UNSUPPORTED. The same shape the UUID paths use.
+           */
+          return command.targetId === null
+            ? null
+            : await this.adminReminderEdit(
+                scope,
+                adminActor,
+                command.targetId as ReminderSettingCode,
+              );
+        case 'ADMIN_REMINDER_SET': {
+          const chosen = command.args?.[0];
+          if (command.targetId === null || chosen === undefined) return null;
+          return await this.adminReminderSet(
+            scope,
+            adminActor,
+            command.targetId as ReminderSettingCode,
+            Number(chosen),
+            input.idempotencyKey,
+          );
+        }
         case 'ADMIN_PANELS_PAGE':
           /*
            * The cursor is decoded at the boundary, so an unparseable one never reaches
@@ -2595,6 +2844,105 @@ export class BotRuntime {
    * `list` charges `panels.view` itself, so an administrator who reached this through a
    * crafted callback without it is refused there rather than here.
    */
+  /**
+   * Every reminder setting and switch, printed before anything is editable.
+   *
+   * The whole point of the screen, and the cure for the defect CBR-013 and BC-SB-003
+   * name: seven of twelve legacy settings screens never show the value they are about
+   * to replace, so "an admin cannot read the current configuration without overwriting
+   * it". Here the read is a read.
+   *
+   * `reminderConfig.read` charges `settings.view` and `features.view` itself. The
+   * button that led here was drawn behind the same pair, and this is checked ANYWAY:
+   * not drawing a button is never the control, because a callback can be replayed from
+   * an old message after a role change.
+   */
+  private async adminReminders(scope: TenantContext, actor: ActorContext): Promise<PendingReply> {
+    const config = await this.deps.reminderConfig.read(scope, actor);
+    return {
+      key: 'bot.admin.reminders_section',
+      values: {
+        expiry: onOff(config.expiryEnabled),
+        expired: onOff(config.expiredNoticeEnabled),
+        usage: onOff(config.usageEnabled),
+        firstDays: config.expiryFirstDays,
+        secondDays: config.expirySecondDays,
+        firstPercent: config.usageFirstPercent,
+        secondPercent: config.usageSecondPercent,
+        finalPercent: config.usageFinalPercent,
+      },
+      buttons: REMINDER_SETTING_CODE_ORDER.map((code) => ({
+        label: { kind: 'TEMPLATE' as const, key: REMINDER_SETTING_BUTTONS[code] },
+        data: `${ADMIN_REMINDER_EDIT_CALLBACK_PREFIX}${code}`,
+      })),
+      orderId: null,
+    };
+  }
+
+  /** One setting, its current value, and the values a tap may replace it with. */
+  private async adminReminderEdit(
+    scope: TenantContext,
+    actor: ActorContext,
+    code: ReminderSettingCode,
+  ): Promise<PendingReply> {
+    const config = await this.deps.reminderConfig.read(scope, actor);
+    return {
+      key: 'bot.admin.reminder_choose',
+      values: {
+        setting: REMINDER_SETTING_CODES[code],
+        current: reminderValueOf(config, code),
+      },
+      /*
+       * The options are plain TEXT labels, because a number is data and not a sentence.
+       * `check:i18n` forbids hard-coded customer-facing STRINGS in a surface; rendering
+       * `String(85)` is neither hard-coded nor a string a translator would touch.
+       */
+      buttons: reminderOptionsFor(code).map((option) => ({
+        label: { kind: 'TEXT' as const, text: String(option) },
+        data: `${ADMIN_REMINDER_SET_CALLBACK_PREFIX}${code}:${String(option)}`,
+      })),
+      orderId: null,
+    };
+  }
+
+  /**
+   * Writes one threshold, or says why the combination was refused.
+   *
+   * The write goes through `SettingsService.set`, which is the SAME path the Web Admin
+   * uses: the same permission, the same audit row, the same idempotency record and the
+   * same `ReminderThresholdsGuard`. This surface adds no rule of its own, which is what
+   * makes the two surfaces impossible to drift apart.
+   *
+   * A refusal is rendered, not thrown. `refuseReminderThresholds` produces Persian
+   * prose naming which of the five is wrong; letting it reach the generic error handler
+   * would replace that with a shrug, which is the legacy `⭕️ ورودی نا معتبر` this whole
+   * section is written against.
+   */
+  private async adminReminderSet(
+    scope: TenantContext,
+    actor: ActorContext,
+    code: ReminderSettingCode,
+    value: number,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    const key = REMINDER_SETTING_CODES[code];
+    const result = await this.deps.reminderConfig.write(scope, actor, key, value, idempotencyKey);
+    if (!result.ok) {
+      return {
+        key: 'bot.admin.reminder_refused',
+        values: { reason: result.reason },
+        buttons: [],
+        orderId: null,
+      };
+    }
+    return {
+      key: 'bot.admin.reminder_saved',
+      values: { setting: key, value },
+      buttons: [],
+      orderId: null,
+    };
+  }
+
   private async adminPanels(
     scope: TenantContext,
     actor: ActorContext,

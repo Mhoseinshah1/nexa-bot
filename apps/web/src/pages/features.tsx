@@ -4,7 +4,7 @@ import type { FeatureFlagResponse } from '@nexa/contracts';
 import { fetchFeatureFlags, saveFeatureFlag } from '../api/client';
 import { useSubmissionKey } from '../submission-key';
 import { t } from '../i18n/web.fa';
-import { ErrorReport } from './settings';
+import { ErrorReport, registryLabel } from './settings';
 import { Badge, Banner, Card, DataTable, Ltr, PageHead, StateSwitch } from '../ui/kit';
 
 /**
@@ -89,7 +89,8 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
 
   return (
     <Card
-      title={flag.key}
+      title={registryLabel(flag.key) ?? flag.key}
+      {...(registryLabel(flag.key) === undefined ? {} : { hint: flag.key })}
       actions={
         <>
           <Badge tone={flag.enabled ? 'ok' : 'neutral'}>

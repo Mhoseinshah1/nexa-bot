@@ -1074,6 +1074,194 @@ export const TEMPLATES = [
    * needs to go looking. Credential creation and rotation are not here at all — they
    * are the Web Admin's, behind `panels.credentials.rotate`.
    */
+  /*
+   * ## The reminder settings section (Phase 6C)
+   *
+   * Mirza's six cron capabilities are «a flag plus a single scalar prompt» (CBR-003,
+   * CBR-011), and seven of its twelve settings screens never print the value they are
+   * about to replace \u2014 «an admin cannot read the current configuration without
+   * overwriting it» (CBR-013, BC-SB-003). The section template below prints all eight
+   * values at once, before anything is editable, which is the cure applied rather than
+   * merely written down.
+   *
+   * There is NO typed-value prompt on this surface. Every edit is a tap on a value
+   * carried in the callback data, so `INCIDENT-FIN-001` \u2014 a pending prompt
+   * swallowing an unrelated message and overwriting a production setting \u2014 has no
+   * mechanism to occur here at all.
+   */
+  {
+    key: 'bot.admin.reminders_button',
+    description: 'Opens the reminder settings section from the admin panel.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.reminders_section',
+    description:
+      'Every reminder setting and switch, with its CURRENT value, before anything is ' +
+      'editable. The three switches are shown and not toggled here: they are ' +
+      'TENANT_WIDE, so ADR-0010 requires a typed confirmation and a reason, and a ' +
+      'button that synthesised either would be the safeguard removed rather than met.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'expiry',
+        type: 'STRING',
+        description: 'Whether advance expiry reminders are on, as a state symbol.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'expired',
+        type: 'STRING',
+        description: 'Whether the expired notice is on, as a state symbol.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'usage',
+        type: 'STRING',
+        description: 'Whether usage reminders are on, as a state symbol.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'firstDays',
+        type: 'NUMBER',
+        description: 'The tenant\u2019s first expiry threshold, in days.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'secondDays',
+        type: 'NUMBER',
+        description: 'Its second.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'firstPercent',
+        type: 'NUMBER',
+        description: 'The first usage threshold, in percent.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'secondPercent',
+        type: 'NUMBER',
+        description: 'Its second.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'finalPercent',
+        type: 'NUMBER',
+        description: 'Its last.',
+        required: false,
+        repeatable: true,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.reminder_expiry_first_button',
+    description: 'Opens the chooser for reminders.expiry_first_days.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.reminder_expiry_second_button',
+    description: 'Opens the chooser for reminders.expiry_second_days.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.reminder_usage_first_button',
+    description: 'Opens the chooser for reminders.usage_first_percent.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.reminder_usage_second_button',
+    description: 'Opens the chooser for reminders.usage_second_percent.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.reminder_usage_final_button',
+    description: 'Opens the chooser for reminders.usage_final_percent.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.reminder_choose',
+    description:
+      'One setting, its current value, and the values that may replace it. `setting` ' +
+      'is the registry KEY rather than a translated name \u2014 the same machine key ' +
+      'the Web Admin row is titled with, so an operator reading both surfaces is ' +
+      'looking at one identifier and not two names for it.',
+    // TELEGRAM_HTML so the registry key renders in <code>: it is a machine
+    // identifier an operator may want to copy into the Web Admin, and a proportional
+    // font turns `reminders.usage_first_percent` into something to squint at.
+    format: 'TELEGRAM_HTML',
+    placeholders: [
+      {
+        token: 'setting',
+        type: 'STRING',
+        description: 'The registry key being edited.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'current',
+        type: 'NUMBER',
+        description: 'Its value right now.',
+        required: false,
+        repeatable: true,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.reminder_saved',
+    description: 'A reminder threshold was written. Names the value that is now stored.',
+    // TELEGRAM_HTML so the registry key renders in <code>: it is a machine
+    // identifier an operator may want to copy into the Web Admin, and a proportional
+    // font turns `reminders.usage_first_percent` into something to squint at.
+    format: 'TELEGRAM_HTML',
+    placeholders: [
+      {
+        token: 'setting',
+        type: 'STRING',
+        description: 'The registry key that was written.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'value',
+        type: 'NUMBER',
+        description: 'The value now stored.',
+        required: false,
+        repeatable: true,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.reminder_refused',
+    description:
+      'A combination the thresholds may not take. Carries the guard\u2019s own reason, ' +
+      'which names WHICH of the five is wrong and why \u2014 Mirza answers the same ' +
+      'situation with `\u2b55\ufe0f \u0648\u0631\u0648\u062f\u06cc \u0646\u0627 ' +
+      '\u0645\u0639\u062a\u0628\u0631` (BC-SB-004), which tells an operator nothing.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reason',
+        type: 'STRING',
+        description: 'The refusal, already in Persian, from `refuseReminderThresholds`.',
+        required: false,
+        repeatable: true,
+      },
+    ],
+  },
   {
     key: 'bot.admin.panels_button',
     description:

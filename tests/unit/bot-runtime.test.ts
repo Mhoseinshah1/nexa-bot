@@ -874,6 +874,28 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.admin.refused',
       'bot.admin.reject_button',
       'bot.admin.rejected',
+      /*
+       * The reminder settings section (Phase 6C). Ten keys, each reviewed against this
+       * case's rule — none of them instructs an administrator to do something this head
+       * cannot do, and the one that comes closest says the opposite: the section states
+       * that turning a reminder family off is done in the Web Admin, because all three
+       * flags are TENANT_WIDE and ADR-0010 wants a typed confirmation there.
+       *
+       * What this list pins is the SET of keys the runtime source names, not the set it
+       * was observed sending — `sent` is scraped from the file. Adding a key here is
+       * therefore a review checkpoint rather than a reachability proof, which is
+       * exactly what the surrounding comment says it is for.
+       */
+      'bot.admin.reminder_choose',
+      'bot.admin.reminder_expiry_first_button',
+      'bot.admin.reminder_expiry_second_button',
+      'bot.admin.reminder_refused',
+      'bot.admin.reminder_saved',
+      'bot.admin.reminder_usage_final_button',
+      'bot.admin.reminder_usage_first_button',
+      'bot.admin.reminder_usage_second_button',
+      'bot.admin.reminders_button',
+      'bot.admin.reminders_section',
       'bot.admin.revoked',
       'bot.admin.roles_set',
       'bot.admin.section',

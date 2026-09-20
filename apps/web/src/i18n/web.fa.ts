@@ -1513,6 +1513,27 @@ export const WEB_FA = {
   'web.unit_seconds': 'ثانیه',
   'web.unit_minutes': 'دقیقه',
   'web.unit_hours': 'ساعت',
+  /*
+   * Persian names for the reminder settings and switches.
+   *
+   * ADDITIVE, and keyed by the registry key. A row with no entry here is titled by its
+   * machine key exactly as every row was before — which is why this is a lookup and not
+   * a required field: naming five of twenty-two keys and leaving seventeen bare would
+   * be worse than the consistent bareness it replaces, and a `Record<SettingKey, …>`
+   * would force seventeen names nobody has agreed on.
+   *
+   * The machine key is still shown beside the name. An operator reading the Telegram
+   * section sees `reminders.usage_first_percent` there, and two surfaces naming one
+   * setting differently is how a support conversation goes wrong.
+   */
+  'web.setting_reminders_expiry_first_days': 'یادآور اول پیش از انقضا (روز)',
+  'web.setting_reminders_expiry_second_days': 'یادآور دوم پیش از انقضا (روز)',
+  'web.setting_reminders_usage_first_percent': 'آستانه اول مصرف حجم (درصد)',
+  'web.setting_reminders_usage_second_percent': 'آستانه دوم مصرف حجم (درصد)',
+  'web.setting_reminders_usage_final_percent': 'آستانه پایانی مصرف حجم (درصد)',
+  'web.flag_service_expiry_reminders': 'یادآور پیش از انقضای سرویس',
+  'web.flag_service_expired_notice': 'اعلام پایان اعتبار سرویس',
+  'web.flag_service_usage_reminders': 'یادآور مصرف حجم سرویس',
 } as const;
 
 export type WebKey = keyof typeof WEB_FA;
