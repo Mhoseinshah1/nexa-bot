@@ -3205,7 +3205,14 @@ export class BotRuntime {
   ): Promise<PendingReply> {
     if (command.intent === 'CATALOG') return this.catalogue(scope, actor);
     if (command.intent === 'ORDER' && command.targetId !== null) {
-      return this.draft(scope, actor, command.targetId, customer, input.idempotencyKey);
+      return this.draft(
+        scope,
+        actor,
+        command.targetId,
+        customer,
+        input.botInstanceId,
+        input.idempotencyKey,
+      );
     }
     if (command.intent === 'CONFIRM' && command.targetId !== null) {
       return this.confirm(scope, actor, command.targetId, customer, input.idempotencyKey);
@@ -4045,6 +4052,7 @@ export class BotRuntime {
     actor: ActorContext,
     order: OrderRecord,
     customer: CustomerRecord,
+    botInstanceId: string,
     idempotencyKey: string,
   ): Promise<PendingReply> {
     const step = await this.deps.orders.usernameStep(scope, actor, {
@@ -4053,8 +4061,31 @@ export class BotRuntime {
     });
     if (step.reservation !== null) return this.orderSummary(order, step.reservation.username);
     if (step.modes.length === 0) return this.orderSummary(order, null);
-    if (step.modes.length === 1 && step.modes[0] === 'RANDOM') {
-      return this.randomUsername(scope, actor, order.id, customer, idempotencyKey);
+    /*
+     * ONE mode is not a question, whichever mode it is.
+     *
+     * An earlier version made an exception for CUSTOM: a single RANDOM button was
+     * skipped, but a single CUSTOM button was still drawn, on the reasoning that
+     * opening a typing window the customer did not ask for is the surprise half of
+     * INCIDENT-FIN-001. The owner overruled that, and the overruling is right — what
+     * INCIDENT-FIN-001 is about is a window that outlives its question and swallows an
+     * unrelated message. This window is opened BY the purchase the customer is in the
+     * middle of, it names that one order, and it says in full what it is waiting for.
+     *
+     * What the exception actually produced was a screen offering one button, which
+     * teaches the customer nothing and costs them a tap.
+     */
+    if (step.modes.length === 1) {
+      return step.modes[0] === 'RANDOM'
+        ? this.randomUsername(scope, actor, order.id, customer, idempotencyKey)
+        : this.customUsername(
+            scope,
+            actor,
+            order.id,
+            customer,
+            botInstanceId,
+            idempotencyKey,
+          );
     }
 
     const buttons: CustomerButton[] = [];
@@ -4178,6 +4209,7 @@ export class BotRuntime {
     actor: ActorContext,
     productId: string,
     customer: CustomerRecord,
+    botInstanceId: string,
     idempotencyKey: string,
   ): Promise<PendingReply> {
     try {
@@ -4191,7 +4223,7 @@ export class BotRuntime {
         customerId: customer.id,
         productId,
       });
-      return this.afterDraft(scope, actor, order, customer, idempotencyKey);
+      return this.afterDraft(scope, actor, order, customer, botInstanceId, idempotencyKey);
     } catch (error) {
       return refusal(error);
     }

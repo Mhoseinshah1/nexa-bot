@@ -98,6 +98,38 @@ export const CUSTOMER_NOTIFICATION_KINDS = [
    * `false`: a refund cannot stop having happened.
    */
   'ORDER_REFUNDED_TO_WALLET',
+  /*
+   * ## The six reminders (Phase 6C)
+   *
+   * Every other member of this list is a fact that happens ONCE per subject for ever:
+   * an order is rejected once, a refund credited once. A reminder is not. A service
+   * renewed twice crosses "three days left" three times, and
+   * `customer_notifications_subject_key` — unique on `(tenant, kind, subject)` with an
+   * `ON CONFLICT DO NOTHING` enqueue — would deliver the first and silently swallow the
+   * other two.
+   *
+   * So a reminder's SUBJECT is not the service. It is a row in `service_reminders`, one
+   * per (service, kind, period), and each occurrence is therefore its own subject with
+   * its own guaranteed single delivery. The rule that a kind determines the table holds
+   * unchanged; for these six the table is `service_reminders`.
+   *
+   * SIX kinds rather than two with a threshold, because the lane carries no payload
+   * (ADR 0030 §1). "Expires in {days} days" would need one, and a parameterised payload
+   * is the thing that turns this lane into "send this customer some text". Each
+   * threshold is its own frozen sentence.
+   */
+  /** Three days of validity left. `service_reminders.id` is the subject. */
+  'SERVICE_EXPIRING_3D',
+  /** One day left. `service_reminders.id` is the subject. */
+  'SERVICE_EXPIRING_1D',
+  /** The service's own deadline passed. `service_reminders.id` is the subject. */
+  'SERVICE_EXPIRED',
+  /** Four fifths of the traffic allowance is gone. `service_reminders.id` is the subject. */
+  'SERVICE_USAGE_80',
+  /** Nineteen twentieths of it. `service_reminders.id` is the subject. */
+  'SERVICE_USAGE_95',
+  /** All of it. `service_reminders.id` is the subject. */
+  'SERVICE_USAGE_100',
 ] as const;
 export type CustomerNotificationKind = (typeof CUSTOMER_NOTIFICATION_KINDS)[number];
 export const customerNotificationKindSchema = z.enum(CUSTOMER_NOTIFICATION_KINDS);
@@ -154,6 +186,28 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
    * copy of the sentence is still true.
    */
   ORDER_REFUNDED_TO_WALLET: false,
+  /*
+   * All six `false`, and the reason is the reminder ROW rather than the service.
+   *
+   * The tempting answer is `true` — surely a "three days left" that arrives after the
+   * customer renewed is stale? But the fact this row asserts is not "the service has
+   * three days left NOW". It is "at the moment this was raised, the period ending at T
+   * had three days left", and the row records that T. A renewal does not make that
+   * untrue; it produces a NEW period, a new row and a new reminder.
+   *
+   * Declaring them `true` would also be unanswerable in practice.
+   * `DrizzleNotificationSubjectReader.stillHolds` reads `services` and nothing else, so
+   * a `true` here would look up a reminder id in `services`, find no row, and SUPERSEDE
+   * the message — the customer never told, silently. That is the exact failure the two
+   * refusals in that reader were written to stop, and the same trap
+   * `PAYMENT_TRANSFER_RECORDED` documents above.
+   */
+  SERVICE_EXPIRING_3D: false,
+  SERVICE_EXPIRING_1D: false,
+  SERVICE_EXPIRED: false,
+  SERVICE_USAGE_80: false,
+  SERVICE_USAGE_95: false,
+  SERVICE_USAGE_100: false,
 };
 
 /**
@@ -188,6 +242,17 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
   ORDER_CANCELLED: 'bot.order.cancelled',
   WALLET_TOPUP_CREDITED: 'bot.wallet.topup_credited',
   ORDER_REFUNDED_TO_WALLET: 'bot.order.refunded_to_wallet',
+  /*
+   * One frozen sentence per threshold. None carries a figure — the lane has no payload,
+   * and «سه روز» inside the sentence is the same information a `{days}` placeholder
+   * would carry with none of the machinery a placeholder needs.
+   */
+  SERVICE_EXPIRING_3D: 'bot.service.expiring_3d',
+  SERVICE_EXPIRING_1D: 'bot.service.expiring_1d',
+  SERVICE_EXPIRED: 'bot.service.expired',
+  SERVICE_USAGE_80: 'bot.service.usage_80',
+  SERVICE_USAGE_95: 'bot.service.usage_95',
+  SERVICE_USAGE_100: 'bot.service.usage_100',
 };
 
 /**

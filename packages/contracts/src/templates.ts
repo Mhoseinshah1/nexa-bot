@@ -2028,6 +2028,64 @@ export const TEMPLATES = [
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
+  /*
+   * The six reminders (Phase 6C). Each carries NO placeholder, deliberately.
+   *
+   * The customer notification lane has no payload — ADR 0030 §1 — so a single
+   * "expires in {days} days" is not available, and inventing one would give a
+   * background loop the ability to send a customer any string in the catalogue.
+   * «سه روز» inside the sentence is the same information with none of that.
+   *
+   * Each one also says what to DO, because a reminder that only states a fact makes
+   * the customer go and find the renew button themselves. The three usage sentences
+   * deliberately do not name a figure: the percentage is the threshold that fired,
+   * and a number rendered here would go stale the moment the next byte moves.
+   */
+  {
+    key: 'bot.service.expiring_3d',
+    description: 'Three days of validity remain on a service. Sent once per period.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.expiring_1d',
+    description: 'One day remains. Sent once per period, after the three-day one.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.expired',
+    description:
+      'The service reached its own deadline. A statement of fact and an invitation to ' +
+      'renew — never a claim that anything was deleted, because expiry is a Nexa-side ' +
+      'lifecycle transition and the panel account is dealt with separately.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.usage_80',
+    description:
+      'Four fifths of the traffic allowance is gone. The figure is the threshold that ' +
+      'fired and is in the sentence, not a placeholder: a rendered number would be ' +
+      'stale the moment the next byte moved.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.usage_95',
+    description: 'Nineteen twentieths of the allowance is gone.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.usage_100',
+    description:
+      'The allowance is exhausted. Says the traffic ran out and offers more; it does ' +
+      'NOT say the service stopped, because whether a panel cuts a customer off at the ' +
+      'limit is the provider’s behaviour and not a fact this installation observed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
   {
     key: 'bot.service.provision_delayed',
     description:
