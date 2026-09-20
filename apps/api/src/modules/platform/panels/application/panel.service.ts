@@ -26,6 +26,7 @@ import {
   NexaError,
   shapeAcceptsCredential,
   providerDescriptor,
+  validateUsernameTemplate,
 } from '@nexa/contracts';
 import type { PanelActivation } from '@nexa/contracts';
 import type { PermissionGuard } from '../../access/application/permission-guard.js';
@@ -58,6 +59,7 @@ import type {
   PanelView,
   PanelCursor,
   PanelArchiveScope,
+  PanelUsernamePolicy,
 } from './ports.js';
 import { capacityOf } from './panel-capacity.js';
 import { connectionIdentityOf, validationAuthorisesEnable } from './panel-eligibility.js';
@@ -104,6 +106,11 @@ export interface CreatePanelCommand {
   readonly activation?: PanelActivation;
   /** Absent means uncapped, which is the honest default for a panel nobody has sized. */
   readonly maxServices?: number | null;
+  /**
+   * Absent means both modes with the derived generator — what every panel did before
+   * this phase, and what the columns default to.
+   */
+  readonly usernamePolicy?: PanelUsernamePolicy | undefined;
   readonly idempotencyKey: string;
 }
 
@@ -120,6 +127,8 @@ export interface UpdatePanelCommand {
   readonly activation?: Record<string, unknown> | null | undefined;
   /** Absent leaves it; `null` removes the cap; a positive integer sets one. */
   readonly maxServices?: number | null | undefined;
+  /** Absent leaves the whole policy; present replaces the whole policy. */
+  readonly usernamePolicy?: PanelUsernamePolicy | undefined;
   readonly idempotencyKey: string;
 }
 
@@ -465,6 +474,47 @@ export class PanelService {
    * this installation refuses. What is NOT checked is reachability, because a
    * panel that happens to be down must still be creatable.
    */
+  /**
+   * Whether this policy may be stored on a panel of this provider.
+   *
+   * Two refusals, and they are different questions with different fixes. A policy with
+   * neither mode enabled is a panel nothing can be sold onto — the CHECK constraint
+   * says the same thing one layer down, and this says it with a message. A template
+   * that cannot render a legal name is refused with EVERY issue at once, because an
+   * operator fixing one problem per round trip is an operator who gives up.
+   *
+   * The template is checked WHATEVER `allowRandom` says. A template stored beside a
+   * disabled mode goes live the moment somebody re-enables it, and that re-enable is a
+   * one-checkbox edit nobody would think to validate.
+   *
+   * The bound comes from `validateUsernameTemplate`'s default —
+   * `PROVEN_PROVIDER_USERNAME_MAX_LENGTH`, the longest name this product has evidence a
+   * real panel accepts. No adapter declares its own yet; when one does, it is passed
+   * here as the second argument and nothing else changes.
+   */
+  private validateUsernamePolicy(
+    providerType: ProviderType,
+    policy: PanelUsernamePolicy,
+  ): PanelUsernamePolicy {
+    if (!policy.allowCustom && !policy.allowRandom) {
+      throw errors.validation(
+        PANEL_ERROR_CODES.PANEL_USERNAME_POLICY_EMPTY,
+        'A panel must allow at least one username mode.',
+      );
+    }
+    if (policy.template !== null) {
+      const verdict = validateUsernameTemplate(policy.template);
+      if (!verdict.ok) {
+        throw errors.validation(
+          PANEL_ERROR_CODES.PANEL_USERNAME_TEMPLATE_INVALID,
+          'This username template cannot produce a usable name.',
+          { issues: [...verdict.issues], providerType, worstCaseLength: verdict.worstCaseLength },
+        );
+      }
+    }
+    return policy;
+  }
+
   private validateUrl(raw: string): string {
     const verdict = checkUrl(raw, this.deps.urlPolicy);
     if (!verdict.allowed) {
@@ -591,6 +641,7 @@ export class PanelService {
         ? {}
         : { activation: parseActivation(parsed.providerType, parsed.activation) }),
       ...(parsed.maxServices === undefined ? {} : { maxServices: parsed.maxServices }),
+      ...(parsed.usernamePolicy === undefined ? {} : { usernamePolicy: parsed.usernamePolicy }),
       idempotencyKey: parsed.idempotencyKey,
     };
     // Two different refusals, and the difference is the operator's next move.
@@ -610,6 +661,11 @@ export class PanelService {
     const providerType: ProviderType = command.providerType;
     this.deps.adapters(providerType);
     const baseUrl = this.validateUrl(command.baseUrl);
+    // Validated against THIS provider, before the transaction opens. See the method.
+    const usernamePolicy =
+      command.usernamePolicy === undefined
+        ? undefined
+        : this.validateUsernamePolicy(providerType, command.usernamePolicy);
 
     /**
      * Initial credentials need the CREDENTIAL permission, not just the edit one.
@@ -682,6 +738,16 @@ export class PanelService {
        * standing.
        */
       maxServices: command.maxServices,
+      /*
+       * And the policy, for the same reason as the cap above it.
+       *
+       * Two creates under one key that differ only in `allowCustom` are two different
+       * panels: one where customers name their own accounts and one where they do not.
+       * Omitted from the hash, the second is answered with the first panel and reported
+       * as a success — and the operator who meant to turn custom names OFF has a panel
+       * that still accepts them.
+       */
+      usernamePolicy: command.usernamePolicy,
     });
     const existing = await this.deps.idempotency.find<{ panelId: string }>(
       scope,
@@ -742,6 +808,7 @@ export class PanelService {
               baseUrl,
               ...(command.activation === undefined ? {} : { activation: command.activation }),
               ...(command.maxServices === undefined ? {} : { maxServices: command.maxServices }),
+              ...(usernamePolicy === undefined ? {} : { usernamePolicy }),
               at: now,
             },
             tx,
@@ -794,6 +861,16 @@ export class PanelService {
                 activation:
                   command.activation === undefined ? null : Object.keys(command.activation).sort(),
                 configured: credentialKindsIn(command.credentials),
+                /*
+                 * The VALUES, unlike `activation` above.
+                 *
+                 * `null` here is not "not given" — it is the panel being created with
+                 * the column defaults, which are both modes and the derived generator.
+                 * Recording that explicitly is the difference between an audit trail
+                 * that can answer "what was this panel born with" and one that can only
+                 * answer it for panels whose creator happened to fill the field in.
+                 */
+                usernamePolicy: usernamePolicy ?? null,
               },
               result: 'SUCCESS',
             },
@@ -862,6 +939,8 @@ export class PanelService {
       // The cap, which is the field on this path most likely to be retried with
       // a different value: it is how an operator stops a panel taking new sales.
       maxServices: command.maxServices,
+      // And the policy, for the reason `create` states.
+      usernamePolicy: command.usernamePolicy,
     });
     const existing = await this.deps.idempotency.find<{ panelId: string }>(
       scope,
@@ -907,6 +986,7 @@ export class PanelService {
           baseUrl?: string;
           activation?: PanelActivation | null;
           maxServices?: number | null;
+          usernamePolicy?: PanelUsernamePolicy;
         } = {};
         if (command.name !== undefined) changes.name = command.name;
         if (baseUrl !== undefined) changes.baseUrl = baseUrl;
@@ -923,6 +1003,21 @@ export class PanelService {
          * also stops the monitor watching a machine that is carrying customers.
          */
         if (command.maxServices !== undefined) changes.maxServices = command.maxServices;
+        /*
+         * Validated against the STORED provider type, for the same reason `activation`
+         * below is: `updatePanelRequestSchema` carries no `providerType`, so the only
+         * truthful source is the row this transaction already holds the lock on.
+         *
+         * That is also why this cannot live in the zod schema. A template legal on one
+         * provider may be too long on another, and a boundary that guessed would be a
+         * second opinion — the kind that disagrees with the service invisibly.
+         */
+        if (command.usernamePolicy !== undefined) {
+          changes.usernamePolicy = this.validateUsernamePolicy(
+            before.panel.providerType,
+            command.usernamePolicy,
+          );
+        }
         if (command.activation !== undefined) {
           /*
            * Parsed against the STORED provider type, which is why this is here and not
@@ -993,12 +1088,23 @@ export class PanelService {
                * needs.
                */
               maxServices: before.panel.maxServices,
+              /*
+               * The VALUES, like the cap and for the same reason.
+               *
+               * Nothing here is a secret — every field is returned by the panel read
+               * under the same permission — and "usernamePolicy changed" is useless to
+               * the person working out why a customer got `nx8f3c…` instead of the name
+               * they typed. The template in particular is what somebody has to compare
+               * against the username in front of them.
+               */
+              usernamePolicy: before.panel.usernamePolicy,
             },
             after: {
               name: updated.name,
               baseUrl: updated.baseUrl,
               activation: activationKeys(updated.activation),
               maxServices: updated.maxServices,
+              usernamePolicy: updated.usernamePolicy,
             },
             result: 'SUCCESS',
           },

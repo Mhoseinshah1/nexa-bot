@@ -49,6 +49,16 @@ export interface PanelRecord {
   readonly activation: unknown;
   /** The operator's cap on services this panel may carry, or null for no limit. */
   readonly maxServices: number | null;
+  /**
+   * Which names this panel accepts for the services sold onto it.
+   *
+   * Always present, never optional. A panel with no policy would have to be read as
+   * "whatever the caller assumes", and the two callers that matter — the customer
+   * purchase step and the allocator — would assume differently. Existing panels were
+   * migrated to both modes enabled with `usernameTemplate: null`, which is exactly the
+   * behaviour they had before the column existed.
+   */
+  readonly usernamePolicy: PanelUsernamePolicy;
   readonly archivedAt: Date | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
@@ -131,6 +141,19 @@ export interface PanelView {
   readonly health: PanelHealthSnapshot | null;
 }
 
+/**
+ * A panel's username policy, as stored.
+ *
+ * `template` is null for the derived `nx…` generator — `PANEL_LEGACY_TEMPLATE`, and the
+ * state every panel sold onto before this phase is in. Null is a real value here and
+ * not an absence, which is why this interface has no optional field.
+ */
+export interface PanelUsernamePolicy {
+  readonly allowCustom: boolean;
+  readonly allowRandom: boolean;
+  readonly template: string | null;
+}
+
 export interface CreatePanelInput {
   readonly id: string;
   readonly name: string;
@@ -140,6 +163,13 @@ export interface CreatePanelInput {
   readonly activation?: PanelActivation;
   /** The cap this panel is created with. Absent means uncapped. */
   readonly maxServices?: number | null;
+  /**
+   * Absent means the column defaults: both modes, derived generator.
+   *
+   * Replaced as a WHOLE — see `panelUsernamePolicyInputSchema`. The one rule the policy
+   * has is about the pair of booleans, so a half-applied policy has no meaning.
+   */
+  readonly usernamePolicy?: PanelUsernamePolicy;
   /**
    * From the `Clock` port, not the database's `now()`.
    *
@@ -160,6 +190,8 @@ export interface UpdatePanelInput {
   readonly activation?: PanelActivation | null;
   /** Absent leaves it; `null` removes the cap; a positive integer sets one. */
   readonly maxServices?: number | null;
+  /** Absent leaves the whole policy; present replaces the whole policy. */
+  readonly usernamePolicy?: PanelUsernamePolicy;
 }
 
 /**

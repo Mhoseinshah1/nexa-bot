@@ -317,6 +317,20 @@ export class DrizzlePanelRepository implements PanelRepository {
           // so a reader does not have to work out whether the two tri-states
           // differ here, and so an added column inherits the shape.
           ...(input.maxServices === undefined ? {} : { maxServices: input.maxServices }),
+          /*
+           * Absent leaves the column defaults, which ARE the legacy behaviour: both
+           * modes enabled, `username_template` null, so `PANEL_LEGACY_TEMPLATE` decides
+           * and the panel behaves exactly as every panel did before this phase. Spread
+           * as one unit rather than three independent spreads, because the CHECK
+           * constraint is about the pair.
+           */
+          ...(input.usernamePolicy === undefined
+            ? {}
+            : {
+                allowCustomUsername: input.usernamePolicy.allowCustom,
+                allowRandomUsername: input.usernamePolicy.allowRandom,
+                usernameTemplate: input.usernamePolicy.template,
+              }),
           createdAt: input.at,
           updatedAt: input.at,
         })
@@ -346,6 +360,20 @@ export class DrizzlePanelRepository implements PanelRepository {
     // Also a VALUE: `null` removes the cap. Lowering it below current usage is
     // allowed and terminates nothing — see `panels.max_services`.
     if (input.maxServices !== undefined) changes['maxServices'] = input.maxServices;
+    /*
+     * All three columns, or none. `null` on the template is a VALUE — it selects the
+     * derived generator — so it is written rather than skipped.
+     *
+     * Writing a subset would be the one way to reach a state the CHECK constraint
+     * forbids without the constraint firing: two concurrent edits, each disabling the
+     * mode the other left enabled, both individually legal against the row they read.
+     * The constraint catches that because both booleans are in every write.
+     */
+    if (input.usernamePolicy !== undefined) {
+      changes['allowCustomUsername'] = input.usernamePolicy.allowCustom;
+      changes['allowRandomUsername'] = input.usernamePolicy.allowRandom;
+      changes['usernameTemplate'] = input.usernamePolicy.template;
+    }
 
     let row;
     try {
@@ -1195,6 +1223,11 @@ function toRecord(row: typeof panels.$inferSelect): PanelRecord {
     baseUrl: row.baseUrl,
     status: row.status as PanelStatus,
     maxServices: row.maxServices,
+    usernamePolicy: {
+      allowCustom: row.allowCustomUsername,
+      allowRandom: row.allowRandomUsername,
+      template: row.usernameTemplate,
+    },
     // Passed through unnarrowed: the shape is per provider and the application layer
     // owns the schema that decides it. See `PanelRecord.activation`.
     activation: row.activation,

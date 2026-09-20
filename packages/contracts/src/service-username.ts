@@ -88,14 +88,38 @@ const HAS_ASCII_DIGIT = /[0-9]/;
 export const RENDERED_USERNAME_PATTERN = /^[a-z0-9_]+$/;
 
 /**
- * The ceiling when the adapter declares none.
+ * The longest name this installation has EVIDENCE a real panel accepts.
  *
- * `ProviderAdapter` exposes no username length today (`docs/phase6c-audit.md` Part 4,
- * gap 2), so this is the value every template is validated against until a real limit
- * is verified against a real panel. Deliberately generous: the point is to refuse a
- * template that cannot possibly work, not to second-guess a provider.
+ * 34, because that is `providerUsernameFor` — `nx` plus 32 hex — and
+ * `tests/acceptance/real-panel-marzban.test.ts` and its 3X-UI counterpart have driven
+ * the shipped adapters against real panels using exactly that shape. Every account
+ * this product has ever created on a real panel is 34 characters.
+ *
+ * It is NOT a claim about either provider's true limit, which is UNKNOWN
+ * (`docs/open-questions.md`, OQ-6C-01) because `ProviderAdapter` exposes no username
+ * length and neither panel's documentation states one. A generous guess was the first
+ * version of this constant and is the wrong shape of error: it would let an operator
+ * save a 60-character template, and the first customer to hit the provider's real
+ * limit would find out AFTER their money moved. Refusing an over-long template while
+ * the operator is still looking at the field costs them a shorter template; the other
+ * ordering costs a customer a failed purchase.
+ *
+ * Raising this is a real-panel acceptance task, not an edit — the rule
+ * `docs/real-panel-acceptance.md` states: a fake this repository wrote and an adapter
+ * this repository wrote can only prove they agree with each other.
  */
-export const PROVIDER_USERNAME_FALLBACK_MAX_LENGTH = 64;
+export const PROVEN_PROVIDER_USERNAME_MAX_LENGTH = 34;
+
+/**
+ * How long a template's RAW TEXT may be, which is not how long its output may be.
+ *
+ * `{telegram_id}` is thirteen characters that render as up to sixteen, and
+ * `{random10}` is eleven that render as ten. Bounding the stored string by the
+ * rendered maximum would refuse templates that produce perfectly legal names, so this
+ * is its own, looser bound — a storage limit, not a correctness one.
+ * `worstCaseRenderedLength` is what decides whether the OUTPUT fits.
+ */
+export const USERNAME_TEMPLATE_MAX_LENGTH = 128;
 
 /**
  * Is this something a customer may type?
@@ -229,13 +253,13 @@ export function worstCaseRenderedLength(template: string): number {
  * parsing the template a second time with its own regex.
  *
  * `maxLength` comes from the selected provider's adapter, falling back to
- * `PROVIDER_USERNAME_FALLBACK_MAX_LENGTH`. It is a parameter rather than a constant
+ * `PROVEN_PROVIDER_USERNAME_MAX_LENGTH`. It is a parameter rather than a constant
  * because the same template may be legal on one provider and not on another, and the
  * panel is what binds the two together.
  */
 export function validateUsernameTemplate(
   template: string,
-  maxLength: number = PROVIDER_USERNAME_FALLBACK_MAX_LENGTH,
+  maxLength: number = PROVEN_PROVIDER_USERNAME_MAX_LENGTH,
 ): UsernameTemplateVerdict {
   const issues: UsernameTemplateIssue[] = [];
   const tokens: UsernameTemplateToken[] = [];

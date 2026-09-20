@@ -3,7 +3,7 @@ import {
   CUSTOM_USERNAME_MAX_LENGTH,
   CUSTOM_USERNAME_MIN_LENGTH,
   LEGACY_USERNAME_PATTERN,
-  PROVIDER_USERNAME_FALLBACK_MAX_LENGTH,
+  PROVEN_PROVIDER_USERNAME_MAX_LENGTH,
   RANDOM_USERNAME_ALPHABET,
   RANDOM_USERNAME_MAX_ATTEMPTS,
   USERNAME_TEMPLATE_TOKEN_NAMES,
@@ -148,10 +148,31 @@ describe('what a customer may type', () => {
 describe('what an operator may save as a RANDOM template', () => {
   it('accepts a template carrying each uniqueness token', () => {
     for (const token of USERNAME_UNIQUENESS_TOKENS) {
-      const verdict = validateUsernameTemplate(`nx_{${token}}`);
+      /*
+       * A generous ceiling is passed deliberately: this asserts the UNIQUENESS rule,
+       * and `{order_id}` is 32 of the proven 34 characters on its own, so a prefix of
+       * any length would make this test fail for the wrong reason. Length has its own
+       * test, against the real default, below.
+       */
+      const verdict = validateUsernameTemplate(`nx_{${token}}`, 64);
       expect(verdict.ok, `{${token}} alone should be sufficient`).toBe(true);
       expect(verdict.issues).toEqual([]);
     }
+  });
+
+  it('leaves almost nothing beside {order_id}, and says so at save time', () => {
+    /*
+     * Not a defect — a consequence worth pinning. `{order_id}` is 32 characters of the
+     * 34 this product has evidence a panel accepts, so it admits a two-character
+     * prefix and no more. An operator who wants a readable prefix uses `{random10}`.
+     *
+     * The value of asserting it here is that the refusal happens while they are
+     * looking at the field. The alternative shape of this rule — a generous ceiling
+     * that defers the question — moves the same refusal to a customer's purchase.
+     */
+    expect(validateUsernameTemplate('nx{order_id}').ok).toBe(true);
+    expect(validateUsernameTemplate('nx_{order_id}').issues).toContain('TOO_LONG');
+    expect(validateUsernameTemplate('customer_{random10}').ok).toBe(true);
   });
 
   it('refuses a template that is empty once trimmed', () => {
@@ -205,12 +226,19 @@ describe('what an operator may save as a RANDOM template', () => {
     expect(worstCaseRenderedLength('plain_text')).toBe(10);
   });
 
-  it('refuses a template whose worst case exceeds the provider ceiling', () => {
+  it('refuses a template whose worst case exceeds the proven provider ceiling', () => {
     const tooLong = `${'u'.repeat(40)}_{order_id}`;
-    expect(worstCaseRenderedLength(tooLong)).toBeGreaterThan(PROVIDER_USERNAME_FALLBACK_MAX_LENGTH);
+    expect(worstCaseRenderedLength(tooLong)).toBeGreaterThan(PROVEN_PROVIDER_USERNAME_MAX_LENGTH);
     expect(validateUsernameTemplate(tooLong).issues).toContain('TOO_LONG');
 
-    // And a stricter adapter limit is honoured over the fallback.
+    /*
+     * The bound is a PARAMETER, and the proven 34 is only its default. `u_{order_id}`
+     * is exactly 34, so it passes at the default and at anything looser, and fails the
+     * moment an adapter declares something tighter — which is the whole reason the
+     * caller may pass one rather than this reading a constant.
+     */
+    expect(worstCaseRenderedLength('u_{order_id}')).toBe(PROVEN_PROVIDER_USERNAME_MAX_LENGTH);
+    expect(validateUsernameTemplate('u_{order_id}').ok).toBe(true);
     expect(validateUsernameTemplate('u_{order_id}', 64).ok).toBe(true);
     expect(validateUsernameTemplate('u_{order_id}', 16).issues).toContain('TOO_LONG');
   });

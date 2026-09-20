@@ -7,6 +7,7 @@ import {
   NOTIFICATION_TRANSPORTS,
 } from './notifications.js';
 import { uuidV7Schema } from './ids.js';
+import { USERNAME_TEMPLATE_MAX_LENGTH } from './service-username.js';
 import { paymentAccountInputSchema } from './payment-accounts.js';
 import { refundChannelSchema, refundStateSchema } from './refunds.js';
 import {
@@ -1067,6 +1068,28 @@ export const panelCapacitySchema = z.object({
 });
 export type PanelCapacityResponse = z.infer<typeof panelCapacitySchema>;
 
+/**
+ * Which names a panel will accept for the services sold onto it.
+ *
+ * Returned in full, like `activation` beside it and for the same reason: a policy an
+ * operator can set and cannot read is the legacy system's write-only settings screen,
+ * where "the only way to read a price is to overwrite it". None of these three fields
+ * is a secret — the customer is shown the rule before they type.
+ *
+ * `template` is null on a panel that uses the derived generator, which is what every
+ * panel sold onto before this phase does and keeps doing. Null is therefore a real
+ * state and not an absence.
+ */
+export const panelUsernamePolicySchema = z.object({
+  /** Whether a customer may type their own name. */
+  allowCustom: z.boolean(),
+  /** Whether the installation may generate one. */
+  allowRandom: z.boolean(),
+  /** The RANDOM-mode template, or null for the derived `nx…` generator. */
+  template: z.string().nullable(),
+});
+export type PanelUsernamePolicyResponse = z.infer<typeof panelUsernamePolicySchema>;
+
 export const panelSummarySchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -1125,6 +1148,8 @@ export const panelSummarySchema = z.object({
    * counter. The honest number of slots left is none.
    */
   capacity: panelCapacitySchema,
+  /** Which names this panel accepts. See `panelUsernamePolicySchema`. */
+  usernamePolicy: panelUsernamePolicySchema,
   createdAt: isoTimestamp,
   updatedAt: isoTimestamp,
 });
@@ -1296,6 +1321,37 @@ export const panelMaxServicesInputSchema = z.union([
   z.null(),
 ]);
 
+/**
+ * The policy as a request states it, and it is ALL THREE FIELDS or none.
+ *
+ * Deliberately not three independent optionals. The one rule this policy has — at
+ * least one mode must be enabled, which the CHECK constraint states one layer down —
+ * is a rule about the pair, and a request that may carry either half alone can only be
+ * validated against whatever happens to be stored. That makes a legal request illegal
+ * depending on ordering: two operators each disabling the mode the other left on, both
+ * accepted, and a panel nothing can be sold onto with no single request to blame.
+ * Absent leaves the whole policy; present replaces the whole policy.
+ *
+ * The template's CONTENT is deliberately not validated here, only its length. Whether
+ * a template can render a legal name depends on the provider's own maximum, which this
+ * schema does not know — `updatePanelRequestSchema` carries no `providerType`, because
+ * changing one is forbidden. `PanelService` re-reads the stored provider and validates
+ * against that adapter's bound, so there is ONE answer to "is this template legal"
+ * rather than a boundary opinion and a service opinion that can disagree by 64 minus
+ * whatever the adapter actually allows.
+ */
+export const panelUsernamePolicyInputSchema = z
+  .object({
+    allowCustom: z.boolean(),
+    allowRandom: z.boolean(),
+    template: z.string().min(1).max(USERNAME_TEMPLATE_MAX_LENGTH).nullable(),
+  })
+  .refine((policy) => policy.allowCustom || policy.allowRandom, {
+    path: ['allowCustom'],
+    message: 'At least one username mode must be enabled.',
+  });
+export type PanelUsernamePolicyInput = z.infer<typeof panelUsernamePolicyInputSchema>;
+
 export const createPanelRequestSchema = z.object({
   name: panelNameSchema,
   providerType: z.enum(PROVIDER_TYPES),
@@ -1303,6 +1359,8 @@ export const createPanelRequestSchema = z.object({
   credentials: panelCredentialsInputSchema.optional(),
   activation: panelActivationInputSchema.optional(),
   maxServices: panelMaxServicesInputSchema.optional(),
+  /** Absent means the default both modes on with the derived generator. */
+  usernamePolicy: panelUsernamePolicyInputSchema.optional(),
   idempotencyKey: z.string().min(8).max(255),
 });
 export type CreatePanelRequest = z.infer<typeof createPanelRequestSchema>;
@@ -1343,6 +1401,13 @@ export const updatePanelRequestSchema = z.object({
    * than renaming the panel does.
    */
   maxServices: panelMaxServicesInputSchema.optional(),
+  /**
+   * `panels.edit`, alongside the name, and replaced as a whole.
+   *
+   * It decides what a customer may be offered, never what anything costs, and it is
+   * read back by every panel read — so it needs no more authority than renaming does.
+   */
+  usernamePolicy: panelUsernamePolicyInputSchema.optional(),
   idempotencyKey: z.string().min(8).max(255),
 });
 export type UpdatePanelRequest = z.infer<typeof updatePanelRequestSchema>;
