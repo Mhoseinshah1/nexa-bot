@@ -29,6 +29,14 @@ removed `PAID_UNFULFILLED` and everything built on it — the operator retry, th
 reassignment, `orders.fulfil` — in favour of one automatic outcome. See the four
 money rules below.
 
+**A service's username is per-panel policy, not a derivation.** A panel allows
+CUSTOM, RANDOM or both; a customer's chosen name is canonicalised to lowercase,
+held by a reservation row in a namespace derived from the provider and host —
+deliberately NOT tenant-scoped, because two tenants pointing at one machine
+share its account namespace — funded in the transaction that takes the money,
+and released only by the transaction that gives it back. A panel with no
+template keeps the `nx…` shape. `docs/phase6c-username-falsification.md`.
+
 **Marzban is the supported mutable provider.** 3X-UI keeps the five
 capabilities it has — of which only `CREATE_USER` mutates anything — and gains
 no new mutable scope: the owner's correction, recorded in

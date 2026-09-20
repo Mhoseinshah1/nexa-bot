@@ -1067,6 +1067,20 @@ textarea.input {
   font-size: 11.5px;
   color: var(--fg-3);
 }
+/*
+ * A heading INSIDE a form, for a group of fields that belong together.
+ *
+ * Not a nested `Card`: a card is a section of the page and the username policy is
+ * three fields of one form, saved by the same button as the name above it. A heading
+ * that implied its own save control would be a screen telling the operator something
+ * untrue about what pressing Save does.
+ */
+.field-group-head {
+  margin: 14px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-2);
+}
 .field .err {
   font-size: 11.5px;
   color: var(--danger);

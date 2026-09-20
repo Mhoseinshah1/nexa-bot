@@ -2064,3 +2064,30 @@ The contract step is the NEXT release: a second backfill identical to 0078, then
 `SalesCurrencyCode` again. Until then a route the previous release provisioned is the one
 row `BOUND_CURRENCY_MISMATCH` still cannot reach, and it is exactly the row that has never
 been edited.
+
+## OQ-6C-01 — the longest username each provider will actually accept is UNKNOWN
+
+`PROVEN_PROVIDER_USERNAME_MAX_LENGTH` is 34, and that number is not a measurement of
+either provider. It is `providerUsernameFor` — `nx` plus 32 hex — the shape that
+`tests/acceptance/real-panel-marzban.test.ts` and its 3X-UI counterpart have actually
+created accounts with. Every account this product has ever made on a real panel is 34
+characters long, so 34 is the longest name this repository has EVIDENCE for and nothing
+more.
+
+Neither Marzban nor 3X-UI documents a limit, and `ProviderAdapter` exposes none, so a
+template's worst-case render is validated against the proven number rather than a real
+one. The first version of the constant was 64 and called itself "deliberately generous";
+that is the wrong shape of error. It lets an operator save a 60-character template and
+makes the first customer past the provider's real limit discover it after their money
+moved. Refusing an over-long template while the operator is still looking at the field
+costs them a shorter template; the other ordering costs a customer a failed purchase.
+
+Raising it is a real-panel acceptance task, not an edit: create an account at the
+candidate length on a disposable panel of each kind, confirm the panel accepts it and
+serves a subscription, and declare the number in the adapter's descriptor so
+`validateUsernameTemplate` can be handed a per-provider bound. The rule
+`docs/real-panel-acceptance.md` states applies — a fake this repository wrote and an
+adapter this repository wrote can only prove they agree with each other.
+
+Until then the bound is conservative and the refusal happens at configuration time,
+which is the failure that costs least.

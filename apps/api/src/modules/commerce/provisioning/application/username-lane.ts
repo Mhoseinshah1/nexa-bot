@@ -11,7 +11,8 @@ import {
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { PanelRepository } from '../../../platform/panels/application/ports.js';
 import type { CustomerRepository } from '../../customers/application/ports.js';
-import { UsernameAllocator, modesOffered } from './username-allocator.js';
+import { modesOffered } from './username-allocator.js';
+import type { UsernameAllocator } from './username-allocator.js';
 import type {
   ServiceUsernameRepository,
   UsernameCaptureRecord,

@@ -570,7 +570,6 @@ export const WEB_FA = {
   'web.panel_username_template_hint':
     'خالی یعنی همان تولیدکننده‌ی پیش‌فرض. در غیر این صورت باید دست‌کم یکی از {order_id}، {random6} یا {random10} را داشته باشد.',
   'web.panel_username_tokens': 'جانشین‌های مجاز',
-  'web.panel_username_preview': 'نمونه‌ی خروجی',
   'web.panel_username_worst_case': 'بلندترین خروجی ممکن: {length} از {max} نویسه',
   // Each issue is its own sentence, and all of them are shown at once: an operator
   // fixing one problem per round trip is an operator who gives up.

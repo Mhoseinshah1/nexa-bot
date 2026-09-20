@@ -254,9 +254,17 @@ are unproven.
    provider-facing claim below rests on the fakes. The owner's deferred manual acceptance is
    what closes this, and the checklist is prepared at the end of the work.
 2. **Provider username constraints are not declared by the adapters.** `ProviderAdapter`
-   exposes no maximum length or character class. The directive's fallback applies: 64
-   characters, lowercase ASCII letters, digits and `_`. Marzban's and Sanaei's real limits
-   are unverified and go to `docs/open-questions.md`.
+   exposes no maximum length or character class, and Marzban's and Sanaei's real limits
+   are unverified — `docs/open-questions.md`, OQ-6C-01.
+
+   _Corrected during implementation._ This item originally recorded the directive's
+   fallback of 64 characters. Sixty-four is a guess, and it is the wrong SHAPE of guess:
+   it lets an operator save a 60-character template and makes the first customer past the
+   provider's real limit discover it after their money moved. The shipped constant is
+   `PROVEN_PROVIDER_USERNAME_MAX_LENGTH` = 34 — `nx` plus 32 hex, the only length this
+   product has ever created an account with on a real panel. It is not a claim about
+   either provider, and raising it is a real-panel acceptance task.
+
 3. **Cross-panel-same-host namespaces** (A-5) cannot be detected from the schema; the
    namespace key mitigates and the provider conflict is the backstop.
 

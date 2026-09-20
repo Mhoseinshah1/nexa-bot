@@ -1233,6 +1233,7 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
             settings screen where "the only way to read a price is to overwrite it".
             None of it is a secret — the customer is shown the rule before they type.
           */}
+          <p className="field-group-head">{t('web.panel_username_policy')}</p>
           <Field
             label={t('web.panel_username_custom')}
             hint={t('web.panel_username_custom_hint')}
