@@ -13,10 +13,7 @@ import {
 import type { IdGenerator } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { PanelUsernamePolicy } from '../../../platform/panels/application/ports.js';
-import type {
-  ServiceUsernameRepository,
-  UsernameReservation,
-} from './username-ports.js';
+import type { ServiceUsernameRepository, UsernameReservation } from './username-ports.js';
 
 /**
  * The provider account namespace a panel's names live in.

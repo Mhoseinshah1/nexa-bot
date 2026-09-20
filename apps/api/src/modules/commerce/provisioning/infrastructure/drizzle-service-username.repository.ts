@@ -154,11 +154,7 @@ export class DrizzleServiceUsernameRepository implements ServiceUsernameReposito
     return rows.length > 0;
   }
 
-  async release(
-    scope: TenantContext,
-    orderId: string,
-    tx: TransactionScope,
-  ): Promise<boolean> {
+  async release(scope: TenantContext, orderId: string, tx: TransactionScope): Promise<boolean> {
     const rows = await tx.tx
       .delete(serviceUsernameReservations)
       .where(
