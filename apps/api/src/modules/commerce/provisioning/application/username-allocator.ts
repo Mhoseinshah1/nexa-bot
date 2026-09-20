@@ -1,16 +1,26 @@
 import {
   COMMERCE_ERROR_CODES,
-  PANEL_LEGACY_TEMPLATE,
-  RANDOM_USERNAME_ALPHABET,
+  DEFAULT_USERNAME_PREFIX,
+  PROVIDER_USERNAME_MAX_LENGTH,
+  RANDOM_STRATEGY_LENGTH,
   RANDOM_USERNAME_MAX_ATTEMPTS,
+  TELEGRAM_ID_RANDOM_SUFFIX_LENGTH,
+  USERNAME_REDRAWN_TOKENS,
+  assertNewProviderUsername,
   canonicalizeCustomUsername,
+  drawUsernameCharacters,
   errors,
+  isNewProviderUsername,
   isValidCustomUsername,
+  prefixRandomLength,
   renderUsernameTemplate,
+  telegramIdSuffix4,
+  usernameDigest4,
+  validateUsernameTemplate,
   type ServiceUsernameMode,
   type TenantContext,
 } from '@nexa/contracts';
-import type { IdGenerator } from '@nexa/contracts';
+import type { Hasher, IdGenerator } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { PanelUsernamePolicy } from '../../../platform/panels/application/ports.js';
 import type { ServiceUsernameRepository, UsernameReservation } from './username-ports.js';
@@ -45,7 +55,7 @@ export function namespaceKeyFor(providerType: string, baseUrl: string): string {
 export function modesOffered(policy: PanelUsernamePolicy): readonly ServiceUsernameMode[] {
   const modes: ServiceUsernameMode[] = [];
   if (policy.allowCustom) modes.push('CUSTOM');
-  if (policy.allowRandom) modes.push('RANDOM');
+  if (policy.allowAutomatic) modes.push('AUTOMATIC');
   return modes;
 }
 
@@ -69,6 +79,14 @@ export interface UsernameAllocatorDeps {
   readonly ids: IdGenerator;
   /** Random bytes as hex. The same port the subscription ref uses. */
   readonly secrets: { readonly hex: (bytes: number) => string };
+  /**
+   * SHA-256, for `{customer4}` and `{order4}`.
+   *
+   * The SAME hasher the operation ids use, bound once in the container. A second one
+   * would make the two digests of one order disagree between processes, and `{order4}`
+   * is supposed to be stable across a replay.
+   */
+  readonly hash: Hasher;
 }
 
 /**
@@ -99,7 +117,7 @@ export class UsernameAllocator {
    * A double tap therefore produces one name, and the redundant read is gone.
    *
    * The mode is checked against the PANEL, not against what the surface offered. A
-   * callback carrying `CUSTOM` for a panel that allows only RANDOM is refused here —
+   * callback carrying `CUSTOM` for a panel that allows only AUTOMATIC is refused here —
    * the button that produced it may have been drawn before an operator changed the
    * policy, and a surface's memory of what it offered is not authorisation.
    */
@@ -118,7 +136,7 @@ export class UsernameAllocator {
     const namespaceKey = namespaceKeyFor(input.providerType, input.baseUrl);
     return input.mode === 'CUSTOM'
       ? this.allocateCustom(scope, input, namespaceKey, tx)
-      : this.allocateRandom(scope, input, namespaceKey, tx);
+      : this.allocateAutomatic(scope, input, namespaceKey, tx);
   }
 
   /**
@@ -152,46 +170,37 @@ export class UsernameAllocator {
   }
 
   /**
-   * A name this installation generates.
+   * A name this installation generates, from the panel's saved preset.
    *
-   * `template === PANEL_LEGACY_TEMPLATE` mints the shape every panel used before this
-   * phase — `nx` plus 32 hex — but from RANDOM hex rather than from the service id. The
-   * shape, the length and the `LEGACY_USERNAME_PATTERN` it matches are unchanged, so
-   * nothing an operator reads is different; what changes is that the name now exists
-   * before the money does, which is the whole point of reserving. Deriving it from the
-   * service id is impossible here because that id is minted at settlement, and the
-   * derivation is no longer load-bearing anywhere: `providerRefFor` reads the stored
-   * column, and reconciliation asks the panel about the name the service row already
-   * carries.
+   * Four presets, all of them bounded by the universal contract, and the bound is
+   * checked on the RENDER rather than trusted from the save. `TELEGRAM_ID_RANDOM` is
+   * why: its length depends on the customer, so a policy that is perfectly legal for
+   * one buyer produces twenty-three characters for another, and the only place that
+   * can be known is here.
    *
-   * Otherwise the template is rendered and, on a collision, drawn again up to
-   * `RANDOM_USERNAME_MAX_ATTEMPTS` times.
+   * ## What a collision redraws, and what it does not
    *
-   * BOUNDED, and the bound is the point. A template whose only uniqueness token is
-   * `{random6}` has 2.1 billion names and will collide eventually; a template an
-   * operator has mistakenly made constant collides every time, and an unbounded loop
-   * against it holds a transaction open against the database for ever rather than
-   * answering. Running out is a refusal the operator can act on, with the panel named.
+   * Only the random component. `RANDOM`, `PREFIX_RANDOM` and `TELEGRAM_ID_RANDOM`
+   * always have one, so they get up to `RANDOM_USERNAME_MAX_ATTEMPTS` candidates. A
+   * template whose only uniqueness token is `{order4}` has NONE: the second attempt
+   * renders exactly what the first did, so it gets one attempt and then a refusal.
+   * Looping would be pretending that a deterministic function might come out
+   * differently, and mutating the order's identity to make it do so would be worse.
+   *
+   * Every exit is BEFORE any debit. `SERVICE_USERNAME_TAKEN` says the names are
+   * occupied; `SERVICE_USERNAME_UNGENERATABLE` says no redraw could have helped and
+   * the operator is the one who fixes it. Collapsing the two would tell a customer to
+   * try again at something that cannot succeed.
    */
-  private async allocateRandom(
+  private async allocateAutomatic(
     scope: TenantContext,
     input: AllocateUsernameInput,
     namespaceKey: string,
     tx: TransactionScope,
   ): Promise<UsernameReservation> {
-    const template = input.policy.template;
-
-    for (let attempt = 0; attempt < RANDOM_USERNAME_MAX_ATTEMPTS; attempt += 1) {
-      const username =
-        template === PANEL_LEGACY_TEMPLATE
-          ? `nx${this.deps.secrets.hex(16)}`
-          : renderUsernameTemplate(template, {
-              telegram_id: input.telegramId,
-              customer_id: input.customerId,
-              order_id: input.orderId,
-              random6: this.draw(6),
-              random10: this.draw(10),
-            });
+    const attempts = this.redrawsOnCollision(input.policy) ? RANDOM_USERNAME_MAX_ATTEMPTS : 1;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const username = this.generate(input);
       const reserved = await this.attempt(scope, input, namespaceKey, username, tx);
       if (reserved !== null) return reserved;
     }
@@ -199,6 +208,69 @@ export class UsernameAllocator {
       COMMERCE_ERROR_CODES.SERVICE_USERNAME_TAKEN,
       'A username could not be generated for this plan right now.',
     );
+  }
+
+  /**
+   * Whether a second attempt would differ from the first.
+   *
+   * True for the three presets that always draw, and for a template that uses at least
+   * one `USERNAME_REDRAWN_TOKENS` token. False for a template built only from
+   * `{order4}` and identity tokens — see `allocateAutomatic`.
+   */
+  private redrawsOnCollision(policy: PanelUsernamePolicy): boolean {
+    if (policy.strategy !== 'CUSTOM_TEMPLATE') return true;
+    const verdict = validateUsernameTemplate(policy.template ?? '');
+    return verdict.tokens.some((token) => USERNAME_REDRAWN_TOKENS.includes(token));
+  }
+
+  /**
+   * One candidate from the panel's preset, already proved legal.
+   *
+   * `TELEGRAM_ID_RANDOM` is the one preset whose output length this installation
+   * cannot bound at save time, so it is checked here and refused with the code that
+   * says an operator must act. The other three end in `assertNewProviderUsername`,
+   * which is a defect check rather than a refusal: their lengths are decided by
+   * constants and by a prefix the save already bounded, so a failure means this file
+   * and the contract have come apart.
+   */
+  private generate(input: AllocateUsernameInput): string {
+    const policy = input.policy;
+    switch (policy.strategy) {
+      case 'RANDOM': {
+        const username = this.draw(RANDOM_STRATEGY_LENGTH);
+        assertNewProviderUsername(username);
+        return username;
+      }
+      case 'PREFIX_RANDOM': {
+        const prefix = policy.prefix ?? DEFAULT_USERNAME_PREFIX;
+        const username = `${prefix}${this.draw(prefixRandomLength(prefix))}`;
+        assertNewProviderUsername(username);
+        return username;
+      }
+      case 'TELEGRAM_ID_RANDOM': {
+        const username = `${input.telegramId}_${this.draw(TELEGRAM_ID_RANDOM_SUFFIX_LENGTH)}`;
+        if (!isNewProviderUsername(username)) {
+          throw errors.preconditionFailed(
+            COMMERCE_ERROR_CODES.SERVICE_USERNAME_UNGENERATABLE,
+            `A username for this account would exceed ${PROVIDER_USERNAME_MAX_LENGTH} characters.`,
+          );
+        }
+        return username;
+      }
+      case 'CUSTOM_TEMPLATE':
+        // `renderUsernameTemplate` asserts the result itself, and the template was
+        // bounded at save time, so a throw here is the contract and this file
+        // disagreeing rather than a customer or an operator being wrong.
+        return renderUsernameTemplate(policy.template ?? '', {
+          telegram_id: input.telegramId,
+          tg4: telegramIdSuffix4(input.telegramId),
+          customer4: usernameDigest4(input.customerId, this.deps.hash),
+          order4: usernameDigest4(input.orderId, this.deps.hash),
+          random4: this.draw(4),
+          random6: this.draw(6),
+          random10: this.draw(10),
+        });
+    }
   }
 
   /**
@@ -239,23 +311,15 @@ export class UsernameAllocator {
   }
 
   /**
-   * `length` characters of `RANDOM_USERNAME_ALPHABET`, from the secrets port.
+   * `length` characters of the username alphabet, from the secrets port.
    *
-   * `% 36` over a byte is very slightly biased — four of the thirty-six characters are
-   * drawn 8/256 of the time rather than 7/256 — and that is accepted deliberately. A
-   * username is an identifier, not a secret: nothing here is guarding against somebody
-   * predicting the next draw, only against two draws colliding, and a 1.14x bias on
-   * one character changes the collision probability by nothing an operator could
-   * measure. Rejection sampling would be the correct fix if this were ever used for a
-   * token; `secrets.hex` is what the subscription ref uses, and that one IS a secret.
+   * The draw itself is `drawUsernameCharacters` in the contracts package, because the
+   * settlement fallback and the preview need the same one and three copies of a draw
+   * is three chances for one of them to reach for `Math.random`. What stays here is
+   * WHERE the entropy comes from: `secrets.hex`, the same CSPRNG the subscription ref
+   * uses.
    */
   private draw(length: number): string {
-    const bytes = this.deps.secrets.hex(length);
-    let drawn = '';
-    for (let index = 0; index < length; index += 1) {
-      const pair = bytes.slice(index * 2, index * 2 + 2);
-      drawn += RANDOM_USERNAME_ALPHABET[parseInt(pair, 16) % RANDOM_USERNAME_ALPHABET.length];
-    }
-    return drawn;
+    return drawUsernameCharacters(this.deps.secrets.hex(length), length);
   }
 }

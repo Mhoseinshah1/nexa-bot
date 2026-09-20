@@ -12,6 +12,7 @@ import type {
   ProviderFailureKind,
   ProviderType,
   TenantContext,
+  UsernameStrategy,
 } from '@nexa/contracts';
 import { SCHEDULE_SUSPENDED_AT } from '../domain/monitor-cadence.js';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
@@ -318,17 +319,19 @@ export class DrizzlePanelRepository implements PanelRepository {
           // differ here, and so an added column inherits the shape.
           ...(input.maxServices === undefined ? {} : { maxServices: input.maxServices }),
           /*
-           * Absent leaves the column defaults, which ARE the legacy behaviour: both
-           * modes enabled, `username_template` null, so `PANEL_LEGACY_TEMPLATE` decides
-           * and the panel behaves exactly as every panel did before this phase. Spread
-           * as one unit rather than three independent spreads, because the CHECK
-           * constraint is about the pair.
+           * Absent leaves the column defaults: both modes enabled on the default
+           * preset, `nx` plus ten random characters. Spread as ONE unit rather than
+           * five independent spreads, because three CHECK constraints are about
+           * combinations of these columns and a partial write is what reaches a state
+           * none of them individually forbids.
            */
           ...(input.usernamePolicy === undefined
             ? {}
             : {
                 allowCustomUsername: input.usernamePolicy.allowCustom,
-                allowRandomUsername: input.usernamePolicy.allowRandom,
+                allowAutomaticUsername: input.usernamePolicy.allowAutomatic,
+                usernameStrategy: input.usernamePolicy.strategy,
+                usernamePrefix: input.usernamePolicy.prefix,
                 usernameTemplate: input.usernamePolicy.template,
               }),
           createdAt: input.at,
@@ -371,7 +374,9 @@ export class DrizzlePanelRepository implements PanelRepository {
      */
     if (input.usernamePolicy !== undefined) {
       changes['allowCustomUsername'] = input.usernamePolicy.allowCustom;
-      changes['allowRandomUsername'] = input.usernamePolicy.allowRandom;
+      changes['allowAutomaticUsername'] = input.usernamePolicy.allowAutomatic;
+      changes['usernameStrategy'] = input.usernamePolicy.strategy;
+      changes['usernamePrefix'] = input.usernamePolicy.prefix;
       changes['usernameTemplate'] = input.usernamePolicy.template;
     }
 
@@ -1225,7 +1230,11 @@ function toRecord(row: typeof panels.$inferSelect): PanelRecord {
     maxServices: row.maxServices,
     usernamePolicy: {
       allowCustom: row.allowCustomUsername,
-      allowRandom: row.allowRandomUsername,
+      allowAutomatic: row.allowAutomaticUsername,
+      // Narrowed from `text` for the reason `providerType` above gives: the CHECK
+      // constraint is what makes it safe, and the allocator's switch is exhaustive.
+      strategy: row.usernameStrategy as UsernameStrategy,
+      prefix: row.usernamePrefix,
       template: row.usernameTemplate,
     },
     // Passed through unnarrowed: the shape is per provider and the application layer

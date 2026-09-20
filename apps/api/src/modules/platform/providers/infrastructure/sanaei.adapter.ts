@@ -1,4 +1,5 @@
 import {
+  assertNewProviderUsername,
   providerDescriptor,
   type ProviderAdapter,
   type ProviderCapability,
@@ -748,6 +749,16 @@ export class SanaeiAdapter implements ProviderAdapter {
     http: ProviderHttpClient,
     input: CreateProviderUserInput,
   ): Promise<ProviderUserOutcome> {
+    /*
+     * The third and last place the username contract is checked, and the only one
+     * that stands between a bad name and somebody else's machine.
+     *
+     * An assertion rather than a refusal: the surface and the allocator have both
+     * already validated, so reaching here with an illegal name means those two checks
+     * have been removed or bypassed, which is our defect and not the customer's. It
+     * runs BEFORE authentication, so a defect costs no request at all.
+     */
+    assertNewProviderUsername(input.username);
     const activation = target.activation as SanaeiActivation;
     const auth = await this.authenticate(target, http);
     if (!auth.ok) return auth;

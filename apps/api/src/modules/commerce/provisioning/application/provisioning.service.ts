@@ -6,7 +6,8 @@ import {
   MAX_TRAFFIC_BYTES,
   NexaError,
   SUBSCRIPTION_REF_BYTES,
-  providerUsernameFor,
+  DEFAULT_USERNAME_PREFIX,
+  drawUsernameCharacters,
   SERVICE_PAGE_MAX,
   UNLIMITED_TRAFFIC_BYTES,
   type ActorContext,
@@ -297,23 +298,34 @@ export class ProvisioningService {
   ): Promise<{ readonly service: ServiceRecord; readonly operation: OperationRecord }> {
     const serviceId = this.deps.ids.uuid();
     /*
-     * The reserved name, and the derived one ONLY when there is no reservation.
+     * The reserved name, and a default one ONLY when there is no reservation.
      *
      * Every order confirmed since the username policy shipped holds a reservation —
      * `OrderService.confirm` requires one. The fallback is for an order that was
      * already AWAITING_PAYMENT when this release was deployed: it was confirmed by
      * code that took no name, and refusing to settle it would strand money a customer
-     * has already sent. It produces exactly the name that release would have produced.
+     * has already sent.
+     *
+     * It used to be `providerUsernameFor(serviceId)` — `nx` plus 32 hex, derived from
+     * the service id. That shape is gone: the universal contract bounds every NEW name
+     * at twenty characters, and a 34-character fallback would be this release minting
+     * exactly what it refuses everywhere else. The fallback is now the default preset,
+     * `nx` plus ten random characters, drawn from the same CSPRNG the allocator uses.
+     *
+     * Random rather than derived has one consequence worth stating: it cannot collide
+     * deterministically, but it also cannot be recomputed. Neither matters here —
+     * `providerRefFor` reads the stored column and reconciliation asks the panel about
+     * the name the service row already carries — and the collision odds over 36^10 are
+     * beneath the unique index that would catch them.
      *
      * Note the interaction with the losing `create` below: when another transaction
      * created this order's service first, `serviceId` is discarded and the winner's
-     * row is used. A reserved name is unaffected — it is keyed on the ORDER — while a
-     * derived one is computed from the id that lost. That is the behaviour the
-     * fallback path has always had, and it is harmless for the same reason: the
-     * discarded row was never written.
+     * row is used, along with the winner's name. The discarded row was never written.
      */
     const reserved = await this.deps.usernames.findByOrder(scope, order.id, tx);
-    const providerUsername = reserved?.username ?? providerUsernameFor(serviceId);
+    const providerUsername =
+      reserved?.username ??
+      `${DEFAULT_USERNAME_PREFIX}${drawUsernameCharacters(this.deps.secrets.hex(10), 10)}`;
     /*
      * Stamped in the SETTLING transaction, which is what makes it true.
      *

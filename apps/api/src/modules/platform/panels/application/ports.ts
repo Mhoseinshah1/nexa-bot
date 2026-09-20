@@ -6,6 +6,8 @@ import type {
   ProviderFailureKind,
   ProviderType,
   TenantContext,
+  UsernamePolicyDraft,
+  UsernameStrategy,
 } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 
@@ -55,7 +57,7 @@ export interface PanelRecord {
    * Always present, never optional. A panel with no policy would have to be read as
    * "whatever the caller assumes", and the two callers that matter — the customer
    * purchase step and the allocator — would assume differently. Existing panels were
-   * migrated to both modes enabled with `usernameTemplate: null`, which is exactly the
+   * migrated to both modes enabled on the default preset, which is exactly the
    * behaviour they had before the column existed.
    */
   readonly usernamePolicy: PanelUsernamePolicy;
@@ -144,15 +146,29 @@ export interface PanelView {
 /**
  * A panel's username policy, as stored.
  *
- * `template` is null for the derived `nx…` generator — `PANEL_LEGACY_TEMPLATE`, and the
- * state every panel sold onto before this phase is in. Null is a real value here and
- * not an absence, which is why this interface has no optional field.
+ * Structurally `UsernamePolicyDraft` from the contracts package, and deliberately
+ * re-declared rather than imported as a type alias: this is the application layer's
+ * own shape, and the contract's is what the frozen evaluator reads. The `satisfies`
+ * below is what stops the two drifting.
+ *
+ * `prefix` and `template` are null unless `strategy` uses them, which the two CHECK
+ * constraints enforce one layer down. Null is a real value here and not an absence,
+ * which is why this interface has no optional field.
  */
 export interface PanelUsernamePolicy {
   readonly allowCustom: boolean;
-  readonly allowRandom: boolean;
+  readonly allowAutomatic: boolean;
+  readonly strategy: UsernameStrategy;
+  readonly prefix: string | null;
   readonly template: string | null;
 }
+
+/** A compile-time assertion that the two shapes are one shape. */
+export type PanelUsernamePolicyIsDraft = PanelUsernamePolicy extends UsernamePolicyDraft
+  ? UsernamePolicyDraft extends PanelUsernamePolicy
+    ? true
+    : never
+  : never;
 
 export interface CreatePanelInput {
   readonly id: string;
@@ -164,7 +180,7 @@ export interface CreatePanelInput {
   /** The cap this panel is created with. Absent means uncapped. */
   readonly maxServices?: number | null;
   /**
-   * Absent means the column defaults: both modes, derived generator.
+   * Absent means the column defaults: both modes, the default preset.
    *
    * Replaced as a WHOLE — see `panelUsernamePolicyInputSchema`. The one rule the policy
    * has is about the pair of booleans, so a half-applied policy has no meaning.

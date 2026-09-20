@@ -998,6 +998,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       repository: serviceUsernameRepository,
       ids,
       secrets: serviceSecrets,
+      // The SAME hasher the operation ids use. `{customer4}` and `{order4}` have to
+      // be stable across processes and replays, and two hashers is two answers.
+      hash: sha256Hex,
     }),
     repository: serviceUsernameRepository,
     captures: new DrizzleUsernameCaptureRepository(database.db),

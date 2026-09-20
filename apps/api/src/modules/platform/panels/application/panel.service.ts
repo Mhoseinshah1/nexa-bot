@@ -26,7 +26,7 @@ import {
   NexaError,
   shapeAcceptsCredential,
   providerDescriptor,
-  validateUsernameTemplate,
+  validateUsernamePolicy as decideUsernamePolicy,
 } from '@nexa/contracts';
 import type { PanelActivation } from '@nexa/contracts';
 import type { PermissionGuard } from '../../access/application/permission-guard.js';
@@ -475,44 +475,81 @@ export class PanelService {
    * panel that happens to be down must still be creatable.
    */
   /**
-   * Whether this policy may be stored on a panel of this provider.
+   * Whether this policy may be stored, and the ONE shape it is stored in.
    *
-   * Two refusals, and they are different questions with different fixes. A policy with
-   * neither mode enabled is a panel nothing can be sold onto — the CHECK constraint
-   * says the same thing one layer down, and this says it with a message. A template
-   * that cannot render a legal name is refused with EVERY issue at once, because an
-   * operator fixing one problem per round trip is an operator who gives up.
+   * The decision itself is `validateUsernamePolicy` in `packages/contracts` — one
+   * evaluator with three callers, this being the only one that WRITES. The Web Admin's
+   * live preview and the Telegram Admin section ask the same function, so a policy one
+   * of them showed as fine cannot be refused here for a reason they did not know
+   * about. What this method adds is the mapping from the contract's typed refusal to
+   * an error code, and the normalisation below.
    *
-   * The template is checked WHATEVER `allowRandom` says. A template stored beside a
-   * disabled mode goes live the moment somebody re-enables it, and that re-enable is a
-   * one-checkbox edit nobody would think to validate.
+   * ## The configuration of the unselected strategies is CLEARED, not kept
    *
-   * The bound comes from `validateUsernameTemplate`'s default —
-   * `PROVEN_PROVIDER_USERNAME_MAX_LENGTH`, the longest name this product has evidence a
-   * real panel accepts. No adapter declares its own yet; when one does, it is passed
-   * here as the second argument and nothing else changes.
+   * A prefix left behind by a move to `CUSTOM_TEMPLATE` looks inert and is not: the
+   * one-checkbox edit that selects `PREFIX_RANDOM` again would go live against a value
+   * nobody has looked at since. `panels_username_prefix_check` and its template
+   * counterpart are biconditionals for the same reason, so this normalisation is what
+   * keeps a legal write legal rather than a nicety.
+   *
+   * The bound on a template is now the universal one — four to twenty — and no longer
+   * a number derived from what our own generator happened to produce. `providerType`
+   * survives in the error detail because it is what an operator needs to know which
+   * panel they are looking at, not because any provider has declared its own limit;
+   * none has, and `docs/open-questions.md` OQ-6C-01 still says so.
    */
   private validateUsernamePolicy(
     providerType: ProviderType,
     policy: PanelUsernamePolicy,
   ): PanelUsernamePolicy {
-    if (!policy.allowCustom && !policy.allowRandom) {
-      throw errors.validation(
-        PANEL_ERROR_CODES.PANEL_USERNAME_POLICY_EMPTY,
-        'A panel must allow at least one username mode.',
-      );
-    }
-    if (policy.template !== null) {
-      const verdict = validateUsernameTemplate(policy.template);
-      if (!verdict.ok) {
+    const normalised: PanelUsernamePolicy = {
+      allowCustom: policy.allowCustom,
+      allowAutomatic: policy.allowAutomatic,
+      strategy: policy.strategy,
+      prefix: policy.strategy === 'PREFIX_RANDOM' ? policy.prefix : null,
+      template: policy.strategy === 'CUSTOM_TEMPLATE' ? policy.template : null,
+    };
+    const verdict = decideUsernamePolicy(normalised);
+    if (verdict.ok) return normalised;
+
+    const detail = {
+      providerType,
+      strategy: normalised.strategy,
+      ...(verdict.prefix === null ? {} : { prefixIssues: [...verdict.prefix.issues] }),
+      ...(verdict.template === null
+        ? {}
+        : {
+            templateIssues: [...verdict.template.issues],
+            worstCaseLength: verdict.template.worstCaseLength,
+            bestCaseLength: verdict.template.bestCaseLength,
+          }),
+    };
+    switch (verdict.refusal) {
+      case 'NO_MODE':
+        throw errors.validation(
+          PANEL_ERROR_CODES.PANEL_USERNAME_POLICY_EMPTY,
+          'A panel must allow at least one username mode.',
+          detail,
+        );
+      case 'STRATEGY_CONFIGURATION':
+        throw errors.validation(
+          PANEL_ERROR_CODES.PANEL_USERNAME_STRATEGY_INVALID,
+          'This username strategy has no configuration behind it.',
+          detail,
+        );
+      case 'PREFIX':
+        throw errors.validation(
+          PANEL_ERROR_CODES.PANEL_USERNAME_PREFIX_INVALID,
+          'This username prefix cannot produce a usable name.',
+          detail,
+        );
+      default:
         throw errors.validation(
           PANEL_ERROR_CODES.PANEL_USERNAME_TEMPLATE_INVALID,
           'This username template cannot produce a usable name.',
-          { issues: [...verdict.issues], providerType, worstCaseLength: verdict.worstCaseLength },
+          detail,
         );
-      }
     }
-    return policy;
   }
 
   private validateUrl(raw: string): string {

@@ -2,6 +2,7 @@ import {
   COMMERCE_ERROR_CODES,
   PANEL_ERROR_CODES,
   errors,
+  isNewProviderUsername,
   type IdGenerator,
   type ServiceUsernameMode,
   type TenantContext,
@@ -199,16 +200,49 @@ export class PanelUsernameLane implements OrderUsernameLane {
     tx: TransactionScope,
   ): Promise<UsernameReservation> {
     const held = await this.held(scope, target.orderId, tx);
-    if (held !== null) return held;
+    if (held !== null) return this.stillUsable(scope, held, tx);
 
     const panel = await this.panel(scope, target.panelId, tx);
-    if (!panel.usernamePolicy.allowRandom) {
+    if (!panel.usernamePolicy.allowAutomatic) {
       throw errors.preconditionFailed(
         COMMERCE_ERROR_CODES.SERVICE_USERNAME_REQUIRED,
         'Choose a username for this service before confirming.',
       );
     }
-    return this.choose(scope, target, { mode: 'RANDOM' }, tx);
+    return this.choose(scope, target, { mode: 'AUTOMATIC' }, tx);
+  }
+
+  /**
+   * A held name that the CURRENT contract would still mint, or a refusal that frees it.
+   *
+   * The one place a frozen name is ever re-judged, and it is fenced by `fundedAt`.
+   * An UNFUNDED hold is a draft: no money has moved, nothing exists on a panel, and a
+   * name frozen under an older rule — longer than twenty characters, or carrying a
+   * character this contract no longer accepts — can be released and chosen again at no
+   * cost to anybody. That release happens ONCE, inside the caller's transaction, and
+   * the customer is told to choose.
+   *
+   * A FUNDED name is returned untouched whatever it looks like, and that asymmetry is
+   * the whole point. Money has moved and an account may already exist under that name;
+   * renaming it would leave this installation addressing an account by a name the
+   * panel does not know it by. An ambiguous outcome is reconciliation's problem and a
+   * definitive non-delivery is the refund's — neither is a rename.
+   *
+   * Existing SERVICES are not reachable from here at all: this reads
+   * `service_username_reservations`, and a provisioned service's name lives on
+   * `services.provider_username`, which nothing in this file writes.
+   */
+  private async stillUsable(
+    scope: TenantContext,
+    held: UsernameReservation,
+    tx: TransactionScope,
+  ): Promise<UsernameReservation> {
+    if (held.fundedAt !== null || isNewProviderUsername(held.username)) return held;
+    await this.deps.repository.release(scope, held.orderId, tx);
+    throw errors.preconditionFailed(
+      COMMERCE_ERROR_CODES.SERVICE_USERNAME_STALE,
+      'That username is no longer valid. Choose another before confirming.',
+    );
   }
 
   async markFunded(
