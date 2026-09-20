@@ -75,7 +75,9 @@ import {
   CUSTOMER_NOTIFICATION_STATES,
   SERVICE_STATES,
   SERVICE_REMINDER_KINDS,
+  DEFAULT_USERNAME_STRATEGY,
   SERVICE_USERNAME_MODES,
+  USERNAME_STRATEGIES,
   USERNAME_CAPTURE_CLOSE_REASONS,
   OPERATION_STATES,
   OPERATION_TYPES,
@@ -1317,20 +1319,23 @@ export const panels = pgTable(
      * fail at their purchase rather than at the operator's save.
      */
     allowCustomUsername: boolean('allow_custom_username').notNull().default(true),
-    allowRandomUsername: boolean('allow_random_username').notNull().default(true),
+    allowAutomaticUsername: boolean('allow_automatic_username').notNull().default(true),
     /**
-     * How RANDOM names are generated here, or NULL for the legacy generator.
+     * Which of the four presets generates an AUTOMATIC name here.
      *
-     * NULL is not "unset pending configuration" — it is a positive statement that this
-     * panel keeps `providerUsernameFor`, the 34-character derived name that produced
-     * every username in production before this phase. `docs/phase6c-audit.md` A-2
-     * records why that resolves without a guess: the legacy behaviour is a pure
-     * function of the service id with no settings behind it, so there is nothing to
-     * read and nothing to infer.
+     * NOT NULL with a real default, and that is the correction 0094 carries. A
+     * nullable column meaning "nobody has configured this, so something else decides"
+     * is a migration state in a vocabulary every surface has to render, and it makes
+     * the generator unreadable: an operator could not answer "what will the next
+     * customer be called" without knowing what the absence falls back to.
      *
-     * An operator moves a panel off the legacy generator by saving a template, and
-     * never by accident. Existing services are not renamed either way.
+     * `PREFIX_RANDOM` with the prefix `nx` renders twelve characters —
+     * `DEFAULT_USERNAME_PATTERN`. Existing services are not renamed.
      */
+    usernameStrategy: text('username_strategy').notNull().default(DEFAULT_USERNAME_STRATEGY),
+    /** The `PREFIX_RANDOM` prefix. NULL under any other strategy. */
+    usernamePrefix: text('username_prefix'),
+    /** The `CUSTOM_TEMPLATE` template. NULL under any other strategy. */
     usernameTemplate: text('username_template'),
     /** Set when the panel is archived, so the event has a time and not just a state. */
     archivedAt: timestamptz('archived_at'),
@@ -1348,7 +1353,24 @@ export const panels = pgTable(
      */
     check(
       'panels_username_policy_check',
-      sql`${table.allowCustomUsername} OR ${table.allowRandomUsername}`,
+      sql`${table.allowCustomUsername} OR ${table.allowAutomaticUsername}`,
+    ),
+    check('panels_username_strategy_check', enumCheck('username_strategy', USERNAME_STRATEGIES)),
+    /**
+     * A preset and the configuration it needs, or neither. Not "or something".
+     *
+     * Two biconditionals rather than two one-way implications, so a template left
+     * behind by a strategy change cannot sit in the row pretending to be inert: the
+     * one-checkbox edit that re-selects `CUSTOM_TEMPLATE` would then go live against
+     * a value nobody looked at. The service nulls the other field on every write.
+     */
+    check(
+      'panels_username_prefix_check',
+      sql`(${table.usernameStrategy} = 'PREFIX_RANDOM') = (${table.usernamePrefix} IS NOT NULL)`,
+    ),
+    check(
+      'panels_username_template_check',
+      sql`(${table.usernameStrategy} = 'CUSTOM_TEMPLATE') = (${table.usernameTemplate} IS NOT NULL)`,
     ),
     /**
      * Unique among a tenant's LIVE panels only.
