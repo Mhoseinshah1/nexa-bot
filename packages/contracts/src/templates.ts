@@ -1454,13 +1454,6 @@ export const TEMPLATES = [
         repeatable: false,
       },
       {
-        token: 'usernameStrategy',
-        type: 'STRING',
-        description: 'The name of the preset that generates automatic usernames here.',
-        required: false,
-        repeatable: false,
-      },
-      {
         /*
          * The template itself, which is configuration and not a secret — an
          * administrator reading it is the only way to answer "why is this customer
@@ -1469,16 +1462,14 @@ export const TEMPLATES = [
          */
         token: 'usernameTemplate',
         type: 'STRING',
-        description:
-          'The CUSTOM_TEMPLATE template, or a mark when the strategy does not use one.',
+        description: 'The CUSTOM_TEMPLATE template, or a mark when the strategy does not use one.',
         required: false,
         repeatable: false,
       },
       {
         token: 'usernamePrefix',
         type: 'STRING',
-        description:
-          'The PREFIX_RANDOM prefix, or a mark when the strategy does not use one.',
+        description: 'The PREFIX_RANDOM prefix, or a mark when the strategy does not use one.',
         required: false,
         repeatable: false,
       },
@@ -1637,12 +1628,78 @@ export const TEMPLATES = [
       'argument rather than capturing the next message.',
     format: 'TELEGRAM_HTML',
     placeholders: [
-      { token: 'panel', type: 'STRING', description: 'The panel\u2019s name.', required: true, repeatable: false },
-      { token: 'custom', type: 'STRING', description: 'A mark for the custom choice.', required: true, repeatable: false },
-      { token: 'automatic', type: 'STRING', description: 'A mark for the automatic choice.', required: true, repeatable: false },
-      { token: 'strategy', type: 'STRING', description: 'The saved preset\u2019s name.', required: true, repeatable: false },
-      { token: 'prefix', type: 'STRING', description: 'The saved prefix, or a mark for none.', required: true, repeatable: false },
-      { token: 'template', type: 'STRING', description: 'The saved template, or a mark for none.', required: true, repeatable: false },
+      {
+        token: 'panel',
+        type: 'STRING',
+        description: 'The panel\u2019s name.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'custom',
+        type: 'STRING',
+        description: 'A mark for the custom choice.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'automatic',
+        type: 'STRING',
+        description: 'A mark for the automatic choice.',
+        required: true,
+        repeatable: false,
+      },
+      /*
+       * The four presets are marks, not a rendered name, and that is a constraint of
+       * this surface rather than a preference: the runtime builds a reply as a key
+       * and a bag of values, and has no translator to turn a preset's key into the
+       * word for it. Passing the enum name would put `PREFIX_RANDOM` in front of a
+       * Persian-speaking operator. The names therefore live in this body and the
+       * runtime passes only which one is selected — the same arrangement the two
+       * mode marks above already use.
+       */
+      {
+        token: 'random',
+        type: 'STRING',
+        description: 'A mark when RANDOM is selected.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'prefixRandom',
+        type: 'STRING',
+        description: 'A mark when PREFIX_RANDOM is selected.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'telegramIdRandom',
+        type: 'STRING',
+        description: 'A mark when TELEGRAM_ID_RANDOM is selected.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'customTemplate',
+        type: 'STRING',
+        description: 'A mark when CUSTOM_TEMPLATE is selected.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'prefix',
+        type: 'STRING',
+        description: 'The saved prefix, or a mark for none.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'template',
+        type: 'STRING',
+        description: 'The saved template, or a mark for none.',
+        required: true,
+        repeatable: false,
+      },
       {
         token: 'preview',
         type: 'STRING',
@@ -1669,8 +1726,11 @@ export const TEMPLATES = [
   {
     key: 'bot.admin.username_strategy_random',
     description:
-      'Selects, and names, the preset that draws twelve random characters. Doubles as ' +
-      'the label the section renders, so the preset\u2019s name lives in ONE key.',
+      'Selects the preset that draws twelve random characters. There is no button for ' +
+      'CUSTOM_TEMPLATE beside these three, and the asymmetry is deliberate: the other ' +
+      'three either need no configuration or have a default, and a template does not ' +
+      'exist until somebody writes one \u2014 so `/panel_template` is how that preset ' +
+      'is selected, in the same message that supplies the template.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -1683,12 +1743,6 @@ export const TEMPLATES = [
   {
     key: 'bot.admin.username_strategy_telegram_id_random',
     description: 'Selects and names the preset that uses the customer\u2019s Telegram id.',
-    format: 'PLAIN_TEXT',
-    placeholders: [],
-  },
-  {
-    key: 'bot.admin.username_strategy_custom_template',
-    description: 'Selects and names the preset that renders a saved template.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },

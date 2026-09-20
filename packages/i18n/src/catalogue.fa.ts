@@ -252,7 +252,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'هیچ پنلی در سرویس نیست. پنل‌ها در پنل وب ساخته می‌شوند، چون ساختن پنل به اعتبارنامه نیاز دارد و اعتبارنامه در چت وارد نمی‌شود.',
   'bot.admin.panels_more_button': '▶️ صفحهٔ بعد',
   'bot.admin.panel_detail':
-    'پنل: {name}\nارائه‌دهنده: {provider}\nوضعیت: {status}\nسلامت: {health}\nآخرین بررسی: {checkedAt}\nخطای آخرین بررسی: {failure}\n\nسرویس‌های فعال: {services}\nرزرو جاری: {reservations}\nسقف سرویس: {cap}\n\nیوزرنیم دلخواه: {usernameCustom}\nیوزرنیم خودکار: {usernameAutomatic}\nروش خودکار: {usernameStrategy}\nپیشوند: {usernamePrefix}\nالگوی یوزرنیم: {usernameTemplate}',
+    'پنل: {name}\nارائه‌دهنده: {provider}\nوضعیت: {status}\nسلامت: {health}\nآخرین بررسی: {checkedAt}\nخطای آخرین بررسی: {failure}\n\nسرویس‌های فعال: {services}\nرزرو جاری: {reservations}\nسقف سرویس: {cap}\n\nیوزرنیم دلخواه: {usernameCustom}\nیوزرنیم خودکار: {usernameAutomatic}\nپیشوند: {usernamePrefix}\nالگوی یوزرنیم: {usernameTemplate}',
   'bot.admin.panel_gone': 'این پنل پیدا نشد.',
   'bot.admin.panel_test_button': '🔌 تست اتصال',
   'bot.admin.panel_tested': 'تست اتصال انجام شد و سلامت پنل به‌روز شد.',
@@ -288,7 +288,11 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'یوزرنیم سرویس‌های پنل <b>{panel}</b>\n\n' +
     'انتخاب دلخواه توسط مشتری: {custom}\n' +
     'انتخاب خودکار: {automatic}\n' +
-    'روش خودکار: {strategy}\n' +
+    'روش خودکار:\n' +
+    '{random} تصادفی ۱۲ نویسه‌ای\n' +
+    '{prefixRandom} پیشوند + تصادفی\n' +
+    '{telegramIdRandom} شناسهٔ تلگرام + تصادفی\n' +
+    '{customTemplate} الگوی دلخواه\n' +
     'پیشوند: <code>{prefix}</code>\n' +
     'الگو: <code>{template}</code>\n' +
     'نمونهٔ خروجی: <code>{preview}</code>\n\n' +
@@ -300,7 +304,6 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.username_strategy_random': 'تصادفی ۱۲ نویسه‌ای',
   'bot.admin.username_strategy_prefix_random': 'پیشوند + تصادفی',
   'bot.admin.username_strategy_telegram_id_random': 'شناسهٔ تلگرام + تصادفی',
-  'bot.admin.username_strategy_custom_template': 'الگوی دلخواه',
   'bot.admin.username_saved': 'تنظیمات یوزرنیم این پنل ذخیره شد.',
   'bot.admin.username_refused': 'ذخیره نشد: {reason}',
   'bot.admin.section':
