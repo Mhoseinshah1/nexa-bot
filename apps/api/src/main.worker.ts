@@ -87,6 +87,13 @@ async function main(): Promise<void> {
         // progress — see `PaymentExpiryLoop`, where "nothing was due" is the healthy
         // answer most of the time.
         ['payment-expiry', true, () => container.paymentExpiryLoop.isFresh(now)],
+        // The lane that warns a customer before their service runs out of days or
+        // traffic. No flag, and for the reason the two either side of it have none:
+        // the alternative to warning them is finding out when it has already
+        // happened, and an installation that could switch it off would be one whose
+        // customers are told nothing until their configuration stops working. Its
+        // failure mode is silence, so it is health-checked rather than trusted.
+        ['service-reminders', true, () => container.serviceReminderLoop.isFresh(now)],
         // The lane that tells a customer something they did not ask for. No flag, for
         // the same reason as the line above: before Phase 4H an operator's rejection and
         // the expiry sweep both happened while the customer was not looking and nothing
@@ -157,6 +164,9 @@ async function main(): Promise<void> {
   // deadline a customer was shown was only ever a refusal, so a month-old order still
   // read as awaiting payment and an operator could not tell it from this morning's.
   container.paymentExpiryLoop.start();
+  // And the reminder lane. Nothing here dials a panel: both halves read columns
+  // `SYNC_USAGE` and the commercial actions already maintain.
+  container.serviceReminderLoop.start();
   // And the customer notification lane. `docs/phase4h-audit.md` §1 measured what it
   // replaces: exactly one thing could be said to a customer who was not looking.
   container.customerNotificationLoop.start();

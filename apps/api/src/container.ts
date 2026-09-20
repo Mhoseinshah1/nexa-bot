@@ -165,6 +165,12 @@ import {
 import { OrderService } from './modules/commerce/orders/application/order.service.js';
 import { DrizzleOrderRepository } from './modules/commerce/orders/infrastructure/drizzle-order.repository.js';
 import { DrizzleServiceRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service.repository.js';
+import { DrizzleServiceReminderRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service-reminder.repository.js';
+import { ServiceReminderService } from './modules/commerce/provisioning/application/service-reminder.service.js';
+import {
+  ServiceReminderLoop,
+  SERVICE_REMINDER_INTERVAL_MS,
+} from './modules/commerce/provisioning/application/service-reminder-loop.js';
 import { serviceSecrets } from './infrastructure/crypto/service-secrets.js';
 import { UsernameAllocator } from './modules/commerce/provisioning/application/username-allocator.js';
 import { PanelUsernameLane } from './modules/commerce/provisioning/application/username-lane.js';
@@ -280,6 +286,15 @@ export interface Container {
    * wedged panel must not delay work that needs no panel.
    */
   readonly paymentExpiryLoop: PaymentExpiryLoop;
+  /**
+   * The lane that warns a customer before their service runs out of days or traffic.
+   *
+   * Started by the WORKER only, for the reason above it: both halves read columns this
+   * installation already maintains and neither dials a panel.
+   */
+  readonly serviceReminderLoop: ServiceReminderLoop;
+  /** The sweep itself, so a test runs one pass instead of starting a timer. */
+  readonly serviceReminderSweep: ServiceReminderService;
   /**
    * The customer notification lane's timer.
    *
@@ -1348,6 +1363,27 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         ? null
         : { tenantId: installationTenantId, botInstanceId: null },
     intervalMs: PAYMENT_EXPIRY_INTERVAL_MS,
+    now: () => clock.now().getTime(),
+    logger,
+  });
+
+  const serviceReminderSweep = new ServiceReminderService({
+    reminders: new DrizzleServiceReminderRepository(database.db),
+    notifier: customerNotifier,
+    scopeActivity: tenants,
+    uow,
+    clock,
+    ids,
+  });
+  const serviceReminderLoop = new ServiceReminderLoop(serviceReminderSweep, {
+    // The same per-pass closure the payment expiry loop uses, and for the same
+    // reason: the installation's tenant is a row, so it is not known while this
+    // object is being built.
+    scope: () =>
+      installationTenantId === null
+        ? null
+        : { tenantId: installationTenantId, botInstanceId: null },
+    intervalMs: SERVICE_REMINDER_INTERVAL_MS,
     now: () => clock.now().getTime(),
     logger,
   });
@@ -2431,6 +2467,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     paymentExpiryLoop,
     /** The sweep itself, so a test runs one pass instead of starting a timer. */
     paymentExpirySweep,
+    serviceReminderLoop,
+    serviceReminderSweep,
     customerNotificationLoop,
     customerNotifications: customerNotificationRepository,
     audit,
@@ -2651,6 +2689,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       await backupRunSweeper.stop();
       await recoveryRequestSweeper.stop();
       await paymentExpiryLoop.stop();
+      await serviceReminderLoop.stop();
       await customerNotificationLoop.stop();
       await redis.close();
       await database.close();

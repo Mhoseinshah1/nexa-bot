@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { CustomerNotificationKind } from './customer-notifications.js';
 
 /**
  * The six moments a customer is told something about a service they already own.
@@ -127,3 +128,41 @@ export function expiryReminderDue(
  * pass continues where this one stopped.
  */
 export const SERVICE_REMINDER_SWEEP_LIMIT = 200;
+
+/**
+ * Which notification kind each reminder kind produces.
+ *
+ * An explicit map rather than `` `SERVICE_${kind}` ``, even though every pair happens
+ * to line up today. The two vocabularies belong to different layers — one names a row
+ * in `service_reminders`, the other a member of a closed set pinned by a CHECK
+ * constraint — and a derived name would make renaming either one silently produce a
+ * kind the database refuses, at runtime, in a background loop.
+ */
+export const SERVICE_REMINDER_NOTIFICATION_KINDS: Readonly<
+  Record<ServiceReminderKind, CustomerNotificationKind>
+> = {
+  EXPIRING_3D: 'SERVICE_EXPIRING_3D',
+  EXPIRING_1D: 'SERVICE_EXPIRING_1D',
+  EXPIRED: 'SERVICE_EXPIRED',
+  USAGE_80: 'SERVICE_USAGE_80',
+  USAGE_95: 'SERVICE_USAGE_95',
+  USAGE_100: 'SERVICE_USAGE_100',
+};
+
+/**
+ * The service states a reminder may be raised for, per family.
+ *
+ * Expiry includes `EXPIRED`, because the `EXPIRED` reminder is the one that fires after
+ * the sweep has already moved the row — the two run in different process roles and in
+ * either order, so requiring the service to still be ACTIVE would make the message a
+ * race.
+ *
+ * Usage does NOT. A service whose window has closed is no longer consuming anything,
+ * and telling its owner they are at ninety-five percent of an allowance they can no
+ * longer use is a message with nothing to do. Neither family includes
+ * `PENDING_PROVISION` or `UNRECONCILED` — there is no account yet, or it is not known
+ * whether there is one — nor `TERMINATED`, which is where a service goes to stop being
+ * anybody's concern.
+ */
+export const EXPIRY_REMINDER_STATES = ['ACTIVE', 'SUSPENDED', 'EXPIRED'] as const;
+export const USAGE_REMINDER_STATES = ['ACTIVE', 'SUSPENDED'] as const;
