@@ -3,7 +3,6 @@ import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   money,
-  providerUsernameFor,
   type ActorContext,
   type BotInstanceId,
   type CorrelationId,
@@ -1442,7 +1441,7 @@ describe('a provisioned service announces itself', () => {
     expect(provisioned?.usageSyncedAt, 'a create leaves no usage figure').toBeNull();
 
     // The customer uses their service. Only the PANEL knows this.
-    const username = providerUsernameFor(provisioned?.id ?? '');
+    const username = provisioned?.providerUsername ?? '';
     panel.useTraffic(username, { up: 1_000_000, down: 24_000_000 });
 
     await makeUsageStale();

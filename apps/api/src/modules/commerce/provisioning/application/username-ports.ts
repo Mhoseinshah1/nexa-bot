@@ -106,11 +106,50 @@ export interface ServiceUsernameRepository {
   /**
    * Give the name back. Only on a terminal non-delivery, and only for THIS order.
    *
+   * Unconditional, funded or not, and that is exactly what separates it from
+   * `releaseUnfunded`. Its one caller is the undeliverable-order refunder, which runs
+   * only where the create is DEFINITIVELY known not to have happened. An `UNKNOWN`
+   * outcome never reaches it — the money rules send that to `UNRECONCILED` instead —
+   * because a create whose answer was lost may be holding the name on a panel, and
+   * selling it to somebody else would promise an account this installation cannot make.
+   *
    * Returns whether a row was removed, so a caller can tell "released it" from
    * "there was nothing to release" — which is a normal outcome on a legacy-mode panel,
    * where no reservation is taken at all.
    */
   release(scope: TenantContext, orderId: string, tx: TransactionScope): Promise<boolean>;
+
+  /**
+   * Give back a name no money has been taken for.
+   *
+   * The cancellation, expiry and re-selection path, and the `funded_at IS NULL` in it
+   * is the entire guard. A funded hold names an account that may already exist, so a
+   * cancellation arriving after settlement — a second tap, a redelivered callback, a
+   * sweep racing a payment — must find nothing to free. Only `release` above may take
+   * a funded name back, and only on the one fact that proves no account exists.
+   */
+  releaseUnfunded(scope: TenantContext, orderId: string, tx: TransactionScope): Promise<boolean>;
+
+  /**
+   * Remove holds that no order will ever fund, oldest deadline first.
+   *
+   * `expires_at` stops a hold being HONOURED; it does not remove the row, and the row
+   * is what `service_username_reservations_name_key` reads. Without this sweep a draft
+   * the customer abandoned takes its name out of circulation for good — and on a panel
+   * whose customers choose their own names, "for good" is the name they wanted. The
+   * cancellation and expiry paths cover the orders that END; this covers the drafts
+   * that simply stop.
+   *
+   * Bounded, and `funded_at IS NULL` again: a funded hold past its deadline belongs to
+   * an order that took money, and a deadline says nothing about the account on a panel.
+   * Returns how many rows went.
+   */
+  sweepExpiredHolds(
+    scope: TenantContext,
+    now: Date,
+    limit: number,
+    tx: TransactionScope,
+  ): Promise<number>;
 }
 
 /**

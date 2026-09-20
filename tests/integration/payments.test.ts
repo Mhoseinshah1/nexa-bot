@@ -1166,6 +1166,9 @@ describe('payments and settlement', () => {
   const expirySweep = () =>
     new PaymentExpiryService({
       panelSales: ctx.container.panelSales,
+      // The username hold's counterpart to the panel slot. Off the container: the
+      // lane is stateless and the isolation claim is about tenants, not about it.
+      usernames: ctx.container.usernameLane,
       payments: new DrizzlePaymentRepository(ctx.container.database.db),
       orders: new DrizzleOrderRepository(ctx.container.database.db),
       uow: ctx.container.uow,

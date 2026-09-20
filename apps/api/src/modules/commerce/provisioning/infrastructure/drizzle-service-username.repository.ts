@@ -166,4 +166,55 @@ export class DrizzleServiceUsernameRepository implements ServiceUsernameReposito
       .returning({ id: serviceUsernameReservations.id });
     return rows.length > 0;
   }
+
+  async releaseUnfunded(
+    scope: TenantContext,
+    orderId: string,
+    tx: TransactionScope,
+  ): Promise<boolean> {
+    const rows = await tx.tx
+      .delete(serviceUsernameReservations)
+      .where(
+        and(
+          eq(serviceUsernameReservations.tenantId, scope.tenantId),
+          eq(serviceUsernameReservations.orderId, orderId),
+          // The predicate, not a read followed by a delete. A settlement committing
+          // between the two would be a funded name deleted by a cancellation that
+          // saw it unfunded.
+          sql`${serviceUsernameReservations.fundedAt} IS NULL`,
+        ),
+      )
+      .returning({ id: serviceUsernameReservations.id });
+    return rows.length > 0;
+  }
+
+  async sweepExpiredHolds(
+    scope: TenantContext,
+    now: Date,
+    limit: number,
+    tx: TransactionScope,
+  ): Promise<number> {
+    /*
+     * The bound is a subselect rather than a `LIMIT` on the DELETE, because
+     * PostgreSQL has no `DELETE ... LIMIT`. `FOR UPDATE SKIP LOCKED` inside it is the
+     * same shape the outbox relay's claim uses and for the same reason: two worker
+     * replicas is the normal case on every rolling update, and a sweeper waiting on
+     * the other's rows would serialise for no gain.
+     */
+    const rows = await tx.tx
+      .delete(serviceUsernameReservations)
+      .where(
+        sql`${serviceUsernameReservations.id} IN (
+          SELECT r.id
+            FROM ${serviceUsernameReservations} AS r
+           WHERE r.tenant_id = ${scope.tenantId}
+             AND r.funded_at IS NULL
+             AND r.expires_at < ${now}
+           ORDER BY r.expires_at
+           LIMIT ${limit}
+             FOR UPDATE SKIP LOCKED)`,
+      )
+      .returning({ id: serviceUsernameReservations.id });
+    return rows.length;
+  }
 }

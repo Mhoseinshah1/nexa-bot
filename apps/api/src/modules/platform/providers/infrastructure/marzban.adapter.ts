@@ -1,5 +1,5 @@
 import {
-  assertNewProviderUsername,
+  assertSendableProviderUsername,
   providerDescriptor,
   type CreateProviderUserInput,
   type MarzbanActivation,
@@ -310,15 +310,21 @@ export class MarzbanAdapter implements ProviderAdapter {
     input: CreateProviderUserInput,
   ): Promise<ProviderUserOutcome> {
     /*
-     * The third and last place the username contract is checked, and the only one
-     * that stands between a bad name and somebody else's machine.
+     * The third and last place a username is checked, and the only one that stands
+     * between a bad name and somebody else's machine.
+     *
+     * `assertSendable`, NOT `assertNew`, and the difference matters: this method is
+     * also reached by a RECONCILE-driven retry that re-sends the name a SERVICE ROW
+     * already carries, and a service provisioned before the four-to-twenty contract
+     * carries `nx` plus 32 hex. Asserting the minting rule here would crash a
+     * recoverable retry for a service the customer is holding.
      *
      * An assertion rather than a refusal: the surface and the allocator have both
-     * already validated, so reaching here with an illegal name means those two checks
-     * have been removed or bypassed, which is our defect and not the customer's. It
-     * runs BEFORE authentication, so a defect costs no request at all.
+     * already validated what they mint, so reaching here with a name that is neither
+     * mintable nor legacy means those checks were removed or bypassed — our defect,
+     * not the customer's. It runs BEFORE authentication, so it costs no request.
      */
-    assertNewProviderUsername(input.username);
+    assertSendableProviderUsername(input.username);
     const activation = target.activation as MarzbanActivation;
     const auth = await this.authenticate(target, http);
     if (!auth.ok) return auth;

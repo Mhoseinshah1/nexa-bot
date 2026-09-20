@@ -443,6 +443,38 @@ export class OrderService {
   }
 
   /**
+   * One of THIS customer's own orders, for a surface that has just written to it.
+   *
+   * `get` above is the OPERATOR's read and charges `orders.view`, which a customer's
+   * own turn does not hold and must not: `orders.view` is "may read the orders of this
+   * installation". A customer turn holds `orders.place`, and what it may read is the
+   * order it is placing — so that is what this charges and how it is scoped.
+   *
+   * It exists because the Telegram username step used `get`, and the effect was
+   * invisible in exactly the way this codebase keeps finding: the name was reserved,
+   * the transaction committed, the permission check on the read that followed threw,
+   * and the customer was shown NOTHING — no summary, no refusal, not even a spinner
+   * stopping. The reservation was real and the screen was blank.
+   *
+   * Another customer's order is UNKNOWN rather than FORBIDDEN, for the reason `confirm`
+   * gives: a distinguishable refusal is an oracle for which order ids exist.
+   */
+  async orderForCustomer(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: { readonly customerId: string; readonly orderId: string },
+  ): Promise<OrderRecord> {
+    const customerId = this.customerId(input.customerId);
+    const orderId = this.orderId(input.orderId);
+    await this.deps.guard.check(scope, actor, ORDER_PLACE_PERMISSION);
+    const order = await this.deps.repository.findById(scope, orderId);
+    if (order === null || order.customerId !== customerId) {
+      throw errors.notFound(COMMERCE_ERROR_CODES.ORDER_NOT_FOUND, 'Unknown order.');
+    }
+    return order;
+  }
+
+  /**
    * What this order's username step looks like right now.
    *
    * A READ, and the one the Telegram flow asks before drawing anything: which modes the
@@ -1222,6 +1254,21 @@ export class OrderService {
          * make "a cancelled order holds no slot" depend on the handler having run.
          */
         await this.deps.panelSales.release(scope, orderId, tx);
+
+        /*
+         * And the NAME, beside the slot, for all the same reasons.
+         *
+         * Unconditional and idempotent in the same way — but `releaseUnfunded`, never
+         * `release`: a cancellation racing a settlement must not free a name money has
+         * been taken for, and the `funded_at IS NULL` predicate is what decides that
+         * inside the DELETE rather than in a read before it.
+         *
+         * Omitting this was a real leak rather than an untidiness. The unique index on
+         * `(namespace_key, username)` does not read `expires_at`, so a cancelled
+         * order's hold went on refusing its name to every later customer — and on a
+         * panel where customers type their own names, the name they wanted.
+         */
+        await this.deps.usernames.releaseUnfunded(scope, orderId, tx);
 
         await this.deps.audit.record(
           scope,

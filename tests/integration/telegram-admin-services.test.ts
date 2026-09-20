@@ -4,7 +4,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import {
   ADMIN_MENU_BUTTON,
   money,
-  providerUsernameFor,
   type ActorContext,
   type AdminId,
   type BotInstanceId,
@@ -1139,7 +1138,8 @@ describe('the services section of the Telegram management panel', () => {
     const service = await services.findByOrderId(tenantA, orderId);
     if (service === null || service === undefined) throw new Error('settlement made no service');
     expect(service.state, 'the fixture must start ACTIVE').toBe('ACTIVE');
-    return { id: service.id, username: providerUsernameFor(service.id) };
+    // The STORED name. See the same correction in `service-management.test.ts`.
+    return { id: service.id, username: service.providerUsername };
   }
 
   /**
@@ -1167,7 +1167,8 @@ describe('the services section of the Telegram management panel', () => {
     const service = await services.findByOrderId(tenantA, orderId);
     if (service === null || service === undefined) throw new Error('no service');
     expect(service.deliveryState, 'the fixture must need a person').toBe('FAILED');
-    return { id: service.id, username: providerUsernameFor(service.id) };
+    // The STORED name. See the same correction in `service-management.test.ts`.
+    return { id: service.id, username: service.providerUsername };
   }
 
   /** A service on the 3X-UI panel, for the capability cases. Never provisioned. */

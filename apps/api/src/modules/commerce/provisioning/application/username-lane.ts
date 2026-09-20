@@ -81,7 +81,17 @@ export interface OrderUsernameLane {
     at: Date,
     tx: TransactionScope,
   ): Promise<boolean>;
+  /** Definitive non-delivery only: frees a FUNDED name too. See the port's docblock. */
   release(scope: TenantContext, orderId: string, tx: TransactionScope): Promise<boolean>;
+  /** Cancellation and expiry: frees an UNFUNDED name and nothing else. */
+  releaseUnfunded(scope: TenantContext, orderId: string, tx: TransactionScope): Promise<boolean>;
+  /** The abandoned-draft sweep. Bounded; never touches a funded hold. */
+  sweepExpiredHolds(
+    scope: TenantContext,
+    now: Date,
+    limit: number,
+    tx: TransactionScope,
+  ): Promise<number>;
 
   /*
    * The typing window. Here rather than in a lane of its own because it answers the
@@ -160,6 +170,27 @@ export class PanelUsernameLane implements OrderUsernameLane {
     if (customer === null) {
       throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
     }
+    /*
+     * A stale hold is cleared HERE, where the clearing commits with the new name.
+     *
+     * `reserve` is `ON CONFLICT DO NOTHING` against a unique `(tenant_id, order_id)`,
+     * so an order that already holds a name gets `ORDER_ALREADY_HELD` and its OLD name
+     * back — which is exactly right for a re-tap and exactly wrong for a draft whose
+     * frozen name this contract no longer accepts. Without this the customer told to
+     * choose again would be handed the same refused name for ever.
+     *
+     * It cannot live in `stillUsable`, and that is the whole reason it is here: that
+     * path refuses, the refusal aborts the caller's transaction, and a DELETE issued
+     * inside a transaction that then throws is a DELETE that never happened. This
+     * transaction commits.
+     *
+     * Fenced by `fundedAt` for the reason `stillUsable` gives at length: money has
+     * moved, an account may exist under that name, and renaming it is never the answer.
+     */
+    const held = await this.deps.repository.findByOrder(scope, target.orderId, tx);
+    if (held !== null && held.fundedAt === null && !isNewProviderUsername(held.username)) {
+      await this.deps.repository.releaseUnfunded(scope, target.orderId, tx);
+    }
     return this.deps.allocator.allocate(
       scope,
       {
@@ -200,7 +231,7 @@ export class PanelUsernameLane implements OrderUsernameLane {
     tx: TransactionScope,
   ): Promise<UsernameReservation> {
     const held = await this.held(scope, target.orderId, tx);
-    if (held !== null) return this.stillUsable(scope, held, tx);
+    if (held !== null) return this.stillUsable(held);
 
     const panel = await this.panel(scope, target.panelId, tx);
     if (!panel.usernamePolicy.allowAutomatic) {
@@ -218,9 +249,14 @@ export class PanelUsernameLane implements OrderUsernameLane {
    * The one place a frozen name is ever re-judged, and it is fenced by `fundedAt`.
    * An UNFUNDED hold is a draft: no money has moved, nothing exists on a panel, and a
    * name frozen under an older rule — longer than twenty characters, or carrying a
-   * character this contract no longer accepts — can be released and chosen again at no
-   * cost to anybody. That release happens ONCE, inside the caller's transaction, and
-   * the customer is told to choose.
+   * character this contract no longer accepts — costs nobody anything to abandon. So
+   * the customer is refused and told to choose again.
+   *
+   * This method REFUSES and does not release, and the distinction is load-bearing
+   * rather than tidy. An earlier version deleted the hold and then threw; the throw
+   * aborts the caller's transaction, so the delete was rolled back with it and the
+   * customer was handed the same refused name on every retry. The clearing belongs in
+   * `choose`, which commits — see the comment there.
    *
    * A FUNDED name is returned untouched whatever it looks like, and that asymmetry is
    * the whole point. Money has moved and an account may already exist under that name;
@@ -232,13 +268,8 @@ export class PanelUsernameLane implements OrderUsernameLane {
    * `service_username_reservations`, and a provisioned service's name lives on
    * `services.provider_username`, which nothing in this file writes.
    */
-  private async stillUsable(
-    scope: TenantContext,
-    held: UsernameReservation,
-    tx: TransactionScope,
-  ): Promise<UsernameReservation> {
+  private stillUsable(held: UsernameReservation): UsernameReservation {
     if (held.fundedAt !== null || isNewProviderUsername(held.username)) return held;
-    await this.deps.repository.release(scope, held.orderId, tx);
     throw errors.preconditionFailed(
       COMMERCE_ERROR_CODES.SERVICE_USERNAME_STALE,
       'That username is no longer valid. Choose another before confirming.',
@@ -256,6 +287,23 @@ export class PanelUsernameLane implements OrderUsernameLane {
 
   async release(scope: TenantContext, orderId: string, tx: TransactionScope): Promise<boolean> {
     return this.deps.repository.release(scope, orderId, tx);
+  }
+
+  async releaseUnfunded(
+    scope: TenantContext,
+    orderId: string,
+    tx: TransactionScope,
+  ): Promise<boolean> {
+    return this.deps.repository.releaseUnfunded(scope, orderId, tx);
+  }
+
+  async sweepExpiredHolds(
+    scope: TenantContext,
+    now: Date,
+    limit: number,
+    tx: TransactionScope,
+  ): Promise<number> {
+    return this.deps.repository.sweepExpiredHolds(scope, now, limit, tx);
   }
 
   async lockWindow(

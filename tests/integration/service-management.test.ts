@@ -3,7 +3,6 @@ import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   money,
-  providerUsernameFor,
   type ActorContext,
   type BotInstanceId,
   type CorrelationId,
@@ -218,7 +217,16 @@ describe('a customer manages the service they bought', () => {
     const service = await services.findByOrderId(tenantA, orderId);
     if (service === undefined || service === null) throw new Error('no service');
     expect(service.state, 'the fixture must start ACTIVE').toBe('ACTIVE');
-    return { id: service.id, username: providerUsernameFor(service.id) };
+    /*
+     * The STORED name, never one recomputed from the id.
+     *
+     * Settlement takes the name from the order's reservation now, so recomputing
+     * `providerUsernameFor(service.id)` here handed every operation below a name no
+     * account has. That is the same coupling `ae6f173` removed from production code —
+     * "the provider is asked for the name the row stores, not one recomputed" — and
+     * this fixture had not followed it.
+     */
+    return { id: service.id, username: service.providerUsername };
   }
 
   const customerUpdate = (payload: Record<string, unknown>, telegramUserId = '910910') => {

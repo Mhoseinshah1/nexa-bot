@@ -580,8 +580,19 @@ const SERVICES_TERMINATE_PERMISSION = 'services.terminate' as PermissionKey;
  * touches a credential: `panels.credentials.rotate` has no button in Telegram at all.
  */
 const PANELS_VIEW_PERMISSION = 'panels.view' as PermissionKey;
+/*
+ * ONE key for both halves of the reminders section, because there is only one.
+ *
+ * The section prints five SETTINGS and three FLAGS, and this used to gate it on
+ * `settings.view` AND `features.view` — a pair that reads sensibly and cannot be
+ * satisfied: `features.view` is in no catalogue. `PERMISSIONS` does not define it, so
+ * no role can be granted it, so the button was drawn for nobody, including the owner.
+ *
+ * The real answer is that flags are not separately permissioned in this product:
+ * `FeatureFlagsService` charges `settings.view` for a read and `settings.edit` for a
+ * write, deliberately and in terms. So does this.
+ */
 const SETTINGS_VIEW_PERMISSION = 'settings.view' as PermissionKey;
-const FEATURES_VIEW_PERMISSION = 'features.view' as PermissionKey;
 const PANELS_EDIT_PERMISSION = 'panels.edit' as PermissionKey;
 
 /**
@@ -1760,7 +1771,7 @@ export interface BotRuntimeDeps {
    * write the five numbers, and nothing else.
    *
    * Neither method is authorized by HAVING the port. `read` charges `settings.view` and
-   * `features.view`, `write` charges `settings.edit`, and both go through the same
+   * `settings.view`, `write` charges `settings.edit`, and both go through the same
    * guard, the same audit row and the same combination validation the Web Admin does —
    * which is the "one application service and one authorization/audit path" the surface
    * is required to share with it.
@@ -2506,8 +2517,7 @@ export class BotRuntime {
      * the five settings and the three switches. Drawing it for an administrator who
      * holds only one would produce a screen that denies itself on arrival.
      */
-    const maySeeReminders =
-      permissions.has(SETTINGS_VIEW_PERMISSION) && permissions.has(FEATURES_VIEW_PERMISSION);
+    const maySeeReminders = permissions.has(SETTINGS_VIEW_PERMISSION);
     if (!mayReview && !maySeeAdmins && !maySeeServices && !maySeePanels && !maySeeReminders) {
       return null;
     }
@@ -3069,7 +3079,8 @@ export class BotRuntime {
    * to replace, so "an admin cannot read the current configuration without overwriting
    * it". Here the read is a read.
    *
-   * `reminderConfig.read` charges `settings.view` and `features.view` itself. The
+   * `reminderConfig.read` charges `settings.view` itself — the one key both the
+   * settings and the flags are read under. The
    * button that led here was drawn behind the same pair, and this is checked ANYWAY:
    * not drawing a button is never the control, because a callback can be replayed from
    * an old message after a role change.
@@ -3143,7 +3154,23 @@ export class BotRuntime {
     idempotencyKey: string,
   ): Promise<PendingReply> {
     const key = REMINDER_SETTING_CODES[code];
-    const result = await this.deps.reminderConfig.write(scope, actor, key, value, idempotencyKey);
+    /*
+     * SUFFIXED, and the suffix is load-bearing — the same note `draft` carries.
+     *
+     * The update's bare key is already consumed by the turn that resolved this
+     * account, so presenting it again with a different payload is
+     * `platform.idempotency_payload_mismatch`. That throws, `adminTurn` catches
+     * everything as `bot.admin.refused`, and the operator sees a generic denial for a
+     * write that was never refused by any permission. Every other admin write on this
+     * surface suffixes; this one did not.
+     */
+    const result = await this.deps.reminderConfig.write(
+      scope,
+      actor,
+      key,
+      value,
+      `${idempotencyKey}:reminder-${code}`,
+    );
     if (!result.ok) {
       return {
         key: 'bot.admin.reminder_refused',
@@ -4845,7 +4872,15 @@ export class BotRuntime {
         orderId,
         choice: { mode: 'AUTOMATIC' },
       });
-      const order = await this.deps.orders.get(scope, actor, orderId);
+      /*
+       * The CUSTOMER's read, not the operator's. `get` charges `orders.view`, which a
+       * customer turn does not hold — so it threw here AFTER the reservation had
+       * committed, and the customer saw nothing at all.
+       */
+      const order = await this.deps.orders.orderForCustomer(scope, actor, {
+        customerId: customer.id,
+        orderId,
+      });
       return this.orderSummary(order, reservation.username);
     } catch (error) {
       return refusal(error);
@@ -4908,7 +4943,11 @@ export class BotRuntime {
       if (result.outcome === 'NO_WINDOW') {
         return { key: 'bot.unknown_command', values: {}, buttons: [], orderId: null };
       }
-      const order = await this.deps.orders.get(scope, actor, result.reservation.orderId);
+      // The customer's read. See `automaticUsername` for what `get` did here.
+      const order = await this.deps.orders.orderForCustomer(scope, actor, {
+        customerId: customer.id,
+        orderId: result.reservation.orderId,
+      });
       return this.orderSummary(order, result.reservation.username);
     } catch (error) {
       /*

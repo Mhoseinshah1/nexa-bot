@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   PROVIDER_TYPES,
   PROVIDER_USERNAME_MAX_LENGTH,
+  isNewProviderUsername,
   type CreateProviderUserInput,
   type ProviderHttpClient,
   type ProviderServiceTarget,
@@ -363,6 +364,36 @@ describe('the adapter boundary refuses an illegal new username before any reques
     await expect(new SanaeiAdapter().createUser(target, NEVER_CALLED, CREATE)).rejects.toThrow(
       /4-20 characters/,
     );
+  });
+
+  it('lets a name minted BEFORE the contract through, because nothing renames a service', async () => {
+    /*
+     * The half that `assertNewProviderUsername` would have broken, and the reason the
+     * adapter asserts `Sendable` rather than `New`.
+     *
+     * `createUser` is not reached only when a name is being minted. A RECONCILE-driven
+     * retry of an UNKNOWN create re-sends the name the SERVICE ROW already carries, and
+     * a service provisioned by the release before the four-to-twenty contract carries
+     * `nx` plus 32 hex. Asserting the minting rule there turns a recoverable retry into
+     * a crash for a service the customer is holding — the "never retroactively
+     * rejected" rule broken by the code meant to enforce it.
+     *
+     * Proved by getting PAST the assertion: the call reaches the adapter's own handling
+     * and answers with an outcome instead of throwing.
+     */
+    const legacy = `nx${'a'.repeat(32)}`;
+    expect(legacy).toHaveLength(34);
+    expect(isNewProviderUsername(legacy), 'not mintable today').toBe(false);
+    const target = {
+      baseUrl: 'https://panel.example.test',
+      credentials: { username: 'u', password: 'p' },
+      activation: { proxyProtocols: ['vless'], inboundTags: { vless: ['in'] } },
+    } as unknown as ProviderServiceTarget;
+    const outcome = await new MarzbanAdapter().createUser(target, NEVER_CALLED, {
+      ...CREATE,
+      username: legacy,
+    });
+    expect(outcome.ok).toBe(false);
   });
 
   it('does NOT throw the contract error for a name inside the contract', async () => {

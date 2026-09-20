@@ -261,6 +261,14 @@ export interface Container {
   readonly panelSales: PanelSalesGate;
   readonly panelCapacity: DrizzlePanelCapacityRepository;
   readonly paymentExpirySweep: PaymentExpiryService;
+  /**
+   * The username reservation lane.
+   *
+   * Exposed because a test that builds its own `PaymentExpiryService` — the two-tenant
+   * isolation cases in `payments.test.ts` do — still needs the real lane, and a second
+   * `PanelUsernameLane` wired by hand would be a second answer to what a hold is.
+   */
+  readonly usernameLane: PanelUsernameLane;
   readonly logger: Logger;
   readonly clock: Clock;
   readonly ids: IdGenerator;
@@ -1355,6 +1363,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    */
   const paymentExpirySweep = new PaymentExpiryService({
     panelSales: panelSalesGate,
+    usernames: usernameLane,
     payments: paymentRepository,
     notifier: customerNotifier,
     orders: orderRepository,
@@ -2463,7 +2472,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * The reminder configuration seam, named so BOTH surfaces and the test can hold it.
    *
    * Both halves go through the SAME application services the Web Admin uses, so the
-   * two surfaces cannot drift: `list` charges `settings.view` and `features.view`,
+   * two surfaces cannot drift: `list` charges `settings.view` — the key flags are
+   * read under too, see `FeatureFlagsService.FEATURES_VIEW` —
    * `set` charges `settings.edit` and runs `ReminderThresholdsGuard` inside its own
    * transaction. Nothing here re-implements a rule, and nothing here is authorized by
    * holding the port — every call still takes the caller's actor.
@@ -2571,6 +2581,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     paymentExpiryLoop,
     /** The sweep itself, so a test runs one pass instead of starting a timer. */
     paymentExpirySweep,
+    usernameLane,
     serviceReminderLoop,
     serviceReminderSweep,
     customerNotificationLoop,
@@ -2756,7 +2767,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
        * The reminder configuration seam for the Telegram admin section.
        *
        * Both halves go through the SAME application services the Web Admin uses, so the
-       * two surfaces cannot drift: `list` charges `settings.view` and `features.view`,
+       * two surfaces cannot drift: `list` charges `settings.view` — the key flags are
+       * read under too, see `FeatureFlagsService.FEATURES_VIEW` —
        * `set` charges `settings.edit` and runs `ReminderThresholdsGuard` inside its own
        * transaction. Nothing here re-implements a rule, and nothing here is authorized
        * by holding the port.

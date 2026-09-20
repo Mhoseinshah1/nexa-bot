@@ -3892,10 +3892,12 @@ export const walletEntries = pgTable(
  * provider treated as authoritative means a panel outage deletes an entitlement, and a
  * provider ignored means billing for something that does not exist.
  *
- * `provider_username` is derived from the service id (`providerUsernameFor`) and unique
- * per PANEL, which is the constraint that makes adoption after an unknown outcome safe:
- * a reconcile asks the panel for that exact name, and the index guarantees at most one
- * service claims it.
+ * `provider_username` is the name the ORDER reserved — chosen or drawn under
+ * `service-username.ts` and frozen before the money moved — and is unique per PANEL,
+ * which is the constraint that makes adoption after an unknown outcome safe: a
+ * reconcile asks the panel for the name THIS ROW carries, and the index guarantees at
+ * most one service claims it. It used to be derived from the service id, which cannot
+ * work once a name has to exist before the service does.
  *
  * `usage_synced_at` is nullable and is rendered to the customer beside the figure,
  * because a usage number with no "as of" is a number a customer reads as live.
@@ -3914,24 +3916,24 @@ export const services = pgTable(
     /** Navigation and reporting. The snapshot of what was bought is on the order. */
     productId: uuid('product_id').notNull(),
     state: text('state').notNull().default('PENDING_PROVISION'),
-    /** Derived from this row's own id. Unique per panel, which is what adoption needs. */
+    /** The order's reserved name, frozen before payment. Unique per panel, for adoption. */
     providerUsername: text('provider_username').notNull(),
     /**
      * The `subId` the panel serves this customer's configuration under. A CAPABILITY.
      *
-     * Random, 128 bits, chosen HERE and written in the settling transaction — not
-     * derived from the service id like the username beside it. The two are different
-     * kinds of thing and the distinction is the whole reason this column exists: the
-     * username appears in an operator's client list and is meant to be recoverable,
-     * while anybody holding this value can fetch the customer's configuration from
+     * Random, 128 bits, chosen HERE and written in the settling transaction. The
+     * username beside it is stored in the same transaction but is a different kind of
+     * thing, and the distinction is the whole reason this column exists: the username
+     * appears in an operator's client list and may be a name the customer picked, while
+     * anybody holding this value can fetch the customer's configuration from
      * `https://<subscription domain>/sub/<this>` with no authentication at all.
      *
      * It was derived, through an unkeyed SHA-256 of the service id — and the service id
      * travels in `operational_events.context`, in `audit_logs.entity_id` and in
      * `outbox_messages.aggregate_id`, none of which are places for a credential. Worse,
-     * `providerUsernameFor` is a reversible encoding rather than a hash, so reading a
-     * name off a panel screen recovered the id and therefore the link. The docblocks
-     * claimed the opposite in both directions.
+     * the username was then a reversible encoding of the id rather than a hash, so
+     * reading a name off a panel screen recovered the id and therefore the link. The
+     * docblocks claimed the opposite in both directions.
      *
      * Stored rather than derived loses nothing: it is written BEFORE any provider call,
      * so a create whose answer was lost can still be reconciled against it — which is

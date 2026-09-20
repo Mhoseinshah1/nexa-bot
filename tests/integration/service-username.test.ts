@@ -515,24 +515,59 @@ describe('the name a service is sold under', () => {
   // A frozen name, and what may re-judge it
   // -------------------------------------------------------------------------
 
-  it('releases an UNFUNDED draft whose frozen name the contract no longer accepts', async () => {
+  it('refuses to confirm an UNFUNDED draft whose frozen name the contract no longer takes', async () => {
     /*
      * A draft frozen under the old 34-character shape, confirmed after this release.
-     * No money has moved and nothing exists on a panel, so the hold is released ONCE
-     * and the customer chooses again — which is the only safe answer, and the reason
-     * it is fenced by `funded_at` in the case below.
+     * No money has moved and nothing exists on a panel, so the safe answer is to
+     * refuse and make the customer choose again — fenced by `funded_at`, as the case
+     * below proves from the other side.
+     *
+     * The hold is still THERE afterwards, and that is the point rather than an
+     * oversight. The refusal aborts the confirming transaction, so anything that
+     * transaction wrote — a release included — goes with it. An earlier version
+     * released here and asserted the row was gone; it was gone only until the
+     * rollback put it back, and the customer got the same refused name for ever.
      */
     const order = await drafted(panelLegacy);
     await choose(order, null);
+    const stale = `nx${'a'.repeat(32)}`;
     await ctx.container.database.db.execute(sql`
       UPDATE service_username_reservations
-         SET username = ${`nx${'a'.repeat(32)}`}
+         SET username = ${stale}
        WHERE order_id = ${order.id}`);
 
     await expect(confirm(order)).rejects.toMatchObject({
       code: COMMERCE_ERROR_CODES.SERVICE_USERNAME_STALE,
     });
-    expect(await reservations(order.id), 'the hold is gone, not rewritten').toHaveLength(0);
+    const [survived] = await reservations(order.id);
+    expect(survived?.username, 'nothing was rewritten by a transaction that refused').toBe(stale);
+  });
+
+  it('lets the customer choose again, and the stale hold gives way to the new name', async () => {
+    /*
+     * The other half, and the one that makes the refusal above an answer rather than
+     * a dead end. `reserve` is `ON CONFLICT DO NOTHING` on `(tenant_id, order_id)`, so
+     * without the clearing in `choose` a re-selection hands back the SAME refused name
+     * and the customer can never get past the summary.
+     *
+     * This transaction commits, which is why the clearing lives here.
+     */
+    const order = await drafted(panelLegacy);
+    await choose(order, null);
+    await ctx.container.database.db.execute(sql`
+      UPDATE service_username_reservations
+         SET username = ${`nx${'b'.repeat(32)}`}
+       WHERE order_id = ${order.id}`);
+
+    await choose(order, null);
+
+    const [replaced] = await reservations(order.id);
+    expect(replaced?.username, 'one hold, and it is a name this contract mints').toMatch(
+      DEFAULT_USERNAME_PATTERN,
+    );
+    expect(await reservations(order.id)).toHaveLength(1);
+    // And confirmation now goes through, which is what the customer was told to do.
+    expect((await confirm(order)).state).toBe('AWAITING_PAYMENT');
   });
 
   it('never re-judges a FUNDED name, whatever it looks like', async () => {
@@ -558,6 +593,94 @@ describe('the name a service is sold under', () => {
     expect(confirmed.state).toBe('AWAITING_PAYMENT');
     const [row] = await reservations(order.id);
     expect(row?.username).toBe(legacyName);
+  });
+
+  // -------------------------------------------------------------------------
+  // The hold's lifecycle: what gives a name back, and what must never
+  // -------------------------------------------------------------------------
+
+  it('gives the name back when the customer cancels, so somebody else may have it', async () => {
+    /*
+     * `service_username_reservations_name_key` is unique on
+     * `(namespace_key, username)` and does NOT read `expires_at`. So a hold nothing
+     * deletes keeps its name out of circulation for ever — and on a panel where
+     * customers type their own names, for ever is the name they wanted.
+     *
+     * Cancellation gave back the panel SLOT and not the name. This is the half that
+     * was missing, and the proof is not that a row vanished but that the name can be
+     * taken again afterwards.
+     */
+    const first = await drafted(panelLegacy);
+    await choose(first, 'zahra_9');
+    await confirm(first);
+    await ctx.container.orders.cancelByCustomer(tenantA, systemActor(key()), {
+      idempotencyKey: key(),
+      customerId: customerA,
+      orderId: first.id,
+    });
+    expect(await reservations(first.id), 'the cancelled order holds nothing').toHaveLength(0);
+
+    const second = await drafted(panelLegacy, customerB);
+    const retaken = await choose(second, 'zahra_9', customerB);
+    expect(retaken.username, 'the next customer may have it').toBe('zahra_9');
+  });
+
+  it('keeps a FUNDED name through a cancellation that arrives too late', async () => {
+    /*
+     * The asymmetry, from the cancellation side. Money has moved and an account may
+     * exist under that name, so a second tap or a redelivered callback arriving after
+     * settlement must find nothing to free. The `funded_at IS NULL` lives in the
+     * DELETE's predicate rather than in a read before it, because a settlement
+     * committing between the read and the delete is exactly the race.
+     */
+    const order = await drafted(panelLegacy);
+    const held = await choose(order, 'late_cancel1');
+    await confirm(order);
+    await ctx.container.database.db.execute(sql`
+      UPDATE service_username_reservations SET funded_at = now() WHERE order_id = ${order.id}`);
+
+    await ctx.container.orders
+      .cancelByCustomer(tenantA, systemActor(key()), {
+        idempotencyKey: key(),
+        customerId: customerA,
+        orderId: order.id,
+      })
+      .catch(() => undefined);
+
+    const [survived] = await reservations(order.id);
+    expect(survived?.username, 'a funded name is never freed by a cancellation').toBe(
+      held.username,
+    );
+  });
+
+  it('sweeps an abandoned DRAFT’s hold once its deadline passes, and never a funded one', async () => {
+    /*
+     * The population no order-ending path can see. A customer who tapped a product,
+     * chose a name and then simply stopped leaves a DRAFT — `expireDue` only looks at
+     * `AWAITING_PAYMENT` — holding a name with nothing to remove it.
+     *
+     * Both halves in one case on purpose: a sweep that frees the abandoned name is
+     * only safe if the same pass leaves the funded one alone, and separating them
+     * lets a bound that catches the first row hide the second.
+     */
+    const abandoned = await drafted(panelLegacy);
+    await choose(abandoned, 'gone_forever1');
+    const funded = await drafted(panelLegacy, customerB);
+    const kept = await choose(funded, 'paid_for_it1', customerB);
+    await ctx.container.database.db.execute(sql`
+      UPDATE service_username_reservations
+         SET expires_at = now() - interval '1 hour',
+             funded_at = CASE WHEN order_id = ${funded.id} THEN now() ELSE NULL END`);
+
+    const report = await ctx.container.paymentExpirySweep.runOnce(tenantA);
+    expect(report.usernameHolds, 'exactly the abandoned one').toBe(1);
+    expect(await reservations(abandoned.id)).toHaveLength(0);
+    expect((await reservations(funded.id))[0]?.username).toBe(kept.username);
+
+    // And the freed name is genuinely free, which is the only thing the row's
+    // absence was ever standing in for.
+    const next = await drafted(panelLegacy);
+    expect((await choose(next, 'gone_forever1')).username).toBe('gone_forever1');
   });
 
   it('refuses a panel policy with neither mode', async () => {

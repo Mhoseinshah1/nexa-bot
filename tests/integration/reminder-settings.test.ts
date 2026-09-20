@@ -87,8 +87,7 @@ describe('the reminder thresholds are configuration, not constants', () => {
     owner: '720001',
     /** Both READ permissions and neither edit. */
     reader: '720002',
-    /** `settings.view` alone — the section prints flags too, so this is not enough. */
-    halfReader: '720003',
+
     /** No settings or features permission at all. */
     stranger: '720004',
   } as const;
@@ -341,19 +340,33 @@ describe('the reminder thresholds are configuration, not constants', () => {
   });
 
   it('refuses a crafted setting code and a crafted value at the boundary', async () => {
+    /*
+     * All three are UNSUPPORTED at the PARSER, before any intent exists — a crafted
+     * code is not a settings key assembled downstream and a crafted value is not a
+     * number passed to the guard. `bot.unknown_command` is what an UNSUPPORTED
+     * callback renders, which is the same answer every unreadable callback in this
+     * surface gets, and deliberately says nothing about which of them it was.
+     */
     const badCode = await open(`${PREFIX.edit}zz`, TG.owner);
-    expect(badCode.replyKey).toBe('bot.unsupported');
+    expect(badCode.replyKey).toBe('bot.unknown_command');
     const badValue = await open(`${PREFIX.set}uf:abc`, TG.owner);
-    expect(badValue.replyKey).toBe('bot.unsupported');
+    expect(badValue.replyKey).toBe('bot.unknown_command');
     const outOfRange = await open(`${PREFIX.set}uf:999`, TG.owner);
-    expect(outOfRange.replyKey).toBe('bot.unsupported');
-    expect((await config()).usageFirstPercent).toBe(80);
+    expect(outOfRange.replyKey).toBe('bot.unknown_command');
+    expect((await config()).usageFirstPercent, 'nothing reached a write').toBe(80);
   });
 
-  it('draws the section for an administrator holding both read permissions', async () => {
-    await bindNewAdmin('reminder-reader', TG.reader, {
-      permissions: ['settings.view', 'features.view'],
-    });
+  it('draws the section for an administrator holding the read permission', async () => {
+    /*
+     * ONE permission, `settings.view`, and it covers both halves of the section.
+     *
+     * This asked for `settings.view` AND `features.view` — which reads sensibly and is
+     * unsatisfiable: `features.view` is in no catalogue, so no role can hold it, so the
+     * button was drawn for NOBODY. Feature flags are not separately permissioned in
+     * this product: `FeatureFlagsService` charges `settings.view` to read and
+     * `settings.edit` to write, in terms, and this surface now says the same.
+     */
+    await bindNewAdmin('reminder-reader', TG.reader, { permissions: ['settings.view'] });
     const result = await runtime().handle(
       tenantA,
       systemActor('bot'),
@@ -363,29 +376,15 @@ describe('the reminder thresholds are configuration, not constants', () => {
     expect(lastMessage()).toContain(PREFIX.section);
   });
 
-  it('does not draw it for an administrator holding only one of the two', async () => {
-    /*
-     * The section prints the five settings AND the three switches, so half the
-     * permissions would produce a screen that denies itself on arrival. Paired with the
-     * tap below, because not drawing a button is never the control.
-     */
-    await bindNewAdmin('reminder-half', TG.halfReader, { permissions: ['settings.view'] });
-    const menu = await runtime().handle(
-      tenantA,
-      systemActor('bot'),
-      adminUpdate('/admin', TG.halfReader),
-    );
-    expect(menu.replyKey).toBe('bot.admin.panel');
-    expect(lastMessage()).not.toContain(PREFIX.section);
-
-    await expect(open(PREFIX.section, TG.halfReader)).rejects.toThrow();
-  });
-
   it('refuses the write to a reader who may not edit', async () => {
-    await bindNewAdmin('reminder-reader-2', TG.reader, {
-      permissions: ['settings.view', 'features.view'],
-    });
-    await expect(open(`${PREFIX.set}uf:70`, TG.reader)).rejects.toThrow();
+    /*
+     * The half that the button cannot be. `settings.view` draws the section and reads
+     * every value; `settings.edit` is what a tap on a threshold needs, and the guard —
+     * not the keyboard — is what refuses one without it.
+     */
+    await bindNewAdmin('reminder-reader-2', TG.reader, { permissions: ['settings.view'] });
+    const refused = await open(`${PREFIX.set}uf:70`, TG.reader);
+    expect(refused.replyKey).toBe('bot.admin.refused');
     expect((await config()).usageFirstPercent, 'unchanged').toBe(80);
   });
 
@@ -397,7 +396,16 @@ describe('the reminder thresholds are configuration, not constants', () => {
       adminUpdate('/admin', TG.stranger),
     );
     expect(JSON.stringify(menu)).not.toContain(PREFIX.section);
-    await expect(open(PREFIX.section, TG.stranger)).rejects.toThrow();
+    /*
+     * And the tap gets nothing, because not drawing a button is never the control.
+     *
+     * `bot.unknown_command`, not a denial: an administrator with no section is not an
+     * administrator as far as this surface is concerned, so a management callback from
+     * them is answered exactly as a stranger's would be. Saying "refused" instead would
+     * confirm that the section exists, which is a fact about other administrators.
+     */
+    const tapped = await open(PREFIX.section, TG.stranger);
+    expect(tapped.replyKey).toBe('bot.unknown_command');
   });
 
   // -------------------------------------------------------------------------
@@ -423,14 +431,24 @@ describe('the reminder thresholds are configuration, not constants', () => {
 
   const sweep = () => ctx.container.serviceReminderSweep.runOnce(tenantA);
 
-  /** Writes one threshold and returns the refusal, or `null` when it was accepted. */
+  /**
+   * Writes one threshold and returns the refusal, or `null` when it was accepted.
+   *
+   * The version is READ first rather than passed as `null`, and that is not a
+   * convenience: `null` means "there is no tenant override", so it is right exactly
+   * once per key. A second write with `null` is a stale-write conflict, which is the
+   * guard doing its job — these tests are about what the thresholds DO, so they carry
+   * the current version the way a surface that has just rendered the value does.
+   * The stale-write guard has its own case below, where the staleness is deliberate.
+   */
   async function setSetting(settingKey: string, value: number): Promise<string | null> {
     try {
+      const before = await ctx.container.settingsService.get(tenantA, owner, settingKey);
       await ctx.container.settingsService.set(tenantA, owner, {
         idempotencyKey: key(),
         key: settingKey,
         value,
-        expectedVersion: null,
+        expectedVersion: before.version,
       });
       return null;
     } catch (error: unknown) {
@@ -438,15 +456,21 @@ describe('the reminder thresholds are configuration, not constants', () => {
     }
   }
 
-  const setFlag = (flagKey: string, enabled: boolean) =>
-    ctx.container.featureFlags.set(tenantA, owner, {
+  /** The same, for a flag. See `setSetting` on why the version is read and not `null`. */
+  async function setFlag(flagKey: string, enabled: boolean): Promise<unknown> {
+    const before = (await ctx.container.featureFlags.list(tenantA, owner)).find(
+      (flag) => flag.key === flagKey,
+    );
+    if (before === undefined) throw new Error(`no such feature flag: ${flagKey}`);
+    return ctx.container.featureFlags.set(tenantA, owner, {
       idempotencyKey: key(),
       key: flagKey,
       enabled,
-      expectedVersion: null,
+      expectedVersion: before.version,
       confirmKey: flagKey,
       reason: 'test toggle of a tenant-wide reminder switch',
     });
+  }
 
   async function customer(
     scope: typeof tenantA | typeof tenantB,
@@ -480,17 +504,24 @@ describe('the reminder thresholds are configuration, not constants', () => {
     const productId = ctx.container.ids.uuid();
     await ctx.container.database.db.execute(sql`
       INSERT INTO products (id, tenant_id, title, description, audience, sort_order, panel_id,
-                            duration_days, traffic_bytes, device_limit, price_amount_minor,
+                            duration_days, traffic_bytes, device_limit, price_amount,
                             price_currency, status)
       VALUES (${productId}, ${tenantA.tenantId}, 'پلن', 'یک ماهه', 'EVERYONE', 10, ${panelA},
               30, ${ALLOWANCE}, 2, 250000, 'IRT', 'ACTIVE')`);
+    /*
+     * The order's own column names, which are NOT the product's. `line_*` is the
+     * SNAPSHOT of what was bought and `total_amount`/`currency` the money — the shape
+     * `telegram-payment-flow.test.ts` writes, copied rather than reinvented.
+     */
     await ctx.container.database.db.execute(sql`
-      INSERT INTO orders (id, tenant_id, customer_id, product_id, state, purpose,
-                          price_amount_minor, price_currency, product_title,
-                          product_duration_days, product_traffic_bytes, product_device_limit,
-                          panel_id)
-      VALUES (${orderId}, ${tenantA.tenantId}, ${customerA}, ${productId}, 'DRAFT', 'NEW_SERVICE',
-              250000, 'IRT', 'پلن', 30, ${ALLOWANCE}, 2, ${panelA})`);
+      INSERT INTO orders (id, tenant_id, customer_id, state, product_id, panel_id, purpose,
+                          line_title, line_duration_days, line_traffic_bytes,
+                          line_device_limit, line_unit_price_amount, line_quantity,
+                          subtotal_amount, discount_amount, total_amount, currency, quote,
+                          confirmed_at, settled_at)
+      VALUES (${orderId}, ${tenantA.tenantId}, ${customerA}, 'PAID', ${productId}, ${panelA},
+              'NEW_SERVICE', 'پلن', 30, ${ALLOWANCE}, 2, 250000, 1, 250000, 0, 250000, 'IRT',
+              '{"trace":[]}'::jsonb, now(), now())`);
     const id = ctx.container.ids.uuid();
     await ctx.container.database.db.execute(sql`
       INSERT INTO services (id, tenant_id, customer_id, order_id, panel_id, product_id,

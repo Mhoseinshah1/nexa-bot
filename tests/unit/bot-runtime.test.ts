@@ -11,6 +11,7 @@ import {
   profileFactsFrom,
   referralCodeFor,
   providerUsernameFor,
+  isNewProviderUsername,
   customerListQuerySchema,
   telegramUserIdSchema,
   type TemplateKey,
@@ -1008,16 +1009,28 @@ describe('profile metadata, normalised before it is ever stored', () => {
 });
 
 describe('the derivations Phase 4 depends on being stable', () => {
-  it('derives a provider username from the service id, the same way every time', () => {
-    // This is what makes adoption after an unknown outcome possible: a reconcile can ask
-    // the provider for this exact name. A random name would leave only a blind create.
+  it('pins the PRE-CONTRACT derivation, which nothing may mint from any more', () => {
+    /*
+     * Not a rule this product still follows — the opposite. A name is now chosen or
+     * drawn under `service-username.ts`, canonicalised and reserved before the money
+     * moves, and the four-to-twenty contract rejects the thirty-four characters below.
+     *
+     * This pins the OLD shape because several proofs are written as "what we mint is
+     * not this", and a mutation that restores the derivation has to have something to
+     * restore. `tests/unit/provider-ref.test.ts` names it as its mutation target.
+     *
+     * The rationale this comment used to carry — "deterministic, so a reconcile can ask
+     * for this exact name" — was true and beside the point: a name STORED before the
+     * provider call is askable-for just as well, and can exist before the service does.
+     */
     const id = '01900000-0000-7000-8000-0000000000c1';
     expect(providerUsernameFor(id)).toBe('nx019000000000700080000000000000c1');
     expect(providerUsernameFor(id)).toBe(providerUsernameFor(id));
-    // No customer text enters it. A username built from a display name would carry
-    // Persian characters, emoji and somebody's real name onto a third party's panel.
     expect(providerUsernameFor(id)).toMatch(/^nx[0-9a-f]{32}$/);
     expect(() => providerUsernameFor('not-a-uuid')).toThrow();
+    // And the contract refuses it, which is the half that matters now: thirty-four
+    // characters is outside four-to-twenty, so this shape can never be minted again.
+    expect(isNewProviderUsername(providerUsernameFor(id))).toBe(false);
   });
 
   it('derives a referral code from the LAST 64 bits, so same-millisecond joiners differ', () => {
