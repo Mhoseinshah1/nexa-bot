@@ -4110,12 +4110,19 @@ export const services = pgTable(
  * One row per (service, reminder kind, period): "we told them this, about that period".
  *
  * A FACT, not a flag, and the distinction is what makes renewal work. The row records
- * the BASIS the reminder was raised against — the deadline for the three expiry kinds,
- * the traffic limit for the three usage ones. The lane skips a service whose stored
- * basis equals its current one, so a renewal moves `expires_at`, the bases differ, and
- * the reminder is due again. Nothing is deleted to re-arm anything, which matters:
- * deleting rows to make a reminder fire again is how an audit trail loses the record of
- * what a customer was actually told.
+ * the BASIS the reminder was raised against — both the deadline and the allowance the
+ * service had at that moment — and the lane skips a service whose stored basis still
+ * equals its current one. A RENEW moves `expires_at`, an ADD_TRAFFIC moves
+ * `traffic_limit_bytes`, either makes the bases differ, and the reminder is due again.
+ * Nothing is deleted to re-arm anything, which matters: deleting rows to make a reminder
+ * fire again is how an audit trail loses the record of what a customer was actually
+ * told. A row is written once and never updated: an occurrence keeps the id the
+ * notification named it by.
+ *
+ * The two columns are read by DIFFERENT kinds. An expiry reminder compares the deadline
+ * alone, so buying extra traffic does not re-send "expires in three days". A usage
+ * reminder compares both, because a renewal is what resets the panel's usage counter and
+ * therefore starts the allowance over even when the allowance itself is unchanged.
  *
  * It is also the SUBJECT of the notification this reminder produces. Every other kind
  * in `CUSTOMER_NOTIFICATION_KINDS` names an order, a payment or a service, and
@@ -4134,16 +4141,26 @@ export const serviceReminders = pgTable(
     /** One of `SERVICE_REMINDER_KINDS`. */
     kind: text('kind').notNull(),
     /**
-     * The deadline this reminder was about, for the three expiry kinds. Null for usage.
+     * The deadline the service had when this reminder was raised. Null means unlimited
+     * validity, which is a real answer and not a missing one.
      *
-     * Kept apart from `basis_traffic_limit_bytes` rather than folded into one opaque
-     * column, because the two are compared against different columns of `services` and
-     * a single `basis text` would be a value whose meaning depends on the row's kind —
-     * which is the shape `subject_type` was refused for on `customer_notifications`.
+     * Written on EVERY row, expiry and usage alike, because it is what a RENEW moves and
+     * a renewal is the event that starts a new usage period too. Kept apart from
+     * `basis_traffic_limit_bytes` rather than folded into one opaque column, because the
+     * two are compared against different columns of `services` and a single `basis text`
+     * would be a value whose meaning depends on the row's kind — which is the shape
+     * `subject_type` was refused for on `customer_notifications`.
      */
     basisExpiresAt: timestamptz('basis_expires_at'),
-    /** The allowance this reminder was about, for the three usage kinds. Null for expiry. */
-    basisTrafficLimitBytes: bigint('basis_traffic_limit_bytes', { mode: 'bigint' }),
+    /**
+     * The allowance the service had when this reminder was raised. Zero is unlimited,
+     * the sentinel `services.traffic_limit_bytes` already uses.
+     *
+     * NOT NULL, and written on every row for the same reason the column above is: an
+     * ADD_TRAFFIC moves it, and a reminder raised against fifty gigabytes says nothing
+     * about a service that now has eighty.
+     */
+    basisTrafficLimitBytes: bigint('basis_traffic_limit_bytes', { mode: 'bigint' }).notNull(),
     raisedAt: timestamptz('raised_at').notNull().defaultNow(),
   },
   (table) => [
@@ -4153,19 +4170,42 @@ export const serviceReminders = pgTable(
       name: 'service_reminders_service_fk',
     }),
     /**
-     * ONE row per service per kind, and the UPSERT on it is what makes the pass safe.
+     * ONE row per service per kind PER PERIOD, and the insert on it is what makes the
+     * pass safe.
      *
      * Two worker replicas is the normal case on every rolling update, and both will
      * find the same due service. The conditional insert is the decision: the winner
      * writes the row and enqueues the notification in the same transaction, the loser's
-     * insert matches nothing and it enqueues nothing.
+     * `ON CONFLICT DO NOTHING` returns nothing and it enqueues nothing.
      *
-     * Per KIND rather than per occurrence, because the row is overwritten when the
-     * basis moves. The history of what was sent lives in `customer_notifications`,
-     * which is where a support conversation looks; this table answers only "is this one
-     * still owed".
+     * The BASIS is in the key, which is what makes a row an occurrence rather than a
+     * slot. An occurrence keeps its id for ever, so the `customer_notifications` row
+     * that names it as its subject still resolves years later; a per-kind slot rewritten
+     * on each renewal would have to change its own primary key to earn a fresh subject,
+     * and every earlier notification would then point at nothing.
+     *
+     * NULLS NOT DISTINCT, because `basis_expires_at` is NULL for unlimited validity and
+     * Postgres treats NULLs in a unique key as distinct by default — which would let
+     * every pass insert another row for the same service and send the same reminder for
+     * ever. It is a UNIQUE CONSTRAINT rather than a unique index only because that is
+     * where drizzle exposes the option.
+     *
+     * Both basis columns are in the key, so an ADD_TRAFFIC re-arms the three EXPIRY
+     * kinds as well as the three usage ones. That is a deliberate, stated cost: the
+     * customer may be told "expires soon" once more after buying traffic. Splitting it
+     * into two partial unique indexes would avoid the extra message and would make the
+     * arbiter of every insert depend on which kind it carries. This lane exists to speak
+     * up, and an extra true sentence is the failure to prefer over a missed one.
      */
-    uniqueIndex('service_reminders_kind_key').on(table.tenantId, table.serviceId, table.kind),
+    unique('service_reminders_period_key')
+      .on(
+        table.tenantId,
+        table.serviceId,
+        table.kind,
+        table.basisExpiresAt,
+        table.basisTrafficLimitBytes,
+      )
+      .nullsNotDistinct(),
     /** The sweep reads by tenant and orders by when it last spoke. */
     index('service_reminders_raised_idx').on(table.tenantId, table.raisedAt),
     check('service_reminders_kind_check', enumCheck('kind', SERVICE_REMINDER_KINDS)),
@@ -4176,10 +4216,18 @@ export const serviceReminders = pgTable(
      * its reminder for ever; a row with both would be two answers to "what was this
      * about". The CHECK is the only thing standing between a future caller and either.
      */
-    check(
-      'service_reminders_basis_check',
-      sql`(${table.basisExpiresAt} IS NULL) <> (${table.basisTrafficLimitBytes} IS NULL)`,
-    ),
+    /**
+     * An allowance is a size, and a negative one is not a size.
+     *
+     * This replaces an exclusive `(expires_at IS NULL) <> (limit IS NULL)` that migration
+     * 0090 shipped and 0091 removes. That constraint encoded a wrong model: it made each
+     * reminder carry exactly ONE basis, expiry or allowance, and a usage reminder whose
+     * only basis was the allowance is a usage reminder a renewal cannot re-arm. A
+     * customer who renews a fifty-gigabyte plan, has their usage reset on the panel and
+     * climbs back past eighty percent would never be told again, for the life of the
+     * service — which is precisely the silence this whole lane exists to break.
+     */
+    check('service_reminders_basis_check', sql`${table.basisTrafficLimitBytes} >= 0`),
   ],
 );
 

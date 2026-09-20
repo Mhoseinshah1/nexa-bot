@@ -1,0 +1,2 @@
+DROP INDEX "service_reminders_kind_key";--> statement-breakpoint
+ALTER TABLE "service_reminders" ADD CONSTRAINT "service_reminders_period_key" UNIQUE NULLS NOT DISTINCT("tenant_id","service_id","kind","basis_expires_at","basis_traffic_limit_bytes");

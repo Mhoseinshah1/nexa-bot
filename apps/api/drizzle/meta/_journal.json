@@ -638,6 +638,20 @@
       "when": 1789919008318,
       "tag": "0090_service_reminders",
       "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "7",
+      "when": 1789919274401,
+      "tag": "0091_service_reminder_basis_pair",
+      "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1789919410137,
+      "tag": "0092_service_reminder_period_key",
+      "breakpoints": true
     }
   ]
 }
