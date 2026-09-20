@@ -66,6 +66,47 @@ reported as it happened rather than trimmed: a rule with several consequences
 has several tests, and pretending each mutation kills exactly one would be the
 tidier claim and the less true one.
 
+## Round three — the hold's lifecycle, and the guard that judges migrations
+
+Round two proved what a name may BE. These are about what happens to the row
+that holds it, and one about the scanner that decides whether a migration is
+safe to roll back onto.
+
+| # | Rule | Mutation | Test that dies | Verdict |
+|---|---|---|---|---|
+| U-10 | a boundary table may not be narrowed | `SET NOT NULL` on `tenants.slug` appended to an incoming migration | _the incoming migrations only ADD_ | KILLED |
+
+U-10 is the one recorded from an actual run in this pass, and it is recorded
+because the exemption it guards is new: `SET NOT NULL` is now permitted on a
+column this unreleased batch introduced, which is the same batch-scoped
+reasoning `DROP COLUMN` already had. An exemption is only as good as the case it
+still refuses, so the case it still refuses was run: appending
+`ALTER TABLE "tenants" ALTER COLUMN "slug" SET NOT NULL` to 0095 fails the named
+assertion with `sets NOT NULL on TENANTS.SLUG`, and the file was restored
+byte-for-byte afterwards (`git diff` clean).
+
+### What the lifecycle rules rest on instead
+
+The four lifecycle rules below were established by tests written against code
+that did NOT have them — each test failed first, for the reason its comment
+states, and passed once the rule existed. That is the same evidence a mutation
+produces, obtained in the other order, and it is reported that way rather than
+dressed up as a mutation pass that was not run:
+
+- _gives the name back when the customer cancels_ — failed because
+  `OrderService.cancelByCustomer` released the panel slot and not the hold.
+- _sweeps an abandoned DRAFT's hold once its deadline passes_ — failed because
+  nothing swept `service_username_reservations` at all.
+- _lets the customer choose again, and the stale hold gives way_ — failed
+  because `reserve` handed back the refused name under `ON CONFLICT DO NOTHING`.
+- _turns a tap into a DRAFT and answers with the order summary_ — failed
+  because the AUTOMATIC path read the order through a permission the customer
+  does not hold, and answered with nothing at all.
+
+The two NEGATIVE halves — a funded name surviving a late cancellation, and the
+sweep leaving a funded hold alone — are what stop each of those rules being
+satisfied by deleting unconditionally, and they are in the same three cases.
+
 ## What is NOT covered here, and why
 
 **The provider's real maximum username length.** Twenty is a product decision,

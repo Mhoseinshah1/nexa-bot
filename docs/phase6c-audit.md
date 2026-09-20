@@ -389,3 +389,66 @@ was available in this session, so `pnpm test:acceptance` did not run. A fake thi
 repository wrote and an adapter this repository wrote can only prove they agree
 with each other (`docs/real-panel-acceptance.md`). This is an evidence gap
 deferred to the owner, and it is not a passed acceptance test.
+
+### 6-7. The hold's lifecycle, which was half-built
+
+Found by reading the code rather than by a failing test, which is the part worth
+recording: `service_username_reservations` had exactly one release path, and it
+was the wrong one to be alone.
+
+| Event | Panel slot | Username hold (before) | Username hold (now) |
+|---|---|---|---|
+| Customer cancels an unpaid order | released | **nothing** | `releaseUnfunded` |
+| Payment window closes, order expires | released | **nothing** | `releaseUnfunded` |
+| Draft abandoned, never confirmed | n/a | **nothing** | `sweepExpiredHolds` |
+| Definitive non-delivery → refund | released | `release` | `release`, unchanged |
+| Settlement funds the hold | consumed | `markFunded` | unchanged |
+
+The consequence was not untidiness. `service_username_reservations_name_key` is
+unconditional on `(namespace_key, username)` and does not read `expires_at`, so a
+row nothing deletes keeps its name out of circulation for ever. On a panel whose
+customers type their own names, "for ever" is the name they wanted, and the
+second customer is told it is taken by a hold belonging to an order that ended
+weeks ago.
+
+`releaseUnfunded` and `release` are two methods rather than one with a flag
+because they answer two different questions. `release` is unconditional and has
+exactly one caller — `UndeliverableOrderRefunder` — which runs only where a
+create is DEFINITIVELY known not to have happened; an `UNKNOWN` outcome never
+reaches it, because a create whose answer was lost may be holding the name on a
+panel and selling it to somebody else promises an account this installation
+cannot make. Everything else uses `releaseUnfunded`, whose `funded_at IS NULL`
+sits inside the DELETE's predicate rather than in a read before it: a settlement
+committing between a read and a delete is exactly the race.
+
+### 6-8. Four defects this phase's tests found, and what each one looked like
+
+None of the four announced itself. Each was a write that succeeded followed by
+nothing the customer or operator could see.
+
+**The AUTOMATIC username step showed nothing at all.** It read the order back
+through `OrderService.get`, which charges `orders.view` — an operator permission
+a customer's own turn does not hold. The name was reserved, the transaction
+committed, the read threw, and the reply was neither a summary nor a refusal, nor
+even a stopped spinner. `orderForCustomer` charges `orders.place` and is scoped
+by customer, which is the shape `usernameStep` already used. The typed-name path
+had the same defect and the same fix.
+
+**A stale draft's release died with the transaction that refused it.**
+`stillUsable` deleted the hold and then threw; a DELETE issued inside a
+transaction that then throws is a DELETE that never happened, so the customer
+told to choose again was handed the same refused name on every attempt. The
+clearing moved to `choose`, which commits.
+
+**Every Telegram threshold write was refused.** `adminReminderSet` passed the
+update's BARE idempotency key, already consumed by the turn that resolved the
+account, so the write died as `platform.idempotency_payload_mismatch` and
+`adminTurn`'s single catch rendered a generic denial. Every other admin write on
+that surface suffixes the key; this one did not.
+
+**The reminders section was reachable by nobody.** Its button was gated on
+`settings.view` AND `features.view` — a pair that reads sensibly and cannot be
+satisfied, because `features.view` is in no catalogue and no role can be granted
+it. Feature flags are not separately permissioned in this product:
+`FeatureFlagsService` charges `settings.view` to read and `settings.edit` to
+write, deliberately and in terms. The gate now says the same.
