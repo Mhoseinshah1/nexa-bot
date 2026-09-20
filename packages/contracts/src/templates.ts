@@ -450,6 +450,17 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.username.mode_unavailable',
+    description:
+      'The customer tapped the typed-name button and the panel no longer offers ' +
+      'typed names — an operator changed the policy after the button was drawn. ' +
+      'The mirror of `bot.username.unavailable`, which is the same refusal the other ' +
+      'way round, and it points at the choice that IS available rather than naming ' +
+      'the policy that changed. Sent before any window opens and before any debit.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.username.stale',
     description:
       'An unpaid order was holding a name the current rules would not accept, so the ' +
