@@ -1,4 +1,4 @@
-import { sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import {
   EXPIRY_REMINDER_STATES,
   USAGE_REMINDER_STATES,
@@ -10,10 +10,13 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
+import { serviceReminders } from '../../../../infrastructure/persistence/schema.js';
 import type {
   ServiceReminderCandidate,
   ServiceReminderRaise,
   ServiceReminderRepository,
+  ServiceReminderSnapshot,
+  ServiceReminderSnapshotReader,
 } from '../application/service-reminder.ports.js';
 
 /** What both candidate queries select, in the order they select it. */
@@ -212,5 +215,43 @@ export class DrizzleServiceReminderRepository implements ServiceReminderReposito
       RETURNING id
     `);
     return inserted.rows.length > 0;
+  }
+}
+
+/**
+ * Reads back one frozen reminder, for the dispatcher.
+ *
+ * A separate class from the sweep's repository although both touch one table, because
+ * they are used by different processes for opposite purposes: the sweep writes
+ * occurrences inside a business transaction, and this reads one outside every
+ * transaction, moments before a network call. One object holding both would let a
+ * future edit enqueue a reminder from inside the send loop.
+ */
+export class DrizzleServiceReminderSnapshotReader implements ServiceReminderSnapshotReader {
+  constructor(private readonly db: Database) {}
+
+  async snapshotOf(
+    scope: TenantContext,
+    reminderId: string,
+  ): Promise<
+    | (ServiceReminderSnapshot & {
+        readonly basisExpiresAt: Date | null;
+        readonly basisTrafficLimitBytes: bigint;
+      })
+    | null
+  > {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.db
+      .select({
+        serviceLabel: serviceReminders.snapshotServiceLabel,
+        remainingDays: serviceReminders.snapshotRemainingDays,
+        usedBytes: serviceReminders.snapshotUsedBytes,
+        basisExpiresAt: serviceReminders.basisExpiresAt,
+        basisTrafficLimitBytes: serviceReminders.basisTrafficLimitBytes,
+      })
+      .from(serviceReminders)
+      .where(and(eq(serviceReminders.tenantId, tenantId), eq(serviceReminders.id, reminderId)))
+      .limit(1);
+    return row ?? null;
   }
 }

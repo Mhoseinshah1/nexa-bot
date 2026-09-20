@@ -166,7 +166,10 @@ import {
 import { OrderService } from './modules/commerce/orders/application/order.service.js';
 import { DrizzleOrderRepository } from './modules/commerce/orders/infrastructure/drizzle-order.repository.js';
 import { DrizzleServiceRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service.repository.js';
-import { DrizzleServiceReminderRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service-reminder.repository.js';
+import {
+  DrizzleServiceReminderRepository,
+  DrizzleServiceReminderSnapshotReader,
+} from './modules/commerce/provisioning/infrastructure/drizzle-service-reminder.repository.js';
 import { ServiceReminderService } from './modules/commerce/provisioning/application/service-reminder.service.js';
 import {
   ServiceReminderLoop,
@@ -1813,6 +1816,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       // The same tenant kill switch every other path reads. A stopped tenant is a
       // healthy pass that did nothing, never a throw — see `deliverDue`.
       scopeIsActive: (scope) => uow.run(scope, async (tx) => tenants.scopeIsActive(scope, tx)),
+      reminderSnapshots: new DrizzleServiceReminderSnapshotReader(database.db),
       logger,
     }),
     {

@@ -128,3 +128,28 @@ export interface ServiceReminderRepository {
     tx: TransactionScope,
   ): Promise<boolean>;
 }
+
+/**
+ * What a queued reminder notification needs to say, read back at send time.
+ *
+ * A NARROW port for the dispatcher, and narrow in the direction that matters: it can
+ * read one reminder occurrence by id and nothing else. The lane that sends customer
+ * messages has no business reaching into `services`, and the values it renders are the
+ * ones the sweep froze rather than whatever is true now.
+ *
+ * `null` means the subject is gone. The dispatcher treats that as a message it cannot
+ * render rather than as a message with blank figures — a sentence with an empty service
+ * name is worse than one not sent.
+ */
+export interface ServiceReminderSnapshotReader {
+  snapshotOf(
+    scope: TenantContext,
+    reminderId: string,
+  ): Promise<
+    | (ServiceReminderSnapshot & {
+        readonly basisExpiresAt: Date | null;
+        readonly basisTrafficLimitBytes: bigint;
+      })
+    | null
+  >;
+}
