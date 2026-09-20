@@ -74,6 +74,7 @@ import {
   CUSTOMER_NOTIFICATION_KINDS,
   CUSTOMER_NOTIFICATION_STATES,
   SERVICE_STATES,
+  SERVICE_USERNAME_MODES,
   OPERATION_STATES,
   OPERATION_TYPES,
   DISCOUNT_TYPES,
@@ -1304,6 +1305,31 @@ export const panels = pgTable(
      * mistyped a number is not a limit, it is an outage with a form field.
      */
     maxServices: integer('max_services'),
+    /**
+     * Which username modes a customer buying on this panel may use.
+     *
+     * Both default to true, so every panel that exists when this migration runs keeps
+     * offering everything and nothing an operator configured changes underneath them.
+     * `panels_username_policy_check` refuses both being false: a panel a customer
+     * cannot name a service on is a panel nothing can be bought from, and it would
+     * fail at their purchase rather than at the operator's save.
+     */
+    allowCustomUsername: boolean('allow_custom_username').notNull().default(true),
+    allowRandomUsername: boolean('allow_random_username').notNull().default(true),
+    /**
+     * How RANDOM names are generated here, or NULL for the legacy generator.
+     *
+     * NULL is not "unset pending configuration" — it is a positive statement that this
+     * panel keeps `providerUsernameFor`, the 34-character derived name that produced
+     * every username in production before this phase. `docs/phase6c-audit.md` A-2
+     * records why that resolves without a guess: the legacy behaviour is a pure
+     * function of the service id with no settings behind it, so there is nothing to
+     * read and nothing to infer.
+     *
+     * An operator moves a panel off the legacy generator by saving a template, and
+     * never by accident. Existing services are not renamed either way.
+     */
+    usernameTemplate: text('username_template'),
     /** Set when the panel is archived, so the event has a time and not just a state. */
     archivedAt: timestamptz('archived_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
@@ -1311,6 +1337,17 @@ export const panels = pgTable(
   },
   (table) => [
     index('panels_tenant_status_idx').on(table.tenantId, table.status),
+    /**
+     * At least one username mode, always.
+     *
+     * A CHECK rather than a service-layer rule because it is the kind of invariant a
+     * direct write, a restore or a future surface can break, and a panel with no mode
+     * is only discovered by a customer trying to buy.
+     */
+    check(
+      'panels_username_policy_check',
+      sql`${table.allowCustomUsername} OR ${table.allowRandomUsername}`,
+    ),
     /**
      * Unique among a tenant's LIVE panels only.
      *
@@ -1627,6 +1664,110 @@ export const panelCapacityReservations = pgTable(
       table.panelId,
       table.expiresAt,
     ),
+  ],
+);
+
+/**
+ * A service username somebody is in the middle of buying.
+ *
+ * The hold that stops two customers paying for one name. It exists because the
+ * decision moved: a username used to be derived from the service id — minted after the
+ * money, unique by construction, impossible to contend for — and a customer-chosen or
+ * template-rendered name is none of those things. It is chosen BEFORE the payment, and
+ * between that choice and the provider account there is a window in which the name
+ * belongs to nobody unless a row says otherwise.
+ *
+ * ## Why this is not `panel_capacity_reservations` with a different column
+ *
+ * The lifecycles differ where it matters most, and `docs/phase6c-audit.md` A-6 records
+ * the difference: capacity is freed by `expires_at` so an abandoned checkout cannot
+ * hold a slot for ever, and **a funded username must never be freed that way**. A TTL
+ * that expired a paid name would let a second customer reserve a name the first already
+ * has an account for on the panel — two services, one provider account, and the usage
+ * figures of both meaningless.
+ *
+ * So `funded_at` is the switch. While it is null the row is an abandoned checkout and
+ * `expires_at` may reap it; once it is set the row is protected until the order reaches
+ * a terminal outcome — FULFILLED, which consumes the name into
+ * `services.provider_username`, or REFUNDED, which releases it. An `UNRECONCILED`
+ * service is neither: the remote account may exist, so the name stays held.
+ *
+ * ## Why the key is a namespace rather than a panel
+ *
+ * `services_panel_provider_username_key` is per panel, and two panel rows may point at
+ * the same provider host — `panels` constrains only the name, never `base_url`. Those
+ * panels share one account namespace, so a per-panel hold would let two customers
+ * reserve one name on one real panel. `namespace_key` is derived from the provider type
+ * and the normalised host and port, so they contend as they should.
+ *
+ * A definitive conflict that survives both — an account an operator made by hand — is a
+ * definitive non-delivery and follows the money rules. It is never adopted.
+ */
+export const serviceUsernameReservations = pgTable(
+  'service_username_reservations',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    /**
+     * The provider account namespace this name is held in.
+     *
+     * Derived, not entered: `<provider_type>:<host>[:<port>]`, lowercased. Stored rather
+     * than computed at query time so the unique index below can be a plain index on a
+     * column, and so a panel whose address is later edited does not silently move every
+     * hold it took.
+     */
+    namespaceKey: text('namespace_key').notNull(),
+    username: text('username').notNull(),
+    panelId: uuid('panel_id').notNull(),
+    orderId: uuid('order_id').notNull(),
+    customerId: uuid('customer_id').notNull(),
+    /** Which mode produced it, so an audit can tell a typed name from a rendered one. */
+    mode: text('mode').notNull(),
+    /**
+     * When the money for this name committed, or null while the checkout is unfunded.
+     *
+     * The single field that decides whether `expires_at` may reap this row. See the
+     * table docblock: a TTL that frees a funded name is two services on one account.
+     */
+    fundedAt: timestamptz('funded_at'),
+    /**
+     * The backstop for an abandoned checkout, and ONLY for one.
+     *
+     * Every query that treats a row as held must also require `funded_at IS NOT NULL OR
+     * expires_at > now()`. Expiry alone is not release: a funded row past its expiry is
+     * still held, which is the whole difference from the capacity table.
+     */
+    expiresAt: timestamptz('expires_at').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.panelId],
+      foreignColumns: [panels.tenantId, panels.id],
+      name: 'service_username_reservations_tenant_panel_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.orderId],
+      foreignColumns: [orders.tenantId, orders.id],
+      name: 'service_username_reservations_order_fk',
+    }),
+    /**
+     * One name per namespace, and the collision IS the refusal.
+     *
+     * Deliberately NOT scoped by tenant: two tenants pointing at one provider host
+     * share its account namespace whether or not they know about each other, and a name
+     * one of them created is a name the other cannot have. The row exposes nothing
+     * across the boundary — a caller learns only that the name is unavailable, which is
+     * the same answer the provider would eventually give.
+     */
+    uniqueIndex('service_username_reservations_name_key').on(table.namespaceKey, table.username),
+    /** One name per order. A duplicate callback finds its own row rather than taking a second. */
+    uniqueIndex('service_username_reservations_order_key').on(table.tenantId, table.orderId),
+    /** The reaper's scan: unfunded holds that have run out. */
+    index('service_username_reservations_expiry_idx').on(table.fundedAt, table.expiresAt),
+    check('service_username_reservations_mode_check', enumCheck('mode', SERVICE_USERNAME_MODES)),
   ],
 );
 
