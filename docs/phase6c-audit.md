@@ -32,7 +32,10 @@ asked for a username and never chooses between modes.
 the legacy compatibility path required by directive item 5. Nothing is being removed,
 because there is nothing yet to remove.
 
-### A-2. What the product does today: one derived name, 34 characters
+### A-2. What the product did before this phase: one derived name, 34 characters
+
+> **Superseded by Part 6.** The present tense below described the state at the time of
+> the audit. Nothing mints a 34-character name any more; see 6-1.
 
 `packages/contracts/src/provisioning.ts`:
 
@@ -261,7 +264,7 @@ are unproven.
    fallback of 64 characters. Sixty-four is a guess, and it is the wrong SHAPE of guess:
    it lets an operator save a 60-character template and makes the first customer past the
    provider's real limit discover it after their money moved. The shipped constant is
-   `PROVEN_PROVIDER_USERNAME_MAX_LENGTH` = 34 — `nx` plus 32 hex, the only length this
+   `PROVEN_PROVIDER_USERNAME_MAX_LENGTH` = 34 — superseded by Part 6; `nx` plus 32 hex was the only length this
    product has ever created an account with on a real panel. It is not a claim about
    either provider, and raising it is a real-panel acceptance task.
 

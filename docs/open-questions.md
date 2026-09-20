@@ -2067,25 +2067,30 @@ been edited.
 
 ## OQ-6C-01 — the longest username each provider will actually accept is UNKNOWN
 
-`PROVEN_PROVIDER_USERNAME_MAX_LENGTH` is 34, and that number is not a measurement of
-either provider. It is `providerUsernameFor` — `nx` plus 32 hex — the shape that
-`tests/acceptance/real-panel-marzban.test.ts` and its 3X-UI counterpart have actually
-created accounts with. Every account this product has ever made on a real panel is 34
-characters long, so 34 is the longest name this repository has EVIDENCE for and nothing
-more.
+**Rewritten after the owner's username correction.** The bound is now
+`PROVIDER_USERNAME_MAX_LENGTH` = 20, and `PROVEN_PROVIDER_USERNAME_MAX_LENGTH` is gone.
+The paragraph this replaces defended 34 as "the longest name this repository has
+evidence for", and that was evidence about our own code rather than about a panel: 34 is
+what `providerUsernameFor` happened to produce — `nx` plus 32 hex — so the product's
+promise was a function of an implementation detail.
 
-Neither Marzban nor 3X-UI documents a limit, and `ProviderAdapter` exposes none, so a
-template's worst-case render is validated against the proven number rather than a real
-one. The first version of the constant was 64 and called itself "deliberately generous";
-that is the wrong shape of error. It lets an operator save a 60-character template and
-makes the first customer past the provider's real limit discover it after their money
-moved. Refusing an over-long template while the operator is still looking at the field
-costs them a shorter template; the other ordering costs a customer a failed purchase.
+Twenty is a DECISION, not a measurement. It is comfortably inside every provider
+username field this product has driven, and every preset and template bound is built to
+fit inside it rather than the ceiling being widened to fit a generator. What stays
+unknown is the same thing as before: neither Marzban nor 3X-UI documents a limit, and
+`ProviderAdapter` exposes none.
 
-Raising it is a real-panel acceptance task, not an edit: create an account at the
-candidate length on a disposable panel of each kind, confirm the panel accepts it and
-serves a subscription, and declare the number in the adapter's descriptor so
-`validateUsernameTemplate` can be handed a per-provider bound. The rule
+The failure mode that argument was originally written against is unchanged and still
+avoided. The first version of the constant was 64 and called itself "deliberately
+generous"; that is the wrong shape of error. It lets an operator save a 60-character
+template and makes the first customer past the provider's real limit discover it after
+their money moved. Refusing an over-long template while the operator is still looking at
+the field costs them a shorter template; the other ordering costs a customer a failed
+purchase.
+
+Raising it above twenty is a real-panel acceptance task, not an edit: create an account
+at the candidate length on a disposable panel of each kind, confirm the panel accepts it
+and serves a subscription, and declare the number in the adapter's descriptor. The rule
 `docs/real-panel-acceptance.md` states applies — a fake this repository wrote and an
 adapter this repository wrote can only prove they agree with each other.
 
