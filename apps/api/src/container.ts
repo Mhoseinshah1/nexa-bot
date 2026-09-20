@@ -166,6 +166,9 @@ import { OrderService } from './modules/commerce/orders/application/order.servic
 import { DrizzleOrderRepository } from './modules/commerce/orders/infrastructure/drizzle-order.repository.js';
 import { DrizzleServiceRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service.repository.js';
 import { serviceSecrets } from './infrastructure/crypto/service-secrets.js';
+import { UsernameAllocator } from './modules/commerce/provisioning/application/username-allocator.js';
+import { PanelUsernameLane } from './modules/commerce/provisioning/application/username-lane.js';
+import { DrizzleServiceUsernameRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service-username.repository.js';
 import { DrizzleOperationRepository } from './modules/commerce/provisioning/infrastructure/drizzle-operation.repository.js';
 import { ProvisioningService } from './modules/commerce/provisioning/application/provisioning.service.js';
 import { ServiceAdminService } from './modules/commerce/provisioning/application/service-admin.service.js';
@@ -960,8 +963,28 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const paymentReceiptRepository = new DrizzlePaymentReceiptRepository(database.db);
 
   const orderRepository = new DrizzleOrderRepository(database.db);
+  /*
+   * The username lane, built before the order service that takes it.
+   *
+   * Three pieces, and each is a different question: the repository holds the rows, the
+   * allocator decides the name, and the lane is the narrow port the orders module sees
+   * — so `OrderService` does not acquire a panel repository to answer a question that
+   * is not about orders. Same argument as `PanelSalesGate` beside it.
+   */
+  const serviceUsernameRepository = new DrizzleServiceUsernameRepository(database.db);
+  const usernameLane = new PanelUsernameLane({
+    allocator: new UsernameAllocator({
+      repository: serviceUsernameRepository,
+      ids,
+      secrets: serviceSecrets,
+    }),
+    repository: serviceUsernameRepository,
+    panels: panelRepository,
+    customers: customerRepository,
+  });
   const orderService = new OrderService({
     panelSales: panelSalesGate,
+    usernames: usernameLane,
     repository: orderRepository,
     /*
      * The NARROW payment lane, not the repository.
@@ -1075,6 +1098,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     scopeActivity: tenants,
     // From the system CSPRNG, never from the id generator: see the binding's own note.
     secrets: serviceSecrets,
+    usernames: serviceUsernameRepository,
   });
 
   /**
@@ -1220,6 +1244,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     refunds: refundService,
     // `release` alone. A refunded order holds no capacity.
     panelSales: panelSalesGate,
+    usernames: usernameLane,
     notifier: customerNotifier,
     opsLog,
     outbox,

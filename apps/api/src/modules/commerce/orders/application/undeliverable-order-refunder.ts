@@ -10,6 +10,7 @@ import {
   type TenantContext,
 } from '@nexa/contracts';
 import type { CustomerNotifier } from '../../messaging/application/customer-notifier.js';
+import type { OrderUsernameLane } from '../../provisioning/application/username-lane.js';
 import type { PanelSalesGate } from '../../../platform/panels/application/panel-sales-gate.js';
 import type { RefundService } from '../../payments/application/refund.service.js';
 import type { PaymentRecord } from '../../payments/application/ports.js';
@@ -66,6 +67,21 @@ export interface UndeliverableOrderRefunderDeps {
    * refunded.
    */
   readonly panelSales: Pick<PanelSalesGate, 'release'>;
+  /**
+   * Gives the USERNAME back, on the same terms as the slot.
+   *
+   * The only path that may. A name is held for ever once `funded_at` is stamped —
+   * expiry alone is not release, because a funded name belongs to a service somebody
+   * is holding — so the ONE thing that can free a funded name is the discovery that
+   * the service will never exist. That is exactly this transaction, and it is the
+   * same transaction that gives the money back, so a customer never ends up without
+   * either their service or their name while their money is gone.
+   *
+   * Idempotent, like the slot: `release` deletes by order id and reports whether a
+   * row was there, so a legacy order that never reserved one is a false and not an
+   * error.
+   */
+  readonly usernames: Pick<OrderUsernameLane, 'release'>;
   /** Tells the customer, in the transaction that made it true. */
   readonly notifier: CustomerNotifier;
   readonly opsLog: OperationalEventRecorder;
@@ -180,6 +196,9 @@ export class UndeliverableOrderRefunder {
      * account. A refunded order holds nothing.
      */
     await this.deps.panelSales.release(scope, orderId, tx);
+    // And the name, for the same reason and in the same breath. A refunded order
+    // holds nothing — not a slot, and not a name somebody else could be using.
+    await this.deps.usernames.release(scope, orderId, tx);
 
     const refund = await this.deps.refunds.refundUndeliverable(scope, actor, { payment, now }, tx);
     const credited = refund?.amount ?? order.totals.total;

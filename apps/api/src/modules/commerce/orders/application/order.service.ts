@@ -1,5 +1,7 @@
 import {
   orderPurposeCreatesNewService,
+  canonicalizeCustomUsername,
+  isValidCustomUsername,
   COMMERCE_ERROR_CODES,
   MAX_ORDER_QUANTITY,
   ORDER_MACHINE,
@@ -35,6 +37,11 @@ import type { OutboxWriter } from '../../../platform/eventing/infrastructure/out
 import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { CustomerRepository } from '../../customers/application/ports.js';
+import type {
+  OrderUsernameLane,
+  UsernameChoice,
+} from '../../provisioning/application/username-lane.js';
+import type { UsernameReservation } from '../../provisioning/application/username-ports.js';
 import type { ProductRecord, ProductRepository } from '../../catalog/application/ports.js';
 import { unorderableReason } from '../../catalog/application/catalog-visibility.js';
 import { quoteProduct } from './order-pricing.js';
@@ -134,6 +141,14 @@ export interface OrderServiceDeps {
    * fleet and not about the catalogue.
    */
   readonly panelSales: PanelSalesGate;
+  /**
+   * What this order's service will be called, and who decides.
+   *
+   * A port into provisioning rather than a rule here, for the same reason
+   * `panelSales` is one: the panel's policy, the template and the reservation index
+   * are facts about the fleet and the provider, not about orders.
+   */
+  readonly usernames: OrderUsernameLane;
   readonly clock: Clock;
   readonly ids: IdGenerator;
 }
@@ -143,6 +158,16 @@ export interface OrderListQuery {
   readonly cursor?: OrderCursor;
   readonly search: OrderSearch;
 }
+
+/**
+ * How long a username hold lasts for an order that carries no deadline of its own.
+ *
+ * Every order this repository creates has an `expires_at`, so this is reached only by
+ * a row written before that column did — and a hold with no end is a name nobody can
+ * ever have again. One hour, because an unfunded hold costs a customer only a retry
+ * while a leaked one costs the name for good.
+ */
+const USERNAME_HOLD_FALLBACK_MS = 60 * 60 * 1000;
 
 export const ORDER_PAGE_DEFAULT = 25;
 export const ORDER_PAGE_MAX = 100;
@@ -322,6 +347,129 @@ export class OrderService {
    * it any. That is the boundary: a surface renders `bot.order.awaiting_payment`, and
    * the phase that owns payment picks the order up from there.
    */
+  /**
+   * The name the customer's service will carry, chosen before they agree to pay.
+   *
+   * Its own command and not part of `confirm`, because the customer has to SEE the
+   * result before they agree to it: the summary they answer shows the canonical name,
+   * and a name decided inside the confirmation is a name they first meet on an
+   * invoice. A CUSTOM one is also refused and retried several times in a normal
+   * conversation, and each of those refusals must cost nothing — no slot, no payment,
+   * no state change on the order.
+   *
+   * DRAFT only. After `AWAITING_PAYMENT` the customer has agreed to a summary naming
+   * this username, and letting it change afterwards would mean the thing they agreed
+   * to and the thing they get are different. It is also the window in which a payment
+   * can already be in flight.
+   *
+   * Idempotent twice over: by the request key, and under it by the
+   * `(tenant_id, order_id)` index — so a Telegram callback redelivered after the
+   * insert committed returns the held name rather than taking a second.
+   */
+  async chooseUsername(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly idempotencyKey: string;
+      readonly customerId: string;
+      readonly orderId: string;
+      readonly choice: UsernameChoice;
+    },
+  ): Promise<UsernameReservation> {
+    const customerId = this.customerId(input.customerId);
+    const orderId = this.orderId(input.orderId);
+    /*
+     * The RAW input is in the hash, not the canonical form.
+     *
+     * Two requests under one key asking for `Ali_2026` and `ali_2026` are the same
+     * ask and must replay; two asking for `ali_2026` and `ali_2027` are different and
+     * must not. Hashing the raw text gets the second right and the first wrong — so
+     * the value hashed is what `canonicalizeCustomUsername` would produce, which is
+     * the identity the reservation is actually about.
+     */
+    const requestHash = hashRequest({
+      customerId,
+      orderId,
+      mode: input.choice.mode,
+      username:
+        input.choice.raw === undefined || !isValidCustomUsername(input.choice.raw)
+          ? null
+          : canonicalizeCustomUsername(input.choice.raw),
+    });
+
+    await this.authorize(scope, actor, {
+      action: 'order.username.choose',
+      entityType: 'Order',
+      entityId: orderId,
+    });
+
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      ORDER_PLACE_PERMISSION,
+      { action: 'order.username.choose', entityType: 'Order', entityId: orderId },
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        await this.assertCustomerMayOrder(scope, customerId, tx);
+
+        // ORDER first, then the panel the lane reads and the reservation it writes.
+        // The canonical order of this domain, and the one a Codex review found broken
+        // on this very path — see the comment in `confirm`.
+        await this.deps.repository.lock(scope, orderId, tx);
+        const order = await this.deps.repository.findById(scope, orderId, tx);
+        // Another customer's order is UNKNOWN, not FORBIDDEN. See `confirm`.
+        if (order === null || order.customerId !== customerId) {
+          throw errors.notFound(COMMERCE_ERROR_CODES.ORDER_NOT_FOUND, 'Unknown order.');
+        }
+        if (order.state !== 'DRAFT') {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.ORDER_STATE_INVALID,
+            'The username for this order can no longer be changed.',
+          );
+        }
+        /*
+         * A commercial order names no new account.
+         *
+         * `RENEW`, `ADD_TRAFFIC` and `ADD_TIME` act on a service that already has a
+         * name, and reserving a second would hold a name nothing will ever use while
+         * suggesting to the customer that their service is about to be renamed.
+         */
+        if (!orderPurposeCreatesNewService(order.purpose)) {
+          throw errors.preconditionFailed(
+            COMMERCE_ERROR_CODES.ORDER_STATE_INVALID,
+            'This order does not create a new service.',
+          );
+        }
+
+        const reservation = await this.deps.usernames.choose(
+          scope,
+          {
+            orderId,
+            customerId,
+            panelId: order.line.panelId,
+            expiresAt:
+              order.expiresAt ??
+              new Date(this.deps.clock.now().getTime() + USERNAME_HOLD_FALLBACK_MS),
+          },
+          input.choice,
+          tx,
+        );
+
+        await rememberOnce(
+          this.deps.idempotency,
+          scope,
+          ORDER_NAMESPACE,
+          input.idempotencyKey,
+          requestHash,
+          { orderId },
+          tx,
+        );
+        return reservation;
+      },
+    );
+  }
+
   async confirm(
     scope: TenantContext,
     actor: ActorContext,
@@ -509,6 +657,35 @@ export class OrderService {
               { reason: eligible.reason },
             );
           }
+
+          /*
+           * And the NAME, in the same transaction and under the same panel lock.
+           *
+           * After the slot rather than before it, because a name held for an order
+           * that cannot have a slot is a name nobody can use until the order lapses,
+           * and the slot is the scarcer of the two. Both are released by the same
+           * cancellation and the same sweep.
+           *
+           * `require` normally finds the reservation the customer already made — the
+           * username step runs before this, so they saw the name in the summary they
+           * are answering. It allocates a RANDOM one only for an order whose step
+           * predates this feature; on a CUSTOM-only panel it refuses, because there
+           * the operator has said the customer chooses.
+           *
+           * Only for an order that creates a service, exactly like the slot above: a
+           * RENEW names no new account, and reserving one for it would hold a name
+           * against a service that already has a different one.
+           */
+          await this.deps.usernames.require(
+            scope,
+            {
+              orderId,
+              customerId,
+              panelId: before.line.panelId,
+              expiresAt: before.expiresAt ?? new Date(now.getTime() + USERNAME_HOLD_FALLBACK_MS),
+            },
+            tx,
+          );
         }
 
         /*
