@@ -74,6 +74,7 @@ import {
   CUSTOMER_NOTIFICATION_KINDS,
   CUSTOMER_NOTIFICATION_STATES,
   SERVICE_STATES,
+  SERVICE_REMINDER_KINDS,
   SERVICE_USERNAME_MODES,
   USERNAME_CAPTURE_CLOSE_REASONS,
   OPERATION_STATES,
@@ -4102,6 +4103,83 @@ export const services = pgTable(
      * index to point at.
      */
     unique('services_tenant_id_customer_key').on(table.tenantId, table.id, table.customerId),
+  ],
+);
+
+/**
+ * One row per (service, reminder kind, period): "we told them this, about that period".
+ *
+ * A FACT, not a flag, and the distinction is what makes renewal work. The row records
+ * the BASIS the reminder was raised against — the deadline for the three expiry kinds,
+ * the traffic limit for the three usage ones. The lane skips a service whose stored
+ * basis equals its current one, so a renewal moves `expires_at`, the bases differ, and
+ * the reminder is due again. Nothing is deleted to re-arm anything, which matters:
+ * deleting rows to make a reminder fire again is how an audit trail loses the record of
+ * what a customer was actually told.
+ *
+ * It is also the SUBJECT of the notification this reminder produces. Every other kind
+ * in `CUSTOMER_NOTIFICATION_KINDS` names an order, a payment or a service, and
+ * `customer_notifications_subject_key` then guarantees one delivery per subject for
+ * ever — right for a rejection, fatal for a reminder. Naming this row instead makes
+ * each occurrence its own subject and keeps the guarantee exactly where it belongs.
+ */
+export const serviceReminders = pgTable(
+  'service_reminders',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    serviceId: uuid('service_id').notNull(),
+    /** One of `SERVICE_REMINDER_KINDS`. */
+    kind: text('kind').notNull(),
+    /**
+     * The deadline this reminder was about, for the three expiry kinds. Null for usage.
+     *
+     * Kept apart from `basis_traffic_limit_bytes` rather than folded into one opaque
+     * column, because the two are compared against different columns of `services` and
+     * a single `basis text` would be a value whose meaning depends on the row's kind —
+     * which is the shape `subject_type` was refused for on `customer_notifications`.
+     */
+    basisExpiresAt: timestamptz('basis_expires_at'),
+    /** The allowance this reminder was about, for the three usage kinds. Null for expiry. */
+    basisTrafficLimitBytes: bigint('basis_traffic_limit_bytes', { mode: 'bigint' }),
+    raisedAt: timestamptz('raised_at').notNull().defaultNow(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.serviceId],
+      foreignColumns: [services.tenantId, services.id],
+      name: 'service_reminders_service_fk',
+    }),
+    /**
+     * ONE row per service per kind, and the UPSERT on it is what makes the pass safe.
+     *
+     * Two worker replicas is the normal case on every rolling update, and both will
+     * find the same due service. The conditional insert is the decision: the winner
+     * writes the row and enqueues the notification in the same transaction, the loser's
+     * insert matches nothing and it enqueues nothing.
+     *
+     * Per KIND rather than per occurrence, because the row is overwritten when the
+     * basis moves. The history of what was sent lives in `customer_notifications`,
+     * which is where a support conversation looks; this table answers only "is this one
+     * still owed".
+     */
+    uniqueIndex('service_reminders_kind_key').on(table.tenantId, table.serviceId, table.kind),
+    /** The sweep reads by tenant and orders by when it last spoke. */
+    index('service_reminders_raised_idx').on(table.tenantId, table.raisedAt),
+    check('service_reminders_kind_check', enumCheck('kind', SERVICE_REMINDER_KINDS)),
+    /**
+     * Exactly one basis, and which one is decided by the kind.
+     *
+     * A row with neither could never be compared against anything and would suppress
+     * its reminder for ever; a row with both would be two answers to "what was this
+     * about". The CHECK is the only thing standing between a future caller and either.
+     */
+    check(
+      'service_reminders_basis_check',
+      sql`(${table.basisExpiresAt} IS NULL) <> (${table.basisTrafficLimitBytes} IS NULL)`,
+    ),
   ],
 );
 
