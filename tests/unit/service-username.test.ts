@@ -8,8 +8,8 @@ import {
   RANDOM_USERNAME_MAX_ATTEMPTS,
   USERNAME_TEMPLATE_TOKEN_NAMES,
   USERNAME_UNIQUENESS_TOKENS,
+  canonicalizeCustomUsername,
   isValidCustomUsername,
-  normalizeCustomUsername,
   providerUsernameFor,
   renderUsernameTemplate,
   validateUsernameTemplate,
@@ -34,46 +34,114 @@ const VALUES = {
 } as const;
 
 describe('what a customer may type', () => {
-  it('folds only the two differences they cannot see', () => {
+  it('accepts either case, and folds only the case', () => {
     /*
-     * Trim and lowercase, and NOTHING else. A normalizer that stripped illegal
-     * characters would hand somebody a name they did not choose — and then reserve it,
-     * charge for it, and create it on a panel under that name.
+     * Case is INPUT, not identity. A customer types what their keyboard gives them and
+     * the identity is the lowercase form; the fold is the ONLY rewrite this contract
+     * permits, and it happens once, at the boundary, before anything durable sees it.
      */
-    expect(normalizeCustomUsername('  MyService_01  ')).toBe('myservice_01');
-    expect(normalizeCustomUsername('ali_2024')).toBe('ali_2024');
-    // The illegal characters SURVIVE normalization, so validation can refuse them.
-    expect(normalizeCustomUsername(' Ali-2024! ')).toBe('ali-2024!');
+    expect(isValidCustomUsername('Ali_2026')).toBe(true);
+    expect(isValidCustomUsername('ali_2026')).toBe(true);
+    expect(isValidCustomUsername('ALI_2026')).toBe(true);
+    expect(canonicalizeCustomUsername('Ali_2026')).toBe('ali_2026');
+    expect(canonicalizeCustomUsername('ALI_2026')).toBe('ali_2026');
+    expect(canonicalizeCustomUsername('ali_2026')).toBe('ali_2026');
   });
 
-  it('accepts the documented baseline at both boundaries', () => {
-    expect(isValidCustomUsername('a'.repeat(CUSTOM_USERNAME_MIN_LENGTH))).toBe(true);
-    expect(isValidCustomUsername('a'.repeat(CUSTOM_USERNAME_MAX_LENGTH))).toBe(true);
-    expect(isValidCustomUsername('ali_2024')).toBe(true);
-    expect(isValidCustomUsername('a_______')).toBe(true);
+  it('resolves differently-cased spellings to ONE identity', () => {
+    /*
+     * The rule the reservation and the unique index both rest on. If these ever stopped
+     * agreeing, `Ali_2026` and `ali_2026` would be two accounts for one name — which an
+     * operator reading a client list cannot tell apart, and which makes the usage
+     * figures of both meaningless.
+     */
+    const spellings = ['Ali_2026', 'ali_2026', 'ALI_2026', 'aLi_2026'];
+    const identities = new Set(spellings.map(canonicalizeCustomUsername));
+    expect(spellings.every(isValidCustomUsername)).toBe(true);
+    expect(identities).toEqual(new Set(['ali_2026']));
   });
 
-  it('refuses one character either side of the baseline', () => {
-    // The boundaries are asserted from the constants, so moving a constant without
-    // meaning to moves this test rather than leaving it agreeing with the old value.
-    expect(isValidCustomUsername('a'.repeat(CUSTOM_USERNAME_MIN_LENGTH - 1))).toBe(false);
-    expect(isValidCustomUsername('a'.repeat(CUSTOM_USERNAME_MAX_LENGTH + 1))).toBe(false);
+  it('accepts every character class the baseline allows', () => {
+    expect(isValidCustomUsername('ali_2026'), 'underscore').toBe(true);
+    expect(isValidCustomUsername('ali-2026'), 'hyphen').toBe(true);
+    expect(isValidCustomUsername('Ali-Reza_26'), 'both, mixed case').toBe(true);
+    expect(isValidCustomUsername('a1b2c3d4'), 'letters and digits only').toBe(true);
   });
 
-  it('refuses every character class the baseline excludes', () => {
-    expect(isValidCustomUsername('Ali_2024'), 'uppercase').toBe(false);
-    expect(isValidCustomUsername('ali-2024'), 'hyphen').toBe(false);
-    expect(isValidCustomUsername('ali.2024'), 'dot').toBe(false);
-    expect(isValidCustomUsername('ali 2024'), 'space').toBe(false);
-    expect(isValidCustomUsername('علی_۱۴۰۳'), 'persian').toBe(false);
-    expect(isValidCustomUsername('ali_😀_24'), 'emoji').toBe(false);
+  it('accepts the documented length at both boundaries', () => {
+    // Built from the constants, so moving one moves this test rather than leaving it
+    // agreeing with the old value. Each carries a digit, as the rule below requires.
+    const atMin = `${'a'.repeat(CUSTOM_USERNAME_MIN_LENGTH - 1)}1`;
+    const atMax = `${'a'.repeat(CUSTOM_USERNAME_MAX_LENGTH - 1)}1`;
+    expect(atMin).toHaveLength(CUSTOM_USERNAME_MIN_LENGTH);
+    expect(atMax).toHaveLength(CUSTOM_USERNAME_MAX_LENGTH);
+    expect(isValidCustomUsername(atMin)).toBe(true);
+    expect(isValidCustomUsername(atMax)).toBe(true);
   });
 
-  it('refuses a name that does not begin with a letter', () => {
-    // Not decoration: `/api/user/{username}` is a route, and a leading digit is an
-    // ambiguity with the numeric-id routes this class of panel also serves.
-    expect(isValidCustomUsername('2024_ali')).toBe(false);
-    expect(isValidCustomUsername('_ali2024')).toBe(false);
+  it('refuses one character either side of the length', () => {
+    expect(isValidCustomUsername(`${'a'.repeat(CUSTOM_USERNAME_MIN_LENGTH - 2)}1`)).toBe(false);
+    expect(isValidCustomUsername(`${'a'.repeat(CUSTOM_USERNAME_MAX_LENGTH)}1`)).toBe(false);
+  });
+
+  it('requires at least one English letter and at least one digit', () => {
+    /*
+     * A legibility rule, not a strength rule — a username is an identifier, not a
+     * secret. `12345678` and `--------` are both eight characters a support
+     * conversation cannot say out loud, and the second is not obviously a username.
+     */
+    expect(isValidCustomUsername('12345678'), 'digits only').toBe(false);
+    expect(isValidCustomUsername('aliserver'), 'letters only').toBe(false);
+    expect(isValidCustomUsername('________'), 'neither').toBe(false);
+    expect(isValidCustomUsername('--------'), 'neither').toBe(false);
+    expect(isValidCustomUsername('_-_-1a_-'), 'one of each is enough').toBe(true);
+  });
+
+  it('refuses non-ASCII letters and digits rather than folding them', () => {
+    /*
+     * `۱۴۰۳` LOOKS like digits and is not `1403`; `Аli` with a Cyrillic А renders
+     * identically to `Ali` and is a different string. Neither is repaired, because a
+     * name this installation altered is a name the customer would not recognise on
+     * their own service.
+     */
+    expect(isValidCustomUsername('علی_۱۴۰۳'), 'persian letters and digits').toBe(false);
+    expect(isValidCustomUsername('ali_۱۴۰۳'), 'persian digits alone').toBe(false);
+    expect(isValidCustomUsername('Аli_2026'), 'cyrillic А').toBe(false);
+    expect(isValidCustomUsername('ali_😀_26'), 'emoji').toBe(false);
+  });
+
+  it('refuses the punctuation a name is most often mistyped with', () => {
+    expect(isValidCustomUsername('ali.2026'), 'dot').toBe(false);
+    expect(isValidCustomUsername('@ali_2026'), 'at').toBe(false);
+    expect(isValidCustomUsername('ali/2026'), 'slash').toBe(false);
+    expect(isValidCustomUsername('ali+2026'), 'plus').toBe(false);
+    expect(isValidCustomUsername('ali:2026'), 'colon').toBe(false);
+  });
+
+  it('REFUSES whitespace rather than trimming it away', () => {
+    /*
+     * The one place this contract deliberately does less than it could. A trailing
+     * space is a difference the customer cannot see, and silently removing it is still
+     * a rewrite — the same class of act as stripping an emoji. They are told, and they
+     * type it again.
+     */
+    expect(isValidCustomUsername(' ali_2026')).toBe(false);
+    expect(isValidCustomUsername('ali_2026 ')).toBe(false);
+    expect(isValidCustomUsername('ali 2026')).toBe(false);
+    expect(isValidCustomUsername('\tali_2026')).toBe(false);
+  });
+
+  it('canonicalizes with the ASCII fold, not the Unicode one', () => {
+    /*
+     * Validate FIRST, then fold, and the order is not interchangeable. `toLowerCase` is
+     * Unicode-aware — 'İ' folds to two code points — so folding before the ASCII-only
+     * check would let a refused character arrive already disguised as an allowed one.
+     * By the time the fold runs, only `A-Z` remains.
+     */
+    expect(isValidCustomUsername('İstanbul12')).toBe(false);
+    expect(canonicalizeCustomUsername('ALI-2026_X')).toBe('ali-2026_x');
+    // Digits, hyphens and underscores are untouched by the fold.
+    expect(canonicalizeCustomUsername('a1-b2_C3d4')).toBe('a1-b2_c3d4');
   });
 });
 
@@ -217,7 +285,7 @@ describe('the legacy name, which nothing may rename', () => {
      */
     const derived = providerUsernameFor('0192ab34-cd56-7890-1234-5678901234ef');
     expect(derived.length).toBeGreaterThan(CUSTOM_USERNAME_MAX_LENGTH);
-    expect(isValidCustomUsername(derived)).toBe(false);
+    expect(isValidCustomUsername(derived), 'too long, and carries no digit-free rule').toBe(false);
     expect(LEGACY_USERNAME_PATTERN.test(derived)).toBe(true);
   });
 

@@ -36,18 +36,44 @@ export const PANEL_LEGACY_TEMPLATE = null;
 /**
  * The documented baseline, and a FLOOR rather than a preference.
  *
- * 8 to 16 characters, lowercase English letters, digits and underscore, beginning with
- * a letter. A provider adapter may be stricter — a panel that refuses underscores is
- * entitled to — but may not broaden this, because the baseline is what the customer was
- * promised and what the Telegram copy describes.
+ * 8 to 16 characters from `A-Z`, `a-z`, `0-9`, `-` and `_`, containing at least one
+ * English letter and at least one digit. A provider adapter may be stricter — a panel
+ * that refuses `-` is entitled to — but may not broaden this, because the baseline is
+ * what the customer was promised and what the Telegram copy describes.
  *
- * Letter-first is not decoration: several provider APIs route `/api/user/{username}`
- * and a leading digit has been observed to collide with numeric-id routes elsewhere in
- * this class of software. It costs a customer nothing and removes a class of ambiguity.
+ * ## Case is INPUT, not identity
+ *
+ * A customer may type `Ali_2026`; the identity is `ali_2026`. Usernames here are
+ * case-insensitive, and the fold happens once, at the boundary, before anything durable
+ * sees the value — see `canonicalizeCustomUsername`. Accepting both spellings and
+ * storing one is what makes `Ali_2026` and `ali_2026` collide on the same reservation
+ * rather than becoming two accounts an operator reading a client list cannot tell apart.
+ *
+ * ## At least one letter and at least one digit
+ *
+ * Not a strength rule — a username is an identifier, not a secret. It is a legibility
+ * rule: `12345678` and `--------` are both eight characters a support conversation
+ * cannot say out loud, and the second is not obviously a username at all. Requiring one
+ * of each keeps every accepted name pronounceable and recognisable.
  */
 export const CUSTOM_USERNAME_MIN_LENGTH = 8;
 export const CUSTOM_USERNAME_MAX_LENGTH = 16;
-export const CUSTOM_USERNAME_PATTERN = /^[a-z][a-z0-9_]{7,15}$/;
+
+/**
+ * What a customer may TYPE. Either case, and nothing outside ASCII.
+ *
+ * The rejections are as deliberate as the acceptances. Persian letters and Persian
+ * digits, whitespace, `@`, `.`, `/` and emoji are all refused rather than stripped,
+ * because a name this installation altered is a name the customer did not choose and
+ * would not recognise on their own service. `۱۴۰۳` looks like digits and is not
+ * `1403`; `Ali` and `Аli` with a Cyrillic А are two different strings that render
+ * identically.
+ */
+export const CUSTOM_USERNAME_INPUT_PATTERN = /^[A-Za-z0-9_-]{8,16}$/;
+/** The same set after the case fold: what is reserved, stored and sent to a provider. */
+export const CUSTOM_USERNAME_CANONICAL_PATTERN = /^[a-z0-9_-]{8,16}$/;
+const HAS_ASCII_LETTER = /[A-Za-z]/;
+const HAS_ASCII_DIGIT = /[0-9]/;
 
 /**
  * What a rendered or typed name may contain, whoever produced it.
@@ -72,21 +98,38 @@ export const RENDERED_USERNAME_PATTERN = /^[a-z0-9_]+$/;
 export const PROVIDER_USERNAME_FALLBACK_MAX_LENGTH = 64;
 
 /**
- * Lowercase, trim, and nothing else.
+ * Is this something a customer may type?
  *
- * NOT a repair function. It folds the two differences a customer cannot see — a
- * trailing space from a mobile keyboard, a capital they did not mean — and then the
- * value either satisfies `CUSTOM_USERNAME_PATTERN` or is refused with a message they can
- * act on. Stripping illegal characters instead would hand somebody a name they did not
- * choose and did not agree to, which is the legacy behaviour this product exists to
- * replace.
+ * Asked of the RAW input, before any fold. Whitespace is refused here rather than
+ * trimmed: a trailing space is a difference the customer cannot see, and silently
+ * removing it is still a rewrite — the same class of act as stripping an emoji, and the
+ * legacy behaviour this product exists to replace. They are told, and they type it
+ * again.
  */
-export function normalizeCustomUsername(raw: string): string {
-  return raw.trim().toLowerCase();
+export function isValidCustomUsername(raw: string): boolean {
+  return (
+    CUSTOM_USERNAME_INPUT_PATTERN.test(raw) &&
+    HAS_ASCII_LETTER.test(raw) &&
+    HAS_ASCII_DIGIT.test(raw)
+  );
 }
 
-export function isValidCustomUsername(normalized: string): boolean {
-  return CUSTOM_USERNAME_PATTERN.test(normalized);
+/**
+ * The one rewrite this contract permits: ASCII letters to lowercase.
+ *
+ * Everything durable uses the result — the uniqueness check, the reservation, the frozen
+ * order snapshot, `services.provider_username`, the provider call, the audit record and
+ * reconciliation — so `Ali_2026` and `ali_2026` are one identity that collides on one
+ * unique index rather than two accounts for one name.
+ *
+ * VALIDATE FIRST, THEN FOLD, and the order is not interchangeable. `toLowerCase` is
+ * Unicode-aware: `'İ'.toLowerCase()` is two code points, and a Cyrillic `А` folds to a
+ * `а` that is not the `a` anybody meant. Running it before the ASCII-only check would
+ * let characters this contract refuses arrive at the check already disguised as ones it
+ * allows. Validated first, only `A-Z` remains, and the fold is exactly the ASCII one.
+ */
+export function canonicalizeCustomUsername(valid: string): string {
+  return valid.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
 }
 
 // ---------------------------------------------------------------------------

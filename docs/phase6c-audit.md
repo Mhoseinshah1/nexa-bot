@@ -134,6 +134,14 @@ name is not**, so the exposure is created by this deliverable.
 Decision, recorded per the directive's instruction to resolve routine choices from existing
 code and continue:
 
+The CUSTOM baseline was corrected by the owner after this audit was written, and the
+correction is recorded here rather than left to the commit log: usernames are
+**case-insensitive**. A customer may type either case and `-` as well as `_`; the input
+must carry at least one English letter and at least one digit; whitespace is **refused
+rather than trimmed**; and the ASCII case fold is the only rewrite permitted, applied
+once at the boundary so `Ali_2026` and `ali_2026` are one identity that collides on one
+reservation. The letter-first rule this audit originally assumed is gone.
+
 - the username **reservation** is keyed on a derived **namespace key** — `provider_type`
   plus the normalised host and port of `base_url` — not on `panel_id`, so two panels on one
   host contend for one name as they should;
