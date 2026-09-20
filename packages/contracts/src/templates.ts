@@ -2042,49 +2042,262 @@ export const TEMPLATES = [
    * and a number rendered here would go stale the moment the next byte moves.
    */
   {
-    key: 'bot.service.expiring_3d',
-    description: 'Three days of validity remain on a service. Sent once per period.',
+    key: 'bot.service.expiry_first',
+    description:
+      'The tenant\u2019s FIRST expiry threshold was crossed \u2014 three days by default, and ' +
+      'whatever reminders.expiry_first_days says otherwise. Named for the slot rather than ' +
+      'the number, because the number is a setting an operator moves.',
     format: 'PLAIN_TEXT',
-    placeholders: [],
+    placeholders: [
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The account name on the panel, which is what the customer sees.',
+        /*
+         * REQUIRED, and the only one of the four that is.
+         *
+         * A customer with three services who is told "one of them expires soon" has been
+         * given a puzzle rather than a warning. The figures below are optional because a
+         * short message without them is still a true, useful sentence; a message without
+         * the name is not.
+         */
+        required: true,
+        repeatable: true,
+      },
+      {
+        token: 'days',
+        type: 'DURATION_DAYS',
+        description:
+          'Whole days left when the reminder was raised, from the snapshot on the ' +
+          'service_reminders row rather than re-read at send time.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description: 'The deadline the reminder was raised against.',
+        required: false,
+        repeatable: true,
+      },
+    ],
   },
   {
-    key: 'bot.service.expiring_1d',
-    description: 'One day remains. Sent once per period, after the three-day one.',
+    key: 'bot.service.expiry_second',
+    description: 'The second, more urgent threshold. One day by default.',
     format: 'PLAIN_TEXT',
-    placeholders: [],
+    placeholders: [
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The account name on the panel, which is what the customer sees.',
+        /*
+         * REQUIRED, and the only one of the four that is.
+         *
+         * A customer with three services who is told "one of them expires soon" has been
+         * given a puzzle rather than a warning. The figures below are optional because a
+         * short message without them is still a true, useful sentence; a message without
+         * the name is not.
+         */
+        required: true,
+        repeatable: true,
+      },
+      {
+        token: 'days',
+        type: 'DURATION_DAYS',
+        description:
+          'Whole days left when the reminder was raised, from the snapshot on the ' +
+          'service_reminders row rather than re-read at send time.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description: 'The deadline the reminder was raised against.',
+        required: false,
+        repeatable: true,
+      },
+    ],
   },
   {
     key: 'bot.service.expired',
     description:
       'The service reached its own deadline. A statement of fact and an invitation to ' +
-      'renew — never a claim that anything was deleted, because expiry is a Nexa-side ' +
-      'lifecycle transition and the panel account is dealt with separately.',
+      'renew \u2014 never a claim that anything was deleted, because expiry is a Nexa-side ' +
+      'lifecycle transition and the panel account is dealt with separately. Carries no ' +
+      '`days`: zero days left is the fact the sentence already states.',
     format: 'PLAIN_TEXT',
-    placeholders: [],
+    placeholders: [
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The account name on the panel, which is what the customer sees.',
+        /*
+         * REQUIRED, and the only one of the four that is.
+         *
+         * A customer with three services who is told "one of them expires soon" has been
+         * given a puzzle rather than a warning. The figures below are optional because a
+         * short message without them is still a true, useful sentence; a message without
+         * the name is not.
+         */
+        required: true,
+        repeatable: true,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description: 'The deadline the reminder was raised against.',
+        required: false,
+        repeatable: true,
+      },
+    ],
   },
   {
-    key: 'bot.service.usage_80',
+    key: 'bot.service.usage_first',
     description:
-      'Four fifths of the traffic allowance is gone. The figure is the threshold that ' +
-      'fired and is in the sentence, not a placeholder: a rendered number would be ' +
-      'stale the moment the next byte moved.',
+      'The tenant\u2019s first usage threshold, eighty percent by default. The figures are ' +
+      'PLACEHOLDERS and they are a SNAPSHOT: `service_reminders` recorded what the panel ' +
+      'had last reported when the reminder was raised, so the sentence says what was true ' +
+      'then rather than a number re-read at send time that would disagree with it.',
     format: 'PLAIN_TEXT',
-    placeholders: [],
+    placeholders: [
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The account name on the panel, which is what the customer sees.',
+        /*
+         * REQUIRED, and the only one of the four that is.
+         *
+         * A customer with three services who is told "one of them expires soon" has been
+         * given a puzzle rather than a warning. The figures below are optional because a
+         * short message without them is still a true, useful sentence; a message without
+         * the name is not.
+         */
+        required: true,
+        repeatable: true,
+      },
+      {
+        token: 'usedTraffic',
+        type: 'BYTES',
+        description:
+          'What the panel had last reported when the reminder was raised. A SNAPSHOT: ' +
+          'never a figure re-read at send time, which could disagree with the threshold ' +
+          'the sentence names, and never zero standing in for a figure nobody has read.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'totalTraffic',
+        type: 'BYTES',
+        description: 'The allowance the reminder was raised against.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'usagePercent',
+        type: 'NUMBER',
+        description: 'The whole-percent figure the two above work out to.',
+        required: false,
+        repeatable: true,
+      },
+    ],
   },
   {
-    key: 'bot.service.usage_95',
-    description: 'Nineteen twentieths of the allowance is gone.',
+    key: 'bot.service.usage_second',
+    description: 'The second usage threshold, ninety-five percent by default.',
     format: 'PLAIN_TEXT',
-    placeholders: [],
+    placeholders: [
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The account name on the panel, which is what the customer sees.',
+        /*
+         * REQUIRED, and the only one of the four that is.
+         *
+         * A customer with three services who is told "one of them expires soon" has been
+         * given a puzzle rather than a warning. The figures below are optional because a
+         * short message without them is still a true, useful sentence; a message without
+         * the name is not.
+         */
+        required: true,
+        repeatable: true,
+      },
+      {
+        token: 'usedTraffic',
+        type: 'BYTES',
+        description:
+          'What the panel had last reported when the reminder was raised. A SNAPSHOT: ' +
+          'never a figure re-read at send time, which could disagree with the threshold ' +
+          'the sentence names, and never zero standing in for a figure nobody has read.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'totalTraffic',
+        type: 'BYTES',
+        description: 'The allowance the reminder was raised against.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'usagePercent',
+        type: 'NUMBER',
+        description: 'The whole-percent figure the two above work out to.',
+        required: false,
+        repeatable: true,
+      },
+    ],
   },
   {
-    key: 'bot.service.usage_100',
+    key: 'bot.service.usage_final',
     description:
-      'The allowance is exhausted. Says the traffic ran out and offers more; it does ' +
-      'NOT say the service stopped, because whether a panel cuts a customer off at the ' +
-      'limit is the provider’s behaviour and not a fact this installation observed.',
+      'The final usage threshold, a hundred percent by default. Says the traffic ran out ' +
+      'and offers more; it does NOT say the service stopped, because whether a panel cuts ' +
+      'a customer off at the limit is the provider\u2019s behaviour and not a fact this ' +
+      'installation observed.',
     format: 'PLAIN_TEXT',
-    placeholders: [],
+    placeholders: [
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The account name on the panel, which is what the customer sees.',
+        /*
+         * REQUIRED, and the only one of the four that is.
+         *
+         * A customer with three services who is told "one of them expires soon" has been
+         * given a puzzle rather than a warning. The figures below are optional because a
+         * short message without them is still a true, useful sentence; a message without
+         * the name is not.
+         */
+        required: true,
+        repeatable: true,
+      },
+      {
+        token: 'usedTraffic',
+        type: 'BYTES',
+        description:
+          'What the panel had last reported when the reminder was raised. A SNAPSHOT: ' +
+          'never a figure re-read at send time, which could disagree with the threshold ' +
+          'the sentence names, and never zero standing in for a figure nobody has read.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'totalTraffic',
+        type: 'BYTES',
+        description: 'The allowance the reminder was raised against.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'usagePercent',
+        type: 'NUMBER',
+        description: 'The whole-percent figure the two above work out to.',
+        required: false,
+        repeatable: true,
+      },
+    ],
   },
   {
     key: 'bot.service.provision_delayed',

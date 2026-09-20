@@ -112,6 +112,7 @@ import { OpsLogService } from './modules/platform/opslog/application/opslog.serv
 import { DrizzleSettingRepository } from './modules/control/settings/infrastructure/drizzle-settings.repository.js';
 import { SettingsResolver } from './modules/control/settings/application/settings-resolver.js';
 import { SettingsService } from './modules/control/settings/application/settings.service.js';
+import { ReminderThresholdsGuard } from './modules/control/settings/application/reminder-thresholds.guard.js';
 import { DrizzleFeatureFlagRepository } from './modules/control/features/infrastructure/drizzle-feature-flags.repository.js';
 import {
   FeatureFlagResolver,
@@ -1367,27 +1368,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     logger,
   });
 
-  const serviceReminderSweep = new ServiceReminderService({
-    reminders: new DrizzleServiceReminderRepository(database.db),
-    notifier: customerNotifier,
-    scopeActivity: tenants,
-    uow,
-    clock,
-    ids,
-  });
-  const serviceReminderLoop = new ServiceReminderLoop(serviceReminderSweep, {
-    // The same per-pass closure the payment expiry loop uses, and for the same
-    // reason: the installation's tenant is a row, so it is not known while this
-    // object is being built.
-    scope: () =>
-      installationTenantId === null
-        ? null
-        : { tenantId: installationTenantId, botInstanceId: null },
-    intervalMs: SERVICE_REMINDER_INTERVAL_MS,
-    now: () => clock.now().getTime(),
-    logger,
-  });
-
   /**
    * One HTTP client for every provider call this process makes.
    *
@@ -1593,7 +1573,12 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
      * Here is the only place the two meet, which is what keeps the dependency
      * pointing inward.
      */
-    [new SalesCurrencyChangeGuard(refundRepository)],
+    [
+      new SalesCurrencyChangeGuard(refundRepository),
+      // One per reminder threshold. The five have to agree with one another, and no
+      // per-key schema can say so — see `ReminderThresholdsGuard`.
+      ...ReminderThresholdsGuard.all(settingsResolver),
+    ],
   );
 
   const featureFlagRepository = new DrizzleFeatureFlagRepository(database.db);
@@ -1616,6 +1601,32 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // For the mutation-time session-revocation check.
     sessions,
   );
+
+  const serviceReminderSweep = new ServiceReminderService({
+    reminders: new DrizzleServiceReminderRepository(database.db),
+    notifier: customerNotifier,
+    // The RESOLVERS, not the services. A background loop that could write a setting or
+    // a flag is a background loop that could turn itself on, and the write paths are
+    // where the permission check, the audit row and the combination validation live.
+    settings: settingsResolver,
+    features: featureFlagResolver,
+    scopeActivity: tenants,
+    uow,
+    clock,
+    ids,
+  });
+  const serviceReminderLoop = new ServiceReminderLoop(serviceReminderSweep, {
+    // The same per-pass closure the payment expiry loop uses, and for the same
+    // reason: the installation's tenant is a row, so it is not known while this
+    // object is being built.
+    scope: () =>
+      installationTenantId === null
+        ? null
+        : { tenantId: installationTenantId, botInstanceId: null },
+    intervalMs: SERVICE_REMINDER_INTERVAL_MS,
+    now: () => clock.now().getTime(),
+    logger,
+  });
 
   const templateRepository = new DrizzleTemplateRepository(database.db);
   const templateCatalogue = new I18nTemplateCatalogue();

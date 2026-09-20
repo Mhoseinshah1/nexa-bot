@@ -652,6 +652,13 @@
       "when": 1789919410137,
       "tag": "0092_service_reminder_period_key",
       "breakpoints": true
+    },
+    {
+      "idx": 93,
+      "version": "7",
+      "when": 1789920913535,
+      "tag": "0093_reminder_slots_and_snapshot",
+      "breakpoints": true
     }
   ]
 }

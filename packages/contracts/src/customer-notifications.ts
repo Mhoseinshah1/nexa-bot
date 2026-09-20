@@ -113,23 +113,33 @@ export const CUSTOMER_NOTIFICATION_KINDS = [
    * its own guaranteed single delivery. The rule that a kind determines the table holds
    * unchanged; for these six the table is `service_reminders`.
    *
-   * SIX kinds rather than two with a threshold, because the lane carries no payload
-   * (ADR 0030 §1). "Expires in {days} days" would need one, and a parameterised payload
-   * is the thing that turns this lane into "send this customer some text". Each
-   * threshold is its own frozen sentence.
+   * SIX kinds rather than two carrying a threshold. Each is its own frozen sentence
+   * with its own editable template, so an operator can word "one day left" differently
+   * from "three days left" — and so the CLOSED SET stays closed, which is what makes
+   * `CUSTOMER_NOTIFICATION_PRECONDITIONS` exhaustive.
+   *
+   * They are named for the SLOT, not the number. The owner confirmed Mirza's crons
+   * were configurable (CBR-003, CBR-011), so three days is a tenant's setting and
+   * `SERVICE_EXPIRING_3D` would be a kind that lies the moment an operator changes it.
+   *
+   * These six DO render values, and that is not the payload ADR 0030 §1 refuses. A
+   * payload is data a producer attaches to a message; these are read by the dispatcher
+   * from the SUBJECT — the `service_reminders` row, which snapshotted them when the
+   * reminder was raised. The producer still passes nothing but a kind and an id, and no
+   * caller can put arbitrary text in front of a customer.
    */
-  /** Three days of validity left. `service_reminders.id` is the subject. */
-  'SERVICE_EXPIRING_3D',
-  /** One day left. `service_reminders.id` is the subject. */
-  'SERVICE_EXPIRING_1D',
+  /** The tenant's FIRST expiry threshold was crossed. `service_reminders.id` is the subject. */
+  'SERVICE_EXPIRY_FIRST',
+  /** Its second, more urgent one. `service_reminders.id` is the subject. */
+  'SERVICE_EXPIRY_SECOND',
   /** The service's own deadline passed. `service_reminders.id` is the subject. */
   'SERVICE_EXPIRED',
-  /** Four fifths of the traffic allowance is gone. `service_reminders.id` is the subject. */
-  'SERVICE_USAGE_80',
-  /** Nineteen twentieths of it. `service_reminders.id` is the subject. */
-  'SERVICE_USAGE_95',
-  /** All of it. `service_reminders.id` is the subject. */
-  'SERVICE_USAGE_100',
+  /** The tenant's first usage threshold. `service_reminders.id` is the subject. */
+  'SERVICE_USAGE_FIRST',
+  /** Its second. `service_reminders.id` is the subject. */
+  'SERVICE_USAGE_SECOND',
+  /** Its final one. `service_reminders.id` is the subject. */
+  'SERVICE_USAGE_FINAL',
 ] as const;
 export type CustomerNotificationKind = (typeof CUSTOMER_NOTIFICATION_KINDS)[number];
 export const customerNotificationKindSchema = z.enum(CUSTOMER_NOTIFICATION_KINDS);
@@ -202,12 +212,12 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
    * refusals in that reader were written to stop, and the same trap
    * `PAYMENT_TRANSFER_RECORDED` documents above.
    */
-  SERVICE_EXPIRING_3D: false,
-  SERVICE_EXPIRING_1D: false,
+  SERVICE_EXPIRY_FIRST: false,
+  SERVICE_EXPIRY_SECOND: false,
   SERVICE_EXPIRED: false,
-  SERVICE_USAGE_80: false,
-  SERVICE_USAGE_95: false,
-  SERVICE_USAGE_100: false,
+  SERVICE_USAGE_FIRST: false,
+  SERVICE_USAGE_SECOND: false,
+  SERVICE_USAGE_FINAL: false,
 };
 
 /**
@@ -247,12 +257,12 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
    * and «سه روز» inside the sentence is the same information a `{days}` placeholder
    * would carry with none of the machinery a placeholder needs.
    */
-  SERVICE_EXPIRING_3D: 'bot.service.expiring_3d',
-  SERVICE_EXPIRING_1D: 'bot.service.expiring_1d',
+  SERVICE_EXPIRY_FIRST: 'bot.service.expiry_first',
+  SERVICE_EXPIRY_SECOND: 'bot.service.expiry_second',
   SERVICE_EXPIRED: 'bot.service.expired',
-  SERVICE_USAGE_80: 'bot.service.usage_80',
-  SERVICE_USAGE_95: 'bot.service.usage_95',
-  SERVICE_USAGE_100: 'bot.service.usage_100',
+  SERVICE_USAGE_FIRST: 'bot.service.usage_first',
+  SERVICE_USAGE_SECOND: 'bot.service.usage_second',
+  SERVICE_USAGE_FINAL: 'bot.service.usage_final',
 };
 
 /**

@@ -16,57 +16,157 @@ import type { CustomerNotificationKind } from './customer-notifications.js';
  * is what the notification names.
  */
 export const SERVICE_REMINDER_KINDS = [
-  'EXPIRING_3D',
-  'EXPIRING_1D',
+  'EXPIRY_FIRST',
+  'EXPIRY_SECOND',
   'EXPIRED',
-  'USAGE_80',
-  'USAGE_95',
-  'USAGE_100',
+  'USAGE_FIRST',
+  'USAGE_SECOND',
+  'USAGE_FINAL',
 ] as const;
 export type ServiceReminderKind = (typeof SERVICE_REMINDER_KINDS)[number];
 export const serviceReminderKindSchema = z.enum(SERVICE_REMINDER_KINDS);
 
-/** The three that are about the clock. */
-export const EXPIRY_REMINDER_KINDS = ['EXPIRING_3D', 'EXPIRING_1D', 'EXPIRED'] as const;
-/** The three that are about the traffic allowance. */
-export const USAGE_REMINDER_KINDS = ['USAGE_80', 'USAGE_95', 'USAGE_100'] as const;
+/**
+ * The three that are about the clock, LEAST URGENT FIRST.
+ *
+ * The order is read by the sweep, which writes the whole prefix up to the kind it is
+ * sending, so that a lane which was down for two days cannot say "expires tomorrow"
+ * and then, an hour later, "three days left".
+ *
+ * A SLOT, not a threshold. `EXPIRING_3D` was the first name these carried, and it was
+ * wrong the moment the owner confirmed Mirza's crons were configurable (CBR-003,
+ * CBR-011: a capability is «a flag plus a configuration record», and the six cron
+ * screens take a scalar). A kind is stored in a row and pinned by a CHECK constraint;
+ * a threshold is a tenant's setting and moves. Naming the row after the number would
+ * make an operator changing three days to five either rewrite history or produce a
+ * kind the database refuses.
+ */
+export const EXPIRY_REMINDER_KINDS = ['EXPIRY_FIRST', 'EXPIRY_SECOND', 'EXPIRED'] as const;
+/** The three that are about the traffic allowance, lowest first. Slots, as above. */
+export const USAGE_REMINDER_KINDS = ['USAGE_FIRST', 'USAGE_SECOND', 'USAGE_FINAL'] as const;
 
 /**
- * How long before the deadline each expiry reminder fires, in whole days.
+ * The bounds a configured expiry threshold is checked against, in whole days.
  *
- * `EXPIRED` is zero — it fires once the deadline has passed, not before it. The owner
- * named these three; they are constants rather than settings because a threshold an
- * operator can move is a threshold whose stored reminders were raised against a rule
- * that no longer exists, and `service_reminders` has no column for which rule produced
- * a row.
+ * Owner's numbers. One day is the floor because a reminder due in less than a day is
+ * one a fifteen-minute sweep may deliver after the service has already lapsed; thirty
+ * is the ceiling because a warning a month out is not a warning.
  */
-export const EXPIRY_REMINDER_DAYS: Readonly<
-  Record<(typeof EXPIRY_REMINDER_KINDS)[number], number>
-> = {
-  EXPIRING_3D: 3,
-  EXPIRING_1D: 1,
-  EXPIRED: 0,
+export const EXPIRY_REMINDER_DAYS_MIN = 1;
+export const EXPIRY_REMINDER_DAYS_MAX = 30;
+
+/** The bounds a configured usage threshold is checked against, in percent. */
+export const USAGE_REMINDER_PERCENT_MIN = 1;
+export const USAGE_REMINDER_PERCENT_MAX = 100;
+
+/**
+ * The thresholds one tenant's reminders fire at, resolved from settings.
+ *
+ * Read per pass and never cached across one, because an operator's edit has to take
+ * effect without a restart — `RUNTIME` mutability, which the registry declares and
+ * this honours.
+ *
+ * The flags are separate from the numbers for the reason `features.ts` gives and
+ * CBR-003 found: a capability is a flag PLUS a configuration record, and a
+ * `map[string]bool` cannot hold the second. Turning a family off therefore leaves its
+ * numbers exactly where they were, and turning it back on restores them — there is no
+ * code path that could reset them, because nothing writes them but an administrator.
+ */
+export interface ServiceReminderThresholds {
+  readonly expiryEnabled: boolean;
+  readonly expiredNoticeEnabled: boolean;
+  readonly expiryFirstDays: number;
+  readonly expirySecondDays: number;
+  readonly usageEnabled: boolean;
+  readonly usageFirstPercent: number;
+  readonly usageSecondPercent: number;
+  readonly usageFinalPercent: number;
+}
+
+/** The registry's defaults, as one object, so a test and a fixture agree with it. */
+export const SERVICE_REMINDER_DEFAULTS: ServiceReminderThresholds = {
+  expiryEnabled: true,
+  expiredNoticeEnabled: true,
+  expiryFirstDays: 3,
+  expirySecondDays: 1,
+  usageEnabled: true,
+  usageFirstPercent: 80,
+  usageSecondPercent: 95,
+  usageFinalPercent: 100,
 };
 
 /**
- * The fraction of the allowance each usage reminder fires at, in PERCENT.
+ * Why a proposed combination of thresholds is refused, or `null` if it is sound.
+ *
+ * ONE function, called by the settings guard that vetoes each of the five keys and by
+ * nothing else. Per-key zod schemas can bound a number and cannot say that the first
+ * expiry threshold must be further out than the second — and a rule spread across five
+ * schemas is a rule that disagrees with itself the first time one of them is edited.
+ *
+ * The messages are Persian because they are shown to an administrator, on both
+ * surfaces, exactly as written. A refusal that says only "invalid" is the legacy
+ * `⭕️ ورودی نا معتبر` (BC-SB-004), which tells an operator nothing about which of the
+ * five numbers is wrong or why.
+ */
+export function refuseReminderThresholds(
+  thresholds: Pick<
+    ServiceReminderThresholds,
+    | 'expiryFirstDays'
+    | 'expirySecondDays'
+    | 'usageFirstPercent'
+    | 'usageSecondPercent'
+    | 'usageFinalPercent'
+  >,
+): string | null {
+  if (thresholds.expiryFirstDays <= thresholds.expirySecondDays) {
+    return 'یادآور اول باید زودتر از یادآور دوم باشد؛ یعنی تعداد روز بیشتری داشته باشد.';
+  }
+  const { usageFirstPercent, usageSecondPercent, usageFinalPercent } = thresholds;
+  if (usageSecondPercent <= usageFirstPercent || usageFinalPercent <= usageSecondPercent) {
+    return 'آستانه‌های مصرف باید به‌ترتیب صعودی و بدون تکرار باشند.';
+  }
+  return null;
+}
+
+/**
+ * The expiry thresholds as a kind-to-days map, most urgent last.
+ *
+ * `EXPIRED` is zero: it fires once the deadline has passed, not before it, and is
+ * therefore not a configurable number — what an operator configures about it is
+ * whether it is sent at all.
+ */
+export function expiryReminderDays(
+  thresholds: Pick<ServiceReminderThresholds, 'expiryFirstDays' | 'expirySecondDays'>,
+): Readonly<Record<(typeof EXPIRY_REMINDER_KINDS)[number], number>> {
+  return {
+    EXPIRY_FIRST: thresholds.expiryFirstDays,
+    EXPIRY_SECOND: thresholds.expirySecondDays,
+    EXPIRED: 0,
+  };
+}
+
+/** The usage thresholds as a kind-to-percent map, lowest first. */
+export function usageReminderPercent(
+  thresholds: Pick<
+    ServiceReminderThresholds,
+    'usageFirstPercent' | 'usageSecondPercent' | 'usageFinalPercent'
+  >,
+): Readonly<Record<(typeof USAGE_REMINDER_KINDS)[number], number>> {
+  return {
+    USAGE_FIRST: thresholds.usageFirstPercent,
+    USAGE_SECOND: thresholds.usageSecondPercent,
+    USAGE_FINAL: thresholds.usageFinalPercent,
+  };
+}
+
+/**
+ * Has this service used at least `percent` of its allowance?
  *
  * Integers rather than floats, and compared by integer arithmetic —
  * `used * 100 >= limit * threshold` — because `usedBytes / limitBytes` on `bigint`
  * values large enough to matter is exactly the float this codebase refuses for money
- * and refuses here for the same reason: the comparison has to be exact at the boundary,
- * and 0.7999999999999999 is a customer not told.
- */
-export const USAGE_REMINDER_PERCENT: Readonly<
-  Record<(typeof USAGE_REMINDER_KINDS)[number], number>
-> = {
-  USAGE_80: 80,
-  USAGE_95: 95,
-  USAGE_100: 100,
-};
-
-/**
- * Has this service used at least `percent` of its allowance?
+ * and refuses here for the same reason: the comparison has to be exact at the
+ * boundary, and 0.7999999999999999 is a customer not told.
  *
  * Integer arithmetic on `bigint`, for the reason above. An UNLIMITED allowance — the
  * sentinel zero `catalog.ts` chose — has no percentage, so it is never reached: an
@@ -89,10 +189,15 @@ export function usageReached(usedBytes: bigint, limitBytes: bigint, percent: num
 export function usageRemindersReached(
   usedBytes: bigint,
   limitBytes: bigint,
+  thresholds: Pick<
+    ServiceReminderThresholds,
+    'usageFirstPercent' | 'usageSecondPercent' | 'usageFinalPercent'
+  >,
 ): readonly (typeof USAGE_REMINDER_KINDS)[number][] {
+  const percent = usageReminderPercent(thresholds);
   return [...USAGE_REMINDER_KINDS]
-    .sort((a, b) => USAGE_REMINDER_PERCENT[b] - USAGE_REMINDER_PERCENT[a])
-    .filter((kind) => usageReached(usedBytes, limitBytes, USAGE_REMINDER_PERCENT[kind]));
+    .sort((a, b) => percent[b] - percent[a])
+    .filter((kind) => usageReached(usedBytes, limitBytes, percent[kind]));
 }
 
 /**
@@ -109,13 +214,14 @@ export function usageRemindersReached(
 export function expiryReminderDue(
   expiresAt: Date | null,
   now: Date,
+  thresholds: Pick<ServiceReminderThresholds, 'expiryFirstDays' | 'expirySecondDays'>,
 ): (typeof EXPIRY_REMINDER_KINDS)[number] | null {
   if (expiresAt === null) return null;
   const msLeft = expiresAt.getTime() - now.getTime();
   if (msLeft <= 0) return 'EXPIRED';
   const daysLeft = msLeft / 86_400_000;
-  if (daysLeft <= EXPIRY_REMINDER_DAYS.EXPIRING_1D) return 'EXPIRING_1D';
-  if (daysLeft <= EXPIRY_REMINDER_DAYS.EXPIRING_3D) return 'EXPIRING_3D';
+  if (daysLeft <= thresholds.expirySecondDays) return 'EXPIRY_SECOND';
+  if (daysLeft <= thresholds.expiryFirstDays) return 'EXPIRY_FIRST';
   return null;
 }
 
@@ -141,12 +247,12 @@ export const SERVICE_REMINDER_SWEEP_LIMIT = 200;
 export const SERVICE_REMINDER_NOTIFICATION_KINDS: Readonly<
   Record<ServiceReminderKind, CustomerNotificationKind>
 > = {
-  EXPIRING_3D: 'SERVICE_EXPIRING_3D',
-  EXPIRING_1D: 'SERVICE_EXPIRING_1D',
+  EXPIRY_FIRST: 'SERVICE_EXPIRY_FIRST',
+  EXPIRY_SECOND: 'SERVICE_EXPIRY_SECOND',
   EXPIRED: 'SERVICE_EXPIRED',
-  USAGE_80: 'SERVICE_USAGE_80',
-  USAGE_95: 'SERVICE_USAGE_95',
-  USAGE_100: 'SERVICE_USAGE_100',
+  USAGE_FIRST: 'SERVICE_USAGE_FIRST',
+  USAGE_SECOND: 'SERVICE_USAGE_SECOND',
+  USAGE_FINAL: 'SERVICE_USAGE_FINAL',
 };
 
 /**

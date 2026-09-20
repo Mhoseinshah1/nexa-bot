@@ -220,7 +220,7 @@ describe('a customer is warned before their service runs out', () => {
     expect(await runPass()).toEqual({ expiry: 1, usage: 0 });
 
     const sent = await notifications();
-    expect(sent.map((one) => one.kind)).toEqual(['SERVICE_EXPIRING_3D']);
+    expect(sent.map((one) => one.kind)).toEqual(['SERVICE_EXPIRY_FIRST']);
     expect(sent[0]?.customerId).toBe(customerA);
     /*
      * The SUBJECT is the reminder row, and that is the whole design. Were it the
@@ -230,7 +230,7 @@ describe('a customer is warned before their service runs out', () => {
     const rows = await ctx.container.database.db.execute(sql`
       SELECT id FROM service_reminders WHERE service_id = ${id}`);
     expect(sent[0]?.subjectId).toBe((rows.rows[0] as { id: string }).id);
-    expect(await reminderKinds(id)).toEqual(['EXPIRING_3D']);
+    expect(await reminderKinds(id)).toEqual(['EXPIRY_FIRST']);
   });
 
   it('says nothing on the second pass, or the third', async () => {
@@ -277,8 +277,8 @@ describe('a customer is warned before their service runs out', () => {
           tenantA,
           {
             now,
-            oneDayAt: new Date(now.getTime() + 86_400_000),
-            threeDaysAt: new Date(now.getTime() + 3 * 86_400_000),
+            secondAt: new Date(now.getTime() + 86_400_000),
+            firstAt: new Date(now.getTime() + 3 * 86_400_000),
           },
           200,
           tx,
@@ -290,7 +290,12 @@ describe('a customer is warned before their service runs out', () => {
     expect(stillDue[0].map((one) => one.serviceId)).toEqual([]);
     expect(stillDue[1].map((one) => one.serviceId)).toEqual([]);
     // And the fixture could have appeared: it did, on the pass that warned.
-    expect(await reminderKinds(id)).toEqual(['EXPIRING_3D', 'USAGE_100', 'USAGE_80', 'USAGE_95']);
+    expect(await reminderKinds(id)).toEqual([
+      'EXPIRY_FIRST',
+      'USAGE_FINAL',
+      'USAGE_FIRST',
+      'USAGE_SECOND',
+    ]);
   });
 
   it('sends the MOST URGENT threshold and records the one it skipped', async () => {
@@ -308,8 +313,8 @@ describe('a customer is warned before their service runs out', () => {
     });
 
     expect(await runPass()).toEqual({ expiry: 1, usage: 0 });
-    expect((await notifications()).map((one) => one.kind)).toEqual(['SERVICE_EXPIRING_1D']);
-    expect(await reminderKinds(id)).toEqual(['EXPIRING_1D', 'EXPIRING_3D']);
+    expect((await notifications()).map((one) => one.kind)).toEqual(['SERVICE_EXPIRY_SECOND']);
+    expect(await reminderKinds(id)).toEqual(['EXPIRY_FIRST', 'EXPIRY_SECOND']);
 
     // And the skipped one stays skipped.
     expect(await runPass()).toEqual({ expiry: 0, usage: 0 });
@@ -327,7 +332,7 @@ describe('a customer is warned before their service runs out', () => {
 
     expect(await runPass()).toEqual({ expiry: 1, usage: 0 });
     expect((await notifications()).map((one) => one.kind)).toEqual(['SERVICE_EXPIRED']);
-    expect(await reminderKinds(id)).toEqual(['EXPIRED', 'EXPIRING_1D', 'EXPIRING_3D']);
+    expect(await reminderKinds(id)).toEqual(['EXPIRED', 'EXPIRY_FIRST', 'EXPIRY_SECOND']);
   });
 
   it('never warns a service with no deadline', async () => {
@@ -369,7 +374,7 @@ describe('a customer is warned before their service runs out', () => {
     });
     await runPass();
     const first = (await notifications())[0];
-    expect(first?.kind).toBe('SERVICE_EXPIRING_3D');
+    expect(first?.kind).toBe('SERVICE_EXPIRY_FIRST');
 
     // The customer renews. Thirty days out, nothing is due.
     await renewTo(id, 30);
@@ -380,7 +385,7 @@ describe('a customer is warned before their service runs out', () => {
     expect(await runPass()).toEqual({ expiry: 1, usage: 0 });
 
     const sent = await notifications();
-    expect(sent.map((one) => one.kind)).toEqual(['SERVICE_EXPIRING_3D', 'SERVICE_EXPIRING_3D']);
+    expect(sent.map((one) => one.kind)).toEqual(['SERVICE_EXPIRY_FIRST', 'SERVICE_EXPIRY_FIRST']);
     /*
      * Two DIFFERENT subjects, which is what carries the second message past
      * `customer_notifications_subject_key`. Equal ids here would mean the second row
@@ -388,7 +393,7 @@ describe('a customer is warned before their service runs out', () => {
      * suite, which is the failure this file exists to make loud.
      */
     expect(sent[0]?.subjectId).not.toBe(sent[1]?.subjectId);
-    expect(await reminderKinds(id)).toEqual(['EXPIRING_3D', 'EXPIRING_3D']);
+    expect(await reminderKinds(id)).toEqual(['EXPIRY_FIRST', 'EXPIRY_FIRST']);
   });
 
   it('warns again about usage after a renewal that reset the counter', async () => {
@@ -407,7 +412,7 @@ describe('a customer is warned before their service runs out', () => {
       usedBytes: ALLOWANCE,
     });
     expect(await runPass()).toEqual({ expiry: 0, usage: 1 });
-    expect((await notifications()).map((one) => one.kind)).toEqual(['SERVICE_USAGE_100']);
+    expect((await notifications()).map((one) => one.kind)).toEqual(['SERVICE_USAGE_FINAL']);
 
     // Renewed: the deadline moves, the panel resets the counter, the allowance does not change.
     await renewTo(id, 40);
@@ -419,7 +424,7 @@ describe('a customer is warned before their service runs out', () => {
     expect(await runPass()).toEqual({ expiry: 0, usage: 1 });
 
     const sent = await notifications();
-    expect(sent.map((one) => one.kind)).toEqual(['SERVICE_USAGE_100', 'SERVICE_USAGE_80']);
+    expect(sent.map((one) => one.kind)).toEqual(['SERVICE_USAGE_FINAL', 'SERVICE_USAGE_FIRST']);
     expect(sent[0]?.subjectId).not.toBe(sent[1]?.subjectId);
   });
 
@@ -440,8 +445,8 @@ describe('a customer is warned before their service runs out', () => {
 
     await setUsage(id, (ALLOWANCE * 80n) / 100n);
     expect(await runPass()).toEqual({ expiry: 0, usage: 1 });
-    expect((await notifications()).map((one) => one.kind)).toEqual(['SERVICE_USAGE_80']);
-    expect(await reminderKinds(id)).toEqual(['USAGE_80']);
+    expect((await notifications()).map((one) => one.kind)).toEqual(['SERVICE_USAGE_FIRST']);
+    expect(await reminderKinds(id)).toEqual(['USAGE_FIRST']);
   });
 
   it('sends only the highest threshold a jump crossed', async () => {
@@ -454,8 +459,8 @@ describe('a customer is warned before their service runs out', () => {
     });
 
     expect(await runPass()).toEqual({ expiry: 0, usage: 1 });
-    expect((await notifications()).map((one) => one.kind)).toEqual(['SERVICE_USAGE_100']);
-    expect(await reminderKinds(id)).toEqual(['USAGE_100', 'USAGE_80', 'USAGE_95']);
+    expect((await notifications()).map((one) => one.kind)).toEqual(['SERVICE_USAGE_FINAL']);
+    expect(await reminderKinds(id)).toEqual(['USAGE_FINAL', 'USAGE_FIRST', 'USAGE_SECOND']);
     // The two it passed through stay passed through.
     expect(await runPass()).toEqual({ expiry: 0, usage: 0 });
     expect(await notifications()).toHaveLength(1);
@@ -530,7 +535,12 @@ describe('a customer is warned before their service runs out', () => {
     });
 
     expect(await runPass()).toEqual({ expiry: 1, usage: 1 });
-    expect(await reminderKinds(id)).toEqual(['EXPIRING_3D', 'USAGE_100', 'USAGE_80', 'USAGE_95']);
+    expect(await reminderKinds(id)).toEqual([
+      'EXPIRY_FIRST',
+      'USAGE_FINAL',
+      'USAGE_FIRST',
+      'USAGE_SECOND',
+    ]);
   });
 
   it('tells an EXPIRED service about its deadline and not about its allowance', async () => {
@@ -553,7 +563,7 @@ describe('a customer is warned before their service runs out', () => {
     });
 
     expect(await runPass()).toEqual({ expiry: 1, usage: 0 });
-    expect(await reminderKinds(id)).toEqual(['EXPIRED', 'EXPIRING_1D', 'EXPIRING_3D']);
+    expect(await reminderKinds(id)).toEqual(['EXPIRED', 'EXPIRY_FIRST', 'EXPIRY_SECOND']);
   });
 
   // -------------------------------------------------------------------------
@@ -593,7 +603,7 @@ describe('a customer is warned before their service runs out', () => {
 
     expect(first.expiry + second.expiry).toBe(1);
     expect(await notifications()).toHaveLength(1);
-    expect(await reminderKinds(id)).toEqual(['EXPIRING_3D']);
+    expect(await reminderKinds(id)).toEqual(['EXPIRY_FIRST']);
   });
 
   it('does nothing for a tenant that has stopped accepting work', async () => {

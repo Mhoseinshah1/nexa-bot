@@ -4161,6 +4161,26 @@ export const serviceReminders = pgTable(
      * about a service that now has eighty.
      */
     basisTrafficLimitBytes: bigint('basis_traffic_limit_bytes', { mode: 'bigint' }).notNull(),
+    /*
+     * WHAT THE CUSTOMER IS TOLD, frozen at the moment the reminder was raised.
+     *
+     * The three columns below are the only reason this table has a snapshot at all, and
+     * the alternative is what makes them necessary: rendering the message from
+     * `services` at SEND time. The two moments are minutes apart on a good day and a
+     * queue-length apart on a bad one, and in between a renewal moves the deadline, a
+     * usage sync moves the figure, and the customer reads a sentence whose numbers
+     * contradict the threshold that produced it. `docs/conventions.md` already requires
+     * a snapshot for anything that will appear in a historical report; a message to a
+     * customer is one.
+     *
+     * `snapshot_used_bytes` is NOT NULL and is never a stand-in for a figure nobody has
+     * read: the usage sweep refuses a service whose `usage_synced_at` is NULL, and the
+     * three expiry kinds render no traffic at all. Zero here means the panel said zero.
+     */
+    snapshotServiceLabel: text('snapshot_service_label').notNull(),
+    /** Whole days left when it was raised. NULL for the usage kinds, which render none. */
+    snapshotRemainingDays: integer('snapshot_remaining_days'),
+    snapshotUsedBytes: bigint('snapshot_used_bytes', { mode: 'bigint' }).notNull(),
     raisedAt: timestamptz('raised_at').notNull().defaultNow(),
   },
   (table) => [

@@ -35,10 +35,27 @@ export interface ServiceReminderBasis {
 export interface ServiceReminderCandidate {
   readonly serviceId: string;
   readonly customerId: UserId;
+  /** The account name on the panel. What the customer is shown, and all they are shown. */
+  readonly providerUsername: string;
   readonly expiresAt: Date | null;
   readonly trafficLimitBytes: bigint;
   readonly trafficUsedBytes: bigint;
   readonly basis: ServiceReminderBasis;
+}
+
+/**
+ * What the customer's message will say, frozen when the reminder is raised.
+ *
+ * Written to `service_reminders` and read back by the dispatcher at send time, rather
+ * than re-read from `services` then. The two moments are minutes apart on a good day
+ * and a queue-length apart on a bad one, and a renewal or a usage sync in between would
+ * give the customer a sentence whose numbers contradict the threshold that produced it.
+ */
+export interface ServiceReminderSnapshot {
+  readonly serviceLabel: string;
+  /** Whole days left, for the expiry kinds. Null for the usage kinds, which show none. */
+  readonly remainingDays: number | null;
+  readonly usedBytes: bigint;
 }
 
 /** One occurrence, as the sweep asks for it to be written. */
@@ -47,6 +64,7 @@ export interface ServiceReminderRaise {
   readonly serviceId: string;
   readonly kind: ServiceReminderKind;
   readonly basis: ServiceReminderBasis;
+  readonly snapshot: ServiceReminderSnapshot;
 }
 
 /**
@@ -62,8 +80,8 @@ export interface ServiceReminderRepository {
    * Services inside the widest expiry threshold with the DUE kind not yet raised for
    * their current deadline.
    *
-   * The boundaries are parameters, computed by the caller from `EXPIRY_REMINDER_DAYS`,
-   * so the thresholds have one home. The query is a COURTESY FILTER in the sense
+   * The boundaries are parameters, computed by the caller from the TENANT'S OWN
+   * settings, so no threshold is written in this file or in the SQL it sends. The query is a COURTESY FILTER in the sense
    * `CLAUDE.md` uses for catalogue eligibility: it exists to make each pass finite and
    * to guarantee forward progress, and the caller re-decides every row with
    * `expiryReminderDue` rather than trusting what came back.
@@ -72,8 +90,10 @@ export interface ServiceReminderRepository {
     scope: TenantContext,
     bounds: {
       readonly now: Date;
-      readonly oneDayAt: Date;
-      readonly threeDaysAt: Date;
+      /** The tenant's SECOND, more urgent threshold as a moment. */
+      readonly secondAt: Date;
+      /** Its first. Also the window: nothing further out than this is a candidate. */
+      readonly firstAt: Date;
     },
     limit: number,
     tx: TransactionScope,
@@ -83,8 +103,8 @@ export interface ServiceReminderRepository {
    * Services past the LOWEST usage threshold with the highest reached kind not yet
    * raised for their current period.
    *
-   * Same contract as above: the percentages arrive as parameters from
-   * `USAGE_REMINDER_PERCENT` and the caller re-decides with `usageRemindersReached`.
+   * Same contract as above: the percentages arrive as parameters resolved from the
+   * tenant's settings, and the caller re-decides with `usageRemindersReached`.
    */
   listUsageCandidates(
     scope: TenantContext,

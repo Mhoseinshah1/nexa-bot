@@ -387,19 +387,35 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.provisioning': 'سرویس شما در حال ساخته شدن است. نتیجه به شما اطلاع داده می‌شود.',
   // Deliberately does NOT invite a retry: `templates.ts` records that a retry after an
   // unknown outcome is how a duplicate account is created.
-  // The six reminders. Each names the fact and the next step; none renders a figure.
-  'bot.service.expiring_3d':
-    'سه روز تا پایان اعتبار سرویس شما مانده است. برای جلوگیری از قطع شدن، از بخش «سرویس‌های من» تمدید کنید.',
-  'bot.service.expiring_1d':
-    'یک روز تا پایان اعتبار سرویس شما مانده است. برای جلوگیری از قطع شدن، از بخش «سرویس‌های من» تمدید کنید.',
+  /*
+   * The six reminders.
+   *
+   * Each names the SERVICE, states the fact with the figures the reminder was raised
+   * against, and gives the next step. The numbers are placeholders rather than words
+   * because the thresholds are a tenant's settings now (CBR-003, CBR-011): a body that
+   * said «سه روز» would be wrong the moment an operator configured five.
+   *
+   * The figures are a SNAPSHOT taken when the reminder was raised, not a value re-read
+   * at send time, so the sentence cannot disagree with the threshold it names.
+   */
+  'bot.service.expiry_first':
+    'سرویس «{service}» تا {days} روز دیگر به پایان اعتبار می‌رسد (تاریخ: {expiresAt}).\n' +
+    'برای جلوگیری از قطع شدن، از بخش «سرویس‌های من» تمدید کنید.',
+  'bot.service.expiry_second':
+    'تنها {days} روز تا پایان اعتبار سرویس «{service}» مانده است (تاریخ: {expiresAt}).\n' +
+    'برای جلوگیری از قطع شدن، همین حالا از بخش «سرویس‌های من» تمدید کنید.',
   'bot.service.expired':
-    'اعتبار سرویس شما به پایان رسید. از بخش «سرویس‌های من» می‌توانید آن را تمدید کنید.',
-  'bot.service.usage_80':
-    'هشتاد درصد از حجم سرویس شما مصرف شده است. در صورت نیاز می‌توانید از بخش «سرویس‌های من» حجم اضافه کنید.',
-  'bot.service.usage_95':
-    'نود و پنج درصد از حجم سرویس شما مصرف شده است. در صورت نیاز می‌توانید از بخش «سرویس‌های من» حجم اضافه کنید.',
-  'bot.service.usage_100':
-    'حجم سرویس شما به پایان رسید. از بخش «سرویس‌های من» می‌توانید حجم اضافه کنید.',
+    'اعتبار سرویس «{service}» در {expiresAt} به پایان رسید.\n' +
+    'از بخش «سرویس‌های من» می‌توانید آن را تمدید کنید.',
+  'bot.service.usage_first':
+    '{usagePercent} درصد از حجم سرویس «{service}» مصرف شده است ({usedTraffic} از {totalTraffic}).\n' +
+    'در صورت نیاز می‌توانید از بخش «سرویس‌های من» حجم اضافه کنید.',
+  'bot.service.usage_second':
+    '{usagePercent} درصد از حجم سرویس «{service}» مصرف شده است ({usedTraffic} از {totalTraffic}).\n' +
+    'برای جلوگیری از قطع شدن، از بخش «سرویس‌های من» حجم اضافه کنید.',
+  'bot.service.usage_final':
+    'حجم سرویس «{service}» به پایان رسید ({usedTraffic} از {totalTraffic}).\n' +
+    'از بخش «سرویس‌های من» می‌توانید حجم اضافه کنید.',
   'bot.service.provision_delayed':
     'ساخت سرویس کامل نشد و موضوع به پشتیبانی اطلاع داده شد. لطفاً منتظر پیگیری بمانید.',
   'bot.service.renew_button': 'تمدید سرویس',

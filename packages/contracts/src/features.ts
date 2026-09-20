@@ -96,6 +96,50 @@ export const FEATURE_FLAGS = [
     blastRadius: 'TENANT_WIDE',
     configuredBy: [],
   },
+  {
+    key: 'service_expiry_reminders',
+    description:
+      'Warn a customer before their service reaches its deadline, at the two advance ' +
+      'thresholds reminders.expiry_first_days and reminders.expiry_second_days. On by ' +
+      'default: the alternative to warning them is their configuration stopping without ' +
+      'notice, which is what this installation did before Phase 6C. A flag PLUS its ' +
+      'configuration, which is the shape CBR-003 and CBR-011 found behind Mirza\u2019s ' +
+      '\u06a9\u0631\u0648\u0646 \u0632\u0645\u0627\u0646 screen and which a flat ' +
+      'map of booleans cannot represent. Turning it off leaves both numbers stored ' +
+      'exactly as they were.',
+    defaultEnabled: true,
+    // Every customer with a dated service stops being warned. Worth saying out loud.
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: ['reminders.expiry_first_days', 'reminders.expiry_second_days'],
+  },
+  {
+    key: 'service_expired_notice',
+    description:
+      'Tell a customer once their service has actually reached its deadline. A separate ' +
+      'flag rather than a third threshold, because it is not a number: it fires at zero ' +
+      'and what an operator decides about it is whether it is sent at all. Independent of ' +
+      'service_expiry_reminders, so a tenant may warn in advance and stay quiet afterwards, ' +
+      'or the reverse.',
+    defaultEnabled: true,
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: [],
+  },
+  {
+    key: 'service_usage_reminders',
+    description:
+      'Warn a customer as their traffic allowance runs down, at the three thresholds ' +
+      'reminders.usage_first_percent, _second_ and _final_. On by default, for the reason ' +
+      'the expiry flag gives. A service with an unlimited allowance is never warned whatever ' +
+      'this says \u2014 there is no fraction of an allowance that does not exist \u2014 and ' +
+      'neither is one whose usage figure no panel has answered.',
+    defaultEnabled: true,
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: [
+      'reminders.usage_first_percent',
+      'reminders.usage_second_percent',
+      'reminders.usage_final_percent',
+    ],
+  },
 ] as const satisfies readonly FeatureFlagDefinition[];
 
 export type FeatureFlagKey = (typeof FEATURE_FLAGS)[number]['key'];

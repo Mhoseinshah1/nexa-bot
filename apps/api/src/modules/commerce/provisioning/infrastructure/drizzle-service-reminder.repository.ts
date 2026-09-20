@@ -20,6 +20,7 @@ import type {
 interface CandidateRow {
   readonly id: string;
   readonly customer_id: string;
+  readonly provider_username: string;
   readonly expires_at: string | null;
   readonly traffic_limit_bytes: string;
   readonly traffic_used_bytes: string;
@@ -30,6 +31,7 @@ function toCandidate(row: CandidateRow): ServiceReminderCandidate {
   return {
     serviceId: row.id,
     customerId: row.customer_id as UserId,
+    providerUsername: row.provider_username,
     /*
      * A `Date` for the DECISION only, and the text beside it for the basis.
      *
@@ -76,8 +78,10 @@ export class DrizzleServiceReminderRepository implements ServiceReminderReposito
    * would hand the same two hundred services back on every tick for as long as they sat
    * inside the window, and the services behind them would never be reached.
    *
-   * The three tiers are compared against BOUND PARAMETERS the caller derived from
-   * `EXPIRY_REMINDER_DAYS`, so the numbers 3 and 1 appear nowhere in this file. The
+   * The three tiers are compared against BOUND PARAMETERS the caller derived from the
+   * TENANT'S settings, so no threshold appears in this file at all — which is the
+   * point, because they are `reminders.expiry_first_days` and `_second_days` now and an
+   * operator moves them while the worker runs. The
    * ladder's shape still mirrors `expiryReminderDue`, which is why the caller re-decides
    * each returned row with that function and uses its answer.
    *
@@ -90,26 +94,27 @@ export class DrizzleServiceReminderRepository implements ServiceReminderReposito
    */
   async listExpiryCandidates(
     scope: TenantContext,
-    bounds: { readonly now: Date; readonly oneDayAt: Date; readonly threeDaysAt: Date },
+    bounds: { readonly now: Date; readonly secondAt: Date; readonly firstAt: Date },
     limit: number,
     tx: TransactionScope,
   ): Promise<readonly ServiceReminderCandidate[]> {
     const tenantId = requireTenantId(scope);
     const result = await this.exec(tx).execute(sql`
-      SELECT s.id, s.customer_id, s.expires_at, s.traffic_limit_bytes, s.traffic_used_bytes
+      SELECT s.id, s.customer_id, s.provider_username, s.expires_at,
+             s.traffic_limit_bytes, s.traffic_used_bytes
       FROM services s
       WHERE s.tenant_id = ${tenantId}
         AND s.state = ANY(${sql.param([...EXPIRY_REMINDER_STATES])}::text[])
         AND s.expires_at IS NOT NULL
-        AND s.expires_at <= ${bounds.threeDaysAt}
+        AND s.expires_at <= ${bounds.firstAt}
         AND NOT EXISTS (
           SELECT 1 FROM service_reminders r
           WHERE r.tenant_id = s.tenant_id
             AND r.service_id = s.id
             AND r.kind = CASE
               WHEN s.expires_at <= ${bounds.now} THEN 'EXPIRED'
-              WHEN s.expires_at <= ${bounds.oneDayAt} THEN 'EXPIRING_1D'
-              ELSE 'EXPIRING_3D'
+              WHEN s.expires_at <= ${bounds.secondAt} THEN 'EXPIRY_SECOND'
+              ELSE 'EXPIRY_FIRST'
             END
             AND r.basis_expires_at IS NOT DISTINCT FROM s.expires_at
         )
@@ -147,7 +152,8 @@ export class DrizzleServiceReminderRepository implements ServiceReminderReposito
   ): Promise<readonly ServiceReminderCandidate[]> {
     const tenantId = requireTenantId(scope);
     const result = await this.exec(tx).execute(sql`
-      SELECT s.id, s.customer_id, s.expires_at, s.traffic_limit_bytes, s.traffic_used_bytes
+      SELECT s.id, s.customer_id, s.provider_username, s.expires_at,
+             s.traffic_limit_bytes, s.traffic_used_bytes
       FROM services s
       WHERE s.tenant_id = ${tenantId}
         AND s.state = ANY(${sql.param([...USAGE_REMINDER_STATES])}::text[])
@@ -160,10 +166,10 @@ export class DrizzleServiceReminderRepository implements ServiceReminderReposito
             AND r.service_id = s.id
             AND r.kind = CASE
               WHEN s.traffic_used_bytes * 100 >= s.traffic_limit_bytes * ${percent.full}
-                THEN 'USAGE_100'
+                THEN 'USAGE_FINAL'
               WHEN s.traffic_used_bytes * 100 >= s.traffic_limit_bytes * ${percent.high}
-                THEN 'USAGE_95'
-              ELSE 'USAGE_80'
+                THEN 'USAGE_SECOND'
+              ELSE 'USAGE_FIRST'
             END
             AND r.basis_expires_at IS NOT DISTINCT FROM s.expires_at
             AND r.basis_traffic_limit_bytes = s.traffic_limit_bytes
@@ -195,9 +201,12 @@ export class DrizzleServiceReminderRepository implements ServiceReminderReposito
     const tenantId = requireTenantId(scope);
     const inserted = await this.exec(tx).execute(sql`
       INSERT INTO service_reminders (id, tenant_id, service_id, kind, basis_expires_at,
-                                     basis_traffic_limit_bytes, raised_at)
+                                     basis_traffic_limit_bytes, snapshot_service_label,
+                                     snapshot_remaining_days, snapshot_used_bytes, raised_at)
       VALUES (${row.id}, ${tenantId}, ${row.serviceId}, ${row.kind},
-              ${row.basis.expiresAt}::timestamptz, ${row.basis.trafficLimitBytes}, ${now})
+              ${row.basis.expiresAt}::timestamptz, ${row.basis.trafficLimitBytes},
+              ${row.snapshot.serviceLabel}, ${row.snapshot.remainingDays},
+              ${row.snapshot.usedBytes}, ${now})
       ON CONFLICT (tenant_id, service_id, kind, basis_expires_at, basis_traffic_limit_bytes)
         DO NOTHING
       RETURNING id

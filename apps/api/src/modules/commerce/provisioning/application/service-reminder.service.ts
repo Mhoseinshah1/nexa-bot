@@ -1,14 +1,16 @@
 import {
-  EXPIRY_REMINDER_DAYS,
   EXPIRY_REMINDER_KINDS,
   SERVICE_REMINDER_NOTIFICATION_KINDS,
   SERVICE_REMINDER_SWEEP_LIMIT,
-  USAGE_REMINDER_PERCENT,
   expiryReminderDue,
   usageRemindersReached,
   type Clock,
+  type FeatureFlagKey,
   type IdGenerator,
+  type ScopeContext,
   type ServiceReminderKind,
+  type ServiceReminderThresholds,
+  type SettingKey,
   type TenantContext,
   type UnitOfWork,
 } from '@nexa/contracts';
@@ -18,7 +20,23 @@ import type { CustomerNotifier } from '../../messaging/application/customer-noti
 import type {
   ServiceReminderCandidate,
   ServiceReminderRepository,
+  ServiceReminderSnapshot,
 } from './service-reminder.ports.js';
+
+/**
+ * The two readers this lane needs, narrowed to the one method each.
+ *
+ * Declared here rather than imported from `control`, so the sweep cannot WRITE a
+ * setting or a flag from a background loop. The container binds them to
+ * `SettingsResolver` and `FeatureFlagsService`, which is where the permission checks,
+ * the audit and the validation live.
+ */
+export interface ReminderSettingsReader {
+  valueOf<T>(scope: ScopeContext, key: SettingKey, tx?: unknown): Promise<T>;
+}
+export interface ReminderFeatureReader {
+  isEnabled(scope: ScopeContext, key: FeatureFlagKey, tx?: unknown): Promise<boolean>;
+}
 
 const DAY_MS = 86_400_000;
 
@@ -30,6 +48,8 @@ export interface ServiceReminderReport {
 
 export interface ServiceReminderServiceDeps {
   readonly reminders: ServiceReminderRepository;
+  readonly settings: ReminderSettingsReader;
+  readonly features: ReminderFeatureReader;
   readonly notifier: CustomerNotifier;
   readonly scopeActivity: ScopeActivityReader;
   readonly uow: UnitOfWork<TransactionScope>;
@@ -104,10 +124,58 @@ export class ServiceReminderService {
       if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
         return { expiry: 0, usage: 0 };
       }
-      const expiry = await this.sweepExpiry(scope, now, tx);
-      const usage = await this.sweepUsage(scope, now, tx);
+      const thresholds = await this.thresholds(scope, tx);
+      const expiry = await this.sweepExpiry(scope, now, thresholds, tx);
+      const usage = await this.sweepUsage(scope, now, thresholds, tx);
       return { expiry, usage };
     });
+  }
+
+  /**
+   * The tenant's own thresholds, read fresh on every pass.
+   *
+   * Never cached across passes, and that is what `RUNTIME` mutability means: an
+   * operator who changes three days to five must not have to wait for a deploy, and a
+   * cache here would be a second copy of a value the registry already owns.
+   *
+   * The flags come from the SAME transaction as the settings and as the writes below,
+   * for the reason every read in this codebase shares its transaction with the write it
+   * informs: a flag turned off while a pass was mid-flight would otherwise send the
+   * messages it was turned off to stop.
+   */
+  private async thresholds(
+    scope: TenantContext,
+    tx: TransactionScope,
+  ): Promise<ServiceReminderThresholds> {
+    const [
+      expiryEnabled,
+      expiredNoticeEnabled,
+      usageEnabled,
+      expiryFirstDays,
+      expirySecondDays,
+      usageFirstPercent,
+      usageSecondPercent,
+      usageFinalPercent,
+    ] = await Promise.all([
+      this.deps.features.isEnabled(scope, 'service_expiry_reminders', tx),
+      this.deps.features.isEnabled(scope, 'service_expired_notice', tx),
+      this.deps.features.isEnabled(scope, 'service_usage_reminders', tx),
+      this.deps.settings.valueOf<number>(scope, 'reminders.expiry_first_days', tx),
+      this.deps.settings.valueOf<number>(scope, 'reminders.expiry_second_days', tx),
+      this.deps.settings.valueOf<number>(scope, 'reminders.usage_first_percent', tx),
+      this.deps.settings.valueOf<number>(scope, 'reminders.usage_second_percent', tx),
+      this.deps.settings.valueOf<number>(scope, 'reminders.usage_final_percent', tx),
+    ]);
+    return {
+      expiryEnabled,
+      expiredNoticeEnabled,
+      usageEnabled,
+      expiryFirstDays,
+      expirySecondDays,
+      usageFirstPercent,
+      usageSecondPercent,
+      usageFinalPercent,
+    };
   }
 
   /**
@@ -123,14 +191,26 @@ export class ServiceReminderService {
   private async sweepExpiry(
     scope: TenantContext,
     now: Date,
+    thresholds: ServiceReminderThresholds,
     tx: TransactionScope,
   ): Promise<number> {
+    /* Both switches off: no query, no candidates, nothing to be made stale. */
+    if (!thresholds.expiryEnabled && !thresholds.expiredNoticeEnabled) return 0;
+    /*
+     * The window NARROWS when advance warnings are off.
+     *
+     * With `service_expiry_reminders` off and only the expired notice on, a service
+     * three days out is not a candidate for anything, and asking for it would hand the
+     * pass two hundred rows it must then skip — every fifteen minutes, in front of the
+     * services that do need something. `now` is the whole window in that case.
+     */
+    const firstDays = thresholds.expiryEnabled ? thresholds.expiryFirstDays : 0;
     const candidates = await this.deps.reminders.listExpiryCandidates(
       scope,
       {
         now,
-        oneDayAt: new Date(now.getTime() + EXPIRY_REMINDER_DAYS.EXPIRING_1D * DAY_MS),
-        threeDaysAt: new Date(now.getTime() + EXPIRY_REMINDER_DAYS.EXPIRING_3D * DAY_MS),
+        secondAt: new Date(now.getTime() + thresholds.expirySecondDays * DAY_MS),
+        firstAt: new Date(now.getTime() + firstDays * DAY_MS),
       },
       SERVICE_REMINDER_SWEEP_LIMIT,
       tx,
@@ -138,7 +218,7 @@ export class ServiceReminderService {
 
     let sent = 0;
     for (const candidate of candidates) {
-      const due = expiryReminderDue(candidate.expiresAt, now);
+      const due = expiryReminderDue(candidate.expiresAt, now, thresholds);
       if (due === null) continue;
       /*
        * Everything from the least urgent up to and including the due kind.
@@ -149,19 +229,38 @@ export class ServiceReminderService {
        * left" after "expires tomorrow".
        */
       const upTo = EXPIRY_REMINDER_KINDS.slice(0, EXPIRY_REMINDER_KINDS.indexOf(due) + 1);
-      if (await this.raise(scope, candidate, upTo, due, now, tx)) sent += 1;
+      /*
+       * A kind whose switch is off is RECORDED and not sent, rather than skipped.
+       *
+       * Skipping would leave the service a candidate for ever: it would come back on
+       * every pass, occupy a slot in a bounded sweep, and starve the services behind it.
+       * Recording also settles what happens on a later re-enable, and settles it the
+       * way an operator would want: turning the expired notice back on does not
+       * suddenly post "your service expired" to everyone whose service lapsed while it
+       * was off.
+       */
+      const announce =
+        due === 'EXPIRED' ? thresholds.expiredNoticeEnabled : thresholds.expiryEnabled;
+      if (await this.raise(scope, candidate, upTo, announce ? due : null, now, tx)) sent += 1;
     }
     return sent;
   }
 
   /** The three that are about the allowance. Same shape, same reasoning. */
-  private async sweepUsage(scope: TenantContext, now: Date, tx: TransactionScope): Promise<number> {
+  private async sweepUsage(
+    scope: TenantContext,
+    now: Date,
+    thresholds: ServiceReminderThresholds,
+    tx: TransactionScope,
+  ): Promise<number> {
+    /* Off means no query at all, for the reason the expiry half gives. */
+    if (!thresholds.usageEnabled) return 0;
     const candidates = await this.deps.reminders.listUsageCandidates(
       scope,
       {
-        lowest: USAGE_REMINDER_PERCENT.USAGE_80,
-        high: USAGE_REMINDER_PERCENT.USAGE_95,
-        full: USAGE_REMINDER_PERCENT.USAGE_100,
+        lowest: thresholds.usageFirstPercent,
+        high: thresholds.usageSecondPercent,
+        full: thresholds.usageFinalPercent,
       },
       SERVICE_REMINDER_SWEEP_LIMIT,
       tx,
@@ -173,6 +272,7 @@ export class ServiceReminderService {
       const reached = usageRemindersReached(
         candidate.trafficUsedBytes,
         candidate.trafficLimitBytes,
+        thresholds,
       );
       const due = reached[0];
       if (due === undefined) continue;
@@ -196,10 +296,12 @@ export class ServiceReminderService {
     scope: TenantContext,
     candidate: ServiceReminderCandidate,
     kinds: readonly ServiceReminderKind[],
-    announce: ServiceReminderKind,
+    /** The one kind to announce, or `null` when its switch is off and it is only recorded. */
+    announce: ServiceReminderKind | null,
     now: Date,
     tx: TransactionScope,
   ): Promise<boolean> {
+    const snapshot = this.snapshot(candidate, now);
     let told = false;
     for (const kind of kinds) {
       const id = this.deps.ids.uuid();
@@ -210,6 +312,7 @@ export class ServiceReminderService {
           serviceId: candidate.serviceId,
           kind,
           basis: candidate.basis,
+          snapshot,
         },
         now,
         tx,
@@ -225,5 +328,27 @@ export class ServiceReminderService {
       );
     }
     return told;
+  }
+
+  /**
+   * What the message will say, frozen now.
+   *
+   * `remainingDays` rounds UP, so a service with eleven hours left is "one day" rather
+   * than "zero days" — a sentence that says zero days and is not the expired notice is
+   * a sentence a customer cannot act on. Past the deadline it is zero, and the expired
+   * template does not render it.
+   *
+   * `usedBytes` is the figure that was on the row, which the usage query only accepts
+   * from a service whose panel has actually answered. Nothing here substitutes a zero
+   * for a figure nobody has read.
+   */
+  private snapshot(candidate: ServiceReminderCandidate, now: Date): ServiceReminderSnapshot {
+    const msLeft =
+      candidate.expiresAt === null ? null : candidate.expiresAt.getTime() - now.getTime();
+    return {
+      serviceLabel: candidate.providerUsername,
+      remainingDays: msLeft === null ? null : Math.max(0, Math.ceil(msLeft / DAY_MS)),
+      usedBytes: candidate.trafficUsedBytes,
+    };
   }
 }
