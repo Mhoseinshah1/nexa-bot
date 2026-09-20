@@ -477,6 +477,80 @@ export type SetAdminTelegramBindingRequest = z.infer<typeof setAdminTelegramBind
 export const adminListResponseSchema = z.object({ admins: z.array(adminSummarySchema) });
 export type AdminListResponse = z.infer<typeof adminListResponseSchema>;
 
+/**
+ * A new password for an administrator who is NOT the caller.
+ *
+ * No `currentPassword`, and that is why the service refuses a caller who names
+ * themselves: `changePasswordRequestSchema` above requires the current one, and
+ * that proof of possession is the whole difference between changing your own
+ * password and an operator resetting somebody else's. A route that accepted both
+ * would let anybody holding `admins.edit` and a hijacked session replace their own
+ * credential without knowing it.
+ *
+ * The same twelve-character floor as every other password this product accepts —
+ * one definition, so an operator-set credential cannot be weaker than a
+ * self-chosen one.
+ */
+export const resetAdminPasswordRequestSchema = z.object({
+  newPassword: z.string().min(12).max(1024),
+  reason: adminChangeReasonSchema,
+});
+export type ResetAdminPasswordRequest = z.infer<typeof resetAdminPasswordRequestSchema>;
+
+/**
+ * What the reset did, which is two facts and not one.
+ *
+ * `sessionsRevoked` is reported because the operator's question after resetting a
+ * compromised credential is "is that person still logged in", and a response that
+ * said only "ok" would leave them guessing. It is the count the revocation
+ * actually returned, never an assumption that there was one.
+ */
+export const resetAdminPasswordResponseSchema = z.object({
+  admin: adminSummarySchema,
+  sessionsRevoked: z.number().int().nonnegative(),
+});
+export type ResetAdminPasswordResponse = z.infer<typeof resetAdminPasswordResponseSchema>;
+
+/**
+ * One live session, as an operator may see it.
+ *
+ * Exactly the columns `admin_sessions` holds and nothing composed: no device
+ * name, no browser, no location. The row records an IP and a user agent because
+ * the request carried them, and both are nullable because a request may not; a
+ * surface that rendered "Chrome on Windows in Tehran" would be inventing three
+ * facts out of one header the client chose to send.
+ *
+ * There is no token, no token hash and no prefix of either. A session identifier
+ * is here only so that a future single-session revocation has something to name,
+ * and it is the row's id — never the credential.
+ */
+export const adminSessionSummarySchema = z.object({
+  id: z.string(),
+  issuedAt: z.string(),
+  expiresAt: z.string(),
+  /** NOT NULL on the row: every session is touched when it is created. */
+  lastSeenAt: z.string(),
+  ip: z.string().nullable(),
+  userAgent: z.string().nullable(),
+  /** True for the session making this request, so an operator can tell it apart. */
+  current: z.boolean(),
+});
+export type AdminSessionSummary = z.infer<typeof adminSessionSummarySchema>;
+
+export const adminSessionListResponseSchema = z.object({
+  sessions: z.array(adminSessionSummarySchema),
+});
+export type AdminSessionListResponse = z.infer<typeof adminSessionListResponseSchema>;
+
+/** Revoking every session an administrator holds. A reason, like every admin write. */
+export const revokeAdminSessionsRequestSchema = z.object({ reason: adminChangeReasonSchema });
+export type RevokeAdminSessionsRequest = z.infer<typeof revokeAdminSessionsRequestSchema>;
+
+export const revokeAdminSessionsResponseSchema = z.object({
+  revoked: z.number().int().nonnegative(),
+});
+export type RevokeAdminSessionsResponse = z.infer<typeof revokeAdminSessionsResponseSchema>;
+
 export const roleSummarySchema = z.object({
   key: z.string(),
   name: z.string(),
@@ -502,6 +576,9 @@ export const ADMIN_ROUTES = {
   status: (id: string) => `/admins/${id}/status`,
   roles: (id: string) => `/admins/${id}/roles`,
   telegram: (id: string) => `/admins/${id}/telegram`,
+  password: (id: string) => `/admins/${id}/password`,
+  sessions: (id: string) => `/admins/${id}/sessions`,
+  revokeSessions: (id: string) => `/admins/${id}/sessions/revoke`,
   rolesCatalog: '/roles',
 } as const;
 
