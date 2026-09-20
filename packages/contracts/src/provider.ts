@@ -366,19 +366,27 @@ export interface ProviderUsage {
 }
 
 /**
- * The three derived identities one service has on a panel.
+ * The three identities one service has on a panel.
  *
- * All three come from the service id through pure functions, and that is the property
- * the whole unknown-outcome design rests on: after a create whose answer was lost,
- * every one of them can be recomputed from a row Nexa already holds, so the account
+ * All three are STORED on the service row, written before any provider call, and that
+ * is the property the whole unknown-outcome design rests on: after a create whose
+ * answer was lost, every one of them is already in a row Nexa holds, so the account
  * can be ASKED for by name instead of created again.
+ *
+ * They used to be derived from the service id instead, which bought the same
+ * recoverability and gave it away: two of them were capabilities anybody holding the
+ * id could compute (`SUBSCRIPTION_REF_LENGTH`), and the third could not be chosen
+ * before the money moved, because the service it was derived from did not exist yet.
  */
 export interface ProviderUserRef {
   /**
-   * The name this installation gave the account. `providerUsernameFor`.
+   * The name this installation gave the account: `services.provider_username`, read
+   * from the row, never recomputed. It was chosen or drawn under `service-username.ts`
+   * and reserved before the money moved.
    *
-   * Opaque, and carrying no customer text: a username built from a Telegram display
-   * name would put somebody's real name on a third party's panel.
+   * It may be a name the customer typed, so it is not opaque — but it is canonicalised
+   * and bounded to `[a-z0-9_-]{4,20}`, which is what keeps a Telegram display name's
+   * Persian characters, emoji and somebody's real name off a third party's panel.
    */
   readonly username: string;
   /**

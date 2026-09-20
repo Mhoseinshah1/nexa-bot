@@ -76,6 +76,41 @@ export function assertNewProviderUsername(canonical: string): void {
 }
 
 /**
+ * May this name be SENT to a provider, whoever minted it and whenever?
+ *
+ * Wider than `isNewProviderUsername` on purpose, and the difference is the whole point:
+ * "may be minted today" and "may be sent" are two questions, and answering the second
+ * with the first refuses names this installation itself created.
+ *
+ * `createUser` is not reached only when a name is being minted. A RECONCILE-driven
+ * retry of an UNKNOWN create re-sends the name the SERVICE ROW already carries, and a
+ * service provisioned by the release before this one carries `nx` plus 32 hex. Asserting
+ * the new contract there would turn a recoverable retry into a crash, for a service the
+ * customer is holding — which is the "never retroactively rejected" rule broken by the
+ * code that was supposed to enforce it.
+ *
+ * So: the current contract, OR the shape this product used to mint. Nothing else.
+ */
+export function isSendableProviderUsername(stored: string): boolean {
+  return isNewProviderUsername(stored) || LEGACY_USERNAME_PATTERN.test(stored);
+}
+
+/**
+ * The adapter boundary's assertion. See `isSendableProviderUsername` for why it is not
+ * `assertNewProviderUsername`.
+ *
+ * Still an assertion rather than a refusal: every caller above has validated, so a name
+ * that fails here is our defect surfacing before it reaches somebody's panel.
+ */
+export function assertSendableProviderUsername(stored: string): void {
+  if (!isSendableProviderUsername(stored)) {
+    throw new Error(
+      `a provider username must be ${PROVIDER_USERNAME_MIN_LENGTH}-${PROVIDER_USERNAME_MAX_LENGTH} characters of [a-z0-9_-], or a name this product minted before that contract`,
+    );
+  }
+}
+
+/**
  * How a customer's service gets the name the provider knows it by.
  *
  * Two modes, and the panel decides which of them a customer may use. They are not
