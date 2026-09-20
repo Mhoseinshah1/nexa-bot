@@ -4078,14 +4078,7 @@ export class BotRuntime {
     if (step.modes.length === 1) {
       return step.modes[0] === 'RANDOM'
         ? this.randomUsername(scope, actor, order.id, customer, idempotencyKey)
-        : this.customUsername(
-            scope,
-            actor,
-            order.id,
-            customer,
-            botInstanceId,
-            idempotencyKey,
-          );
+        : this.customUsername(scope, actor, order.id, customer, botInstanceId, idempotencyKey);
     }
 
     const buttons: CustomerButton[] = [];

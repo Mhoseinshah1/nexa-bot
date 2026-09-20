@@ -23,6 +23,7 @@ import type {
 import { DrizzleCustomerRepository } from '../../apps/api/src/modules/commerce/customers/infrastructure/drizzle-customer.repository';
 import { DrizzleNotificationSubjectReader } from '../../apps/api/src/modules/commerce/messaging/infrastructure/drizzle-notification-subject.reader';
 import { createTestContext, SEED_IDS, tenantA, tenantB, type TestContext } from './harness';
+import { DrizzleServiceReminderSnapshotReader } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service-reminder.repository';
 
 /**
  * The customer notification lane, against a real database.
@@ -98,6 +99,17 @@ describe('the customer notification lane', () => {
   function lane(options: { readonly stillHolds?: boolean; readonly active?: boolean } = {}) {
     return new CustomerNotificationService({
       notifications: repo,
+      /*
+       * The REAL reader, over the real table.
+       *
+       * Not a stub returning figures: the six reminder kinds are the only ones whose
+       * message carries any, and a stub here would let the lane pass while the column
+       * it reads did not exist. Every kind this file exercises is a payload-free fact,
+       * so the reader is never asked — which is itself the thing worth proving, because
+       * a dispatcher that fetched a snapshot for every kind would spend a query per
+       * message for nothing.
+       */
+      reminderSnapshots: new DrizzleServiceReminderSnapshotReader(ctx.container.database.db),
       contacts: {
         contactFor: async (scope, customerId, tx) => {
           const found = await people.findById(scope, customerId, tx);

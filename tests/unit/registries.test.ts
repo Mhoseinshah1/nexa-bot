@@ -226,6 +226,12 @@ describe('the feature flag registry', () => {
     // that turns nothing on is worse than an absent feature.
     expect([...FEATURE_FLAGS].map((f) => f.key).sort()).toEqual([
       'ops_notifications',
+      // The three reminder switches. `service_expired_notice` is a flag rather than a
+      // sixth threshold because it is not a number: it fires at zero days and what an
+      // operator decides about it is whether it is sent at all.
+      'service_expired_notice',
+      'service_expiry_reminders',
+      'service_usage_reminders',
       'template_overrides',
     ]);
   });
