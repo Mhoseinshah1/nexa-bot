@@ -295,6 +295,101 @@ describe('the panel detail', () => {
    * it is the surface that would invent a masked stand-in, and `********` in a
    * populated edit field submits `********` back.
    */
+  /**
+   * The username policy, over the DOM.
+   *
+   * Four cases, and each one is a way the screen could lie to an operator about what
+   * their panel will call a customer's service.
+   */
+  describe('the username policy', () => {
+    it('renders the stored policy rather than a default', async () => {
+      /*
+       * The read-back half of `docs/conventions.md`'s write-only rule. A policy an
+       * operator can set and cannot see is the legacy screen where "the only way to
+       * read a price is to overwrite it" — and here the consequence is worse than a
+       * price, because the mode decides whether a customer is even asked.
+       */
+      stubApi(
+        detail({
+          usernamePolicy: { allowCustom: false, allowRandom: true, template: 'nx{random10}' },
+        }),
+      );
+      renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+      await screen.findByText('Frankfurt A');
+
+      const custom = screen.getByLabelText(t('web.panel_username_custom')) as HTMLInputElement;
+      const random = screen.getByLabelText(t('web.panel_username_random')) as HTMLInputElement;
+      const template = screen.getByLabelText(t('web.panel_username_template')) as HTMLInputElement;
+      expect(custom.checked).toBe(false);
+      expect(random.checked).toBe(true);
+      expect(template.value).toBe('nx{random10}');
+    });
+
+    it('sends the policy as a whole, with an empty template meaning the legacy generator', async () => {
+      const api = stubApi([...detail(), { url: `/panels/${PANEL_ID}`, body: { panel: panel() } }]);
+      renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+      await screen.findByText('Frankfurt A');
+
+      fireEvent.click(screen.getByLabelText(t('web.panel_username_custom')));
+      fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+
+      await waitFor(() => {
+        expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
+      });
+      const write = api.calls.filter((call) => call.method === 'POST').at(-1);
+      /*
+       * BOTH switches and the template, although only one switch was touched. The rule
+       * the policy has is about the pair, so a request carrying half of it could only
+       * be validated against whatever happens to be stored — and two operators each
+       * disabling the mode the other left on would both be accepted.
+       */
+      expect(write?.body).toMatchObject({
+        usernamePolicy: { allowCustom: false, allowRandom: true, template: null },
+      });
+    });
+
+    it('refuses a policy with neither mode, before it is sent', async () => {
+      const api = stubApi([...detail(), { url: `/panels/${PANEL_ID}`, body: { panel: panel() } }]);
+      renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+      await screen.findByText('Frankfurt A');
+
+      fireEvent.click(screen.getByLabelText(t('web.panel_username_custom')));
+      fireEvent.click(screen.getByLabelText(t('web.panel_username_random')));
+      // The banner appears while they are still looking at the switches, and the CHECK
+      // constraint says the same thing one layer down — this is the courtesy, not the
+      // authority.
+      expect(await screen.findByText(t('web.panel_username_policy_empty'))).toBeTruthy();
+
+      fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+      await waitFor(() => {
+        expect(api.calls.filter((call) => call.method === 'POST')).toHaveLength(0);
+      });
+    });
+
+    it('shows the WORST rendered length, not a sample', async () => {
+      /*
+       * `nx_{order_id}` is 3 + 32 = 35, one over the 34 this product has evidence a
+       * real panel accepts. A template measured on a typical value passes at save time
+       * and then produces a name the panel refuses for one customer — after their
+       * money moved.
+       */
+      stubApi(detail());
+      renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+      await screen.findByText('Frankfurt A');
+
+      fireEvent.change(screen.getByLabelText(t('web.panel_username_template')), {
+        target: { value: 'nx_{order_id}' },
+      });
+      /*
+       * The worst-case line names BOTH numbers — what this template can produce and
+       * what the product has evidence a panel accepts — so an operator reading it can
+       * tell how much they have to cut rather than only that it is too long.
+       */
+      const verdict = await screen.findByText((text) => text.includes('35') && text.includes('34'));
+      expect(verdict.textContent).toContain(t('web.panel_username_issue_TOO_LONG'));
+    });
+  });
+
   it('never renders a credential value, masked or otherwise', async () => {
     // A Sanaei panel, so all three fields are in the provider's shape and the
     // presence rows are the only thing that can differ between them.

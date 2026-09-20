@@ -555,6 +555,35 @@ export const WEB_FA = {
   'web.panel_capacity_available': 'ظرفیت آزاد',
   'web.panel_capacity_unlimited': 'بدون محدودیت',
   'web.panel_max_services': 'سقف سرویس',
+
+  // The username policy. Read back in full on the panel page, for the reason
+  // `docs/conventions.md` names: a setting a surface can write and cannot read is the
+  // legacy screen where "the only way to read a price is to overwrite it".
+  'web.panel_username_policy': 'یوزرنیم سرویس‌ها',
+  'web.panel_username_custom': 'یوزرنیم دلخواه مشتری',
+  'web.panel_username_custom_hint':
+    'مشتری خودش یوزرنیم را می‌نویسد: ۸ تا ۱۶ نویسه از a-z، A-Z، 0-9، - و _ ، با حداقل یک حرف و یک رقم. حروف بزرگ و کوچک فرقی ندارند و با حروف کوچک ذخیره می‌شود.',
+  'web.panel_username_random': 'یوزرنیم تصادفی',
+  'web.panel_username_random_hint':
+    'سامانه خودش یوزرنیم می‌سازد. اگر الگو خالی باشد همان شکل قبلی ساخته می‌شود.',
+  'web.panel_username_template': 'الگوی یوزرنیم تصادفی',
+  'web.panel_username_template_hint':
+    'خالی یعنی همان تولیدکننده‌ی پیش‌فرض. در غیر این صورت باید دست‌کم یکی از {order_id}، {random6} یا {random10} را داشته باشد.',
+  'web.panel_username_tokens': 'جانشین‌های مجاز',
+  'web.panel_username_preview': 'نمونه‌ی خروجی',
+  'web.panel_username_worst_case': 'بلندترین خروجی ممکن: {length} از {max} نویسه',
+  // Each issue is its own sentence, and all of them are shown at once: an operator
+  // fixing one problem per round trip is an operator who gives up.
+  'web.panel_username_issue_EMPTY': 'الگو نمی‌تواند خالی باشد.',
+  'web.panel_username_issue_MALFORMED': 'آکولاد بازِ بسته‌نشده در الگو هست.',
+  'web.panel_username_issue_UNKNOWN_TOKEN': 'جانشینی که این الگو دارد تعریف نشده است.',
+  'web.panel_username_issue_ILLEGAL_CHARACTER':
+    'متن ثابت الگو فقط می‌تواند حرف کوچک انگلیسی، رقم و زیرخط داشته باشد.',
+  'web.panel_username_issue_NO_UNIQUENESS_TOKEN':
+    'الگو باید دست‌کم یکی از {order_id}، {random6} یا {random10} را داشته باشد، وگرنه همه‌ی مشتری‌ها یک یوزرنیم می‌گیرند.',
+  'web.panel_username_issue_TOO_LONG':
+    'بلندترین خروجی این الگو از چیزی که روی پنل واقعی آزموده شده بلندتر است.',
+  'web.panel_username_policy_empty': 'دست‌کم یکی از دو حالت باید روشن باشد.',
   'web.panel_max_services_hint': 'یک عدد مثبت، یا خالی برای بدون محدودیت.',
   'web.panel_id': 'شناسه',
   'web.panel_identity': 'شناسنامه',

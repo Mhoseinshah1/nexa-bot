@@ -235,6 +235,12 @@ export function panel(overrides: Record<string, unknown> = {}): Record<string, u
       used: 0,
       available: null,
     },
+    /*
+     * Both modes and the derived generator: what a panel that nobody has configured a
+     * username policy for looks like, and what migration 0088 gave every panel that
+     * existed before the policy did.
+     */
+    usernamePolicy: { allowCustom: true, allowRandom: true, template: null },
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     ...overrides,

@@ -79,6 +79,7 @@ import {
   providerListResponseSchema,
   testPanelResponseSchema,
   type PanelCredentialsInput,
+  type PanelUsernamePolicyInput,
   type PanelListArchivedMode,
   type PanelListResponse,
   type PanelResponse,
@@ -1091,6 +1092,8 @@ export function createPanel(input: {
   providerType: ProviderType;
   baseUrl: string;
   credentials?: PanelCredentialsInput;
+  /** Absent means the defaults: both modes, and the derived generator. */
+  usernamePolicy?: PanelUsernamePolicyInput;
   idempotencyKey: string;
 }): Promise<PanelResponse> {
   return post(PANEL_ROUTES.create, input, panelResponseSchema);
@@ -1109,6 +1112,15 @@ export function updatePanel(input: {
    * unsendable from this client.
    */
   maxServices?: number | null;
+  /**
+   * Absent leaves the whole policy; present replaces the whole policy.
+   *
+   * NOT three independent optionals, and the server's schema is the same shape for the
+   * same reason: the one rule this policy has — at least one mode enabled — is a rule
+   * about the pair, so a request carrying half of it could only be validated against
+   * whatever happens to be stored.
+   */
+  usernamePolicy?: PanelUsernamePolicyInput;
   idempotencyKey: string;
 }): Promise<PanelResponse> {
   const { id, ...body } = input;

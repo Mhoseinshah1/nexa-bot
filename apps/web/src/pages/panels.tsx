@@ -12,6 +12,9 @@ import {
   PANEL_ERROR_CODES,
   shapeAcceptsCredential,
   shapeIsSatisfiedBy,
+  PROVEN_PROVIDER_USERNAME_MAX_LENGTH,
+  USERNAME_TEMPLATE_TOKEN_NAMES,
+  validateUsernameTemplate,
 } from '@nexa/contracts';
 import {
   ApiError,
@@ -726,6 +729,16 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
    * Declared here with the rest of the draft state, and read by `behind` below,
    * where the rule it exists for is written out.
    */
+  /*
+   * The policy, as three pieces of draft state and one submitted object.
+   *
+   * The template is TEXT with '' standing for the legacy generator, for the same reason
+   * the cap is text: a `string | null` field would have to represent the operator
+   * midway through clearing it as something, and the conversion belongs on submit.
+   */
+  const [allowCustom, setAllowCustom] = useState(panel.usernamePolicy.allowCustom);
+  const [allowRandom, setAllowRandom] = useState(panel.usernamePolicy.allowRandom);
+  const [usernameTemplate, setUsernameTemplate] = useState(panel.usernamePolicy.template ?? '');
   const [written, setWritten] = useState<string | null>(null);
   const submission = useSubmissionKey();
   const statusSubmission = useSubmissionKey();
@@ -745,6 +758,10 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
     name: basis.name !== panel.name,
     baseUrl: basis.baseUrl !== panel.baseUrl,
     maxServices: basis.capacity.maxServices !== panel.capacity.maxServices,
+    usernamePolicy:
+      basis.usernamePolicy.allowCustom !== panel.usernamePolicy.allowCustom ||
+      basis.usernamePolicy.allowRandom !== panel.usernamePolicy.allowRandom ||
+      basis.usernamePolicy.template !== panel.usernamePolicy.template,
   };
   /*
    * Sent AND different from what is stored now.
@@ -824,6 +841,21 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
    * warning about a value that will never leave the browser is the false
    * positive the whole notice was rewritten to remove.
    */
+  /*
+   * The verdict on what is typed RIGHT NOW, so the operator sees the answer while they
+   * are still looking at the field rather than after a round trip.
+   *
+   * `null` for the empty box, because an empty box is the legacy generator and not a
+   * broken template. The bound is the shared default — the longest name this product
+   * has evidence a real panel accepts — and the server re-checks against the panel's
+   * own provider, so this is a preview and never the decision.
+   */
+  const templateVerdict =
+    usernameTemplate === '' ? null : validateUsernameTemplate(usernameTemplate);
+  const templateIssues = (templateVerdict?.issues ?? []).map((issue) =>
+    t(`web.panel_username_issue_${issue}` as WebKey),
+  );
+
   const draftCap = capFromInput(maxServices);
   const overwritesCap =
     remote.maxServices &&
@@ -854,6 +886,9 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
     // fields and leave the third holding a number the server no longer has —
     // which the next save would then write back over somebody else's change.
     setMaxServices(fresh.capacity.maxServices === null ? '' : String(fresh.capacity.maxServices));
+    setAllowCustom(fresh.usernamePolicy.allowCustom);
+    setAllowRandom(fresh.usernamePolicy.allowRandom);
+    setUsernameTemplate(fresh.usernamePolicy.template ?? '');
   };
 
   const refresh = async () => {
@@ -1014,7 +1049,8 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
    * NEWER than this operator's write — is never suppressed by it.
    */
   const behind = written !== null && Date.parse(panel.updatedAt) < Date.parse(written);
-  const changedElsewhere = !behind && (remote.name || remote.baseUrl || remote.maxServices);
+  const changedElsewhere =
+    !behind && (remote.name || remote.baseUrl || remote.maxServices || remote.usernamePolicy);
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
@@ -1039,10 +1075,43 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
       toast({ tone: 'danger', message: t('web.panel_max_services_hint') });
       return;
     }
+    /*
+     * The policy is sent WHOLE or not at all, and refused locally before it is sent.
+     *
+     * Whole, because the one rule it has is about the pair of switches and a half
+     * policy could only be validated against whatever happens to be stored. Refused
+     * locally as a courtesy and never as the authority: `PanelService` re-validates
+     * against the panel's own provider, which is the only place that knows the real
+     * ceiling. Showing every issue at once is the same rule the template validator
+     * follows — an operator fixing one problem per round trip is one who gives up.
+     */
+    const policyChanged =
+      allowCustom !== basis.usernamePolicy.allowCustom ||
+      allowRandom !== basis.usernamePolicy.allowRandom ||
+      usernameTemplate !== (basis.usernamePolicy.template ?? '');
+    if (policyChanged && !allowCustom && !allowRandom) {
+      toast({ tone: 'danger', message: t('web.panel_username_policy_empty') });
+      return;
+    }
+    if (policyChanged && templateVerdict !== null && !templateVerdict.ok) {
+      toast({ tone: 'danger', message: templateIssues.join(' ') });
+      return;
+    }
+
     const command = {
       ...(name === basis.name ? {} : { name }),
       ...(baseUrl === basis.baseUrl ? {} : { baseUrl }),
       ...(capValue === basis.capacity.maxServices ? {} : { maxServices: capValue }),
+      ...(policyChanged
+        ? {
+            usernamePolicy: {
+              allowCustom,
+              allowRandom,
+              // '' is the LEGACY generator, which is a value and not an absence.
+              template: usernameTemplate === '' ? null : usernameTemplate,
+            },
+          }
+        : {}),
     };
     if (Object.keys(command).length === 0) {
       toast({ tone: 'warn', message: t('web.no_changes') });
@@ -1156,6 +1225,85 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
               disabled={!mayWrite}
             />
           </Field>
+          {/*
+            The username policy: two switches and a template, read back in full.
+
+            Returned by every panel read and rendered here, for the reason `activation`
+            above is: a policy an operator can write and cannot read is the legacy
+            settings screen where "the only way to read a price is to overwrite it".
+            None of it is a secret — the customer is shown the rule before they type.
+          */}
+          <Field
+            label={t('web.panel_username_custom')}
+            hint={t('web.panel_username_custom_hint')}
+            htmlFor={`uc-${panel.id}`}
+          >
+            <input
+              id={`uc-${panel.id}`}
+              type="checkbox"
+              checked={allowCustom}
+              onChange={(event) => setAllowCustom(event.target.checked)}
+              disabled={!mayWrite}
+            />
+          </Field>
+          <Field
+            label={t('web.panel_username_random')}
+            hint={t('web.panel_username_random_hint')}
+            htmlFor={`ur-${panel.id}`}
+          >
+            <input
+              id={`ur-${panel.id}`}
+              type="checkbox"
+              checked={allowRandom}
+              onChange={(event) => setAllowRandom(event.target.checked)}
+              disabled={!mayWrite}
+            />
+          </Field>
+          {/*
+            Shown whatever `allowRandom` says, deliberately.
+
+            A template stored beside a disabled mode goes live the moment somebody
+            re-enables it — a one-checkbox edit nobody would think to validate — so the
+            server checks it either way and hiding the field here would leave an
+            operator unable to see what is about to become live.
+          */}
+          <Field
+            label={t('web.panel_username_template')}
+            hint={t('web.panel_username_template_hint')}
+            htmlFor={`ut-${panel.id}`}
+          >
+            <input
+              id={`ut-${panel.id}`}
+              className="input ltr mono"
+              value={usernameTemplate}
+              onChange={(event) => setUsernameTemplate(event.target.value)}
+              disabled={!mayWrite}
+            />
+          </Field>
+          <p className="hint ltr mono">
+            {t('web.panel_username_tokens')}:{' '}
+            {USERNAME_TEMPLATE_TOKEN_NAMES.map((token) => `{${token}}`).join(' ')}
+          </p>
+          {/*
+            The WORST case, not a sample render.
+
+            A template measured on a typical value passes here and then produces a name
+            the panel refuses for the one customer whose Telegram id is longer than the
+            operator's — after their money moved. The number shown is what
+            `validateUsernameTemplate` actually decides on.
+          */}
+          {templateVerdict !== null && (
+            <p className={templateVerdict.ok ? 'hint' : 'notice'}>
+              {t('web.panel_username_worst_case')
+                .replace('{length}', String(templateVerdict.worstCaseLength))
+                .replace('{max}', String(PROVEN_PROVIDER_USERNAME_MAX_LENGTH))}
+              {templateIssues.length > 0 && ` — ${templateIssues.join(' ')}`}
+            </p>
+          )}
+          {!allowCustom && !allowRandom && (
+            <Banner tone="danger">{t('web.panel_username_policy_empty')}</Banner>
+          )}
+
           {/* The provider type is deliberately not editable. Changing it would
               reinterpret the stored credentials against a different protocol;
               the API does not accept it either. */}
