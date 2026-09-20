@@ -1332,24 +1332,28 @@ export const panelMaxServicesInputSchema = z.union([
  * accepted, and a panel nothing can be sold onto with no single request to blame.
  * Absent leaves the whole policy; present replaces the whole policy.
  *
- * The template's CONTENT is deliberately not validated here, only its length. Whether
- * a template can render a legal name depends on the provider's own maximum, which this
- * schema does not know — `updatePanelRequestSchema` carries no `providerType`, because
- * changing one is forbidden. `PanelService` re-reads the stored provider and validates
- * against that adapter's bound, so there is ONE answer to "is this template legal"
- * rather than a boundary opinion and a service opinion that can disagree by 64 minus
- * whatever the adapter actually allows.
+ * NOTHING about the policy's MEANING is decided here — not the template's content and
+ * not the at-least-one-mode rule. This schema settles shape and length, and
+ * `PanelService.validateUsernamePolicy` settles everything else.
+ *
+ * The template half has no choice: whether a template can render a legal name depends
+ * on the provider's own maximum, and `updatePanelRequestSchema` carries no
+ * `providerType` because changing one is forbidden. Only the service can read the
+ * stored row.
+ *
+ * The at-least-one-mode half COULD have been decided here, and deliberately is not.
+ * A `.refine` was written first and the integration case for the service's own
+ * `PANEL_USERNAME_POLICY_EMPTY` then failed with `panel.request_invalid` — the boundary
+ * had made the dedicated code unreachable. Two places deciding one rule is the shape
+ * this repository keeps refusing: the second opinion is the one that goes stale, and a
+ * code nothing can raise is a code a surface cannot map. One evaluator, three callers
+ * — create, update, and the CHECK constraint one layer down.
  */
-export const panelUsernamePolicyInputSchema = z
-  .object({
-    allowCustom: z.boolean(),
-    allowRandom: z.boolean(),
-    template: z.string().min(1).max(USERNAME_TEMPLATE_MAX_LENGTH).nullable(),
-  })
-  .refine((policy) => policy.allowCustom || policy.allowRandom, {
-    path: ['allowCustom'],
-    message: 'At least one username mode must be enabled.',
-  });
+export const panelUsernamePolicyInputSchema = z.object({
+  allowCustom: z.boolean(),
+  allowRandom: z.boolean(),
+  template: z.string().min(1).max(USERNAME_TEMPLATE_MAX_LENGTH).nullable(),
+});
 export type PanelUsernamePolicyInput = z.infer<typeof panelUsernamePolicyInputSchema>;
 
 export const createPanelRequestSchema = z.object({
