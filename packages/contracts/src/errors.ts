@@ -826,9 +826,14 @@ export const COMMERCE_ERROR_CODES = {
   /**
    * A typed username that does not satisfy the CUSTOM baseline.
    *
-   * 8 to 16 characters, lowercase letters, digits and underscore, letter-first. The
-   * customer is told which rule they broke and asked again; nothing is reserved and no
-   * payment is started.
+   * 8 to 16 characters from `A-Z`, `a-z`, `0-9`, `-` and `_`, with at least one letter
+   * and at least one digit. Case is not distinguished — `Ali_2026` is accepted and
+   * stored as `ali_2026` — and nothing else is altered: whitespace is refused rather
+   * than trimmed.
+   *
+   * The refusal deliberately does NOT name which clause failed. The whole rule is shown
+   * before the customer types, so a per-clause answer adds nothing they did not have
+   * and turns the refusal into a probe. Nothing is reserved and no payment is started.
    */
   SERVICE_USERNAME_INVALID: 'commerce.service_username_invalid',
   /**
@@ -840,6 +845,22 @@ export const COMMERCE_ERROR_CODES = {
    * regenerate and the customer is the only one who can choose again.
    */
   SERVICE_USERNAME_TAKEN: 'commerce.service_username_taken',
+  /**
+   * The order is being confirmed and no username has been chosen for it.
+   *
+   * Reachable in exactly one situation: a panel that offers CUSTOM and nothing else,
+   * and an order whose username step was skipped — a DRAFT created before this feature
+   * shipped and confirmed after, or a confirm callback replayed from before the step
+   * existed. Where RANDOM is allowed the confirmation allocates one instead of raising
+   * this, because a customer who is already at the confirm button should not be sent
+   * back for something the installation can decide itself.
+   *
+   * It is a REFUSAL rather than a silently generated name: on a CUSTOM-only panel the
+   * operator has said the customer chooses, and choosing for them would be this
+   * product's own version of the legacy defect where an admin's name was baked into
+   * thirteen thousand customers' records.
+   */
+  SERVICE_USERNAME_REQUIRED: 'commerce.service_username_required',
 
   /**
    * There is not enough of the order's own window left to pay out of band inside it.
