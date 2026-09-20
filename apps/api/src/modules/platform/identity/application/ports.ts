@@ -223,6 +223,36 @@ export interface SessionRepository {
    */
   isLive(scope: ScopeContext, id: AdminSessionId, now: Date, tx?: unknown): Promise<boolean>;
   touch(id: AdminSessionId, now: Date): Promise<void>;
+  /**
+   * The sessions one administrator currently holds. Live ones only.
+   *
+   * Revoked and expired rows are excluded in the QUERY rather than filtered
+   * afterwards, for the reason every bounded read here gives: a limit applied
+   * after the filter returns the newest live sessions, and a limit applied
+   * before it returns whatever the table happened to order first — which on an
+   * account with a long history is a page of dead rows and an operator
+   * concluding nobody is logged in.
+   *
+   * No token and no token hash in the projection. There is no use for either
+   * above this port, and a hash that reaches a response builder is a hash that
+   * eventually reaches a response.
+   */
+  listForAdmin(
+    scope: ScopeContext,
+    adminId: AdminId,
+    now: Date,
+    limit: number,
+    tx?: unknown,
+  ): Promise<
+    readonly {
+      readonly id: AdminSessionId;
+      readonly issuedAt: Date;
+      readonly expiresAt: Date;
+      readonly lastSeenAt: Date;
+      readonly ip: string | null;
+      readonly userAgent: string | null;
+    }[]
+  >;
   revoke(id: AdminSessionId, now: Date, reason: string, tx?: unknown): Promise<void>;
   revokeAllForAdmin(
     scope: ScopeContext,

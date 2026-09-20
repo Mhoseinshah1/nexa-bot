@@ -13,6 +13,9 @@ import {
   setAdminRolesRequestSchema,
   setAdminStatusRequestSchema,
   setAdminTelegramBindingRequestSchema,
+  resetAdminPasswordRequestSchema,
+  revokeAdminSessionsRequestSchema,
+  type AdminSessionSummary,
   type ActorContext,
   type Admin,
   type AdminId,
@@ -822,6 +825,264 @@ export class AdminManagementService {
    * credential they believe is exposed. It needs no catalog permission for the
    * same reason — the current password IS the authorization.
    */
+  /**
+   * Sets a NEW password for an administrator who is not the caller.
+   *
+   * The operator's answer to a credential that has to change without its owner
+   * — someone left, a laptop went missing, a password was shared. It is
+   * deliberately NOT the same act as `changeOwnPassword` and does not share its
+   * route:
+   *
+   *   - self-service proves possession of the CURRENT password, and that proof
+   *     is the whole of its security. This has no such proof and cannot: the
+   *     operator does not know the old one. So it is bound by permission and by
+   *     privilege instead;
+   *   - and it refuses a caller who names themselves. Allowing that would give
+   *     anybody holding `admins.edit` a way to replace their own credential
+   *     without knowing it, which is exactly what a hijacked session wants.
+   *     `assertNotSelf` is the same refusal `setStatus` and `setRoles` make.
+   *
+   * ## Why the privilege check is the same one re-enabling uses
+   *
+   * Setting somebody's password is taking their account. So the bound is not
+   * "may you edit administrators" but "may you BECOME this one" — and
+   * `assertRestoresNoMorePrivilegeThanHeld` answers precisely that question
+   * already: it resolves the target's effective permissions, overrides
+   * included, and refuses when they exceed the actor's. Without it a manager
+   * with `admins.edit` sets the owner's password and signs in as the owner,
+   * which is every guard in this file bypassed by one request.
+   *
+   * An OWNER target additionally takes `admins.permissions.edit`, for the
+   * reason `setStatus` gives where it does the same: the owner role is
+   * privilege, and changing what can be done with it is a privilege edit.
+   *
+   * ## And every session ends
+   *
+   * A reset that left the old sessions alive would be a reset that did not
+   * lock anybody out — the common reason for doing this at all. The count is
+   * returned rather than assumed, because "is that person still signed in" is
+   * the operator's next question and a response that said only `ok` leaves
+   * them guessing.
+   */
+  async resetPassword(
+    scope: ScopeContext,
+    actor: ActorContext,
+    targetId: AdminId,
+    input: unknown,
+  ): Promise<{ admin: Admin; roleKeys: string[]; sessionsRevoked: number }> {
+    // A cheap rejection before the KDF, and NOT the authorization: read on the
+    // pool, so it can be stale by the time the row is written. The check of
+    // record is inside the transaction, exactly as `create` and `setStatus` do.
+    await this.assertMayAttempt(scope, actor, 'admins.edit', {
+      action: 'admin.password_reset',
+      entityId: targetId,
+    });
+    const command = resetAdminPasswordRequestSchema.parse(input);
+    adminPasswordSchema.parse(command.newPassword);
+
+    // Before anything is read. An administrator changes their OWN password
+    // through the path that asks for the current one.
+    assertNotSelf(adminIdOf(actor), targetId);
+
+    // Outside the transaction, like `create`: a KDF is intentionally slow and
+    // holding a lock for its duration turns one request into contention for
+    // every other writer.
+    const passwordHash = await this.hasher.hash(command.newPassword);
+
+    return this.runLockedMutation(
+      scope,
+      actor,
+      { action: 'admin.password_reset', entityId: targetId },
+      async (tx) => {
+        assertTenantActive(await this.admins.lockTenantForAdminChange(scope, tx));
+        await this.assertSessionStillLive(scope, actor, tx);
+        const now = this.clock.now();
+        await this.guard.check(scope, actor, 'admins.edit', tx);
+
+        const target = await this.requireAdmin(scope, targetId, tx);
+        // Against the id the DATABASE returned, not the one the caller supplied.
+        assertNotSelf(adminIdOf(actor), target.id);
+
+        const targetRoleKeys = await this.admins.roleKeysFor(scope, target.id, tx);
+        if (targetRoleKeys.includes(OWNER_ROLE_KEY)) {
+          await this.guard.check(scope, actor, 'admins.permissions.edit', tx);
+        }
+        // "May you become this administrator." See the docblock.
+        await this.assertRestoresNoMorePrivilegeThanHeld(scope, actor, target.id, tx);
+
+        await this.admins.setPasswordHash(scope, target.id, passwordHash, now, tx);
+        const sessionsRevoked = await this.sessions.revokeAllForAdmin(
+          scope,
+          target.id,
+          now,
+          'admin_password_reset',
+          tx,
+        );
+
+        await this.audit.record(
+          scope,
+          actor,
+          {
+            action: 'admin.password_reset',
+            entityType: 'Admin',
+            entityId: target.id,
+            /*
+             * No password, no hash, no length, no prefix — on either side.
+             *
+             * What changed is not in dispute and does not need recording; WHAT IT
+             * CHANGED TO is the thing an audit row must never carry. The counts
+             * are the useful part and the safe part.
+             */
+            before: { sessionsLive: sessionsRevoked },
+            after: { passwordRotated: true, sessionsRevoked },
+            reason: command.reason,
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+
+        await this.recordAdminChange(
+          scope,
+          tx,
+          'admin.password_reset',
+          `administrator ${target.username} had their password reset by an operator`,
+          { adminId: target.id, sessionsRevoked },
+        );
+
+        return { admin: target, roleKeys: targetRoleKeys, sessionsRevoked };
+      },
+    );
+  }
+
+  /**
+   * The sessions one administrator currently holds.
+   *
+   * A READ, so it charges `admins.view` and takes no lock — and it is bounded,
+   * because an account that has signed in daily for a year has a long history
+   * and nobody is going to read four hundred rows.
+   *
+   * `current` is computed here rather than by the surface: the caller's own
+   * session id is in the actor, the surface would have to be told it, and a
+   * surface that decides which row is "yours" from anything else is a surface
+   * that can get it wrong. It is only ever true when the caller is looking at
+   * their own sessions.
+   */
+  async listSessions(
+    scope: ScopeContext,
+    actor: ActorContext,
+    targetId: AdminId,
+  ): Promise<readonly AdminSessionSummary[]> {
+    await this.guard.check(scope, actor, 'admins.view');
+    // Refuses another tenant's administrator as NOT FOUND, which is also what a
+    // caller learns about an id that never existed.
+    const target = await this.requireAdmin(scope, targetId);
+    const rows = await this.sessions.listForAdmin(
+      scope,
+      target.id,
+      this.clock.now(),
+      SESSION_LIST_LIMIT,
+    );
+    const mine = sessionIdOf(actor);
+    return rows.map((row) => ({
+      id: row.id,
+      issuedAt: row.issuedAt.toISOString(),
+      expiresAt: row.expiresAt.toISOString(),
+      lastSeenAt: row.lastSeenAt.toISOString(),
+      ip: row.ip,
+      userAgent: row.userAgent,
+      current: mine !== null && row.id === mine,
+    }));
+  }
+
+  /**
+   * Ends every session an administrator holds, without changing their password.
+   *
+   * Separate from the reset because the operator's two situations are separate:
+   * "this credential is compromised" replaces it, and "this person left a
+   * session open somewhere" does not. Folding them together would make every
+   * lock-out also a password the owner no longer knows.
+   *
+   * Self-revocation is ALLOWED here, unlike everywhere else in this file, and
+   * that is deliberate: signing yourself out of every device is a safe act
+   * anybody may perform on themselves, and the caller's own session is among
+   * the ones that end. It is the same thing the logout button does, at a wider
+   * blast radius, and it removes authority rather than conferring it — which is
+   * why it needs neither the privilege check nor the self refusal.
+   */
+  async revokeSessions(
+    scope: ScopeContext,
+    actor: ActorContext,
+    targetId: AdminId,
+    input: unknown,
+  ): Promise<number> {
+    await this.assertMayAttempt(scope, actor, 'admins.edit', {
+      action: 'admin.sessions_revoked',
+      entityId: targetId,
+    });
+    const command = revokeAdminSessionsRequestSchema.parse(input);
+
+    return this.runLockedMutation(
+      scope,
+      actor,
+      { action: 'admin.sessions_revoked', entityId: targetId },
+      async (tx) => {
+        assertTenantActive(await this.admins.lockTenantForAdminChange(scope, tx));
+        /*
+         * Deliberately NOT `assertSessionStillLive` when the caller is revoking
+         * their own sessions.
+         *
+         * Every other write here refuses an actor whose session died mid-request,
+         * because a revoked session is not a less-privileged actor. Revoking your
+         * OWN sessions is the one act where that refusal is wrong in a way the
+         * operator feels: a replayed request, or a second click, arrives after the
+         * first has already ended the session it came from, and answering it with
+         * "your session is invalid" makes a completed sign-out look like a failure.
+         * The act is idempotent and removes authority, so the second one is a
+         * no-op reporting zero.
+         */
+        if (adminIdOf(actor) !== targetId) {
+          await this.assertSessionStillLive(scope, actor, tx);
+        }
+        const now = this.clock.now();
+        await this.guard.check(scope, actor, 'admins.edit', tx);
+
+        const target = await this.requireAdmin(scope, targetId, tx);
+        const revoked = await this.sessions.revokeAllForAdmin(
+          scope,
+          target.id,
+          now,
+          'admin_sessions_revoked',
+          tx,
+        );
+
+        await this.audit.record(
+          scope,
+          actor,
+          {
+            action: 'admin.sessions_revoked',
+            entityType: 'Admin',
+            entityId: target.id,
+            before: { sessionsLive: revoked },
+            after: { sessionsLive: 0 },
+            reason: command.reason,
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+
+        await this.recordAdminChange(
+          scope,
+          tx,
+          'admin.sessions_revoked',
+          `every session of administrator ${target.username} was ended`,
+          { adminId: target.id, revoked },
+        );
+
+        return revoked;
+      },
+    );
+  }
+
   async changeOwnPassword(
     scope: ScopeContext,
     actor: ActorContext,
@@ -1359,6 +1620,28 @@ export class AdminManagementService {
     }
     return keys.map((key) => found.get(key) as RoleId);
   }
+}
+
+/**
+ * How many live sessions one administrator's list returns.
+ *
+ * Bounded because an account that signs in daily accumulates history, and an
+ * unbounded read on a security screen is a page nobody finishes and a query
+ * whose cost grows with the installation's age. Fifty is far above any real
+ * simultaneous-device count and far below a number that hurts; the read is
+ * newest-first, so the ones an operator is looking for are the ones they get.
+ */
+const SESSION_LIST_LIMIT = 50;
+
+/**
+ * The session this actor is acting through, when there is one.
+ *
+ * Optional on `ActorContext` because a job has no session, and the one caller
+ * of this uses it to mark the row an operator is reading their own list from —
+ * so "no session" answers "none of these is yours", which is correct for a job.
+ */
+function sessionIdOf(actor: ActorContext): string | null {
+  return actor.sessionId ?? null;
 }
 
 function adminIdOf(actor: ActorContext): AdminId | null {

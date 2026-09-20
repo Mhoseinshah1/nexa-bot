@@ -1,4 +1,4 @@
-import { and, eq, gt, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, sql } from 'drizzle-orm';
 import {
   asId,
   type AdminId,
@@ -114,6 +114,58 @@ export class DrizzleSessionRepository implements SessionRepository {
       .update(adminSessions)
       .set({ lastSeenAt: sql`GREATEST(${adminSessions.lastSeenAt}, ${now})` })
       .where(eq(adminSessions.id, id));
+  }
+
+  async listForAdmin(
+    scope: ScopeContext,
+    adminId: AdminId,
+    now: Date,
+    limit: number,
+    tx?: unknown,
+  ): Promise<
+    readonly {
+      readonly id: AdminSessionId;
+      readonly issuedAt: Date;
+      readonly expiresAt: Date;
+      readonly lastSeenAt: Date;
+      readonly ip: string | null;
+      readonly userAgent: string | null;
+    }[]
+  > {
+    /*
+     * The projection names its columns, and `token_hash` is not among them.
+     *
+     * `toSession` above already drops it, but this read does not go through
+     * `toSession` and a `select()` with no argument would have carried it out of
+     * the repository. The port's docblock says why that matters; this is where it
+     * is true.
+     *
+     * LIVE only, decided in the WHERE and not by the caller: unrevoked and not yet
+     * expired. Newest first, then bounded — an operator looking at "who is logged
+     * in" wants the current ones, and the opposite order on an account with a long
+     * history returns a page of dead rows.
+     */
+    const rows = await executorOf(this.db, tx)
+      .select({
+        id: adminSessions.id,
+        issuedAt: adminSessions.issuedAt,
+        expiresAt: adminSessions.expiresAt,
+        lastSeenAt: adminSessions.lastSeenAt,
+        ip: adminSessions.ip,
+        userAgent: adminSessions.userAgent,
+      })
+      .from(adminSessions)
+      .where(
+        and(
+          eq(adminSessions.tenantId, requireTenantId(scope)),
+          eq(adminSessions.adminId, adminId),
+          isNull(adminSessions.revokedAt),
+          gt(adminSessions.expiresAt, now),
+        ),
+      )
+      .orderBy(desc(adminSessions.lastSeenAt), desc(adminSessions.id))
+      .limit(limit);
+    return rows.map((row) => ({ ...row, id: asId<'AdminSessionId'>(row.id) }));
   }
 
   async revoke(id: AdminSessionId, now: Date, reason: string, tx?: unknown): Promise<void> {
