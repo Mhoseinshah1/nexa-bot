@@ -530,6 +530,24 @@ export const PANEL_ERROR_CODES = {
    */
   PANEL_USERNAME_TEMPLATE_INVALID: 'panel.username_template_invalid',
   /**
+   * The PREFIX_RANDOM prefix cannot produce a name inside the universal contract.
+   *
+   * Empty, containing something outside `[a-z0-9_-]`, not starting with an English
+   * letter, or long enough to leave fewer than six random characters. Like the
+   * template refusal it carries every issue at once, and like the template refusal it
+   * is raised at the operator's save and never deferred to a customer's purchase.
+   */
+  PANEL_USERNAME_PREFIX_INVALID: 'panel.username_prefix_invalid',
+  /**
+   * The saved strategy and the configuration beside it do not describe one generator.
+   *
+   * `PREFIX_RANDOM` with no prefix, `CUSTOM_TEMPLATE` with no template, or either
+   * carrying the other's configuration. It is a separate code from the two above
+   * because the fix is different: those say "this value is wrong", this says "this
+   * value is missing for the strategy you chose".
+   */
+  PANEL_USERNAME_STRATEGY_INVALID: 'panel.username_strategy_invalid',
+  /**
    * A persisted provider type that this release has no adapter for.
    *
    * Reached only when a value gets past the CHECK constraint — a migration, a
@@ -826,7 +844,7 @@ export const COMMERCE_ERROR_CODES = {
   /**
    * A typed username that does not satisfy the CUSTOM baseline.
    *
-   * 8 to 16 characters from `A-Z`, `a-z`, `0-9`, `-` and `_`, with at least one letter
+   * 4 to 20 characters from `A-Z`, `a-z`, `0-9`, `-` and `_`, with at least one letter
    * and at least one digit. Case is not distinguished — `Ali_2026` is accepted and
    * stored as `ali_2026` — and nothing else is altered: whitespace is refused rather
    * than trimmed.
@@ -861,6 +879,27 @@ export const COMMERCE_ERROR_CODES = {
    * thirteen thousand customers' records.
    */
   SERVICE_USERNAME_REQUIRED: 'commerce.service_username_required',
+  /**
+   * The panel's automatic strategy cannot render a legal name for THIS purchase.
+   *
+   * Distinct from `SERVICE_USERNAME_TAKEN`, and the difference is who can act.
+   * `TAKEN` means the names are legal and occupied, so a redraw or a different typed
+   * name resolves it. This means no redraw can help: `TELEGRAM_ID_RANDOM` for a
+   * Telegram id long enough to push the render past twenty characters, or a strategy
+   * whose stored configuration went stale. It is raised BEFORE any debit, and the
+   * operator is the one who fixes it.
+   */
+  SERVICE_USERNAME_UNGENERATABLE: 'commerce.service_username_ungeneratable',
+  /**
+   * An UNFUNDED draft is holding a name that the current contract would not mint.
+   *
+   * A draft frozen before the four-to-twenty contract, or before a panel's strategy
+   * changed. The reservation is released and the customer chooses again — safe
+   * precisely because no money has moved. A FUNDED or provider-ambiguous name is never
+   * touched by this: it belongs to an account that may exist, and the answer there is
+   * reconciliation or the automatic refund, never a rename.
+   */
+  SERVICE_USERNAME_STALE: 'commerce.service_username_stale',
 
   /**
    * There is not enough of the order's own window left to pay out of band inside it.

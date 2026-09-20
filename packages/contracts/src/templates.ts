@@ -395,7 +395,7 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
-    key: 'bot.username.random_button',
+    key: 'bot.username.automatic_button',
     description: 'The button that has the installation generate the username.',
     format: 'PLAIN_TEXT',
     placeholders: [],
@@ -425,6 +425,36 @@ export const TEMPLATES = [
       'Refuses a username already held on the same provider namespace, and says no ' +
       'money moved. Sent before any debit, so the statement is a fact about the ' +
       'order rather than a reassurance.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.username.exhausted',
+    description:
+      'The panel\u2019s automatic generator drew five candidates and every one was ' +
+      'already held. Separate from `bot.username.taken` because the customer did ' +
+      'nothing wrong and typing a different name is not the remedy \u2014 there is ' +
+      'nothing for them to do but try again or ask. Sent before any debit.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.username.unavailable',
+    description:
+      'The panel\u2019s automatic configuration cannot produce a name for THIS ' +
+      'purchase \u2014 the commonest case being a Telegram id long enough to push ' +
+      '`TELEGRAM_ID_RANDOM` past the length limit. It names no configuration and no ' +
+      'panel: an operator fixes this, and a customer being shown the internals of a ' +
+      'generator learns nothing they can act on. Sent before any debit.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.username.stale',
+    description:
+      'An unpaid order was holding a name the current rules would not accept, so the ' +
+      'hold was released and the customer chooses again. Safe precisely because no ' +
+      'money has moved, which the body says.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -1417,9 +1447,16 @@ export const TEMPLATES = [
         repeatable: false,
       },
       {
-        token: 'usernameRandom',
+        token: 'usernameAutomatic',
         type: 'STRING',
         description: 'A mark when the panel lets the installation generate one.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'usernameStrategy',
+        type: 'STRING',
+        description: 'The name of the preset that generates automatic usernames here.',
         required: false,
         repeatable: false,
       },
@@ -1432,7 +1469,16 @@ export const TEMPLATES = [
          */
         token: 'usernameTemplate',
         type: 'STRING',
-        description: 'The RANDOM-mode template, or a mark for the derived generator.',
+        description:
+          'The CUSTOM_TEMPLATE template, or a mark when the strategy does not use one.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'usernamePrefix',
+        type: 'STRING',
+        description:
+          'The PREFIX_RANDOM prefix, or a mark when the strategy does not use one.',
         required: false,
         repeatable: false,
       },
@@ -1572,6 +1618,103 @@ export const TEMPLATES = [
       'log carry the distinction. Reached by a button drawn before the panel moved.',
     format: 'PLAIN_TEXT',
     placeholders: [],
+  },
+  {
+    key: 'bot.admin.username_button',
+    description: 'Opens the panel\u2019s username-policy section from its detail view.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.username_section',
+    description:
+      'The panel\u2019s whole username policy, READ BACK before anything is edited: ' +
+      'which of the two customer choices are on, which automatic preset is saved, its ' +
+      'prefix or template, and a preview rendered from synthetic values. Every value ' +
+      'is shown because a setting an operator can write and cannot read is the ' +
+      'write-only settings screen this product exists to replace. It also states the ' +
+      'two commands that set a prefix and a template, because those carry their ' +
+      'argument rather than capturing the next message.',
+    format: 'TELEGRAM_HTML',
+    placeholders: [
+      { token: 'panel', type: 'STRING', description: 'The panel\u2019s name.', required: true, repeatable: false },
+      { token: 'custom', type: 'STRING', description: 'A mark for the custom choice.', required: true, repeatable: false },
+      { token: 'automatic', type: 'STRING', description: 'A mark for the automatic choice.', required: true, repeatable: false },
+      { token: 'strategy', type: 'STRING', description: 'The saved preset\u2019s name.', required: true, repeatable: false },
+      { token: 'prefix', type: 'STRING', description: 'The saved prefix, or a mark for none.', required: true, repeatable: false },
+      { token: 'template', type: 'STRING', description: 'The saved template, or a mark for none.', required: true, repeatable: false },
+      {
+        token: 'preview',
+        type: 'STRING',
+        description:
+          'One name this policy would produce, rendered from SYNTHETIC values. It ' +
+          'consumes no randomness that reaches a customer and reserves nothing.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.username_custom_button',
+    description: 'Turns the customer\u2019s own-name choice on or off for this panel.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.username_automatic_button',
+    description: 'Turns the generated-name choice on or off for this panel.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.username_strategy_random',
+    description:
+      'Selects, and names, the preset that draws twelve random characters. Doubles as ' +
+      'the label the section renders, so the preset\u2019s name lives in ONE key.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.username_strategy_prefix_random',
+    description: 'Selects and names the preset that puts a saved prefix before random characters.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.username_strategy_telegram_id_random',
+    description: 'Selects and names the preset that uses the customer\u2019s Telegram id.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.username_strategy_custom_template',
+    description: 'Selects and names the preset that renders a saved template.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.username_saved',
+    description: 'The username policy was written. The section is re-rendered beneath it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.username_refused',
+    description:
+      'The username policy was refused and NOTHING was written \u2014 both choices off, ' +
+      'a prefix or template that cannot render a legal name, or a preset with no ' +
+      'configuration behind it. The reason is passed in, because an operator fixing one ' +
+      'problem per round trip is an operator who gives up.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reason',
+        type: 'STRING',
+        description: 'Why it was refused, in words, from the shared validator.',
+        required: true,
+        repeatable: false,
+      },
+    ],
   },
   {
     key: 'bot.admin.section',

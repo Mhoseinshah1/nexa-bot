@@ -95,14 +95,14 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // decides which of the two modes they are offered; with one enabled the choice is
   // skipped and that flow runs directly.
   'bot.username.choose': 'یوزرنیم سرویس‌تان را چطور انتخاب می‌کنید؟',
-  'bot.username.custom_button': '✍️ انتخاب یوزرنیم دلخواه',
-  'bot.username.random_button': '🎲 یوزرنیم تصادفی',
+  'bot.username.custom_button': '✍️ نام کاربری دلخواه',
+  'bot.username.automatic_button': '🎲 انتخاب خودکار',
   // The rule, stated once and in full, because a customer who is refused twice for two
   // different reasons they were never told stops buying. Every clause here is one the
   // shared validator actually enforces.
   'bot.username.instructions':
     'یوزرنیم دلخواه‌تان را بفرستید.\n' +
-    '• بین ۸ تا ۱۶ نویسه\n' +
+    '• بین ۴ تا ۲۰ نویسه\n' +
     '• فقط حروف انگلیسی (a تا z)، رقم انگلیسی (0 تا 9)، خط تیره (-) و زیرخط (_)\n' +
     '• حداقل یک حرف انگلیسی و حداقل یک رقم داشته باشد\n' +
     '• حروف بزرگ و کوچک فرقی ندارند و در نهایت با حروف کوچک ذخیره می‌شود\n' +
@@ -111,6 +111,15 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'این یوزرنیم پذیرفته نشد. لطفاً با توجه به شرایط بالا یک یوزرنیم دیگر بفرستید.',
   'bot.username.taken':
     'این یوزرنیم قبلاً گرفته شده است. لطفاً یوزرنیم دیگری بفرستید. هیچ مبلغی کسر نشده است.',
+  // Three refusals the customer did not cause. Each says that no money moved, because
+  // that is the only part of the answer they can act on; none of them names a panel,
+  // a preset or a template, because none of those is theirs to fix.
+  'bot.username.exhausted':
+    'ساخت خودکار یوزرنیم در این لحظه ممکن نشد. لطفاً چند دقیقه دیگر دوباره تلاش کنید. هیچ مبلغی کسر نشده است.',
+  'bot.username.unavailable':
+    'ساخت خودکار یوزرنیم برای این خرید ممکن نیست. لطفاً یوزرنیم دلخواه خود را بفرستید یا با پشتیبانی تماس بگیرید. هیچ مبلغی کسر نشده است.',
+  'bot.username.stale':
+    'یوزرنیم انتخاب‌شده برای این سفارش دیگر معتبر نیست و آزاد شد. لطفاً دوباره یوزرنیم انتخاب کنید. هیچ مبلغی کسر نشده است.',
   'bot.order.summary':
     'سفارش شما\nسرویس: {productTitle}\nمدت: {durationDays}\nحجم: {trafficBytes}\nیوزرنیم: {username}\nمبلغ قابل پرداخت: {total}',
   'bot.order.confirm_button': 'تأیید و ثبت سفارش',
@@ -243,7 +252,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'هیچ پنلی در سرویس نیست. پنل‌ها در پنل وب ساخته می‌شوند، چون ساختن پنل به اعتبارنامه نیاز دارد و اعتبارنامه در چت وارد نمی‌شود.',
   'bot.admin.panels_more_button': '▶️ صفحهٔ بعد',
   'bot.admin.panel_detail':
-    'پنل: {name}\nارائه‌دهنده: {provider}\nوضعیت: {status}\nسلامت: {health}\nآخرین بررسی: {checkedAt}\nخطای آخرین بررسی: {failure}\n\nسرویس‌های فعال: {services}\nرزرو جاری: {reservations}\nسقف سرویس: {cap}\n\nیوزرنیم دلخواه: {usernameCustom}\nیوزرنیم تصادفی: {usernameRandom}\nالگوی یوزرنیم: {usernameTemplate}',
+    'پنل: {name}\nارائه‌دهنده: {provider}\nوضعیت: {status}\nسلامت: {health}\nآخرین بررسی: {checkedAt}\nخطای آخرین بررسی: {failure}\n\nسرویس‌های فعال: {services}\nرزرو جاری: {reservations}\nسقف سرویس: {cap}\n\nیوزرنیم دلخواه: {usernameCustom}\nیوزرنیم خودکار: {usernameAutomatic}\nروش خودکار: {usernameStrategy}\nپیشوند: {usernamePrefix}\nالگوی یوزرنیم: {usernameTemplate}',
   'bot.admin.panel_gone': 'این پنل پیدا نشد.',
   'bot.admin.panel_test_button': '🔌 تست اتصال',
   'bot.admin.panel_tested': 'تست اتصال انجام شد و سلامت پنل به‌روز شد.',
@@ -270,6 +279,30 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * A prompt that captures the next message is what overwrote a production gateway
    * setting in INCIDENT-FIN-001; a command carries its argument with it.
    */
+  // The panel's username policy, read back in full before anything is edited. The two
+  // toggles and the four presets are taps; the prefix and the template are commands
+  // that carry their argument, because a prompt that captures the next message is
+  // INCIDENT-FIN-001.
+  'bot.admin.username_button': '👤 یوزرنیم سرویس‌ها',
+  'bot.admin.username_section':
+    'یوزرنیم سرویس‌های پنل <b>{panel}</b>\n\n' +
+    'انتخاب دلخواه توسط مشتری: {custom}\n' +
+    'انتخاب خودکار: {automatic}\n' +
+    'روش خودکار: {strategy}\n' +
+    'پیشوند: <code>{prefix}</code>\n' +
+    'الگو: <code>{template}</code>\n' +
+    'نمونهٔ خروجی: <code>{preview}</code>\n\n' +
+    'هر یوزرنیم جدید بین ۴ تا ۲۰ نویسه و فقط از حروف کوچک انگلیسی، رقم، خط تیره و زیرخط ساخته می‌شود.\n' +
+    'برای تغییر پیشوند: <code>/panel_prefix &lt;شمارهٔ پنل&gt; &lt;پیشوند&gt;</code>\n' +
+    'برای تغییر الگو: <code>/panel_template &lt;شمارهٔ پنل&gt; &lt;الگو&gt;</code>',
+  'bot.admin.username_custom_button': 'انتخاب دلخواه',
+  'bot.admin.username_automatic_button': 'انتخاب خودکار',
+  'bot.admin.username_strategy_random': 'تصادفی ۱۲ نویسه‌ای',
+  'bot.admin.username_strategy_prefix_random': 'پیشوند + تصادفی',
+  'bot.admin.username_strategy_telegram_id_random': 'شناسهٔ تلگرام + تصادفی',
+  'bot.admin.username_strategy_custom_template': 'الگوی دلخواه',
+  'bot.admin.username_saved': 'تنظیمات یوزرنیم این پنل ذخیره شد.',
+  'bot.admin.username_refused': 'ذخیره نشد: {reason}',
   'bot.admin.section':
     'ادمین‌هایی که دسترسی تلگرام دارند در فهرست زیر آمده‌اند.\n\nبرای دادن دسترسی تلگرام به یک ادمین موجود:\n/link <شناسهٔ عددی تلگرام> <نام کاربری ادمین>\n\nبرای تعیین نقش یک ادمین:\n/role <نام کاربری ادمین> <کلید نقش>',
   'bot.admin.admins_none':

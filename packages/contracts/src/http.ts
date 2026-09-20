@@ -7,7 +7,11 @@ import {
   NOTIFICATION_TRANSPORTS,
 } from './notifications.js';
 import { uuidV7Schema } from './ids.js';
-import { USERNAME_TEMPLATE_MAX_LENGTH } from './service-username.js';
+import {
+  USERNAME_PREFIX_MAX_LENGTH,
+  USERNAME_STRATEGIES,
+  USERNAME_TEMPLATE_MAX_LENGTH,
+} from './service-username.js';
 import { paymentAccountInputSchema } from './payment-accounts.js';
 import { refundChannelSchema, refundStateSchema } from './refunds.js';
 import {
@@ -1072,20 +1076,24 @@ export type PanelCapacityResponse = z.infer<typeof panelCapacitySchema>;
  * Which names a panel will accept for the services sold onto it.
  *
  * Returned in full, like `activation` beside it and for the same reason: a policy an
- * operator can set and cannot read is the legacy system's write-only settings screen,
- * where "the only way to read a price is to overwrite it". None of these three fields
- * is a secret — the customer is shown the rule before they type.
+ * operator can set and cannot read is the legacy write-only settings screen this
+ * product exists to replace, where "the only way to read a price is to overwrite it".
+ * None of these fields is a secret — the customer is shown the rule before they type.
  *
- * `template` is null on a panel that uses the derived generator, which is what every
- * panel sold onto before this phase does and keeps doing. Null is therefore a real
- * state and not an absence.
+ * `prefix` and `template` are null unless the saved `strategy` uses them. Null is a
+ * real state here and not an absence: it says this panel's generator takes no
+ * configuration, which is true of `RANDOM` and `TELEGRAM_ID_RANDOM`.
  */
 export const panelUsernamePolicySchema = z.object({
   /** Whether a customer may type their own name. */
   allowCustom: z.boolean(),
   /** Whether the installation may generate one. */
-  allowRandom: z.boolean(),
-  /** The RANDOM-mode template, or null for the derived `nx…` generator. */
+  allowAutomatic: z.boolean(),
+  /** Which of the four presets generates it. */
+  strategy: z.enum(USERNAME_STRATEGIES),
+  /** The `PREFIX_RANDOM` prefix, or null under any other strategy. */
+  prefix: z.string().nullable(),
+  /** The `CUSTOM_TEMPLATE` template, or null under any other strategy. */
   template: z.string().nullable(),
 });
 export type PanelUsernamePolicyResponse = z.infer<typeof panelUsernamePolicySchema>;
@@ -1336,10 +1344,11 @@ export const panelMaxServicesInputSchema = z.union([
  * not the at-least-one-mode rule. This schema settles shape and length, and
  * `PanelService.validateUsernamePolicy` settles everything else.
  *
- * The template half has no choice: whether a template can render a legal name depends
- * on the provider's own maximum, and `updatePanelRequestSchema` carries no
- * `providerType` because changing one is forbidden. Only the service can read the
- * stored row.
+ * The template and prefix halves have no choice: whether either can render a legal
+ * name is a judgement about the whole policy — the strategy chosen beside it decides
+ * which of the two is even read — and a per-field `.refine` cannot see the strategy.
+ * This schema settles shape and length; `PanelService.validateUsernamePolicy` settles
+ * whether the pieces describe one working generator.
  *
  * The at-least-one-mode half COULD have been decided here, and deliberately is not.
  * A `.refine` was written first and the integration case for the service's own
@@ -1351,7 +1360,9 @@ export const panelMaxServicesInputSchema = z.union([
  */
 export const panelUsernamePolicyInputSchema = z.object({
   allowCustom: z.boolean(),
-  allowRandom: z.boolean(),
+  allowAutomatic: z.boolean(),
+  strategy: z.enum(USERNAME_STRATEGIES),
+  prefix: z.string().min(1).max(USERNAME_PREFIX_MAX_LENGTH).nullable(),
   template: z.string().min(1).max(USERNAME_TEMPLATE_MAX_LENGTH).nullable(),
 });
 export type PanelUsernamePolicyInput = z.infer<typeof panelUsernamePolicyInputSchema>;
