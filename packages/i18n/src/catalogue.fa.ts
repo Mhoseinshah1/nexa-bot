@@ -215,7 +215,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'هیچ پنلی در سرویس نیست. پنل‌ها در پنل وب ساخته می‌شوند، چون ساختن پنل به اعتبارنامه نیاز دارد و اعتبارنامه در چت وارد نمی‌شود.',
   'bot.admin.panels_more_button': '▶️ صفحهٔ بعد',
   'bot.admin.panel_detail':
-    'پنل: {name}\nارائه‌دهنده: {provider}\nوضعیت: {status}\nسلامت: {health}\nآخرین بررسی: {checkedAt}\nخطای آخرین بررسی: {failure}\n\nسرویس‌های فعال: {services}\nرزرو جاری: {reservations}\nسقف سرویس: {cap}',
+    'پنل: {name}\nارائه‌دهنده: {provider}\nوضعیت: {status}\nسلامت: {health}\nآخرین بررسی: {checkedAt}\nخطای آخرین بررسی: {failure}\n\nسرویس‌های فعال: {services}\nرزرو جاری: {reservations}\nسقف سرویس: {cap}\n\nیوزرنیم دلخواه: {usernameCustom}\nیوزرنیم تصادفی: {usernameRandom}\nالگوی یوزرنیم: {usernameTemplate}',
   'bot.admin.panel_gone': 'این پنل پیدا نشد.',
   'bot.admin.panel_test_button': '🔌 تست اتصال',
   'bot.admin.panel_tested': 'تست اتصال انجام شد و سلامت پنل به‌روز شد.',

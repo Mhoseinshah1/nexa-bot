@@ -1119,7 +1119,8 @@ export const TEMPLATES = [
       'One panel, as an administrator sees it in Telegram. Carries the name, the ' +
       'provider, the status, the health STATE with when it was last checked, the ' +
       'failure KIND from the frozen vocabulary when there is one, and the occupancy — ' +
-      'services, held slots, and the cap. It carries NO base URL, NO credential, no ' +
+      'services, held slots, the cap and the username policy. It carries NO base URL, ' +
+      'NO credential, no ' +
       'masked stand-in for one, and no provider response body: all four are either a ' +
       'secret or most of the way to finding one, and this message is forwardable for ' +
       'ever.',
@@ -1206,6 +1207,45 @@ export const TEMPLATES = [
           'because “no cap” is one of its values and rendering that as 0 would read as ' +
           'a full panel — the exact inversion the null means.',
         required: true,
+        repeatable: false,
+      },
+      {
+        /*
+         * Which username modes this panel offers, as two marks and a template.
+         *
+         * THREE placeholders rather than one composed sentence, and that is the rule
+         * `UNCAPPED` already follows: a surface may pass a VALUE into a message the
+         * catalogue owns, and may not build one message out of another. The words stay
+         * here; the surface passes a mark or the template text.
+         *
+         * Optional, because a body a tenant overrode before this line existed must
+         * keep rendering rather than throwing in the resolver — an administrator
+         * unable to read a panel at all, over a line of copy.
+         */
+        token: 'usernameCustom',
+        type: 'STRING',
+        description: 'A mark when the panel lets a customer type their own name.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'usernameRandom',
+        type: 'STRING',
+        description: 'A mark when the panel lets the installation generate one.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        /*
+         * The template itself, which is configuration and not a secret — an
+         * administrator reading it is the only way to answer "why is this customer
+         * called that". The base URL and the credentials stay out of this message for
+         * the reasons the docblock above gives; a token list is neither.
+         */
+        token: 'usernameTemplate',
+        type: 'STRING',
+        description: 'The RANDOM-mode template, or a mark for the derived generator.',
+        required: false,
         repeatable: false,
       },
     ],

@@ -503,6 +503,17 @@ const ADMIN_QUEUE_LIMIT = 10;
 const UNCAPPED = '\u2014';
 
 /**
+ * The two marks `bot.admin.panel_detail` renders for a username mode.
+ *
+ * Symbols and not words, for exactly the reason `UNCAPPED` is an em dash: the copy
+ * belongs to the catalogue and a surface may pass a VALUE into it but may not compose
+ * one message out of another. `ON` is a tick and `OFF` is the same dash the cap uses
+ * for "there is none", so the three lines of this block read consistently.
+ */
+const MODE_ON = '\u2713';
+const MODE_OFF = UNCAPPED;
+
+/**
  * The two permissions the panel's sections charge, named once.
  *
  * Read through the guard by the services behind each section; these constants only
@@ -2721,6 +2732,21 @@ export class BotRuntime {
          * exact inversion a null cap means.
          */
         cap: view.capacity.maxServices === null ? UNCAPPED : String(view.capacity.maxServices),
+        /*
+         * The policy, and it is configuration rather than a secret.
+         *
+         * An administrator reading the template is the only way to answer "why is this
+         * customer's account called that" — the question a support conversation starts
+         * from. The base URL and the credentials stay out of this message for the
+         * reasons the docblock gives; a list of placeholder tokens is neither of those.
+         *
+         * The DASH for a null template is the same value the cap uses for "there is
+         * none", and means the same thing: the derived generator, which is what every
+         * panel used before this policy existed.
+         */
+        usernameCustom: view.panel.usernamePolicy.allowCustom ? MODE_ON : MODE_OFF,
+        usernameRandom: view.panel.usernamePolicy.allowRandom ? MODE_ON : MODE_OFF,
+        usernameTemplate: view.panel.usernamePolicy.template ?? UNCAPPED,
       },
       buttons,
       orderId: null,
