@@ -72,9 +72,9 @@ Round two proved what a name may BE. These are about what happens to the row
 that holds it, and one about the scanner that decides whether a migration is
 safe to roll back onto.
 
-| # | Rule | Mutation | Test that dies | Verdict |
-|---|---|---|---|---|
-| U-10 | a boundary table may not be narrowed | `SET NOT NULL` on `tenants.slug` appended to an incoming migration | _the incoming migrations only ADD_ | KILLED |
+| #    | Rule                                 | Mutation                                                           | Test that dies                     | Verdict |
+| ---- | ------------------------------------ | ------------------------------------------------------------------ | ---------------------------------- | ------- |
+| U-10 | a boundary table may not be narrowed | `SET NOT NULL` on `tenants.slug` appended to an incoming migration | _the incoming migrations only ADD_ | KILLED  |
 
 U-10 is the one recorded from an actual run in this pass, and it is recorded
 because the exemption it guards is new: `SET NOT NULL` is now permitted on a

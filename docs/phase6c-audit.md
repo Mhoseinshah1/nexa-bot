@@ -396,13 +396,13 @@ Found by reading the code rather than by a failing test, which is the part worth
 recording: `service_username_reservations` had exactly one release path, and it
 was the wrong one to be alone.
 
-| Event | Panel slot | Username hold (before) | Username hold (now) |
-|---|---|---|---|
-| Customer cancels an unpaid order | released | **nothing** | `releaseUnfunded` |
-| Payment window closes, order expires | released | **nothing** | `releaseUnfunded` |
-| Draft abandoned, never confirmed | n/a | **nothing** | `sweepExpiredHolds` |
-| Definitive non-delivery → refund | released | `release` | `release`, unchanged |
-| Settlement funds the hold | consumed | `markFunded` | unchanged |
+| Event                                | Panel slot | Username hold (before) | Username hold (now)  |
+| ------------------------------------ | ---------- | ---------------------- | -------------------- |
+| Customer cancels an unpaid order     | released   | **nothing**            | `releaseUnfunded`    |
+| Payment window closes, order expires | released   | **nothing**            | `releaseUnfunded`    |
+| Draft abandoned, never confirmed     | n/a        | **nothing**            | `sweepExpiredHolds`  |
+| Definitive non-delivery → refund     | released   | `release`              | `release`, unchanged |
+| Settlement funds the hold            | consumed   | `markFunded`           | unchanged            |
 
 The consequence was not untidiness. `service_username_reservations_name_key` is
 unconditional on `(namespace_key, username)` and does not read `expires_at`, so a
