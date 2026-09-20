@@ -119,6 +119,48 @@ The two NEGATIVE halves — a funded name surviving a late cancellation, and the
 sweep leaving a funded hold alone — are what stop each of those rules being
 satisfied by deleting unconditionally, and they are in the same three cases.
 
+## Round four — the Codex findings on this PR
+
+Seven findings. Two were already fixed by later commits on this branch and are
+recorded as such rather than re-run; one no longer describes any code, because
+the token it named was removed by the owner's final username correction. The
+four that were real were fixed and each one was mutated.
+
+| #    | Rule                                                          | Mutation                                                  | Test that dies                                                                | Verdict |
+| ---- | ------------------------------------------------------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------- | ------- |
+| U-12 | a completed username choice REPLAYS, it does not conflict     | the `replayUsername` lookup removed from `chooseUsername` | _hands a retried choice the name it already took, rather than a conflict_     | KILLED  |
+| U-13 | a typing window opens only where typed names are accepted     | the `modesFor` gate removed from `beginUsernameEntry`     | _refuses to open a typing window on a panel that no longer takes typed names_ | KILLED  |
+| U-14 | the overwrite warning covers the username policy              | `overwritesPolicy` dropped from `willOverwrite`           | _promises an overwrite when the concurrent change is the USERNAME POLICY_     | KILLED  |
+| U-15 | a panel's holds move with its address, or the move is refused | the `rebind` call removed from `PanelService.update`      | _carries the names a panel holds to the namespace of its new address_         | KILLED  |
+
+Each mutation killed only the cases named — 31 of the 33 in
+`service-username.test.ts` and 88 of the 89 in `tests/web/panels.test.tsx`
+stayed green under the ones that touch them, so none of these is a test that
+passes because something else is failing.
+
+U-12 and U-15 each kill a second case as well, and both are the negative half
+that stops the fix being satisfied by doing the thing unconditionally: _still
+refuses a DIFFERENT ask under one key_ (a replay must compare the request hash,
+not just find the key) and _refuses the move when a name this panel holds is
+already held at the destination_ (a rebind that skipped what it could not move
+would be the collision with a success message on it). U-14 has the same pair in
+`tests/web/panels.test.tsx`: _does not call a policy an overwrite when this
+operator set the stored one_.
+
+### The three that needed no fix, and why
+
+- **Reap expired unfunded reservations (P1).** Already done, by the commits this
+  record's round three describes: cancellation releases the hold
+  (`OrderService.cancelByCustomer`), payment expiry releases one per expired
+  order and sweeps abandoned drafts (`PaymentExpiryService`).
+- **A customer-authorized read when rebuilding the summary (P1).** Already done:
+  both the AUTOMATIC and the typed-name paths call `orders.orderForCustomer`,
+  and section 6-8 of `docs/phase6c-audit.md` records the defect it fixed.
+- **Strip UUID dashes before rendering `{order_id}` (P1).** Does not apply:
+  `USERNAME_TEMPLATE_TOKENS` is a closed set and `{order_id}` is not in it. The
+  owner's final correction replaced the id tokens with four-character digests
+  (`{order4}`, `{customer4}`, `{tg4}`), each of which renders `[a-z0-9]` only.
+
 ## What is NOT covered here, and why
 
 **The provider's real maximum username length.** Twenty is a product decision,

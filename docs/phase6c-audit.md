@@ -492,3 +492,65 @@ bot does not spend four more failed logins on the operator's panel), the order i
 REFUNDED once for the exact total through the one credit path, and the service is
 still ACTIVE with the allowance and window it had — on the row and on the panel.
 Recorded as U-11 in `docs/phase6c-username-falsification.md`.
+
+### 6-10. The Codex round on this PR: four defects and three non-findings
+
+Seven findings. Four were real and are fixed here; the other three are recorded
+with the evidence that they no longer describe this code, rather than closed
+silently.
+
+**A retried username choice was answered with a conflict.** `chooseUsername` had
+no pre-mutation replay lookup — the only command in `OrderService` without one.
+`rememberOnce` is a conditional INSERT, so the second arrival under a key gets
+`false` and throws `IDEMPOTENCY_IN_FLIGHT`: correct for two requests racing,
+wrong for the ordinary post-timeout retry it also caught, where the customer was
+told their request conflicted with itself instead of being handed the name they
+had reserved. `replayUsername` reads the reservation BY ORDER rather than
+reconstructing it, so a name released since falls through to a fresh attempt.
+
+**A stale CUSTOM tap opened a window nothing could satisfy.** `beginUsernameEntry`
+validated the order and not the panel. The allocator does refuse a mode the panel
+no longer offers — one typed message later, and its refusal aborts the
+transaction that would have closed the window. So the customer was told to type a
+name, every name was refused, and the window went on intercepting their ordinary
+messages for the rest of its ten minutes: the legacy prompt-capture failure
+(INCIDENT-FIN-001) with a customer on the other end. The gate is now the same
+refusal, given before the window exists.
+
+**The Web Admin overwrite warning ignored the username policy.** `remote.usernamePolicy`
+was computed and used only by the "somebody moved something" banner, never by the
+verdict that says whether this save replaces their value. The policy is sent
+WHOLE or not at all, so two administrators editing it at once meant one silently
+replaced the other's switches and preset — under a notice that said only their
+own changed fields were going.
+
+**Moving a panel left its username holds behind.** `namespace_key` is provider
+plus host and is frozen on the reservation row. Changing a panel's address moved
+the panel out from under every name it was holding: the holds kept counting
+against the old machine while settlement created accounts on the new one. Since
+two panels may point at one host — the reason the namespace is not the panel —
+a move onto an occupied host let one name be reserved twice for one machine, and
+the two orders met on the provider's `409` with both customers already paid.
+`PanelNamespaceRebinder` carries the holds with the address in the same
+transaction, and refuses the edit whole (`panel.namespace_conflict`) when one of
+them cannot move. Funded holds move too: a funded name is one an account exists
+under, and nobody else may take it at the new address either.
+
+The three that needed no fix: the reservation reaper and the customer-scoped
+summary read were already done by the commits sections 6-7 and 6-8 describe, and
+the `{order_id}` dashed-UUID finding names a token the owner's final correction
+removed — `USERNAME_TEMPLATE_TOKENS` is a closed set whose id tokens are now
+four-character digests rendering `[a-z0-9]` only.
+
+One of the fixes was caught by a guard as it landed, which is worth recording
+because it is the guard doing exactly its job. Moving the mode refusal into
+`OrderService` made `SERVICE_USERNAME_MODE_UNAVAILABLE` a code a
+customer-facing service throws, and `tests/unit/refusal-coverage.test.ts`
+failed: `refusal` rethrows an unmapped code, the webhook swallows it, and the
+customer is told nothing at all. The allocator had been throwing it from
+outside the scanned set, so the reply had never existed. It does now —
+`bot.username.mode_unavailable`, the mirror of `bot.username.unavailable`,
+pointing the customer at the choice that IS available rather than naming the
+policy that changed.
+
+Recorded as U-12 to U-15 in `docs/phase6c-username-falsification.md`.

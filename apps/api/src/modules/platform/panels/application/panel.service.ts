@@ -53,6 +53,7 @@ import {
 import type { SafeHttpClient } from '../../../../infrastructure/net/safe-http.js';
 import type {
   PanelCredentialStore,
+  PanelNamespaceRebinder,
   PanelCredentialWrite,
   PanelRepository,
   ProbeBudget,
@@ -145,6 +146,13 @@ export interface PanelServiceDeps {
    */
   readonly capacity: PanelCapacityRepository;
   readonly credentials: PanelCredentialStore;
+  /**
+   * The username holds this panel carries, for the one edit that can move them.
+   *
+   * A port, because the rows live in commerce and commerce depends on this module —
+   * see `PanelNamespaceRebinder`. Nothing else on this service touches it.
+   */
+  readonly usernameNamespace: PanelNamespaceRebinder;
   readonly guard: PermissionGuard;
   /**
    * Whether this scope is still accepting work, read INSIDE the transaction.
@@ -1096,6 +1104,34 @@ export class PanelService {
         if (updated === null) {
           throw errors.notFound(PANEL_ERROR_CODES.PANEL_NOT_FOUND, 'No such panel.');
         }
+        /*
+         * The holds move WITH the address, in this transaction, or the edit does not
+         * happen.
+         *
+         * `namespace_key` is provider plus host and is frozen on the reservation row,
+         * so without this an address change left every name this panel holds counting
+         * against a machine the panel no longer talks to. Two panels can point at one
+         * host — that is the reason the namespace is not the panel — so a move onto a
+         * host another panel already occupies let the same name be reserved twice for
+         * one machine, and the two orders met on the provider's `409`, after both
+         * customers had paid. Found by Codex.
+         *
+         * Only when the address actually changed: `changes.baseUrl` is present only
+         * then, and the rebind itself is a further no-op when provider and host
+         * resolve to the key the rows already carry.
+         */
+        if (changes.baseUrl !== undefined) {
+          await this.deps.usernameNamespace.rebind(
+            tenant,
+            {
+              panelId,
+              providerType: before.panel.providerType,
+              baseUrl: changes.baseUrl,
+            },
+            tx,
+          );
+        }
+
         // An edit makes the panel due immediately. Whatever the monitor had
         // decided was about a configuration that no longer exists — and an
         // operator who has just corrected an address should not wait out a

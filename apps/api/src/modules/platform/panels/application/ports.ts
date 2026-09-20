@@ -662,3 +662,44 @@ export interface PanelCredentialStore {
     tx: TransactionScope,
   ): Promise<PanelCredentialSummary>;
 }
+
+/**
+ * Carries this panel's username holds to the namespace its new address belongs to.
+ *
+ * A PORT and not a direct call, because the rows live in commerce and this module
+ * is what commerce depends on — the import would run the wrong way. The panels side
+ * states what it needs; the side that owns `service_username_reservations`
+ * implements it, and the namespace key is derived there, by the one function that
+ * derives it for the allocator too.
+ *
+ * ## Why an address change has to touch them at all
+ *
+ * `namespace_key` is provider plus host, deliberately NOT the panel: two panels
+ * pointing at one machine share its account namespace, which is the whole reason the
+ * key is not simply `panel_id`. It is frozen when the hold is written, so an address
+ * change silently moves the panel out from under every name it is holding — the
+ * holds keep counting against the OLD host while settlement creates accounts on the
+ * new one. A name another panel already holds at the destination can then be taken a
+ * second time, and the two orders meet on the machine, after both have paid.
+ *
+ * FUNDED holds move too. A funded name is one an account exists under, and the
+ * conservative reading is the correct one here: after the move, that name must not be
+ * handed to anybody else at the new address either.
+ *
+ * It throws `PANEL_NAMESPACE_CONFLICT` rather than skipping the colliding row — the
+ * unique index is the guarantee, and a rebind that dropped what it could not move
+ * would be the guarantee quietly not holding.
+ */
+export interface PanelNamespaceRebinder {
+  /** How many holds moved. Zero is the ordinary case: most panels hold none. */
+  rebind(
+    scope: TenantContext,
+    input: {
+      readonly panelId: string;
+      readonly providerType: ProviderType;
+      /** The address the panel is moving TO, already validated and normalised. */
+      readonly baseUrl: string;
+    },
+    tx: TransactionScope,
+  ): Promise<number>;
+}

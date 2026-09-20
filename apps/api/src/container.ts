@@ -180,6 +180,7 @@ import { serviceSecrets } from './infrastructure/crypto/service-secrets.js';
 import { UsernameAllocator } from './modules/commerce/provisioning/application/username-allocator.js';
 import { PanelUsernameLane } from './modules/commerce/provisioning/application/username-lane.js';
 import { DrizzleServiceUsernameRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service-username.repository.js';
+import type { PanelNamespaceRebinder } from './modules/platform/panels/application/ports.js';
 import { DrizzleUsernameCaptureRepository } from './modules/commerce/provisioning/infrastructure/drizzle-username-capture.repository.js';
 import { DrizzleOperationRepository } from './modules/commerce/provisioning/infrastructure/drizzle-operation.repository.js';
 import { ProvisioningService } from './modules/commerce/provisioning/application/provisioning.service.js';
@@ -269,6 +270,14 @@ export interface Container {
    * `PanelUsernameLane` wired by hand would be a second answer to what a hold is.
    */
   readonly usernameLane: PanelUsernameLane;
+  /**
+   * The same repository, as the narrow port `PanelService` takes.
+   *
+   * Exposed so a test building its own `PanelService` wires the REAL rebinder rather
+   * than a stub — a stub here would let a panel move without its holds and the suite
+   * would not notice, which is the defect this port exists for.
+   */
+  readonly usernameNamespace: PanelNamespaceRebinder;
   readonly logger: Logger;
   readonly clock: Clock;
   readonly ids: IdGenerator;
@@ -1499,6 +1508,13 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     repository: panelRepository,
     capacity: panelCapacity,
     credentials: panelCredentials,
+    /*
+     * The same repository the allocator writes through, given to panels as the
+     * narrow port it declares. One implementation, so the namespace key an address
+     * change moves rows TO is derived by the function that derived the key they were
+     * written with.
+     */
+    usernameNamespace: serviceUsernameRepository,
     guard,
     // The same reader settings, templates, feature flags and the ping
     // recorder are given. The panels module was the one write path that did
@@ -2582,6 +2598,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     /** The sweep itself, so a test runs one pass instead of starting a timer. */
     paymentExpirySweep,
     usernameLane,
+    usernameNamespace: serviceUsernameRepository,
     serviceReminderLoop,
     serviceReminderSweep,
     customerNotificationLoop,

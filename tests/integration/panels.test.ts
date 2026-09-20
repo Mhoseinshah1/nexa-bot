@@ -222,6 +222,7 @@ describe('panels', () => {
 
       const service = new PanelService({
         capacity: ctx.container.panelCapacity,
+        usernameNamespace: ctx.container.usernameNamespace,
         repository: new DrizzlePanelRepository(ctx.container.database.db),
         credentials: new DrizzlePanelCredentialStore(
           ctx.container.database.db,
@@ -1353,6 +1354,7 @@ describe('panels', () => {
 
     const service = new PanelService({
       capacity: ctx.container.panelCapacity,
+      usernameNamespace: ctx.container.usernameNamespace,
       repository: new DrizzlePanelRepository(ctx.container.database.db),
       credentials: counting,
       guard: ctx.container.guard,
@@ -1544,6 +1546,7 @@ describe('panels', () => {
   ) {
     const scripted = new PanelService({
       capacity: ctx.container.panelCapacity,
+      usernameNamespace: ctx.container.usernameNamespace,
       repository: new DrizzlePanelRepository(ctx.container.database.db),
       credentials: new DrizzlePanelCredentialStore(ctx.container.database.db, ctx.container.cipher),
       guard: ctx.container.guard,

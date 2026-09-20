@@ -883,6 +883,20 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
    * what is wrong.
    */
   const preview = previewUsername(draftPolicy);
+  /*
+   * Changed from the basis, which is exactly what decides whether it is SENT.
+   *
+   * Hoisted out of `onSubmit` rather than computed twice, because the two copies
+   * answer the same question for two consumers — the request and the overwrite
+   * warning — and a warning derived from a second spelling of "changed" is a warning
+   * about a field that may not be in the request.
+   */
+  const policyChanged =
+    allowCustom !== basis.usernamePolicy.allowCustom ||
+    allowAutomatic !== basis.usernamePolicy.allowAutomatic ||
+    strategy !== basis.usernamePolicy.strategy ||
+    draftPolicy.prefix !== basis.usernamePolicy.prefix ||
+    draftPolicy.template !== basis.usernamePolicy.template;
 
   const draftCap = capFromInput(maxServices);
   const overwritesCap =
@@ -890,10 +904,41 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
     draftCap !== INVALID_CAP &&
     draftCap !== basis.capacity.maxServices &&
     draftCap !== panel.capacity.maxServices;
+  /*
+   * The policy, asked the same three questions as the name, the URL and the cap.
+   *
+   * `remote.usernamePolicy` was computed and then used only by the "somebody moved
+   * something" banner — never by the verdict that says whether THIS save replaces
+   * their value. So two administrators editing the policy at once got the
+   * "only your changed fields are sent" reassurance while the whole policy object,
+   * which is sent WHOLE or not at all, overwrote the other's switches and preset.
+   * Found by Codex.
+   *
+   * Compared field by field rather than by identity: `draftPolicy` is rebuilt on
+   * every render, so `!==` on the object is true always and the warning would be
+   * permanent. `prefix` and `template` are compared through `draftPolicy`, which is
+   * where the '' → null conversion has already happened — the same values the request
+   * carries, so the verdict judges what is actually sent.
+   */
+  const samePolicy = (other: {
+    readonly allowCustom: boolean;
+    readonly allowAutomatic: boolean;
+    readonly strategy: UsernameStrategy;
+    readonly prefix: string | null;
+    readonly template: string | null;
+  }) =>
+    draftPolicy.allowCustom === other.allowCustom &&
+    draftPolicy.allowAutomatic === other.allowAutomatic &&
+    draftPolicy.strategy === other.strategy &&
+    draftPolicy.prefix === other.prefix &&
+    draftPolicy.template === other.template;
+  const overwritesPolicy =
+    remote.usernamePolicy && policyChanged && !samePolicy(panel.usernamePolicy);
   const willOverwrite =
     overwrites(name, basis.name, panel.name, remote.name, (a, b) => a.trim() === b.trim()) ||
     overwrites(baseUrl, basis.baseUrl, panel.baseUrl, remote.baseUrl, sameUrl) ||
-    overwritesCap;
+    overwritesCap ||
+    overwritesPolicy;
 
   /**
    * Every identity control, not just the Save button.
@@ -1115,12 +1160,6 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
      * ceiling. Showing every issue at once is the same rule the template validator
      * follows — an operator fixing one problem per round trip is one who gives up.
      */
-    const policyChanged =
-      allowCustom !== basis.usernamePolicy.allowCustom ||
-      allowAutomatic !== basis.usernamePolicy.allowAutomatic ||
-      strategy !== basis.usernamePolicy.strategy ||
-      draftPolicy.prefix !== basis.usernamePolicy.prefix ||
-      draftPolicy.template !== basis.usernamePolicy.template;
     if (policyChanged && !policyVerdict.ok) {
       /*
        * The evaluator's own words, plus the template's issue list where it has one.

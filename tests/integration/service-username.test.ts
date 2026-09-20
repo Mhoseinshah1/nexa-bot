@@ -8,6 +8,7 @@ import {
   usernameDigest4,
   COMMERCE_ERROR_CODES,
   PANEL_ERROR_CODES,
+  PLATFORM_ERROR_CODES,
   money,
   type ActorContext,
   type BotInstanceId,
@@ -769,5 +770,206 @@ describe('the name a service is sold under', () => {
       prefix: 'nx',
       template: null,
     });
+  });
+  // -------------------------------------------------------------------------
+  // What a RETRY gets, and what a stale button may open
+  // -------------------------------------------------------------------------
+
+  it('hands a retried choice the name it already took, rather than a conflict', async () => {
+    /*
+     * Codex, P2. The command had no replay lookup at all.
+     *
+     * `rememberOnce` is a conditional INSERT, so the second arrival under a key finds
+     * the row already there and throws `IDEMPOTENCY_IN_FLIGHT`. That is the right
+     * answer for two requests racing — the loser must roll back — and the wrong one
+     * for the case it also caught: a customer whose reply timed out, retrying with the
+     * key the client already generated, was told their request conflicted with itself.
+     *
+     * The same key AND the same ask, which is what makes it a retry. `confirm` and
+     * `createDraft` have had this lookup since Phase 4B; the username command was
+     * written without it.
+     */
+    const order = await drafted(panelLegacy);
+    const once = await ctx.container.orders.chooseUsername(tenantA, systemActor('retry-1'), {
+      idempotencyKey: 'choose-retry',
+      customerId: customerA,
+      orderId: order.id,
+      choice: { mode: 'CUSTOM', raw: 'ali2026' },
+    });
+    const again = await ctx.container.orders.chooseUsername(tenantA, systemActor('retry-2'), {
+      idempotencyKey: 'choose-retry',
+      customerId: customerA,
+      orderId: order.id,
+      choice: { mode: 'CUSTOM', raw: 'ali2026' },
+    });
+
+    expect(again.username, 'the name they already have, not a 409').toBe('ali2026');
+    expect(again.id, 'and the same row — nothing was allocated twice').toBe(once.id);
+    expect(await reservations(order.id)).toHaveLength(1);
+  });
+
+  it('still refuses a DIFFERENT ask under one key, because that is a bug and not a retry', async () => {
+    /*
+     * The negative half, and the reason the replay compares a request hash rather
+     * than just finding the key. Without it the fix above would turn "I asked for
+     * something else under the same key" into "here is the first answer", which is
+     * how a customer ends up holding a name they did not choose.
+     */
+    const order = await drafted(panelLegacy);
+    await ctx.container.orders.chooseUsername(tenantA, systemActor('mismatch-1'), {
+      idempotencyKey: 'choose-mismatch',
+      customerId: customerA,
+      orderId: order.id,
+      choice: { mode: 'CUSTOM', raw: 'ali2026' },
+    });
+    await expect(
+      ctx.container.orders.chooseUsername(tenantA, systemActor('mismatch-2'), {
+        idempotencyKey: 'choose-mismatch',
+        customerId: customerA,
+        orderId: order.id,
+        choice: { mode: 'CUSTOM', raw: 'ali2027' },
+      }),
+    ).rejects.toMatchObject({ code: PLATFORM_ERROR_CODES.IDEMPOTENCY_PAYLOAD_MISMATCH });
+    expect((await reservations(order.id))[0]?.username, 'and the first name stands').toBe(
+      'ali2026',
+    );
+  });
+
+  it('refuses to open a typing window on a panel that no longer takes typed names', async () => {
+    /*
+     * Codex, P2. `beginUsernameEntry` checked the ORDER and not the panel.
+     *
+     * `allocate` does refuse a CUSTOM the panel does not offer — one typed message
+     * later, and the refusal aborts the transaction that would have closed the
+     * window. So a button drawn before an operator made the panel automatic-only told
+     * the customer to type a name, refused every name they typed, and left the window
+     * intercepting their ordinary messages for the rest of its ten minutes. That is
+     * the legacy prompt-capture failure (INCIDENT-FIN-001) with the customer on the
+     * other end of it.
+     *
+     * Asserted as BOTH: the refusal, and no row. A refusal that still opened the
+     * window would leave the interception in place, which is the actual harm.
+     */
+    const order = await drafted(panelLegacy);
+    await setPolicy(panelLegacy, false, true, null);
+
+    await expect(
+      ctx.container.orders.beginUsernameEntry(tenantA, systemActor(key()), {
+        idempotencyKey: key(),
+        botInstanceId: BOT_A,
+        customerId: customerA,
+        orderId: order.id,
+      }),
+    ).rejects.toMatchObject({ code: COMMERCE_ERROR_CODES.SERVICE_USERNAME_MODE_UNAVAILABLE });
+
+    const windows = await ctx.container.database.db.execute(
+      sql`SELECT count(*)::int AS n FROM username_captures WHERE order_id = ${order.id}`,
+    );
+    expect(
+      (windows.rows[0] as { n: number } | undefined)?.n,
+      'nothing is listening for a name it would refuse',
+    ).toBe(0);
+  });
+
+  it('opens the window on a panel that does take typed names', async () => {
+    // The positive half, so the guard above cannot be satisfied by refusing always.
+    const order = await drafted(panelLegacy);
+    const opened = await ctx.container.orders.beginUsernameEntry(tenantA, systemActor(key()), {
+      idempotencyKey: key(),
+      botInstanceId: BOT_A,
+      customerId: customerA,
+      orderId: order.id,
+    });
+    expect(opened.expiresAt.getTime()).toBeGreaterThan(ctx.container.clock.now().getTime());
+  });
+
+  // -------------------------------------------------------------------------
+  // What moving a panel does to the names it is holding
+  // -------------------------------------------------------------------------
+
+  it('carries the names a panel holds to the namespace of its new address', async () => {
+    /*
+     * Codex, P2. `namespace_key` is frozen on the row, and nothing moved it.
+     *
+     * The key is provider plus host and deliberately NOT the panel, because two
+     * panels pointing at one machine share its account namespace. Freezing it means
+     * an address change left every name this panel holds counting against a machine
+     * the panel no longer talks to — so the guarantee the unique index exists for
+     * stopped describing the machine the accounts would actually be created on.
+     */
+    const order = await drafted(panelTemplated);
+    await choose(order, 'ali2026');
+    const before = (await reservations(order.id))[0];
+    expect(before?.namespace_key).toContain('t.example.test');
+
+    await ctx.container.panels.update(tenantA, owner, panelTemplated, {
+      baseUrl: 'https://moved.example.test',
+      idempotencyKey: key(),
+    });
+
+    const after = (await reservations(order.id))[0];
+    expect(after?.namespace_key, 'the hold followed the panel').toContain('moved.example.test');
+    expect(after?.username, 'and the name itself is untouched, as it must be').toBe('ali2026');
+  });
+
+  it('refuses the move when a name this panel holds is already held at the destination', async () => {
+    /*
+     * The other outcome, and the one that costs money if it is allowed.
+     *
+     * `panelShared` belongs to the OTHER tenant and sits on `shared.example.test`;
+     * namespaces are not tenant-scoped, which is the point of the case above this
+     * file's "holds a name across tenants that share one provider host". Moving
+     * `panelTemplated` onto that host would put two holds on one name for one
+     * machine — and nothing would notice until the second provider create answered
+     * 409, with both customers already paid.
+     *
+     * The edit is refused WHOLE: the rebind and the panel row are one transaction, so
+     * the address is still the old one afterwards. A rebind that skipped the row it
+     * could not move would be the same collision with a success message on it.
+     */
+    // The other tenant's panel, on the host this one is about to move to.
+    const elsewhere = await products.create(tenantB, {
+      id: ctx.container.ids.uuid() as ProductId,
+      draft: draft(panelShared),
+      now: ctx.container.clock.now(),
+    });
+    await products.setStatus(
+      tenantB,
+      elsewhere.id,
+      'INACTIVE',
+      'ACTIVE',
+      ctx.container.clock.now(),
+    );
+    const theirCustomer = await customer(tenantB, '900903');
+    const theirOrder = await ctx.container.orders.createDraft(tenantB, systemActor(key()), {
+      idempotencyKey: key(),
+      customerId: theirCustomer,
+      productId: elsewhere.id,
+    });
+    await ctx.container.orders.chooseUsername(tenantB, systemActor(key()), {
+      idempotencyKey: key(),
+      customerId: theirCustomer,
+      orderId: theirOrder.id,
+      choice: { mode: 'CUSTOM', raw: 'taken2026' },
+    });
+    // And this tenant's own order holds the same name, legitimately, on another host.
+    const ours = await drafted(panelTemplated, customerB);
+    await choose(ours, 'taken2026', customerB);
+
+    await expect(
+      ctx.container.panels.update(tenantA, owner, panelTemplated, {
+        baseUrl: 'https://shared.example.test',
+        idempotencyKey: key(),
+      }),
+    ).rejects.toMatchObject({ code: PANEL_ERROR_CODES.PANEL_NAMESPACE_CONFLICT });
+
+    const row = await ctx.container.database.db.execute(
+      sql`SELECT base_url FROM panels WHERE id = ${panelTemplated}`,
+    );
+    expect(
+      (row.rows[0] as { base_url: string } | undefined)?.base_url,
+      'the whole edit unwound, address included',
+    ).toBe('https://t.example.test');
+    expect((await reservations(ours.id))[0]?.namespace_key).toContain('t.example.test');
   });
 });

@@ -399,11 +399,15 @@ export class OrderService {
           : canonicalizeCustomUsername(input.choice.raw),
     });
 
+    /** Before the replay, for the reason `createDraft` states: a replay returns a row. */
     await this.authorize(scope, actor, {
       action: 'order.username.choose',
       entityType: 'Order',
       entityId: orderId,
     });
+
+    const replayed = await this.replayUsername(scope, input.idempotencyKey, requestHash, orderId);
+    if (replayed !== null) return replayed;
 
     return runAuthorizedMutation(
       this.mutationDeps(),
@@ -566,6 +570,28 @@ export class OrderService {
           throw errors.notFound(COMMERCE_ERROR_CODES.ORDER_NOT_FOUND, 'Unknown order.');
         }
         this.assertNameable(order);
+        /*
+         * The PANEL's modes, not the ones the button was drawn from.
+         *
+         * `allocate` already refuses a CUSTOM it does not offer — but it refuses at
+         * SUBMISSION, one typed message later, and the refusal aborts the transaction
+         * that would have closed the window. So a tap carrying CUSTOM after an
+         * operator made the panel automatic-only told the customer to type a name,
+         * refused every name they typed, and left the window intercepting their
+         * ordinary messages for the rest of its ten minutes. Found by Codex.
+         *
+         * The same refusal as the allocator's, deliberately: one wrong answer, given
+         * before the window exists rather than after. Nothing is opened, because this
+         * throws and the transaction carries the window's insert.
+         */
+        if (
+          !(await this.deps.usernames.modesFor(scope, order.line.panelId, tx)).includes('CUSTOM')
+        ) {
+          throw errors.preconditionFailed(
+            COMMERCE_ERROR_CODES.SERVICE_USERNAME_MODE_UNAVAILABLE,
+            'That way of choosing a username is not available for this plan.',
+          );
+        }
 
         const now = this.deps.clock.now();
         const window = await this.deps.usernames.openWindow(
@@ -1350,6 +1376,43 @@ export class OrderService {
     );
     if (found === null) return null;
     return this.deps.repository.findById(scope, found.result.orderId as OrderId);
+  }
+
+  /**
+   * The name a completed `chooseUsername` already took, or null.
+   *
+   * The username command had no replay lookup at all, and the shape of that omission
+   * is the one this file has now met three times: `rememberOnce` is a conditional
+   * INSERT, so the SECOND arrival under a key finds the row already there, gets
+   * `false`, and throws `IDEMPOTENCY_IN_FLIGHT`. That answer is right for a
+   * double-tap — two requests raced and the loser must roll back — and wrong for the
+   * ordinary case it also caught: a customer whose reply timed out, retrying with the
+   * same key, was told their request conflicted with itself instead of being handed
+   * the name they had already reserved. Found by Codex.
+   *
+   * The reservation is re-read rather than reconstructed from the stored response, for
+   * the reason `replay` gives: the stored value is an order id and the ROW is the
+   * truth. So a name released since — cancelled, swept, or cleared as a stale draft —
+   * falls through to a fresh attempt rather than replaying a hold that is gone.
+   *
+   * `find` compares the request hash, so a different ask under the same key is a
+   * payload mismatch and not a replay. The hash carries the customer, which is what
+   * stops one customer replaying another's key.
+   */
+  private async replayUsername(
+    scope: TenantContext,
+    key: string,
+    requestHash: string,
+    orderId: OrderId,
+  ): Promise<UsernameReservation | null> {
+    const found = await this.deps.idempotency.find<{ orderId: string }>(
+      scope,
+      ORDER_NAMESPACE,
+      key,
+      requestHash,
+    );
+    if (found === null || found.result.orderId !== orderId) return null;
+    return this.deps.usernames.held(scope, orderId);
   }
 
   /**

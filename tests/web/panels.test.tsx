@@ -1546,6 +1546,92 @@ describe('the panel detail', () => {
     });
   });
 
+  it('promises an overwrite when the concurrent change is the USERNAME POLICY', async () => {
+    /*
+     * Codex, P2. `remote.usernamePolicy` was computed and then used by the banner
+     * only — never by the verdict.
+     *
+     * The policy is sent WHOLE or not at all, so this is the field where a silent
+     * overwrite costs the most: two administrators editing it at once meant one of
+     * them replaced the other's switches AND preset, under a notice that said only
+     * their changed fields were going. And the preset decides what every future
+     * customer's service is called.
+     */
+    const id = panel().id as string;
+    const withPolicy = (strategy: string) =>
+      panel({
+        usernamePolicy: {
+          allowCustom: true,
+          allowAutomatic: true,
+          strategy,
+          prefix: strategy === 'PREFIX_RANDOM' ? 'nx' : null,
+          template: null,
+        },
+      });
+    const route = { url: `/panels/${id}`, body: { panel: withPolicy('PREFIX_RANDOM') } as unknown };
+    const api = stubApi([
+      route,
+      { url: `/panels/${id}/status`, body: { panel: withPolicy('PREFIX_RANDOM') } },
+    ]);
+    renderPage(<PanelDetailPage id={id} mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    // This operator turns the typed-name switch off...
+    fireEvent.click(screen.getByLabelText(t('web.panel_username_custom')));
+    // ...while somebody else changes the preset to something different again.
+    route.body = { panel: withPolicy('RANDOM') };
+    fireEvent.click(screen.getByRole('button', { name: 'غیرفعال‌سازی' }));
+
+    const notice = await screen.findByText(/جای دیگری تغییر کرده/);
+    expect(notice.textContent ?? '').toContain('بازنویسی می‌کند');
+
+    // And the save really does carry the whole policy, so the promise is not a
+    // scare: the message alone would stay green for a field the request omits.
+    fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+    await waitFor(() => {
+      const write = api.calls.find(
+        (call) => call.method === 'POST' && call.url.endsWith(`/panels/${id}`),
+      );
+      expect(
+        (write?.body as Record<string, unknown> | undefined)?.['usernamePolicy'],
+      ).toMatchObject({ allowCustom: false, strategy: 'PREFIX_RANDOM' });
+    });
+  });
+
+  it('does not call a policy an overwrite when this operator set the stored one', async () => {
+    /*
+     * The other side, and the reason this needs all three terms like the cap: two
+     * administrators reacting to the same complaint turn the same switch off. The
+     * escape from a false warning is "load the fresh value", which resets the whole
+     * form — so warning the second one costs them their unsaved base URL to prevent
+     * a write that would have stored what is already there.
+     */
+    const id = panel().id as string;
+    const withCustom = (allowCustom: boolean) =>
+      panel({
+        usernamePolicy: {
+          allowCustom,
+          allowAutomatic: true,
+          strategy: 'PREFIX_RANDOM',
+          prefix: 'nx',
+          template: null,
+        },
+      });
+    const route = { url: `/panels/${id}`, body: { panel: withCustom(true) } as unknown };
+    stubApi([route, { url: `/panels/${id}/status`, body: { panel: withCustom(true) } }]);
+    renderPage(<PanelDetailPage id={id} mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    fireEvent.click(screen.getByLabelText(t('web.panel_username_custom')));
+    route.body = { panel: withCustom(false) };
+    fireEvent.click(screen.getByRole('button', { name: 'غیرفعال‌سازی' }));
+
+    const notice = await screen.findByText(/جای دیگری تغییر کرده/);
+    expect(notice.textContent ?? '', 'the same policy is not a replacement').not.toContain(
+      'بازنویسی می‌کند',
+    );
+  });
+
   it('does not call a cap an overwrite when this operator typed the stored one', async () => {
     /*
      * The other side, and the reason this cannot be `!== basis` alone: two

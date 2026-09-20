@@ -780,6 +780,7 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.username.exhausted',
       'bot.username.instructions',
       'bot.username.invalid',
+      'bot.username.mode_unavailable',
       'bot.username.stale',
       'bot.username.taken',
       'bot.username.unavailable',

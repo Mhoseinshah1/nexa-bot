@@ -1,4 +1,5 @@
 import { and, eq, ne, sql } from 'drizzle-orm';
+import { errors, PANEL_ERROR_CODES, type ProviderType } from '@nexa/contracts';
 import type { ServiceUsernameMode, TenantContext } from '@nexa/contracts';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import {
@@ -6,12 +7,34 @@ import {
   services,
 } from '../../../../infrastructure/persistence/schema.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
+import type { PanelNamespaceRebinder } from '../../../platform/panels/application/ports.js';
+import { namespaceKeyFor } from '../application/username-allocator.js';
 import type {
   ReserveUsernameInput,
   ReserveUsernameOutcome,
   ServiceUsernameRepository,
   UsernameReservation,
 } from '../application/username-ports.js';
+
+/**
+ * A PostgreSQL unique violation, however deep the driver wrapped it.
+ *
+ * `23505` arrives on the pg error, and drizzle wraps that in a `DrizzleQueryError`
+ * carrying the SQL and its parameters — so reading `.code` off what was thrown finds
+ * `undefined` and the translation below never happens. The chain is walked rather
+ * than assumed to be one link, because the depth is the driver's business and this
+ * rule is not: a violation is a violation at any depth.
+ *
+ * Bounded, so a cyclic `cause` cannot spin here.
+ */
+function isUniqueViolation(error: unknown): boolean {
+  let at: unknown = error;
+  for (let depth = 0; depth < 5 && at !== null && typeof at === 'object'; depth += 1) {
+    if ((at as { code?: unknown }).code === '23505') return true;
+    at = (at as { cause?: unknown }).cause;
+  }
+  return false;
+}
 
 type Row = typeof serviceUsernameReservations.$inferSelect;
 
@@ -39,7 +62,9 @@ function toRecord(row: Row): UsernameReservation {
  * the state the loser started from — and the loser here is a second customer who is
  * told they have a name they do not have.
  */
-export class DrizzleServiceUsernameRepository implements ServiceUsernameRepository {
+export class DrizzleServiceUsernameRepository
+  implements ServiceUsernameRepository, PanelNamespaceRebinder
+{
   constructor(private readonly db: Database) {}
 
   async findByOrder(
@@ -216,5 +241,57 @@ export class DrizzleServiceUsernameRepository implements ServiceUsernameReposito
       )
       .returning({ id: serviceUsernameReservations.id });
     return rows.length;
+  }
+
+  /**
+   * `PanelNamespaceRebinder`. Moves this panel's holds to the namespace of a new
+   * address, or refuses the move.
+   *
+   * The port's docblock says why an address change has to touch these rows at all.
+   * Three things about HOW:
+   *
+   *   - `ne(namespaceKey, next)` makes it a no-op when the key does not actually
+   *     change, which is the ordinary case for an edit that renames a panel while
+   *     resubmitting the address it already had;
+   *   - no `funded_at` predicate, deliberately: a funded name is one an account
+   *     exists under, and the conservative reading is that nobody else may take it
+   *     at the destination either;
+   *   - a unique violation is translated rather than propagated. `23505` here means
+   *     exactly one thing — a name this panel holds is already held at the
+   *     destination — and the operator needs that sentence, not a 500. The
+   *     transaction is the caller's and unwinds with the panel row it was about to
+   *     write, which is the point: the address change and the rebind are one commit
+   *     or neither.
+   */
+  async rebind(
+    scope: TenantContext,
+    input: {
+      readonly panelId: string;
+      readonly providerType: ProviderType;
+      readonly baseUrl: string;
+    },
+    tx: TransactionScope,
+  ): Promise<number> {
+    const next = namespaceKeyFor(input.providerType, input.baseUrl);
+    try {
+      const rows = await tx.tx
+        .update(serviceUsernameReservations)
+        .set({ namespaceKey: next })
+        .where(
+          and(
+            eq(serviceUsernameReservations.tenantId, scope.tenantId),
+            eq(serviceUsernameReservations.panelId, input.panelId),
+            ne(serviceUsernameReservations.namespaceKey, next),
+          ),
+        )
+        .returning({ id: serviceUsernameReservations.id });
+      return rows.length;
+    } catch (cause) {
+      if (!isUniqueViolation(cause)) throw cause;
+      throw errors.conflict(
+        PANEL_ERROR_CODES.PANEL_NAMESPACE_CONFLICT,
+        'A username this panel is holding is already reserved at that address.',
+      );
+    }
   }
 }

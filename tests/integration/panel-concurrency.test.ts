@@ -334,6 +334,7 @@ describe('panel service under concurrency', () => {
   ): PanelService {
     return new PanelService({
       capacity: ctx.container.panelCapacity,
+      usernameNamespace: ctx.container.usernameNamespace,
       repository: new DrizzlePanelRepository(ctx.container.database.db),
       credentials: new DrizzlePanelCredentialStore(ctx.container.database.db, ctx.container.cipher),
       guard: ctx.container.guard,
