@@ -91,8 +91,39 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.catalog.empty': 'در حال حاضر سرویسی برای فروش تنظیم نشده است.',
   'bot.catalog.heading': 'سرویس‌های قابل خرید:',
 
+  // The username a customer's service is known by on the panel. The panel's policy
+  // decides which of the two modes they are offered; with one enabled the choice is
+  // skipped and that flow runs directly.
+  'bot.username.choose': 'یوزرنیم سرویس‌تان را چطور انتخاب می‌کنید؟',
+  'bot.username.custom_button': '✍️ نام کاربری دلخواه',
+  'bot.username.automatic_button': '🎲 انتخاب خودکار',
+  // The rule, stated once and in full, because a customer who is refused twice for two
+  // different reasons they were never told stops buying. Every clause here is one the
+  // shared validator actually enforces.
+  'bot.username.instructions':
+    'یوزرنیم دلخواه‌تان را بفرستید.\n' +
+    '• بین ۴ تا ۲۰ نویسه\n' +
+    '• فقط حروف انگلیسی (a تا z)، رقم انگلیسی (0 تا 9)، خط تیره (-) و زیرخط (_)\n' +
+    '• حداقل یک حرف انگلیسی و حداقل یک رقم داشته باشد\n' +
+    '• حروف بزرگ و کوچک فرقی ندارند و در نهایت با حروف کوچک ذخیره می‌شود\n' +
+    '• حرف و رقم فارسی، فاصله، نقطه، @ و ایموجی پذیرفته نمی‌شود',
+  'bot.username.invalid':
+    'این یوزرنیم پذیرفته نشد. لطفاً با توجه به شرایط بالا یک یوزرنیم دیگر بفرستید.',
+  'bot.username.taken':
+    'این یوزرنیم قبلاً گرفته شده است. لطفاً یوزرنیم دیگری بفرستید. هیچ مبلغی کسر نشده است.',
+  // Three refusals the customer did not cause. Each says that no money moved, because
+  // that is the only part of the answer they can act on; none of them names a panel,
+  // a preset or a template, because none of those is theirs to fix.
+  'bot.username.exhausted':
+    'ساخت خودکار یوزرنیم در این لحظه ممکن نشد. لطفاً چند دقیقه دیگر دوباره تلاش کنید. هیچ مبلغی کسر نشده است.',
+  'bot.username.unavailable':
+    'ساخت خودکار یوزرنیم برای این خرید ممکن نیست. لطفاً یوزرنیم دلخواه خود را بفرستید یا با پشتیبانی تماس بگیرید. هیچ مبلغی کسر نشده است.',
+  'bot.username.mode_unavailable':
+    'انتخاب یوزرنیم دلخواه برای این خرید در دسترس نیست. لطفاً گزینه‌ی انتخاب خودکار را بزنید. هیچ مبلغی کسر نشده است.',
+  'bot.username.stale':
+    'یوزرنیم انتخاب‌شده برای این سفارش دیگر معتبر نیست و آزاد شد. لطفاً دوباره یوزرنیم انتخاب کنید. هیچ مبلغی کسر نشده است.',
   'bot.order.summary':
-    'سفارش شما\nسرویس: {productTitle}\nمدت: {durationDays}\nحجم: {trafficBytes}\nمبلغ قابل پرداخت: {total}',
+    'سفارش شما\nسرویس: {productTitle}\nمدت: {durationDays}\nحجم: {trafficBytes}\nیوزرنیم: {username}\nمبلغ قابل پرداخت: {total}',
   'bot.order.confirm_button': 'تأیید و ثبت سفارش',
   'bot.order.unavailable': 'این سرویس در حال حاضر قابل خرید نیست.',
   'bot.order.expired': 'مهلت این سفارش به پایان رسیده است. لطفاً دوباره سفارش دهید.',
@@ -188,6 +219,34 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * Phase 6B — the panels section. No address, no credential, no provider body:
    * a chat message is forwardable and stays in that chat for ever.
    */
+  /*
+   * The reminder settings section.
+   *
+   * Every value is PRINTED before anything is editable — the cure for BC-SB-003, where
+   * seven of twelve legacy screens ask for a new value without showing the old one.
+   */
+  'bot.admin.reminders_button': 'یادآورهای سرویس',
+  'bot.admin.reminders_section':
+    'تنظیمات یادآور سرویس‌ها\n\n' +
+    'یادآور پیش از انقضا: {expiry}\n' +
+    '  • یادآور اول: {firstDays} روز پیش از پایان\n' +
+    '  • یادآور دوم: {secondDays} روز پیش از پایان\n' +
+    'اعلام پایان اعتبار: {expired}\n\n' +
+    'یادآور مصرف حجم: {usage}\n' +
+    '  • آستانه اول: {firstPercent}٪\n' +
+    '  • آستانه دوم: {secondPercent}٪\n' +
+    '  • آستانه پایانی: {finalPercent}٪\n\n' +
+    'برای تغییر هر مقدار، دکمهٔ آن را بزنید. روشن و خاموش کردن خودِ یادآورها از پنل وب ' +
+    'انجام می‌شود، چون دامنهٔ اثر آن کل مشتریان است و به تأیید نوشتاری و ثبت دلیل نیاز دارد.',
+  'bot.admin.reminder_expiry_first_button': 'یادآور اول انقضا',
+  'bot.admin.reminder_expiry_second_button': 'یادآور دوم انقضا',
+  'bot.admin.reminder_usage_first_button': 'آستانه اول مصرف',
+  'bot.admin.reminder_usage_second_button': 'آستانه دوم مصرف',
+  'bot.admin.reminder_usage_final_button': 'آستانه پایانی مصرف',
+  'bot.admin.reminder_choose':
+    'تنظیم: <code>{setting}</code>\nمقدار فعلی: {current}\n\nمقدار تازه را انتخاب کنید.',
+  'bot.admin.reminder_saved': 'ذخیره شد.\n<code>{setting}</code> از این پس {value} است.',
+  'bot.admin.reminder_refused': 'این مقدار پذیرفته نشد.\n\n{reason}',
   'bot.admin.panels_button': '🛰 پنل‌ها',
   'bot.admin.panels_section':
     'پنل‌های در سرویس، از تازه‌ترین. برای دیدن وضعیت و ظرفیت هر پنل، روی نامش بزنید.',
@@ -195,7 +254,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'هیچ پنلی در سرویس نیست. پنل‌ها در پنل وب ساخته می‌شوند، چون ساختن پنل به اعتبارنامه نیاز دارد و اعتبارنامه در چت وارد نمی‌شود.',
   'bot.admin.panels_more_button': '▶️ صفحهٔ بعد',
   'bot.admin.panel_detail':
-    'پنل: {name}\nارائه‌دهنده: {provider}\nوضعیت: {status}\nسلامت: {health}\nآخرین بررسی: {checkedAt}\nخطای آخرین بررسی: {failure}\n\nسرویس‌های فعال: {services}\nرزرو جاری: {reservations}\nسقف سرویس: {cap}',
+    'پنل: {name}\nارائه‌دهنده: {provider}\nوضعیت: {status}\nسلامت: {health}\nآخرین بررسی: {checkedAt}\nخطای آخرین بررسی: {failure}\n\nسرویس‌های فعال: {services}\nرزرو جاری: {reservations}\nسقف سرویس: {cap}\n\nیوزرنیم دلخواه: {usernameCustom}\nیوزرنیم خودکار: {usernameAutomatic}\nپیشوند: {usernamePrefix}\nالگوی یوزرنیم: {usernameTemplate}',
   'bot.admin.panel_gone': 'این پنل پیدا نشد.',
   'bot.admin.panel_test_button': '🔌 تست اتصال',
   'bot.admin.panel_tested': 'تست اتصال انجام شد و سلامت پنل به‌روز شد.',
@@ -222,6 +281,32 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * A prompt that captures the next message is what overwrote a production gateway
    * setting in INCIDENT-FIN-001; a command carries its argument with it.
    */
+  // The panel's username policy, read back in full before anything is edited. The two
+  // toggles and the four presets are taps; the prefix and the template are commands
+  // that carry their argument, because a prompt that captures the next message is
+  // INCIDENT-FIN-001.
+  'bot.admin.username_button': '👤 یوزرنیم سرویس‌ها',
+  'bot.admin.username_section':
+    'یوزرنیم سرویس‌های پنل <b>{panel}</b>\n\n' +
+    'انتخاب دلخواه توسط مشتری: {custom}\n' +
+    'انتخاب خودکار: {automatic}\n' +
+    'روش خودکار:\n' +
+    '{random} تصادفی ۱۲ نویسه‌ای\n' +
+    '{prefixRandom} پیشوند + تصادفی\n' +
+    '{telegramIdRandom} شناسهٔ تلگرام + تصادفی\n' +
+    '{customTemplate} الگوی دلخواه\n' +
+    'پیشوند: <code>{prefix}</code>\n' +
+    'الگو: <code>{template}</code>\n' +
+    'نمونهٔ خروجی: <code>{preview}</code>\n\n' +
+    'هر یوزرنیم جدید بین ۴ تا ۲۰ نویسه و فقط از حروف کوچک انگلیسی، رقم، خط تیره و زیرخط ساخته می‌شود.\n' +
+    'برای تغییر پیشوند: <code>/panel_prefix &lt;شمارهٔ پنل&gt; &lt;پیشوند&gt;</code>\n' +
+    'برای تغییر الگو: <code>/panel_template &lt;شمارهٔ پنل&gt; &lt;الگو&gt;</code>',
+  'bot.admin.username_custom_button': 'انتخاب دلخواه',
+  'bot.admin.username_automatic_button': 'انتخاب خودکار',
+  'bot.admin.username_strategy_random': 'تصادفی ۱۲ نویسه‌ای',
+  'bot.admin.username_strategy_prefix_random': 'پیشوند + تصادفی',
+  'bot.admin.username_strategy_telegram_id_random': 'شناسهٔ تلگرام + تصادفی',
+  'bot.admin.username_refused': 'ذخیره نشد: {reason}',
   'bot.admin.section':
     'ادمین‌هایی که دسترسی تلگرام دارند در فهرست زیر آمده‌اند.\n\nبرای دادن دسترسی تلگرام به یک ادمین موجود:\n/link <شناسهٔ عددی تلگرام> <نام کاربری ادمین>\n\nبرای تعیین نقش یک ادمین:\n/role <نام کاربری ادمین> <کلید نقش>',
   'bot.admin.admins_none':
@@ -367,6 +452,35 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.provisioning': 'سرویس شما در حال ساخته شدن است. نتیجه به شما اطلاع داده می‌شود.',
   // Deliberately does NOT invite a retry: `templates.ts` records that a retry after an
   // unknown outcome is how a duplicate account is created.
+  /*
+   * The six reminders.
+   *
+   * Each names the SERVICE, states the fact with the figures the reminder was raised
+   * against, and gives the next step. The numbers are placeholders rather than words
+   * because the thresholds are a tenant's settings now (CBR-003, CBR-011): a body that
+   * said «سه روز» would be wrong the moment an operator configured five.
+   *
+   * The figures are a SNAPSHOT taken when the reminder was raised, not a value re-read
+   * at send time, so the sentence cannot disagree with the threshold it names.
+   */
+  'bot.service.expiry_first':
+    'سرویس «{service}» تا {days} روز دیگر به پایان اعتبار می‌رسد (تاریخ: {expiresAt}).\n' +
+    'برای جلوگیری از قطع شدن، از بخش «سرویس‌های من» تمدید کنید.',
+  'bot.service.expiry_second':
+    'تنها {days} روز تا پایان اعتبار سرویس «{service}» مانده است (تاریخ: {expiresAt}).\n' +
+    'برای جلوگیری از قطع شدن، همین حالا از بخش «سرویس‌های من» تمدید کنید.',
+  'bot.service.expired':
+    'اعتبار سرویس «{service}» در {expiresAt} به پایان رسید.\n' +
+    'از بخش «سرویس‌های من» می‌توانید آن را تمدید کنید.',
+  'bot.service.usage_first':
+    '{usagePercent} درصد از حجم سرویس «{service}» مصرف شده است ({usedTraffic} از {totalTraffic}).\n' +
+    'در صورت نیاز می‌توانید از بخش «سرویس‌های من» حجم اضافه کنید.',
+  'bot.service.usage_second':
+    '{usagePercent} درصد از حجم سرویس «{service}» مصرف شده است ({usedTraffic} از {totalTraffic}).\n' +
+    'برای جلوگیری از قطع شدن، از بخش «سرویس‌های من» حجم اضافه کنید.',
+  'bot.service.usage_final':
+    'حجم سرویس «{service}» به پایان رسید ({usedTraffic} از {totalTraffic}).\n' +
+    'از بخش «سرویس‌های من» می‌توانید حجم اضافه کنید.',
   'bot.service.provision_delayed':
     'ساخت سرویس کامل نشد و موضوع به پشتیبانی اطلاع داده شد. لطفاً منتظر پیگیری بمانید.',
   'bot.service.renew_button': 'تمدید سرویس',

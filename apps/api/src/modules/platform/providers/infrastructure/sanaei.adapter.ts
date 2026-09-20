@@ -1,4 +1,5 @@
 import {
+  assertSendableProviderUsername,
   providerDescriptor,
   type ProviderAdapter,
   type ProviderCapability,
@@ -748,6 +749,22 @@ export class SanaeiAdapter implements ProviderAdapter {
     http: ProviderHttpClient,
     input: CreateProviderUserInput,
   ): Promise<ProviderUserOutcome> {
+    /*
+     * The third and last place a username is checked, and the only one that stands
+     * between a bad name and somebody else's machine.
+     *
+     * `assertSendable`, NOT `assertNew`, and the difference matters: this method is
+     * also reached by a RECONCILE-driven retry that re-sends the name a SERVICE ROW
+     * already carries, and a service provisioned before the four-to-twenty contract
+     * carries `nx` plus 32 hex. Asserting the minting rule here would crash a
+     * recoverable retry for a service the customer is holding.
+     *
+     * An assertion rather than a refusal: the surface and the allocator have both
+     * already validated what they mint, so reaching here with a name that is neither
+     * mintable nor legacy means those checks were removed or bypassed — our defect,
+     * not the customer's. It runs BEFORE authentication, so it costs no request.
+     */
+    assertSendableProviderUsername(input.username);
     const activation = target.activation as SanaeiActivation;
     const auth = await this.authenticate(target, http);
     if (!auth.ok) return auth;

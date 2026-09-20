@@ -6,6 +6,8 @@ import type {
   ProviderFailureKind,
   ProviderType,
   TenantContext,
+  UsernamePolicyDraft,
+  UsernameStrategy,
 } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 
@@ -49,6 +51,16 @@ export interface PanelRecord {
   readonly activation: unknown;
   /** The operator's cap on services this panel may carry, or null for no limit. */
   readonly maxServices: number | null;
+  /**
+   * Which names this panel accepts for the services sold onto it.
+   *
+   * Always present, never optional. A panel with no policy would have to be read as
+   * "whatever the caller assumes", and the two callers that matter — the customer
+   * purchase step and the allocator — would assume differently. Existing panels were
+   * migrated to both modes enabled on the default preset, which is exactly the
+   * behaviour they had before the column existed.
+   */
+  readonly usernamePolicy: PanelUsernamePolicy;
   readonly archivedAt: Date | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
@@ -131,6 +143,33 @@ export interface PanelView {
   readonly health: PanelHealthSnapshot | null;
 }
 
+/**
+ * A panel's username policy, as stored.
+ *
+ * Structurally `UsernamePolicyDraft` from the contracts package, and deliberately
+ * re-declared rather than imported as a type alias: this is the application layer's
+ * own shape, and the contract's is what the frozen evaluator reads. The `satisfies`
+ * below is what stops the two drifting.
+ *
+ * `prefix` and `template` are null unless `strategy` uses them, which the two CHECK
+ * constraints enforce one layer down. Null is a real value here and not an absence,
+ * which is why this interface has no optional field.
+ */
+export interface PanelUsernamePolicy {
+  readonly allowCustom: boolean;
+  readonly allowAutomatic: boolean;
+  readonly strategy: UsernameStrategy;
+  readonly prefix: string | null;
+  readonly template: string | null;
+}
+
+/** A compile-time assertion that the two shapes are one shape. */
+export type PanelUsernamePolicyIsDraft = PanelUsernamePolicy extends UsernamePolicyDraft
+  ? UsernamePolicyDraft extends PanelUsernamePolicy
+    ? true
+    : never
+  : never;
+
 export interface CreatePanelInput {
   readonly id: string;
   readonly name: string;
@@ -140,6 +179,13 @@ export interface CreatePanelInput {
   readonly activation?: PanelActivation;
   /** The cap this panel is created with. Absent means uncapped. */
   readonly maxServices?: number | null;
+  /**
+   * Absent means the column defaults: both modes, the default preset.
+   *
+   * Replaced as a WHOLE — see `panelUsernamePolicyInputSchema`. The one rule the policy
+   * has is about the pair of booleans, so a half-applied policy has no meaning.
+   */
+  readonly usernamePolicy?: PanelUsernamePolicy;
   /**
    * From the `Clock` port, not the database's `now()`.
    *
@@ -160,6 +206,8 @@ export interface UpdatePanelInput {
   readonly activation?: PanelActivation | null;
   /** Absent leaves it; `null` removes the cap; a positive integer sets one. */
   readonly maxServices?: number | null;
+  /** Absent leaves the whole policy; present replaces the whole policy. */
+  readonly usernamePolicy?: PanelUsernamePolicy;
 }
 
 /**
@@ -613,4 +661,45 @@ export interface PanelCredentialStore {
     at: Date,
     tx: TransactionScope,
   ): Promise<PanelCredentialSummary>;
+}
+
+/**
+ * Carries this panel's username holds to the namespace its new address belongs to.
+ *
+ * A PORT and not a direct call, because the rows live in commerce and this module
+ * is what commerce depends on — the import would run the wrong way. The panels side
+ * states what it needs; the side that owns `service_username_reservations`
+ * implements it, and the namespace key is derived there, by the one function that
+ * derives it for the allocator too.
+ *
+ * ## Why an address change has to touch them at all
+ *
+ * `namespace_key` is provider plus host, deliberately NOT the panel: two panels
+ * pointing at one machine share its account namespace, which is the whole reason the
+ * key is not simply `panel_id`. It is frozen when the hold is written, so an address
+ * change silently moves the panel out from under every name it is holding — the
+ * holds keep counting against the OLD host while settlement creates accounts on the
+ * new one. A name another panel already holds at the destination can then be taken a
+ * second time, and the two orders meet on the machine, after both have paid.
+ *
+ * FUNDED holds move too. A funded name is one an account exists under, and the
+ * conservative reading is the correct one here: after the move, that name must not be
+ * handed to anybody else at the new address either.
+ *
+ * It throws `PANEL_NAMESPACE_CONFLICT` rather than skipping the colliding row — the
+ * unique index is the guarantee, and a rebind that dropped what it could not move
+ * would be the guarantee quietly not holding.
+ */
+export interface PanelNamespaceRebinder {
+  /** How many holds moved. Zero is the ordinary case: most panels hold none. */
+  rebind(
+    scope: TenantContext,
+    input: {
+      readonly panelId: string;
+      readonly providerType: ProviderType;
+      /** The address the panel is moving TO, already validated and normalised. */
+      readonly baseUrl: string;
+    },
+    tx: TransactionScope,
+  ): Promise<number>;
 }

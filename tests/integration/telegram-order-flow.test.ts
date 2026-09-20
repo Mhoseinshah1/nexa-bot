@@ -284,6 +284,23 @@ describe('the customer purchase flow over Telegram', () => {
     // a week later.
     expect(rows[0]?.['expires_at']).not.toBeNull();
 
+    /*
+     * The draft's first screen is the USERNAME question, not the summary.
+     *
+     * A panel that offers both ways of choosing has a question to ask, and it is asked
+     * before the summary because the summary shows the name that was chosen. Asserting
+     * the summary on the reply to the product tap stopped being right when the username
+     * step landed; this test had not followed.
+     */
+    expect(String(lastMessage()?.body['text'])).toBe(CATALOGUE_FA['bot.username.choose']);
+    expect(buttonsOf(lastMessage()).map((b) => b.callback_data)).toEqual([
+      `j:${String(rows[0]?.['id'])}`,
+      `Z:${String(rows[0]?.['id'])}`,
+    ]);
+
+    // Answer it the cheap way, and NOW the summary.
+    expect((await tap(`Z:${String(rows[0]?.['id'])}`)).statusCode).toBe(201);
+
     // The summary, rendered from the catalogue with the ORDER's figures in it.
     const text = String(lastMessage()?.body['text']);
     expect(text).toContain('پلن پایه');

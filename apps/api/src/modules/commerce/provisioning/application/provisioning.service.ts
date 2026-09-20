@@ -6,7 +6,8 @@ import {
   MAX_TRAFFIC_BYTES,
   NexaError,
   SUBSCRIPTION_REF_BYTES,
-  providerUsernameFor,
+  DEFAULT_USERNAME_PREFIX,
+  drawUsernameCharacters,
   SERVICE_PAGE_MAX,
   UNLIMITED_TRAFFIC_BYTES,
   type ActorContext,
@@ -39,6 +40,7 @@ import type {
   OperationRepository,
   PanelOperabilityReader,
 } from './ports.js';
+import type { ServiceUsernameRepository } from './username-ports.js';
 
 /** Asking for a provider call to be made again is `services.edit`, not `services.view`. */
 const SERVICE_EDIT_PERMISSION = 'services.edit';
@@ -68,6 +70,15 @@ export interface ProvisioningServiceDeps {
   readonly scopeActivity: ScopeActivityReader;
   /** Unguessable values for the two identities that are capabilities, not ids. */
   readonly secrets: ServiceSecretSource;
+  /**
+   * The name this order reserved before it was paid for.
+   *
+   * Read here rather than decided here: the allocator chose it at confirmation, the
+   * customer saw it in the summary they agreed to, and the unique index has been
+   * holding it since. Deciding again at settlement would be a second opinion about
+   * the one string that has to match what is on the panel.
+   */
+  readonly usernames: ServiceUsernameRepository;
   /**
    * The holder of the panel slot this order took at confirmation.
    *
@@ -286,6 +297,44 @@ export class ProvisioningService {
     tx: TransactionScope,
   ): Promise<{ readonly service: ServiceRecord; readonly operation: OperationRecord }> {
     const serviceId = this.deps.ids.uuid();
+    /*
+     * The reserved name, and a default one ONLY when there is no reservation.
+     *
+     * Every order confirmed since the username policy shipped holds a reservation —
+     * `OrderService.confirm` requires one. The fallback is for an order that was
+     * already AWAITING_PAYMENT when this release was deployed: it was confirmed by
+     * code that took no name, and refusing to settle it would strand money a customer
+     * has already sent.
+     *
+     * It used to be `providerUsernameFor(serviceId)` — `nx` plus 32 hex, derived from
+     * the service id. That shape is gone: the universal contract bounds every NEW name
+     * at twenty characters, and a 34-character fallback would be this release minting
+     * exactly what it refuses everywhere else. The fallback is now the default preset,
+     * `nx` plus ten random characters, drawn from the same CSPRNG the allocator uses.
+     *
+     * Random rather than derived has one consequence worth stating: it cannot collide
+     * deterministically, but it also cannot be recomputed. Neither matters here —
+     * `providerRefFor` reads the stored column and reconciliation asks the panel about
+     * the name the service row already carries — and the collision odds over 36^10 are
+     * beneath the unique index that would catch them.
+     *
+     * Note the interaction with the losing `create` below: when another transaction
+     * created this order's service first, `serviceId` is discarded and the winner's
+     * row is used, along with the winner's name. The discarded row was never written.
+     */
+    const reserved = await this.deps.usernames.findByOrder(scope, order.id, tx);
+    const providerUsername =
+      reserved?.username ??
+      `${DEFAULT_USERNAME_PREFIX}${drawUsernameCharacters(this.deps.secrets.hex(10), 10)}`;
+    /*
+     * Stamped in the SETTLING transaction, which is what makes it true.
+     *
+     * `funded_at` is the single field that stops the reaper taking this name back, and
+     * the money for it commits here. A stamp written afterwards, in a later
+     * transaction or by a job, leaves a window in which the customer has paid and the
+     * name is still reapable.
+     */
+    if (reserved !== null) await this.deps.usernames.markFunded(scope, order.id, now, tx);
     const created = await this.deps.services.create(
       scope,
       {
@@ -294,7 +343,7 @@ export class ProvisioningService {
         orderId: order.id,
         panelId: order.line.panelId,
         productId: order.line.productId,
-        providerUsername: providerUsernameFor(serviceId),
+        providerUsername,
         /*
          * Random, and written here — before anything leaves the process.
          *

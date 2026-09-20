@@ -1166,6 +1166,9 @@ describe('payments and settlement', () => {
   const expirySweep = () =>
     new PaymentExpiryService({
       panelSales: ctx.container.panelSales,
+      // The username hold's counterpart to the panel slot. Off the container: the
+      // lane is stateless and the isolation claim is about tenants, not about it.
+      usernames: ctx.container.usernameLane,
       payments: new DrizzlePaymentRepository(ctx.container.database.db),
       orders: new DrizzleOrderRepository(ctx.container.database.db),
       uow: ctx.container.uow,
@@ -1491,7 +1494,11 @@ describe('payments and settlement', () => {
 
       const report = await expirySweep().runOnce(tenantA);
 
-      expect(report).toEqual({ payments: 1, orders: 1 });
+      // One hold freed per expired order, because these orders went through the real
+      // flow and each reserved a name. Before the expiry sweep released them, that
+      // name stayed out of circulation for ever — the unique index on
+      // `(namespace_key, username)` does not read `expires_at`.
+      expect(report).toEqual({ payments: 1, orders: 1, usernameHolds: 1 });
       expect((await paymentRow(payment.id)).state).toBe('EXPIRED');
       expect((await stateOf(order.id)).state).toBe('EXPIRED');
       // An audit row for each, and no operational event: the passage of time is the
@@ -1505,7 +1512,7 @@ describe('payments and settlement', () => {
 
       const report = await expirySweep().runOnce(tenantA);
 
-      expect(report).toEqual({ payments: 0, orders: 0 });
+      expect(report).toEqual({ payments: 0, orders: 0, usernameHolds: 0 });
       expect((await paymentRow(payment.id)).state).toBe('PENDING');
       expect((await stateOf(order.id)).state).toBe('AWAITING_PAYMENT');
     });
@@ -1526,7 +1533,7 @@ describe('payments and settlement', () => {
 
       const report = await expirySweep().runOnce(tenantA);
 
-      expect(report).toEqual({ payments: 0, orders: 0 });
+      expect(report).toEqual({ payments: 0, orders: 0, usernameHolds: 0 });
       expect((await paymentRow(payment.id)).state).toBe('CONFIRMED');
       expect((await stateOf(order.id)).state).toBe('PAID');
     });
@@ -1548,7 +1555,11 @@ describe('payments and settlement', () => {
       // exactly its own.
       const report = await expirySweep().runOnce(tenantA);
 
-      expect(report).toEqual({ payments: 1, orders: 1 });
+      // One hold freed per expired order, because these orders went through the real
+      // flow and each reserved a name. Before the expiry sweep released them, that
+      // name stayed out of circulation for ever — the unique index on
+      // `(namespace_key, username)` does not read `expires_at`.
+      expect(report).toEqual({ payments: 1, orders: 1, usernameHolds: 1 });
       expect((await paymentRow(paymentA.id)).state).toBe('EXPIRED');
       expect((await paymentRow(paymentB.id)).state).toBe('PENDING');
       expect((await stateOf(orderB.id)).state).toBe('AWAITING_PAYMENT');
@@ -1593,7 +1604,7 @@ describe('payments and settlement', () => {
        */
       const report = await expirySweep().runOnce(tenantA);
 
-      expect(report).toEqual({ payments: 0, orders: 0 });
+      expect(report).toEqual({ payments: 0, orders: 0, usernameHolds: 0 });
       // Nothing decayed while the tenant was stopped; the rows simply wait.
       expect((await paymentRow(payment.id)).state).toBe('PENDING');
       expect((await stateOf(order.id)).state).toBe('AWAITING_PAYMENT');
@@ -1621,7 +1632,7 @@ describe('payments and settlement', () => {
 
       const report = await expirySweep().runOnce(tenantA);
 
-      expect(report).toEqual({ payments: 0, orders: 0 });
+      expect(report).toEqual({ payments: 0, orders: 0, usernameHolds: 0 });
       expect((await stateOf(order.id)).state).toBe('AWAITING_PAYMENT');
       expect((await paymentRow(payment.id)).state).toBe('PENDING');
     });

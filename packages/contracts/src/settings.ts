@@ -2,6 +2,12 @@ import { z } from 'zod';
 import { OPERATIONAL_SEVERITIES } from './ports.js';
 import { ORDER_EXPIRY_MINUTES_MAX, ORDER_EXPIRY_MINUTES_MIN } from './commerce.js';
 import { USAGE_SYNC_MINUTES_MAX, USAGE_SYNC_MINUTES_MIN } from './provisioning.js';
+import {
+  EXPIRY_REMINDER_DAYS_MAX,
+  EXPIRY_REMINDER_DAYS_MIN,
+  USAGE_REMINDER_PERCENT_MAX,
+  USAGE_REMINDER_PERCENT_MIN,
+} from './service-reminders.js';
 import { moneySchema, salesCurrencyCodeSchema } from './money.js';
 import {
   PAYMENT_AMOUNT_MAX_MINOR,
@@ -508,6 +514,100 @@ export const SETTINGS = [
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
     configures: null,
+    consumer: 'ACTIVE',
+  },
+  /*
+   * The five reminder thresholds.
+   *
+   * CBR-003 and CBR-011: six of Mirza's twelve configurable capabilities are crons, and
+   * every one of them is «a flag plus a single scalar prompt». The owner confirmed the
+   * shape, so these are settings and their on/off switches are feature flags — the split
+   * `features.ts` already makes, applied to the case the research describes.
+   *
+   * BC-SB-003 is the defect this registry exists to prevent and these keys inherit the
+   * cure for free: every settings surface in this product prints the current value
+   * before it asks for a new one. Mirza's own کرون زمان
+   * screen happens to be one of the five that DO echo (3روز); the volume
+   * threshold beside it is one of the seven that do not, «so an admin cannot read the
+   * current configuration without overwriting it».
+   *
+   * Each bound is the CONTRACT's own constant rather than a number retyped here, for the
+   * reason the two window keys above give: two copies of a bound drift. What no per-key
+   * schema can express is the RELATION between them — first further out than second,
+   * usage strictly increasing — and that is `refuseReminderThresholds`, enforced by a
+   * `SettingChangeGuard` on each of the five inside the write's own transaction.
+   */
+  {
+    key: 'reminders.expiry_first_days',
+    description:
+      'How many days before a service expires the FIRST warning is sent. Must be greater ' +
+      'than reminders.expiry_second_days; the pair is checked as a combination when either ' +
+      'is written, so a value that would put the two warnings in the wrong order is refused ' +
+      'rather than stored. Inert while the service_expiry_reminders flag is off, and ' +
+      'preserved across turning it off and on again.',
+    schema: z.number().int().min(EXPIRY_REMINDER_DAYS_MIN).max(EXPIRY_REMINDER_DAYS_MAX),
+    defaultValue: 3,
+    configures: 'service_expiry_reminders',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'reminders.expiry_second_days',
+    description:
+      'How many days before expiry the SECOND, more urgent warning is sent. Must be less ' +
+      'than reminders.expiry_first_days. One day by default, which is the floor: a shorter ' +
+      'warning is one a fifteen-minute sweep may deliver after the service has lapsed.',
+    schema: z.number().int().min(EXPIRY_REMINDER_DAYS_MIN).max(EXPIRY_REMINDER_DAYS_MAX),
+    defaultValue: 1,
+    configures: 'service_expiry_reminders',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'reminders.usage_first_percent',
+    description:
+      'The first traffic-usage threshold, in percent of the allowance. The three usage ' +
+      'thresholds must be strictly increasing and distinct; the trio is checked as a ' +
+      'combination when any one of them is written. A service with an unlimited allowance ' +
+      'is never warned, whatever these say.',
+    schema: z.number().int().min(USAGE_REMINDER_PERCENT_MIN).max(USAGE_REMINDER_PERCENT_MAX),
+    defaultValue: 80,
+    configures: 'service_usage_reminders',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'reminders.usage_second_percent',
+    description:
+      'The second traffic-usage threshold, in percent. Must be greater than ' +
+      'reminders.usage_first_percent and less than reminders.usage_final_percent.',
+    schema: z.number().int().min(USAGE_REMINDER_PERCENT_MIN).max(USAGE_REMINDER_PERCENT_MAX),
+    defaultValue: 95,
+    configures: 'service_usage_reminders',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'reminders.usage_final_percent',
+    description:
+      'The last traffic-usage threshold, in percent. A hundred by default — the moment ' +
+      'the allowance is gone. The message says the traffic ran out and offers more; it does ' +
+      'not claim the service stopped, because whether a panel cuts a customer off at the ' +
+      'limit is the provider’s behaviour and not a fact this installation observed.',
+    schema: z.number().int().min(USAGE_REMINDER_PERCENT_MIN).max(USAGE_REMINDER_PERCENT_MAX),
+    defaultValue: 100,
+    configures: 'service_usage_reminders',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
     consumer: 'ACTIVE',
   },
 ] as const satisfies readonly SettingDefinition[];

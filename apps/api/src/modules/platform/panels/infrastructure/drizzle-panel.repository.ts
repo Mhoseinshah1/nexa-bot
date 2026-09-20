@@ -12,6 +12,7 @@ import type {
   ProviderFailureKind,
   ProviderType,
   TenantContext,
+  UsernameStrategy,
 } from '@nexa/contracts';
 import { SCHEDULE_SUSPENDED_AT } from '../domain/monitor-cadence.js';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
@@ -317,6 +318,22 @@ export class DrizzlePanelRepository implements PanelRepository {
           // so a reader does not have to work out whether the two tri-states
           // differ here, and so an added column inherits the shape.
           ...(input.maxServices === undefined ? {} : { maxServices: input.maxServices }),
+          /*
+           * Absent leaves the column defaults: both modes enabled on the default
+           * preset, `nx` plus ten random characters. Spread as ONE unit rather than
+           * five independent spreads, because three CHECK constraints are about
+           * combinations of these columns and a partial write is what reaches a state
+           * none of them individually forbids.
+           */
+          ...(input.usernamePolicy === undefined
+            ? {}
+            : {
+                allowCustomUsername: input.usernamePolicy.allowCustom,
+                allowAutomaticUsername: input.usernamePolicy.allowAutomatic,
+                usernameStrategy: input.usernamePolicy.strategy,
+                usernamePrefix: input.usernamePolicy.prefix,
+                usernameTemplate: input.usernamePolicy.template,
+              }),
           createdAt: input.at,
           updatedAt: input.at,
         })
@@ -346,6 +363,22 @@ export class DrizzlePanelRepository implements PanelRepository {
     // Also a VALUE: `null` removes the cap. Lowering it below current usage is
     // allowed and terminates nothing — see `panels.max_services`.
     if (input.maxServices !== undefined) changes['maxServices'] = input.maxServices;
+    /*
+     * All three columns, or none. `null` on the template is a VALUE — it selects the
+     * derived generator — so it is written rather than skipped.
+     *
+     * Writing a subset would be the one way to reach a state the CHECK constraint
+     * forbids without the constraint firing: two concurrent edits, each disabling the
+     * mode the other left enabled, both individually legal against the row they read.
+     * The constraint catches that because both booleans are in every write.
+     */
+    if (input.usernamePolicy !== undefined) {
+      changes['allowCustomUsername'] = input.usernamePolicy.allowCustom;
+      changes['allowAutomaticUsername'] = input.usernamePolicy.allowAutomatic;
+      changes['usernameStrategy'] = input.usernamePolicy.strategy;
+      changes['usernamePrefix'] = input.usernamePolicy.prefix;
+      changes['usernameTemplate'] = input.usernamePolicy.template;
+    }
 
     let row;
     try {
@@ -1195,6 +1228,15 @@ function toRecord(row: typeof panels.$inferSelect): PanelRecord {
     baseUrl: row.baseUrl,
     status: row.status as PanelStatus,
     maxServices: row.maxServices,
+    usernamePolicy: {
+      allowCustom: row.allowCustomUsername,
+      allowAutomatic: row.allowAutomaticUsername,
+      // Narrowed from `text` for the reason `providerType` above gives: the CHECK
+      // constraint is what makes it safe, and the allocator's switch is exhaustive.
+      strategy: row.usernameStrategy as UsernameStrategy,
+      prefix: row.usernamePrefix,
+      template: row.usernameTemplate,
+    },
     // Passed through unnarrowed: the shape is per provider and the application layer
     // owns the schema that decides it. See `PanelRecord.activation`.
     activation: row.activation,

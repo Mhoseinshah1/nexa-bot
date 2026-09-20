@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   money,
   operationIdFrom,
+  DEFAULT_USERNAME_PATTERN,
   providerUsernameFor,
   type ActorContext,
   type BotInstanceId,
@@ -180,8 +181,16 @@ describe('provisioning invariants', () => {
     expect(service?.state).toBe('PENDING_PROVISION');
     expect(service?.customerId).toBe(customerA);
     expect(service?.panelId).toBe(panelA);
-    // Derived from the service's own id, which is what makes adoption possible later.
-    expect(service?.providerUsername).toBe(providerUsernameFor(service?.id ?? ''));
+    /*
+     * The name the ORDER reserved, not one derived from the service id.
+     *
+     * This used to assert `providerUsernameFor(service.id)` and call the derivation
+     * "what makes adoption possible later". Neither half is true any more: the name is
+     * chosen and reserved BEFORE the money moves, so it cannot be a function of an id
+     * that does not exist yet, and reconciliation adopts by asking the panel about the
+     * name the row already carries.
+     */
+    expect(service?.providerUsername).toMatch(DEFAULT_USERNAME_PATTERN);
 
     const planned = await operations.listForService(tenantA, service?.id ?? '', 10);
     expect(planned).toHaveLength(1);
@@ -225,8 +234,13 @@ describe('provisioning invariants', () => {
       sha256Hex(`nexa:client:${serviceId.toLowerCase()}`).slice(0, 8),
     );
 
-    // The username stays derived, because being askable-for by name is its whole job.
-    expect(service?.providerUsername).toBe(providerUsernameFor(serviceId));
+    /*
+     * And the username is NOT derived from the id either, which is the point of the
+     * paragraph above: a name read off a panel's client list must not recover the
+     * service id. It used to, because it was a reversible encoding of it.
+     */
+    expect(service?.providerUsername).not.toBe(providerUsernameFor(serviceId));
+    expect(service?.providerUsername).toMatch(DEFAULT_USERNAME_PATTERN);
 
     // Two services on one panel never share a reference — an index, not a hope.
     const second = await awaitingPayment('secret-2');

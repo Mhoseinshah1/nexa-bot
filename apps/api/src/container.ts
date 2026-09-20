@@ -112,6 +112,8 @@ import { OpsLogService } from './modules/platform/opslog/application/opslog.serv
 import { DrizzleSettingRepository } from './modules/control/settings/infrastructure/drizzle-settings.repository.js';
 import { SettingsResolver } from './modules/control/settings/application/settings-resolver.js';
 import { SettingsService } from './modules/control/settings/application/settings.service.js';
+import { ReminderThresholdsGuard } from './modules/control/settings/application/reminder-thresholds.guard.js';
+import { CONTROL_ERROR_CODES, SERVICE_REMINDER_DEFAULTS, isNexaError } from '@nexa/contracts';
 import { DrizzleFeatureFlagRepository } from './modules/control/features/infrastructure/drizzle-feature-flags.repository.js';
 import {
   FeatureFlagResolver,
@@ -165,7 +167,21 @@ import {
 import { OrderService } from './modules/commerce/orders/application/order.service.js';
 import { DrizzleOrderRepository } from './modules/commerce/orders/infrastructure/drizzle-order.repository.js';
 import { DrizzleServiceRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service.repository.js';
+import {
+  DrizzleServiceReminderRepository,
+  DrizzleServiceReminderSnapshotReader,
+} from './modules/commerce/provisioning/infrastructure/drizzle-service-reminder.repository.js';
+import { ServiceReminderService } from './modules/commerce/provisioning/application/service-reminder.service.js';
+import {
+  ServiceReminderLoop,
+  SERVICE_REMINDER_INTERVAL_MS,
+} from './modules/commerce/provisioning/application/service-reminder-loop.js';
 import { serviceSecrets } from './infrastructure/crypto/service-secrets.js';
+import { UsernameAllocator } from './modules/commerce/provisioning/application/username-allocator.js';
+import { PanelUsernameLane } from './modules/commerce/provisioning/application/username-lane.js';
+import { DrizzleServiceUsernameRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service-username.repository.js';
+import type { PanelNamespaceRebinder } from './modules/platform/panels/application/ports.js';
+import { DrizzleUsernameCaptureRepository } from './modules/commerce/provisioning/infrastructure/drizzle-username-capture.repository.js';
 import { DrizzleOperationRepository } from './modules/commerce/provisioning/infrastructure/drizzle-operation.repository.js';
 import { ProvisioningService } from './modules/commerce/provisioning/application/provisioning.service.js';
 import { ServiceAdminService } from './modules/commerce/provisioning/application/service-admin.service.js';
@@ -183,6 +199,7 @@ import { CustomerNotifier } from './modules/commerce/messaging/application/custo
 import { OperationOutcomeAnnouncer } from './modules/commerce/messaging/application/operation-outcome-announcer.js';
 import { DrizzleNotificationSubjectReader } from './modules/commerce/messaging/infrastructure/drizzle-notification-subject.reader.js';
 import { BotRuntime } from './surfaces/telegram/bot-runtime.js';
+import type { BotRuntimeDeps } from './surfaces/telegram/bot-runtime.js';
 import { I18nTemplateCatalogue } from './modules/control/templates/infrastructure/i18n-template-catalogue.js';
 import { TemplateManagementService } from './modules/control/templates/application/template-management.service.js';
 import { DrizzleNotificationRepository } from './modules/control/notifications/infrastructure/drizzle-notification.repository.js';
@@ -245,6 +262,22 @@ export interface Container {
   readonly panelSales: PanelSalesGate;
   readonly panelCapacity: DrizzlePanelCapacityRepository;
   readonly paymentExpirySweep: PaymentExpiryService;
+  /**
+   * The username reservation lane.
+   *
+   * Exposed because a test that builds its own `PaymentExpiryService` — the two-tenant
+   * isolation cases in `payments.test.ts` do — still needs the real lane, and a second
+   * `PanelUsernameLane` wired by hand would be a second answer to what a hold is.
+   */
+  readonly usernameLane: PanelUsernameLane;
+  /**
+   * The same repository, as the narrow port `PanelService` takes.
+   *
+   * Exposed so a test building its own `PanelService` wires the REAL rebinder rather
+   * than a stub — a stub here would let a panel move without its holds and the suite
+   * would not notice, which is the defect this port exists for.
+   */
+  readonly usernameNamespace: PanelNamespaceRebinder;
   readonly logger: Logger;
   readonly clock: Clock;
   readonly ids: IdGenerator;
@@ -276,6 +309,15 @@ export interface Container {
    * wedged panel must not delay work that needs no panel.
    */
   readonly paymentExpiryLoop: PaymentExpiryLoop;
+  /**
+   * The lane that warns a customer before their service runs out of days or traffic.
+   *
+   * Started by the WORKER only, for the reason above it: both halves read columns this
+   * installation already maintains and neither dials a panel.
+   */
+  readonly serviceReminderLoop: ServiceReminderLoop;
+  /** The sweep itself, so a test runs one pass instead of starting a timer. */
+  readonly serviceReminderSweep: ServiceReminderService;
   /**
    * The customer notification lane's timer.
    *
@@ -374,6 +416,8 @@ export interface Container {
 
   // Control plane — Phase 2
   readonly panels: PanelService;
+  /** The Telegram admin section's reminder seam. See the construction site. */
+  readonly reminderConfig: BotRuntimeDeps['reminderConfig'];
   /**
    * The background health loop. Started only by the `monitor` entrypoint.
    *
@@ -960,8 +1004,33 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const paymentReceiptRepository = new DrizzlePaymentReceiptRepository(database.db);
 
   const orderRepository = new DrizzleOrderRepository(database.db);
+  /*
+   * The username lane, built before the order service that takes it.
+   *
+   * Three pieces, and each is a different question: the repository holds the rows, the
+   * allocator decides the name, and the lane is the narrow port the orders module sees
+   * — so `OrderService` does not acquire a panel repository to answer a question that
+   * is not about orders. Same argument as `PanelSalesGate` beside it.
+   */
+  const serviceUsernameRepository = new DrizzleServiceUsernameRepository(database.db);
+  const usernameLane = new PanelUsernameLane({
+    allocator: new UsernameAllocator({
+      repository: serviceUsernameRepository,
+      ids,
+      secrets: serviceSecrets,
+      // The SAME hasher the operation ids use. `{customer4}` and `{order4}` have to
+      // be stable across processes and replays, and two hashers is two answers.
+      hash: sha256Hex,
+    }),
+    repository: serviceUsernameRepository,
+    captures: new DrizzleUsernameCaptureRepository(database.db),
+    ids,
+    panels: panelRepository,
+    customers: customerRepository,
+  });
   const orderService = new OrderService({
     panelSales: panelSalesGate,
+    usernames: usernameLane,
     repository: orderRepository,
     /*
      * The NARROW payment lane, not the repository.
@@ -1075,6 +1144,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     scopeActivity: tenants,
     // From the system CSPRNG, never from the id generator: see the binding's own note.
     secrets: serviceSecrets,
+    usernames: serviceUsernameRepository,
   });
 
   /**
@@ -1220,6 +1290,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     refunds: refundService,
     // `release` alone. A refunded order holds no capacity.
     panelSales: panelSalesGate,
+    usernames: usernameLane,
     notifier: customerNotifier,
     opsLog,
     outbox,
@@ -1301,6 +1372,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    */
   const paymentExpirySweep = new PaymentExpiryService({
     panelSales: panelSalesGate,
+    usernames: usernameLane,
     payments: paymentRepository,
     notifier: customerNotifier,
     orders: orderRepository,
@@ -1436,6 +1508,13 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     repository: panelRepository,
     capacity: panelCapacity,
     credentials: panelCredentials,
+    /*
+     * The same repository the allocator writes through, given to panels as the
+     * narrow port it declares. One implementation, so the namespace key an address
+     * change moves rows TO is derived by the function that derived the key they were
+     * written with.
+     */
+    usernameNamespace: serviceUsernameRepository,
     guard,
     // The same reader settings, templates, feature flags and the ping
     // recorder are given. The panels module was the one write path that did
@@ -1529,7 +1608,12 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
      * Here is the only place the two meet, which is what keeps the dependency
      * pointing inward.
      */
-    [new SalesCurrencyChangeGuard(refundRepository)],
+    [
+      new SalesCurrencyChangeGuard(refundRepository),
+      // One per reminder threshold. The five have to agree with one another, and no
+      // per-key schema can say so — see `ReminderThresholdsGuard`.
+      ...ReminderThresholdsGuard.all(settingsResolver),
+    ],
   );
 
   const featureFlagRepository = new DrizzleFeatureFlagRepository(database.db);
@@ -1552,6 +1636,32 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // For the mutation-time session-revocation check.
     sessions,
   );
+
+  const serviceReminderSweep = new ServiceReminderService({
+    reminders: new DrizzleServiceReminderRepository(database.db),
+    notifier: customerNotifier,
+    // The RESOLVERS, not the services. A background loop that could write a setting or
+    // a flag is a background loop that could turn itself on, and the write paths are
+    // where the permission check, the audit row and the combination validation live.
+    settings: settingsResolver,
+    features: featureFlagResolver,
+    scopeActivity: tenants,
+    uow,
+    clock,
+    ids,
+  });
+  const serviceReminderLoop = new ServiceReminderLoop(serviceReminderSweep, {
+    // The same per-pass closure the payment expiry loop uses, and for the same
+    // reason: the installation's tenant is a row, so it is not known while this
+    // object is being built.
+    scope: () =>
+      installationTenantId === null
+        ? null
+        : { tenantId: installationTenantId, botInstanceId: null },
+    intervalMs: SERVICE_REMINDER_INTERVAL_MS,
+    now: () => clock.now().getTime(),
+    logger,
+  });
 
   const templateRepository = new DrizzleTemplateRepository(database.db);
   const templateCatalogue = new I18nTemplateCatalogue();
@@ -1738,6 +1848,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       // The same tenant kill switch every other path reads. A stopped tenant is a
       // healthy pass that did nothing, never a throw — see `deliverDue`.
       scopeIsActive: (scope) => uow.run(scope, async (tx) => tenants.scopeIsActive(scope, tx)),
+      reminderSnapshots: new DrizzleServiceReminderSnapshotReader(database.db),
       logger,
     }),
     {
@@ -2373,6 +2484,89 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     });
   };
 
+  /**
+   * The reminder configuration seam, named so BOTH surfaces and the test can hold it.
+   *
+   * Both halves go through the SAME application services the Web Admin uses, so the
+   * two surfaces cannot drift: `list` charges `settings.view` — the key flags are
+   * read under too, see `FeatureFlagsService.FEATURES_VIEW` —
+   * `set` charges `settings.edit` and runs `ReminderThresholdsGuard` inside its own
+   * transaction. Nothing here re-implements a rule, and nothing here is authorized by
+   * holding the port — every call still takes the caller's actor.
+   *
+   * A named const rather than an inline literal on `BotRuntime`, because an
+   * integration test that asserts "both surfaces obey one path" has to be able to
+   * read the bot's path, and reading it through a hand-built copy would assert
+   * nothing about the one the bot actually uses.
+   */
+  const reminderConfig: BotRuntimeDeps['reminderConfig'] = {
+    read: async (scope, actor) => {
+      const [values, flags] = await Promise.all([
+        settingsService.list(scope, actor),
+        featureFlags.list(scope, actor),
+      ]);
+      const number = (key: string, fallback: number): number => {
+        const found = values.find((one) => one.key === key);
+        return typeof found?.value === 'number' ? found.value : fallback;
+      };
+      const on = (key: string, fallback: boolean): boolean =>
+        flags.find((one) => one.key === key)?.enabled ?? fallback;
+      return {
+        expiryEnabled: on('service_expiry_reminders', SERVICE_REMINDER_DEFAULTS.expiryEnabled),
+        expiredNoticeEnabled: on(
+          'service_expired_notice',
+          SERVICE_REMINDER_DEFAULTS.expiredNoticeEnabled,
+        ),
+        usageEnabled: on('service_usage_reminders', SERVICE_REMINDER_DEFAULTS.usageEnabled),
+        expiryFirstDays: number(
+          'reminders.expiry_first_days',
+          SERVICE_REMINDER_DEFAULTS.expiryFirstDays,
+        ),
+        expirySecondDays: number(
+          'reminders.expiry_second_days',
+          SERVICE_REMINDER_DEFAULTS.expirySecondDays,
+        ),
+        usageFirstPercent: number(
+          'reminders.usage_first_percent',
+          SERVICE_REMINDER_DEFAULTS.usageFirstPercent,
+        ),
+        usageSecondPercent: number(
+          'reminders.usage_second_percent',
+          SERVICE_REMINDER_DEFAULTS.usageSecondPercent,
+        ),
+        usageFinalPercent: number(
+          'reminders.usage_final_percent',
+          SERVICE_REMINDER_DEFAULTS.usageFinalPercent,
+        ),
+      };
+    },
+    write: async (scope, actor, key, value, idempotencyKey) => {
+      try {
+        await settingsService.set(scope, actor, {
+          idempotencyKey,
+          key,
+          value,
+          expectedVersion: null,
+        });
+        return { ok: true };
+      } catch (error: unknown) {
+        /*
+         * ONLY the combination refusal becomes a value.
+         *
+         * `INVALID_VALUE` is what `ReminderThresholdsGuard` raises, and its message
+         * is the Persian sentence an operator has to read. Everything else — a
+         * denial, a stopped tenant, a lost connection — rethrows and is handled the
+         * way it is everywhere else, because swallowing those would report a write
+         * that did not happen as one that did, which is `SOURCE_BUG-002` exactly.
+         */
+        if (isNexaError(error) && error.code === CONTROL_ERROR_CODES.INVALID_VALUE) {
+          return { ok: false, reason: error.message };
+        }
+        throw error;
+      }
+    },
+  };
+
   return {
     config,
     logger,
@@ -2403,6 +2597,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     paymentExpiryLoop,
     /** The sweep itself, so a test runs one pass instead of starting a timer. */
     paymentExpirySweep,
+    usernameLane,
+    usernameNamespace: serviceUsernameRepository,
+    serviceReminderLoop,
+    serviceReminderSweep,
     customerNotificationLoop,
     customerNotifications: customerNotificationRepository,
     audit,
@@ -2582,12 +2780,29 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
        * at confirmation, so it is the only copy that still says what the customer
        * agreed to.
        */
+      /*
+       * The reminder configuration seam for the Telegram admin section.
+       *
+       * Both halves go through the SAME application services the Web Admin uses, so the
+       * two surfaces cannot drift: `list` charges `settings.view` — the key flags are
+       * read under too, see `FeatureFlagsService.FEATURES_VIEW` —
+       * `set` charges `settings.edit` and runs `ReminderThresholdsGuard` inside its own
+       * transaction. Nothing here re-implements a rule, and nothing here is authorized
+       * by holding the port.
+       */
+      reminderConfig,
       purchaseTitle: async (scope, orderId) => {
         const order = await orderRepository.findById(scope, orderId);
         return order?.line.title ?? null;
       },
     }),
     panels: panelService,
+    /*
+     * The bot's own reminder-configuration seam, exposed so a test can read the path
+     * the SURFACE uses rather than a copy of it. Nothing else holds it: the HTTP
+     * surface reaches the same services directly.
+     */
+    reminderConfig,
     settingsService,
     settingsResolver,
     featureFlags,
@@ -2623,6 +2838,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       await backupRunSweeper.stop();
       await recoveryRequestSweeper.stop();
       await paymentExpiryLoop.stop();
+      await serviceReminderLoop.stop();
       await customerNotificationLoop.stop();
       await redis.close();
       await database.close();

@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { PanelsPage, PanelDetailPage, NewPanelPage } from '../../apps/web/src/pages/panels';
-import { t } from '../../apps/web/src/i18n/web.fa';
+import {
+  USERNAME_PREFIX_MAX_LENGTH,
+  USERNAME_STRATEGIES,
+  validateUsernamePolicy,
+} from '@nexa/contracts';
+import { t, type WebKey } from '../../apps/web/src/i18n/web.fa';
 import { panel, product, renderPage, stubApi } from './harness';
 
 /** The panels list reads its archive filter from the URL, as `/system` does. */
@@ -295,6 +300,181 @@ describe('the panel detail', () => {
    * it is the surface that would invent a masked stand-in, and `********` in a
    * populated edit field submits `********` back.
    */
+  /**
+   * The username policy, over the DOM.
+   *
+   * Four cases, and each one is a way the screen could lie to an operator about what
+   * their panel will call a customer's service.
+   */
+  describe('the username policy', () => {
+    it('renders every stored value rather than a default', async () => {
+      /*
+       * The read-back half of `docs/conventions.md`'s write-only rule. A policy an
+       * operator can set and cannot see is the legacy screen where "the only way to
+       * read a price is to overwrite it" — and here the consequence is worse than a
+       * price, because the preset decides what every future customer is called.
+       */
+      stubApi(
+        detail({
+          usernamePolicy: {
+            allowCustom: false,
+            allowAutomatic: true,
+            strategy: 'CUSTOM_TEMPLATE',
+            prefix: null,
+            template: 'z{tg4}_{random6}',
+          },
+        }),
+      );
+      renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+      await screen.findByText('Frankfurt A');
+
+      const custom = screen.getByLabelText(t('web.panel_username_custom')) as HTMLInputElement;
+      const automatic = screen.getByLabelText(
+        t('web.panel_username_automatic'),
+      ) as HTMLInputElement;
+      const strategy = screen.getByLabelText(t('web.panel_username_strategy')) as HTMLSelectElement;
+      const template = screen.getByLabelText(t('web.panel_username_template')) as HTMLInputElement;
+      expect(custom.checked).toBe(false);
+      expect(automatic.checked).toBe(true);
+      expect(strategy.value).toBe('CUSTOM_TEMPLATE');
+      expect(template.value).toBe('z{tg4}_{random6}');
+    });
+
+    it('shows a preset the operator can read in Persian, not its enum name', async () => {
+      stubApi(detail());
+      renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+      await screen.findByText('Frankfurt A');
+
+      const strategy = screen.getByLabelText(t('web.panel_username_strategy')) as HTMLSelectElement;
+      // Every preset is offered, and each option carries the Persian label rather than
+      // the constant — the machine value stays in `value`, where a customer never sees it.
+      for (const option of USERNAME_STRATEGIES) {
+        const rendered = [...strategy.options].find((each) => each.value === option);
+        expect(rendered, option).toBeTruthy();
+        expect(rendered?.textContent).toBe(t(`web.panel_username_strategy_${option}` as WebKey));
+      }
+    });
+
+    it('previews the name this policy would produce, without reserving one', async () => {
+      /*
+       * The whole answer to the write-only screen: an operator sees the SHAPE before
+       * saving. `previewUsername` renders from fixed synthetic values, so looking at
+       * this line draws no randomness and takes no name out of the namespace — which
+       * is why it can be recomputed on every keystroke.
+       */
+      stubApi(detail());
+      renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+      await screen.findByText('Frankfurt A');
+
+      const shown = await screen.findByText((text) =>
+        text.includes(t('web.panel_username_preview')),
+      );
+      expect(shown.textContent).toMatch(/nx[a-z0-9]{10}/);
+    });
+
+    it('sends the policy as a whole, including the preset nobody touched', async () => {
+      const api = stubApi([...detail(), { url: `/panels/${PANEL_ID}`, body: { panel: panel() } }]);
+      renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+      await screen.findByText('Frankfurt A');
+
+      fireEvent.click(screen.getByLabelText(t('web.panel_username_custom')));
+      fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+
+      await waitFor(() => {
+        expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
+      });
+      const write = api.calls.filter((call) => call.method === 'POST').at(-1);
+      /*
+       * Both switches, the preset and both configuration fields, although only one
+       * switch was touched. Three CHECK constraints are about combinations of these
+       * columns, so a request carrying half of the policy could only be validated
+       * against whatever happens to be stored.
+       */
+      expect(write?.body).toMatchObject({
+        usernamePolicy: {
+          allowCustom: false,
+          allowAutomatic: true,
+          strategy: 'PREFIX_RANDOM',
+          prefix: 'nx',
+          template: null,
+        },
+      });
+    });
+
+    it('refuses a policy with neither choice, before it is sent', async () => {
+      const api = stubApi([...detail(), { url: `/panels/${PANEL_ID}`, body: { panel: panel() } }]);
+      renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+      await screen.findByText('Frankfurt A');
+
+      fireEvent.click(screen.getByLabelText(t('web.panel_username_custom')));
+      fireEvent.click(screen.getByLabelText(t('web.panel_username_automatic')));
+      // The banner appears while they are still looking at the switches, and the CHECK
+      // constraint says the same thing one layer down — this is the courtesy, not the
+      // authority.
+      expect(await screen.findByText(t('web.panel_username_policy_empty'))).toBeTruthy();
+
+      fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+      await waitFor(() => {
+        expect(api.calls.filter((call) => call.method === 'POST')).toHaveLength(0);
+      });
+    });
+
+    it('shows BOTH rendered bounds, not a sample', async () => {
+      /*
+       * `{telegram_id}_{random6}` renders 8 characters for a one-digit id and 23 for a
+       * sixteen-digit one. A template measured on a typical value passes at save time
+       * and then produces a name the panel refuses for one customer — after their
+       * money moved — so both numbers are shown and the worst one is refused.
+       */
+      stubApi(
+        detail({
+          usernamePolicy: {
+            allowCustom: true,
+            allowAutomatic: true,
+            strategy: 'CUSTOM_TEMPLATE',
+            prefix: null,
+            template: 'z{tg4}_{random6}',
+          },
+        }),
+      );
+      renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+      await screen.findByText('Frankfurt A');
+
+      fireEvent.change(screen.getByLabelText(t('web.panel_username_template')), {
+        target: { value: '{telegram_id}_{random6}' },
+      });
+      const verdict = await screen.findByText((text) => text.includes('23') && text.includes('20'));
+      expect(verdict.textContent).toContain(t('web.panel_username_issue_TOO_LONG'));
+    });
+
+    it('refuses a prefix that would leave too little randomness, with the shared reason', async () => {
+      const api = stubApi([...detail(), { url: `/panels/${PANEL_ID}`, body: { panel: panel() } }]);
+      renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+      await screen.findByText('Frankfurt A');
+
+      fireEvent.change(screen.getByLabelText(t('web.panel_username_prefix')), {
+        target: { value: 'a'.repeat(USERNAME_PREFIX_MAX_LENGTH + 1) },
+      });
+      /*
+       * The words come from `validateUsernamePolicy`, the same function the server
+       * refuses with, so the two surfaces cannot explain one refusal differently.
+       */
+      const reason = validateUsernamePolicy({
+        allowCustom: true,
+        allowAutomatic: true,
+        strategy: 'PREFIX_RANDOM',
+        prefix: 'a'.repeat(USERNAME_PREFIX_MAX_LENGTH + 1),
+        template: null,
+      }).reason;
+      expect(await screen.findByText(reason ?? '')).toBeTruthy();
+
+      fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+      await waitFor(() => {
+        expect(api.calls.filter((call) => call.method === 'POST')).toHaveLength(0);
+      });
+    });
+  });
+
   it('never renders a credential value, masked or otherwise', async () => {
     // A Sanaei panel, so all three fields are in the provider's shape and the
     // presence rows are the only thing that can differ between them.
@@ -1364,6 +1544,92 @@ describe('the panel detail', () => {
       );
       expect((write?.body as Record<string, unknown> | undefined)?.['maxServices']).toBe(10);
     });
+  });
+
+  it('promises an overwrite when the concurrent change is the USERNAME POLICY', async () => {
+    /*
+     * Codex, P2. `remote.usernamePolicy` was computed and then used by the banner
+     * only — never by the verdict.
+     *
+     * The policy is sent WHOLE or not at all, so this is the field where a silent
+     * overwrite costs the most: two administrators editing it at once meant one of
+     * them replaced the other's switches AND preset, under a notice that said only
+     * their changed fields were going. And the preset decides what every future
+     * customer's service is called.
+     */
+    const id = panel().id as string;
+    const withPolicy = (strategy: string) =>
+      panel({
+        usernamePolicy: {
+          allowCustom: true,
+          allowAutomatic: true,
+          strategy,
+          prefix: strategy === 'PREFIX_RANDOM' ? 'nx' : null,
+          template: null,
+        },
+      });
+    const route = { url: `/panels/${id}`, body: { panel: withPolicy('PREFIX_RANDOM') } as unknown };
+    const api = stubApi([
+      route,
+      { url: `/panels/${id}/status`, body: { panel: withPolicy('PREFIX_RANDOM') } },
+    ]);
+    renderPage(<PanelDetailPage id={id} mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    // This operator turns the typed-name switch off...
+    fireEvent.click(screen.getByLabelText(t('web.panel_username_custom')));
+    // ...while somebody else changes the preset to something different again.
+    route.body = { panel: withPolicy('RANDOM') };
+    fireEvent.click(screen.getByRole('button', { name: 'غیرفعال‌سازی' }));
+
+    const notice = await screen.findByText(/جای دیگری تغییر کرده/);
+    expect(notice.textContent ?? '').toContain('بازنویسی می‌کند');
+
+    // And the save really does carry the whole policy, so the promise is not a
+    // scare: the message alone would stay green for a field the request omits.
+    fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+    await waitFor(() => {
+      const write = api.calls.find(
+        (call) => call.method === 'POST' && call.url.endsWith(`/panels/${id}`),
+      );
+      expect(
+        (write?.body as Record<string, unknown> | undefined)?.['usernamePolicy'],
+      ).toMatchObject({ allowCustom: false, strategy: 'PREFIX_RANDOM' });
+    });
+  });
+
+  it('does not call a policy an overwrite when this operator set the stored one', async () => {
+    /*
+     * The other side, and the reason this needs all three terms like the cap: two
+     * administrators reacting to the same complaint turn the same switch off. The
+     * escape from a false warning is "load the fresh value", which resets the whole
+     * form — so warning the second one costs them their unsaved base URL to prevent
+     * a write that would have stored what is already there.
+     */
+    const id = panel().id as string;
+    const withCustom = (allowCustom: boolean) =>
+      panel({
+        usernamePolicy: {
+          allowCustom,
+          allowAutomatic: true,
+          strategy: 'PREFIX_RANDOM',
+          prefix: 'nx',
+          template: null,
+        },
+      });
+    const route = { url: `/panels/${id}`, body: { panel: withCustom(true) } as unknown };
+    stubApi([route, { url: `/panels/${id}/status`, body: { panel: withCustom(true) } }]);
+    renderPage(<PanelDetailPage id={id} mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    fireEvent.click(screen.getByLabelText(t('web.panel_username_custom')));
+    route.body = { panel: withCustom(false) };
+    fireEvent.click(screen.getByRole('button', { name: 'غیرفعال‌سازی' }));
+
+    const notice = await screen.findByText(/جای دیگری تغییر کرده/);
+    expect(notice.textContent ?? '', 'the same policy is not a replacement').not.toContain(
+      'بازنویسی می‌کند',
+    );
   });
 
   it('does not call a cap an overwrite when this operator typed the stored one', async () => {

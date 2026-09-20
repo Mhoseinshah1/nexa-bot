@@ -55,6 +55,46 @@ export function SettingsPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
   );
 }
 
+/**
+ * Persian names for the registry keys that have one.
+ *
+ * A LITERAL map, not a key built from the registry key at runtime. Two reasons, and
+ * the second is the one that decided it: `check:i18n` proves every `web.*` key is
+ * rendered somewhere by looking for the key in the source, and a key assembled from
+ * `` `web.${kind}_${key}` `` is invisible to it — the catalogue would grow entries
+ * nothing could prove are reachable, which is the class of drift that check exists to
+ * stop. The first is simply that a reader can grep for either half.
+ *
+ * Partial on purpose. A key with no entry is titled by its machine key, exactly as
+ * every row was before this existed: naming five of twenty-two settings and leaving
+ * seventeen bare would read worse than the consistent bareness it replaces, and a
+ * total map would force seventeen names nobody has agreed on.
+ */
+const REGISTRY_LABELS: Readonly<Record<string, WebKey>> = {
+  'reminders.expiry_first_days': 'web.setting_reminders_expiry_first_days',
+  'reminders.expiry_second_days': 'web.setting_reminders_expiry_second_days',
+  'reminders.usage_first_percent': 'web.setting_reminders_usage_first_percent',
+  'reminders.usage_second_percent': 'web.setting_reminders_usage_second_percent',
+  'reminders.usage_final_percent': 'web.setting_reminders_usage_final_percent',
+  service_expiry_reminders: 'web.flag_service_expiry_reminders',
+  service_expired_notice: 'web.flag_service_expired_notice',
+  service_usage_reminders: 'web.flag_service_usage_reminders',
+};
+
+/**
+ * A Persian name for a registry key, or `undefined` when none has been written.
+ *
+ * Shared by the settings rows and the feature-flag rows, so one setting cannot end up
+ * named one way here and another way there. Where a name IS shown the machine key is
+ * shown under it rather than replaced: the Telegram section prints
+ * `reminders.usage_first_percent`, and an operator moving between the two surfaces has
+ * to be able to see they are looking at one setting.
+ */
+export function registryLabel(key: string): string | undefined {
+  const found = REGISTRY_LABELS[key];
+  return found === undefined ? undefined : t(found);
+}
+
 const ZERO_MEANING_KEYS: Record<ResolvedSettingResponse['zeroMeaning'], WebKey> = {
   DISABLES: 'web.zero_disables',
   UNLIMITED: 'web.zero_unlimited',
@@ -152,7 +192,15 @@ function SettingRow({ setting, mayEdit }: { setting: ResolvedSettingResponse; ma
 
   return (
     <Card
-      title={setting.key}
+      title={registryLabel(setting.key) ?? setting.key}
+      /*
+       * The machine key, under the Persian name, when there is one.
+       *
+       * Never instead of it. The Telegram section prints `reminders.usage_first_percent`
+       * and an operator moving between the two surfaces has to be able to see they are
+       * looking at one setting, not two.
+       */
+      {...(registryLabel(setting.key) === undefined ? {} : { hint: setting.key })}
       actions={
         <>
           {setting.consumer === 'PLANNED' && <MaturityBadge value="ready" />}

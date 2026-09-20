@@ -12,6 +12,7 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
 import type { PanelSalesGate } from '../../../platform/panels/application/panel-sales-gate.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { OrderRepository } from '../../orders/application/ports.js';
+import type { OrderUsernameLane } from '../../provisioning/application/username-lane.js';
 import type { CustomerNotifier } from '../../messaging/application/customer-notifier.js';
 import type { PaymentRepository } from './ports.js';
 
@@ -29,6 +30,8 @@ export const PAYMENT_EXPIRY_SWEEP_LIMIT = 200;
 export interface PaymentExpiryReport {
   readonly payments: number;
   readonly orders: number;
+  /** Username holds removed: the ones this pass expired, plus abandoned drafts. */
+  readonly usernameHolds: number;
 }
 
 export interface PaymentExpiryServiceDeps {
@@ -51,6 +54,14 @@ export interface PaymentExpiryServiceDeps {
   readonly scopeActivity: ScopeActivityReader;
   /** Gives back the panel slot an expired order was holding. */
   readonly panelSales: PanelSalesGate;
+  /**
+   * Gives back the NAME, for the same orders and for the drafts that never became one.
+   *
+   * The slot's counterpart, and it was missing. `service_username_reservations` has an
+   * `expires_at`, but the unique index on `(namespace_key, username)` does not read it,
+   * so a hold nothing deletes keeps its name out of circulation for ever.
+   */
+  readonly usernames: OrderUsernameLane;
   readonly clock: Clock;
   readonly ids: IdGenerator;
 }
@@ -176,7 +187,7 @@ export class PaymentExpiryService {
        * loop that leaves them alone is doing its job rather than failing at it.
        */
       if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
-        return { payments: 0, orders: 0 };
+        return { payments: 0, orders: 0, usernameHolds: 0 };
       }
 
       const payments = await this.deps.payments.expireDue(
@@ -216,6 +227,7 @@ export class PaymentExpiryService {
         );
       }
 
+      let heldNames = 0;
       const orders = await this.deps.orders.expireDue(scope, now, PAYMENT_EXPIRY_SWEEP_LIMIT, tx);
       for (const order of orders) {
         /*
@@ -227,6 +239,12 @@ export class PaymentExpiryService {
          * the sweep, and it is the one that knows which orders just ended.
          */
         await this.deps.panelSales.release(scope, order.id, tx);
+        /*
+         * And the NAME, in the same transaction, for the same reason — with the
+         * `funded_at IS NULL` guard `releaseUnfunded` carries, because a settlement
+         * that commits between this pass's SELECT and this DELETE must keep its name.
+         */
+        if (await this.deps.usernames.releaseUnfunded(scope, order.id, tx)) heldNames += 1;
         await this.deps.audit.record(
           scope,
           actor,
@@ -253,7 +271,26 @@ export class PaymentExpiryService {
         );
       }
 
-      return { payments: payments.length, orders: orders.length };
+      /*
+       * And the drafts that never became an order at all.
+       *
+       * The loop above covers orders that END — they were `AWAITING_PAYMENT` and their
+       * window closed. A customer who tapped a product, chose a name and then simply
+       * stopped leaves a DRAFT, which `expireDue` never sees, holding a name for ever.
+       * This is the only path that frees those, and it is the reason
+       * `service_username_reservations_expiry_idx` on `(funded_at, expires_at)` exists.
+       *
+       * Its own bound, not a share of the one above: the two populations are unrelated
+       * and a busy expiry tick must not stop the abandoned ones being collected.
+       */
+      heldNames += await this.deps.usernames.sweepExpiredHolds(
+        scope,
+        now,
+        PAYMENT_EXPIRY_SWEEP_LIMIT,
+        tx,
+      );
+
+      return { payments: payments.length, orders: orders.length, usernameHolds: heldNames };
     });
   }
 }

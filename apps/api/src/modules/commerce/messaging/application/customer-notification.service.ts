@@ -3,8 +3,10 @@ import {
   CUSTOMER_NOTIFICATION_MAX_ATTEMPTS,
   CUSTOMER_NOTIFICATION_PRECONDITIONS,
   CUSTOMER_NOTIFICATION_TEMPLATES,
+  SERVICE_REMINDER_NOTIFICATION_KINDS,
   type Clock,
   type CustomerNotificationKind,
+  type TemplateValues,
   type TenantContext,
   type UnitOfWork,
 } from '@nexa/contracts';
@@ -14,6 +16,7 @@ import type {
   CustomerNotificationRecord,
   CustomerNotificationRepository,
 } from './ports.js';
+import type { ServiceReminderSnapshotReader } from '../../provisioning/application/service-reminder.ports.js';
 
 /**
  * Whether a kind's fact is still true, asked of the subject itself.
@@ -90,6 +93,17 @@ export interface NotificationSweepReport {
   readonly lost: number;
 }
 
+/**
+ * The six kinds whose message carries figures, as a set, derived from the contract.
+ *
+ * Derived rather than listed, so a seventh reminder kind is covered the moment it is
+ * added to `SERVICE_REMINDER_NOTIFICATION_KINDS` — and a kind removed from there stops
+ * asking for a snapshot that no longer exists, instead of failing every send.
+ */
+const REMINDER_NOTIFICATION_KINDS = new Set<string>(
+  Object.values(SERVICE_REMINDER_NOTIFICATION_KINDS),
+);
+
 export interface CustomerNotificationDeps {
   readonly notifications: CustomerNotificationRepository;
   readonly contacts: {
@@ -105,6 +119,14 @@ export interface CustomerNotificationDeps {
   };
   readonly subjects: NotificationSubjectReader;
   readonly messenger: CustomerMessenger;
+  /**
+   * The frozen figures a reminder renders, read back by id.
+   *
+   * The only kinds that use it are the six reminders, and they are also the only kinds
+   * whose message carries numbers. Everything else in this lane is a fact with no
+   * parameters, which is why `values` was an empty object until now.
+   */
+  readonly reminderSnapshots: ServiceReminderSnapshotReader;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly clock: Clock;
   readonly scopeIsActive: (scope: TenantContext) => Promise<boolean>;
@@ -192,6 +214,47 @@ export class CustomerNotificationService {
       unreachable: counts.unreachable ?? 0,
       errored: counts.errored ?? 0,
       lost: counts.lost ?? 0,
+    };
+  }
+
+  /**
+   * The values a reminder's template needs, or `null` when its subject has vanished.
+   *
+   * `{}` for every other kind, which is what the whole lane used to pass: those
+   * messages are facts with no parameters. ADR 0030 §1 refuses a producer-supplied
+   * PAYLOAD, and this is not one — the producer passed a kind and an id, and these are
+   * read from the row that id names.
+   *
+   * The values are the ones the sweep FROZE, not today's. A renewal between the
+   * enqueue and the send must not turn "expires in one day" into a contradiction, and
+   * a usage sync must not move the figure out from under the threshold that fired.
+   *
+   * `remainingDays` is omitted rather than sent as zero when it is null, so a template
+   * that declares it optional and a body that drops it both behave; the three expiry
+   * kinds always have one and `bot.service.expired` does not render it.
+   */
+  private async reminderValues(
+    scope: TenantContext,
+    row: CustomerNotificationRecord,
+  ): Promise<TemplateValues | null> {
+    if (!REMINDER_NOTIFICATION_KINDS.has(row.kind)) return {};
+    const snapshot = await this.deps.reminderSnapshots.snapshotOf(scope, row.subjectId);
+    if (snapshot === null) return null;
+    const limit = snapshot.basisTrafficLimitBytes;
+    return {
+      service: snapshot.serviceLabel,
+      ...(snapshot.remainingDays === null ? {} : { days: snapshot.remainingDays }),
+      ...(snapshot.basisExpiresAt === null ? {} : { expiresAt: snapshot.basisExpiresAt }),
+      usedTraffic: snapshot.usedBytes,
+      totalTraffic: limit,
+      /*
+       * Integer arithmetic, and floored, for the reason `usageReached` gives: the
+       * comparison that produced this reminder was exact at the boundary and the
+       * figure beside it must not round the other way. An unlimited allowance cannot
+       * reach a percentage and cannot be a usage reminder, so the zero guard is a
+       * division guard and not a business rule.
+       */
+      usagePercent: limit <= 0n ? 0 : Number((snapshot.usedBytes * 100n) / limit),
     };
   }
 
@@ -308,6 +371,39 @@ export class CustomerNotificationService {
       }
 
       /*
+       * The figures, read BEFORE the stamp.
+       *
+       * Before, because a reminder whose subject cannot be read is a message this pass
+       * must not send, and the stamp is the thing that makes an unsent message look
+       * sent. The order is the same one the unsupported-kind check above is placed for,
+       * and for the same reason.
+       */
+      const values = await this.reminderValues(scope, row);
+      if (values === null) {
+        /*
+         * A reminder naming a row that is not there.
+         *
+         * `service_reminders` is never deleted by the product, so this is either a
+         * restore that landed between the enqueue and the send, or a bug. Either way
+         * the sentence would have an empty service name in it, and an empty name is
+         * worse than silence: the customer cannot tell which of their services it is
+         * about. FAILED rather than deferred, because nothing will bring the row back.
+         */
+        const at = this.deps.clock.now();
+        await this.deps.uow.run(scope, async (tx) =>
+          this.deps.notifications.record(
+            scope,
+            row.id,
+            'FAILED',
+            { resolvedAt: at, nextAttemptAt: null },
+            at,
+            tx,
+          ),
+        );
+        return 'errored';
+      }
+
+      /*
        * The stamp, committed BEFORE the send and in a transaction holding nothing else.
        *
        * A crash must not roll it back: the crash is the case it records. `false` means
@@ -322,7 +418,7 @@ export class CustomerNotificationService {
         chatId: lookup.contact.chatId,
         botInstanceId: row.botInstanceId,
         templateKey: CUSTOMER_NOTIFICATION_TEMPLATES[row.kind],
-        values: {},
+        values,
       });
 
       const at = this.deps.clock.now();

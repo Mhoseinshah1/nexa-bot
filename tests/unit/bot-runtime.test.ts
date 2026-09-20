@@ -11,6 +11,7 @@ import {
   profileFactsFrom,
   referralCodeFor,
   providerUsernameFor,
+  isNewProviderUsername,
   customerListQuerySchema,
   telegramUserIdSchema,
   type TemplateKey,
@@ -101,11 +102,16 @@ describe('a Telegram turn, decided before any I/O', () => {
     );
   });
 
-  it('answers a menu label it was not given as an unknown command', () => {
+  it('answers a menu label it was not given as ordinary text', () => {
     // The map is the whole authority. Without it — a bot with no keyboard configured —
-    // the label is ordinary text and gets the answer ordinary text has always got.
+    // the label is ordinary text and takes the path ordinary text takes.
+    //
+    // That path is `USERNAME_TEXT` since the username step, and the CUSTOMER-visible
+    // answer is unchanged: the handler asks the database whether a typing window is
+    // open, is told no for every message but one, and returns `bot.unknown_command`.
+    // Asserted at the parse layer, which is what this file tests.
     expect(intentOf({ message: { text: CATALOGUE_FA['bot.menu.catalog'] } }).intent).toBe(
-      'UNSUPPORTED',
+      'USERNAME_TEXT',
     );
   });
 
@@ -115,11 +121,21 @@ describe('a Telegram turn, decided before any I/O', () => {
     );
     // No fuzzy matching, no prefix matching, no case folding: the menu is a closed set
     // of exact strings and everything else is what it was before the menu existed.
-    expect(intentOf({ message: { text: 'سلام' } }, menu).intent).toBe('UNSUPPORTED');
-    expect(intentOf({ message: { text: 'خرید' } }, menu).intent).toBe('UNSUPPORTED');
+    expect(intentOf({ message: { text: 'سلام' } }, menu).intent).toBe('USERNAME_TEXT');
+    expect(intentOf({ message: { text: 'خرید' } }, menu).intent).toBe('USERNAME_TEXT');
     expect(
       intentOf({ message: { text: `${CATALOGUE_FA['bot.menu.catalog']} extra` } }, menu).intent,
-    ).toBe('UNSUPPORTED');
+    ).toBe('USERNAME_TEXT');
+
+    /*
+     * And the text is carried UNTOUCHED, which is the half that matters.
+     *
+     * `isValidCustomUsername` is asked of the raw input and refuses whitespace rather
+     * than trimming it — the owner's rule: nothing is rewritten but ASCII case. A
+     * surface that tidied the text here would make that rule unreachable, and the
+     * customer would be given a name they did not type.
+     */
+    expect(intentOf({ message: { text: '  Ali_2026  ' } }, menu).args).toEqual(['  Ali_2026  ']);
   });
 
   it('offers exactly the four top-level actions this release can perform', () => {
@@ -198,8 +214,15 @@ describe('a Telegram turn, decided before any I/O', () => {
   });
 
   it('treats anything else as unsupported rather than as an error', () => {
-    expect(intentOf({ message: { text: 'hello' } }).intent).toBe('UNSUPPORTED');
-    expect(intentOf({ message: { text: '/startle' } }).intent).toBe('UNSUPPORTED');
+    /*
+     * TEXT takes the username path; everything that is not text stays `UNSUPPORTED`.
+     *
+     * The split is the point. Only a message a customer TYPED can be a username, so
+     * only text is offered to the window — a message with no text at all has nothing to
+     * offer and never reaches the database.
+     */
+    expect(intentOf({ message: { text: 'hello' } }).intent).toBe('USERNAME_TEXT');
+    expect(intentOf({ message: { text: '/startle' } }).intent).toBe('USERNAME_TEXT');
     expect(intentOf({ message: {} }).intent).toBe('UNSUPPORTED');
     expect(intentOf({}).intent).toBe('UNSUPPORTED');
     expect(intentOf(null).intent).toBe('UNSUPPORTED');
@@ -724,6 +747,43 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.start.welcome',
       'bot.start.welcome_back',
       'bot.unknown_command',
+      /*
+       * Five joined with the username step. Reviewed, one at a time:
+       *
+       *   `bot.username.choose`        asks which mode, and is sent ONLY when the panel
+       *                                offers both. One button is a tap that teaches
+       *                                nothing, so a single-mode panel skips it.
+       *   `bot.username.custom_button` opens the typing window, and the window is what
+       *                                makes the next ordinary message mean something.
+       *                                Nothing opens one the customer did not ask for.
+       *   `bot.username.random_button` has the installation draw the name instead.
+       *   `bot.username.instructions`  states the WHOLE rule before they type — length,
+       *                                the character set, letter-and-digit, and that
+       *                                case is not distinguished. It is why the refusal
+       *                                below names no clause.
+       *   `bot.username.invalid`       refuses without saying which rule was broken. The
+       *                                rule was shown in full, so naming the clause adds
+       *                                nothing they did not have and turns each attempt
+       *                                into a probe of the validator.
+       *   `bot.username.taken`         says the name is gone AND that no money moved,
+       *                                which is a fact rather than a reassurance: it is
+       *                                raised before any debit and before a transfer is
+       *                                requested.
+       *
+       * None instructs a customer to do something that can only answer
+       * `bot.unknown_command`, and none claims an effect that did not happen. A refusal
+       * leaves the window OPEN, so "send another" is true when it is said.
+       */
+      'bot.username.automatic_button',
+      'bot.username.choose',
+      'bot.username.custom_button',
+      'bot.username.exhausted',
+      'bot.username.instructions',
+      'bot.username.invalid',
+      'bot.username.mode_unavailable',
+      'bot.username.stale',
+      'bot.username.taken',
+      'bot.username.unavailable',
       'bot.wallet.balance',
       'bot.wallet.insufficient',
       /*
@@ -819,6 +879,28 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.admin.refused',
       'bot.admin.reject_button',
       'bot.admin.rejected',
+      /*
+       * The reminder settings section (Phase 6C). Ten keys, each reviewed against this
+       * case's rule — none of them instructs an administrator to do something this head
+       * cannot do, and the one that comes closest says the opposite: the section states
+       * that turning a reminder family off is done in the Web Admin, because all three
+       * flags are TENANT_WIDE and ADR-0010 wants a typed confirmation there.
+       *
+       * What this list pins is the SET of keys the runtime source names, not the set it
+       * was observed sending — `sent` is scraped from the file. Adding a key here is
+       * therefore a review checkpoint rather than a reachability proof, which is
+       * exactly what the surrounding comment says it is for.
+       */
+      'bot.admin.reminder_choose',
+      'bot.admin.reminder_expiry_first_button',
+      'bot.admin.reminder_expiry_second_button',
+      'bot.admin.reminder_refused',
+      'bot.admin.reminder_saved',
+      'bot.admin.reminder_usage_final_button',
+      'bot.admin.reminder_usage_first_button',
+      'bot.admin.reminder_usage_second_button',
+      'bot.admin.reminders_button',
+      'bot.admin.reminders_section',
       'bot.admin.revoked',
       'bot.admin.roles_set',
       'bot.admin.section',
@@ -841,6 +923,14 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.admin.services_none',
       'bot.admin.services_section',
       'bot.admin.usage',
+      'bot.admin.username_automatic_button',
+      'bot.admin.username_button',
+      'bot.admin.username_custom_button',
+      'bot.admin.username_refused',
+      'bot.admin.username_section',
+      'bot.admin.username_strategy_prefix_random',
+      'bot.admin.username_strategy_random',
+      'bot.admin.username_strategy_telegram_id_random',
     ]);
 
     /*
@@ -920,16 +1010,28 @@ describe('profile metadata, normalised before it is ever stored', () => {
 });
 
 describe('the derivations Phase 4 depends on being stable', () => {
-  it('derives a provider username from the service id, the same way every time', () => {
-    // This is what makes adoption after an unknown outcome possible: a reconcile can ask
-    // the provider for this exact name. A random name would leave only a blind create.
+  it('pins the PRE-CONTRACT derivation, which nothing may mint from any more', () => {
+    /*
+     * Not a rule this product still follows — the opposite. A name is now chosen or
+     * drawn under `service-username.ts`, canonicalised and reserved before the money
+     * moves, and the four-to-twenty contract rejects the thirty-four characters below.
+     *
+     * This pins the OLD shape because several proofs are written as "what we mint is
+     * not this", and a mutation that restores the derivation has to have something to
+     * restore. `tests/unit/provider-ref.test.ts` names it as its mutation target.
+     *
+     * The rationale this comment used to carry — "deterministic, so a reconcile can ask
+     * for this exact name" — was true and beside the point: a name STORED before the
+     * provider call is askable-for just as well, and can exist before the service does.
+     */
     const id = '01900000-0000-7000-8000-0000000000c1';
     expect(providerUsernameFor(id)).toBe('nx019000000000700080000000000000c1');
     expect(providerUsernameFor(id)).toBe(providerUsernameFor(id));
-    // No customer text enters it. A username built from a display name would carry
-    // Persian characters, emoji and somebody's real name onto a third party's panel.
     expect(providerUsernameFor(id)).toMatch(/^nx[0-9a-f]{32}$/);
     expect(() => providerUsernameFor('not-a-uuid')).toThrow();
+    // And the contract refuses it, which is the half that matters now: thirty-four
+    // characters is outside four-to-twenty, so this shape can never be minted again.
+    expect(isNewProviderUsername(providerUsernameFor(id))).toBe(false);
   });
 
   it('derives a referral code from the LAST 64 bits, so same-millisecond joiners differ', () => {

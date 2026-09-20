@@ -555,6 +555,46 @@ export const WEB_FA = {
   'web.panel_capacity_available': 'ظرفیت آزاد',
   'web.panel_capacity_unlimited': 'بدون محدودیت',
   'web.panel_max_services': 'سقف سرویس',
+
+  // The username policy. Read back in full on the panel page, for the reason
+  // `docs/conventions.md` names: a setting a surface can write and cannot read is the
+  // legacy screen where "the only way to read a price is to overwrite it".
+  'web.panel_username_policy': 'یوزرنیم سرویس‌ها',
+  'web.panel_username_custom': 'یوزرنیم دلخواه مشتری',
+  'web.panel_username_custom_hint':
+    'مشتری خودش یوزرنیم را می‌نویسد: ۴ تا ۲۰ نویسه از a-z، A-Z، 0-9، - و _ ، با حداقل یک حرف و یک رقم. حروف بزرگ و کوچک فرقی ندارند و با حروف کوچک ذخیره می‌شود.',
+  'web.panel_username_automatic': 'انتخاب خودکار',
+  'web.panel_username_automatic_hint':
+    'سامانه خودش یوزرنیم می‌سازد، بر اساس روشی که پایین انتخاب می‌کنید.',
+  'web.panel_username_strategy': 'روش ساخت خودکار',
+  'web.panel_username_strategy_hint':
+    'هر یوزرنیم جدید بین ۴ تا ۲۰ نویسه و فقط از حروف کوچک انگلیسی، رقم، خط تیره و زیرخط ساخته می‌شود.',
+  'web.panel_username_strategy_RANDOM': 'تصادفی ۱۲ نویسه‌ای',
+  'web.panel_username_strategy_PREFIX_RANDOM': 'پیشوند + تصادفی',
+  'web.panel_username_strategy_TELEGRAM_ID_RANDOM': 'شناسهٔ تلگرام + تصادفی',
+  'web.panel_username_strategy_CUSTOM_TEMPLATE': 'الگوی دلخواه',
+  'web.panel_username_prefix': 'پیشوند',
+  'web.panel_username_prefix_hint':
+    'با یک حرف کوچک انگلیسی شروع شود و حداکثر ۱۴ نویسه باشد، تا دست‌کم ۶ نویسهٔ تصادفی جا بماند. پیش‌فرض nx است.',
+  'web.panel_username_template': 'الگوی یوزرنیم',
+  'web.panel_username_template_hint':
+    'باید دست‌کم یکی از {order4}، {random4}، {random6} یا {random10} را داشته باشد، وگرنه دو خرید یک نام می‌گیرند.',
+  'web.panel_username_tokens': 'جانشین‌های مجاز',
+  'web.panel_username_bounds':
+    'خروجی این الگو بین {best} و {worst} نویسه است؛ مجاز {min} تا {max} نویسه.',
+  'web.panel_username_preview': 'نمونهٔ خروجی',
+  // Each issue is its own sentence, and all of them are shown at once: an operator
+  // fixing one problem per round trip is an operator who gives up.
+  'web.panel_username_issue_EMPTY': 'الگو نمی‌تواند خالی باشد.',
+  'web.panel_username_issue_MALFORMED': 'آکولاد بازِ بسته‌نشده در الگو هست.',
+  'web.panel_username_issue_UNKNOWN_TOKEN': 'جانشینی که این الگو دارد تعریف نشده است.',
+  'web.panel_username_issue_ILLEGAL_CHARACTER':
+    'متن ثابت الگو فقط می‌تواند حرف کوچک انگلیسی، رقم، خط تیره و زیرخط داشته باشد.',
+  'web.panel_username_issue_NO_UNIQUENESS_TOKEN':
+    'الگو باید دست‌کم یکی از {order4}، {random4}، {random6} یا {random10} را داشته باشد، وگرنه همه‌ی مشتری‌ها یک یوزرنیم می‌گیرند.',
+  'web.panel_username_issue_TOO_LONG': 'بلندترین خروجی این الگو از ۲۰ نویسه بیشتر می‌شود.',
+  'web.panel_username_issue_TOO_SHORT': 'کوتاه‌ترین خروجی این الگو از ۴ نویسه کمتر می‌شود.',
+  'web.panel_username_policy_empty': 'دست‌کم یکی از دو حالت باید روشن باشد.',
   'web.panel_max_services_hint': 'یک عدد مثبت، یا خالی برای بدون محدودیت.',
   'web.panel_id': 'شناسه',
   'web.panel_identity': 'شناسنامه',
@@ -1485,6 +1525,27 @@ export const WEB_FA = {
   'web.unit_seconds': 'ثانیه',
   'web.unit_minutes': 'دقیقه',
   'web.unit_hours': 'ساعت',
+  /*
+   * Persian names for the reminder settings and switches.
+   *
+   * ADDITIVE, and keyed by the registry key. A row with no entry here is titled by its
+   * machine key exactly as every row was before — which is why this is a lookup and not
+   * a required field: naming five of twenty-two keys and leaving seventeen bare would
+   * be worse than the consistent bareness it replaces, and a `Record<SettingKey, …>`
+   * would force seventeen names nobody has agreed on.
+   *
+   * The machine key is still shown beside the name. An operator reading the Telegram
+   * section sees `reminders.usage_first_percent` there, and two surfaces naming one
+   * setting differently is how a support conversation goes wrong.
+   */
+  'web.setting_reminders_expiry_first_days': 'یادآور اول پیش از انقضا (روز)',
+  'web.setting_reminders_expiry_second_days': 'یادآور دوم پیش از انقضا (روز)',
+  'web.setting_reminders_usage_first_percent': 'آستانه اول مصرف حجم (درصد)',
+  'web.setting_reminders_usage_second_percent': 'آستانه دوم مصرف حجم (درصد)',
+  'web.setting_reminders_usage_final_percent': 'آستانه پایانی مصرف حجم (درصد)',
+  'web.flag_service_expiry_reminders': 'یادآور پیش از انقضای سرویس',
+  'web.flag_service_expired_notice': 'اعلام پایان اعتبار سرویس',
+  'web.flag_service_usage_reminders': 'یادآور مصرف حجم سرویس',
 } as const;
 
 export type WebKey = keyof typeof WEB_FA;

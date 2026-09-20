@@ -1,7 +1,6 @@
 import {
   OPERATION_MAX_ATTEMPTS,
   operationFailureOutcome,
-  providerUsernameFor,
   UNLIMITED_DURATION_DAYS,
   type CanApplyAllowance,
   type CanDeleteUser,
@@ -97,22 +96,35 @@ export function backoffMs(attempts: number): number {
  * reconcile that used another would adopt an account and hand the customer a link to a
  * different one.
  *
- * Only the USERNAME is derived, and only it should be. It appears in an operator's
- * client list and its recoverability is what lets a reconcile ask the panel for a
- * service by name after a lost write. The other two are CAPABILITIES — anybody holding
- * the subscription reference can fetch the customer's configuration unauthenticated,
- * and the client id is what that configuration authenticates with — so they are random,
- * and stored in the settling transaction before any provider call. That gives the same
- * recoverability without making them computable from an id that travels through the
- * audit log, the operations log and the outbox.
+ * ALL THREE ARE READ FROM THE ROW. None is recomputed here, and the username was.
+ *
+ * It used to be `providerUsernameFor(service.id)` while `services.provider_username` sat
+ * stored beside it and unread on this path. The two agreed only because generation was a
+ * deterministic function of the service id — an identity that stops holding the moment a
+ * username is customer-chosen or template-rendered. At that point the row would record
+ * one name and the panel be asked to create another: `services_panel_provider_username_key`
+ * guarding a value nobody sent, a reconcile asking for a name that was never created, and
+ * a customer shown a username their account does not have. No test caught it, because
+ * every test asserted the identity that was about to stop holding
+ * (`docs/phase6c-audit.md` A-4).
+ *
+ * What reconciliation actually needs is that the name was COMMITTED BEFORE the provider
+ * call, not that it can be recomputed — the same argument migration 0045 already made for
+ * `subscription_ref`, which was derived for the same stated reason and is now stored. A
+ * value written in the settling transaction survives a lost answer exactly as well.
+ *
+ * The other two remain what they were: CAPABILITIES. Anybody holding the subscription
+ * reference can fetch the customer's configuration unauthenticated, and the client id is
+ * what that configuration authenticates with, so both are random rather than computable
+ * from an id that travels through the audit log, the operations log and the outbox.
  */
 export function providerRefFor(service: {
-  readonly id: string;
+  readonly providerUsername: string;
   readonly subscriptionRef: string;
   readonly providerClientId: string;
 }): ProviderUserRef {
   return {
-    username: providerUsernameFor(service.id),
+    username: service.providerUsername,
     subscriptionRef: service.subscriptionRef,
     clientId: service.providerClientId,
   };

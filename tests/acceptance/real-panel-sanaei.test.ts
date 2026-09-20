@@ -89,7 +89,15 @@ function target(overrides: Partial<SanaeiActivation> = {}): ProviderServiceTarge
   };
 }
 
-/** The three derived identities, as `providerUsernameFor` and friends produce them. */
+/**
+ * The three identities a service carries, in the shape a real one has.
+ *
+ * Literals, not derivations: all three are STORED on the service row now, and the
+ * username in particular is chosen or drawn under `service-username.ts` before the
+ * money moves. It is kept inside `[a-z0-9_-]{4,20}` deliberately — the adapter asserts
+ * that contract before it opens a socket, so a fixture outside it would prove nothing
+ * about a panel.
+ */
 let refSeq = 0;
 function disposableRef(): ProviderUserRef {
   refSeq += 1;

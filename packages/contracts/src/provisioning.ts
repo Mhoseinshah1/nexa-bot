@@ -448,16 +448,26 @@ export const USAGE_SYNC_MINUTES_MAX = 1440;
 export const USAGE_SYNC_PLAN_LIMIT = 50;
 
 /**
- * The provider-side username this installation assigns.
+ * The shape this product minted BEFORE the username contract, kept as a reference.
  *
- * Deterministic from the service id, which is the property that makes adoption possible:
- * after an unknown outcome, a reconcile can ASK the provider for this exact name. A
- * random or customer-chosen name would leave nothing to ask for, and the only remaining
- * move would be a blind create.
+ * **Nothing may call this to name a service.** It is not the generator any more and it
+ * must not become one again: a name is now chosen or drawn under
+ * `service-username.ts`, canonicalised, reserved before the money moves and frozen —
+ * and the four-to-twenty rule there rejects the thirty-four characters this produces.
  *
- * Lowercase hex of the service id with the dashes removed, prefixed. No customer text
- * enters it: a username built from a Telegram display name would carry Persian
- * characters, emoji and somebody's real name onto a third party's panel.
+ * It survives for one reason: several tests assert that what the product mints is NOT
+ * this, and a mutation that restores the derivation has to have something to restore.
+ * `tests/unit/provider-ref.test.ts` is the worked example. Deleting it would leave
+ * those proofs with nothing to name.
+ *
+ * What it used to be, and why the reasoning was wrong: `nx` plus the service id's hex
+ * with the dashes removed, justified as "deterministic, so a reconcile can ask the
+ * provider for this exact name". The determinism was real and the conclusion was not.
+ * A name STORED before the provider call is askable-for exactly as well, cannot be
+ * recomputed by anybody else, and — unlike this one — can be chosen before a service
+ * id exists, which is what reserving a name before taking money requires. This is also
+ * a reversible ENCODING rather than a hash, so a name read off a panel's client list
+ * recovered the service id; see `SUBSCRIPTION_REF_LENGTH` below.
  */
 export const PROVIDER_USERNAME_PREFIX = 'nx';
 
@@ -521,20 +531,22 @@ export const DELIVERY_MAX_ATTEMPTS = 3;
  * from the service id through the same unkeyed `Hasher` that mints operation ids, and
  * claiming in their own docblocks that neither was derivable from the username.
  *
- * Both claims were false. `providerUsernameFor` is a reversible ENCODING of the service
- * id rather than a hash, so a name read off a panel's client list recovered the id; and
- * the id itself travels in `operational_events.context`, in `audit_logs.entity_id` and
- * in `outbox_messages.aggregate_id`. Anybody who could read an audit log could compute
- * the link that serves a customer's configuration with no authentication, and the VLESS
- * client id that configuration authenticates with.
+ * Both claims were false. `providerUsernameFor` was a reversible ENCODING of the
+ * service id rather than a hash, so a name read off a panel's client list recovered the
+ * id; and the id itself travels in `operational_events.context`, in
+ * `audit_logs.entity_id` and in `outbox_messages.aggregate_id`. Anybody who could read
+ * an audit log could compute the link that serves a customer's configuration with no
+ * authentication, and the VLESS client id that configuration authenticates with.
  *
  * The recoverability the derivation existed for is kept by STORING both values, written
  * in the settling transaction before any provider call — see `services.subscription_ref`.
  * A value committed before the call survives a lost answer exactly as well as one that
  * can be recomputed, and cannot be recomputed by anybody else.
  *
- * `providerUsernameFor` stays derived. It is an identifier, not a capability, and being
- * askable-for by name after a lost write is the whole reason it exists.
+ * The username is stored for the same reason, and is no longer derived from anything:
+ * it is chosen or drawn under `service-username.ts` and reserved before the money
+ * moves. `providerUsernameFor` is kept only as the pre-contract shape those proofs
+ * name; see its own docblock.
  */
 export const SUBSCRIPTION_REF_LENGTH = 32;
 export const SUBSCRIPTION_REF_BYTES = 16;

@@ -74,6 +74,12 @@ import {
   CUSTOMER_NOTIFICATION_KINDS,
   CUSTOMER_NOTIFICATION_STATES,
   SERVICE_STATES,
+  SERVICE_REMINDER_KINDS,
+  DEFAULT_USERNAME_PREFIX,
+  DEFAULT_USERNAME_STRATEGY,
+  SERVICE_USERNAME_MODES,
+  USERNAME_STRATEGIES,
+  USERNAME_CAPTURE_CLOSE_REASONS,
   OPERATION_STATES,
   OPERATION_TYPES,
   DISCOUNT_TYPES,
@@ -1304,6 +1310,42 @@ export const panels = pgTable(
      * mistyped a number is not a limit, it is an outage with a form field.
      */
     maxServices: integer('max_services'),
+    /**
+     * Which username modes a customer buying on this panel may use.
+     *
+     * Both default to true, so every panel that exists when this migration runs keeps
+     * offering everything and nothing an operator configured changes underneath them.
+     * `panels_username_policy_check` refuses both being false: a panel a customer
+     * cannot name a service on is a panel nothing can be bought from, and it would
+     * fail at their purchase rather than at the operator's save.
+     */
+    allowCustomUsername: boolean('allow_custom_username').notNull().default(true),
+    allowAutomaticUsername: boolean('allow_automatic_username').notNull().default(true),
+    /**
+     * Which of the four presets generates an AUTOMATIC name here.
+     *
+     * NOT NULL with a real default, and that is the correction 0094 carries. A
+     * nullable column meaning "nobody has configured this, so something else decides"
+     * is a migration state in a vocabulary every surface has to render, and it makes
+     * the generator unreadable: an operator could not answer "what will the next
+     * customer be called" without knowing what the absence falls back to.
+     *
+     * `PREFIX_RANDOM` with the prefix `nx` renders twelve characters —
+     * `DEFAULT_USERNAME_PATTERN`. Existing services are not renamed.
+     */
+    usernameStrategy: text('username_strategy').notNull().default(DEFAULT_USERNAME_STRATEGY),
+    /**
+     * The `PREFIX_RANDOM` prefix. NULL under any other strategy.
+     *
+     * Defaulted, and it HAS to be: `username_strategy` defaults to PREFIX_RANDOM, and
+     * `panels_username_prefix_check` is a biconditional, so a prefix with no default
+     * makes a panel created without a policy unstorable. 0095 is that correction —
+     * found by the integration case that creates a panel and names no policy, which
+     * is the commonest way an operator makes one.
+     */
+    usernamePrefix: text('username_prefix').default(DEFAULT_USERNAME_PREFIX),
+    /** The `CUSTOM_TEMPLATE` template. NULL under any other strategy. */
+    usernameTemplate: text('username_template'),
     /** Set when the panel is archived, so the event has a time and not just a state. */
     archivedAt: timestamptz('archived_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
@@ -1311,6 +1353,34 @@ export const panels = pgTable(
   },
   (table) => [
     index('panels_tenant_status_idx').on(table.tenantId, table.status),
+    /**
+     * At least one username mode, always.
+     *
+     * A CHECK rather than a service-layer rule because it is the kind of invariant a
+     * direct write, a restore or a future surface can break, and a panel with no mode
+     * is only discovered by a customer trying to buy.
+     */
+    check(
+      'panels_username_policy_check',
+      sql`${table.allowCustomUsername} OR ${table.allowAutomaticUsername}`,
+    ),
+    check('panels_username_strategy_check', enumCheck('username_strategy', USERNAME_STRATEGIES)),
+    /**
+     * A preset and the configuration it needs, or neither. Not "or something".
+     *
+     * Two biconditionals rather than two one-way implications, so a template left
+     * behind by a strategy change cannot sit in the row pretending to be inert: the
+     * one-checkbox edit that re-selects `CUSTOM_TEMPLATE` would then go live against
+     * a value nobody looked at. The service nulls the other field on every write.
+     */
+    check(
+      'panels_username_prefix_check',
+      sql`(${table.usernameStrategy} = 'PREFIX_RANDOM') = (${table.usernamePrefix} IS NOT NULL)`,
+    ),
+    check(
+      'panels_username_template_check',
+      sql`(${table.usernameStrategy} = 'CUSTOM_TEMPLATE') = (${table.usernameTemplate} IS NOT NULL)`,
+    ),
     /**
      * Unique among a tenant's LIVE panels only.
      *
@@ -1627,6 +1697,181 @@ export const panelCapacityReservations = pgTable(
       table.panelId,
       table.expiresAt,
     ),
+  ],
+);
+
+/**
+ * A service username somebody is in the middle of buying.
+ *
+ * The hold that stops two customers paying for one name. It exists because the
+ * decision moved: a username used to be derived from the service id — minted after the
+ * money, unique by construction, impossible to contend for — and a customer-chosen or
+ * template-rendered name is none of those things. It is chosen BEFORE the payment, and
+ * between that choice and the provider account there is a window in which the name
+ * belongs to nobody unless a row says otherwise.
+ *
+ * ## Why this is not `panel_capacity_reservations` with a different column
+ *
+ * The lifecycles differ where it matters most, and `docs/phase6c-audit.md` A-6 records
+ * the difference: capacity is freed by `expires_at` so an abandoned checkout cannot
+ * hold a slot for ever, and **a funded username must never be freed that way**. A TTL
+ * that expired a paid name would let a second customer reserve a name the first already
+ * has an account for on the panel — two services, one provider account, and the usage
+ * figures of both meaningless.
+ *
+ * So `funded_at` is the switch. While it is null the row is an abandoned checkout and
+ * `expires_at` may reap it; once it is set the row is protected until the order reaches
+ * a terminal outcome — FULFILLED, which consumes the name into
+ * `services.provider_username`, or REFUNDED, which releases it. An `UNRECONCILED`
+ * service is neither: the remote account may exist, so the name stays held.
+ *
+ * ## Why the key is a namespace rather than a panel
+ *
+ * `services_panel_provider_username_key` is per panel, and two panel rows may point at
+ * the same provider host — `panels` constrains only the name, never `base_url`. Those
+ * panels share one account namespace, so a per-panel hold would let two customers
+ * reserve one name on one real panel. `namespace_key` is derived from the provider type
+ * and the normalised host and port, so they contend as they should.
+ *
+ * A definitive conflict that survives both — an account an operator made by hand — is a
+ * definitive non-delivery and follows the money rules. It is never adopted.
+ */
+/**
+ * The window in which an ordinary message means "this is my username".
+ *
+ * Modelled on `receipt_captures` deliberately, down to the partial unique index,
+ * because it answers the same dangerous question: when may a plain message the customer
+ * typed be read as an answer rather than as conversation? The legacy system answered it
+ * with a stateful prompt that outlived its question and overwrote a production gateway
+ * setting with somebody's ordinary message (INCIDENT-FIN-001).
+ *
+ * Two things bound the damage, and neither is the deadline. First, the window is a ROW:
+ * it is explicit, it has an owner, and a redelivered message either finds it or does
+ * not. Second, and more important, the only thing an open window can DO is validate a
+ * name against the one draft order it names, for the one customer it names. There is no
+ * branch in which it reaches a setting, a payment or another order — so even a window
+ * that outlived its question is confined to the question.
+ */
+export const usernameCaptures = pgTable(
+  'username_captures',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    /** WHICH bot, for the reason `receipt_captures.bot_instance_id` states. */
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    customerId: uuid('customer_id').notNull(),
+    orderId: uuid('order_id').notNull(),
+    openedAt: timestamptz('opened_at').notNull().defaultNow(),
+    expiresAt: timestamptz('expires_at').notNull(),
+    /** Null while open. The partial unique index below is keyed on exactly this. */
+    closedAt: timestamptz('closed_at'),
+    closeReason: text('close_reason'),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'username_captures_customer_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.orderId],
+      foreignColumns: [orders.tenantId, orders.id],
+      name: 'username_captures_order_fk',
+    }),
+    /**
+     * ONE open window per customer per bot, decided by the database.
+     *
+     * Two taps on two different drafts arriving together both read "nothing open", and
+     * the name the customer then types attaches to whichever row the planner returns
+     * first — a username reserved against an order they were not looking at, on a panel
+     * they were not buying from.
+     */
+    uniqueIndex('username_captures_open_key')
+      .on(table.tenantId, table.botInstanceId, table.customerId)
+      .where(sql`closed_at IS NULL`),
+    /** The sweep's index: windows past their deadline that nobody has closed. */
+    index('username_captures_due_idx')
+      .on(table.tenantId, table.expiresAt)
+      .where(sql`closed_at IS NULL`),
+    check(
+      'username_captures_close_reason_check',
+      nullableEnumCheck('close_reason', USERNAME_CAPTURE_CLOSE_REASONS),
+    ),
+    /** A closed window has a reason, and an open one has neither. Both halves. */
+    check('username_captures_closed_check', sql`(closed_at IS NULL) = (close_reason IS NULL)`),
+    check('username_captures_expiry_check', sql`expires_at > opened_at`),
+  ],
+);
+
+export const serviceUsernameReservations = pgTable(
+  'service_username_reservations',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    /**
+     * The provider account namespace this name is held in.
+     *
+     * Derived, not entered: `<provider_type>:<host>[:<port>]`, lowercased. Stored rather
+     * than computed at query time so the unique index below can be a plain index on a
+     * column, and so a panel whose address is later edited does not silently move every
+     * hold it took.
+     */
+    namespaceKey: text('namespace_key').notNull(),
+    username: text('username').notNull(),
+    panelId: uuid('panel_id').notNull(),
+    orderId: uuid('order_id').notNull(),
+    customerId: uuid('customer_id').notNull(),
+    /** Which mode produced it, so an audit can tell a typed name from a rendered one. */
+    mode: text('mode').notNull(),
+    /**
+     * When the money for this name committed, or null while the checkout is unfunded.
+     *
+     * The single field that decides whether `expires_at` may reap this row. See the
+     * table docblock: a TTL that frees a funded name is two services on one account.
+     */
+    fundedAt: timestamptz('funded_at'),
+    /**
+     * The backstop for an abandoned checkout, and ONLY for one.
+     *
+     * Every query that treats a row as held must also require `funded_at IS NOT NULL OR
+     * expires_at > now()`. Expiry alone is not release: a funded row past its expiry is
+     * still held, which is the whole difference from the capacity table.
+     */
+    expiresAt: timestamptz('expires_at').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.panelId],
+      foreignColumns: [panels.tenantId, panels.id],
+      name: 'service_username_reservations_tenant_panel_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.orderId],
+      foreignColumns: [orders.tenantId, orders.id],
+      name: 'service_username_reservations_order_fk',
+    }),
+    /**
+     * One name per namespace, and the collision IS the refusal.
+     *
+     * Deliberately NOT scoped by tenant: two tenants pointing at one provider host
+     * share its account namespace whether or not they know about each other, and a name
+     * one of them created is a name the other cannot have. The row exposes nothing
+     * across the boundary — a caller learns only that the name is unavailable, which is
+     * the same answer the provider would eventually give.
+     */
+    uniqueIndex('service_username_reservations_name_key').on(table.namespaceKey, table.username),
+    /** One name per order. A duplicate callback finds its own row rather than taking a second. */
+    uniqueIndex('service_username_reservations_order_key').on(table.tenantId, table.orderId),
+    /** The reaper's scan: unfunded holds that have run out. */
+    index('service_username_reservations_expiry_idx').on(table.fundedAt, table.expiresAt),
+    check('service_username_reservations_mode_check', enumCheck('mode', SERVICE_USERNAME_MODES)),
   ],
 );
 
@@ -3647,10 +3892,12 @@ export const walletEntries = pgTable(
  * provider treated as authoritative means a panel outage deletes an entitlement, and a
  * provider ignored means billing for something that does not exist.
  *
- * `provider_username` is derived from the service id (`providerUsernameFor`) and unique
- * per PANEL, which is the constraint that makes adoption after an unknown outcome safe:
- * a reconcile asks the panel for that exact name, and the index guarantees at most one
- * service claims it.
+ * `provider_username` is the name the ORDER reserved — chosen or drawn under
+ * `service-username.ts` and frozen before the money moved — and is unique per PANEL,
+ * which is the constraint that makes adoption after an unknown outcome safe: a
+ * reconcile asks the panel for the name THIS ROW carries, and the index guarantees at
+ * most one service claims it. It used to be derived from the service id, which cannot
+ * work once a name has to exist before the service does.
  *
  * `usage_synced_at` is nullable and is rendered to the customer beside the figure,
  * because a usage number with no "as of" is a number a customer reads as live.
@@ -3669,24 +3916,24 @@ export const services = pgTable(
     /** Navigation and reporting. The snapshot of what was bought is on the order. */
     productId: uuid('product_id').notNull(),
     state: text('state').notNull().default('PENDING_PROVISION'),
-    /** Derived from this row's own id. Unique per panel, which is what adoption needs. */
+    /** The order's reserved name, frozen before payment. Unique per panel, for adoption. */
     providerUsername: text('provider_username').notNull(),
     /**
      * The `subId` the panel serves this customer's configuration under. A CAPABILITY.
      *
-     * Random, 128 bits, chosen HERE and written in the settling transaction — not
-     * derived from the service id like the username beside it. The two are different
-     * kinds of thing and the distinction is the whole reason this column exists: the
-     * username appears in an operator's client list and is meant to be recoverable,
-     * while anybody holding this value can fetch the customer's configuration from
+     * Random, 128 bits, chosen HERE and written in the settling transaction. The
+     * username beside it is stored in the same transaction but is a different kind of
+     * thing, and the distinction is the whole reason this column exists: the username
+     * appears in an operator's client list and may be a name the customer picked, while
+     * anybody holding this value can fetch the customer's configuration from
      * `https://<subscription domain>/sub/<this>` with no authentication at all.
      *
      * It was derived, through an unkeyed SHA-256 of the service id — and the service id
      * travels in `operational_events.context`, in `audit_logs.entity_id` and in
      * `outbox_messages.aggregate_id`, none of which are places for a credential. Worse,
-     * `providerUsernameFor` is a reversible encoding rather than a hash, so reading a
-     * name off a panel screen recovered the id and therefore the link. The docblocks
-     * claimed the opposite in both directions.
+     * the username was then a reversible encoding of the id rather than a hash, so
+     * reading a name off a panel screen recovered the id and therefore the link. The
+     * docblocks claimed the opposite in both directions.
      *
      * Stored rather than derived loses nothing: it is written BEFORE any provider call,
      * so a create whose answer was lost can still be reconciled against it — which is
@@ -3889,6 +4136,151 @@ export const services = pgTable(
      * index to point at.
      */
     unique('services_tenant_id_customer_key').on(table.tenantId, table.id, table.customerId),
+  ],
+);
+
+/**
+ * One row per (service, reminder kind, period): "we told them this, about that period".
+ *
+ * A FACT, not a flag, and the distinction is what makes renewal work. The row records
+ * the BASIS the reminder was raised against — both the deadline and the allowance the
+ * service had at that moment — and the lane skips a service whose stored basis still
+ * equals its current one. A RENEW moves `expires_at`, an ADD_TRAFFIC moves
+ * `traffic_limit_bytes`, either makes the bases differ, and the reminder is due again.
+ * Nothing is deleted to re-arm anything, which matters: deleting rows to make a reminder
+ * fire again is how an audit trail loses the record of what a customer was actually
+ * told. A row is written once and never updated: an occurrence keeps the id the
+ * notification named it by.
+ *
+ * The two columns are read by DIFFERENT kinds. An expiry reminder compares the deadline
+ * alone, so buying extra traffic does not re-send "expires in three days". A usage
+ * reminder compares both, because a renewal is what resets the panel's usage counter and
+ * therefore starts the allowance over even when the allowance itself is unchanged.
+ *
+ * It is also the SUBJECT of the notification this reminder produces. Every other kind
+ * in `CUSTOMER_NOTIFICATION_KINDS` names an order, a payment or a service, and
+ * `customer_notifications_subject_key` then guarantees one delivery per subject for
+ * ever — right for a rejection, fatal for a reminder. Naming this row instead makes
+ * each occurrence its own subject and keeps the guarantee exactly where it belongs.
+ */
+export const serviceReminders = pgTable(
+  'service_reminders',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    serviceId: uuid('service_id').notNull(),
+    /** One of `SERVICE_REMINDER_KINDS`. */
+    kind: text('kind').notNull(),
+    /**
+     * The deadline the service had when this reminder was raised. Null means unlimited
+     * validity, which is a real answer and not a missing one.
+     *
+     * Written on EVERY row, expiry and usage alike, because it is what a RENEW moves and
+     * a renewal is the event that starts a new usage period too. Kept apart from
+     * `basis_traffic_limit_bytes` rather than folded into one opaque column, because the
+     * two are compared against different columns of `services` and a single `basis text`
+     * would be a value whose meaning depends on the row's kind — which is the shape
+     * `subject_type` was refused for on `customer_notifications`.
+     */
+    basisExpiresAt: timestamptz('basis_expires_at'),
+    /**
+     * The allowance the service had when this reminder was raised. Zero is unlimited,
+     * the sentinel `services.traffic_limit_bytes` already uses.
+     *
+     * NOT NULL, and written on every row for the same reason the column above is: an
+     * ADD_TRAFFIC moves it, and a reminder raised against fifty gigabytes says nothing
+     * about a service that now has eighty.
+     */
+    basisTrafficLimitBytes: bigint('basis_traffic_limit_bytes', { mode: 'bigint' }).notNull(),
+    /*
+     * WHAT THE CUSTOMER IS TOLD, frozen at the moment the reminder was raised.
+     *
+     * The three columns below are the only reason this table has a snapshot at all, and
+     * the alternative is what makes them necessary: rendering the message from
+     * `services` at SEND time. The two moments are minutes apart on a good day and a
+     * queue-length apart on a bad one, and in between a renewal moves the deadline, a
+     * usage sync moves the figure, and the customer reads a sentence whose numbers
+     * contradict the threshold that produced it. `docs/conventions.md` already requires
+     * a snapshot for anything that will appear in a historical report; a message to a
+     * customer is one.
+     *
+     * `snapshot_used_bytes` is NOT NULL and is never a stand-in for a figure nobody has
+     * read: the usage sweep refuses a service whose `usage_synced_at` is NULL, and the
+     * three expiry kinds render no traffic at all. Zero here means the panel said zero.
+     */
+    snapshotServiceLabel: text('snapshot_service_label').notNull(),
+    /** Whole days left when it was raised. NULL for the usage kinds, which render none. */
+    snapshotRemainingDays: integer('snapshot_remaining_days'),
+    snapshotUsedBytes: bigint('snapshot_used_bytes', { mode: 'bigint' }).notNull(),
+    raisedAt: timestamptz('raised_at').notNull().defaultNow(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.serviceId],
+      foreignColumns: [services.tenantId, services.id],
+      name: 'service_reminders_service_fk',
+    }),
+    /**
+     * ONE row per service per kind PER PERIOD, and the insert on it is what makes the
+     * pass safe.
+     *
+     * Two worker replicas is the normal case on every rolling update, and both will
+     * find the same due service. The conditional insert is the decision: the winner
+     * writes the row and enqueues the notification in the same transaction, the loser's
+     * `ON CONFLICT DO NOTHING` returns nothing and it enqueues nothing.
+     *
+     * The BASIS is in the key, which is what makes a row an occurrence rather than a
+     * slot. An occurrence keeps its id for ever, so the `customer_notifications` row
+     * that names it as its subject still resolves years later; a per-kind slot rewritten
+     * on each renewal would have to change its own primary key to earn a fresh subject,
+     * and every earlier notification would then point at nothing.
+     *
+     * NULLS NOT DISTINCT, because `basis_expires_at` is NULL for unlimited validity and
+     * Postgres treats NULLs in a unique key as distinct by default — which would let
+     * every pass insert another row for the same service and send the same reminder for
+     * ever. It is a UNIQUE CONSTRAINT rather than a unique index only because that is
+     * where drizzle exposes the option.
+     *
+     * Both basis columns are in the key, so an ADD_TRAFFIC re-arms the three EXPIRY
+     * kinds as well as the three usage ones. That is a deliberate, stated cost: the
+     * customer may be told "expires soon" once more after buying traffic. Splitting it
+     * into two partial unique indexes would avoid the extra message and would make the
+     * arbiter of every insert depend on which kind it carries. This lane exists to speak
+     * up, and an extra true sentence is the failure to prefer over a missed one.
+     */
+    unique('service_reminders_period_key')
+      .on(
+        table.tenantId,
+        table.serviceId,
+        table.kind,
+        table.basisExpiresAt,
+        table.basisTrafficLimitBytes,
+      )
+      .nullsNotDistinct(),
+    /** The sweep reads by tenant and orders by when it last spoke. */
+    index('service_reminders_raised_idx').on(table.tenantId, table.raisedAt),
+    check('service_reminders_kind_check', enumCheck('kind', SERVICE_REMINDER_KINDS)),
+    /**
+     * Exactly one basis, and which one is decided by the kind.
+     *
+     * A row with neither could never be compared against anything and would suppress
+     * its reminder for ever; a row with both would be two answers to "what was this
+     * about". The CHECK is the only thing standing between a future caller and either.
+     */
+    /**
+     * An allowance is a size, and a negative one is not a size.
+     *
+     * This replaces an exclusive `(expires_at IS NULL) <> (limit IS NULL)` that migration
+     * 0090 shipped and 0091 removes. That constraint encoded a wrong model: it made each
+     * reminder carry exactly ONE basis, expiry or allowance, and a usage reminder whose
+     * only basis was the allowance is a usage reminder a renewal cannot re-arm. A
+     * customer who renews a fifty-gigabyte plan, has their usage reset on the panel and
+     * climbs back past eighty percent would never be told again, for the life of the
+     * service — which is precisely the silence this whole lane exists to break.
+     */
+    check('service_reminders_basis_check', sql`${table.basisTrafficLimitBytes} >= 0`),
   ],
 );
 

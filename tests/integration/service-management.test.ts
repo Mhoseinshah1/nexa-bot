@@ -3,7 +3,6 @@ import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   money,
-  providerUsernameFor,
   type ActorContext,
   type BotInstanceId,
   type CorrelationId,
@@ -218,7 +217,16 @@ describe('a customer manages the service they bought', () => {
     const service = await services.findByOrderId(tenantA, orderId);
     if (service === undefined || service === null) throw new Error('no service');
     expect(service.state, 'the fixture must start ACTIVE').toBe('ACTIVE');
-    return { id: service.id, username: providerUsernameFor(service.id) };
+    /*
+     * The STORED name, never one recomputed from the id.
+     *
+     * Settlement takes the name from the order's reservation now, so recomputing
+     * `providerUsernameFor(service.id)` here handed every operation below a name no
+     * account has. That is the same coupling `ae6f173` removed from production code —
+     * "the provider is asked for the name the row stores, not one recomputed" — and
+     * this fixture had not followed it.
+     */
+    return { id: service.id, username: service.providerUsername };
   }
 
   const customerUpdate = (payload: Record<string, unknown>, telegramUserId = '910910') => {
@@ -1169,6 +1177,109 @@ describe('a customer manages the service they bought', () => {
     // ONE debit for the renewal, on top of the original purchase's.
     const balance = await ctx.container.wallet.balance(tenantA, owner, customerA);
     expect(balance.amountMinor).toBe(5_000_000n + 1_000_000n - 250_000n - 250_000n);
+  });
+
+  it('refunds a renewal the panel definitively refused, and leaves the service ACTIVE', async () => {
+    /*
+     * The other half of `refundPurchase`, and the half nothing tested.
+     *
+     * Two lanes reach `UndeliverableOrderRefunder`, and each one asks a different
+     * question of the same method. Settlement's commercial refusal is covered twice
+     * over — `automatic-refund.test.ts` for a panel that stopped being operable, and
+     * the stranded-transfer case above for a service terminated while the receipt
+     * waited — and both of those end BEFORE an operation is planned. This one begins
+     * after: the panel was operable, the RENEW was planned, the provisioner dialled,
+     * and the panel answered definitively that it would not.
+     *
+     * What that reaches is the one branch in `refundPurchase` with a condition on it:
+     *
+     *     if (purchasedAs === 'PROVISION') { ...transition the service to TERMINATED }
+     *
+     * A failed PROVISION leaves a `PENDING_PROVISION` service holding a capacity slot
+     * for an account that will never exist, so it is ended. A failed RENEW does not:
+     * the customer's service is alive, they are using it, and the thing being refunded
+     * is the extra month that was not applied. Deleting the `if` — the mutation this
+     * case is written against — terminates a working account the customer paid for
+     * last month because this month's renewal hit a wrong password. Measured, not
+     * assumed: with the condition replaced by `true`, the other 49 cases in this file
+     * and all 66 in `automatic-refund.test.ts` and `provisioning-delivery.test.ts`
+     * stayed green, and this one was the only failure.
+     *
+     * A BANK TRANSFER, not the wallet, and deliberately: the money has already moved,
+     * so `UNDELIVERABLE` is a genuine credit rather than a debit that could have died
+     * with its transaction. The asymmetry is the owner's, and it is asserted as a
+     * ledger below — one automatic refund, for the exact total, once.
+     *
+     * `bad-credentials` because it is the DEFINITIVE, non-retryable failure:
+     * `AUTHENTICATION_FAILED` is terminal on the first attempt, so nothing here is
+     * testing an attempt ceiling, and — the part that matters for the money — a
+     * refund on an `UNKNOWN` outcome would be a refund for a renewal the panel may
+     * have applied. The adapter mints a token per call sequence and stores none, so
+     * flipping the behaviour after the create genuinely closes the door.
+     */
+    const service = await activeService('renew-refused');
+    const before = await services.findById(tenantA, service.id);
+    const onPanelBefore = panel.users.get(service.username);
+    const { orderId, paymentId } = await buyByTransfer(service.id, 'RENEW', 'renew-refused');
+    const { payment } = await ctx.container.payments.confirmManualTransfer(
+      tenantA,
+      owner,
+      paymentId,
+      { idempotencyKey: 'xfer-renew-refused-confirm-op', note: 'کارت به کارت' },
+    );
+    expect(payment.state, 'the money arrived before the panel was asked').toBe('CONFIRMED');
+    expect((await operationOf(service.id, 'RENEW'))?.state).toBe('PLANNED');
+    const walletBefore = await ctx.container.wallet.balance(tenantA, owner, customerA);
+
+    panel.behaviour = 'bad-credentials';
+    await ctx.container.provisionerLoop.tick();
+
+    const failed = await operationOf(service.id, 'RENEW');
+    expect(failed?.state, 'definitive, so terminal — never UNKNOWN').toBe('FAILED');
+    expect(failed?.failureKind).toBe('AUTHENTICATION_FAILED');
+    expect(failed?.attempts, 'and not four more logins against the operator s panel').toBe(1);
+
+    // THE ASSERTION THIS CASE EXISTS FOR.
+    const after = await services.findById(tenantA, service.id);
+    expect(after?.state, 'the service they already had is untouched').toBe('ACTIVE');
+    expect(after?.state).not.toBe('TERMINATED');
+    // Untouched means untouched: the allowance they paid for last month is intact,
+    // and the renewal that was refunded was not quietly applied to the row either.
+    expect(after?.trafficLimitBytes).toBe(before?.trafficLimitBytes);
+    expect(after?.expiresAt?.getTime()).toBe(before?.expiresAt?.getTime());
+    const onPanelAfter = panel.users.get(service.username);
+    expect(onPanelAfter?.dataLimit).toBe(onPanelBefore?.dataLimit);
+    expect(onPanelAfter?.expire).toBe(onPanelBefore?.expire);
+    expect(onPanelAfter?.status, 'and the account still serves').toBe('active');
+
+    // And the money went back, once, for the exact amount, by the one credit path.
+    const order = (await ctx.container.database.db.execute(
+      sql`SELECT state, total_amount::text AS total, refunded_at
+            FROM orders WHERE id = ${orderId}` as never,
+    )) as unknown as {
+      rows: { state: string; total: string; refunded_at: string | null }[];
+    };
+    expect(order.rows[0]?.state).toBe('REFUNDED');
+    expect(order.rows[0]?.refunded_at).not.toBeNull();
+    const refunds = (await ctx.container.database.db.execute(
+      sql`SELECT amount::text AS amount, state, reason, requested_by_admin_id IS NULL AS automatic
+            FROM refunds WHERE order_id = ${orderId}` as never,
+    )) as unknown as {
+      rows: { amount: string; state: string; reason: string; automatic: boolean }[];
+    };
+    expect(refunds.rows, 'one automatic refund, not two and not none').toEqual([
+      {
+        amount: order.rows[0]?.total,
+        state: 'COMPLETED',
+        reason: 'UNDELIVERABLE',
+        automatic: true,
+      },
+    ]);
+    const walletAfter = await ctx.container.wallet.balance(tenantA, owner, customerA);
+    expect(
+      walletAfter.amountMinor - walletBefore.amountMinor,
+      'the exact amount, and nothing else',
+    ).toBe(BigInt(order.rows[0]?.total as string));
   });
 
   it('adds traffic without touching the window, and keeps what has been consumed', async () => {

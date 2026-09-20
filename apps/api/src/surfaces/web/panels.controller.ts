@@ -208,6 +208,15 @@ export class PanelsController {
        * because the arithmetic looks obvious.
        */
       capacity: view.capacity,
+      /*
+       * Returned in full, for the reason `activation` above states.
+       *
+       * A write-only policy is the legacy settings screen: an operator could turn a
+       * mode off and have no way to see it was off except by turning it on again. The
+       * template in particular is a value somebody typed and will later need to read
+       * back to work out why a customer's username looks the way it does.
+       */
+      usernamePolicy: view.panel.usernamePolicy,
       createdAt: view.panel.createdAt.toISOString(),
       updatedAt: view.panel.updatedAt.toISOString(),
     };

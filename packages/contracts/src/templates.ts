@@ -380,6 +380,96 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.username.choose',
+    description:
+      'Asks which of the two username modes the customer wants. Sent only when the ' +
+      "panel's policy allows both; with one enabled the question has no answer to " +
+      'give and that mode runs directly.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.username.custom_button',
+    description: 'The button that starts the custom-username prompt.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.username.automatic_button',
+    description: 'The button that has the installation generate the username.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.username.instructions',
+    description:
+      'States the whole custom-username rule before the customer types: length, the ' +
+      'accepted characters, the letter-and-digit requirement, and that case is not ' +
+      'distinguished. Carries no payload, so a rule change is a copy change and the ' +
+      'shared validator stays the single decider.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.username.invalid',
+    description:
+      'Refuses a username that does not satisfy the stated rule. Deliberately does ' +
+      'not name which clause failed — the rule is shown in full beforehand, and a ' +
+      'per-clause answer is a probe.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.username.taken',
+    description:
+      'Refuses a username already held on the same provider namespace, and says no ' +
+      'money moved. Sent before any debit, so the statement is a fact about the ' +
+      'order rather than a reassurance.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.username.exhausted',
+    description:
+      'The panel\u2019s automatic generator drew five candidates and every one was ' +
+      'already held. Separate from `bot.username.taken` because the customer did ' +
+      'nothing wrong and typing a different name is not the remedy \u2014 there is ' +
+      'nothing for them to do but try again or ask. Sent before any debit.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.username.unavailable',
+    description:
+      'The panel\u2019s automatic configuration cannot produce a name for THIS ' +
+      'purchase \u2014 the commonest case being a Telegram id long enough to push ' +
+      '`TELEGRAM_ID_RANDOM` past the length limit. It names no configuration and no ' +
+      'panel: an operator fixes this, and a customer being shown the internals of a ' +
+      'generator learns nothing they can act on. Sent before any debit.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.username.mode_unavailable',
+    description:
+      'The customer tapped the typed-name button and the panel no longer offers ' +
+      'typed names — an operator changed the policy after the button was drawn. ' +
+      'The mirror of `bot.username.unavailable`, which is the same refusal the other ' +
+      'way round, and it points at the choice that IS available rather than naming ' +
+      'the policy that changed. Sent before any window opens and before any debit.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.username.stale',
+    description:
+      'An unpaid order was holding a name the current rules would not accept, so the ' +
+      'hold was released and the customer chooses again. Safe precisely because no ' +
+      'money has moved, which the body says.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.order.summary',
     description:
       'The server-calculated order summary a customer confirms. Every figure in it ' +
@@ -411,6 +501,24 @@ export const TEMPLATES = [
         token: 'trafficBytes',
         type: 'BYTES',
         description: 'Traffic allowance in bytes, or 0 for unlimited. The renderer owns the unit.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        /*
+         * The name the service will carry, in the summary the customer AGREES to.
+         *
+         * Optional because a tenant may have overridden this body before the username
+         * step existed, and a required token would then throw in the resolver rather
+         * than degrade — an order a customer cannot place at all, over a line of copy.
+         *
+         * The value is the CANONICAL lowercase form and never what they typed. Showing
+         * the typed spelling here would mean the summary and the panel account say two
+         * different things for every customer who used a capital.
+         */
+        token: 'username',
+        type: 'STRING',
+        description: 'The canonical username reserved for this order.',
         required: false,
         repeatable: false,
       },
@@ -1007,6 +1115,194 @@ export const TEMPLATES = [
    * needs to go looking. Credential creation and rotation are not here at all — they
    * are the Web Admin's, behind `panels.credentials.rotate`.
    */
+  /*
+   * ## The reminder settings section (Phase 6C)
+   *
+   * Mirza's six cron capabilities are «a flag plus a single scalar prompt» (CBR-003,
+   * CBR-011), and seven of its twelve settings screens never print the value they are
+   * about to replace \u2014 «an admin cannot read the current configuration without
+   * overwriting it» (CBR-013, BC-SB-003). The section template below prints all eight
+   * values at once, before anything is editable, which is the cure applied rather than
+   * merely written down.
+   *
+   * There is NO typed-value prompt on this surface. Every edit is a tap on a value
+   * carried in the callback data, so `INCIDENT-FIN-001` \u2014 a pending prompt
+   * swallowing an unrelated message and overwriting a production setting \u2014 has no
+   * mechanism to occur here at all.
+   */
+  {
+    key: 'bot.admin.reminders_button',
+    description: 'Opens the reminder settings section from the admin panel.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.reminders_section',
+    description:
+      'Every reminder setting and switch, with its CURRENT value, before anything is ' +
+      'editable. The three switches are shown and not toggled here: they are ' +
+      'TENANT_WIDE, so ADR-0010 requires a typed confirmation and a reason, and a ' +
+      'button that synthesised either would be the safeguard removed rather than met.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'expiry',
+        type: 'STRING',
+        description: 'Whether advance expiry reminders are on, as a state symbol.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'expired',
+        type: 'STRING',
+        description: 'Whether the expired notice is on, as a state symbol.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'usage',
+        type: 'STRING',
+        description: 'Whether usage reminders are on, as a state symbol.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'firstDays',
+        type: 'NUMBER',
+        description: 'The tenant\u2019s first expiry threshold, in days.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'secondDays',
+        type: 'NUMBER',
+        description: 'Its second.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'firstPercent',
+        type: 'NUMBER',
+        description: 'The first usage threshold, in percent.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'secondPercent',
+        type: 'NUMBER',
+        description: 'Its second.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'finalPercent',
+        type: 'NUMBER',
+        description: 'Its last.',
+        required: false,
+        repeatable: true,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.reminder_expiry_first_button',
+    description: 'Opens the chooser for reminders.expiry_first_days.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.reminder_expiry_second_button',
+    description: 'Opens the chooser for reminders.expiry_second_days.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.reminder_usage_first_button',
+    description: 'Opens the chooser for reminders.usage_first_percent.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.reminder_usage_second_button',
+    description: 'Opens the chooser for reminders.usage_second_percent.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.reminder_usage_final_button',
+    description: 'Opens the chooser for reminders.usage_final_percent.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.reminder_choose',
+    description:
+      'One setting, its current value, and the values that may replace it. `setting` ' +
+      'is the registry KEY rather than a translated name \u2014 the same machine key ' +
+      'the Web Admin row is titled with, so an operator reading both surfaces is ' +
+      'looking at one identifier and not two names for it.',
+    // TELEGRAM_HTML so the registry key renders in <code>: it is a machine
+    // identifier an operator may want to copy into the Web Admin, and a proportional
+    // font turns `reminders.usage_first_percent` into something to squint at.
+    format: 'TELEGRAM_HTML',
+    placeholders: [
+      {
+        token: 'setting',
+        type: 'STRING',
+        description: 'The registry key being edited.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'current',
+        type: 'NUMBER',
+        description: 'Its value right now.',
+        required: false,
+        repeatable: true,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.reminder_saved',
+    description: 'A reminder threshold was written. Names the value that is now stored.',
+    // TELEGRAM_HTML so the registry key renders in <code>: it is a machine
+    // identifier an operator may want to copy into the Web Admin, and a proportional
+    // font turns `reminders.usage_first_percent` into something to squint at.
+    format: 'TELEGRAM_HTML',
+    placeholders: [
+      {
+        token: 'setting',
+        type: 'STRING',
+        description: 'The registry key that was written.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'value',
+        type: 'NUMBER',
+        description: 'The value now stored.',
+        required: false,
+        repeatable: true,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.reminder_refused',
+    description:
+      'A combination the thresholds may not take. Carries the guard\u2019s own reason, ' +
+      'which names WHICH of the five is wrong and why \u2014 Mirza answers the same ' +
+      'situation with `\u2b55\ufe0f \u0648\u0631\u0648\u062f\u06cc \u0646\u0627 ' +
+      '\u0645\u0639\u062a\u0628\u0631` (BC-SB-004), which tells an operator nothing.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reason',
+        type: 'STRING',
+        description: 'The refusal, already in Persian, from `refuseReminderThresholds`.',
+        required: false,
+        repeatable: true,
+      },
+    ],
+  },
   {
     key: 'bot.admin.panels_button',
     description:
@@ -1052,7 +1348,8 @@ export const TEMPLATES = [
       'One panel, as an administrator sees it in Telegram. Carries the name, the ' +
       'provider, the status, the health STATE with when it was last checked, the ' +
       'failure KIND from the frozen vocabulary when there is one, and the occupancy — ' +
-      'services, held slots, and the cap. It carries NO base URL, NO credential, no ' +
+      'services, held slots, the cap and the username policy. It carries NO base URL, ' +
+      'NO credential, no ' +
       'masked stand-in for one, and no provider response body: all four are either a ' +
       'secret or most of the way to finding one, and this message is forwardable for ' +
       'ever.',
@@ -1139,6 +1436,52 @@ export const TEMPLATES = [
           'because “no cap” is one of its values and rendering that as 0 would read as ' +
           'a full panel — the exact inversion the null means.',
         required: true,
+        repeatable: false,
+      },
+      {
+        /*
+         * Which username modes this panel offers, as two marks and a template.
+         *
+         * THREE placeholders rather than one composed sentence, and that is the rule
+         * `UNCAPPED` already follows: a surface may pass a VALUE into a message the
+         * catalogue owns, and may not build one message out of another. The words stay
+         * here; the surface passes a mark or the template text.
+         *
+         * Optional, because a body a tenant overrode before this line existed must
+         * keep rendering rather than throwing in the resolver — an administrator
+         * unable to read a panel at all, over a line of copy.
+         */
+        token: 'usernameCustom',
+        type: 'STRING',
+        description: 'A mark when the panel lets a customer type their own name.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'usernameAutomatic',
+        type: 'STRING',
+        description: 'A mark when the panel lets the installation generate one.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        /*
+         * The template itself, which is configuration and not a secret — an
+         * administrator reading it is the only way to answer "why is this customer
+         * called that". The base URL and the credentials stay out of this message for
+         * the reasons the docblock above gives; a token list is neither.
+         */
+        token: 'usernameTemplate',
+        type: 'STRING',
+        description: 'The CUSTOM_TEMPLATE template, or a mark when the strategy does not use one.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'usernamePrefix',
+        type: 'STRING',
+        description: 'The PREFIX_RANDOM prefix, or a mark when the strategy does not use one.',
+        required: false,
         repeatable: false,
       },
     ],
@@ -1277,6 +1620,160 @@ export const TEMPLATES = [
       'log carry the distinction. Reached by a button drawn before the panel moved.',
     format: 'PLAIN_TEXT',
     placeholders: [],
+  },
+  {
+    key: 'bot.admin.username_button',
+    description: 'Opens the panel\u2019s username-policy section from its detail view.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.username_section',
+    description:
+      'The panel\u2019s whole username policy, READ BACK before anything is edited: ' +
+      'which of the two customer choices are on, which automatic preset is saved, its ' +
+      'prefix or template, and a preview rendered from synthetic values. Every value ' +
+      'is shown because a setting an operator can write and cannot read is the ' +
+      'write-only settings screen this product exists to replace. It also states the ' +
+      'two commands that set a prefix and a template, because those carry their ' +
+      'argument rather than capturing the next message.',
+    format: 'TELEGRAM_HTML',
+    placeholders: [
+      {
+        token: 'panel',
+        type: 'STRING',
+        description: 'The panel\u2019s name.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'custom',
+        type: 'STRING',
+        description: 'A mark for the custom choice.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'automatic',
+        type: 'STRING',
+        description: 'A mark for the automatic choice.',
+        required: true,
+        repeatable: false,
+      },
+      /*
+       * The four presets are marks, not a rendered name, and that is a constraint of
+       * this surface rather than a preference: the runtime builds a reply as a key
+       * and a bag of values, and has no translator to turn a preset's key into the
+       * word for it. Passing the enum name would put `PREFIX_RANDOM` in front of a
+       * Persian-speaking operator. The names therefore live in this body and the
+       * runtime passes only which one is selected — the same arrangement the two
+       * mode marks above already use.
+       */
+      {
+        token: 'random',
+        type: 'STRING',
+        description: 'A mark when RANDOM is selected.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'prefixRandom',
+        type: 'STRING',
+        description: 'A mark when PREFIX_RANDOM is selected.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'telegramIdRandom',
+        type: 'STRING',
+        description: 'A mark when TELEGRAM_ID_RANDOM is selected.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'customTemplate',
+        type: 'STRING',
+        description: 'A mark when CUSTOM_TEMPLATE is selected.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'prefix',
+        type: 'STRING',
+        description: 'The saved prefix, or a mark for none.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'template',
+        type: 'STRING',
+        description: 'The saved template, or a mark for none.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'preview',
+        type: 'STRING',
+        description:
+          'One name this policy would produce, rendered from SYNTHETIC values. It ' +
+          'consumes no randomness that reaches a customer and reserves nothing.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.username_custom_button',
+    description: 'Turns the customer\u2019s own-name choice on or off for this panel.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.username_automatic_button',
+    description: 'Turns the generated-name choice on or off for this panel.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.username_strategy_random',
+    description:
+      'Selects the preset that draws twelve random characters. There is no button for ' +
+      'CUSTOM_TEMPLATE beside these three, and the asymmetry is deliberate: the other ' +
+      'three either need no configuration or have a default, and a template does not ' +
+      'exist until somebody writes one \u2014 so `/panel_template` is how that preset ' +
+      'is selected, in the same message that supplies the template.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.username_strategy_prefix_random',
+    description: 'Selects and names the preset that puts a saved prefix before random characters.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.username_strategy_telegram_id_random',
+    description: 'Selects and names the preset that uses the customer\u2019s Telegram id.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.username_refused',
+    description:
+      'The username policy was refused and NOTHING was written \u2014 both choices off, ' +
+      'a prefix or template that cannot render a legal name, or a preset with no ' +
+      'configuration behind it. The reason is passed in, because an operator fixing one ' +
+      'problem per round trip is an operator who gives up.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reason',
+        type: 'STRING',
+        description: 'Why it was refused, in words, from the shared validator.',
+        required: true,
+        repeatable: false,
+      },
+    ],
   },
   {
     key: 'bot.admin.section',
@@ -1920,6 +2417,277 @@ export const TEMPLATES = [
       'rather than a duration, because the duration depends on somebody else.',
     format: 'PLAIN_TEXT',
     placeholders: [],
+  },
+  /*
+   * The six reminders (Phase 6C). Each carries NO placeholder, deliberately.
+   *
+   * The customer notification lane has no payload — ADR 0030 §1 — so a single
+   * "expires in {days} days" is not available, and inventing one would give a
+   * background loop the ability to send a customer any string in the catalogue.
+   * «سه روز» inside the sentence is the same information with none of that.
+   *
+   * Each one also says what to DO, because a reminder that only states a fact makes
+   * the customer go and find the renew button themselves. The three usage sentences
+   * deliberately do not name a figure: the percentage is the threshold that fired,
+   * and a number rendered here would go stale the moment the next byte moves.
+   */
+  {
+    key: 'bot.service.expiry_first',
+    description:
+      'The tenant\u2019s FIRST expiry threshold was crossed \u2014 three days by default, and ' +
+      'whatever reminders.expiry_first_days says otherwise. Named for the slot rather than ' +
+      'the number, because the number is a setting an operator moves.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The account name on the panel, which is what the customer sees.',
+        /*
+         * REQUIRED, and the only one of the four that is.
+         *
+         * A customer with three services who is told "one of them expires soon" has been
+         * given a puzzle rather than a warning. The figures below are optional because a
+         * short message without them is still a true, useful sentence; a message without
+         * the name is not.
+         */
+        required: true,
+        repeatable: true,
+      },
+      {
+        token: 'days',
+        type: 'DURATION_DAYS',
+        description:
+          'Whole days left when the reminder was raised, from the snapshot on the ' +
+          'service_reminders row rather than re-read at send time.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description: 'The deadline the reminder was raised against.',
+        required: false,
+        repeatable: true,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.expiry_second',
+    description: 'The second, more urgent threshold. One day by default.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The account name on the panel, which is what the customer sees.',
+        /*
+         * REQUIRED, and the only one of the four that is.
+         *
+         * A customer with three services who is told "one of them expires soon" has been
+         * given a puzzle rather than a warning. The figures below are optional because a
+         * short message without them is still a true, useful sentence; a message without
+         * the name is not.
+         */
+        required: true,
+        repeatable: true,
+      },
+      {
+        token: 'days',
+        type: 'DURATION_DAYS',
+        description:
+          'Whole days left when the reminder was raised, from the snapshot on the ' +
+          'service_reminders row rather than re-read at send time.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description: 'The deadline the reminder was raised against.',
+        required: false,
+        repeatable: true,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.expired',
+    description:
+      'The service reached its own deadline. A statement of fact and an invitation to ' +
+      'renew \u2014 never a claim that anything was deleted, because expiry is a Nexa-side ' +
+      'lifecycle transition and the panel account is dealt with separately. Carries no ' +
+      '`days`: zero days left is the fact the sentence already states.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The account name on the panel, which is what the customer sees.',
+        /*
+         * REQUIRED, and the only one of the four that is.
+         *
+         * A customer with three services who is told "one of them expires soon" has been
+         * given a puzzle rather than a warning. The figures below are optional because a
+         * short message without them is still a true, useful sentence; a message without
+         * the name is not.
+         */
+        required: true,
+        repeatable: true,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description: 'The deadline the reminder was raised against.',
+        required: false,
+        repeatable: true,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.usage_first',
+    description:
+      'The tenant\u2019s first usage threshold, eighty percent by default. The figures are ' +
+      'PLACEHOLDERS and they are a SNAPSHOT: `service_reminders` recorded what the panel ' +
+      'had last reported when the reminder was raised, so the sentence says what was true ' +
+      'then rather than a number re-read at send time that would disagree with it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The account name on the panel, which is what the customer sees.',
+        /*
+         * REQUIRED, and the only one of the four that is.
+         *
+         * A customer with three services who is told "one of them expires soon" has been
+         * given a puzzle rather than a warning. The figures below are optional because a
+         * short message without them is still a true, useful sentence; a message without
+         * the name is not.
+         */
+        required: true,
+        repeatable: true,
+      },
+      {
+        token: 'usedTraffic',
+        type: 'BYTES',
+        description:
+          'What the panel had last reported when the reminder was raised. A SNAPSHOT: ' +
+          'never a figure re-read at send time, which could disagree with the threshold ' +
+          'the sentence names, and never zero standing in for a figure nobody has read.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'totalTraffic',
+        type: 'BYTES',
+        description: 'The allowance the reminder was raised against.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'usagePercent',
+        type: 'NUMBER',
+        description: 'The whole-percent figure the two above work out to.',
+        required: false,
+        repeatable: true,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.usage_second',
+    description: 'The second usage threshold, ninety-five percent by default.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The account name on the panel, which is what the customer sees.',
+        /*
+         * REQUIRED, and the only one of the four that is.
+         *
+         * A customer with three services who is told "one of them expires soon" has been
+         * given a puzzle rather than a warning. The figures below are optional because a
+         * short message without them is still a true, useful sentence; a message without
+         * the name is not.
+         */
+        required: true,
+        repeatable: true,
+      },
+      {
+        token: 'usedTraffic',
+        type: 'BYTES',
+        description:
+          'What the panel had last reported when the reminder was raised. A SNAPSHOT: ' +
+          'never a figure re-read at send time, which could disagree with the threshold ' +
+          'the sentence names, and never zero standing in for a figure nobody has read.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'totalTraffic',
+        type: 'BYTES',
+        description: 'The allowance the reminder was raised against.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'usagePercent',
+        type: 'NUMBER',
+        description: 'The whole-percent figure the two above work out to.',
+        required: false,
+        repeatable: true,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.usage_final',
+    description:
+      'The final usage threshold, a hundred percent by default. Says the traffic ran out ' +
+      'and offers more; it does NOT say the service stopped, because whether a panel cuts ' +
+      'a customer off at the limit is the provider\u2019s behaviour and not a fact this ' +
+      'installation observed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The account name on the panel, which is what the customer sees.',
+        /*
+         * REQUIRED, and the only one of the four that is.
+         *
+         * A customer with three services who is told "one of them expires soon" has been
+         * given a puzzle rather than a warning. The figures below are optional because a
+         * short message without them is still a true, useful sentence; a message without
+         * the name is not.
+         */
+        required: true,
+        repeatable: true,
+      },
+      {
+        token: 'usedTraffic',
+        type: 'BYTES',
+        description:
+          'What the panel had last reported when the reminder was raised. A SNAPSHOT: ' +
+          'never a figure re-read at send time, which could disagree with the threshold ' +
+          'the sentence names, and never zero standing in for a figure nobody has read.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'totalTraffic',
+        type: 'BYTES',
+        description: 'The allowance the reminder was raised against.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'usagePercent',
+        type: 'NUMBER',
+        description: 'The whole-percent figure the two above work out to.',
+        required: false,
+        repeatable: true,
+      },
+    ],
   },
   {
     key: 'bot.service.provision_delayed',

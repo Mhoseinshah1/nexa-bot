@@ -502,6 +502,24 @@ export const PANEL_ERROR_CODES = {
    */
   PANEL_PROBE_LIMITED: 'panel.probe_limited',
   /**
+   * Moving this panel to that address would collide with a username held there.
+   *
+   * A username reservation is unique per NAMESPACE — provider plus host, and
+   * deliberately not per panel, because two panels pointing at one machine share
+   * its account namespace. The key is frozen on the reservation row, so changing a
+   * panel's address moves the panel out from under every name it is holding: the
+   * holds keep counting in the namespace of the OLD host while settlement creates
+   * accounts on the new one.
+   *
+   * So an address change carries its panel's reservations with it, and this is what
+   * the operator is told when it cannot: some name this panel holds is already
+   * reserved at the destination, by another panel that was already there. Refusing
+   * the edit is the only answer that keeps the guarantee — the alternative is two
+   * orders holding one name on one machine, discovered by the second provider create
+   * after both customers have paid.
+   */
+  PANEL_NAMESPACE_CONFLICT: 'panel.namespace_conflict',
+  /**
    * The panel changed while its connection test was in flight.
    *
    * A probe reads a panel's address and credentials, then spends as long as the
@@ -513,6 +531,40 @@ export const PANEL_ERROR_CODES = {
    * the operator is asked to run the test again against what the panel is now.
    */
   PANEL_CONFIGURATION_CHANGED: 'panel.configuration_changed',
+  /**
+   * A username policy that leaves a customer no way to name their service.
+   *
+   * Both modes off is not a strict configuration, it is a panel nothing can be bought
+   * from — and it would fail at the customer's purchase rather than at the operator's
+   * save, which is the class of defect `docs/conventions.md` calls a write-only setting.
+   */
+  PANEL_USERNAME_POLICY_EMPTY: 'panel.username_policy_empty',
+  /**
+   * The RANDOM template cannot produce a name this provider will accept.
+   *
+   * Raised at panel create and update, never deferred to a purchase. The detail carries
+   * every issue at once — unknown token, no uniqueness token, illegal character, too
+   * long — because an operator fixing one per round trip gives up.
+   */
+  PANEL_USERNAME_TEMPLATE_INVALID: 'panel.username_template_invalid',
+  /**
+   * The PREFIX_RANDOM prefix cannot produce a name inside the universal contract.
+   *
+   * Empty, containing something outside `[a-z0-9_-]`, not starting with an English
+   * letter, or long enough to leave fewer than six random characters. Like the
+   * template refusal it carries every issue at once, and like the template refusal it
+   * is raised at the operator's save and never deferred to a customer's purchase.
+   */
+  PANEL_USERNAME_PREFIX_INVALID: 'panel.username_prefix_invalid',
+  /**
+   * The saved strategy and the configuration beside it do not describe one generator.
+   *
+   * `PREFIX_RANDOM` with no prefix, `CUSTOM_TEMPLATE` with no template, or either
+   * carrying the other's configuration. It is a separate code from the two above
+   * because the fix is different: those say "this value is wrong", this says "this
+   * value is missing for the strategy you chose".
+   */
+  PANEL_USERNAME_STRATEGY_INVALID: 'panel.username_strategy_invalid',
   /**
    * A persisted provider type that this release has no adapter for.
    *
@@ -798,6 +850,85 @@ export const COMMERCE_ERROR_CODES = {
    * check alone.
    */
   SERVICE_ACTION_IN_PROGRESS: 'commerce.service_action_in_progress',
+  /**
+   * The customer asked for a username mode this panel does not offer.
+   *
+   * Checked server-side even though the surface only draws the buttons the policy
+   * allows, for the reason `CLAUDE.md` states about never enforcing by not drawing a
+   * button: a callback is a string somebody can send twice, or send after the operator
+   * turned that mode off.
+   */
+  SERVICE_USERNAME_MODE_UNAVAILABLE: 'commerce.service_username_mode_unavailable',
+  /**
+   * A typed username that does not satisfy the CUSTOM baseline.
+   *
+   * 4 to 20 characters from `A-Z`, `a-z`, `0-9`, `-` and `_`, with at least one letter
+   * and at least one digit. Case is not distinguished — `Ali_2026` is accepted and
+   * stored as `ali_2026` — and nothing else is altered: whitespace is refused rather
+   * than trimmed.
+   *
+   * The refusal deliberately does NOT name which clause failed. The whole rule is shown
+   * before the customer types, so a per-clause answer adds nothing they did not have
+   * and turns the refusal into a probe. Nothing is reserved and no payment is started.
+   */
+  SERVICE_USERNAME_INVALID: 'commerce.service_username_invalid',
+  /**
+   * The name is legal and somebody else has it, or is part-way through buying it.
+   *
+   * Raised BEFORE any debit and before a manual transfer is requested. A RANDOM
+   * candidate that collides is regenerated up to `RANDOM_USERNAME_MAX_ATTEMPTS` times
+   * before this is raised; a CUSTOM one is raised at once, because there is nothing to
+   * regenerate and the customer is the only one who can choose again.
+   */
+  SERVICE_USERNAME_TAKEN: 'commerce.service_username_taken',
+  /**
+   * The order is being confirmed and no username has been chosen for it.
+   *
+   * Reachable in exactly one situation: a panel that offers CUSTOM and nothing else,
+   * and an order whose username step was skipped — a DRAFT created before this feature
+   * shipped and confirmed after, or a confirm callback replayed from before the step
+   * existed. Where RANDOM is allowed the confirmation allocates one instead of raising
+   * this, because a customer who is already at the confirm button should not be sent
+   * back for something the installation can decide itself.
+   *
+   * It is a REFUSAL rather than a silently generated name: on a CUSTOM-only panel the
+   * operator has said the customer chooses, and choosing for them would be this
+   * product's own version of the legacy defect where an admin's name was baked into
+   * thirteen thousand customers' records.
+   */
+  SERVICE_USERNAME_REQUIRED: 'commerce.service_username_required',
+  /**
+   * The panel's automatic strategy cannot render a legal name for THIS purchase.
+   *
+   * Distinct from `SERVICE_USERNAME_TAKEN`, and the difference is who can act.
+   * `TAKEN` means the names are legal and occupied, so a redraw or a different typed
+   * name resolves it. This means no redraw can help: `TELEGRAM_ID_RANDOM` for a
+   * Telegram id long enough to push the render past twenty characters, or a strategy
+   * whose stored configuration went stale. It is raised BEFORE any debit, and the
+   * operator is the one who fixes it.
+   */
+  SERVICE_USERNAME_UNGENERATABLE: 'commerce.service_username_ungeneratable',
+  /**
+   * The automatic generator drew its bounded number of candidates and every one was
+   * held.
+   *
+   * Distinct from `SERVICE_USERNAME_TAKEN`, and the difference is whose problem it is.
+   * `TAKEN` answers a name the CUSTOMER chose, so "choose another" is the remedy. This
+   * answers a name they never saw, so there is nothing for them to choose differently
+   * and telling them to try again at a different name would be advice they cannot
+   * follow. Raised BEFORE any debit.
+   */
+  SERVICE_USERNAME_EXHAUSTED: 'commerce.service_username_exhausted',
+  /**
+   * An UNFUNDED draft is holding a name that the current contract would not mint.
+   *
+   * A draft frozen before the four-to-twenty contract, or before a panel's strategy
+   * changed. The reservation is released and the customer chooses again — safe
+   * precisely because no money has moved. A FUNDED or provider-ambiguous name is never
+   * touched by this: it belongs to an account that may exist, and the answer there is
+   * reconciliation or the automatic refund, never a rename.
+   */
+  SERVICE_USERNAME_STALE: 'commerce.service_username_stale',
 
   /**
    * There is not enough of the order's own window left to pay out of band inside it.

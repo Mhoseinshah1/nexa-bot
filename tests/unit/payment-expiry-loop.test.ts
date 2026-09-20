@@ -48,7 +48,7 @@ describe('the payment expiry loop', () => {
       async () => {
         await inFlight;
         finished = true;
-        return { payments: 1, orders: 1 };
+        return { payments: 1, orders: 1, usernameHolds: 0 };
       },
       () => 0,
     );
@@ -81,7 +81,7 @@ describe('the payment expiry loop', () => {
     const loop = loopOver(
       async () => {
         if (fail) throw new Error('every pass fails');
-        return { payments: 0, orders: 0 };
+        return { payments: 0, orders: 0, usernameHolds: 0 };
       },
       () => clock,
     );
@@ -107,7 +107,7 @@ describe('the payment expiry loop', () => {
     const loop = loopOver(
       async () => {
         called += 1;
-        return { payments: 0, orders: 0 };
+        return { payments: 0, orders: 0, usernameHolds: 0 };
       },
       () => 0,
       () => null,

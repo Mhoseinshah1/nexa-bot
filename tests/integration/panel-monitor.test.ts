@@ -225,6 +225,7 @@ describe('the panel health monitor', () => {
     const deps = probeDeps(probe);
     return new PanelService({
       capacity: ctx.container.panelCapacity,
+      usernameNamespace: ctx.container.usernameNamespace,
       repository: deps.repository,
       credentials: deps.credentials,
       guard: ctx.container.guard,
