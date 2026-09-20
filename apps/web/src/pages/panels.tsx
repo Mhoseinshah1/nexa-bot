@@ -8,13 +8,18 @@ import {
   type PanelSummaryResponse,
   type ProviderCapability,
   type ProviderType,
+  type UsernamePolicyDraft,
+  type UsernameStrategy,
   providerDescriptor,
   PANEL_ERROR_CODES,
   shapeAcceptsCredential,
   shapeIsSatisfiedBy,
-  PROVEN_PROVIDER_USERNAME_MAX_LENGTH,
+  PROVIDER_USERNAME_MAX_LENGTH,
+  PROVIDER_USERNAME_MIN_LENGTH,
+  USERNAME_STRATEGIES,
   USERNAME_TEMPLATE_TOKEN_NAMES,
-  validateUsernameTemplate,
+  previewUsername,
+  validateUsernamePolicy,
 } from '@nexa/contracts';
 import {
   ApiError,
@@ -737,7 +742,9 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
    * midway through clearing it as something, and the conversion belongs on submit.
    */
   const [allowCustom, setAllowCustom] = useState(panel.usernamePolicy.allowCustom);
-  const [allowRandom, setAllowRandom] = useState(panel.usernamePolicy.allowRandom);
+  const [allowAutomatic, setAllowAutomatic] = useState(panel.usernamePolicy.allowAutomatic);
+  const [strategy, setStrategy] = useState<UsernameStrategy>(panel.usernamePolicy.strategy);
+  const [usernamePrefix, setUsernamePrefix] = useState(panel.usernamePolicy.prefix ?? '');
   const [usernameTemplate, setUsernameTemplate] = useState(panel.usernamePolicy.template ?? '');
   const [written, setWritten] = useState<string | null>(null);
   const submission = useSubmissionKey();
@@ -760,7 +767,9 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
     maxServices: basis.capacity.maxServices !== panel.capacity.maxServices,
     usernamePolicy:
       basis.usernamePolicy.allowCustom !== panel.usernamePolicy.allowCustom ||
-      basis.usernamePolicy.allowRandom !== panel.usernamePolicy.allowRandom ||
+      basis.usernamePolicy.allowAutomatic !== panel.usernamePolicy.allowAutomatic ||
+      basis.usernamePolicy.strategy !== panel.usernamePolicy.strategy ||
+      basis.usernamePolicy.prefix !== panel.usernamePolicy.prefix ||
       basis.usernamePolicy.template !== panel.usernamePolicy.template,
   };
   /*
@@ -842,19 +851,38 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
    * positive the whole notice was rewritten to remove.
    */
   /*
-   * The verdict on what is typed RIGHT NOW, so the operator sees the answer while they
-   * are still looking at the field rather than after a round trip.
+   * The whole policy as the form currently holds it, and the verdict on it.
    *
-   * `null` for the empty box, because an empty box is the legacy generator and not a
-   * broken template. The bound is the shared default — the longest name this product
-   * has evidence a real panel accepts — and the server re-checks against the panel's
-   * own provider, so this is a preview and never the decision.
+   * Assembled once and read by everything below — the verdict, the preview, the
+   * submit guard and the request — so the thing being judged is the thing that is
+   * sent. An earlier version validated the template in one place and assembled the
+   * request in another, which is how the two come to disagree.
+   *
+   * `validateUsernamePolicy` is the SAME function the server decides with. This is
+   * still a courtesy and never the authority: the server re-runs it inside the
+   * write's transaction, under the panel's lock.
    */
-  const templateVerdict =
-    usernameTemplate === '' ? null : validateUsernameTemplate(usernameTemplate);
+  const draftPolicy: UsernamePolicyDraft = {
+    allowCustom,
+    allowAutomatic,
+    strategy,
+    prefix: strategy === 'PREFIX_RANDOM' && usernamePrefix !== '' ? usernamePrefix : null,
+    template: strategy === 'CUSTOM_TEMPLATE' && usernameTemplate !== '' ? usernameTemplate : null,
+  };
+  const policyVerdict = validateUsernamePolicy(draftPolicy);
+  const templateVerdict = policyVerdict.template;
   const templateIssues = (templateVerdict?.issues ?? []).map((issue) =>
     t(`web.panel_username_issue_${issue}` as WebKey),
   );
+  /*
+   * One name this policy would produce, from fixed synthetic values.
+   *
+   * It draws no randomness and reserves nothing, so an operator may look at it as
+   * often as they like. Null while the policy is not storable — a half-typed template
+   * is the normal case here, not an error, and the refusal beside it already says
+   * what is wrong.
+   */
+  const preview = previewUsername(draftPolicy);
 
   const draftCap = capFromInput(maxServices);
   const overwritesCap =
@@ -887,7 +915,9 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
     // which the next save would then write back over somebody else's change.
     setMaxServices(fresh.capacity.maxServices === null ? '' : String(fresh.capacity.maxServices));
     setAllowCustom(fresh.usernamePolicy.allowCustom);
-    setAllowRandom(fresh.usernamePolicy.allowRandom);
+    setAllowAutomatic(fresh.usernamePolicy.allowAutomatic);
+    setStrategy(fresh.usernamePolicy.strategy);
+    setUsernamePrefix(fresh.usernamePolicy.prefix ?? '');
     setUsernameTemplate(fresh.usernamePolicy.template ?? '');
   };
 
@@ -1087,14 +1117,19 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
      */
     const policyChanged =
       allowCustom !== basis.usernamePolicy.allowCustom ||
-      allowRandom !== basis.usernamePolicy.allowRandom ||
-      usernameTemplate !== (basis.usernamePolicy.template ?? '');
-    if (policyChanged && !allowCustom && !allowRandom) {
-      toast({ tone: 'danger', message: t('web.panel_username_policy_empty') });
-      return;
-    }
-    if (policyChanged && templateVerdict !== null && !templateVerdict.ok) {
-      toast({ tone: 'danger', message: templateIssues.join(' ') });
+      allowAutomatic !== basis.usernamePolicy.allowAutomatic ||
+      strategy !== basis.usernamePolicy.strategy ||
+      draftPolicy.prefix !== basis.usernamePolicy.prefix ||
+      draftPolicy.template !== basis.usernamePolicy.template;
+    if (policyChanged && !policyVerdict.ok) {
+      /*
+       * The evaluator's own words, plus the template's issue list where it has one.
+       * The reason comes from the shared function rather than being composed here,
+       * so this surface and the Telegram one cannot explain the same refusal
+       * differently.
+       */
+      const detail = templateIssues.length > 0 ? ` ${templateIssues.join(' ')}` : '';
+      toast({ tone: 'danger', message: `${policyVerdict.reason ?? ''}${detail}`.trim() });
       return;
     }
 
@@ -1102,16 +1137,8 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
       ...(name === basis.name ? {} : { name }),
       ...(baseUrl === basis.baseUrl ? {} : { baseUrl }),
       ...(capValue === basis.capacity.maxServices ? {} : { maxServices: capValue }),
-      ...(policyChanged
-        ? {
-            usernamePolicy: {
-              allowCustom,
-              allowRandom,
-              // '' is the LEGACY generator, which is a value and not an absence.
-              template: usernameTemplate === '' ? null : usernameTemplate,
-            },
-          }
-        : {}),
+      // The whole policy, exactly as it was validated and previewed above.
+      ...(policyChanged ? { usernamePolicy: draftPolicy } : {}),
     };
     if (Object.keys(command).length === 0) {
       toast({ tone: 'warn', message: t('web.no_changes') });
@@ -1248,61 +1275,115 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
             />
           </Field>
           <Field
-            label={t('web.panel_username_random')}
-            hint={t('web.panel_username_random_hint')}
+            label={t('web.panel_username_automatic')}
+            hint={t('web.panel_username_automatic_hint')}
             htmlFor={`ur-${panel.id}`}
           >
             <input
               id={`ur-${panel.id}`}
               type="checkbox"
-              checked={allowRandom}
-              onChange={(event) => setAllowRandom(event.target.checked)}
+              checked={allowAutomatic}
+              onChange={(event) => setAllowAutomatic(event.target.checked)}
               disabled={!mayWrite}
             />
           </Field>
           {/*
-            Shown whatever `allowRandom` says, deliberately.
+            The preset, shown whatever the automatic switch says.
 
-            A template stored beside a disabled mode goes live the moment somebody
-            re-enables it — a one-checkbox edit nobody would think to validate — so the
-            server checks it either way and hiding the field here would leave an
-            operator unable to see what is about to become live.
+            Deliberately, and for the reason the template field below gives: a preset
+            stored beside a disabled mode goes live the moment somebody re-enables it,
+            which is a one-checkbox edit nobody would think to validate. Hiding it
+            would leave an operator unable to see what is about to become live.
           */}
           <Field
-            label={t('web.panel_username_template')}
-            hint={t('web.panel_username_template_hint')}
-            htmlFor={`ut-${panel.id}`}
+            label={t('web.panel_username_strategy')}
+            hint={t('web.panel_username_strategy_hint')}
+            htmlFor={`us-${panel.id}`}
           >
-            <input
-              id={`ut-${panel.id}`}
-              className="input ltr mono"
-              value={usernameTemplate}
-              onChange={(event) => setUsernameTemplate(event.target.value)}
+            <select
+              id={`us-${panel.id}`}
+              className="input"
+              value={strategy}
+              onChange={(event) => setStrategy(event.target.value as UsernameStrategy)}
               disabled={!mayWrite}
-            />
+            >
+              {USERNAME_STRATEGIES.map((option) => (
+                <option key={option} value={option}>
+                  {t(`web.panel_username_strategy_${option}` as WebKey)}
+                </option>
+              ))}
+            </select>
           </Field>
-          <p className="hint ltr mono">
-            {t('web.panel_username_tokens')}:{' '}
-            {USERNAME_TEMPLATE_TOKEN_NAMES.map((token) => `{${token}}`).join(' ')}
-          </p>
-          {/*
-            The WORST case, not a sample render.
-
-            A template measured on a typical value passes here and then produces a name
-            the panel refuses for the one customer whose Telegram id is longer than the
-            operator's — after their money moved. The number shown is what
-            `validateUsernameTemplate` actually decides on.
-          */}
-          {templateVerdict !== null && (
-            <p className={templateVerdict.ok ? 'hint' : 'notice'}>
-              {t('web.panel_username_worst_case')
-                .replace('{length}', String(templateVerdict.worstCaseLength))
-                .replace('{max}', String(PROVEN_PROVIDER_USERNAME_MAX_LENGTH))}
-              {templateIssues.length > 0 && ` — ${templateIssues.join(' ')}`}
-            </p>
+          {strategy === 'PREFIX_RANDOM' && (
+            <Field
+              label={t('web.panel_username_prefix')}
+              hint={t('web.panel_username_prefix_hint')}
+              htmlFor={`up-${panel.id}`}
+            >
+              <input
+                id={`up-${panel.id}`}
+                className="input ltr mono"
+                value={usernamePrefix}
+                onChange={(event) => setUsernamePrefix(event.target.value)}
+                disabled={!mayWrite}
+              />
+            </Field>
           )}
-          {!allowCustom && !allowRandom && (
+          {strategy === 'CUSTOM_TEMPLATE' && (
+            <>
+              <Field
+                label={t('web.panel_username_template')}
+                hint={t('web.panel_username_template_hint')}
+                htmlFor={`ut-${panel.id}`}
+              >
+                <input
+                  id={`ut-${panel.id}`}
+                  className="input ltr mono"
+                  value={usernameTemplate}
+                  onChange={(event) => setUsernameTemplate(event.target.value)}
+                  disabled={!mayWrite}
+                />
+              </Field>
+              <p className="hint ltr mono">
+                {t('web.panel_username_tokens')}:{' '}
+                {USERNAME_TEMPLATE_TOKEN_NAMES.map((token) => `{${token}}`).join(' ')}
+              </p>
+              {/*
+                BOTH bounds, not a sample render.
+
+                A template measured on a typical value passes here and then produces a
+                name the panel refuses for the one customer whose Telegram id is longer
+                than the operator's — after their money moved. The two numbers shown are
+                what `validateUsernameTemplate` actually decides on.
+              */}
+              {templateVerdict !== null && (
+                <p className={templateVerdict.ok ? 'hint' : 'notice'}>
+                  {t('web.panel_username_bounds')
+                    .replace('{best}', String(templateVerdict.bestCaseLength))
+                    .replace('{worst}', String(templateVerdict.worstCaseLength))
+                    .replace('{min}', String(PROVIDER_USERNAME_MIN_LENGTH))
+                    .replace('{max}', String(PROVIDER_USERNAME_MAX_LENGTH))}
+                  {templateIssues.length > 0 && ` — ${templateIssues.join(' ')}`}
+                </p>
+              )}
+            </>
+          )}
+          {/*
+            The preview, from synthetic values, beside the controls that produce it.
+
+            This is the whole answer to a write-only settings screen: an operator can
+            see the shape a customer will get BEFORE saving, without reserving a name
+            or consuming any randomness.
+          */}
+          <p className="hint">
+            {t('web.panel_username_preview')}:{' '}
+            <span className="ltr mono">{preview ?? '\u2014'}</span>
+          </p>
+          {!policyVerdict.ok && policyVerdict.refusal === 'NO_MODE' && (
             <Banner tone="danger">{t('web.panel_username_policy_empty')}</Banner>
+          )}
+          {!policyVerdict.ok && policyVerdict.refusal !== 'NO_MODE' && (
+            <Banner tone="danger">{policyVerdict.reason ?? ''}</Banner>
           )}
 
           {/* The provider type is deliberately not editable. Changing it would

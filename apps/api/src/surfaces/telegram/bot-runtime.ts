@@ -32,7 +32,13 @@ import type {
   TenantContext,
   UserId,
 } from '@nexa/contracts';
-import { ADMIN_MENU_COMMAND } from '@nexa/contracts';
+import {
+  ADMIN_MENU_COMMAND,
+  DEFAULT_USERNAME_PREFIX,
+  previewUsername,
+  validateUsernamePolicy,
+} from '@nexa/contracts';
+import type { PanelUsernamePolicy } from '../../modules/platform/panels/application/ports.js';
 import type { CustomerService } from '../../modules/commerce/customers/application/customer.service.js';
 import type { PaymentDestinationRenderer } from '../../modules/commerce/payments/infrastructure/destination-renderer.js';
 import type { InboundReceiptFile } from '../../modules/commerce/payments/application/receipt-ports.js';
@@ -127,7 +133,7 @@ export const BOT_INTENTS = [
    * for almost every message — falls through to the same fallback as before.
    */
   'USERNAME_CUSTOM',
-  'USERNAME_RANDOM',
+  'USERNAME_AUTOMATIC',
   'USERNAME_TEXT',
   'HELP',
   'RECEIPT_UPLOAD',
@@ -188,6 +194,19 @@ export const BOT_INTENTS = [
   'ADMIN_PANEL_DISABLE',
   'ADMIN_PANEL_ARCHIVE_ASK',
   'ADMIN_PANEL_ARCHIVE',
+  /*
+   * Phase 6C — a panel's username policy, read back and edited.
+   *
+   * Five intents. Three are taps and carry only what was tapped; two are COMMANDS that
+   * carry their argument in the same message, because a prefix and a template are text
+   * an operator authors and this surface has no prompt that captures the next message.
+   * INCIDENT-FIN-001 is what such a prompt does when it outlives its question.
+   */
+  'ADMIN_USERNAME',
+  'ADMIN_USERNAME_TOGGLE',
+  'ADMIN_USERNAME_STRATEGY',
+  'ADMIN_USERNAME_PREFIX',
+  'ADMIN_USERNAME_TEMPLATE',
   /*
    * Phase 6C — the reminder settings section.
    *
@@ -488,7 +507,7 @@ export const SERVICE_ACTION_CONFIRM_CALLBACK_PREFIX = 'q:';
  * a button drawn before an operator changed the policy is not authorisation.
  */
 export const USERNAME_CUSTOM_CALLBACK_PREFIX = 'j:';
-export const USERNAME_RANDOM_CALLBACK_PREFIX = 'Z:';
+export const USERNAME_AUTOMATIC_CALLBACK_PREFIX = 'Z:';
 
 /**
  * The management panel's prefixes (Phase 5T), deliberately UPPERCASE.
@@ -632,6 +651,54 @@ export const ADMIN_PANELS_PAGE_CALLBACK_PREFIX = 'Y:';
 export const ADMIN_REMINDERS_CALLBACK_PREFIX = '0:';
 export const ADMIN_REMINDER_EDIT_CALLBACK_PREFIX = '1:';
 export const ADMIN_REMINDER_SET_CALLBACK_PREFIX = '2:';
+
+/**
+ * The username-policy section's three tap prefixes.
+ *
+ * Digits, because every letter in both cases is already spoken for by the table above
+ * — and a digit can never become a prefix of a lettered one, which is the collision
+ * that whole table exists to prevent.
+ *
+ * `4:` and `5:` carry a code AND a uuid, separated by a colon, which fits inside the
+ * 64-byte `callback_data` cap with room to spare (42 bytes at the longest). The code
+ * in `4:` is the TARGET value rather than "flip it": a double tap then writes the same
+ * value twice instead of toggling twice, which is the difference between an idempotent
+ * button and one that undoes itself on a slow connection.
+ */
+export const ADMIN_USERNAME_CALLBACK_PREFIX = '3:';
+export const ADMIN_USERNAME_TOGGLE_CALLBACK_PREFIX = '4:';
+export const ADMIN_USERNAME_STRATEGY_CALLBACK_PREFIX = '5:';
+
+/** Which of the two customer choices a `4:` tap is setting. */
+const USERNAME_TOGGLE_FIELDS = { c: 'allowCustom', a: 'allowAutomatic' } as const;
+type UsernameToggleField = keyof typeof USERNAME_TOGGLE_FIELDS;
+function isUsernameToggleField(value: string): value is UsernameToggleField {
+  return Object.prototype.hasOwnProperty.call(USERNAME_TOGGLE_FIELDS, value);
+}
+
+/**
+ * The three presets a TAP can select, and the letter each travels as.
+ *
+ * `CUSTOM_TEMPLATE` is deliberately absent. The other three either take no
+ * configuration or have a default prefix, so a tap is a complete instruction; a
+ * template does not exist until somebody writes one, and the message that writes it —
+ * `/panel_template` — is what selects the preset. A button that selected
+ * `CUSTOM_TEMPLATE` with nothing behind it could only ever be refused.
+ */
+const USERNAME_STRATEGY_CODES = {
+  r: 'RANDOM',
+  p: 'PREFIX_RANDOM',
+  t: 'TELEGRAM_ID_RANDOM',
+} as const;
+type UsernameStrategyCode = keyof typeof USERNAME_STRATEGY_CODES;
+function isUsernameStrategyCode(value: string): value is UsernameStrategyCode {
+  return Object.prototype.hasOwnProperty.call(USERNAME_STRATEGY_CODES, value);
+}
+const USERNAME_STRATEGY_BUTTONS: readonly (readonly [UsernameStrategyCode, TemplateKey])[] = [
+  ['r', 'bot.admin.username_strategy_random'],
+  ['p', 'bot.admin.username_strategy_prefix_random'],
+  ['t', 'bot.admin.username_strategy_telegram_id_random'],
+];
 
 /**
  * The five editable thresholds, as the two-letter codes the callback data carries.
@@ -888,6 +955,7 @@ const ADMIN_PANEL_CALLBACKS: readonly (readonly [string, BotIntent])[] = [
    * one-character mistake `ADMIN_SERVICE_CALLBACKS` names in its own comment.
    */
   [ADMIN_PANEL_ARCHIVE_CALLBACK_PREFIX, 'ADMIN_PANEL_ARCHIVE'],
+  [ADMIN_USERNAME_CALLBACK_PREFIX, 'ADMIN_USERNAME'],
 ];
 
 const ADMIN_SERVICE_CALLBACKS: readonly (readonly [string, BotIntent])[] = [
@@ -1145,10 +1213,10 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
         id,
       );
     }
-    if (data.startsWith(USERNAME_RANDOM_CALLBACK_PREFIX)) {
+    if (data.startsWith(USERNAME_AUTOMATIC_CALLBACK_PREFIX)) {
       return callbackCommand(
-        'USERNAME_RANDOM',
-        data.slice(USERNAME_RANDOM_CALLBACK_PREFIX.length),
+        'USERNAME_AUTOMATIC',
+        data.slice(USERNAME_AUTOMATIC_CALLBACK_PREFIX.length),
         id,
       );
     }
@@ -1249,6 +1317,38 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
       const cursor = decodeKeysetToken(data.slice(ADMIN_PANELS_PAGE_CALLBACK_PREFIX.length));
       if (cursor === null) return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
       return { intent: 'ADMIN_PANELS_PAGE', targetId: null, cursor, callbackQueryId: id };
+    }
+    if (data.startsWith(ADMIN_USERNAME_TOGGLE_CALLBACK_PREFIX)) {
+      /*
+       * `<field>:<value>:<panelId>`, all three validated HERE.
+       *
+       * `callback_data` is client-supplied text. An unknown field, a value that is
+       * not one of the two, or a panel id that is not a uuid must be UNSUPPORTED at
+       * the boundary rather than something assembled downstream — the same rule the
+       * reminder codes above follow. The panel id itself is checked by
+       * `callbackCommand`, which is why it is passed through it.
+       */
+      const [field, value, panelId] = data
+        .slice(ADMIN_USERNAME_TOGGLE_CALLBACK_PREFIX.length)
+        .split(':');
+      if (
+        field === undefined ||
+        !isUsernameToggleField(field) ||
+        (value !== '0' && value !== '1') ||
+        panelId === undefined
+      ) {
+        return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      }
+      const command = callbackCommand('ADMIN_USERNAME_TOGGLE', panelId, id);
+      return command.targetId === null ? command : { ...command, args: [field, value] };
+    }
+    if (data.startsWith(ADMIN_USERNAME_STRATEGY_CALLBACK_PREFIX)) {
+      const [code, panelId] = data.slice(ADMIN_USERNAME_STRATEGY_CALLBACK_PREFIX.length).split(':');
+      if (code === undefined || !isUsernameStrategyCode(code) || panelId === undefined) {
+        return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      }
+      const command = callbackCommand('ADMIN_USERNAME_STRATEGY', panelId, id);
+      return command.targetId === null ? command : { ...command, args: [code] };
     }
     for (const [prefix, intent] of ADMIN_PANEL_CALLBACKS) {
       if (data.startsWith(prefix)) return callbackCommand(intent, data.slice(prefix.length), id);
@@ -1358,6 +1458,25 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
       intent: 'ADMIN_SERVICE',
       targetId: null,
       args: asCommand.trim().split(/\s+/).slice(1),
+      callbackQueryId: null,
+    };
+  }
+  /*
+   * `/panel_prefix <panel id> <prefix>` and `/panel_template <panel id> <template>`.
+   *
+   * Commands rather than a prompt, for the reason `/link` and `/role` state. The
+   * template argument is joined back with single spaces AFTER the split, so a
+   * template is one token in practice — and a template containing a space is refused
+   * by the grammar anyway, since a space is not in the permitted character class.
+   * Nothing is validated here: what makes a string a legal prefix or template is the
+   * shared evaluator's question, and answering it twice is how two answers diverge.
+   */
+  if (command === '/panel_prefix' || command === '/panel_template') {
+    const args = asCommand.trim().split(/\s+/).slice(1);
+    return {
+      intent: command === '/panel_prefix' ? 'ADMIN_USERNAME_PREFIX' : 'ADMIN_USERNAME_TEMPLATE',
+      targetId: null,
+      args,
       callbackQueryId: null,
     };
   }
@@ -1594,7 +1713,10 @@ export interface BotRuntimeDeps {
    * here would either be a panel that cannot be operated or a credential typed into a
    * chat.
    */
-  readonly panelAdmin: Pick<PanelService, 'list' | 'get' | 'testConnection' | 'setStatus'>;
+  readonly panelAdmin: Pick<
+    PanelService,
+    'list' | 'get' | 'testConnection' | 'setStatus' | 'update'
+  >;
   /**
    * The clock, for the ONE thing this surface decides about time.
    *
@@ -2567,6 +2689,86 @@ export class BotRuntime {
                 command.targetId,
                 input.idempotencyKey,
               );
+        case 'ADMIN_USERNAME':
+          return command.targetId === null
+            ? null
+            : await this.adminUsername(scope, adminActor, command.targetId, permissions);
+        case 'ADMIN_USERNAME_TOGGLE': {
+          /*
+           * The casts are safe because the BOUNDARY validated them: `callbackCommand`
+           * refuses any field outside `USERNAME_TOGGLE_FIELDS` and any value that is
+           * not `0` or `1` before an intent is produced. The same shape the reminder
+           * codes use.
+           */
+          const field = command.args?.[0];
+          const value = command.args?.[1];
+          if (command.targetId === null || field === undefined || value === undefined) return null;
+          return await this.adminUsernameWrite(
+            scope,
+            adminActor,
+            command.targetId,
+            permissions,
+            (policy) => ({
+              ...policy,
+              [USERNAME_TOGGLE_FIELDS[field as UsernameToggleField]]: value === '1',
+            }),
+            input.idempotencyKey,
+          );
+        }
+        case 'ADMIN_USERNAME_STRATEGY': {
+          const code = command.args?.[0];
+          if (command.targetId === null || code === undefined) return null;
+          const strategy = USERNAME_STRATEGY_CODES[code as UsernameStrategyCode];
+          return await this.adminUsernameWrite(
+            scope,
+            adminActor,
+            command.targetId,
+            permissions,
+            (policy) => ({
+              ...policy,
+              strategy,
+              /*
+               * A preset that needs a prefix and has none gets the default one rather
+               * than a refusal. `nx` is what an unconfigured panel already uses, so
+               * the tap does exactly what the button says; the operator changes it
+               * with `/panel_prefix` afterwards if they want a different one.
+               */
+              prefix:
+                strategy === 'PREFIX_RANDOM' ? (policy.prefix ?? DEFAULT_USERNAME_PREFIX) : null,
+              template: null,
+            }),
+            input.idempotencyKey,
+          );
+        }
+        case 'ADMIN_USERNAME_PREFIX':
+        case 'ADMIN_USERNAME_TEMPLATE': {
+          const [panelId, ...rest] = command.args ?? [];
+          const written = rest.join(' ');
+          if (panelId === undefined || written === '') {
+            return { key: 'bot.admin.panel_gone', values: {}, buttons: [], orderId: null };
+          }
+          const wantsTemplate = command.intent === 'ADMIN_USERNAME_TEMPLATE';
+          return await this.adminUsernameWrite(
+            scope,
+            adminActor,
+            panelId,
+            permissions,
+            (policy) => ({
+              ...policy,
+              /*
+               * The command selects the preset as well as supplying its value, and it
+               * has to: `panels_username_template_check` is a biconditional, so a
+               * template without `CUSTOM_TEMPLATE` beside it is not a storable row.
+               * Saying "use this template here" in one message is also what an
+               * operator means by sending it.
+               */
+              strategy: wantsTemplate ? 'CUSTOM_TEMPLATE' : 'PREFIX_RANDOM',
+              prefix: wantsTemplate ? null : written,
+              template: wantsTemplate ? written : null,
+            }),
+            input.idempotencyKey,
+          );
+        }
         case 'ADMIN_SECTION':
           return await this.adminSection(scope, adminActor);
         case 'ADMIN_REVOKE':
@@ -3054,6 +3256,16 @@ export class BotRuntime {
           data: `${ADMIN_PANEL_ARCHIVE_ASK_CALLBACK_PREFIX}${view.panel.id}`,
         });
       }
+      /*
+       * Offered for an ARCHIVED panel too, and deliberately: `update` refuses one, so
+       * the button records a refusal rather than working — but the SECTION behind it
+       * is also where the policy is read, and an operator should be able to see what
+       * an archived panel was configured to do.
+       */
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.admin.username_button' },
+        data: `${ADMIN_USERNAME_CALLBACK_PREFIX}${view.panel.id}`,
+      });
     }
 
     return {
@@ -3088,17 +3300,175 @@ export class BotRuntime {
          * from. The base URL and the credentials stay out of this message for the
          * reasons the docblock gives; a list of placeholder tokens is neither of those.
          *
-         * The DASH for a null template is the same value the cap uses for "there is
-         * none", and means the same thing: the derived generator, which is what every
-         * panel used before this policy existed.
+         * The DASH for a null prefix or template is the same value the cap uses for
+         * "there is none", and means the same thing here: this preset takes no
+         * configuration, so there is nothing to read.
          */
         usernameCustom: view.panel.usernamePolicy.allowCustom ? MODE_ON : MODE_OFF,
-        usernameRandom: view.panel.usernamePolicy.allowRandom ? MODE_ON : MODE_OFF,
+        usernameAutomatic: view.panel.usernamePolicy.allowAutomatic ? MODE_ON : MODE_OFF,
+        usernamePrefix: view.panel.usernamePolicy.prefix ?? UNCAPPED,
         usernameTemplate: view.panel.usernamePolicy.template ?? UNCAPPED,
       },
       buttons,
       orderId: null,
     };
+  }
+
+  /**
+   * A panel's username policy, read back in full before anything is edited.
+   *
+   * Everything the operator can change is on this one screen WITH its current value —
+   * the two customer choices, the selected preset, the prefix, the template, and a
+   * preview rendered from synthetic values. That is the answer to the legacy
+   * write-only settings screen, where the only way to read a price was to overwrite
+   * it: nothing here has to be guessed at by changing it.
+   *
+   * The preview costs nothing and reserves nothing. `previewUsername` renders from
+   * `USERNAME_PREVIEW_VALUES`, so looking at this screen cannot consume randomness a
+   * customer would have got or take a name out of the namespace.
+   */
+  private async adminUsername(
+    scope: TenantContext,
+    actor: ActorContext,
+    panelId: string,
+    permissions: ReadonlySet<PermissionKey>,
+  ): Promise<PendingReply> {
+    let view;
+    try {
+      view = await this.deps.panelAdmin.get(scope, actor, panelId);
+    } catch {
+      return { key: 'bot.admin.panel_gone', values: {}, buttons: [], orderId: null };
+    }
+    return this.usernameSection(
+      view.panel.id,
+      view.panel.name,
+      view.panel.usernamePolicy,
+      permissions,
+    );
+  }
+
+  /**
+   * The section, rendered from a policy. Shared by the read and by every write.
+   *
+   * A write re-renders through this rather than telling the operator it succeeded and
+   * leaving them to go and look: the screen they are left on shows what is stored NOW,
+   * which is the only way a save can be checked without a second round trip.
+   */
+  private usernameSection(
+    panelId: string,
+    panelName: string,
+    policy: PanelUsernamePolicy,
+    permissions: ReadonlySet<PermissionKey>,
+  ): PendingReply {
+    const buttons: CustomerButton[] = [];
+    /*
+     * Drawn only with `panels.edit`, and that is presentation and not enforcement:
+     * `PanelService.update` charges the same permission through the same guard, so a
+     * crafted callback from an administrator without it is refused there and the
+     * refusal is recorded. Not drawing a button is never the check — `CLAUDE.md`.
+     */
+    if (permissions.has(PANELS_EDIT_PERMISSION)) {
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.admin.username_custom_button' },
+        data: `${ADMIN_USERNAME_TOGGLE_CALLBACK_PREFIX}c:${policy.allowCustom ? '0' : '1'}:${panelId}`,
+      });
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.admin.username_automatic_button' },
+        data: `${ADMIN_USERNAME_TOGGLE_CALLBACK_PREFIX}a:${policy.allowAutomatic ? '0' : '1'}:${panelId}`,
+      });
+      for (const [code, key] of USERNAME_STRATEGY_BUTTONS) {
+        buttons.push({
+          label: { kind: 'TEMPLATE', key },
+          data: `${ADMIN_USERNAME_STRATEGY_CALLBACK_PREFIX}${code}:${panelId}`,
+        });
+      }
+    }
+    return {
+      key: 'bot.admin.username_section',
+      values: {
+        panel: panelName,
+        custom: policy.allowCustom ? MODE_ON : MODE_OFF,
+        automatic: policy.allowAutomatic ? MODE_ON : MODE_OFF,
+        random: policy.strategy === 'RANDOM' ? MODE_ON : MODE_OFF,
+        prefixRandom: policy.strategy === 'PREFIX_RANDOM' ? MODE_ON : MODE_OFF,
+        telegramIdRandom: policy.strategy === 'TELEGRAM_ID_RANDOM' ? MODE_ON : MODE_OFF,
+        customTemplate: policy.strategy === 'CUSTOM_TEMPLATE' ? MODE_ON : MODE_OFF,
+        prefix: policy.prefix ?? UNCAPPED,
+        template: policy.template ?? UNCAPPED,
+        preview: previewUsername(policy) ?? UNCAPPED,
+      },
+      buttons,
+      orderId: null,
+    };
+  }
+
+  /**
+   * Read the stored policy, apply ONE change to it, and write the whole thing back.
+   *
+   * Whole-policy rather than a field, because `PanelService.update` replaces the
+   * policy as a unit and three CHECK constraints are about combinations of its
+   * columns — a partial write is what reaches a state none of them individually
+   * forbids. The edit is expressed as a function of what is stored, so the caller
+   * never has to assemble a policy it did not read.
+   *
+   * Every tap carries the TARGET value rather than "flip it", so a double tap writes
+   * the same policy twice. The turn's idempotency key makes the second one a replay
+   * on top of that, and the service takes the panel's row lock: three mechanisms, and
+   * the only one that would survive two administrators editing at once is the lock.
+   * Last write wins between two people, which is what an absolute value means; what
+   * cannot happen is one person's slow connection undoing their own change.
+   *
+   * A refusal is rendered with the shared evaluator's own words and NOTHING is
+   * written — the service refuses the whole update, so the operator is looking at the
+   * policy that is still stored.
+   */
+  private async adminUsernameWrite(
+    scope: TenantContext,
+    actor: ActorContext,
+    panelId: string,
+    permissions: ReadonlySet<PermissionKey>,
+    edit: (policy: PanelUsernamePolicy) => PanelUsernamePolicy,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    let before;
+    try {
+      before = await this.deps.panelAdmin.get(scope, actor, panelId);
+    } catch {
+      return { key: 'bot.admin.panel_gone', values: {}, buttons: [], orderId: null };
+    }
+    const wanted = edit(before.panel.usernamePolicy);
+    try {
+      const after = await this.deps.panelAdmin.update(scope, actor, panelId, {
+        idempotencyKey: `${idempotencyKey}:panel-username`,
+        usernamePolicy: wanted,
+      });
+      return this.usernameSection(
+        after.panel.id,
+        after.panel.name,
+        after.panel.usernamePolicy,
+        permissions,
+      );
+    } catch (error) {
+      /*
+       * The evaluator's own Persian, not a sentence composed here.
+       *
+       * `validateUsernamePolicy` is the one place that decides whether a policy is
+       * storable, and it carries the words for each refusal. Writing them again on
+       * this surface would be the second opinion that goes stale — and the Web Admin
+       * renders the same function's `reason`, so the two surfaces cannot disagree
+       * about why something was refused.
+       */
+      const reason = validateUsernamePolicy(wanted).reason;
+      if (reason !== null) {
+        return {
+          key: 'bot.admin.username_refused',
+          values: { reason },
+          buttons: [],
+          orderId: null,
+        };
+      }
+      return refusal(error);
+    }
   }
 
   /**
@@ -3575,8 +3945,8 @@ export class BotRuntime {
         input.idempotencyKey,
       );
     }
-    if (command.intent === 'USERNAME_RANDOM' && command.targetId !== null) {
-      return this.randomUsername(scope, actor, command.targetId, customer, input.idempotencyKey);
+    if (command.intent === 'USERNAME_AUTOMATIC' && command.targetId !== null) {
+      return this.automaticUsername(scope, actor, command.targetId, customer, input.idempotencyKey);
     }
     /*
      * The one intent produced by an ordinary message, and the one place this surface
@@ -4412,7 +4782,7 @@ export class BotRuntime {
     /*
      * ONE mode is not a question, whichever mode it is.
      *
-     * An earlier version made an exception for CUSTOM: a single RANDOM button was
+     * An earlier version made an exception for CUSTOM: a single AUTOMATIC button was
      * skipped, but a single CUSTOM button was still drawn, on the reasoning that
      * opening a typing window the customer did not ask for is the surprise half of
      * INCIDENT-FIN-001. The owner overruled that, and the overruling is right — what
@@ -4424,8 +4794,8 @@ export class BotRuntime {
      * teaches the customer nothing and costs them a tap.
      */
     if (step.modes.length === 1) {
-      return step.modes[0] === 'RANDOM'
-        ? this.randomUsername(scope, actor, order.id, customer, idempotencyKey)
+      return step.modes[0] === 'AUTOMATIC'
+        ? this.automaticUsername(scope, actor, order.id, customer, idempotencyKey)
         : this.customUsername(scope, actor, order.id, customer, botInstanceId, idempotencyKey);
     }
 
@@ -4436,17 +4806,17 @@ export class BotRuntime {
         data: `${USERNAME_CUSTOM_CALLBACK_PREFIX}${order.id}`,
       });
     }
-    if (step.modes.includes('RANDOM')) {
+    if (step.modes.includes('AUTOMATIC')) {
       buttons.push({
-        label: { kind: 'TEMPLATE', key: 'bot.username.random_button' },
-        data: `${USERNAME_RANDOM_CALLBACK_PREFIX}${order.id}`,
+        label: { kind: 'TEMPLATE', key: 'bot.username.automatic_button' },
+        data: `${USERNAME_AUTOMATIC_CALLBACK_PREFIX}${order.id}`,
       });
     }
     return { key: 'bot.username.choose', values: {}, buttons, orderId: order.id };
   }
 
   /** The installation draws a name, and the summary shows the one it drew. */
-  private async randomUsername(
+  private async automaticUsername(
     scope: TenantContext,
     actor: ActorContext,
     orderId: string,
@@ -4458,7 +4828,7 @@ export class BotRuntime {
         idempotencyKey: `${idempotencyKey}:username`,
         customerId: customer.id,
         orderId,
-        choice: { mode: 'RANDOM' },
+        choice: { mode: 'AUTOMATIC' },
       });
       const order = await this.deps.orders.get(scope, actor, orderId);
       return this.orderSummary(order, reservation.username);
