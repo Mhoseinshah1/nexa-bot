@@ -2,15 +2,22 @@ import {
   COMMERCE_ERROR_CODES,
   PANEL_ERROR_CODES,
   errors,
+  type IdGenerator,
   type ServiceUsernameMode,
   type TenantContext,
   type UserId,
+  type UsernameCaptureCloseReason,
 } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { PanelRepository } from '../../../platform/panels/application/ports.js';
 import type { CustomerRepository } from '../../customers/application/ports.js';
 import { UsernameAllocator, modesOffered } from './username-allocator.js';
-import type { ServiceUsernameRepository, UsernameReservation } from './username-ports.js';
+import type {
+  ServiceUsernameRepository,
+  UsernameCaptureRecord,
+  UsernameCaptureRepository,
+  UsernameReservation,
+} from './username-ports.js';
 
 export interface UsernameChoice {
   readonly mode: ServiceUsernameMode;
@@ -73,11 +80,49 @@ export interface OrderUsernameLane {
     tx: TransactionScope,
   ): Promise<boolean>;
   release(scope: TenantContext, orderId: string, tx: TransactionScope): Promise<boolean>;
+
+  /*
+   * The typing window. Here rather than in a lane of its own because it answers the
+   * same question from the other side: the reservation says what the name IS, and the
+   * window says when a plain message is allowed to propose one.
+   */
+  lockWindow(
+    scope: TenantContext,
+    botInstanceId: string,
+    customerId: string,
+    tx: TransactionScope,
+  ): Promise<void>;
+  openWindow(
+    scope: TenantContext,
+    input: {
+      readonly botInstanceId: string;
+      readonly customerId: string;
+      readonly orderId: string;
+      readonly openedAt: Date;
+      readonly expiresAt: Date;
+    },
+    tx: TransactionScope,
+  ): Promise<UsernameCaptureRecord>;
+  openWindowFor(
+    scope: TenantContext,
+    botInstanceId: string,
+    customerId: string,
+    tx: TransactionScope,
+  ): Promise<UsernameCaptureRecord | null>;
+  closeWindow(
+    scope: TenantContext,
+    id: string,
+    reason: UsernameCaptureCloseReason,
+    at: Date,
+    tx: TransactionScope,
+  ): Promise<boolean>;
 }
 
 export interface UsernameLaneDeps {
   readonly allocator: UsernameAllocator;
   readonly repository: ServiceUsernameRepository;
+  readonly captures: UsernameCaptureRepository;
+  readonly ids: IdGenerator;
   readonly panels: PanelRepository;
   readonly customers: CustomerRepository;
 }
@@ -176,6 +221,48 @@ export class PanelUsernameLane implements OrderUsernameLane {
 
   async release(scope: TenantContext, orderId: string, tx: TransactionScope): Promise<boolean> {
     return this.deps.repository.release(scope, orderId, tx);
+  }
+
+  async lockWindow(
+    scope: TenantContext,
+    botInstanceId: string,
+    customerId: string,
+    tx: TransactionScope,
+  ): Promise<void> {
+    return this.deps.captures.lockForCustomer(scope, botInstanceId, customerId, tx);
+  }
+
+  async openWindow(
+    scope: TenantContext,
+    input: {
+      readonly botInstanceId: string;
+      readonly customerId: string;
+      readonly orderId: string;
+      readonly openedAt: Date;
+      readonly expiresAt: Date;
+    },
+    tx: TransactionScope,
+  ): Promise<UsernameCaptureRecord> {
+    return this.deps.captures.open(scope, { id: this.deps.ids.uuid(), ...input }, tx);
+  }
+
+  async openWindowFor(
+    scope: TenantContext,
+    botInstanceId: string,
+    customerId: string,
+    tx: TransactionScope,
+  ): Promise<UsernameCaptureRecord | null> {
+    return this.deps.captures.findOpen(scope, botInstanceId, customerId, tx);
+  }
+
+  async closeWindow(
+    scope: TenantContext,
+    id: string,
+    reason: UsernameCaptureCloseReason,
+    at: Date,
+    tx: TransactionScope,
+  ): Promise<boolean> {
+    return this.deps.captures.close(scope, id, reason, at, tx);
   }
 
   private async panel(scope: TenantContext, panelId: string, tx: TransactionScope) {

@@ -75,6 +75,7 @@ import {
   CUSTOMER_NOTIFICATION_STATES,
   SERVICE_STATES,
   SERVICE_USERNAME_MODES,
+  USERNAME_CAPTURE_CLOSE_REASONS,
   OPERATION_STATES,
   OPERATION_TYPES,
   DISCOUNT_TYPES,
@@ -1703,6 +1704,77 @@ export const panelCapacityReservations = pgTable(
  * A definitive conflict that survives both — an account an operator made by hand — is a
  * definitive non-delivery and follows the money rules. It is never adopted.
  */
+/**
+ * The window in which an ordinary message means "this is my username".
+ *
+ * Modelled on `receipt_captures` deliberately, down to the partial unique index,
+ * because it answers the same dangerous question: when may a plain message the customer
+ * typed be read as an answer rather than as conversation? The legacy system answered it
+ * with a stateful prompt that outlived its question and overwrote a production gateway
+ * setting with somebody's ordinary message (INCIDENT-FIN-001).
+ *
+ * Two things bound the damage, and neither is the deadline. First, the window is a ROW:
+ * it is explicit, it has an owner, and a redelivered message either finds it or does
+ * not. Second, and more important, the only thing an open window can DO is validate a
+ * name against the one draft order it names, for the one customer it names. There is no
+ * branch in which it reaches a setting, a payment or another order — so even a window
+ * that outlived its question is confined to the question.
+ */
+export const usernameCaptures = pgTable(
+  'username_captures',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    /** WHICH bot, for the reason `receipt_captures.bot_instance_id` states. */
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    customerId: uuid('customer_id').notNull(),
+    orderId: uuid('order_id').notNull(),
+    openedAt: timestamptz('opened_at').notNull().defaultNow(),
+    expiresAt: timestamptz('expires_at').notNull(),
+    /** Null while open. The partial unique index below is keyed on exactly this. */
+    closedAt: timestamptz('closed_at'),
+    closeReason: text('close_reason'),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'username_captures_customer_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.orderId],
+      foreignColumns: [orders.tenantId, orders.id],
+      name: 'username_captures_order_fk',
+    }),
+    /**
+     * ONE open window per customer per bot, decided by the database.
+     *
+     * Two taps on two different drafts arriving together both read "nothing open", and
+     * the name the customer then types attaches to whichever row the planner returns
+     * first — a username reserved against an order they were not looking at, on a panel
+     * they were not buying from.
+     */
+    uniqueIndex('username_captures_open_key')
+      .on(table.tenantId, table.botInstanceId, table.customerId)
+      .where(sql`closed_at IS NULL`),
+    /** The sweep's index: windows past their deadline that nobody has closed. */
+    index('username_captures_due_idx')
+      .on(table.tenantId, table.expiresAt)
+      .where(sql`closed_at IS NULL`),
+    check(
+      'username_captures_close_reason_check',
+      nullableEnumCheck('close_reason', USERNAME_CAPTURE_CLOSE_REASONS),
+    ),
+    /** A closed window has a reason, and an open one has neither. Both halves. */
+    check('username_captures_closed_check', sql`(closed_at IS NULL) = (close_reason IS NULL)`),
+    check('username_captures_expiry_check', sql`expires_at > opened_at`),
+  ],
+);
+
 export const serviceUsernameReservations = pgTable(
   'service_username_reservations',
   {

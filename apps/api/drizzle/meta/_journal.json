@@ -624,6 +624,13 @@
       "when": 1789904802441,
       "tag": "0088_service_username_policy",
       "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1789907085806,
+      "tag": "0089_username_capture_window",
+      "breakpoints": true
     }
   ]
 }

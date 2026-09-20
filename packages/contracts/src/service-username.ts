@@ -363,4 +363,30 @@ export const RANDOM_USERNAME_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
  * refuse them: this predicate is what lets a validation path tell "a legacy name" from
  * "a name somebody typed wrongly" without reaching for the service id.
  */
+/**
+ * Why a username-entry window stopped being open.
+ *
+ * The same three the receipt window has, and for the same reasons: the customer typed
+ * a name, they started the step again elsewhere, or the deadline passed. `RECEIVED`
+ * covers an ACCEPTED name only — a refused one leaves the window open, because the
+ * customer is being asked to type another and closing it would strand them.
+ */
+export const USERNAME_CAPTURE_CLOSE_REASONS = ['RECEIVED', 'SUPERSEDED', 'EXPIRED'] as const;
+export type UsernameCaptureCloseReason = (typeof USERNAME_CAPTURE_CLOSE_REASONS)[number];
+
+/**
+ * How long a customer has to type their username before the window closes.
+ *
+ * Short on purpose. An open window is the one thing in this flow that makes an
+ * ORDINARY message mean something, and the legacy system's prompt capture swallowed a
+ * normal message and overwrote a production gateway setting (INCIDENT-FIN-001) precisely
+ * because its window outlived the question. Ten minutes is long enough to think of a
+ * name and short enough that a customer who wandered off is typing into nothing.
+ *
+ * The blast radius is bounded independently of the deadline: the only thing an open
+ * window can do is validate a name against ONE draft order of ONE customer, so even a
+ * window that outlived its question cannot reach a setting, a payment or another order.
+ */
+export const USERNAME_CAPTURE_TTL_MS = 10 * 60 * 1000;
+
 export const LEGACY_USERNAME_PATTERN = /^nx[0-9a-f]{32}$/;

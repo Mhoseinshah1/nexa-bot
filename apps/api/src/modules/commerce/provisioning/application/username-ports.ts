@@ -1,4 +1,8 @@
-import type { ServiceUsernameMode, TenantContext } from '@nexa/contracts';
+import type {
+  ServiceUsernameMode,
+  TenantContext,
+  UsernameCaptureCloseReason,
+} from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 
 /**
@@ -107,4 +111,79 @@ export interface ServiceUsernameRepository {
    * where no reservation is taken at all.
    */
   release(scope: TenantContext, orderId: string, tx: TransactionScope): Promise<boolean>;
+}
+
+/**
+ * A window in which an ordinary message from this customer means "this is my username".
+ *
+ * See `username_captures`. The narrow point of the whole mechanism is that a window
+ * names ONE order: whatever a redelivered or unexpected message contains, the only
+ * thing an open window can do with it is offer it to the allocator for that order.
+ */
+export interface UsernameCaptureRecord {
+  readonly id: string;
+  readonly botInstanceId: string;
+  readonly customerId: string;
+  readonly orderId: string;
+  readonly openedAt: Date;
+  readonly expiresAt: Date;
+}
+
+export interface UsernameCaptureRepository {
+  /**
+   * Serialise this customer's window work on this bot.
+   *
+   * An advisory lock rather than a row lock, because the row a caller wants to lock is
+   * the one it is about to decide whether to create. Two taps arriving together both
+   * read "nothing open" without it, and `username_captures_open_key` then turns the
+   * loser into a 23505 rather than a queue.
+   */
+  lockForCustomer(
+    scope: TenantContext,
+    botInstanceId: string,
+    customerId: string,
+    tx: TransactionScope,
+  ): Promise<void>;
+
+  /**
+   * Close whatever was open and open a new one, in the caller's transaction.
+   *
+   * One transaction and not two: the partial unique index refuses a second open row, so
+   * a split would leave the customer with no window between the close and the open —
+   * and the tap that asked for one has already been answered.
+   */
+  open(
+    scope: TenantContext,
+    input: {
+      readonly id: string;
+      readonly botInstanceId: string;
+      readonly customerId: string;
+      readonly orderId: string;
+      readonly openedAt: Date;
+      readonly expiresAt: Date;
+    },
+    tx: TransactionScope,
+  ): Promise<UsernameCaptureRecord>;
+
+  findOpen(
+    scope: TenantContext,
+    botInstanceId: string,
+    customerId: string,
+    tx: TransactionScope,
+  ): Promise<UsernameCaptureRecord | null>;
+
+  /**
+   * Close one window, naming why. Conditional on it still being open.
+   *
+   * `RECEIVED` is stamped only for a name that was ACCEPTED. A refused one leaves the
+   * window open on purpose: the customer is being asked to type another, and closing it
+   * would strand them mid-question with a button they have already used.
+   */
+  close(
+    scope: TenantContext,
+    id: string,
+    reason: UsernameCaptureCloseReason,
+    at: Date,
+    tx: TransactionScope,
+  ): Promise<boolean>;
 }

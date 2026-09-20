@@ -2,6 +2,7 @@ import {
   orderPurposeCreatesNewService,
   canonicalizeCustomUsername,
   isValidCustomUsername,
+  USERNAME_CAPTURE_TTL_MS,
   COMMERCE_ERROR_CODES,
   MAX_ORDER_QUANTITY,
   ORDER_MACHINE,
@@ -422,39 +423,9 @@ export class OrderService {
         if (order === null || order.customerId !== customerId) {
           throw errors.notFound(COMMERCE_ERROR_CODES.ORDER_NOT_FOUND, 'Unknown order.');
         }
-        if (order.state !== 'DRAFT') {
-          throw errors.conflict(
-            COMMERCE_ERROR_CODES.ORDER_STATE_INVALID,
-            'The username for this order can no longer be changed.',
-          );
-        }
-        /*
-         * A commercial order names no new account.
-         *
-         * `RENEW`, `ADD_TRAFFIC` and `ADD_TIME` act on a service that already has a
-         * name, and reserving a second would hold a name nothing will ever use while
-         * suggesting to the customer that their service is about to be renamed.
-         */
-        if (!orderPurposeCreatesNewService(order.purpose)) {
-          throw errors.preconditionFailed(
-            COMMERCE_ERROR_CODES.ORDER_STATE_INVALID,
-            'This order does not create a new service.',
-          );
-        }
+        this.assertNameable(order);
 
-        const reservation = await this.deps.usernames.choose(
-          scope,
-          {
-            orderId,
-            customerId,
-            panelId: order.line.panelId,
-            expiresAt:
-              order.expiresAt ??
-              new Date(this.deps.clock.now().getTime() + USERNAME_HOLD_FALLBACK_MS),
-          },
-          input.choice,
-          tx,
-        );
+        const reservation = await this.reserveFor(scope, order, input.choice, tx);
 
         await rememberOnce(
           this.deps.idempotency,
@@ -467,6 +438,228 @@ export class OrderService {
         );
         return reservation;
       },
+    );
+  }
+
+  /**
+   * Open the window in which this customer's next plain message is a username.
+   *
+   * The window is a ROW and not conversation state held in a process, which is the
+   * distinction `BOT_INTENTS` is written around: the legacy system's prompt capture
+   * outlived its question and swallowed an ordinary message into a production gateway
+   * setting (INCIDENT-FIN-001). What bounds this one is not its deadline but its
+   * REACH — the row names one order, and the only thing an open window can do with
+   * whatever arrives is offer it to the allocator for that order.
+   *
+   * Idempotent under a redelivered tap: the advisory lock serialises the customer's
+   * window work, and `openWindow` closes whatever was open before inserting, in ONE
+   * transaction, because the partial unique index refuses two open rows and a split
+   * would leave the customer with no window at all.
+   */
+  async beginUsernameEntry(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly idempotencyKey: string;
+      readonly botInstanceId: string;
+      readonly customerId: string;
+      readonly orderId: string;
+    },
+  ): Promise<{ readonly expiresAt: Date }> {
+    const customerId = this.customerId(input.customerId);
+    const orderId = this.orderId(input.orderId);
+    const requestHash = hashRequest({ customerId, orderId, bot: input.botInstanceId });
+
+    await this.authorize(scope, actor, {
+      action: 'order.username.entry',
+      entityType: 'Order',
+      entityId: orderId,
+    });
+
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      ORDER_PLACE_PERMISSION,
+      { action: 'order.username.entry', entityType: 'Order', entityId: orderId },
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        await this.assertCustomerMayOrder(scope, customerId, tx);
+        await this.deps.usernames.lockWindow(scope, input.botInstanceId, customerId, tx);
+
+        const order = await this.deps.repository.findById(scope, orderId, tx);
+        // Another customer's order is UNKNOWN, not FORBIDDEN. See `confirm`.
+        if (order === null || order.customerId !== customerId) {
+          throw errors.notFound(COMMERCE_ERROR_CODES.ORDER_NOT_FOUND, 'Unknown order.');
+        }
+        this.assertNameable(order);
+
+        const now = this.deps.clock.now();
+        const window = await this.deps.usernames.openWindow(
+          scope,
+          {
+            botInstanceId: input.botInstanceId,
+            customerId,
+            orderId,
+            openedAt: now,
+            expiresAt: new Date(now.getTime() + USERNAME_CAPTURE_TTL_MS),
+          },
+          tx,
+        );
+        await rememberOnce(
+          this.deps.idempotency,
+          scope,
+          ORDER_NAMESPACE,
+          input.idempotencyKey,
+          requestHash,
+          { orderId },
+          tx,
+        );
+        return { expiresAt: window.expiresAt };
+      },
+    );
+  }
+
+  /**
+   * Take a plain message as a username, IF a window says it is one.
+   *
+   * `NO_WINDOW` is a first-class outcome rather than an error, because the caller is a
+   * surface deciding what an ordinary message meant: every message that is not a
+   * command arrives here, and the answer for almost all of them is "that was not a
+   * username". Making the normal case an exception would turn the fallback path into a
+   * `catch`, and a `catch` around a command is how a real refusal gets swallowed.
+   *
+   * The window is closed only for an ACCEPTED name. A refusal leaves it open on
+   * purpose — the customer is being asked to type another, and closing it would strand
+   * them behind a button they have already used.
+   */
+  async submitTypedUsername(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly idempotencyKey: string;
+      readonly botInstanceId: string;
+      readonly customerId: string;
+      readonly text: string;
+    },
+  ): Promise<
+    | { readonly outcome: 'NO_WINDOW' }
+    | { readonly outcome: 'RESERVED'; readonly reservation: UsernameReservation }
+  > {
+    const customerId = this.customerId(input.customerId);
+
+    await this.authorize(scope, actor, {
+      action: 'order.username.submit',
+      entityType: 'Order',
+      entityId: null,
+    });
+
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      ORDER_PLACE_PERMISSION,
+      { action: 'order.username.submit', entityType: 'Order', entityId: null },
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        await this.assertCustomerMayOrder(scope, customerId, tx);
+        await this.deps.usernames.lockWindow(scope, input.botInstanceId, customerId, tx);
+
+        const window = await this.deps.usernames.openWindowFor(
+          scope,
+          input.botInstanceId,
+          customerId,
+          tx,
+        );
+        if (window === null) return { outcome: 'NO_WINDOW' } as const;
+
+        const now = this.deps.clock.now();
+        if (now.getTime() >= window.expiresAt.getTime()) {
+          /*
+           * Closed as it is found, and reported as NO WINDOW.
+           *
+           * The customer gets the ordinary unsupported-input answer rather than "your
+           * username window expired", because by then they may well have been typing
+           * something else entirely — which is the case the deadline exists for.
+           */
+          await this.deps.usernames.closeWindow(scope, window.id, 'EXPIRED', now, tx);
+          return { outcome: 'NO_WINDOW' } as const;
+        }
+
+        const orderId = this.orderId(window.orderId);
+        await this.deps.repository.lock(scope, orderId, tx);
+        const order = await this.deps.repository.findById(scope, orderId, tx);
+        if (order === null || order.customerId !== customerId) {
+          throw errors.notFound(COMMERCE_ERROR_CODES.ORDER_NOT_FOUND, 'Unknown order.');
+        }
+        this.assertNameable(order);
+
+        // Throws on an invalid or taken name, which rolls this transaction back and so
+        // leaves the window open — the customer is asked to type another.
+        const reservation = await this.reserveFor(
+          scope,
+          order,
+          { mode: 'CUSTOM', raw: input.text },
+          tx,
+        );
+        await this.deps.usernames.closeWindow(scope, window.id, 'RECEIVED', now, tx);
+        await rememberOnce(
+          this.deps.idempotency,
+          scope,
+          ORDER_NAMESPACE,
+          input.idempotencyKey,
+          hashRequest({ customerId, orderId, username: reservation.username }),
+          { orderId },
+          tx,
+        );
+        return { outcome: 'RESERVED', reservation } as const;
+      },
+    );
+  }
+
+  /**
+   * The two conditions an order must meet before it may be given a name.
+   *
+   * Shared by all three entry points so they cannot drift. DRAFT, because after
+   * `AWAITING_PAYMENT` the customer has agreed to a summary naming this username and a
+   * payment may already be in flight. And a purpose that creates a service, because
+   * `RENEW`, `ADD_TRAFFIC` and `ADD_TIME` act on an account that already has a name —
+   * reserving a second would hold a name nothing will ever use while telling the
+   * customer their service is about to be renamed.
+   */
+  private assertNameable(order: OrderRecord): void {
+    if (order.state !== 'DRAFT') {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.ORDER_STATE_INVALID,
+        'The username for this order can no longer be changed.',
+      );
+    }
+    if (!orderPurposeCreatesNewService(order.purpose)) {
+      throw errors.preconditionFailed(
+        COMMERCE_ERROR_CODES.ORDER_STATE_INVALID,
+        'This order does not create a new service.',
+      );
+    }
+  }
+
+  /** The reservation itself, with the hold bounded by the order's own deadline. */
+  private async reserveFor(
+    scope: TenantContext,
+    order: OrderRecord,
+    choice: UsernameChoice,
+    tx: TransactionScope,
+  ): Promise<UsernameReservation> {
+    return this.deps.usernames.choose(
+      scope,
+      {
+        orderId: order.id,
+        customerId: this.customerId(order.customerId),
+        panelId: order.line.panelId,
+        expiresAt:
+          order.expiresAt ?? new Date(this.deps.clock.now().getTime() + USERNAME_HOLD_FALLBACK_MS),
+      },
+      choice,
+      tx,
     );
   }
 

@@ -169,6 +169,7 @@ import { serviceSecrets } from './infrastructure/crypto/service-secrets.js';
 import { UsernameAllocator } from './modules/commerce/provisioning/application/username-allocator.js';
 import { PanelUsernameLane } from './modules/commerce/provisioning/application/username-lane.js';
 import { DrizzleServiceUsernameRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service-username.repository.js';
+import { DrizzleUsernameCaptureRepository } from './modules/commerce/provisioning/infrastructure/drizzle-username-capture.repository.js';
 import { DrizzleOperationRepository } from './modules/commerce/provisioning/infrastructure/drizzle-operation.repository.js';
 import { ProvisioningService } from './modules/commerce/provisioning/application/provisioning.service.js';
 import { ServiceAdminService } from './modules/commerce/provisioning/application/service-admin.service.js';
@@ -979,6 +980,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       secrets: serviceSecrets,
     }),
     repository: serviceUsernameRepository,
+    captures: new DrizzleUsernameCaptureRepository(database.db),
+    ids,
     panels: panelRepository,
     customers: customerRepository,
   });
