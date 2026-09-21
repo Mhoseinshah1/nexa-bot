@@ -308,9 +308,17 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.username_strategy_telegram_id_random': 'شناسهٔ تلگرام + تصادفی',
   'bot.admin.username_refused': 'ذخیره نشد: {reason}',
   'bot.admin.section':
-    'ادمین‌هایی که دسترسی تلگرام دارند در فهرست زیر آمده‌اند.\n\nبرای دادن دسترسی تلگرام به یک ادمین موجود:\n/link <شناسهٔ عددی تلگرام> <نام کاربری ادمین>\n\nبرای تعیین نقش یک ادمین:\n/role <نام کاربری ادمین> <کلید نقش>',
+    'فهرست ادمین‌های این نصب ({shown} از {total}). برای دیدن جزئیات و تغییر وضعیت، روی نام هرکدام بزنید.\n\nبرای دادن دسترسی تلگرام به یک ادمین موجود:\n/link <شناسهٔ عددی تلگرام> <نام کاربری ادمین>\n\nبرای تعیین نقش یک ادمین:\n/role <نام کاربری ادمین> <کلید نقش>',
   'bot.admin.admins_none':
     'هیچ ادمینی دسترسی تلگرام ندارد. ادمین‌ها در پنل وب ساخته می‌شوند و سپس با /link به تلگرام متصل می‌شوند.',
+  'bot.admin.admin_detail':
+    'نام کاربری: {username}\nنام نمایشی: {displayName}\nوضعیت: {status}\nنقش‌ها: {roles}\nتلگرام: {telegram}',
+  'bot.admin.admin_enable_button': 'فعال کردن',
+  'bot.admin.admin_disable_button': 'غیرفعال کردن',
+  'bot.admin.admin_status_changed': 'وضعیت {username} اکنون {status} است.',
+  'bot.admin.admin_gone': 'چنین ادمینی یافت نشد.',
+  'bot.admin.revoke_button': 'قطع دسترسی تلگرام',
+  'bot.admin.admins_back_button': 'بازگشت به فهرست ادمین‌ها',
   'bot.admin.linked': 'دسترسی تلگرام برای {username} ثبت شد.',
   'bot.admin.revoked': 'دسترسی تلگرام {username} حذف شد.',
   'bot.admin.roles_set': 'نقش‌های {username} به {roles} تغییر یافت.',

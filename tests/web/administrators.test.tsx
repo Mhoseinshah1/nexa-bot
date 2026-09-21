@@ -168,3 +168,175 @@ describe('the administrators section', () => {
     expect(screen.getByText(t('web.admin_telegram_removed_done'))).toBeInTheDocument();
   });
 });
+
+/**
+ * The controls WP1 added, and the three Codex findings that had no coverage.
+ *
+ * `apps/web` had unit coverage for the shared kit and none for this page's new
+ * controls, which is exactly where three defects lived: a save button that
+ * refused the last role removal, a role picker that went stale under the
+ * roster's own poll, and a revoke button disabled by a cached empty list. Each
+ * case below fails if its fix is reverted.
+ */
+describe('the administrator controls', () => {
+  const SECOND = '019a0000-0000-7000-8000-000000000002';
+
+  const open = async (): Promise<HTMLElement> => {
+    // `web.admin_manage` is also the column header, so this asks for the
+    // BUTTON rather than the first element carrying the word.
+    const manage = await screen.findByRole('button', { name: t('web.admin_manage') });
+    fireEvent.click(manage);
+    return manage;
+  };
+
+  it('lets an operator remove the LAST role, which the domain supports', async () => {
+    const api = stubApi([
+      {
+        url: '/roles',
+        body: {
+          roles: [{ key: 'support', name: 'Support', isSystem: true, permissions: ['users.view'] }],
+        },
+      },
+      { url: `/admins/${SECOND}/roles`, body: admin({ id: SECOND, roleKeys: [] }) },
+      {
+        url: '/admins',
+        body: { admins: [admin({ id: SECOND, username: 'parked', roleKeys: ['support'] })] },
+      },
+      { url: `/admins/${SECOND}/sessions`, body: { sessions: [] } },
+    ]);
+    renderPage(<SystemPage route={adminsRoute} permissions={['admins.view', 'admins.edit']} />);
+    await open();
+
+    fireEvent.change(await screen.findByLabelText(t('web.admin_reason_label')), {
+      target: { value: 'parking the account' },
+    });
+    // Uncheck the only role. `setAdminRolesRequestSchema` accepts an empty
+    // array; requiring one here made the last role unremovable.
+    fireEvent.click(await screen.findByLabelText('Support'));
+
+    const save = screen.getByText(t('web.admin_roles_save'));
+    expect(save, 'the last role could not be removed').not.toBeDisabled();
+    fireEvent.click(save);
+
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.url.includes(`/admins/${SECOND}/roles`))).toBe(true);
+    });
+    expect(
+      api.calls.find((call) => call.url.includes(`/admins/${SECOND}/roles`))?.body,
+    ).toMatchObject({ roleKeys: [] });
+  });
+
+  it('follows the row when the picker is untouched, and keeps the edit when it is not', async () => {
+    /*
+     * The roster POLLS, so `row.roleKeys` changes underneath a mounted panel
+     * when another operator or the Telegram surface edits the same
+     * administrator. A `useState` initialiser runs once, so an untouched picker
+     * went on showing the roles as they were when the panel opened — and
+     * `setRoles` sends the FULL set, so saving from it silently reverted the
+     * other change.
+     *
+     * Driven here by a status write, whose response replaces the cached row.
+     * That is the same prop change the poll delivers, without a four-minute
+     * wait: what is under test is that the picker DERIVES from the row rather
+     * than snapshotting it.
+     */
+    const roles = {
+      url: '/roles',
+      body: {
+        roles: [
+          { key: 'support', name: 'Support', isSystem: true, permissions: ['users.view'] },
+          { key: 'finance', name: 'Finance', isSystem: true, permissions: ['payments.view'] },
+        ],
+      },
+    };
+    stubApi([
+      roles,
+      { url: `/admins/${SECOND}/sessions`, body: { sessions: [] } },
+      {
+        url: `/admins/${SECOND}/status`,
+        // The row comes back carrying a role change somebody else made.
+        body: admin({ id: SECOND, username: 'moving', status: 'DISABLED', roleKeys: ['finance'] }),
+      },
+      {
+        url: '/admins',
+        body: { admins: [admin({ id: SECOND, username: 'moving', roleKeys: ['support'] })] },
+      },
+    ]);
+    renderPage(<SystemPage route={adminsRoute} permissions={['admins.view', 'admins.edit']} />);
+    await open();
+    expect(await screen.findByLabelText('Support')).toBeChecked();
+
+    fireEvent.change(await screen.findByLabelText(t('web.admin_reason_label')), {
+      target: { value: 'stepping back' },
+    });
+    fireEvent.click(screen.getByText(t('web.admin_disable')));
+
+    await waitFor(async () => {
+      expect(await screen.findByLabelText('Finance')).toBeChecked();
+    });
+    expect(
+      screen.getByLabelText('Support'),
+      'an untouched picker kept the roles it opened with',
+    ).not.toBeChecked();
+  });
+
+  it('offers revocation even when the cached session list is empty', async () => {
+    /*
+     * Gating the button on "we know there is nothing to revoke" sounds careful
+     * and locks the operator out: a cached empty result keeps it disabled after
+     * the target signs in. Revoking when there is nothing to revoke answers
+     * zero, so the server is where that is found out.
+     */
+    stubApi([
+      { url: '/roles', body: { roles: [] } },
+      { url: `/admins/${SECOND}/sessions`, body: { sessions: [] } },
+      { url: '/admins', body: { admins: [admin({ id: SECOND, username: 'quiet' })] } },
+    ]);
+    renderPage(<SystemPage route={adminsRoute} permissions={['admins.view', 'admins.edit']} />);
+    await open();
+
+    expect(await screen.findByText(t('web.admin_sessions_empty'))).toBeInTheDocument();
+    fireEvent.change(await screen.findByLabelText(t('web.admin_reason_label')), {
+      target: { value: 'lost laptop' },
+    });
+    expect(
+      screen.getByText(t('web.admin_sessions_revoke')),
+      'a cached empty list disabled the action',
+    ).not.toBeDisabled();
+  });
+
+  it('sends an idempotency key with a creation, so a retry is not a second command', async () => {
+    const api = stubApi([
+      {
+        url: '/roles',
+        body: {
+          roles: [{ key: 'support', name: 'Support', isSystem: true, permissions: ['users.view'] }],
+        },
+      },
+      { url: '/admins', body: { admins: [admin()] } },
+    ]);
+    renderPage(<SystemPage route={adminsRoute} permissions={['admins.view', 'admins.edit']} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: t('web.admin_add') }));
+    fireEvent.change(await screen.findByLabelText(t('web.admin_username_label')), {
+      target: { value: 'newcomer' },
+    });
+    fireEvent.change(screen.getByLabelText(t('web.admin_display_name_label')), {
+      target: { value: 'New Comer' },
+    });
+    fireEvent.change(screen.getByLabelText(t('web.admin_password_label')), {
+      target: { value: 'a-twelve-char-password' },
+    });
+    fireEvent.click(await screen.findByLabelText('Support'));
+    const form = screen.getByLabelText(t('web.admin_username_label')).closest('form');
+    fireEvent.submit(form as HTMLFormElement);
+
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
+    });
+    const created = api.calls.find((call) => call.method === 'POST');
+    // The key was minted and THROWN AWAY once, which made the mechanism present
+    // in appearance only while `mutations.retry` re-sent the create.
+    expect((created?.body as { idempotencyKey?: string })?.idempotencyKey).toMatch(/.{8,}/);
+  });
+});

@@ -35,7 +35,10 @@ export interface TelegramAdminDeps {
       tx?: unknown,
     ): Promise<ReadonlySet<PermissionKey>>;
   };
-  readonly management: Pick<AdminManagementService, 'setTelegramBinding' | 'setRoles' | 'list'>;
+  readonly management: Pick<
+    AdminManagementService,
+    'setTelegramBinding' | 'setRoles' | 'list' | 'setStatus'
+  >;
 }
 
 /**
@@ -127,6 +130,61 @@ export class TelegramAdminService {
     // product, and it is charged here through the same guard the Web Admin uses.
     await this.deps.management.list(scope, actor);
     return this.deps.admins.listTelegramBound(scope);
+  }
+
+  /**
+   * Every administrator on this tenant, with their roles — the roster.
+   *
+   * `management.list` rather than a second query, so the permission, the projection
+   * and the tenant scope are the Web Admin's. It returns everyone, not only the
+   * Telegram-bound: the administrator an operator most needs on this surface is the
+   * one they want to STOP, and there is no reason that person holds a binding. It is
+   * also what makes `listBound` still worth having — that one answers a different
+   * question, "who can be reached here".
+   *
+   * Unbounded on purpose, and bounded in fact: an administrator roster is people an
+   * operator created by hand. The customer-sized sets in this product are the ones
+   * that page.
+   */
+  async listAll(
+    scope: TenantContext,
+    actor: ActorContext,
+  ): Promise<readonly { admin: Admin; roleKeys: string[] }[]> {
+    return this.deps.management.list(scope, actor);
+  }
+
+  /**
+   * Activates or disables one administrator, through the SAME method the Web Admin
+   * calls — so the self-modification refusal, the last-owner rule, the privilege bound,
+   * the tenant lock and the in-transaction authorization are all the ones already
+   * tested, and this surface adds none of its own.
+   *
+   * The update's key IS threaded, and the no-op path is not a substitute for it.
+   *
+   * `setStatus` returns the same projection when the status already matches, which
+   * answers a replay that arrives while nothing else has happened. A Telegram
+   * redelivery does not promise that: if this tap disabled Alice, a second operator
+   * re-enabled her, and Telegram then redelivered this update, there is no longer a
+   * no-op to find — the old command would run again, disable her a second time and
+   * revoke her sessions, silently undoing the other operator's decision from a tap
+   * nobody made twice. `setRoles` carries the key for exactly this reason and this
+   * is the same shape.
+   */
+  async setStatus(
+    scope: TenantContext,
+    actor: ActorContext,
+    targetId: AdminId,
+    status: 'ACTIVE' | 'DISABLED',
+    reason: string,
+    idempotencyKey: string,
+  ): Promise<{ admin: Admin; roleKeys: string[] }> {
+    return this.deps.management.setStatus(
+      scope,
+      actor,
+      targetId,
+      { status, reason },
+      { namespace: 'TELEGRAM', idempotencyKey: `${idempotencyKey}:admin-status` },
+    );
   }
 
   /**

@@ -322,7 +322,7 @@ export const MANAGEMENT_CONDITION_CODES = [
 ] as const;
 
 /**
- * The four administrator-change codes, as a type.
+ * The administrator-change codes, as a type.
  *
  * Named separately so `AdminManagementService` cannot record a fifth code that
  * this scope does not carry — the failure the `admin.` prefix hid, in the one
@@ -337,6 +337,22 @@ export const MANAGEMENT_ADMIN_EVENT_CODES = [
   'admin.password_changed',
   'admin.roles_changed',
   'admin.status_changed',
+  /*
+   * Two more, and each is a different act from the one above it.
+   *
+   * `admin.password_changed` is somebody changing their OWN password, having
+   * proved they know the current one. `admin.password_reset` is an operator
+   * replacing somebody else's without that proof. Reading one stream and seeing
+   * only "a password changed" would lose the distinction that matters to whoever
+   * is investigating — and an event CODE is part of the schema, so the two could
+   * not be split apart later without stranding every row recorded under the
+   * merged one.
+   *
+   * `admin.sessions_revoked` is the third act: signing an administrator out
+   * everywhere WITHOUT changing their credential.
+   */
+  'admin.password_reset',
+  'admin.sessions_revoked',
 ] as const;
 export type ManagementAdminEventCode = (typeof MANAGEMENT_ADMIN_EVENT_CODES)[number];
 

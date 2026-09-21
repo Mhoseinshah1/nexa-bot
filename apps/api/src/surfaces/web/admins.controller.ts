@@ -5,7 +5,10 @@ import {
   uuidV7Schema,
   type AdminId,
   type AdminListResponse,
+  type AdminSessionListResponse,
   type AdminSummary,
+  type ResetAdminPasswordResponse,
+  type RevokeAdminSessionsResponse,
   type RoleListResponse,
   type TenantContext,
 } from '@nexa/contracts';
@@ -110,6 +113,60 @@ export class AdminsController {
       body,
     );
     return toSummary(updated.admin, updated.roleKeys);
+  }
+
+  /**
+   * Sets a new password for an administrator who is not the caller.
+   *
+   * A WRITE, so it takes the origin check, and the body travels unparsed for the
+   * reason the three above it give: the service authorizes before it parses, so a
+   * malformed body from a caller without `admins.edit` still leaves the denial
+   * record rather than a bare 400 with nothing behind it.
+   *
+   * The response carries no credential — not the new password, not a hash, not a
+   * confirmation of what it was set to. What comes back is the administrator as
+   * anybody may see them, plus how many sessions ended.
+   */
+  @Post('admins/:id/password')
+  async resetPassword(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<ResetAdminPasswordResponse> {
+    const { scope, actor } = await this.authenticate(request, { write: true });
+    const targetId = uuidV7Schema.parse(id) as AdminId;
+    const result = await this.container.adminManagement.resetPassword(scope, actor, targetId, body);
+    return {
+      admin: toSummary(result.admin, result.roleKeys),
+      sessionsRevoked: result.sessionsRevoked,
+    };
+  }
+
+  /** The live sessions one administrator holds. A read: `admins.view`, no origin check. */
+  @Get('admins/:id/sessions')
+  async sessions(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+  ): Promise<AdminSessionListResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const targetId = uuidV7Schema.parse(id) as AdminId;
+    return {
+      sessions: [...(await this.container.adminManagement.listSessions(scope, actor, targetId))],
+    };
+  }
+
+  /** Ends every session an administrator holds, without changing their password. */
+  @Post('admins/:id/sessions/revoke')
+  async revokeSessions(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<RevokeAdminSessionsResponse> {
+    const { scope, actor } = await this.authenticate(request, { write: true });
+    const targetId = uuidV7Schema.parse(id) as AdminId;
+    return {
+      revoked: await this.container.adminManagement.revokeSessions(scope, actor, targetId, body),
+    };
   }
 
   /**

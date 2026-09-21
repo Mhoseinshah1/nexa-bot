@@ -1,12 +1,24 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
-import { IDENTITY_ERROR_CODES, type AdminSummary, type MonitorProfile } from '@nexa/contracts';
+import { useState, type ReactNode } from 'react';
+import {
+  IDENTITY_ERROR_CODES,
+  type AdminSessionSummary,
+  type AdminSummary,
+  type MonitorProfile,
+} from '@nexa/contracts';
 import {
   ApiError,
+  createAdmin,
+  fetchAdminSessions,
   fetchAdmins,
   fetchInfo,
   fetchMonitorProfile,
   fetchReadiness,
+  fetchRoles,
+  resetAdminPassword,
+  revokeAdminSessions,
+  setAdminRoles,
+  setAdminStatus,
   setAdminTelegramBinding,
 } from '../api/client';
 import { formatTimestamp } from '../format';
@@ -357,6 +369,7 @@ function AdminsSection({ denied, mayEdit }: { denied: boolean; mayEdit: boolean 
 
   return (
     <Card title={t('web.administrators')} hint={t('web.administrators_hint')}>
+      {mayEdit && <CreateAdmin />}
       <StateSwitch query={admins} denied={denied} isEmpty={rows.length === 0}>
         <DataTable
           caption={t('web.administrators')}
@@ -406,11 +419,593 @@ function AdminsSection({ denied, mayEdit }: { denied: boolean; mayEdit: boolean 
               header: t('web.admin_telegram'),
               render: (row) => <TelegramBinding row={row} mayEdit={mayEdit} />,
             },
+            {
+              key: 'manage',
+              header: t('web.admin_manage'),
+              render: (row) => <AdminControls row={row} mayEdit={mayEdit} />,
+            },
           ]}
         />
       </StateSwitch>
     </Card>
   );
+}
+
+/**
+ * Creating an administrator, from the screen that lists them.
+ *
+ * The password leaves the browser once. Nothing reads it back — not this form
+ * after submitting, not the roster, not the response — because there is nowhere
+ * it could come back FROM: the server stores a hash and the projection carries
+ * no credential field at all. The hint says so, so an operator knows to deliver
+ * it out of band rather than looking for it here later.
+ *
+ * The role checkboxes come from `/roles`, which is the same catalogue the server
+ * resolves against. Offering a hard-coded list would let this screen promise a
+ * role an installation does not have.
+ */
+function CreateAdmin() {
+  const notify = useToast();
+  const queries = useQueryClient();
+  const submission = useSubmissionKey();
+  const [open, setOpen] = useState(false);
+  const [username, setUsername] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [password, setPassword] = useState('');
+  const [roleKeys, setRoleKeys] = useState<string[]>([]);
+  const [problem, setProblem] = useState<string | null>(null);
+
+  const roles = useQuery({ queryKey: ['roles'], queryFn: fetchRoles, enabled: open });
+
+  const mutate = useMutation({
+    mutationFn: (input: {
+      username: string;
+      displayName: string;
+      password: string;
+      roleKeys: string[];
+    }) =>
+      /*
+       * The key is SENT, not merely minted.
+       *
+       * It was computed here and thrown away, which made the submission-key
+       * mechanism present in appearance only: `mutations.retry` re-sends a
+       * write the server did not answer, and a create that committed then
+       * came back as "that username is taken" — the operator told their new
+       * administrator failed, for an account that exists holding the password
+       * they just typed.
+       *
+       * The fingerprint deliberately excludes the password, matching what the
+       * server hashes the key against: changing the credential on a held key
+       * is the same command, and a different username is a new one.
+       */
+      createAdmin({
+        ...input,
+        idempotencyKey: submission.current({
+          username: input.username,
+          displayName: input.displayName,
+          roleKeys: input.roleKeys,
+        }),
+      }),
+    onSuccess: () => {
+      submission.settle();
+      setProblem(null);
+      setOpen(false);
+      setUsername('');
+      setDisplayName('');
+      // Cleared on success as well as on close: a password left in a detached
+      // input is a password in the page for as long as the tab is open.
+      setPassword('');
+      setRoleKeys([]);
+      notify({ tone: 'ok', message: t('web.admin_created_done') });
+      void queries.invalidateQueries({ queryKey: ['admins'] });
+    },
+    onError: (error: unknown) => {
+      submission.settleOn(error);
+      setProblem(refusalText(error, t('web.admin_username_taken')));
+    },
+  });
+
+  if (!open) {
+    return (
+      <div className="toolbar">
+        <button type="button" className="btn sm" onClick={() => setOpen(true)}>
+          {t('web.admin_add')}
+        </button>
+      </div>
+    );
+  }
+
+  const ready =
+    username.trim() !== '' &&
+    displayName.trim() !== '' &&
+    password.length >= 12 &&
+    roleKeys.length > 0;
+
+  return (
+    <form
+      className="stack"
+      onSubmit={(event) => {
+        event.preventDefault();
+        mutate.mutate({
+          username: username.trim(),
+          displayName: displayName.trim(),
+          password,
+          roleKeys,
+        });
+      }}
+    >
+      <Banner tone="info" title={t('web.admin_add_title')}>
+        {t('web.admin_add_hint')}
+      </Banner>
+      <Field
+        label={t('web.admin_username_label')}
+        hint={t('web.admin_username_hint')}
+        htmlFor="admin-new-username"
+        {...(problem === null ? {} : { error: problem })}
+      >
+        <input
+          id="admin-new-username"
+          dir="ltr"
+          autoComplete="off"
+          value={username}
+          onChange={(event) => setUsername(event.target.value)}
+        />
+      </Field>
+      <Field label={t('web.admin_display_name_label')} htmlFor="admin-new-display">
+        <input
+          id="admin-new-display"
+          value={displayName}
+          onChange={(event) => setDisplayName(event.target.value)}
+        />
+      </Field>
+      <Field
+        label={t('web.admin_password_label')}
+        hint={t('web.admin_password_hint')}
+        htmlFor="admin-new-password"
+      >
+        <input
+          id="admin-new-password"
+          type="password"
+          dir="ltr"
+          autoComplete="new-password"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+        />
+      </Field>
+      <Field label={t('web.admin_roles_label')} hint={t('web.admin_roles_hint')}>
+        <RolePicker
+          idPrefix="admin-new"
+          available={roles.data?.roles ?? []}
+          selected={roleKeys}
+          onChange={setRoleKeys}
+        />
+      </Field>
+      <div className="toolbar">
+        <button type="submit" className="btn primary sm" disabled={mutate.isPending || !ready}>
+          {t('web.admin_add')}
+        </button>
+        <button
+          type="button"
+          className="btn sm"
+          disabled={mutate.isPending}
+          onClick={() => {
+            setOpen(false);
+            setPassword('');
+            setProblem(null);
+          }}
+        >
+          {t('web.admin_telegram_cancel')}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/** The role catalogue as checkboxes. Shared by creation and by role editing. */
+function RolePicker({
+  idPrefix,
+  available,
+  selected,
+  onChange,
+}: {
+  idPrefix: string;
+  available: readonly { key: string; name: string }[];
+  selected: readonly string[];
+  onChange: (next: string[]) => void;
+}) {
+  return (
+    <div className="stack">
+      {available.map((role) => (
+        <label key={role.key} htmlFor={`${idPrefix}-role-${role.key}`} className="checkbox">
+          <input
+            id={`${idPrefix}-role-${role.key}`}
+            type="checkbox"
+            checked={selected.includes(role.key)}
+            onChange={(event) =>
+              onChange(
+                event.target.checked
+                  ? [...selected, role.key]
+                  : selected.filter((key) => key !== role.key),
+              )
+            }
+          />
+          <span>{role.name}</span>
+        </label>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Status, roles, live sessions and credential reset for ONE administrator.
+ *
+ * Behind a disclosure rather than four columns, because a roster is read far
+ * more often than it is edited and four sets of controls per row turn a list
+ * into a form. Every one of these already existed on the server and could not
+ * be reached from here — which is the finding the audit for this package
+ * records.
+ *
+ * A reason is required by the server on all three writes, so the field is one
+ * field shared by them rather than three that disagree. The buttons are drawn
+ * only for an actor who may edit; the guard still runs on the request, so this
+ * stops promising what the server would refuse rather than deciding anything.
+ */
+/**
+ * How often the open sessions panel re-reads.
+ *
+ * Faster than the roster's own poll because the question is sharper: an
+ * operator watching this list is deciding whether somebody is still signed in,
+ * and the answer changes on a sign-in rather than on an administrative edit.
+ */
+const SESSIONS_REFRESH_MS = 15_000;
+
+function AdminControls({ row, mayEdit }: { row: AdminSummary; mayEdit: boolean }) {
+  const notify = useToast();
+  const queries = useQueryClient();
+  const statusKey = useSubmissionKey();
+  const rolesKey = useSubmissionKey();
+  const passwordKey = useSubmissionKey();
+  const revokeKey = useSubmissionKey();
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState('');
+  /*
+   * DERIVED from the row until the operator touches it, not initialised from it.
+   *
+   * The roster polls, so `row.roleKeys` changes underneath a mounted panel when
+   * another operator or the Telegram surface edits the same administrator. A
+   * `useState` initialiser runs once, so the picker went on showing the roles as
+   * they were when the panel opened — and `setRoles` sends the FULL set, so
+   * saving from that stale picker silently reverted the other change.
+   *
+   * `edited` is what distinguishes "I have not touched this" from "I deliberately
+   * unchecked everything", which the empty set above makes a real state.
+   */
+  const [edited, setEdited] = useState<readonly string[] | null>(null);
+  const roleKeys = edited ?? row.roleKeys;
+  const [newPassword, setNewPassword] = useState('');
+  const [problem, setProblem] = useState<string | null>(null);
+
+  const roles = useQuery({ queryKey: ['roles'], queryFn: fetchRoles, enabled: open && mayEdit });
+  /*
+   * Polled while the panel is open, and the reason is the panel's own claim.
+   *
+   * `refetchOnWindowFocus` is off globally, so without an interval this list is
+   * whatever it was when the panel opened: a target who signs in afterwards
+   * never appears, and one whose session expires never leaves. A screen whose
+   * whole job is "who is signed in right now" cannot be a snapshot from minutes
+   * ago.
+   */
+  const sessions = useQuery({
+    queryKey: ['admin-sessions', row.id],
+    queryFn: () => fetchAdminSessions(row.id),
+    enabled: open,
+    refetchInterval: open ? SESSIONS_REFRESH_MS : false,
+  });
+
+  const reasonGiven = reason.trim().length > 0;
+  const fail = (error: unknown) => setProblem(refusalText(error, null));
+  const replaceRow = (updated: AdminSummary) => {
+    setProblem(null);
+    queries.setQueryData(['admins'], (current: { admins: AdminSummary[] } | undefined) =>
+      current === undefined
+        ? current
+        : { admins: current.admins.map((one) => (one.id === updated.id ? updated : one)) },
+    );
+  };
+
+  const status = useMutation({
+    mutationFn: (next: 'ACTIVE' | 'DISABLED') => {
+      statusKey.current({ id: row.id, next, reason: reason.trim() });
+      return setAdminStatus({ id: row.id, status: next, reason: reason.trim() });
+    },
+    onSuccess: (updated) => {
+      statusKey.settle();
+      replaceRow(updated);
+      notify({ tone: 'ok', message: t('web.admin_status_done') });
+    },
+    onError: (error: unknown) => {
+      statusKey.settleOn(error);
+      fail(error);
+    },
+  });
+
+  const rolesMutation = useMutation({
+    mutationFn: () => {
+      const next = [...roleKeys];
+      rolesKey.current({ id: row.id, next, reason: reason.trim() });
+      return setAdminRoles({ id: row.id, roleKeys: next, reason: reason.trim() });
+    },
+    onSuccess: (updated) => {
+      rolesKey.settle();
+      replaceRow(updated);
+      notify({ tone: 'ok', message: t('web.admin_roles_done') });
+    },
+    onError: (error: unknown) => {
+      rolesKey.settleOn(error);
+      fail(error);
+    },
+  });
+
+  const password = useMutation({
+    mutationFn: () => {
+      passwordKey.current({ id: row.id, reason: reason.trim() });
+      return resetAdminPassword({ id: row.id, newPassword, reason: reason.trim() });
+    },
+    onSuccess: (result) => {
+      passwordKey.settle();
+      replaceRow(result.admin);
+      // Cleared before the toast, so the value is out of state whatever the
+      // operator does next.
+      setNewPassword('');
+      notify({
+        tone: 'ok',
+        message: t('web.admin_password_reset_done').replace(
+          '{count}',
+          String(result.sessionsRevoked),
+        ),
+      });
+      void queries.invalidateQueries({ queryKey: ['admin-sessions', row.id] });
+    },
+    onError: (error: unknown) => {
+      passwordKey.settleOn(error);
+      fail(error);
+    },
+  });
+
+  const revoke = useMutation({
+    mutationFn: () => {
+      revokeKey.current({ id: row.id, reason: reason.trim() });
+      return revokeAdminSessions({ id: row.id, reason: reason.trim() });
+    },
+    onSuccess: (result) => {
+      revokeKey.settle();
+      setProblem(null);
+      notify({
+        tone: 'ok',
+        message: t('web.admin_sessions_revoked_done').replace('{count}', String(result.revoked)),
+      });
+      void queries.invalidateQueries({ queryKey: ['admin-sessions', row.id] });
+    },
+    onError: (error: unknown) => {
+      revokeKey.settleOn(error);
+      fail(error);
+    },
+  });
+
+  if (!open) {
+    return (
+      <div className="toolbar">
+        <button type="button" className="btn sm" onClick={() => setOpen(true)}>
+          {t('web.admin_manage')}
+        </button>
+      </div>
+    );
+  }
+
+  const live = sessions.data?.sessions ?? [];
+  const busy =
+    status.isPending || rolesMutation.isPending || password.isPending || revoke.isPending;
+
+  return (
+    <div className="stack">
+      {problem !== null && (
+        <Banner tone="danger" title={t('web.admin_manage')}>
+          {problem}
+        </Banner>
+      )}
+
+      {/* The sessions panel is a READ and is shown to anybody who may see this
+          screen at all — `admins.view` is what the route charges. */}
+      <div className="stack">
+        <strong>{t('web.admin_sessions')}</strong>
+        {/* Through `StateSwitch` rather than a bare `length === 0`, so a read
+            that was REFUSED or failed renders as what it was. Printing "no
+            live sessions" for an answer we never got is the kind of quiet
+            untruth an operator would act on. */}
+        <StateSwitch
+          query={sessions}
+          isEmpty={live.length === 0}
+          empty={<span className="faint">{t('web.admin_sessions_empty')}</span>}
+        >
+          {live.map((session) => (
+            <div key={session.id} className="stack">
+              {session.current && <Badge tone="ok">{t('web.admin_sessions_current')}</Badge>}
+              <KV items={sessionRows(session)} />
+            </div>
+          ))}
+        </StateSwitch>
+      </div>
+
+      {mayEdit && (
+        <>
+          <Field
+            label={t('web.admin_reason_label')}
+            hint={t('web.admin_reason_hint')}
+            htmlFor={`admin-reason-${row.id}`}
+          >
+            <input
+              id={`admin-reason-${row.id}`}
+              value={reason}
+              maxLength={500}
+              onChange={(event) => setReason(event.target.value)}
+            />
+          </Field>
+
+          <div className="toolbar">
+            <button
+              type="button"
+              className={row.status === 'ACTIVE' ? 'btn danger sm' : 'btn primary sm'}
+              disabled={busy || !reasonGiven}
+              onClick={() => status.mutate(row.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE')}
+            >
+              {row.status === 'ACTIVE' ? t('web.admin_disable') : t('web.admin_enable')}
+            </button>
+            <button
+              type="button"
+              className="btn danger sm"
+              /*
+               * NOT gated on the listing at all any more.
+               *
+               * Gating on "we know there is nothing to revoke" sounds careful
+               * and is a trap: a cached empty result keeps the button disabled
+               * after the target signs in, and the operator is locked out of
+               * the action by a fact that stopped being true. Revoking when
+               * there is nothing to revoke is safe and answers zero, so the
+               * server is the right place to find that out.
+               */
+              disabled={busy || !reasonGiven}
+              onClick={() => revoke.mutate()}
+            >
+              {t('web.admin_sessions_revoke')}
+            </button>
+          </div>
+
+          <Field label={t('web.admin_roles_label')} hint={t('web.admin_roles_hint')}>
+            <RolePicker
+              idPrefix={`admin-${row.id}`}
+              available={roles.data?.roles ?? []}
+              selected={roleKeys}
+              onChange={setEdited}
+            />
+          </Field>
+          <div className="toolbar">
+            <button
+              type="button"
+              className="btn sm"
+              /*
+               * NOT gated on a non-empty set. `setAdminRolesRequestSchema`
+               * accepts an empty array and the domain supports an
+               * administrator with none — parking an account without
+               * disabling it. Requiring one here made the last role
+               * unremovable, which is the advertised operation refused by the
+               * button rather than by the server. Creation is the arm that
+               * genuinely needs a role, and it keeps the requirement.
+               */
+              disabled={busy || !reasonGiven}
+              onClick={() => rolesMutation.mutate()}
+            >
+              {t('web.admin_roles_save')}
+            </button>
+          </div>
+
+          <Banner tone="warn" title={t('web.admin_password_reset_title')}>
+            {t('web.admin_password_reset_hint')}
+          </Banner>
+          <Field label={t('web.admin_new_password_label')} htmlFor={`admin-password-${row.id}`}>
+            <input
+              id={`admin-password-${row.id}`}
+              type="password"
+              dir="ltr"
+              autoComplete="new-password"
+              value={newPassword}
+              onChange={(event) => setNewPassword(event.target.value)}
+            />
+          </Field>
+          <div className="toolbar">
+            <button
+              type="button"
+              className="btn danger sm"
+              disabled={busy || !reasonGiven || newPassword.length < 12}
+              onClick={() => password.mutate()}
+            >
+              {t('web.admin_password_reset')}
+            </button>
+          </div>
+        </>
+      )}
+
+      <div className="toolbar">
+        <button
+          type="button"
+          className="btn sm"
+          disabled={busy}
+          onClick={() => {
+            setOpen(false);
+            setNewPassword('');
+            setProblem(null);
+          }}
+        >
+          {t('web.admin_manage_close')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One live session, as rows.
+ *
+ * Every value here is a column the session ROW actually holds. No device name,
+ * no browser name, no location: deriving any of those from a `User-Agent` or an
+ * IP would be a guess presented to an operator as a fact, and an operator
+ * deciding whether a session is theirs is exactly who must not be guessed at.
+ * The user agent is shown verbatim for the same reason — it is what was sent.
+ * The session TOKEN never reaches this surface; the projection behind it does
+ * not select `token_hash` at all.
+ */
+function sessionRows(session: AdminSessionSummary): [ReactNode, ReactNode][] {
+  const rows: [ReactNode, ReactNode][] = [
+    [t('web.admin_session_last_seen'), formatTimestamp(session.lastSeenAt)],
+    [t('web.admin_session_issued'), formatTimestamp(session.issuedAt)],
+    [t('web.admin_session_expires'), formatTimestamp(session.expiresAt)],
+  ];
+  if (session.ip !== null) {
+    rows.push([t('web.admin_session_ip'), <Ltr key="ip">{session.ip}</Ltr>]);
+  }
+  if (session.userAgent !== null) {
+    rows.push([
+      t('web.admin_session_agent'),
+      <Ltr key="ua">
+        <span className="plain">{session.userAgent}</span>
+      </Ltr>,
+    ]);
+  }
+  return rows;
+}
+
+/**
+ * The server's refusal, in this product's words where it has any.
+ *
+ * Three identity refusals have a sentence an operator can act on; everything
+ * else falls back to the server's own message rather than a guess. `fallback`
+ * covers the one code whose meaning depends on which form raised it.
+ */
+function refusalText(error: unknown, fallback: string | null): string {
+  if (error instanceof ApiError) {
+    if (error.code === IDENTITY_ERROR_CODES.ADMIN_SELF_MODIFICATION) {
+      return t('web.admin_self_modification');
+    }
+    if (error.code === IDENTITY_ERROR_CODES.ADMIN_PRIVILEGE_ESCALATION) {
+      return t('web.admin_privilege_escalation');
+    }
+    if (error.code === IDENTITY_ERROR_CODES.ADMIN_LAST_OWNER) {
+      return t('web.admin_last_owner');
+    }
+    if (fallback !== null && error.code === IDENTITY_ERROR_CODES.ADMIN_USERNAME_TAKEN) {
+      return fallback;
+    }
+  }
+  return error instanceof Error ? error.message : String(error);
 }
 
 /**

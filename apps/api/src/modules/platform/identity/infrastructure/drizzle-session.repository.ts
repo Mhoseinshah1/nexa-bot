@@ -1,4 +1,4 @@
-import { and, eq, gt, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, sql } from 'drizzle-orm';
 import {
   asId,
   type AdminId,
@@ -116,6 +116,58 @@ export class DrizzleSessionRepository implements SessionRepository {
       .where(eq(adminSessions.id, id));
   }
 
+  async listForAdmin(
+    scope: ScopeContext,
+    adminId: AdminId,
+    now: Date,
+    limit: number,
+    tx?: unknown,
+  ): Promise<
+    readonly {
+      readonly id: AdminSessionId;
+      readonly issuedAt: Date;
+      readonly expiresAt: Date;
+      readonly lastSeenAt: Date;
+      readonly ip: string | null;
+      readonly userAgent: string | null;
+    }[]
+  > {
+    /*
+     * The projection names its columns, and `token_hash` is not among them.
+     *
+     * `toSession` above already drops it, but this read does not go through
+     * `toSession` and a `select()` with no argument would have carried it out of
+     * the repository. The port's docblock says why that matters; this is where it
+     * is true.
+     *
+     * LIVE only, decided in the WHERE and not by the caller: unrevoked and not yet
+     * expired. Newest first, then bounded — an operator looking at "who is logged
+     * in" wants the current ones, and the opposite order on an account with a long
+     * history returns a page of dead rows.
+     */
+    const rows = await executorOf(this.db, tx)
+      .select({
+        id: adminSessions.id,
+        issuedAt: adminSessions.issuedAt,
+        expiresAt: adminSessions.expiresAt,
+        lastSeenAt: adminSessions.lastSeenAt,
+        ip: adminSessions.ip,
+        userAgent: adminSessions.userAgent,
+      })
+      .from(adminSessions)
+      .where(
+        and(
+          eq(adminSessions.tenantId, requireTenantId(scope)),
+          eq(adminSessions.adminId, adminId),
+          isNull(adminSessions.revokedAt),
+          gt(adminSessions.expiresAt, now),
+        ),
+      )
+      .orderBy(desc(adminSessions.lastSeenAt), desc(adminSessions.id))
+      .limit(limit);
+    return rows.map((row) => ({ ...row, id: asId<'AdminSessionId'>(row.id) }));
+  }
+
   async revoke(id: AdminSessionId, now: Date, reason: string, tx?: unknown): Promise<void> {
     // Only an unrevoked session is revoked, so the original revocation time and
     // reason survive a second logout rather than being overwritten.
@@ -141,6 +193,24 @@ export class DrizzleSessionRepository implements SessionRepository {
           eq(adminSessions.tenantId, tenantId),
           eq(adminSessions.adminId, adminId),
           isNull(adminSessions.revokedAt),
+          /*
+           * Expired rows are NOT revoked, and the count is the reason.
+           *
+           * Sessions are retained after they expire, so an account can hold
+           * dozens of rows that are unrevoked and long dead. Revoking those
+           * changes nothing — an expired session is already not a session —
+           * but it made the RETURNED COUNT include them, and that count is
+           * what a reset and a revocation report to an operator asking "is
+           * that person still signed in". `listForAdmin` above filters on the
+           * same expiry, so the two disagreed on one screen: a panel showing
+           * no live sessions, above a message claiming three were ended.
+           *
+           * The predicate here is what makes the number true. The bookkeeping
+           * it gives up — a `revoked_reason` stamped on rows that expired on
+           * their own — is not a fact anybody reads, and it would be a false
+           * one: they were not revoked, they ran out.
+           */
+          gt(adminSessions.expiresAt, now),
         ),
       )
       .returning({ id: adminSessions.id });
