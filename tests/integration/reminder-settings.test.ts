@@ -88,7 +88,13 @@ describe('the reminder thresholds are configuration, not constants', () => {
     /** Both READ permissions and neither edit. */
     reader: '720002',
 
-    /** No settings or features permission at all. */
+    /*
+     * No permission that opens ANY section of the panel.
+     *
+     * It was `sales` until WP2, when the customers section made `users.view` a
+     * section key and `sales` therefore an administrator with a panel. The case
+     * reading this builds a role holding `catalog.view` alone instead.
+     */
     stranger: '720004',
   } as const;
 
@@ -389,7 +395,17 @@ describe('the reminder thresholds are configuration, not constants', () => {
   });
 
   it('shows an administrator with no settings permission no section at all', async () => {
-    await bindNewAdmin('reminder-stranger', TG.stranger, { roleKeys: ['sales'] });
+    /*
+     * A hand-made role holding `catalog.view` alone — NOT `sales`, which was the
+     * fixture until WP2 and stopped being one.
+     *
+     * This case needs an administrator with NO section of the panel at all, so
+     * `adminTurn` returns null and the tap below is answered exactly as a stranger's
+     * would be. `sales` was that until the customers section shipped: it holds
+     * `users.view`, so it now HAS a section and its panel opens — correctly, and a
+     * different case from this one. `catalog.view` opens nothing in Telegram.
+     */
+    await bindNewAdmin('reminder-stranger', TG.stranger, { permissions: ['catalog.view'] });
     const menu = await runtime().handle(
       tenantA,
       systemActor('bot'),
