@@ -57,6 +57,9 @@ const BOT_A = SEED_IDS.botA1 as BotInstanceId;
 /** Every callback prefix the section owns, spelled out rather than imported. */
 const PREFIX = {
   services: 'H:',
+  /** WP3: the browsable list, a screen INSIDE the services section rather than beside it. */
+  browse: 'H:b',
+  browsePage: 'H:b:',
   service: 'I:',
   sync: 'J:',
   resend: 'K:',
@@ -399,6 +402,146 @@ describe('the services section of the Telegram management panel', () => {
   });
 
   // =========================================================================
+  // The browsable list beside the queue (WP3)
+  // =========================================================================
+
+  it('offers the browse button even when the queue is empty', async () => {
+    /*
+     * An empty queue is the normal, healthy state, and until WP3 it was also a DEAD
+     * END: "nothing needs attention" with no route from there to the service a
+     * customer is asking about. The button belongs on both answers for that reason.
+     */
+    await activeService('browse-from-empty');
+    const empty = await runtime().handle(
+      tenantA,
+      systemActor('bot'),
+      tapUpdate(PREFIX.services, TG.owner),
+    );
+    expect(empty.replyKey).toBe('bot.admin.services_none');
+    expect(lastMessage(), 'the empty queue must still lead somewhere').toContain(PREFIX.browse);
+
+    const stranded = await activeService('browse-from-queue');
+    await ctx.container.database.db.execute(sql`
+      UPDATE services SET state = 'UNRECONCILED', provisioned_at = NULL WHERE id = ${stranded.id}`);
+    const queued = await runtime().handle(
+      tenantA,
+      systemActor('bot'),
+      tapUpdate(PREFIX.services, TG.owner),
+    );
+    expect(queued.replyKey).toBe('bot.admin.services_section');
+    expect(lastMessage()).toContain(PREFIX.browse);
+  });
+
+  it('browses every service, including the ones the queue will never show', async () => {
+    /*
+     * The whole difference between a queue and an inventory. The queue lists what
+     * nothing resolves on its own; a perfectly healthy ACTIVE, DELIVERED service is
+     * invisible to it — and is exactly the one a customer writes in about.
+     */
+    const healthy = await activeService('browse-healthy');
+
+    const queue = await runtime().handle(
+      tenantA,
+      systemActor('bot'),
+      tapUpdate(PREFIX.services, TG.owner),
+    );
+    expect(queue.replyKey, 'the queue has no work').toBe('bot.admin.services_none');
+    expect(lastMessage(), 'and must not list a healthy service').not.toContain(
+      `${PREFIX.service}${healthy.id}`,
+    );
+
+    const browse = await runtime().handle(
+      tenantA,
+      systemActor('bot'),
+      tapUpdate(PREFIX.browse, TG.owner),
+    );
+    expect(browse.replyKey).toBe('bot.admin.services_browse');
+    const body = lastMessage();
+    expect(body, 'the inventory reaches it').toContain(`${PREFIX.service}${healthy.id}`);
+    expect(body, 'labelled by the handle an operator types into the panel').toContain(
+      healthy.username,
+    );
+    /* The two bearer capabilities the row carries. A chat message is not revocable. */
+    const row = await services.findById(tenantA, healthy.id);
+    expect(body).not.toContain(row?.subscriptionRef);
+    expect(body).not.toContain(row?.providerClientId);
+  });
+
+  it('pages the browsable list rather than truncating it', async () => {
+    /*
+     * `ADMIN_QUEUE_LIMIT` is ten. Eleven services is one more than a page, which is the
+     * smallest fixture that can tell "paged" from "bounded and silently cut" — the
+     * defect WP1 named, where a truncated list reads as a complete one.
+     *
+     * The traversal is the SERVER's keyset, carried through the codec that makes a
+     * cursor fit Telegram's 64-byte callback limit. The assertion is that the second
+     * page holds rows the first did not, and that between them every service is
+     * reachable: a cursor that failed to advance would repeat the first page for ever.
+     */
+    const all: string[] = [];
+    for (let index = 0; index < 11; index += 1) {
+      all.push((await activeService(`browse-page-${String(index)}`)).id);
+    }
+
+    await runtime().handle(tenantA, systemActor('bot'), tapUpdate(PREFIX.browse, TG.owner));
+    const first = lastMessage();
+    const onFirst = all.filter((id) => first.includes(`${PREFIX.service}${id}`));
+    expect(onFirst, 'a full page').toHaveLength(10);
+
+    const token = /"H:b:([^"]+)"/.exec(first)?.[1];
+    expect(token, 'the more button carries a cursor').toBeDefined();
+
+    const second = await runtime().handle(
+      tenantA,
+      systemActor('bot'),
+      tapUpdate(`${PREFIX.browsePage}${token ?? ''}`, TG.owner),
+    );
+    expect(second.replyKey).toBe('bot.admin.services_browse');
+    const rest = lastMessage();
+    const onSecond = all.filter((id) => rest.includes(`${PREFIX.service}${id}`));
+    expect(onSecond, 'the eleventh is reachable').toHaveLength(1);
+    expect(onFirst, 'the second page is not the first again').not.toContain(onSecond[0]);
+    expect(new Set([...onFirst, ...onSecond]).size, 'every service is reachable').toBe(11);
+  });
+
+  it('refuses a browse cursor that is not one this codec minted', async () => {
+    /*
+     * `callback_data` is client-supplied text. A crafted token must be UNSUPPORTED at
+     * the BOUNDARY rather than an invalid cast inside a query — the rule every other
+     * paged section here follows. Nothing is authorized by a cursor, so this is about
+     * shape, not trust.
+     */
+    const result = await runtime().handle(
+      tenantA,
+      systemActor('bot'),
+      tapUpdate(`${PREFIX.browsePage}not-a-cursor`, TG.owner),
+    );
+    expect(result.replyKey).toBe('bot.unknown_command');
+  });
+
+  it("cannot browse another tenant's services", async () => {
+    /*
+     * The list is scoped to the TURN's tenant, and the index it reads leads with
+     * `tenant_id`. A browsable list is the worst place to get that wrong, because it
+     * returns rows nobody asked for by id.
+     */
+    const foreign = await serviceInTenantB();
+    await activeService('browse-own');
+
+    await runtime().handle(tenantA, systemActor('bot'), tapUpdate(PREFIX.browse, TG.owner));
+    expect(lastMessage()).not.toContain(foreign);
+  });
+
+  it('says so when there is nothing to browse, rather than drawing an empty keyboard', async () => {
+    const result = await runtime().handle(
+      tenantA,
+      systemActor('bot'),
+      tapUpdate(PREFIX.browse, TG.owner),
+    );
+    expect(result.replyKey).toBe('bot.admin.services_browse_none');
+  });
+
+  // =========================================================================
   // The exact lookup and the detail
   // =========================================================================
 
@@ -415,19 +558,111 @@ describe('the services section of the Telegram management panel', () => {
     expect(lastMessage()).toContain(service.username);
   });
 
-  it('answers a malformed or missing /service argument as unknown, not as a failed cast', async () => {
+  it('answers a malformed /service argument as unknown, not as a failed cast', async () => {
     /*
      * The id reaches a `uuid` column. `not-a-uuid` used to be a 500 at the cast on
      * every surface that took one; the shape here is the one the rest of the product
      * uses — one answer for unknown, malformed and not-yours alike.
+     *
+     * Both strings here are WELL-FORMED provider usernames — lowercase ASCII, digits
+     * and a dash, inside the length bounds — since WP3 gave the argument that second
+     * shape. So they are looked up and found to name nobody, which is `service_gone`.
+     * The case below covers the strings that are neither shape.
      */
-    for (const text of ['/service not-a-uuid', '/service', '/service 12345']) {
+    for (const text of ['/service not-a-uuid', '/service 12345']) {
       const result = await runtime().handle(
         tenantA,
         systemActor('bot'),
         adminUpdate(text, TG.owner),
       );
       expect(result.replyKey, text).toBe('bot.admin.service_gone');
+    }
+  });
+
+  it('repeats the syntax for an argument that is neither an id nor a name', async () => {
+    /*
+     * The syntax, NOT a prompt for the missing argument. A prompt that outlives its
+     * question swallows the next unrelated message, which is INCIDENT-FIN-001 — an
+     * ordinary chat message overwrote a production gateway setting that way.
+     *
+     * `@maryam` is what somebody pastes when they mean a Telegram username, and
+     * `سلام` is an ordinary word. Neither could ever be a service, so answering them
+     * with "no such service" would report a fact the lookup never established.
+     */
+    for (const text of ['/service', '/service @maryam', '/service سلام']) {
+      const result = await runtime().handle(
+        tenantA,
+        systemActor('bot'),
+        adminUpdate(text, TG.owner),
+      );
+      expect(result.replyKey, text).toBe('bot.admin.service_usage');
+    }
+  });
+
+  it('opens one service by the NAME on its panel, in either case', async () => {
+    /*
+     * The handle a customer's message actually contains. Until WP3 the only accepted
+     * argument was the internal uuid, which appears in no support conversation ever —
+     * `docs/wp3-service-audit.md` is blunt about it: service management was the most
+     * built of the three and the least reachable.
+     *
+     * Asked twice, as stored and uppercased, because the fold happens once at the
+     * boundary and an operator typing what the customer sent must reach the same row.
+     */
+    const service = await activeService('lookup-by-name');
+
+    for (const typed of [service.username, service.username.toUpperCase()]) {
+      const result = await runtime().handle(
+        tenantA,
+        systemActor('bot'),
+        adminUpdate(`/service ${typed}`, TG.owner),
+      );
+      expect(result.replyKey, typed).toBe('bot.admin.service');
+      expect(lastMessage(), typed).toContain(service.username);
+    }
+  });
+
+  it('answers a PREFIX of a name as unknown, rather than with the account it names', async () => {
+    /*
+     * The rule that decides the whole shape of this lookup, asserted rather than
+     * commented: a prefix search over account names is an enumeration of a panel's
+     * accounts. The prefix used is deliberately one the grammar ACCEPTS, so this
+     * measures the repository's equality and not the validator — a `like` in place of
+     * the `eq` opens the service and this fails.
+     */
+    const service = await activeService('lookup-prefix');
+
+    const result = await runtime().handle(
+      tenantA,
+      systemActor('bot'),
+      adminUpdate(`/service ${service.username.slice(0, 6)}`, TG.owner),
+    );
+    expect(result.replyKey).toBe('bot.admin.service_gone');
+  });
+
+  it('refuses /service for an administrator who does not hold services.view', async () => {
+    /*
+     * The PERMISSION decides before the shape of the argument is even considered, and
+     * that ordering is the point: an administrator without the key must not learn from
+     * this surface whether a string is a well-formed id, a name this product stores, or
+     * neither. One refusal for all three.
+     *
+     * `receipt_reviewer`, not an administrator with no section at all: one with no
+     * section never reaches `adminTurn` and gets `bot.unknown_command`, which the case
+     * above already covers and which would pass here for the wrong reason. A reviewer
+     * HAS a panel — the receipts section — and is inside the turn when this refusal is
+     * decided, which is the arm that matters.
+     */
+    await bindNewAdmin('reviewer-no-lookup', TG.support, { roleKeys: ['receipt_reviewer'] });
+    const service = await activeService('lookup-denied');
+
+    for (const text of [`/service ${service.id}`, `/service ${service.username}`, '/service']) {
+      const result = await runtime().handle(
+        tenantA,
+        systemActor('bot'),
+        adminUpdate(text, TG.support),
+      );
+      expect(result.replyKey, text).toBe('bot.admin.refused');
     }
   });
 
@@ -493,7 +728,20 @@ describe('the services section of the Telegram management panel', () => {
     );
 
     const text = String(lastBody()?.['text'] ?? '');
-    expect(text, 'the customer').toContain(customerA);
+    /*
+     * WHO, by the numeric Telegram identity — the handle a support conversation quotes.
+     *
+     * This asserted the internal UUID until WP3, which is what the runtime passed while
+     * the contract's own description said "the numeric identity this installation
+     * holds". A uuid names the right person to nobody, can be typed into no command
+     * here, and is a customer identifier handed to an administrator who may not be
+     * allowed to read customers at all. The negative half is the assertion: the uuid
+     * must be GONE, not merely accompanied.
+     */
+    expect(text, 'the customer, by the handle a support conversation quotes').toContain(
+      TG.customer,
+    );
+    expect(text, 'the internal customer uuid is not an identity').not.toContain(customerA);
     expect(text, 'the handle on the panel').toContain(service.username);
     expect(text, 'the panel').toContain(panelId);
     expect(text, 'the lifecycle state').toContain('ACTIVE');
@@ -503,6 +751,47 @@ describe('the services section of the Telegram management panel', () => {
      * from a completed one — the difference the legacy panel's "updated" erased.
      */
     expect(text, 'the latest operation and its state').toContain('SYNC_USAGE PLANNED');
+    /*
+     * And how much of the history that ONE operation is (WP3). A `PROVISION` and a
+     * `SYNC_USAGE` is two, well inside the bound, so the figure is exact and carries no
+     * `+`. A screen that printed one row of a history it had truncated would be
+     * presenting a fragment as the whole story.
+     */
+    expect(text, 'the operation count').toContain('2');
+    expect(text, 'the count is exact, so it carries no bound marker').not.toContain('50+');
+  });
+
+  it('links to the customer, and only for an administrator who may read them', async () => {
+    /*
+     * The other half of naming the person: one tap to the customer screen the customers
+     * section already owns, rather than a second rendering of a customer here.
+     *
+     * The callback is `9:v:<customerId>` — the customers section's own detail prefix —
+     * so the screen it opens charges `users.view` again when tapped. The button decides
+     * what is ADVERTISED, never what is allowed, which is why the negative arm matters:
+     * an administrator holding `services.view` alone gets no button and no identity,
+     * because asking for the customer would only manufacture a denial per screen they
+     * open.
+     */
+    const service = await activeService('detail-customer');
+
+    await runtime().handle(
+      tenantA,
+      systemActor('bot'),
+      tapUpdate(`${PREFIX.service}${service.id}`, TG.owner),
+    );
+    expect(lastMessage(), 'the owner holds users.view').toContain(`9:v:${customerA}`);
+
+    await bindNewAdmin('services-only-detail', TG.viewer, { permissions: ['services.view'] });
+    await runtime().handle(
+      tenantA,
+      systemActor('bot'),
+      tapUpdate(`${PREFIX.service}${service.id}`, TG.viewer),
+    );
+    const viewerText = lastMessage();
+    expect(viewerText, 'a button whose every tap is a denial').not.toContain('9:v:');
+    expect(viewerText, 'nor the identity behind it').not.toContain(TG.customer);
+    expect(viewerText, 'and never the internal uuid instead').not.toContain(customerA);
   });
 
   it('carries no subscription URL, subscription ref, client id or panel credential', async () => {

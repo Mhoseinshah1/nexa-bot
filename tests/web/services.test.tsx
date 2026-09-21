@@ -7,6 +7,7 @@ import {
 } from '@nexa/contracts';
 import type { ReactElement } from 'react';
 import { ServiceDetailPage, ServicesPage } from '../../apps/web/src/pages/services';
+import { formatNumber } from '../../apps/web/src/format';
 import { resolve } from '../../apps/web/src/app';
 import { PLANNED_SURFACES } from '../../apps/web/src/pages/planned';
 import { renderPage, stubApi } from './harness';
@@ -224,6 +225,56 @@ describe('the service list', () => {
 
     expect(await screen.findByText('هنوز سرویسی ساخته نشده است.')).toBeInTheDocument();
     expect(screen.queryByRole('table')).toBeNull();
+  });
+
+  it('asks the server for the exact name, and sends it unfolded', async () => {
+    /*
+     * The filter WP3 added, and the reason it exists: a customer quotes the name on
+     * their account, never the internal id, so until this box existed the one handle a
+     * support conversation contains matched no search here.
+     *
+     * Sent as TYPED. `providerUsernameLookupSchema` folds and validates once, at the
+     * server's boundary; a client that lowercased it first would be the second opinion
+     * about what a username is that `ServiceSearch` names, and the two would drift the
+     * first time either changed.
+     */
+    const api = stubApi(list([service()]));
+    renderPage(
+      <ServicesPage
+        route={{
+          path: '/services',
+          query: new URLSearchParams({ providerUsername: 'NX-7F3A91' }),
+        }}
+        denied={false}
+      />,
+    );
+    await screen.findByText('nx-7f3a91');
+
+    expect(api.calls[0]?.url).toContain('providerUsername=NX-7F3A91');
+  });
+
+  it('refuses a name the server would refuse, without spending a request on it', async () => {
+    /*
+     * The box checks against the SAME schema the endpoint applies — imported, not
+     * copied by eye, which is how a client comes to reject a name the server accepts.
+     *
+     * `@maryam` is what somebody pastes when they mean a Telegram username. Refusing it
+     * here is not duplicated authorization: the server validates it again, and this
+     * only stops a request that could never have matched.
+     */
+    const api = stubApi(list([service()]));
+    renderPage(<ServicesPage route={LIST_ROUTE} denied={false} />);
+    await screen.findByText('nx-7f3a91');
+    const before = api.calls.length;
+
+    const box = screen.getByLabelText('نام کاربری روی پنل');
+    fireEvent.change(box, { target: { value: '@maryam' } });
+    fireEvent.click(screen.getByRole('button', { name: 'جست‌وجو' }));
+
+    expect(
+      await screen.findByText('این نام کاربری از شکلی نیست که اینجا ذخیره می‌شود.'),
+    ).toBeInTheDocument();
+    expect(api.calls.length, 'a request was spent on a string that cannot be one').toBe(before);
   });
 
   /**
@@ -560,6 +611,49 @@ describe('the service detail', () => {
     renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
 
     expect(await screen.findByText('هیچ عملیاتی روی این سرویس ثبت نشده است.')).toBeInTheDocument();
+  });
+
+  it('says the history was cut, with the bound the SERVER applied', async () => {
+    /*
+     * What stood here said a service with dozens of operations "is itself the problem"
+     * — an opinion, and a wrong one: a service renewed monthly for three years earns
+     * renew, add-traffic and sync operations by ordinary use, and the retry ceilings
+     * bound ATTEMPTS, not a lifetime. Worse, it told an operator nothing about the one
+     * thing they needed to know, which is whether they were looking at all of it.
+     *
+     * The figure comes from the RESPONSE. A `7` here rather than the production `50`
+     * is the assertion: a page that hard-coded the bound would print `50` and fail.
+     */
+    stubApi(detail({}, [operation()], { limit: 7, hasMore: true }));
+    renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
+
+    const notice = await screen.findByText(/عملیات قدیمی‌تری هم روی این سرویس ثبت شده/);
+    /*
+     * Read off the NOTICE, not the document: a digit appears all over this page, so a
+     * bare `getByText` would match a traffic figure and pass whatever the notice said.
+     *
+     * Through `formatNumber`, because WHICH numeral system renders is not what this
+     * case is about — jsdom's ICU data decides that, and pinning Persian digits here
+     * would make the case fail on a build with a different ICU. What it is about is
+     * WHOSE number it is: `7` comes from the response, and `50` is the production
+     * default a page that hard-coded the bound would print.
+     */
+    expect(notice.textContent).toContain(formatNumber(7));
+    expect(notice.textContent, 'the bound was hard-coded').not.toContain(formatNumber(50));
+  });
+
+  it('prints no truncation notice for a history that was NOT cut', async () => {
+    /*
+     * The half that makes the case above mean something. `operations.length === limit`
+     * is the wrong test and is why the response carries `hasMore`: a service with
+     * exactly the bound has a full page and nothing behind it, and a notice there sends
+     * an operator looking for rows that do not exist.
+     */
+    stubApi(detail({}, [operation()], { limit: 1, hasMore: false }));
+    renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
+    await screen.findByRole('table');
+
+    expect(screen.queryByText(/عملیات قدیمی‌تری هم روی این سرویس ثبت شده/)).toBeNull();
   });
 });
 
