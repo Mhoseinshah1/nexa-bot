@@ -7,6 +7,8 @@ import {
   type CustomerStatus,
   type CustomerSummaryResponse,
   type LedgerDirection,
+  type OrderSummaryResponse,
+  type ServiceSummaryResponse,
   type WalletEntrySummaryResponse,
 } from '@nexa/contracts';
 import {
@@ -14,6 +16,8 @@ import {
   blockCustomer,
   fetchCustomer,
   fetchCustomers,
+  fetchOrders,
+  fetchServices,
   fetchWallet,
   fetchWalletEntries,
   unblockCustomer,
@@ -24,6 +28,20 @@ import { mayRequest, queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
 import { messageFor } from './settings';
+/*
+ * The OTHER two screens' badge vocabularies, borrowed rather than copied.
+ *
+ * A second `REFUNDED: 'violet'` here would be a second answer to what an order
+ * state looks like, and the two would drift the first time one of them gained a
+ * state. `panels.tsx` borrows the product and service maps for the same reason.
+ */
+import { STATE_LABELS as ORDER_STATE_LABELS, STATE_TONES as ORDER_STATE_TONES } from './orders';
+import {
+  DELIVERY_LABELS as SERVICE_DELIVERY_LABELS,
+  DELIVERY_TONES as SERVICE_DELIVERY_TONES,
+  STATE_LABELS as SERVICE_STATE_LABELS,
+  STATE_TONES as SERVICE_STATE_TONES,
+} from './services';
 import {
   Badge,
   Banner,
@@ -48,12 +66,18 @@ import {
  * Customers — the first product surface this codebase genuinely operates.
  *
  * What this page does NOT draw is as deliberate as what it does. There is no
- * service list, no discount and no reseller column — because none of those
- * entities exists in this release. A `0` in any of those places would be a
- * measurement of something unbuilt, which is the legacy statistics screen
- * counting configured panels as connected. The scope card says so in words
- * instead, which is what `planned.tsx` argues for: an empty table claims "you
- * have none of these", and that is also false.
+ * discount and no reseller column — because neither entity exists in this
+ * release. A `0` in either place would be a measurement of something unbuilt,
+ * which is the legacy statistics screen counting configured panels as
+ * connected. The scope card says so in words instead, which is what
+ * `planned.tsx` argues for: an empty table claims "you have none of these", and
+ * that is also false.
+ *
+ * The clause above used to name SERVICES too, and had been false since 4D: the
+ * detail page now draws this customer's orders and this customer's services,
+ * each as a paged view of the very list `/orders` and `/services` page, filtered
+ * by `customerId`. Neither is a count and neither is a "recent N" — see
+ * `CustomerOrdersCard` for why that distinction is the whole design.
  *
  * The wallet IS drawn, as of 4C, and its balance is DERIVED — summed from the
  * ledger on every read. There is no stored balance for this page to disagree
@@ -454,6 +478,8 @@ export function UserDetailPage({
   mayViewWallet,
   mayCredit,
   mayDebit,
+  mayViewOrders,
+  mayViewServices,
   denied,
 }: {
   id: string;
@@ -461,6 +487,17 @@ export function UserDetailPage({
   mayViewWallet: boolean;
   mayCredit: boolean;
   mayDebit: boolean;
+  /*
+   * `orders.view` and `services.view`, passed separately and never derived.
+   *
+   * They are not implied by `users.view`: a role that may read customers need
+   * not be a role that may read what they bought or what runs on a panel for
+   * them. Each card draws a denial sentence naming its own key, and the server
+   * charges it regardless — the missing card is a courtesy, never the
+   * enforcement.
+   */
+  mayViewOrders: boolean;
+  mayViewServices: boolean;
   denied: boolean;
 }) {
   const notify = useToast();
@@ -629,6 +666,10 @@ export function UserDetailPage({
               mayDebit={mayDebit}
             />
 
+            <CustomerOrdersCard customerId={id} mayView={mayViewOrders} />
+
+            <CustomerServicesCard customerId={id} mayView={mayViewServices} />
+
             <Card title={t('web.users_scope_title')}>
               <p className="muted">{t('web.users_scope_body')}</p>
             </Card>
@@ -636,6 +677,288 @@ export function UserDetailPage({
         )}
       </StateSwitch>
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// This customer's orders and services
+// ---------------------------------------------------------------------------
+
+/**
+ * How many rows either embedded list shows at a time.
+ *
+ * Smaller than the top-level screens' 25, because this is one card among five on
+ * a detail page rather than the whole screen. The pager makes the bound
+ * honest — an operator can always reach the next page — which is what a bounded
+ * list owes and a "recent N" with no pager does not.
+ */
+const EMBEDDED_PAGE = 10;
+
+/**
+ * The cursor trail both embedded cards page with.
+ *
+ * A single `cursor` was the first version, reset to null on Previous — which is what
+ * `WalletCard` and `/services` do, and what a Codex round on this PR named: after two
+ * advances, Previous jumped from page three straight to page one and page two could not
+ * be reached at all. The button says "the adjacent page" in both vocabularies —
+ * «تازه‌تر» on the ascending card and «قدیمی‌تر» on the descending one — so delivering
+ * the FIRST page is a control that does something other than what it is labelled, which
+ * is the class of thing this codebase refuses everywhere else.
+ *
+ * So it keeps the stack `OrdersPage` keeps, and Previous pops one. There is no filter
+ * signature to key it on, unlike `OrdersPage`: an embedded card is pinned to one
+ * customer for its whole life, and the page is keyed by that customer's id at the route,
+ * so a different customer is a different component instance with an empty trail.
+ */
+function useCursorTrail(): {
+  readonly cursor: string | undefined;
+  readonly hasPrevious: boolean;
+  readonly back: () => void;
+  readonly forward: (next: string | null) => void;
+} {
+  const [trail, setTrail] = useState<readonly string[]>([]);
+  return {
+    cursor: trail.length > 0 ? trail[trail.length - 1] : undefined,
+    hasPrevious: trail.length > 0,
+    back: () => setTrail((current) => current.slice(0, -1)),
+    /*
+     * A null next cursor pushes NOTHING.
+     *
+     * `CursorPager` disables the button when there is no next page, so this is
+     * unreachable through the UI — and it is guarded anyway, because pushing a
+     * placeholder would make Previous pop a page that was never visited.
+     */
+    forward: (next) => {
+      if (next !== null) setTrail((current) => [...current, next]);
+    },
+  };
+}
+
+/**
+ * This customer's orders.
+ *
+ * ## Why this is a paged list and not a count or a "latest five"
+ *
+ * A count would be a number this page computes from a page of rows, and there is
+ * no endpoint that returns one — inventing it from `items.length` is the legacy
+ * statistics screen, which counted configured panels as connected. A "latest
+ * five" would be worse: `/orders` pages ASCENDING, oldest first, and a card
+ * labelled "latest" over the first page of an ascending traversal shows a
+ * customer's FIRST five orders while claiming they are their last. The
+ * divergence is deliberate (`drizzle-service.repository.ts` records the owner's
+ * decision that `/users`, `/orders` and `/products` page one way and
+ * `/services` the other), so the card states the direction in words and hands
+ * the pager the same swapped labels `/orders` uses.
+ *
+ * ## It calls the same endpoint the screen calls
+ *
+ * `GET /orders?customerId=…` — the filter has existed since 4B and is charged
+ * `orders.view` inside `OrderService.list`, so this card adds no read path and
+ * no new authorization surface. The "all orders" link below opens the same
+ * query on the full screen, which is where the state filter and the pager trail
+ * live.
+ */
+function CustomerOrdersCard({ customerId, mayView }: { customerId: string; mayView: boolean }) {
+  const onLink = useLinkHandler();
+  const pages = useCursorTrail();
+
+  const orders = useQuery({
+    queryKey: ['customer-orders', customerId, pages.cursor ?? null],
+    queryFn: () =>
+      fetchOrders({
+        customerId,
+        limit: EMBEDDED_PAGE,
+        ...(pages.cursor === undefined ? {} : { cursor: pages.cursor }),
+      }),
+    enabled: mayView,
+  });
+
+  if (!mayView) {
+    return (
+      <Card title={t('web.user_orders_title')}>
+        <Banner tone="info">{t('web.user_orders_denied')}</Banner>
+      </Card>
+    );
+  }
+
+  const columns: readonly Column<OrderSummaryResponse>[] = [
+    {
+      key: 'title',
+      header: t('web.order_line'),
+      render: (row) => (
+        <a href={`/orders/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
+          {/* The SNAPSHOT title, not a lookup. What the customer bought. */}
+          {row.lineTitle}
+        </a>
+      ),
+    },
+    {
+      key: 'state',
+      header: t('web.status'),
+      render: (row) => (
+        <Badge tone={ORDER_STATE_TONES[row.state]}>{t(ORDER_STATE_LABELS[row.state])}</Badge>
+      ),
+    },
+    {
+      key: 'total',
+      header: t('web.order_total'),
+      render: (row) => <Money value={{ amountMinor: row.totalAmount, currency: row.currency }} />,
+    },
+    {
+      key: 'created',
+      header: t('web.order_created_at'),
+      render: (row) => <span className="nowrap">{formatTimestamp(row.createdAt)}</span>,
+    },
+  ];
+
+  return (
+    <Card title={t('web.user_orders_title')}>
+      <StateSwitch query={orders}>
+        {orders.data === undefined ? null : orders.data.orders.length === 0 ? (
+          <Empty title={t('web.user_orders_empty')} />
+        ) : (
+          <>
+            <DataTable
+              caption={t('web.user_orders_title')}
+              columns={columns}
+              rows={orders.data.orders}
+              rowKey={(row) => row.id}
+            />
+            {/*
+              The labels are SWAPPED, exactly as on `/orders`.
+              `nextCursor` walks towards newer rows here, so the button that
+              fetches it says "newer". Leaving the defaults on an ascending
+              traversal is the defect `services.tsx` warns about in reverse.
+            */}
+            <CursorPager
+              shown={orders.data.orders.length}
+              hasPrevious={pages.hasPrevious}
+              hasNext={orders.data.nextCursor !== null}
+              onPrevious={pages.back}
+              onNext={() => pages.forward(orders.data?.nextCursor ?? null)}
+              nextLabel="web.newer"
+              previousLabel="web.older"
+            />
+          </>
+        )}
+      </StateSwitch>
+      <p className="muted">{t('web.user_orders_hint')}</p>
+      <a href={`/orders?customerId=${encodeURIComponent(customerId)}`} onClick={onLink}>
+        {t('web.user_orders_all')}
+      </a>
+    </Card>
+  );
+}
+
+/**
+ * This customer's services.
+ *
+ * The same shape as the orders card and the same reasoning, with one difference
+ * that matters: `/services` pages DESCENDING, so the pager keeps its default
+ * labels and the hint says newest-first. The two cards sit one above the other
+ * with pagers whose buttons mean opposite things, which is precisely why each
+ * one says which way it goes rather than leaving it to be inferred.
+ *
+ * Two columns and not one, because `state` and `deliveryState` are two facts:
+ * a provisioned account whose Telegram message bounced is `ACTIVE` and `FAILED`,
+ * and a card that merged them would show it as unprovisioned — for which the
+ * obvious remedy is to provision it again, on somebody's panel, a second time.
+ * `services.tsx` states the rule; this card obeys it rather than restating it.
+ *
+ * No subscription link and no masked stand-in: `serviceSummarySchema` does not
+ * carry `subscriptionUrl`, `subscriptionRef` or `providerClientId`, so there is
+ * nothing here to leak and no edit to this file that could start leaking one.
+ */
+function CustomerServicesCard({ customerId, mayView }: { customerId: string; mayView: boolean }) {
+  const onLink = useLinkHandler();
+  const pages = useCursorTrail();
+
+  const services = useQuery({
+    queryKey: ['customer-services', customerId, pages.cursor ?? null],
+    queryFn: () =>
+      fetchServices({
+        customerId,
+        limit: EMBEDDED_PAGE,
+        ...(pages.cursor === undefined ? {} : { cursor: pages.cursor }),
+      }),
+    enabled: mayView,
+  });
+
+  if (!mayView) {
+    return (
+      <Card title={t('web.user_services_title')}>
+        <Banner tone="info">{t('web.user_services_denied')}</Banner>
+      </Card>
+    );
+  }
+
+  const columns: readonly Column<ServiceSummaryResponse>[] = [
+    {
+      key: 'username',
+      header: t('web.service_username'),
+      render: (row) => (
+        <a href={`/services/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
+          <Ltr>{row.providerUsername}</Ltr>
+        </a>
+      ),
+    },
+    {
+      key: 'state',
+      header: t('web.service_state'),
+      render: (row) => (
+        <Badge tone={SERVICE_STATE_TONES[row.state]}>{t(SERVICE_STATE_LABELS[row.state])}</Badge>
+      ),
+    },
+    {
+      key: 'delivery',
+      header: t('web.service_delivery'),
+      render: (row) => (
+        <Badge tone={SERVICE_DELIVERY_TONES[row.deliveryState]}>
+          {t(SERVICE_DELIVERY_LABELS[row.deliveryState])}
+        </Badge>
+      ),
+    },
+    {
+      key: 'expires',
+      header: t('web.service_expires_at'),
+      render: (row) =>
+        row.expiresAt === null ? (
+          <Dash />
+        ) : (
+          <span className="nowrap">{formatTimestamp(row.expiresAt)}</span>
+        ),
+    },
+  ];
+
+  return (
+    <Card title={t('web.user_services_title')}>
+      <StateSwitch query={services}>
+        {services.data === undefined ? null : services.data.services.length === 0 ? (
+          <Empty title={t('web.user_services_empty')} />
+        ) : (
+          <>
+            <DataTable
+              caption={t('web.user_services_title')}
+              columns={columns}
+              rows={services.data.services}
+              rowKey={(row) => row.id}
+            />
+            {/* Default labels: this traversal runs newest to oldest. */}
+            <CursorPager
+              shown={services.data.services.length}
+              hasPrevious={pages.hasPrevious}
+              hasNext={services.data.nextCursor !== null}
+              onPrevious={pages.back}
+              onNext={() => pages.forward(services.data?.nextCursor ?? null)}
+            />
+          </>
+        )}
+      </StateSwitch>
+      <p className="muted">{t('web.user_services_hint')}</p>
+      <a href={`/services?customerId=${encodeURIComponent(customerId)}`} onClick={onLink}>
+        {t('web.user_services_all')}
+      </a>
+    </Card>
   );
 }
 

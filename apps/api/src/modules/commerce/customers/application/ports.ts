@@ -124,12 +124,17 @@ export interface CustomerRepository {
 
   findById(scope: ScopeContext, id: UserId, tx?: unknown): Promise<CustomerRecord | null>;
 
-  findByTelegramId(
-    scope: TenantContext,
-    telegramUserId: string,
-    tx?: unknown,
-  ): Promise<CustomerRecord | null>;
-
+  /*
+   * There is deliberately no `findByTelegramId`.
+   *
+   * One existed, with an implementation, and had ZERO callers anywhere in the
+   * repository including the tests — so it was a promise on a port that nothing
+   * kept, and the next author to need "find this customer by their numeric id"
+   * would have had two ways to ask: this, and `list` with its exact
+   * `telegramUserId` filter. Two ways to ask one question is how two answers
+   * start, and `list` is the one the operator search and the Telegram
+   * administrator section both go through, so it is the one that stays.
+   */
   list(
     scope: TenantContext,
     search: CustomerSearch,

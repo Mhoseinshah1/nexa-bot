@@ -151,21 +151,6 @@ export class DrizzleCustomerRepository implements CustomerRepository {
     return row === undefined ? null : toRecord(row);
   }
 
-  async findByTelegramId(
-    scope: TenantContext,
-    telegramUserId: string,
-    tx?: unknown,
-  ): Promise<CustomerRecord | null> {
-    const tenantId = requireTenantId(scope);
-    const rows = await this.exec(tx)
-      .select()
-      .from(customers)
-      .where(and(eq(customers.tenantId, tenantId), eq(customers.telegramUserId, telegramUserId)))
-      .limit(1);
-    const row = rows[0];
-    return row === undefined ? null : toRecord(row);
-  }
-
   /**
    * One page, by keyset.
    *

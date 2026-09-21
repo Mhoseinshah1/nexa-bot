@@ -39,9 +39,14 @@ import type {
  *
  * `toSummary` below is the only thing that turns a `CustomerRecord` into JSON, and what
  * it does NOT carry is the point: no wallet balance, no order count, no service list, no
- * payment history. None of those exist in this phase, and a field that reported `0` for
- * something unimplemented is the legacy system's "total revenue" disagreeing with itself
- * by 38% — two surfaces computing a number neither of them owns.
+ * payment history. That is no longer because those entities are unbuilt — wallets came
+ * in 4C, orders in 4B, services in 4D — but because this response is a CUSTOMER row and
+ * nothing else. Each of those is read from the endpoint that owns it (`/users/:id/wallet`,
+ * `/orders?customerId=…`, `/services?customerId=…`), which charges its own permission:
+ * `users.view` is not `orders.view`, and a customer response that carried an order count
+ * would hand one to a reader the guard would have refused. A summed figure here would
+ * also be a number computed by a surface that does not own it, which is the legacy
+ * system's "total revenue" disagreeing with itself by 38%.
  */
 @Controller(`${API_PREFIX}`)
 export class CustomersController {

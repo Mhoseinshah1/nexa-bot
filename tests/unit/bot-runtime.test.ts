@@ -852,6 +852,32 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.admin.admins_none',
       'bot.admin.approve_button',
       'bot.admin.approved',
+      /*
+       * WP2's eleven, the customers section. Reviewed against the same rule, and
+       * against the one that matters most for a screen about a PERSON: not one of
+       * them carries anything the customer bought. No wallet balance, no order, no
+       * service, no subscription reference, no provider username — each of those is a
+       * different permission, and this message is as forwardable as the rest.
+       *
+       * `bot.admin.customers_section` names `/customer <telegram id>`, which
+       * `intentOf` parses and `telegram-command-menu.test.ts` proves is deliberately
+       * unregistered — the same standing the three commands above it have.
+       *
+       * `bot.admin.customer_gone` is ONE answer for unknown, malformed, another
+       * tenant's and not-matched, so an administrator cannot use this surface to
+       * discover whether an id names anybody here.
+       */
+      'bot.admin.customer_block_button',
+      'bot.admin.customer_detail',
+      'bot.admin.customer_gone',
+      'bot.admin.customer_status_changed',
+      'bot.admin.customer_unblock_button',
+      'bot.admin.customer_usage',
+      'bot.admin.customers_back_button',
+      'bot.admin.customers_button',
+      'bot.admin.customers_more_button',
+      'bot.admin.customers_none',
+      'bot.admin.customers_section',
       'bot.admin.linked',
       'bot.admin.panel',
       /*

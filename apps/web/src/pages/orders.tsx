@@ -59,7 +59,12 @@ import {
  * answers.
  */
 
-const STATE_LABELS: Readonly<Record<OrderState, WebKey>> = {
+/*
+ * Exported, because `/users/:id` draws this customer's orders and a second copy of
+ * this map is a second answer to "what does REFUNDED look like". `panels.tsx` already
+ * borrows the product and service maps the same way, for the same reason.
+ */
+export const STATE_LABELS: Readonly<Record<OrderState, WebKey>> = {
   DRAFT: 'web.order_state_draft',
   AWAITING_PAYMENT: 'web.order_state_awaiting_payment',
   PAID: 'web.order_state_paid',
@@ -68,7 +73,7 @@ const STATE_LABELS: Readonly<Record<OrderState, WebKey>> = {
   REFUNDED: 'web.order_state_refunded',
 };
 
-const STATE_TONES: Readonly<Record<OrderState, Tone>> = {
+export const STATE_TONES: Readonly<Record<OrderState, Tone>> = {
   DRAFT: 'neutral',
   AWAITING_PAYMENT: 'warn',
   PAID: 'ok',

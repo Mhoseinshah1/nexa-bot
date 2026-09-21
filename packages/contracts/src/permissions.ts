@@ -44,8 +44,32 @@ export const PERMISSIONS = [
   // Users
   p('users.view', 'View customer accounts', 'LOW'),
   p('users.search', 'Search customers', 'LOW'),
+  /*
+   * DECLARED AND CHARGED BY NOTHING, and that is the product's answer rather
+   * than an unfinished feature.
+   *
+   * Every attribute a customer has — username, first name, last name, language
+   * — arrives FROM Telegram on the inbound update and is overwritten by the
+   * next one (`drizzle-customer.repository.ts`, the `DO UPDATE` set). An
+   * operator edit would therefore survive until that customer next opened the
+   * bot, which is worse than no edit at all: it looks like a correction and
+   * silently is not.
+   *
+   * What an operator can actually change about a customer is their STATUS, and
+   * that is `users.block`. The key stays declared and seeded because removing a
+   * permission strands the role rows that grant it; what it must not acquire is
+   * a surface that pretends to work. See `docs/wp2-customer-audit.md`.
+   */
   p('users.edit', 'Edit customer attributes'),
   p('users.block', 'Block or unblock a customer', 'HIGH'),
+  /*
+   * Phase 7, both of them, and neither is charged by anything here. There is no
+   * tier column, no tier type and no tier surface; there is no mass tool at all.
+   * `CLAUDE.md` forbids building either without an explicit instruction, and the
+   * research calls the mass credit "the single most dangerous control found
+   * anywhere in MirzaBot" — no preview, no affected count, no confirmation, no
+   * undo. If it is ever built it needs the ADR-0010 shape.
+   */
   p('users.tier.change', 'Change a customer tier', 'HIGH'),
   p('users.wallet.credit', 'Credit a customer wallet', 'HIGH'),
   p('users.wallet.credit.large', 'Credit a wallet above the large-amount threshold', 'CRITICAL'),

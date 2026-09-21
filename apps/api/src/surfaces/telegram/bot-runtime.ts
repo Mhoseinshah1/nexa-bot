@@ -7,6 +7,7 @@ import {
   money,
   PAYMENT_RECEIPT_MAX_PER_PAYMENT,
   plainAmount,
+  telegramUserIdSchema,
   uuidV7Schema,
   USAGE_REMINDER_PERCENT_MAX,
   USAGE_REMINDER_PERCENT_MIN,
@@ -238,6 +239,27 @@ export const BOT_INTENTS = [
   'ADMIN_REMINDERS',
   'ADMIN_REMINDER_EDIT',
   'ADMIN_REMINDER_SET',
+  /*
+   * WP2 — the customers section.
+   *
+   * Six intents. `ADMIN_CUSTOMERS` and `ADMIN_CUSTOMERS_PAGE` are one paged list;
+   * `ADMIN_CUSTOMER` is one person by their internal id, reached by tapping a row;
+   * `ADMIN_CUSTOMER_FIND` is the same screen reached by the numeric Telegram id an
+   * operator quotes from a support conversation, which is a DIFFERENT question and
+   * charges `users.search` on top of `users.view` because the permission catalogue
+   * already separates them. `ADMIN_CUSTOMER_BLOCK` and `ADMIN_CUSTOMER_UNBLOCK` are the
+   * two writes, and there is no third because `CUSTOMER_STATUSES` has no third member.
+   *
+   * The lookup is a COMMAND carrying its argument, not a prompt that captures the next
+   * message — the rule `/link`, `/role` and `/service` state, and INCIDENT-FIN-001 is
+   * what the other kind does when it outlives its question.
+   */
+  'ADMIN_CUSTOMERS',
+  'ADMIN_CUSTOMERS_PAGE',
+  'ADMIN_CUSTOMER',
+  'ADMIN_CUSTOMER_FIND',
+  'ADMIN_CUSTOMER_BLOCK',
+  'ADMIN_CUSTOMER_UNBLOCK',
   'ADMIN_LINK',
   'ADMIN_ROLE',
   'UNSUPPORTED',
@@ -625,6 +647,55 @@ const PANELS_VIEW_PERMISSION = 'panels.view' as PermissionKey;
  */
 const SETTINGS_VIEW_PERMISSION = 'settings.view' as PermissionKey;
 const PANELS_EDIT_PERMISSION = 'panels.edit' as PermissionKey;
+/*
+ * The two the customers section reads, and the same rule a fourth time: these decide
+ * which BUTTONS exist, never what is allowed. `CustomerService.list` and `.get` charge
+ * `users.view`; `.list` charges `users.search` ON TOP of it when the search names a
+ * Telegram id, which is why the lookup command is a different question from the list;
+ * `.block` and `.unblock` charge `users.block` and re-check it inside the writing
+ * transaction. A crafted `9:` callback from an administrator holding none of them is
+ * refused there and leaves the denial record.
+ *
+ * `users.edit` is deliberately absent. It is declared, it is seeded to `operator`, and
+ * nothing charges it — see the comment above it in `packages/contracts/src/permissions.ts`
+ * for why that is the product's answer rather than an unfinished feature. Drawing an
+ * edit button here would be the first thing to make it a lie.
+ */
+const CUSTOMERS_VIEW_PERMISSION = 'users.view' as PermissionKey;
+const CUSTOMERS_BLOCK_PERMISSION = 'users.block' as PermissionKey;
+
+/**
+ * The key each section of the management panel is ADVERTISED by, in one list.
+ *
+ * Two readers: `adminTurn`, which answers as a customer when an administrator holds
+ * none of them, and `isAdmin`, which decides whether `/start` draws the panel row at
+ * all. The comment on `isAdmin` already said these two must agree — "the keyboard must
+ * not promise a panel the turn would refuse, and it must not withhold one from an
+ * administrator who has a section" — and they had stopped agreeing: the reminders
+ * section was added with `settings.view` and only one of the two lists learned about
+ * it, so an administrator whose only section was the reminders got no panel row and no
+ * way to reach one from the keyboard. That is precisely the "missing arm" the comment
+ * names, hand-maintained in two places.
+ *
+ * So there is one list and both read it, the way `ADMIN_INTENTS` is derived rather than
+ * listed. Adding a section means adding one entry here, and it cannot half-land.
+ *
+ * `users.block`, `panels.edit`, `services.edit` and the rest are deliberately absent:
+ * this list is what OPENS a section, never what may be done inside one.
+ */
+const PANEL_SECTION_PERMISSIONS: readonly PermissionKey[] = [
+  RECEIPTS_VIEW_PERMISSION,
+  ADMINS_VIEW_PERMISSION,
+  SERVICES_VIEW_PERMISSION,
+  PANELS_VIEW_PERMISSION,
+  SETTINGS_VIEW_PERMISSION,
+  CUSTOMERS_VIEW_PERMISSION,
+];
+
+/** Whether these permissions open any section of the panel. */
+function hasAnyPanelSection(permissions: ReadonlySet<PermissionKey>): boolean {
+  return PANEL_SECTION_PERMISSIONS.some((key) => permissions.has(key));
+}
 
 /**
  * The intents `adminTurn` owns, so `act` has one branch rather than nineteen.
@@ -714,6 +785,48 @@ export const ADMIN_REMINDER_SET_CALLBACK_PREFIX = '2:';
  */
 export const ADMIN_ADMIN_CALLBACK_PREFIX = '6:';
 export const ADMIN_ADMIN_STATUS_CALLBACK_PREFIX = '7:';
+
+/*
+ * The customers section, WP2. The LAST two free prefixes on this surface.
+ *
+ * Fifty-two letters and eight digits were already spoken for, so these are `8:` and
+ * `9:` and there is no `10:` — a two-character prefix would break the one property
+ * `intentOf` relies on, that no prefix is a prefix of another. A seventh section will
+ * need that registry reorganised rather than extended, and this comment is where the
+ * next author finds that out before designing around a prefix that does not exist.
+ *
+ * So the two carry more than one meaning each, and both are disambiguated at the
+ * boundary rather than downstream:
+ *
+ * - `8:` alone is the section; `8:<token>` is a page of it. One meaning — "show me a
+ *   page of customers" — with the payload deciding which page, so there is no reading
+ *   of this prefix that acts on anybody.
+ * - `9:<code>:<uuid>` is one customer, where the code says which of the three things to
+ *   do with them. A TABLE maps code to intent, for the reason `ADMIN_SERVICE_CALLBACKS`
+ *   gives: three near-identical `if`s is three chances to point a code at the wrong
+ *   intent, and the one that matters is the code that BLOCKS. 39 bytes at the longest,
+ *   the same shape `7:` uses for an administrator's status.
+ */
+export const ADMIN_CUSTOMERS_CALLBACK_PREFIX = '8:';
+export const ADMIN_CUSTOMER_CALLBACK_PREFIX = '9:';
+
+/**
+ * What a `9:` code means, as a table rather than a chain of comparisons.
+ *
+ * `v` reads, `b` blocks, `u` unblocks. Validated at the boundary against this map, so
+ * an unknown code is UNSUPPORTED and never becomes an intent — the same treatment the
+ * reminder codes, the username toggles and the administrator statuses get.
+ */
+const ADMIN_CUSTOMER_CODES = {
+  v: 'ADMIN_CUSTOMER',
+  b: 'ADMIN_CUSTOMER_BLOCK',
+  u: 'ADMIN_CUSTOMER_UNBLOCK',
+} as const;
+type AdminCustomerCode = keyof typeof ADMIN_CUSTOMER_CODES;
+
+function isAdminCustomerCode(value: string): value is AdminCustomerCode {
+  return Object.hasOwn(ADMIN_CUSTOMER_CODES, value);
+}
 
 export const ADMIN_USERNAME_CALLBACK_PREFIX = '3:';
 export const ADMIN_USERNAME_TOGGLE_CALLBACK_PREFIX = '4:';
@@ -964,6 +1077,102 @@ function adminServiceButtons(
 }
 
 /**
+ * What a customer's row says, in the order an operator recognises them.
+ *
+ * `@username` when there is one, else the name Telegram reported, else the numeric id.
+ * A customer may have none of the first two, so the id is the fallback rather than a
+ * dash: a row reading `— ACTIVE` names nobody, and a keyboard of them is unusable.
+ *
+ * The numeric id is NOT withheld here the way an administrator's is. The reason that
+ * roster withholds it is that a forwardable message naming where an administrator signs
+ * in from is most of the way to finding them; a customer's Telegram id is the handle the
+ * support conversation already quoted, it is on the Web Admin list, and this surface
+ * exists so an operator can act on it from a phone.
+ *
+ * The status rides along, because the one thing an operator scanning this list is
+ * looking for is who is blocked.
+ */
+function adminCustomerLabel(customer: CustomerRecord): string {
+  const name = [customer.firstName, customer.lastName].filter((part) => part !== null).join(' ');
+  const who =
+    customer.username !== null
+      ? `@${customer.username}`
+      : name !== ''
+        ? name
+        : customer.telegramUserId;
+  return `${who} — ${customer.status}`;
+}
+
+/**
+ * The detail screen for one customer, shared by the read, the lookup and the write.
+ *
+ * ONE builder, so the buttons an operator sees after a change are the buttons the new
+ * state actually offers — a second copy is how a block leaves a "block" button on the
+ * screen, which is the defect `adminAdminReply` was written to avoid and the same one
+ * applies here.
+ *
+ * The status button offered is the OPPOSITE of the status held, and neither is drawn
+ * without `users.block`. That is a courtesy: `CustomerService.setStatus` charges the key
+ * through the guard and re-checks it inside the writing transaction, so a crafted `9:b:`
+ * callback from an administrator who lacks it is refused there and leaves the record.
+ *
+ * What this screen carries is a person and nothing they bought. No wallet balance, no
+ * order, no service, no subscription reference: each is a different permission, and a
+ * Telegram message is forwardable — which is the argument ADR-0023 makes about panel
+ * credentials and `services.tsx` makes about subscription URLs.
+ */
+function adminCustomerReply(
+  customer: CustomerRecord,
+  permissions: ReadonlySet<PermissionKey>,
+): PendingReply {
+  const buttons: CustomerButton[] = [];
+  if (permissions.has(CUSTOMERS_BLOCK_PERMISSION)) {
+    const blocked = customer.status === 'BLOCKED';
+    buttons.push({
+      label: {
+        kind: 'TEMPLATE',
+        key: blocked ? 'bot.admin.customer_unblock_button' : 'bot.admin.customer_block_button',
+      },
+      /*
+       * The TARGET status, not "flip it".
+       *
+       * A double tap then writes the same status twice — which `setStatus`'s conditional
+       * UPDATE answers as a successful no-op — instead of toggling twice, which is the
+       * difference between an idempotent button and one that undoes itself on a slow
+       * connection. The same reasoning `4:` and `7:` record.
+       */
+      data: `${ADMIN_CUSTOMER_CALLBACK_PREFIX}${blocked ? 'u' : 'b'}:${customer.id}`,
+    });
+  }
+  buttons.push({
+    label: { kind: 'TEMPLATE', key: 'bot.admin.customers_back_button' },
+    data: ADMIN_CUSTOMERS_CALLBACK_PREFIX,
+  });
+  const name = [customer.firstName, customer.lastName].filter((part) => part !== null).join(' ');
+  return {
+    key: 'bot.admin.customer_detail',
+    values: {
+      telegramId: customer.telegramUserId,
+      username: customer.username === null ? '—' : `@${customer.username}`,
+      name: name === '' ? '—' : name,
+      status: customer.status,
+      /*
+       * The operator note, or a dash — never a stale one.
+       *
+       * `setStatus` clears it on an unblock precisely so a reason cannot outlive the
+       * block it explains, and this renders whatever it finds rather than deciding by
+       * status: two places deciding when a reason is current is how they disagree.
+       */
+      reason: customer.blockedReason ?? '—',
+      firstSeen: customer.firstSeenAt,
+      lastSeen: customer.lastSeenAt,
+    },
+    buttons,
+    orderId: null,
+  };
+}
+
+/**
  * Whether a refusal is about the SERVICE rather than about the administrator.
  *
  * The four service refusals are things a person can act on — the state moved, the
@@ -980,6 +1189,36 @@ function isServiceRefusal(error: unknown): boolean {
     code === COMMERCE_ERROR_CODES.SERVICE_UNRECONCILED ||
     code === COMMERCE_ERROR_CODES.SERVICE_NOT_DELIVERABLE ||
     code === COMMERCE_ERROR_CODES.ORDER_STATE_INVALID
+  );
+}
+
+/**
+ * Whether a refusal means "no such customer" rather than "not you".
+ *
+ * The section's read paths catch NARROWLY, on these two codes alone, and rethrow
+ * everything else — and that distinction is the whole point rather than tidiness. A
+ * catch-all was the first version, and it answered an administrator who lacks
+ * `users.view` with `bot.admin.customer_gone`: a sentence saying the person does not
+ * exist, to somebody who was only refused permission to look. An operator acts on that
+ * — they tell the customer there is no account — and the fact they were actually told
+ * is about THEMSELVES, not about anybody's data, so there is nothing to protect by
+ * blurring it.
+ *
+ * A denial therefore falls through to `adminTurn`'s single refusal, which is what every
+ * other denial on this surface answers with, and `customer_gone` stays the one answer
+ * for the four cases that genuinely mean "not here": unknown, malformed, another
+ * tenant's, and a lookup that matched nobody.
+ *
+ * `COMMERCE_REQUEST_INVALID` is in the pair because `CustomerService.customerId`
+ * raises it for an id that is not a UUIDv7 — which the callback boundary has already
+ * refused, so it is reachable only from a typed command, and is still "no such
+ * customer" from where an operator sits.
+ */
+function isCustomerMiss(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return (
+    code === COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND ||
+    code === COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID
   );
 }
 
@@ -1447,6 +1686,32 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
     if (data.startsWith(ADMIN_ADMIN_CALLBACK_PREFIX)) {
       return callbackCommand('ADMIN_ADMIN', data.slice(ADMIN_ADMIN_CALLBACK_PREFIX.length), id);
     }
+    if (data === ADMIN_CUSTOMERS_CALLBACK_PREFIX) {
+      return { intent: 'ADMIN_CUSTOMERS', targetId: null, callbackQueryId: id };
+    }
+    if (data.startsWith(ADMIN_CUSTOMERS_CALLBACK_PREFIX)) {
+      /*
+       * The same prefix carrying a POSITION, decoded HERE for the reason
+       * `ADMIN_PANELS_PAGE_CALLBACK_PREFIX` states: a crafted token must be UNSUPPORTED
+       * at the boundary rather than an invalid cast inside a query. The bare-prefix
+       * branch above runs FIRST, so `8:` alone is never offered to the decoder.
+       */
+      const cursor = decodeKeysetToken(data.slice(ADMIN_CUSTOMERS_CALLBACK_PREFIX.length));
+      if (cursor === null) return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      return { intent: 'ADMIN_CUSTOMERS_PAGE', targetId: null, cursor, callbackQueryId: id };
+    }
+    if (data.startsWith(ADMIN_CUSTOMER_CALLBACK_PREFIX)) {
+      const [code, customerId] = data.slice(ADMIN_CUSTOMER_CALLBACK_PREFIX.length).split(':');
+      if (code === undefined || !isAdminCustomerCode(code) || customerId === undefined) {
+        return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      }
+      /*
+       * The TABLE picks the intent. A chain of comparisons here would be the place a
+       * read and a block could be transposed, and the uuid still goes through
+       * `callbackCommand` so a malformed one is refused before either is chosen.
+       */
+      return callbackCommand(ADMIN_CUSTOMER_CODES[code], customerId, id);
+    }
     if (data.startsWith(ADMIN_ADMIN_STATUS_CALLBACK_PREFIX)) {
       const [code, adminId] = data.slice(ADMIN_ADMIN_STATUS_CALLBACK_PREFIX.length).split(':');
       /*
@@ -1557,6 +1822,27 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
       intent: command === '/panel_prefix' ? 'ADMIN_USERNAME_PREFIX' : 'ADMIN_USERNAME_TEMPLATE',
       targetId: null,
       args,
+      callbackQueryId: null,
+    };
+  }
+  /*
+   * Exact lookup, WP2: `/customer <telegram id>`.
+   *
+   * The numeric Telegram id, because that is what a support conversation quotes — not
+   * the internal uuid, which nobody outside the Web Admin has ever seen. Nothing is
+   * validated here: what makes a string a Telegram account is a question for the service
+   * that looks it up, and the boundary splitting a command's words cannot know which of
+   * them was meant to be an id.
+   *
+   * Not registered with `setMyCommands`, for the reason `/admin` and `/service` are not:
+   * Telegram's command list is per bot rather than per user, so registering it would
+   * advertise the management panel to every customer.
+   */
+  if (command === '/customer') {
+    return {
+      intent: 'ADMIN_CUSTOMER_FIND',
+      targetId: null,
+      args: asCommand.trim().split(/\s+/).slice(1),
       callbackQueryId: null,
     };
   }
@@ -2625,9 +2911,8 @@ export class BotRuntime {
      * holds only one would produce a screen that denies itself on arrival.
      */
     const maySeeReminders = permissions.has(SETTINGS_VIEW_PERMISSION);
-    if (!mayReview && !maySeeAdmins && !maySeeServices && !maySeePanels && !maySeeReminders) {
-      return null;
-    }
+    const maySeeCustomers = permissions.has(CUSTOMERS_VIEW_PERMISSION);
+    if (!hasAnyPanelSection(permissions)) return null;
 
     try {
       switch (command.intent) {
@@ -2677,6 +2962,17 @@ export class BotRuntime {
                         key: 'bot.admin.reminders_button' as const,
                       },
                       data: ADMIN_REMINDERS_CALLBACK_PREFIX,
+                    },
+                  ]
+                : []),
+              ...(maySeeCustomers
+                ? [
+                    {
+                      label: {
+                        kind: 'TEMPLATE' as const,
+                        key: 'bot.admin.customers_button' as const,
+                      },
+                      data: ADMIN_CUSTOMERS_CALLBACK_PREFIX,
                     },
                   ]
                 : []),
@@ -2901,6 +3197,37 @@ export class BotRuntime {
             input.idempotencyKey,
           );
         }
+        case 'ADMIN_CUSTOMERS':
+          return await this.adminCustomers(scope, adminActor, null);
+        case 'ADMIN_CUSTOMERS_PAGE':
+          /*
+           * The cursor is decoded at the boundary, so an unparseable one never reaches
+           * here — the same shape `ADMIN_PANELS_PAGE` has.
+           */
+          return await this.adminCustomers(scope, adminActor, command.cursor ?? null);
+        case 'ADMIN_CUSTOMER':
+          return command.targetId === null
+            ? null
+            : await this.adminCustomer(scope, adminActor, command.targetId, permissions);
+        case 'ADMIN_CUSTOMER_FIND':
+          return await this.adminCustomerFind(
+            scope,
+            adminActor,
+            (command.args ?? [])[0] ?? '',
+            permissions,
+          );
+        case 'ADMIN_CUSTOMER_BLOCK':
+        case 'ADMIN_CUSTOMER_UNBLOCK':
+          return command.targetId === null
+            ? null
+            : await this.adminCustomerStatus(
+                scope,
+                adminActor,
+                command.targetId,
+                command.intent === 'ADMIN_CUSTOMER_BLOCK',
+                permissions,
+                input.idempotencyKey,
+              );
         case 'ADMIN_SECTION':
           return await this.adminSection(scope, adminActor);
         case 'ADMIN_ADMIN':
@@ -2967,18 +3294,14 @@ export class BotRuntime {
     const identity = await admins.resolve(scope, input.telegramUserId, actor.correlationId);
     if (identity === null) return false;
     /*
-     * The SAME four `adminTurn` gates on, and that is the rule rather than a
-     * coincidence: the keyboard must not promise a panel the turn would refuse, and it
-     * must not withhold one from an administrator who has a section. An installation
-     * whose only `services.view` holder got no panel row is what a missing arm here
-     * would produce, and Phase 6B added the fourth one for the same reason.
+     * The SAME list `adminTurn` gates on, and now literally the same one.
+     *
+     * The rule has always been that the keyboard must not promise a panel the turn
+     * would refuse, and must not withhold one from an administrator who has a section.
+     * It was two hand-kept copies, and they had already diverged over the reminders
+     * section — see `PANEL_SECTION_PERMISSIONS` for what that cost.
      */
-    return (
-      identity.permissions.has(RECEIPTS_VIEW_PERMISSION) ||
-      identity.permissions.has(ADMINS_VIEW_PERMISSION) ||
-      identity.permissions.has(SERVICES_VIEW_PERMISSION) ||
-      identity.permissions.has(PANELS_VIEW_PERMISSION)
-    );
+    return hasAnyPanelSection(identity.permissions);
   }
 
   /**
@@ -3940,6 +4263,221 @@ export class BotRuntime {
       }
       throw error;
     }
+  }
+
+  /**
+   * The customers section: a page of this tenant's customers, oldest first.
+   *
+   * ## Why it pages rather than bounding like the queues do
+   *
+   * `adminServices` is a QUEUE — the ten things needing attention — and drops its
+   * `nextCursor` on the floor deliberately, because the eleventh unreconciled service is
+   * not a thing an operator scrolls to. A customer list is an INVENTORY: the customer an
+   * operator is looking for is as likely to be the four-hundredth as the fourth, so this
+   * pages the way `adminPanels` does, through the codec that makes a keyset cursor fit
+   * Telegram's 64-byte `callback_data`.
+   *
+   * ## And why the lookup command exists beside it
+   *
+   * Paging to the four-hundredth customer is forty taps. The command in the section's
+   * own text takes the numeric id from a support conversation straight to the detail
+   * screen, and charges `users.search` on top of `users.view` for doing it — a list of
+   * a tenant's own customers and a lookup of one specific person are different
+   * questions, which is why `CustomerService.list` separates them.
+   *
+   * ## No counts
+   *
+   * The rule `bot.admin.panels_section` states: a figure in this message goes stale
+   * between the render and the tap. `adminSection` prints `shown of total` because an
+   * administrator roster is a bounded hand-made list that is NOT paged, so its bound
+   * would otherwise be silent. This one has a next-page button instead, which is the
+   * same honesty by a different means.
+   */
+  private async adminCustomers(
+    scope: TenantContext,
+    actor: ActorContext,
+    cursor: KeysetToken | null,
+  ): Promise<PendingReply> {
+    const page = await this.deps.customers.list(scope, actor, {
+      limit: ADMIN_QUEUE_LIMIT,
+      /*
+       * The decoded token, used as this module's cursor.
+       *
+       * `CustomerCursor.id` is branded `UserId` and a token's is a plain string, so the
+       * brand is asserted rather than parsed — deliberately, and for the reason
+       * `keyset-cursor.ts` gives about accepting any UUID version: this id only ever
+       * feeds a `>` comparison against `(created_at, id)`, never a lookup of a person,
+       * and `decodeKeysetToken` has already guaranteed it is thirty-two hex digits in a
+       * UUID's shape. Running it through `userIdSchema` would refuse a v4 row an import
+       * or a restore created and end that traversal early.
+       */
+      cursor: cursor === null ? null : { createdAt: cursor.createdAt, id: cursor.id as UserId },
+    });
+    if (page.items.length === 0) {
+      /*
+       * Empty is empty, cursor or not.
+       *
+       * Reachable WITH a cursor: an operator pages forward and the last of the customers
+       * was on the previous page. `bot.admin.customers_none` reads correctly in both
+       * cases, because it says nobody is here rather than that nobody exists.
+       */
+      return { key: 'bot.admin.customers_none', values: {}, buttons: [], orderId: null };
+    }
+
+    const buttons: CustomerButton[] = page.items.map((customer) => ({
+      label: { kind: 'TEXT' as const, text: adminCustomerLabel(customer) },
+      data: `${ADMIN_CUSTOMER_CALLBACK_PREFIX}v:${customer.id}`,
+    }));
+    /*
+     * The next page, appended only when the cursor ENCODES — the rule `adminPanels` and
+     * the customer's own services list both state. A cursor this codec cannot carry
+     * would become a button whose tap Telegram rejects, and a list that ends is the
+     * safe direction.
+     */
+    const token = page.nextCursor === null ? null : encodeKeysetToken(page.nextCursor);
+    if (token !== null) {
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.admin.customers_more_button' },
+        data: `${ADMIN_CUSTOMERS_CALLBACK_PREFIX}${token}`,
+      });
+    }
+    return { key: 'bot.admin.customers_section', values: {}, buttons, orderId: null };
+  }
+
+  /**
+   * One customer, by the internal id a row carries.
+   *
+   * An id that is unknown, malformed or another tenant's gets ONE answer — the rule
+   * `bot.admin.panel_gone` states — so nobody holding an id can learn whether it names
+   * anybody on this installation. `CustomerService.get` charges `users.view` BEFORE it
+   * validates the id, so an administrator without the permission cannot even learn
+   * whether an id is well-formed.
+   */
+  private async adminCustomer(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: string,
+    permissions: ReadonlySet<PermissionKey>,
+  ): Promise<PendingReply> {
+    let customer: CustomerRecord;
+    try {
+      customer = await this.deps.customers.get(scope, actor, customerId);
+    } catch (error) {
+      // NARROW. See `isCustomerMiss`: a denial is not a missing person, and saying so
+      // is what an operator would act on.
+      if (isCustomerMiss(error)) {
+        return { key: 'bot.admin.customer_gone', values: {}, buttons: [], orderId: null };
+      }
+      throw error;
+    }
+    return adminCustomerReply(customer, permissions);
+  }
+
+  /**
+   * The same screen, reached by the numeric Telegram id an operator quotes.
+   *
+   * Through `list` with its EXACT `telegramUserId` filter, which is the one way this
+   * codebase asks that question — `CustomerRepository` says so in the comment where
+   * `findByTelegramId` used to be, and two ways to ask one question is how two answers
+   * start. The filter is exact rather than a prefix for a reason stated there too: a
+   * partial match on a Telegram id is a way to enumerate them.
+   *
+   * A blank or unmatched argument gets the SYNTAX rather than a prompt for the missing
+   * one, because a prompt that outlives its question swallows the next unrelated
+   * message (INCIDENT-FIN-001). An id that matches nobody gets `customer_gone`, the
+   * same single answer the row path gives.
+   */
+  private async adminCustomerFind(
+    scope: TenantContext,
+    actor: ActorContext,
+    telegramUserId: string,
+    permissions: ReadonlySet<PermissionKey>,
+  ): Promise<PendingReply> {
+    const needle = telegramUserId.trim();
+    /*
+     * The shape is checked HERE, against the CONTRACT's own schema, and the permission
+     * is NOT.
+     *
+     * An argument that is not a Telegram id is a typing mistake, not a lookup, and
+     * answering it with the syntax costs nothing and tells nobody anything: it is a
+     * fact about the message that was sent, not about this installation's customers.
+     * Everything that IS a fact about them — whether that id exists — goes through
+     * `list`, which charges `users.view` and then `users.search` before it looks.
+     *
+     * `telegramUserIdSchema` and not a regex written here. This was `/^\d{1,32}$/`,
+     * which is looser than the contract in both directions: it accepted a leading zero
+     * and up to thirty-two digits, neither of which any Telegram account has. Those
+     * reached `list` — which trusts its `CustomerSearch` and validates nothing — spent
+     * `users.search` on a value that cannot match, and came back `customer_gone`: the
+     * sentence that says the person does not exist, for a string that is not an id at
+     * all. One schema means the Telegram lookup and the HTTP one agree about what an
+     * id is, which is the same reason `orders.tsx` parses with `uuidV7Schema` rather
+     * than its own idea of a uuid.
+     */
+    if (!telegramUserIdSchema.safeParse(needle).success) {
+      return { key: 'bot.admin.customer_usage', values: {}, buttons: [], orderId: null };
+    }
+    /*
+     * NOT wrapped in a catch at all.
+     *
+     * `list` refuses with a permission denial or it answers; there is no "miss" it can
+     * raise, because an id that matches nobody comes back as an empty page. So a
+     * denial — an administrator holding `users.view` and not `users.search` — reaches
+     * `adminTurn`'s single refusal, which is the same answer every other denial on this
+     * surface gets and is not `customer_gone`: that sentence would tell somebody who
+     * was refused permission that the person does not exist.
+     */
+    const page = await this.deps.customers.list(scope, actor, {
+      search: { telegramUserId: needle },
+      limit: 1,
+    });
+    const customer = page.items[0];
+    if (customer === undefined) {
+      return { key: 'bot.admin.customer_gone', values: {}, buttons: [], orderId: null };
+    }
+    return adminCustomerReply(customer, permissions);
+  }
+
+  /**
+   * Blocks or unblocks one customer.
+   *
+   * `CustomerService.block`/`.unblock` carry every refusal this needs — the permission
+   * is charged and re-checked inside the writing transaction, the scope's activity is
+   * read there too, the id is validated and lower-cased before the idempotency hash, and
+   * the update is CONDITIONAL on the status it expects to find. So this adds none of its
+   * own and catches nothing: `adminTurn`'s single refusal answers a denial, and which
+   * denial it was belongs to the audit row.
+   *
+   * The reply names the status the customer now HOLDS rather than the button that was
+   * pressed, so a redelivered update reads as the state it found instead of claiming a
+   * second change — and the buttons come from the SAME builder the read uses, so a block
+   * does not leave a "block" button on the screen.
+   *
+   * The reason recorded is this surface's own sentence and not operator text, because
+   * this surface has no prompt to collect operator text with and will not grow one.
+   */
+  private async adminCustomerStatus(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: string,
+    blocking: boolean,
+    permissions: ReadonlySet<PermissionKey>,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    const input = {
+      idempotencyKey,
+      customerId,
+      reason: blocking ? 'Blocked from the Telegram management panel.' : null,
+    };
+    const updated = blocking
+      ? await this.deps.customers.block(scope, actor, input)
+      : await this.deps.customers.unblock(scope, actor, input);
+    return {
+      key: 'bot.admin.customer_status_changed',
+      values: { telegramId: updated.telegramUserId, status: updated.status },
+      buttons: adminCustomerReply(updated, permissions).buttons,
+      orderId: null,
+    };
   }
 
   /**

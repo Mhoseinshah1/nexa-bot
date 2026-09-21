@@ -60,6 +60,7 @@ const RECORDS = [
   'docs/phase6a-falsification.md',
   'docs/phase6b-falsification.md',
   'docs/phase6c-username-falsification.md',
+  'docs/wp2-falsification.md',
 ];
 /**
  * The fewest citations this record may contain.
@@ -86,7 +87,7 @@ const RECORDS = [
  * have to be a map, and a map is a place for a record to be added with no entry
  * and checked against nothing — which is this script's own failure mode.
  */
-const EXPECTED = 1221;
+const EXPECTED = 1239;
 /**
  * A table whose last column is one of these is making citations.
  *
