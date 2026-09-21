@@ -307,6 +307,45 @@ export const PANEL_ACTIVATION_SCHEMAS: Readonly<{
 };
 
 /**
+ * Parse a panel's stored activation against its provider's schema, treating an
+ * UNSET activation as an empty one.
+ *
+ * The normalisation is the whole point, and it exists because leaving it to each
+ * caller produced the bug this function was extracted to kill. A panel row's
+ * `activation` is nullable, so every evaluator has to decide what `null` means,
+ * and two of them decided differently: one answered "the fields this provider
+ * requires, and RickPanel requires none, so nothing is missing"; the other asked
+ * zod, which rejects `null` whatever the schema is. A RickPanel with no
+ * activation row was therefore SELLABLE and NOT OPERABLE at the same time —
+ * which is `decideEligibility` and `decideOperability` disagreeing about whether
+ * an order can be delivered, and that disagreement is exactly what takes a
+ * customer's money for an account that cannot be made.
+ *
+ * `{}` is the truthful normalisation rather than a convenient one. "Unset" and
+ * "set to nothing" are the same fact about a panel, and each provider's own
+ * schema is then left to decide whether nothing is enough: `rickpanelActivationSchema`
+ * accepts `{}` because a RickPanel has nothing to configure, while Marzban's and
+ * 3X-UI's reject it and name the fields they are missing — `proxyProtocols`,
+ * `inboundTags`, `subscriptionDomain`, `inboundId` — which is strictly better
+ * than a hand-kept list of required keys, because it cannot fall out of step
+ * with the schema it describes.
+ *
+ * The inverse rule matters as much: this NEVER rewrites an activation an
+ * operator set. A present-but-invalid activation is passed through unchanged and
+ * fails, because silently repairing a misconfiguration is how the legacy system
+ * hid them.
+ */
+export function parsePanelActivation(
+  providerType: ProviderType,
+  activation: unknown,
+): z.ZodSafeParseResult<PanelActivation> {
+  const candidate = activation === null || activation === undefined ? {} : activation;
+  return PANEL_ACTIVATION_SCHEMAS[providerType].safeParse(
+    candidate,
+  ) as z.ZodSafeParseResult<PanelActivation>;
+}
+
+/**
  * Static description of a provider type. Display names come from the template
  * catalog; `key` is the stable identifier and is never a display string.
  */
