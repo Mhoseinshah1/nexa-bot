@@ -159,6 +159,43 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
     definition:
       'ON "services" USING btree ("tenant_id","panel_id") ' + "WHERE (state <> 'TERMINATED'::text)",
   },
+  {
+    /*
+     * The support lookup: for ONE tenant, the service holding a given provider
+     * username.
+     *
+     * A customer writes "my account nx7f3a91... stopped working", and that
+     * string is the only handle they have — they never see a service id. Until
+     * this release no surface could answer it, because the only index carrying
+     * `provider_username` is `services_panel_provider_username_key`, which
+     * leads with `panel_id` and therefore serves "is this name taken on THIS
+     * panel" and nothing else. A tenant-scoped lookup through it means one
+     * probe per panel, or a sequential scan of every service the installation
+     * has ever sold.
+     *
+     * So the leading column is `tenant_id`, which is also what makes the
+     * lookup an isolation boundary rather than a filter applied afterwards.
+     * Not unique, deliberately: the uniqueness that exists is per PANEL, and
+     * two panels of one tenant pointing at different machines may legitimately
+     * hold the same account name. A unique index here would refuse the second
+     * sale with a constraint violation.
+     *
+     * Not partial on state either. Terminated services are exactly what a
+     * support question is often about — "my account stopped working" is the
+     * sentence a terminated account produces — so excluding them would make
+     * the index fast at answering everything except the common case.
+     *
+     * CONCURRENTLY, and this is the point worth reading twice: `services` is
+     * POPULATED on every installation that has sold anything, and `botctl
+     * update` migrates while the outgoing release is still serving. An
+     * ordinary `CREATE INDEX` in a migration would take a SHARE lock on the
+     * one table every provisioning write touches, for the length of the build,
+     * on a live installation. That is why this index is here and not in
+     * `apps/api/drizzle/` — the same reason `0036` gives for the rule.
+     */
+    name: 'services_tenant_provider_username_idx',
+    definition: 'ON "services" USING btree ("tenant_id","provider_username")',
+  },
 ];
 
 /** Index names are code constants; this refuses one that stopped being one. */

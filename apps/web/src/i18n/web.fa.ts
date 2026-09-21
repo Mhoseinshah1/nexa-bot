@@ -1469,6 +1469,17 @@ export const WEB_FA = {
   'web.services_filter_customer_hint': 'شناسهٔ مشتری را کامل وارد کنید.',
   'web.services_filter_panel_hint': 'شناسهٔ پنل را کامل وارد کنید.',
   'web.services_filter_invalid_id': 'شناسه معتبر نیست.',
+  /*
+   * The lookup an operator actually arrives with.
+   *
+   * A customer quotes the name on their account, never the internal id, so until
+   * this existed the one handle a support conversation contains matched no search
+   * on either surface. EXACT, and the hint says so: a prefix over account names
+   * would enumerate a panel's accounts, and every row here leads to a
+   * subscription.
+   */
+  'web.services_filter_username_hint': 'نام کاربری روی پنل را کامل وارد کنید؛ جست‌وجو دقیق است.',
+  'web.services_filter_invalid_username': 'این نام کاربری از شکلی نیست که اینجا ذخیره می‌شود.',
   'web.services_search_apply': 'جست‌وجو',
 
   /*
@@ -1495,7 +1506,25 @@ export const WEB_FA = {
    */
   'web.service_operations_title': 'کارهای انجام‌شده روی این سرویس',
   'web.service_operations_hint':
-    'تازه‌ترین در بالا. این فهرست صفحه‌بندی نمی‌شود؛ سرویسی که ده‌ها عملیات داشته باشد، خودش همان مسئله است.',
+    'تازه‌ترین در بالا. این فهرست صفحه‌بندی نمی‌شود و به تازه‌ترین عملیات محدود است.',
+  /*
+   * The bound, printed only when it actually bit.
+   *
+   * What stood here said a service with dozens of operations "is itself the
+   * problem". A service renewed monthly for three years accumulates renew,
+   * add-traffic and usage-sync operations by ORDINARY use; the retry ceilings
+   * bound attempts, not a lifetime. So the old sentence told an operator their
+   * healthy service was in trouble on the evidence of its age, and told them
+   * nothing about the one thing they needed to know — whether they were
+   * looking at all of it.
+   *
+   * The figure comes from the RESPONSE, never from a constant in this file: the
+   * server reads one row beyond its bound to answer this, and a client that
+   * hard-coded fifty would print a number that stopped being true the moment
+   * the bound moved.
+   */
+  'web.service_operations_truncated':
+    'عملیات قدیمی‌تری هم روی این سرویس ثبت شده و اینجا نیامده است. شمار عملیات نشان‌داده‌شده:',
   'web.service_operations_empty': 'هیچ عملیاتی روی این سرویس ثبت نشده است.',
   'web.operation_type': 'نوع',
   'web.operation_state': 'نتیجه',

@@ -889,6 +889,7 @@ export function fetchServices(
     deliveryState?: ServiceDeliveryState;
     customerId?: string;
     panelId?: string;
+    providerUsername?: string;
   } = {},
 ): Promise<ServiceListResponse> {
   const params = new URLSearchParams();
@@ -900,6 +901,17 @@ export function fetchServices(
     params.set('customerId', query.customerId);
   }
   if (query.panelId !== undefined && query.panelId !== '') params.set('panelId', query.panelId);
+  /*
+   * The account name, sent RAW and canonicalised by the server.
+   *
+   * Not lowercased here: `providerUsernameLookupSchema` folds and validates it, and a
+   * client that folded it first would be a second opinion about what a username is —
+   * the one `ServiceSearch` names. An empty string is not a filter, the same rule the
+   * two ids above apply.
+   */
+  if (query.providerUsername !== undefined && query.providerUsername !== '') {
+    params.set('providerUsername', query.providerUsername);
+  }
   const suffix = params.toString();
   return authedGet(
     suffix ? `${SERVICE_ROUTES.list}?${suffix}` : SERVICE_ROUTES.list,

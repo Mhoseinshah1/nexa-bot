@@ -191,6 +191,24 @@ export class DrizzleServiceRepository implements ServiceRepository {
     if (search.deliveryState !== undefined) {
       filters.push(eq(services.deliveryState, search.deliveryState));
     }
+    if (search.providerUsername !== undefined) {
+      /*
+       * EQUALITY, never `like`, and never `lower(...)` around the column.
+       *
+       * Equality because a prefix match over account names enumerates a
+       * panel's accounts, and every row carries a `subscriptionUrl` that is a
+       * bearer capability. No caller wants "services whose name starts with";
+       * the caller that wants browsing pages with the cursor above.
+       *
+       * The column is compared AS STORED. `providerUsernameLookupSchema` has
+       * already folded the caller's text to lowercase, and every write path
+       * goes through the same canonicalisation, so a `lower()` here would only
+       * make the value non-indexable while asserting a second, quieter opinion
+       * about what a username is. `services_tenant_provider_username_idx`
+       * serves this as an index cond with `tenant_id` leading.
+       */
+      filters.push(eq(services.providerUsername, search.providerUsername));
+    }
     if (cursor !== null) {
       /*
        * Keyset, on `(created_at, id)`, DESCENDING.

@@ -128,8 +128,23 @@ const actionRoute = (path: string, over: Record<string, unknown> = {}, planned =
   },
 });
 
-const detail = (overrides: Record<string, unknown> = {}, operations: unknown[] = [operation()]) => [
-  { url: `/services/${SERVICE_ID}/operations`, body: { operations } },
+/*
+ * `limit` and `hasMore` travel with the rows, because WP3 made the bound the SERVER's.
+ *
+ * A fixture that omitted them would not merely be thin — `serviceOperationsResponseSchema`
+ * requires both, so the parse would fail and every detail case would fail on the
+ * operations card rather than on what it was written to assert. `hasMore` defaults to
+ * false: a case that wants the truncation notice passes it, and no other case prints it.
+ */
+const detail = (
+  overrides: Record<string, unknown> = {},
+  operations: unknown[] = [operation()],
+  history: { limit?: number; hasMore?: boolean } = {},
+) => [
+  {
+    url: `/services/${SERVICE_ID}/operations`,
+    body: { operations, limit: history.limit ?? 50, hasMore: history.hasMore ?? false },
+  },
   {
     url: `/services/${SERVICE_ID}`,
     body: {

@@ -6,6 +6,7 @@ import {
   SERVICE_STATES,
   SERVICE_TERMINATE_CONFIRMATION,
   UNLIMITED_TRAFFIC_BYTES,
+  providerUsernameLookupSchema,
   uuidV7Schema,
   type OperationState,
   type OperationType,
@@ -35,6 +36,7 @@ import {
   Field,
   KV,
   Ltr,
+  Num,
   PageHead,
   Pills,
   StateSwitch,
@@ -202,6 +204,25 @@ function idProblem(value: string): string | undefined {
   return uuidV7Schema.safeParse(value).success ? undefined : t('web.services_filter_invalid_id');
 }
 
+/**
+ * The account name, checked against the SAME schema the server applies.
+ *
+ * `providerUsernameLookupSchema` is the contract, so this box refuses exactly what the
+ * endpoint would refuse — a local rule copied by eye is how a client comes to reject a
+ * name the server accepts, or to spend a request on one it does not. It is deliberately
+ * not a local regex for that reason.
+ *
+ * The match is EXACT, which is also why there is no "contains" affordance here: a
+ * prefix search over account names is an enumeration of a panel's accounts, and every
+ * service row leads to a subscription the operator must not hand out in bulk.
+ */
+function usernameProblem(value: string): string | undefined {
+  if (value === '') return undefined;
+  return providerUsernameLookupSchema.safeParse(value).success
+    ? undefined
+    : t('web.services_filter_invalid_username');
+}
+
 // ---------------------------------------------------------------------------
 // List
 // ---------------------------------------------------------------------------
@@ -213,6 +234,7 @@ export function ServicesPage({ route, denied }: { route: Route; denied: boolean 
   const delivery = route.query.get('deliveryState');
   const appliedCustomer = route.query.get('customerId') ?? '';
   const appliedPanel = route.query.get('panelId') ?? '';
+  const appliedUsername = route.query.get('providerUsername') ?? '';
 
   /*
    * The drafts are keyed to the APPLIED values, so navigation that drops the query
@@ -220,22 +242,24 @@ export function ServicesPage({ route, denied }: { route: Route; denied: boolean 
    * component with an empty query rather than remounting it, and a `useState`
    * initialiser runs once per mount — leaving criteria on screen that no longer apply.
    */
-  const appliedSignature = `${appliedCustomer}|${appliedPanel}`;
+  const appliedSignature = `${appliedCustomer}|${appliedPanel}|${appliedUsername}`;
   const [draft, setDraft] = useState({
     signature: appliedSignature,
     customerId: appliedCustomer,
     panelId: appliedPanel,
+    providerUsername: appliedUsername,
   });
   if (draft.signature !== appliedSignature) {
     setDraft({
       signature: appliedSignature,
       customerId: appliedCustomer,
       panelId: appliedPanel,
+      providerUsername: appliedUsername,
     });
   }
 
   const services = useQuery({
-    queryKey: ['services', cursor, state, delivery, appliedCustomer, appliedPanel],
+    queryKey: ['services', cursor, state, delivery, appliedCustomer, appliedPanel, appliedUsername],
     queryFn: () =>
       fetchServices({
         ...(cursor === null ? {} : { cursor }),
@@ -243,21 +267,30 @@ export function ServicesPage({ route, denied }: { route: Route; denied: boolean 
         ...(delivery === null ? {} : { deliveryState: delivery as ServiceDeliveryState }),
         ...(appliedCustomer === '' ? {} : { customerId: appliedCustomer }),
         ...(appliedPanel === '' ? {} : { panelId: appliedPanel }),
+        ...(appliedUsername === '' ? {} : { providerUsername: appliedUsername }),
       }),
     enabled: !denied,
   });
 
   const customerProblem = idProblem(draft.customerId);
   const panelProblem = idProblem(draft.panelId);
+  const usernameProblemText = usernameProblem(draft.providerUsername);
 
   const apply = (event: FormEvent) => {
     event.preventDefault();
-    if (customerProblem !== undefined || panelProblem !== undefined) return;
+    if (
+      customerProblem !== undefined ||
+      panelProblem !== undefined ||
+      usernameProblemText !== undefined
+    ) {
+      return;
+    }
     // ONE navigation for both. Separate `setQuery` calls each build from the
     // `route.query` this render captured, so the earlier ones are dropped.
     setQueries(route, [
       ['customerId', draft.customerId === '' ? null : draft.customerId],
       ['panelId', draft.panelId === '' ? null : draft.panelId],
+      ['providerUsername', draft.providerUsername === '' ? null : draft.providerUsername],
       // A new filter starts at the first page. Carrying a cursor from one filter to
       // another pages through a list that no longer exists.
       ['cursor', null],
@@ -382,6 +415,21 @@ export function ServicesPage({ route, denied }: { route: Route; denied: boolean 
                 dir="ltr"
                 value={draft.panelId}
                 onChange={(event) => setDraft({ ...draft, panelId: event.target.value.trim() })}
+              />
+            </Field>
+            <Field
+              label={t('web.service_username')}
+              hint={t('web.services_filter_username_hint')}
+              htmlFor="services-username"
+              {...(usernameProblemText === undefined ? {} : { error: usernameProblemText })}
+            >
+              <input
+                id="services-username"
+                dir="ltr"
+                value={draft.providerUsername}
+                onChange={(event) =>
+                  setDraft({ ...draft, providerUsername: event.target.value.trim() })
+                }
               />
             </Field>
             <button type="submit" className="btn sm">
@@ -916,12 +964,28 @@ export function ServiceDetailPage({
                 {operations.data === undefined ? null : operations.data.operations.length === 0 ? (
                   <Empty title={t('web.service_operations_empty')} />
                 ) : (
-                  <DataTable
-                    caption={t('web.service_operations_title')}
-                    columns={operationColumns}
-                    rows={operations.data.operations}
-                    rowKey={(op) => op.id}
-                  />
+                  <>
+                    <DataTable
+                      caption={t('web.service_operations_title')}
+                      columns={operationColumns}
+                      rows={operations.data.operations}
+                      rowKey={(op) => op.id}
+                    />
+                    {/*
+                      Printed only when the server says the history was CUT, and
+                      with the server's own bound. `operations.length === limit`
+                      is the wrong test and is why the response carries
+                      `hasMore`: a service with exactly fifty operations has a
+                      full page and nothing behind it, and a notice there would
+                      send an operator looking for rows that do not exist.
+                    */}
+                    {operations.data.hasMore && (
+                      <p className="muted small">
+                        {t('web.service_operations_truncated')}{' '}
+                        <Num value={operations.data.limit} />
+                      </p>
+                    )}
+                  </>
                 )}
               </StateSwitch>
             </Card>

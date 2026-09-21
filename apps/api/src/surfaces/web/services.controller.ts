@@ -87,6 +87,7 @@ export class ServicesController {
       ...(query.deliveryState === undefined ? {} : { deliveryState: query.deliveryState }),
       ...(query.customerId === undefined ? {} : { customerId: query.customerId }),
       ...(query.panelId === undefined ? {} : { panelId: query.panelId }),
+      ...(query.providerUsername === undefined ? {} : { providerUsername: query.providerUsername }),
     });
     const result = await this.container.serviceAdmin.list(scope, actor, {
       ...(page.limit === undefined ? {} : { limit: page.limit }),
@@ -96,6 +97,13 @@ export class ServicesController {
         ...(page.deliveryState === undefined ? {} : { deliveryState: page.deliveryState }),
         ...(page.customerId === undefined ? {} : { customerId: page.customerId as UserId }),
         ...(page.panelId === undefined ? {} : { panelId: page.panelId as PanelId }),
+        /*
+         * Already canonicalised by the schema — trimmed, folded to lowercase, and
+         * checked against the grammar this product stores. The controller passes it
+         * through unaltered, because a surface that lowercased it a second time would
+         * be the second opinion `ServiceSearch` names.
+         */
+        ...(page.providerUsername === undefined ? {} : { providerUsername: page.providerUsername }),
       },
     });
     return {
@@ -118,6 +126,12 @@ export class ServicesController {
    * their link" — which `state` alone cannot answer: an `UNRECONCILED` service says
    * this installation does not know what exists on the panel, and the operation history
    * is where the reason lives.
+   *
+   * Bounded, newest first, and the bound is REPORTED. Not paged: the answer an operator
+   * came for is in the newest attempts, and a second page of a diagnostic list is
+   * scope this question does not need. What it does need is for the surface to be able
+   * to say "these are the newest N of more than N" rather than presenting a truncated
+   * history as a complete one.
    */
   @Get('services/:id/operations')
   async operations(
@@ -125,8 +139,20 @@ export class ServicesController {
     @Param('id') id: string,
   ): Promise<ServiceOperationsResponse> {
     const { scope, actor } = await this.authenticate(request);
-    const operations = await this.container.serviceAdmin.operations(scope, actor, id);
-    return { operations: operations.map(toOperation) };
+    const history = await this.container.serviceAdmin.operations(scope, actor, id);
+    /*
+     * `limit` and `hasMore` travel with the rows, and both are the SERVER's.
+     *
+     * A client that hard-coded fifty would print a truncation notice that stopped
+     * being true the moment the bound moved, and one that inferred truncation from
+     * `length === limit` would be wrong for the service that has exactly fifty. The
+     * only place that knows is the query that asked for one more than it returned.
+     */
+    return {
+      operations: history.operations.map(toOperation),
+      limit: history.limit,
+      hasMore: history.hasMore,
+    };
   }
 
   /**
