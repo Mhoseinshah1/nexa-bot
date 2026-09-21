@@ -1319,6 +1319,29 @@ export function conditionOf(
         severity: 'ERROR',
         summary: 'cannot do what this installation asked of it',
       };
+    /*
+     * NEW CODE, and no probe produces it today.
+     *
+     * `PROVIDER_REFUSED` is raised on the CREATE path, where a panel answers a
+     * rule of its own — an admin's user limit, a service that will not take a
+     * subscription this short. A probe asks a panel about itself and gets no
+     * such answer, so this arm is currently unreachable.
+     *
+     * It is written anyway because the switch is exhaustive with no catch-all,
+     * and because the alternative is worse in a specific way: the `default`
+     * this file used to have answered "is not answering" for anything it did
+     * not recognise, so a kind added to the contract was announced to an
+     * operator as an outage it is not. A code of its own rather than sharing
+     * `provider_error`'s, because `operational_events` dedupes and recovers by
+     * code and the two have opposite remedies — one says look at the panel, the
+     * other says look at your own limits.
+     */
+    case 'PROVIDER_REFUSED':
+      return {
+        code: 'panel.health.provider_refused',
+        severity: 'ERROR',
+        summary: 'refused the request by a rule of its own',
+      };
     case 'UNREACHABLE':
     case 'TIMEOUT':
       // These two DO share a code, and that is a judgement rather than an

@@ -256,7 +256,7 @@ describe('the provider registry', () => {
     // when a registration disappears, which is the failure this exists to
     // catch; and it passes when one appears, which should be a deliberate
     // edit here rather than a silent widening of what operators can configure.
-    expect([...IMPLEMENTED_PROVIDER_TYPES].sort()).toEqual(['marzban', 'sanaei']);
+    expect([...IMPLEMENTED_PROVIDER_TYPES].sort()).toEqual(['marzban', 'rickpanel', 'sanaei']);
   });
 
   it('resolves every implemented type to an adapter that declares that type', () => {
@@ -340,6 +340,35 @@ describe('the provider registry', () => {
          * neither was enough on its own: an adapter that can perform an operation the
          * executor will not route to is an operation a customer is still refused.
          */
+        'RENEW_USER',
+        'ADD_VOLUME',
+        'ADD_TIME',
+      ],
+      /*
+       * RickPanel's ten, and the ONE place in this file where the rule above —
+       * a capability joins this list in the commit that proved it against a real
+       * panel — has a deliberate exception.
+       *
+       * No RickPanel has been contacted. `docs/rickpanel-adapter-audit.md` §4
+       * records why the exception was taken rather than quietly made: declaring
+       * nothing would leave `canProvision` false for every RickPanel, no
+       * RickPanel sellable, and the production incident this release exists to
+       * fix unfixed. `tests/acceptance/real-panel-rickpanel.test.ts` is what
+       * turns these ten into evidence, and until it has run against a panel they
+       * rest on a document and a fake.
+       *
+       * `LIMIT_DEVICES` is absent even so, and for the ordinary reason:
+       * `RickpanelAdapter.createUser` does not send a device limit, because the
+       * contract does not describe a field for one.
+       */
+      rickpanel: [
+        'HEALTH_CHECK',
+        'CREATE_USER',
+        'READ_USAGE',
+        'DELIVER_SUBSCRIPTION_LINK',
+        'DISABLE_USER',
+        'ENABLE_USER',
+        'DELETE_USER',
         'RENEW_USER',
         'ADD_VOLUME',
         'ADD_TIME',

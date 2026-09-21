@@ -1,0 +1,862 @@
+import {
+  assertSendableProviderUsername,
+  providerDescriptor,
+  type CreateProviderUserInput,
+  type ProviderAdapter,
+  type ProviderAllowancePlan,
+  type ProviderCapability,
+  type ProviderDescriptor,
+  type ProviderFailureResult,
+  type ProviderHttpClient,
+  type ProviderHttpResult,
+  type ProviderLookupOutcome,
+  type ProviderProbeOutcome,
+  type ProviderRemovalOutcome,
+  type ProviderServiceTarget,
+  type ProviderStateChangeOutcome,
+  type ProviderTarget,
+  type ProviderUsage,
+  type ProviderUsageOutcome,
+  type ProviderUserOutcome,
+  type ProviderUserRef,
+} from '@nexa/contracts';
+
+/**
+ * RickPanel.
+ *
+ * **Where these endpoints come from.** `rickpanel-openapi.json`, the per-admin
+ * OpenAPI document the owner attached, and `docs/rickpanel-adapter-audit.md` is
+ * the audit of it. Two things about that document govern everything here:
+ *
+ *   - its **descriptions are the contract** and its **schemas are lossy**. Every
+ *     property of `UserCreate` is typed `"string"` including the two the same
+ *     description calls "a UTC timestamp in seconds" and "in bytes";
+ *     `components.schemas` is empty, so no response has a declared shape; and
+ *     the token endpoint declares a JSON body while its own description says
+ *     "The request body is form-encoded, not JSON". Where the two disagree the
+ *     description wins, and where the document is simply silent this adapter
+ *     fails safe rather than inventing.
+ *   - **no RickPanel was contacted while writing this.** The behaviour below is
+ *     verified against a deterministic fake this repository wrote, which
+ *     `docs/real-panel-acceptance.md` is explicit can only prove that the fake
+ *     and the adapter agree. `tests/acceptance/real-panel-rickpanel.test.ts` is
+ *     what turns it into evidence and it has NOT been run.
+ *
+ * **Why this is not the Marzban adapter with a flag.** Three differences, each
+ * one a way to lose a customer's money:
+ *
+ *   1. `inbounds` and a partial `proxies` set "are accepted but ignored: every
+ *      user gets every protocol and every inbound". Marzban's opposite rule —
+ *      name your inbounds or deliver a zero-byte subscription — is measured on a
+ *      binary and must not be weakened to let this panel through.
+ *   2. "The response returns before the nodes have the user." A 200 on create is
+ *      an acknowledgement, not a delivery, so this adapter reads the user back
+ *      before it reports one.
+ *   3. A create answers `400` "saying which rule was hit" — an admin's user
+ *      limit, a service rule. That is a decision, not a fault, and retrying it
+ *      five times over seven minutes is the incident this release exists to fix.
+ */
+
+/** Form-encoded, as an OAuth2 password grant. The document's prose, not its schema. */
+export const TOKEN_PATH = 'api/admin/token';
+export const SYSTEM_PATH = 'api/system';
+/** Create is a POST to the collection; read, modify and delete address `/{username}`. */
+export const USER_PATH = 'api/user';
+
+/**
+ * How hard the create path tries to read its own user back, and how long it
+ * waits between tries.
+ *
+ * Bounded deliberately and kept small. The panel says the create returns before
+ * the nodes have the user; it does not say how long that takes, and
+ * `OQ-RP-04` records that as unmeasured rather than guessing at a number. So
+ * this is a short courtesy poll that absorbs the ordinary case, NOT a
+ * correctness mechanism: when it runs out, the outcome is `UNKNOWN` and
+ * `RECONCILE` — a READ — settles it. A longer poll here would hold a worker
+ * against a panel while a customer waits, and would not make the answer any more
+ * certain than the read that follows.
+ */
+const READ_BACK_ATTEMPTS = 3;
+const READ_BACK_DELAY_MS = 750;
+
+const DESCRIPTOR: ProviderDescriptor = providerDescriptor('rickpanel') ?? {
+  // Unreachable: `rickpanel` is in `PROVIDER_TYPES` and a unit test proves every
+  // type has a descriptor. A fallback rather than a `!` so that a contract edit
+  // removing it fails at the type level instead of on somebody's installation.
+  key: 'rickpanel',
+  canonicalName: 'RickPanel',
+  credentialShape: 'USERNAME_PASSWORD',
+  capabilities: ['HEALTH_CHECK'],
+  maxRequestsPerProbe: 2,
+  requiredActivationFields: [],
+};
+
+/**
+ * A failed HTTP exchange, as a probe outcome.
+ *
+ * The same taxonomy the other two adapters use, and deliberately WITHOUT the
+ * create path's `PROVIDER_REFUSED`: a probe asks the panel about itself, and a
+ * 400 to `GET /api/system` is a panel behaving oddly rather than a rule being
+ * applied to a request. The distinction is raised only where the document says
+ * a refusal carries a reason, which is the create.
+ */
+function outcomeFromStatus(status: number): ProviderFailureResult {
+  if (status === 401 || status === 403) {
+    return { ok: false, failure: 'AUTHENTICATION_FAILED', status };
+  }
+  if (status === 429) return { ok: false, failure: 'RATE_LIMITED', status };
+  return { ok: false, failure: 'PROVIDER_ERROR', status };
+}
+
+function outcomeFromTransport(
+  result: Extract<ProviderHttpResult, { ok: false }>,
+): ProviderFailureResult {
+  return { ok: false, failure: result.failure, status: result.status };
+}
+
+/**
+ * A JSON body, or null.
+ *
+ * Never throws and never carries the body forward: a panel behind a misconfigured
+ * proxy answers with an HTML login page, and `MALFORMED_RESPONSE` is a more
+ * useful thing to tell an operator than a syntax error quoting somebody's form.
+ */
+function parseJson(bodyText: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(bodyText);
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Bounded and character-restricted: it is persisted and shown to an operator. */
+function safeVersion(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > 64) return null;
+  return /^[A-Za-z0-9._+-]+$/.test(trimmed) ? trimmed : null;
+}
+
+type RickpanelAuth = { readonly ok: true; readonly token: string } | ProviderFailureResult;
+
+/**
+ * The panel's user record, reduced to what Nexa keeps.
+ *
+ * The field names are Marzban's, because RickPanel is Marzban-derived and its own
+ * document names them — `data_limit`, `data_limit_reset_strategy`, `expire`,
+ * `sub_updated_at` all appear in `UserCreate`. `used_traffic` does not appear
+ * anywhere in the document, which is why a record without it yields `null` here
+ * rather than a fabricated zero: zero bytes used is what a brand-new account
+ * looks like, so inventing it would hide a divergence instead of reporting one.
+ */
+function usageFromUser(record: Record<string, unknown>): ProviderUsage | null {
+  const used = record['used_traffic'];
+  if (typeof used !== 'number' || !Number.isFinite(used) || used < 0) return null;
+  const limit = record['data_limit'];
+  const expire = record['expire'];
+  return {
+    usedBytes: BigInt(Math.trunc(used)),
+    // Zero and null are both "no limit". Kept as null so "unlimited" and "an
+    // allowance of nothing" cannot be confused downstream.
+    totalBytes:
+      typeof limit === 'number' && Number.isFinite(limit) && limit > 0
+        ? BigInt(Math.trunc(limit))
+        : null,
+    // Seconds, not milliseconds: the document says so in `POST /api/user`, and
+    // the factor of a thousand is an expiry in 2026 against one in 1970.
+    expiresAt:
+      typeof expire === 'number' && Number.isFinite(expire) && expire > 0
+        ? new Date(Math.trunc(expire) * 1000)
+        : null,
+    lastConnectionAt: null,
+  };
+}
+
+/**
+ * The subscription, from a record whose field names the document does not give.
+ *
+ * `GET /api/user/{username}` is documented as returning "the config links, the
+ * subscription URL and the subscription token" — three facts and no keys, which
+ * `OQ-RP-01` records as open. So three shapes are tried, in the order of how
+ * much each one assumes:
+ *
+ *   1. `subscription_url`, which is what the Marzban lineage calls it.
+ *   2. `subscription_token`, joined onto `/sub/<token>` — the document's own
+ *      `/sub/{token}` route, so the shape is the panel's rather than a guess.
+ *   3. the first entry of `links`, which is what "the config links" would be.
+ *
+ * If none is present the caller gets `null` and reports `MALFORMED_RESPONSE`. It
+ * never returns a URL it assembled from something it did not recognise: a
+ * subscription link is what the customer receives, and a wrong one is a customer
+ * holding a link that serves nothing.
+ */
+function subscriptionFrom(baseUrl: string, record: Record<string, unknown>): string | null {
+  const direct = absoluteSubscription(baseUrl, record['subscription_url']);
+  if (direct !== null) return direct;
+
+  const token = record['subscription_token'];
+  if (typeof token === 'string' && /^[A-Za-z0-9._~-]{8,512}$/.test(token)) {
+    return `${baseUrl.replace(/\/+$/, '')}/sub/${token}`;
+  }
+
+  const links = record['links'];
+  if (Array.isArray(links) && links.length > 0) {
+    return absoluteSubscription(baseUrl, links[0]);
+  }
+  return null;
+}
+
+/**
+ * A subscription path made absolute against the operator's configured address.
+ *
+ * A panel answering with a PATH does not know what hostname it is reached by,
+ * and the base URL is the only source of one this installation has. An absolute
+ * URL is taken as given, since a panel behind a proxy may emit one.
+ */
+function absoluteSubscription(baseUrl: string, value: unknown): string | null {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 2048) return null;
+  if (/^https?:\/\//i.test(value)) return value;
+  if (!value.startsWith('/')) return null;
+  return `${baseUrl.replace(/\/+$/, '')}${value}`;
+}
+
+/** What a bounded read-back found, or why it could not say. */
+type ReadBack =
+  | { readonly ok: true; readonly found: true; readonly record: Record<string, unknown> }
+  | { readonly ok: true; readonly found: false }
+  | ProviderFailureResult;
+
+export interface RickpanelAdapterOptions {
+  /** How many times the create path reads its own user back. */
+  readonly readBackAttempts?: number;
+  /** How long it waits between those reads. */
+  readonly readBackDelayMs?: number;
+  /**
+   * Injected so a test can drive the poll without spending real seconds.
+   *
+   * A seam rather than a fake timer, because the thing worth asserting is how
+   * many READS the adapter makes and in what order — and a test that stubbed the
+   * clock would still be asserting against real `setTimeout` ordering.
+   */
+  readonly sleep?: (ms: number) => Promise<void>;
+}
+
+export class RickpanelAdapter implements ProviderAdapter {
+  readonly descriptor = DESCRIPTOR;
+
+  private readonly readBackAttempts: number;
+  private readonly readBackDelayMs: number;
+  private readonly sleep: (ms: number) => Promise<void>;
+
+  constructor(options: RickpanelAdapterOptions = {}) {
+    this.readBackAttempts = options.readBackAttempts ?? READ_BACK_ATTEMPTS;
+    this.readBackDelayMs = options.readBackDelayMs ?? READ_BACK_DELAY_MS;
+    this.sleep =
+      options.sleep ??
+      ((ms: number) =>
+        new Promise((resolve) => {
+          setTimeout(resolve, ms);
+        }));
+  }
+
+  supports(capability: ProviderCapability): boolean {
+    return this.descriptor.capabilities.includes(capability);
+  }
+
+  /**
+   * Exchange the operator's credentials for a bearer JWT.
+   *
+   * Form-encoded, because the document's prose says so however its schema is
+   * typed. A 401 is a wrong username or password; a 403 is a DISABLED account
+   * with the right password — the document distinguishes them and this adapter
+   * does not, deliberately: both are "an operator has to go and look at their own
+   * admin account", both must never be retried, and `AUTHENTICATION_FAILED` is
+   * the kind that says so.
+   *
+   * The token lives for the call sequence that asked for it and is discarded.
+   * There is no third credential to rotate and nothing extra in a database dump.
+   */
+  private async authenticate(
+    target: ProviderTarget,
+    http: ProviderHttpClient,
+  ): Promise<RickpanelAuth> {
+    if (target.credentials.shape !== 'USERNAME_PASSWORD') {
+      // Reported as unsupported rather than attempted: sending an empty password
+      // to find out would be one more failed login on the operator's own panel.
+      return { ok: false, failure: 'UNSUPPORTED_CAPABILITY', status: null };
+    }
+
+    const login = await http.send({
+      method: 'POST',
+      path: TOKEN_PATH,
+      body: {
+        kind: 'form',
+        value: {
+          username: target.credentials.username,
+          password: target.credentials.password,
+          grant_type: 'password',
+        },
+      },
+    });
+    if (!login.ok) return outcomeFromTransport(login);
+    if (login.status < 200 || login.status >= 300) return outcomeFromStatus(login.status);
+
+    const body = parseJson(login.bodyText);
+    const token = body?.['access_token'];
+    if (typeof token !== 'string' || token.length === 0) {
+      // A 200 carrying no token is not a successful login, and treating it as one
+      // would report a healthy panel that nothing can actually call.
+      return { ok: false, failure: 'MALFORMED_RESPONSE', status: login.status };
+    }
+    return { ok: true, token };
+  }
+
+  async probe(target: ProviderTarget, http: ProviderHttpClient): Promise<ProviderProbeOutcome> {
+    const auth = await this.authenticate(target, http);
+    if (!auth.ok) return auth;
+
+    const system = await http.send({
+      method: 'GET',
+      path: SYSTEM_PATH,
+      headers: { authorization: `Bearer ${auth.token}` },
+    });
+
+    // From here the credentials are known good, so nothing below may report an
+    // authentication failure: it would send an operator to replace a password
+    // that just worked. A panel that authenticates and cannot describe itself is
+    // DEGRADED, which is a different remedy from UNREACHABLE.
+    if (!system.ok) return { ok: true, providerVersion: null, degraded: true };
+    if (system.status < 200 || system.status >= 300) {
+      return { ok: true, providerVersion: null, degraded: true };
+    }
+    const info = parseJson(system.bodyText);
+    if (info === null) return { ok: true, providerVersion: null, degraded: true };
+
+    return { ok: true, providerVersion: safeVersion(info['version']), degraded: false };
+  }
+
+  /**
+   * Create one RickPanel user, and do not claim a delivery until one exists.
+   *
+   * The payload carries the four things RickPanel acts on and NOTHING else.
+   * There is no `proxies` and no `inbounds`: the document says both are ignored,
+   * and sending a value a panel throws away would leave an operator believing
+   * they had configured something. There is no `status` either — `OQ-RP-02`
+   * records that the create is not documented to take one, and a suspend is its
+   * own PUT.
+   *
+   * `username` is sent although `UserCreate` does not declare it. That is not an
+   * invention and the audit says why: the created user is addressed as
+   * `/api/user/{username}` immediately afterwards and a duplicate name answers
+   * 409, neither of which is possible for a name the caller did not choose.
+   *
+   * ## The shape of the call
+   *
+   *   2xx  -> read the user back. The 200 is an acknowledgement; the record is
+   *           the delivery, and until it is readable there is nothing to send a
+   *           customer.
+   *   409  -> read the user back and ADOPT it. With an idempotency-safe username
+   *           a 409 means this installation's own earlier create landed. A
+   *           second create under a different name would be a second paid-for
+   *           account on somebody's panel, so there is none.
+   *   400  -> `PROVIDER_REFUSED`. A rule was hit and will be hit again.
+   *   403  -> `PROVIDER_REFUSED`. The admin account may not do this.
+   *   429  -> `RATE_LIMITED`, which is neither of the above.
+   *   else -> `PROVIDER_ERROR`, which is UNKNOWN for a create and reconciles.
+   */
+  async createUser(
+    target: ProviderServiceTarget,
+    http: ProviderHttpClient,
+    input: CreateProviderUserInput,
+  ): Promise<ProviderUserOutcome> {
+    /*
+     * The last check between a bad name and somebody else's machine.
+     *
+     * `assertSendable`, not `assertNew`: this method is also reached by a
+     * RECONCILE-driven retry re-sending the name a service row already carries.
+     * It runs before authentication, so it costs no request.
+     */
+    assertSendableProviderUsername(input.username);
+
+    const auth = await this.authenticate(target, http);
+    if (!auth.ok) return auth;
+
+    const payload: Record<string, unknown> = {
+      username: input.username,
+      // Epoch SECONDS. Zero is the panel's own "never expires", which is also
+      // what `UNLIMITED_DURATION_DAYS` means, so the unlimited case needs no
+      // branch and must not grow one.
+      expire: input.expiresAt === null ? 0 : Math.floor(input.expiresAt.getTime() / 1000),
+      data_limit: Number(input.volumeBytes ?? 0n),
+      data_limit_reset_strategy: 'no_reset',
+    };
+
+    const created = await http.send({
+      method: 'POST',
+      path: USER_PATH,
+      headers: { authorization: `Bearer ${auth.token}` },
+      body: { kind: 'json', value: payload },
+    });
+    if (!created.ok) return outcomeFromTransport(created);
+    if (created.status === 429) return { ok: false, failure: 'RATE_LIMITED', status: 429 };
+
+    if (created.status === 409) {
+      /*
+       * The name is taken. By whom is the entire question.
+       *
+       * A read answers it, because the document says a user this admin does not
+       * own answers 404 "the same as one that does not exist". So:
+       *
+       *   found     -> our own earlier create landed. Adopt it. This is what
+       *                makes a replayed provision idempotent without a second
+       *                account, and it is why the read is by the SAME username
+       *                rather than by a freshly minted one.
+       *   not found -> the name belongs to another admin on this panel. No
+       *                amount of retrying will make it ours, so this is a
+       *                refusal rather than an unknown: the order is failed and
+       *                the customer refunded rather than left waiting on a
+       *                reconciliation that can only ever find nothing.
+       */
+      const existing = await this.readBack(target, http, auth.token, input.username, 1);
+      if (!existing.ok) return existing;
+      if (!existing.found) {
+        return { ok: false, failure: 'PROVIDER_REFUSED', status: 409 };
+      }
+      return this.delivered(target, existing.record, created.status);
+    }
+
+    if (created.status === 400 || created.status === 403) {
+      /*
+       * A decision, not a fault.
+       *
+       * "Your user limit applies, and your service can refuse a user that is too
+       * short, that has a data limit, or that is on hold; a rejection answers
+       * 400 saying which rule was hit." Every one of those will be decided the
+       * same way at every attempt, and the body that says WHICH is deliberately
+       * not read — it is text a third party chose, and `failureNote` keeps the
+       * operations record to a closed vocabulary and a number.
+       *
+       * `PROVIDER_REFUSED` is non-retryable and safe to replay, so the operation
+       * fails once, terminally, and the automatic refund runs in that
+       * transaction. Five attempts over seven minutes against a rule is the
+       * production incident, reached by a second path.
+       */
+      return { ok: false, failure: 'PROVIDER_REFUSED', status: created.status };
+    }
+
+    if (created.status < 200 || created.status >= 300) {
+      // Nothing after a good token exchange may report an authentication
+      // failure. `PROVIDER_ERROR` is UNKNOWN for a create and routes to a READ,
+      // which is right: a 5xx may have committed the user before failing.
+      return { ok: false, failure: 'PROVIDER_ERROR', status: created.status };
+    }
+
+    /*
+     * THE 200 IS NOT THE DELIVERY.
+     *
+     * "The response returns before the nodes have the user." The create response
+     * is therefore not read for a subscription at all — not even as a fallback —
+     * because a URL taken from it would be a link this installation cannot show
+     * exists. The authoritative record is what `GET /api/user/{username}`
+     * returns, and that is what the customer's link comes from.
+     */
+    const readBack = await this.readBack(
+      target,
+      http,
+      auth.token,
+      input.username,
+      this.readBackAttempts,
+    );
+    if (!readBack.ok) return readBack;
+    if (!readBack.found) {
+      /*
+       * Accepted, and not readable yet.
+       *
+       * `MALFORMED_RESPONSE` rather than a retryable kind, and the difference
+       * matters more than the name does. A retryable kind on a PROVISION means
+       * the CREATE runs again, which is a second account the customer did not
+       * buy. This kind is non-retryable and not safe to replay, so the operation
+       * becomes `UNKNOWN`, the service becomes `UNRECONCILED`, and `RECONCILE` —
+       * a READ — adopts the account as soon as it appears. That is what
+       * "propagation is retryable" has to mean for a create: the READ repeats,
+       * never the create.
+       */
+      return { ok: false, failure: 'MALFORMED_RESPONSE', status: created.status };
+    }
+    return this.delivered(target, readBack.record, created.status);
+  }
+
+  /** An adopted or created record, as a user outcome. */
+  private delivered(
+    target: ProviderServiceTarget,
+    record: Record<string, unknown>,
+    status: number,
+  ): ProviderUserOutcome {
+    const url = subscriptionFrom(target.baseUrl, record);
+    if (url === null) {
+      /*
+       * The account exists and this installation cannot deliver it.
+       *
+       * UNKNOWN for a mutating call, which is right: something is there, nothing
+       * may be created again, and a READ is what resolves it. Reporting success
+       * with no link would mark a service DELIVERED that no customer received.
+       */
+      return { ok: false, failure: 'MALFORMED_RESPONSE', status };
+    }
+    return {
+      ok: true,
+      /*
+       * RickPanel keys users by name and its record carries no separate id that
+       * outlives a rename, exactly as Marzban's does not. The username IS the
+       * identity, so there is no second one to report and inventing a value for
+       * this column would be worse than a null.
+       */
+      providerUserId: null,
+      delivery: { kind: 'SUBSCRIPTION_LINK', url },
+      usage: usageFromUser(record),
+    };
+  }
+
+  /**
+   * Read one user, up to `attempts` times, with a wait between tries.
+   *
+   * The wait is skipped after the LAST attempt, so a three-attempt poll costs two
+   * waits rather than three: a worker that slept after learning its answer would
+   * be holding a customer's order open for nothing.
+   *
+   * A failure that is not a 404 stops the poll immediately. Repeating a call that
+   * a panel is answering with a 500 is not a propagation delay, and treating it
+   * as one would turn one fault into three.
+   */
+  private async readBack(
+    target: ProviderServiceTarget,
+    http: ProviderHttpClient,
+    token: string,
+    username: string,
+    attempts: number,
+  ): Promise<ReadBack> {
+    let last: ReadBack = { ok: true, found: false };
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      if (attempt > 0) await this.sleep(this.readBackDelayMs);
+      const read = await http.send({
+        method: 'GET',
+        path: `${USER_PATH}/${encodeURIComponent(username)}`,
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!read.ok) return outcomeFromTransport(read);
+      if (read.status === 429) return { ok: false, failure: 'RATE_LIMITED', status: 429 };
+      if (read.status === 404) {
+        last = { ok: true, found: false };
+        continue;
+      }
+      if (read.status < 200 || read.status >= 300) {
+        return { ok: false, failure: 'PROVIDER_ERROR', status: read.status };
+      }
+      const record = parseJson(read.bodyText);
+      if (record === null) {
+        return { ok: false, failure: 'MALFORMED_RESPONSE', status: read.status };
+      }
+      return { ok: true, found: true, record };
+    }
+    return last;
+  }
+
+  /**
+   * Whether this panel holds a user with that name.
+   *
+   * 404 is the one status that means ABSENT, and it means it because the request
+   * was authenticated — the token exchange already succeeded, so this is the
+   * panel answering a question it understood. The document adds a second reading
+   * of the same code: "a user you do not own answers 404, the same as one that
+   * does not exist". Both are "this installation may not have it", which is what
+   * the caller acts on.
+   *
+   * Every other failure leaves this installation not knowing, which is never
+   * reported as absence — that collapse is how a timeout becomes a duplicate.
+   */
+  async lookupUser(
+    target: ProviderServiceTarget,
+    http: ProviderHttpClient,
+    ref: ProviderUserRef,
+  ): Promise<ProviderLookupOutcome> {
+    const auth = await this.authenticate(target, http);
+    if (!auth.ok) return auth;
+
+    // One attempt, not the create path's poll: a lookup asks what is true now.
+    const read = await this.readBack(target, http, auth.token, ref.username, 1);
+    if (!read.ok) return read;
+    if (!read.found) return { ok: true, found: false };
+
+    const usage = usageFromUser(read.record);
+    if (usage === null) return { ok: false, failure: 'MALFORMED_RESPONSE', status: null };
+    const url = subscriptionFrom(target.baseUrl, read.record);
+    return {
+      ok: true,
+      found: true,
+      providerUserId: null,
+      /*
+       * A user that exists with no readable subscription is still a user that
+       * exists. Reported as NONE rather than refused, because the adoption this
+       * read exists for must not be blocked by a delivery detail — an operator
+       * can see the service, and re-delivery is its own retryable act.
+       */
+      delivery: url === null ? { kind: 'NONE' } : { kind: 'SUBSCRIPTION_LINK', url },
+      usage,
+    };
+  }
+
+  /**
+   * Stop this account serving, or start it serving again.
+   *
+   * ONE implementation for both: the panel has one route, `PUT /api/user/{username}`,
+   * and "saving the user as disabled, limited or expired removes them from every
+   * core; any other status pushes the change instead".
+   *
+   * The body carries the status and NOTHING else, and that is load-bearing rather
+   * than minimalism. An omitted field is no change, but a present one is applied,
+   * so sending `expire` or `data_limit` here would make a suspend silently
+   * rewrite the customer's allowance. A suspend changes one thing.
+   *
+   * `proxies` is absent for a second reason on this panel: "an edit that would
+   * leave a user with no proxies answers 400", so an empty object sent out of
+   * habit is a refusal, and a populated one would be this adapter inventing a
+   * configuration the panel says it chooses itself.
+   */
+  private async setStatus(
+    target: ProviderServiceTarget,
+    http: ProviderHttpClient,
+    ref: ProviderUserRef,
+    status: 'active' | 'disabled',
+  ): Promise<ProviderStateChangeOutcome> {
+    const auth = await this.authenticate(target, http);
+    if (!auth.ok) return auth;
+
+    const changed = await http.send({
+      method: 'PUT',
+      path: `${USER_PATH}/${encodeURIComponent(ref.username)}`,
+      headers: { authorization: `Bearer ${auth.token}` },
+      body: { kind: 'json', value: { status } },
+    });
+    if (!changed.ok) return outcomeFromTransport(changed);
+    // A 404 after a good token exchange is a POSITIVE statement: the panel does
+    // not have this account, or this admin may not see it. Either way the caller
+    // acts on it differently from a failure.
+    if (changed.status === 404) return { ok: true, found: false };
+    if (changed.status === 429) return { ok: false, failure: 'RATE_LIMITED', status: 429 };
+    if (changed.status === 400 || changed.status === 403) {
+      /*
+       * "Re-enabling a disabled user can hit your user limit; either answers 400
+       * or 403 with the reason." A rule again, and one an operator fixes on their
+       * own panel rather than by waiting.
+       */
+      return { ok: false, failure: 'PROVIDER_REFUSED', status: changed.status };
+    }
+    if (changed.status < 200 || changed.status >= 300) {
+      return { ok: false, failure: 'PROVIDER_ERROR', status: changed.status };
+    }
+    const record = parseJson(changed.bodyText);
+    if (record === null) {
+      return { ok: false, failure: 'MALFORMED_RESPONSE', status: changed.status };
+    }
+    /*
+     * The panel's own word for what the account is NOW, checked rather than
+     * assumed. A 200 whose record does not carry the status that was asked for is
+     * a panel doing something this adapter does not model, and reporting success
+     * would be reporting a suspension that did not happen.
+     */
+    if (record['status'] !== status) {
+      return { ok: false, failure: 'MALFORMED_RESPONSE', status: changed.status };
+    }
+    return { ok: true, found: true, usage: usageFromUser(record) };
+  }
+
+  /**
+   * Make this account's allowance read as the plan says. `RENEW_USER`,
+   * `ADD_VOLUME` and `ADD_TIME` over the one route that performs them.
+   *
+   * The body carries exactly the fields the plan sets. An omitted key is no
+   * change on this panel, and a key set to something read back a moment ago would
+   * turn a replay into a different request — which is the whole basis on which
+   * these three are in `IDEMPOTENT_MUTATIONS`.
+   *
+   * There is deliberately no `status` and no call to `POST /api/user/{name}/reset`
+   * anywhere in this adapter. A reset would clear the usage counter, and replayed
+   * after the customer had consumed more it would destroy real evidence of
+   * consumption.
+   *
+   * Worth knowing and deliberately not acted on: "raising `data_limit` or pushing
+   * `expire` out on an active user gives that user their one-time emergency
+   * top-up back". That is the panel's own feature, it is a consequence of the
+   * renewal the customer bought, and nothing here tries to suppress or trigger it.
+   */
+  async applyAllowance(
+    target: ProviderServiceTarget,
+    http: ProviderHttpClient,
+    ref: ProviderUserRef,
+    plan: ProviderAllowancePlan,
+  ): Promise<ProviderStateChangeOutcome> {
+    if (plan.expiresAt === null && plan.trafficLimitBytes === null) {
+      // A caller defect, not a provider one — and refused rather than sent,
+      // because a request that asks for nothing and answers 200 would be recorded
+      // as a renewal that succeeded.
+      return { ok: false, failure: 'PROVIDER_ERROR', status: null };
+    }
+
+    const auth = await this.authenticate(target, http);
+    if (!auth.ok) return auth;
+
+    const body: Record<string, unknown> = {};
+    if (plan.expiresAt !== null) {
+      body['expire'] = Math.floor(plan.expiresAt.getTime() / 1000);
+    }
+    if (plan.trafficLimitBytes !== null) {
+      // `0` is what this installation stores for "no limit" and what the panel
+      // reads as one. The two sentinels agree, so no branch is needed and none
+      // must be added: a branch skipping the key for zero would leave an
+      // unlimited renewal quietly keeping the old cap.
+      body['data_limit'] = Number(plan.trafficLimitBytes);
+    }
+
+    const changed = await http.send({
+      method: 'PUT',
+      path: `${USER_PATH}/${encodeURIComponent(ref.username)}`,
+      headers: { authorization: `Bearer ${auth.token}` },
+      body: { kind: 'json', value: body },
+    });
+    if (!changed.ok) return outcomeFromTransport(changed);
+    if (changed.status === 404) return { ok: true, found: false };
+    if (changed.status === 429) return { ok: false, failure: 'RATE_LIMITED', status: 429 };
+    if (changed.status === 400 || changed.status === 403) {
+      return { ok: false, failure: 'PROVIDER_REFUSED', status: changed.status };
+    }
+    if (changed.status < 200 || changed.status >= 300) {
+      return { ok: false, failure: 'PROVIDER_ERROR', status: changed.status };
+    }
+    const record = parseJson(changed.bodyText);
+    if (record === null) {
+      return { ok: false, failure: 'MALFORMED_RESPONSE', status: changed.status };
+    }
+    if (!appliedPlan(record, plan)) {
+      return { ok: false, failure: 'MALFORMED_RESPONSE', status: changed.status };
+    }
+    return { ok: true, found: true, usage: usageFromUser(record) };
+  }
+
+  /** Disable one account. `DISABLE_USER`. */
+  async suspendUser(
+    target: ProviderServiceTarget,
+    http: ProviderHttpClient,
+    ref: ProviderUserRef,
+  ): Promise<ProviderStateChangeOutcome> {
+    return this.setStatus(target, http, ref, 'disabled');
+  }
+
+  /** Re-enable one account. `ENABLE_USER`. */
+  async resumeUser(
+    target: ProviderServiceTarget,
+    http: ProviderHttpClient,
+    ref: ProviderUserRef,
+  ): Promise<ProviderStateChangeOutcome> {
+    return this.setStatus(target, http, ref, 'active');
+  }
+
+  /**
+   * Delete one account. `DELETE_USER`.
+   *
+   * The 404 here is a SUCCESS, and it is the only place in this adapter where a
+   * 404 means the work is done rather than that something is missing. A delete
+   * replayed after a lost answer finds nothing the second time, and "this account
+   * is not on this panel" — the whole of what a terminate asks for — holds either
+   * way.
+   *
+   * The 403 is this panel's own, and it is NOT a success: "your service may only
+   * allow deleting expired users, and a refusal answers 403". The account is
+   * still there. `PROVIDER_REFUSED` says so and stops the retry, because a rule
+   * about expiry does not change in thirty seconds.
+   *
+   * There is no confirmation step here and there must not be one. The decision to
+   * destroy a service is made in a surface, before an operation is ever planned;
+   * an adapter that re-asked would be a second, weaker gate that looks like a
+   * safeguard.
+   */
+  async terminateUser(
+    target: ProviderServiceTarget,
+    http: ProviderHttpClient,
+    ref: ProviderUserRef,
+  ): Promise<ProviderRemovalOutcome> {
+    const auth = await this.authenticate(target, http);
+    if (!auth.ok) return auth;
+
+    const removed = await http.send({
+      method: 'DELETE',
+      path: `${USER_PATH}/${encodeURIComponent(ref.username)}`,
+      headers: { authorization: `Bearer ${auth.token}` },
+    });
+    if (!removed.ok) return outcomeFromTransport(removed);
+    if (removed.status === 404) return { ok: true, wasPresent: false };
+    if (removed.status === 429) return { ok: false, failure: 'RATE_LIMITED', status: 429 };
+    if (removed.status === 403) {
+      return { ok: false, failure: 'PROVIDER_REFUSED', status: 403 };
+    }
+    if (removed.status < 200 || removed.status >= 300) {
+      return { ok: false, failure: 'PROVIDER_ERROR', status: removed.status };
+    }
+    /*
+     * The body is deliberately NOT parsed. Reading a confirmation sentence would
+     * make a string load-bearing — a locale, a proxy that rewrites bodies, or an
+     * upstream wording change would each turn a completed delete into a failure.
+     * The 2xx is the statement; the sentence is decoration.
+     */
+    return { ok: true, wasPresent: true };
+  }
+
+  /** One user's traffic. A read, so a failure is never `UNKNOWN`. */
+  async readUsage(
+    target: ProviderServiceTarget,
+    http: ProviderHttpClient,
+    ref: ProviderUserRef,
+  ): Promise<ProviderUsageOutcome> {
+    const found = await this.lookupUser(target, http, ref);
+    if (!found.ok) return found;
+    if (!found.found) {
+      // A service Nexa believes is ACTIVE whose account is gone from the panel is
+      // a real divergence an operator has to see. Zero bytes used is what a brand
+      // new account looks like, so reporting that instead would hide it.
+      return { ok: false, failure: 'PROVIDER_ERROR', status: null };
+    }
+    if (found.usage === null) return { ok: false, failure: 'MALFORMED_RESPONSE', status: null };
+    return { ok: true, usage: found.usage };
+  }
+}
+
+/**
+ * Did the panel's own record come back carrying what the plan asked for?
+ *
+ * Read from the RESPONSE rather than inferred from the request: a 200 whose
+ * record still holds the old expiry is a panel doing something this adapter does
+ * not model, and reporting success would tell a customer their service was
+ * renewed when it was not.
+ *
+ * Both sentinels are folded the way the panel folds them — `expire: 0` and
+ * `data_limit: 0` mean no limit and read back as null or zero — which is the same
+ * mapping `usageFromUser` makes. A field the plan did not set is not checked,
+ * because the adapter did not send it and the panel was right to leave it alone.
+ */
+function appliedPlan(record: Record<string, unknown>, plan: ProviderAllowancePlan): boolean {
+  if (plan.expiresAt !== null) {
+    const wanted = Math.floor(plan.expiresAt.getTime() / 1000);
+    const got = record['expire'];
+    const normalised = got === null || got === 0 ? 0 : got;
+    if (normalised !== wanted) return false;
+  }
+  if (plan.trafficLimitBytes !== null) {
+    const wanted = Number(plan.trafficLimitBytes);
+    const got = record['data_limit'];
+    const normalised = got === null || got === 0 ? 0 : got;
+    if (normalised !== wanted) return false;
+  }
+  return true;
+}

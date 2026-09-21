@@ -76,6 +76,22 @@ describe('the probe cooldown floor', () => {
       probePath: ['probe', 'authenticate'],
       file: 'apps/api/src/modules/platform/providers/infrastructure/marzban.adapter.ts',
     },
+    /*
+     * Two, exactly as Marzban's, and for the same reason: RickPanel's probe is
+     * a token exchange and a status read.
+     *
+     * The create path's read-back does NOT belong here and must not be counted
+     * into it. This guard bounds the PROBE — what the monitor spends on a panel
+     * on a timer — and `createUser`'s bounded poll is spent by one customer's
+     * order, against an operation's own budget, not the probe cooldown's.
+     * Folding it in would raise the floor for every panel this installation
+     * watches on account of a request the monitor never makes.
+     */
+    rickpanel: {
+      longestPath: 2,
+      probePath: ['probe', 'authenticate'],
+      file: 'apps/api/src/modules/platform/providers/infrastructure/rickpanel.adapter.ts',
+    },
     sanaei: {
       longestPath: 4,
       // csrf-token, the 2FA question and the login all live in the session method;

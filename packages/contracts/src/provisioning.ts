@@ -278,6 +278,19 @@ export const SAFE_TO_REPLAY_FAILURE_KINDS: readonly ProviderFailureKind[] = [
   'AUTHENTICATION_FAILED',
   'AUTHENTICATION_REQUIRES_INTERACTION',
   'RATE_LIMITED',
+  /*
+   * The panel read the request and refused it by a rule of its own — an admin's
+   * user limit, a service that will not take a subscription this short. It
+   * answered, and it did nothing, so there is no half-made account behind this
+   * and nothing to reconcile.
+   *
+   * That makes it safe, and being safe is what lets a refused create become
+   * terminal `FAILED` and refund the customer in the same transaction instead of
+   * going to `UNRECONCILED` to wait for a READ that will find nothing. An
+   * adapter may only raise this kind where the panel's own answer says the
+   * refusal is a RULE rather than a fault — see `PROVIDER_FAILURE_KINDS`.
+   */
+  'PROVIDER_REFUSED',
 ] as unknown as readonly ProviderFailureKind[];
 
 /**

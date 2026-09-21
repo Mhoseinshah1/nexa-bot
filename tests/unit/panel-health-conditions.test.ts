@@ -72,7 +72,7 @@ describe('the condition a failing panel announces', () => {
 });
 
 describe('the set of condition codes is fixed deliberately', () => {
-  it('is exactly these ten, and changing one is an upgrade', () => {
+  it('is exactly these eleven, and changing one is an upgrade', () => {
     // `operational_events` dedupes and recovers by code, and the append-only
     // guard forbids rewriting `code` on a row that already exists — so a code
     // this function stops producing strands every row still open under it,
@@ -96,6 +96,18 @@ describe('the set of condition codes is fixed deliberately', () => {
       'panel.health.degraded',
       'panel.health.malformed_response',
       'panel.health.provider_error',
+      /*
+       * Eleven now, not ten. `PROVIDER_REFUSED` joined the failure taxonomy for
+       * the CREATE path — a panel answering a rule of its own — and no probe
+       * produces it, so this code is currently unreachable in practice.
+       *
+       * It is listed anyway because `conditionOf` is exhaustive with no
+       * catch-all: an unlisted kind would not fall through to a generic
+       * condition, it would fail to compile. The code is NEW rather than a
+       * split of `provider_error`, which is what keeps every row already open
+       * under that code resolvable — a rename would strand them for ever.
+       */
+      'panel.health.provider_refused',
       'panel.health.rate_limited',
       'panel.health.target_blocked',
       'panel.health.tls_failed',

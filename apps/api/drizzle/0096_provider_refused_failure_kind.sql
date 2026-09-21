@@ -1,0 +1,6 @@
+ALTER TABLE "panel_health" DROP CONSTRAINT "panel_health_failure_check";--> statement-breakpoint
+ALTER TABLE "panels" DROP CONSTRAINT "panels_provider_type_check";--> statement-breakpoint
+ALTER TABLE "provisioning_operations" DROP CONSTRAINT "provisioning_operations_failure_kind_check";--> statement-breakpoint
+ALTER TABLE "panel_health" ADD CONSTRAINT "panel_health_failure_check" CHECK (failure IS NULL OR failure IN ('AUTHENTICATION_FAILED', 'AUTHENTICATION_REQUIRES_INTERACTION', 'UNREACHABLE', 'TIMEOUT', 'TLS_FAILED', 'BLOCKED_TARGET', 'RATE_LIMITED', 'MALFORMED_RESPONSE', 'PROVIDER_ERROR', 'PROVIDER_REFUSED', 'UNSUPPORTED_CAPABILITY'));--> statement-breakpoint
+ALTER TABLE "panels" ADD CONSTRAINT "panels_provider_type_check" CHECK (provider_type IN ('marzban', 'rickpanel', 'sanaei'));--> statement-breakpoint
+ALTER TABLE "provisioning_operations" ADD CONSTRAINT "provisioning_operations_failure_kind_check" CHECK (failure_kind IS NULL OR failure_kind IN ('AUTHENTICATION_FAILED', 'AUTHENTICATION_REQUIRES_INTERACTION', 'UNREACHABLE', 'TIMEOUT', 'TLS_FAILED', 'BLOCKED_TARGET', 'RATE_LIMITED', 'MALFORMED_RESPONSE', 'PROVIDER_ERROR', 'PROVIDER_REFUSED', 'UNSUPPORTED_CAPABILITY'));
