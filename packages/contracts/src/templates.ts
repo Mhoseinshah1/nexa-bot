@@ -996,6 +996,21 @@ export const TEMPLATES = [
         required: true,
         repeatable: false,
       },
+      {
+        token: 'history',
+        type: 'STRING',
+        description:
+          'How many operations this service has, and whether that figure is exact. A ' +
+          'plain number when the whole history was read; the bound with a trailing `+` ' +
+          'when it was not, because the reader stops at a bound and an exact count ' +
+          'would mean walking every operation the service ever had to render one ' +
+          'figure. WP3 added it so the screen above a SINGLE operation says whether ' +
+          'that one is the whole story — the same rule the Web history now prints ' +
+          'under its table, and the reason neither surface calls a long history a ' +
+          'problem any more.',
+        required: true,
+        repeatable: false,
+      },
     ],
   },
   {

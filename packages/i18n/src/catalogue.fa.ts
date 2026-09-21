@@ -198,7 +198,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.services_none':
     'در حال حاضر هیچ سرویسی رسیدگی نمی‌خواهد. برای دیدن یک سرویس مشخص: /service <شناسهٔ سرویس>',
   'bot.admin.service':
-    'مشتری: {customer}\nنام کاربری روی پنل: {username}\nپنل: {panel}\nپلن: {product}\nوضعیت: {state}\nتحویل به مشتری: {delivery}\nمصرف: {usedTrafficBytes} از {totalTrafficBytes}\nآخرین خواندن مصرف: {syncedAt}\nانقضا: {expiresAt}\nآخرین عملیات: {operation}',
+    'مشتری: {customer}\nنام کاربری روی پنل: {username}\nپنل: {panel}\nپلن: {product}\nوضعیت: {state}\nتحویل به مشتری: {delivery}\nمصرف: {usedTrafficBytes} از {totalTrafficBytes}\nآخرین خواندن مصرف: {syncedAt}\nانقضا: {expiresAt}\nآخرین عملیات: {operation}\nشمار عملیات ثبت‌شده: {history}',
   'bot.admin.service_gone': 'این سرویس پیدا نشد.',
   'bot.admin.service_sync_button': '🔄 خواندن مصرف از پنل',
   'bot.admin.service_resend_button': '📨 ارسال مجدد لینک',
