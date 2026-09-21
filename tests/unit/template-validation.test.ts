@@ -82,6 +82,30 @@ describe('validateTemplateBody', () => {
     expect(kinds('سلام')).toContain('MISSING_REQUIRED_PLACEHOLDER');
   });
 
+  it('accepts a body that predates an OPTIONAL placeholder the key later gained', () => {
+    /*
+     * The upgrade path, asserted rather than assumed. Found by the Codex review of the
+     * WP3 branch.
+     *
+     * An override is raw persisted source and nothing rewrites it, so an installation
+     * that overrode `bot.admin.service` before WP3 holds a body with no `{history}`.
+     * Had that token been declared REQUIRED, the operator could still READ their body
+     * and never save it again: every attempt refused as MISSING_REQUIRED_PLACEHOLDER,
+     * for a token they never wrote. That is the write-only-settings failure the
+     * research records, arriving through an upgrade instead of through a screen.
+     *
+     * The body used here is the one this catalogue shipped BEFORE the placeholder, so
+     * the case fails the moment `history` is marked required again.
+     */
+    const beforeWp3 =
+      'مشتری: {customer}\nنام کاربری روی پنل: {username}\nپنل: {panel}\n' +
+      'پلن: {product}\nوضعیت: {state}\nتحویل به مشتری: {delivery}\n' +
+      'مصرف: {usedTrafficBytes} از {totalTrafficBytes}\nآخرین خواندن مصرف: {syncedAt}\n' +
+      'انقضا: {expiresAt}\nآخرین عملیات: {operation}';
+
+    expect(validateTemplateBody(templateDefinition('bot.admin.service'), beforeWp3)).toEqual([]);
+  });
+
   it('rejects repeating a placeholder the key declares single-use', () => {
     expect(kinds('{correlationId} {correlationId}')).toContain('REPEATED_PLACEHOLDER');
   });

@@ -948,6 +948,15 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.admin.section',
       'bot.admin.section_button',
       'bot.admin.service',
+      /*
+       * The disambiguation screen (the Codex round on this branch). It carries no
+       * action and no identity: one button per match, each opening the ordinary
+       * detail. The detail is where the panel and the customer are named, and where
+       * the seven action buttons live — a screen that has not established WHICH
+       * service the operator means must not offer to end one.
+       */
+      'bot.admin.service_ambiguous',
+      'bot.admin.service_customer_button',
       'bot.admin.service_gone',
       'bot.admin.service_planned',
       'bot.admin.service_reconcile_button',
@@ -961,7 +970,31 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.admin.service_terminate_button',
       'bot.admin.service_terminate_confirm_button',
       'bot.admin.service_unavailable',
+      /*
+       * WP3's seven, the browsable half of the services section and the two things a
+       * service screen was missing. Reviewed against the same rule, and against the
+       * one that matters most for a screen about somebody's ACCOUNT: none of them
+       * carries a subscription URL, a subscription ref or a provider client id. What
+       * the browse list prints is the provider username, which is the handle an
+       * operator types into the panel and is not a credential — the queue above it has
+       * printed exactly that since 6A.
+       *
+       * `bot.admin.service_customer_button` links to `bot.admin.customer_detail`,
+       * already in this list, so the two screens together still carry nothing the
+       * customer bought beyond the one service the administrator was already looking
+       * at.
+       *
+       * `bot.admin.service_usage` names `/service <username or id>`, which `intentOf`
+       * parses and `telegram-command-menu.test.ts` proves is deliberately unregistered
+       * — the same standing `/customer`, `/link` and `/role` have.
+       */
+      'bot.admin.service_usage',
+      'bot.admin.services_back_button',
+      'bot.admin.services_browse',
+      'bot.admin.services_browse_button',
+      'bot.admin.services_browse_none',
       'bot.admin.services_button',
+      'bot.admin.services_more_button',
       'bot.admin.services_none',
       'bot.admin.services_section',
       'bot.admin.usage',

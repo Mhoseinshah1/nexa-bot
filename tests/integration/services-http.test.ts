@@ -376,6 +376,17 @@ describe('service HTTP surface', () => {
     const body = serviceOperationsResponseSchema.parse(JSON.parse(response.body));
     expect(body.operations.map((o) => o.type)).toEqual(['PROVISION']);
     expect(body.operations[0]?.state).toBe('PLANNED');
+    /*
+     * The BOUND travels with the rows (WP3).
+     *
+     * A client that hard-coded fifty would print a truncation notice that stopped being
+     * true the moment the bound moved, and one that inferred truncation from
+     * `length === limit` would be wrong for the service that has exactly fifty. One
+     * `PROVISION` is well inside the bound, so `hasMore` is false and the figure is the
+     * server's own.
+     */
+    expect(body.limit).toBe(50);
+    expect(body.hasMore).toBe(false);
     /* The worker's own bookkeeping is not an operator's business. */
     for (const internal of ['leaseUntil', 'claimedBy']) {
       expect(response.body, `the operations list leaked ${internal}`).not.toContain(internal);
@@ -557,6 +568,124 @@ describe('service HTTP surface', () => {
       JSON.parse((await get(`${SERVICE_ROUTES.list}?customerId=${other}`, viewerCookie)).body),
     );
     expect(byOther.services).toHaveLength(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // The lookup an operator actually arrives with (WP3)
+  // -------------------------------------------------------------------------
+
+  /** The name the settlement minted, read back the way a support conversation gets it. */
+  const usernameOf = async (serviceId: string): Promise<string> => {
+    const rows = (await api.container.database.db.execute(
+      sql`SELECT provider_username FROM services WHERE id = ${serviceId}` as never,
+    )) as unknown as { rows: { provider_username: string }[] };
+    const found = rows.rows[0]?.provider_username;
+    if (found === undefined) throw new Error('no such service');
+    return found;
+  };
+
+  it('finds one service by the exact name on its panel, in either case', async () => {
+    /*
+     * The whole point of WP3's first item. A customer writes "my account nx… stopped
+     * working", and until this existed that string — the only handle their message
+     * ever contains — matched no search on either surface.
+     *
+     * Asked TWICE, lowercase and uppercased, because the fold happens once at the
+     * boundary and a caller typing what they were sent must reach the same row. A
+     * second, quieter fold in a repository or a client is what `ServiceSearch` names as
+     * the way two opinions about a username start.
+     */
+    const { serviceId } = await serviceFor('svc-by-name');
+    const username = await usernameOf(serviceId);
+
+    for (const typed of [username, username.toUpperCase()]) {
+      const body = serviceListResponseSchema.parse(
+        JSON.parse(
+          (await get(`${SERVICE_ROUTES.list}?providerUsername=${typed}`, viewerCookie)).body,
+        ),
+      );
+      expect(
+        body.services.map((service) => service.id),
+        `typed as ${typed}`,
+      ).toEqual([serviceId]);
+    }
+  });
+
+  it('answers a PREFIX of a name with nothing, rather than with the account it names', async () => {
+    /*
+     * The rule that decides the whole shape of this filter, asserted rather than
+     * commented: a prefix search over account names is an ENUMERATION of a panel's
+     * accounts, and every row it would return leads to a subscription URL that is a
+     * bearer capability.
+     *
+     * The prefix used here is deliberately one the schema ACCEPTS — six characters of
+     * `[a-z0-9]` is a well-formed provider username — so this measures the repository's
+     * equality and not the validator. A `like` in place of the `eq` returns the service
+     * and this fails.
+     */
+    const { serviceId } = await serviceFor('svc-prefix');
+    const username = await usernameOf(serviceId);
+
+    const body = serviceListResponseSchema.parse(
+      JSON.parse(
+        (await get(`${SERVICE_ROUTES.list}?providerUsername=${username.slice(0, 6)}`, viewerCookie))
+          .body,
+      ),
+    );
+    expect(body.services).toHaveLength(0);
+  });
+
+  it("cannot find another tenant's service by the name on its panel", async () => {
+    /*
+     * The username namespace is derived from the PROVIDER and HOST and is deliberately
+     * not tenant-scoped, so two tenants pointing at one machine share it — which means
+     * a name is exactly the sort of handle that could cross a tenant boundary if the
+     * lookup were not scoped. The index leads with `tenant_id` and so does the query.
+     */
+    const foreignId = await foreignService('svc-foreign-name');
+    const username = await usernameOf(foreignId);
+
+    const body = serviceListResponseSchema.parse(
+      JSON.parse(
+        (await get(`${SERVICE_ROUTES.list}?providerUsername=${username}`, viewerCookie)).body,
+      ),
+    );
+    expect(body.services).toHaveLength(0);
+  });
+
+  it('refuses a lookup that is not a name this product stores', async () => {
+    /*
+     * Refused at the schema, as a malformed REQUEST, rather than spent as a query that
+     * finds nothing. `@zahra` is what somebody pastes when they mean a Telegram
+     * username, and answering it with an empty list would say "no such service" about a
+     * string that could never be one.
+     */
+    const response = await get(`${SERVICE_ROUTES.list}?providerUsername=@zahra`, viewerCookie);
+    expect(response.statusCode).toBe(400);
+    /*
+     * `request.invalid` is the boundary's OWN code for a body or query the schema
+     * rejected, not a commerce one: nothing about services has been consulted yet, and
+     * saying `commerce.service_not_found` here would report a fact this request never
+     * established.
+     */
+    expect(errorCodeOf(response.body)).toBe('request.invalid');
+  });
+
+  it('refuses the name lookup for an operator who does not hold services.view', async () => {
+    /*
+     * A new filter is a new way to ask, and it is charged by the same key: the guard
+     * runs inside `ServiceAdminService.list` before the search reaches a repository, so
+     * an operator without `services.view` cannot use this to learn whether a name
+     * exists here.
+     */
+    const { serviceId } = await serviceFor('svc-name-denied');
+    const username = await usernameOf(serviceId);
+
+    const response = await get(
+      `${SERVICE_ROUTES.list}?providerUsername=${username}`,
+      reviewerCookie,
+    );
+    expect(response.statusCode).toBe(403);
   });
 
   // -------------------------------------------------------------------------

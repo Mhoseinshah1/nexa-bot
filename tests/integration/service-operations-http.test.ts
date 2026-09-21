@@ -609,7 +609,7 @@ describe('operator service actions over HTTP', () => {
     }
     /* And nothing happened to the service or its operations. */
     expect((await services.findById(tenantA, serviceId))?.state).toBe('ACTIVE');
-    const operations = await api.container.serviceAdmin.operations(tenantA, owner, serviceId);
+    const { operations } = await api.container.serviceAdmin.operations(tenantA, owner, serviceId);
     expect(operations.map((one) => one.type)).toEqual(['PROVISION']);
   });
 
@@ -633,7 +633,7 @@ describe('operator service actions over HTTP', () => {
       expect(errorCodeOf(response.body)).toBe(COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID);
     }
     /* Nothing was planned by any of them. */
-    const operations = await api.container.serviceAdmin.operations(tenantA, owner, serviceId);
+    const { operations } = await api.container.serviceAdmin.operations(tenantA, owner, serviceId);
     expect(operations.map((one) => one.type)).not.toContain('TERMINATE');
 
     /* The phrase with surrounding whitespace IS accepted — an operator pasted it. */
@@ -680,7 +680,7 @@ describe('operator service actions over HTTP', () => {
     const b = serviceActionResponseSchema.parse(JSON.parse(second.body));
     expect(b.operation?.id).toBe(a.operation?.id);
 
-    const operations = await api.container.serviceAdmin.operations(tenantA, owner, serviceId);
+    const { operations } = await api.container.serviceAdmin.operations(tenantA, owner, serviceId);
     expect(operations.filter((one) => one.type === 'SUSPEND')).toHaveLength(1);
   });
 
@@ -704,7 +704,7 @@ describe('operator service actions over HTTP', () => {
     const a = serviceActionResponseSchema.parse(JSON.parse(first.body));
     const b = serviceActionResponseSchema.parse(JSON.parse(second.body));
     expect(b.operation?.id).toBe(a.operation?.id);
-    const operations = await api.container.serviceAdmin.operations(tenantA, owner, serviceId);
+    const { operations } = await api.container.serviceAdmin.operations(tenantA, owner, serviceId);
     expect(operations.filter((one) => one.type === 'SUSPEND')).toHaveLength(1);
   });
 
@@ -925,7 +925,7 @@ describe('operator service actions over HTTP', () => {
       );
     }
     /* And nothing was planned against it. */
-    const operations = await api.container.serviceAdmin.operations(tenantB, ownerB, foreign.id);
+    const { operations } = await api.container.serviceAdmin.operations(tenantB, ownerB, foreign.id);
     expect(operations.map((one) => one.type)).toEqual(['PROVISION']);
   });
 

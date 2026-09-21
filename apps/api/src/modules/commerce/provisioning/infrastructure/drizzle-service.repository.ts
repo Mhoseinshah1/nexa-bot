@@ -183,6 +183,34 @@ export class DrizzleServiceRepository implements ServiceRepository {
     cursor: ServiceCursor | null,
     tx?: unknown,
   ): Promise<ServicePage> {
+    const rows = await this.listStatement(scope, search, limit, cursor, tx);
+
+    const page = rows.slice(0, limit).map(toRecord);
+    const lastRow = rows[limit - 1];
+    return {
+      items: page,
+      nextCursor:
+        rows.length > limit && lastRow !== undefined
+          ? { createdAt: lastRow.createdAtText, id: lastRow.id }
+          : null,
+    };
+  }
+
+  /**
+   * The page statement, exposed so a PLAN regression can explain it.
+   *
+   * Public for the reason `DrizzleCustomerRepository.listStatement` gives: the plan test
+   * has to explain the statement this code issues, and a retyped equivalent in a test
+   * proves a plan for a query nobody runs — the failure `panel-monitor-scale.test.ts`
+   * records in full.
+   */
+  listStatement(
+    scope: TenantContext,
+    search: ServiceSearch,
+    limit: number,
+    cursor: ServiceCursor | null,
+    tx?: unknown,
+  ) {
     const tenantId = requireTenantId(scope);
     const filters: SQL[] = [eq(services.tenantId, tenantId)];
     if (search.customerId !== undefined) filters.push(eq(services.customerId, search.customerId));
@@ -190,6 +218,24 @@ export class DrizzleServiceRepository implements ServiceRepository {
     if (search.state !== undefined) filters.push(eq(services.state, search.state));
     if (search.deliveryState !== undefined) {
       filters.push(eq(services.deliveryState, search.deliveryState));
+    }
+    if (search.providerUsername !== undefined) {
+      /*
+       * EQUALITY, never `like`, and never `lower(...)` around the column.
+       *
+       * Equality because a prefix match over account names enumerates a
+       * panel's accounts, and every row carries a `subscriptionUrl` that is a
+       * bearer capability. No caller wants "services whose name starts with";
+       * the caller that wants browsing pages with the cursor above.
+       *
+       * The column is compared AS STORED. `providerUsernameLookupSchema` has
+       * already folded the caller's text to lowercase, and every write path
+       * goes through the same canonicalisation, so a `lower()` here would only
+       * make the value non-indexable while asserting a second, quieter opinion
+       * about what a username is. `services_tenant_provider_username_idx`
+       * serves this as an index cond with `tenant_id` leading.
+       */
+      filters.push(eq(services.providerUsername, search.providerUsername));
     }
     if (cursor !== null) {
       /*
@@ -218,7 +264,7 @@ export class DrizzleServiceRepository implements ServiceRepository {
         sql`(${services.createdAt}, ${services.id}) < (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`,
       );
     }
-    const rows = await this.exec(tx)
+    return this.exec(tx)
       .select({
         ...getTableColumns(services),
         /**
@@ -234,16 +280,6 @@ export class DrizzleServiceRepository implements ServiceRepository {
       .where(and(...filters))
       .orderBy(desc(services.createdAt), desc(services.id))
       .limit(limit + 1);
-
-    const page = rows.slice(0, limit).map(toRecord);
-    const lastRow = rows[limit - 1];
-    return {
-      items: page,
-      nextCursor:
-        rows.length > limit && lastRow !== undefined
-          ? { createdAt: lastRow.createdAtText, id: lastRow.id }
-          : null,
-    };
   }
 
   /**

@@ -905,8 +905,12 @@ export const TEMPLATES = [
         token: 'customer',
         type: 'STRING',
         description:
-          'Whose service it is, by the numeric identity this installation holds \u2014 ' +
-          'never a display name, for the reason `bot.admin.receipt` gives.',
+          'Whose service it is, by the numeric Telegram identity this installation ' +
+          'holds \u2014 the handle a support conversation quotes. WP3 made this true: ' +
+          'the description already said "numeric identity" while the runtime passed ' +
+          'the INTERNAL uuid, which names the right person to nobody and cannot be ' +
+          'typed into any command. It is still not a display name, and the service ' +
+          'screen carries no wallet balance, order or payment beside it.',
         required: true,
         repeatable: false,
       },
@@ -990,6 +994,37 @@ export const TEMPLATES = [
           'or that nothing has been attempted. It is what tells a planned action apart ' +
           'from a completed one.',
         required: true,
+        repeatable: false,
+      },
+      {
+        token: 'history',
+        type: 'STRING',
+        description:
+          'How many operations this service has, and whether that figure is exact. A ' +
+          'plain number when the whole history was read; the bound with a trailing `+` ' +
+          'when it was not, because the reader stops at a bound and an exact count ' +
+          'would mean walking every operation the service ever had to render one ' +
+          'figure; and `-` when the history could not be read AT ALL, which is a ' +
+          'different fact from “none” and must never render as zero. WP3 added it so ' +
+          'the screen above a SINGLE operation says whether that one is the whole ' +
+          'story — the same rule the Web history now prints under its table, and the ' +
+          'reason neither surface calls a long history a problem any more.',
+        /*
+         * NOT required, and on this key that is a decision rather than an oversight.
+         *
+         * `validateTemplateBody` refuses a body that omits a REQUIRED token. An
+         * installation that already overrode `bot.admin.service` holds a stored body
+         * predating this one — an override is raw persisted source and nothing rewrites
+         * it — so requiring the token would leave that operator with a body they cannot
+         * re-save: every attempt refused as MISSING_REQUIRED_PLACEHOLDER, for a token
+         * they never wrote and did not ask for. That is the write-only-settings failure
+         * the research records, produced by an upgrade rather than by a screen.
+         *
+         * The runtime supplies the value unconditionally, so the shipped body shows the
+         * line and an override that omits it simply does not. Requiring the token would
+         * be this catalogue dictating what a body must SAY rather than what it may use.
+         */
+        required: false,
         repeatable: false,
       },
     ],
@@ -1785,6 +1820,94 @@ export const TEMPLATES = [
    * section answers is the one question a support conversation asks — "who is this
    * Telegram account to us, and should the bot still talk to them".
    */
+  /*
+   * WP3 — browsing services, and reaching the customer from one.
+   *
+   * Six keys. The services section was a QUEUE and nothing else: the ten things needing
+   * attention, with its `nextCursor` dropped deliberately because the eleventh
+   * unreconciled service is not a thing an operator scrolls to. That stays. What these
+   * add is the other half — a browsable, paged inventory, so a service that is
+   * perfectly healthy is reachable from a phone at all — and one button, so the person
+   * a service belongs to is one tap away instead of a UUID an operator cannot read.
+   */
+  {
+    key: 'bot.admin.services_browse_button',
+    description:
+      'Opens the browsable list from the services section. Beside the queue, never ' +
+      'instead of it: a queue answers "what needs me" and an inventory answers "where ' +
+      'is this one", and collapsing them loses the first.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.services_browse',
+    description:
+      'Introduces the browsable list: one button per service, newest first, and a ' +
+      'further page when the server says there is one. No counts — the rule ' +
+      '`bot.admin.panels_section` states, that a figure here goes stale between the ' +
+      'render and the tap. It also names the lookup command, because paging to the ' +
+      'four-hundredth service is forty taps and the name a customer quotes is one ' +
+      'message.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.services_browse_none',
+    description:
+      'No service on this installation, or none left beyond this page. Says nobody is ' +
+      'here rather than that nobody exists, because it is reachable with a cursor.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.services_more_button',
+    description:
+      'The next page of services, carrying the keyset cursor the server minted. Drawn ' +
+      'only when the page says there is more AND the cursor fits Telegram’s ' +
+      '64-byte callback limit; a cursor that cannot be carried is a list that ends, ' +
+      'which is the safe direction.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.services_back_button',
+    description: 'Returns from one service to the services section.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.service_customer_button',
+    description:
+      'Opens the customer this service belongs to. Drawn only for an administrator who ' +
+      'holds `users.view`, and the customer screen charges that key again server-side ' +
+      '— the button decides what is advertised, never what is allowed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.service_ambiguous',
+    description:
+      'The typed name belongs to more than one service in this tenant, so the lookup ' +
+      'answers with the matches instead of picking one. `services_panel_provider_' +
+      'username_key` is unique per PANEL, not per tenant, and two panels of one tenant ' +
+      'may point at different machines — so one name legitimately names two accounts. ' +
+      'Choosing the newest silently would put suspend and terminate buttons on an ' +
+      'arbitrary one of them, which is the wrong customer’s service under a right ' +
+      'answer’s heading. No action is offered on this screen: it only routes to a ' +
+      'detail, and the detail names the panel and the customer.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.service_usage',
+    description:
+      'The lookup command was sent without a readable argument. Repeats the syntax, ' +
+      'which now accepts EITHER the internal id or the provider username, rather than ' +
+      'opening a prompt for the missing one: a prompt that outlives its question ' +
+      'swallows the next unrelated message (INCIDENT-FIN-001).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
   {
     key: 'bot.admin.customers_button',
     description:

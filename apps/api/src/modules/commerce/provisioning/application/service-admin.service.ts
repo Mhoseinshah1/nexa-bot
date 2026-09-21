@@ -35,12 +35,29 @@ export const SERVICE_VIEW_PERMISSION: PermissionKey = 'services.view';
 /**
  * How many operations a service's history returns.
  *
- * Bounded like every other list here. It is deliberately NOT paged: an operator opens
- * this to answer "what has been attempted on this service", and a service with more
- * than fifty operations against it is itself the finding — `retireExhausted` and the
- * reconcile lane both bound how many an ordinary service accumulates.
+ * Bounded like every other list here, and deliberately NOT paged: an operator opens
+ * this to answer "what has been attempted on this service", which the newest attempts
+ * answer.
+ *
+ * What changed in WP3 is what the bound SAYS. This docblock used to add that a service
+ * with more than fifty operations "is itself the finding", and both surfaces printed a
+ * sentence to that effect — so an operator reading a truncated history was told their
+ * service was in trouble, on the evidence of nothing but its age. A service renewed
+ * monthly for three years accumulates renew, add-traffic and sync operations by
+ * ordinary use; `retireExhausted` and the reconcile lane bound RETRIES, not a
+ * lifetime's operations. The truncation is a display bound and now says so, in both
+ * surfaces, with the number it actually applied.
  */
 export const SERVICE_OPERATION_LIMIT = 50;
+
+/** A service's history, with the bound that produced it stated rather than assumed. */
+export interface ServiceOperationHistory {
+  readonly operations: readonly OperationRecord[];
+  /** The bound actually applied. Not a constant the caller may assume. */
+  readonly limit: number;
+  /** Whether older operations exist beyond the bound. */
+  readonly hasMore: boolean;
+}
 
 export interface ServiceAdminQuery {
   readonly limit?: number;
@@ -214,7 +231,7 @@ export class ServiceAdminService {
     scope: TenantContext,
     actor: ActorContext,
     id: string,
-  ): Promise<readonly OperationRecord[]> {
+  ): Promise<ServiceOperationHistory> {
     const service = await this.get(scope, actor, id);
     /*
      * `listRecentForService`, not `listForService`.
@@ -225,8 +242,25 @@ export class ServiceAdminService {
      * the history is long enough for the difference to matter, and with the most recent
      * failures, the ones an operator came to read, missing. Found by the Codex review
      * of PR #30.
+     *
+     * LIMIT + 1, then discard the extra. That one row is the whole difference between
+     * "here are fifty operations" and "here are fifty of more than fifty": a caller
+     * cannot tell a history of exactly fifty from a truncated one by counting, and
+     * guessing wrong in either direction is a sentence to the operator that is false.
+     * A `COUNT(*)` would answer the same question by walking every operation the
+     * service ever had, to render one word.
      */
-    return this.deps.operations.listRecentForService(scope, service.id, SERVICE_OPERATION_LIMIT);
+    const found = await this.deps.operations.listRecentForService(
+      scope,
+      service.id,
+      SERVICE_OPERATION_LIMIT + 1,
+    );
+    const hasMore = found.length > SERVICE_OPERATION_LIMIT;
+    return {
+      operations: hasMore ? found.slice(0, SERVICE_OPERATION_LIMIT) : found,
+      limit: SERVICE_OPERATION_LIMIT,
+      hasMore,
+    };
   }
 
   /**

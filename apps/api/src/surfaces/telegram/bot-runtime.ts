@@ -7,6 +7,7 @@ import {
   money,
   PAYMENT_RECEIPT_MAX_PER_PAYMENT,
   plainAmount,
+  providerUsernameLookupSchema,
   telegramUserIdSchema,
   uuidV7Schema,
   USAGE_REMINDER_PERCENT_MAX,
@@ -68,7 +69,10 @@ import type {
   ServiceRecord,
 } from '../../modules/commerce/provisioning/application/ports.js';
 import type { OperatorServiceOperation } from '../../modules/commerce/provisioning/application/provisioning.service.js';
-import type { ServiceAdminService } from '../../modules/commerce/provisioning/application/service-admin.service.js';
+import type {
+  ServiceAdminService,
+  ServiceOperationHistory,
+} from '../../modules/commerce/provisioning/application/service-admin.service.js';
 import { decodeKeysetToken, encodeKeysetToken, type KeysetToken } from './keyset-token.js';
 import type { PanelService } from '../../modules/platform/panels/application/panel.service.js';
 
@@ -179,6 +183,21 @@ export const BOT_INTENTS = [
    * exactly one place.
    */
   'ADMIN_SERVICES',
+  /*
+   * WP3 — the browsable half of the services section.
+   *
+   * `ADMIN_SERVICES` stays a QUEUE: the unreconciled and the undelivered, ten rows
+   * that are ten decisions. These two are an INVENTORY, which is a different question
+   * and needs a different list — "where is this one" rather than "what needs me".
+   * Collapsing them would lose the first, because a queue that pages is no longer a
+   * queue.
+   *
+   * Two intents rather than one with an optional payload, for the reason
+   * `SERVICES_PAGE` gives: the first is a bare tap and the second carries an opaque
+   * cursor the boundary validates before any handler sees it.
+   */
+  'ADMIN_SERVICES_BROWSE',
+  'ADMIN_SERVICES_BROWSE_PAGE',
   'ADMIN_SERVICE',
   'ADMIN_SERVICE_SYNC',
   'ADMIN_SERVICE_RESEND',
@@ -729,6 +748,23 @@ export const ADMIN_REVOKE_CALLBACK_PREFIX = 'G:';
  * service id is 38 bytes and the pair-carrying codec is not needed.
  */
 export const ADMIN_SERVICES_CALLBACK_PREFIX = 'H:';
+
+/**
+ * The browsable list, under the services prefix rather than beside it.
+ *
+ * Every one of the fifty-two letters and all ten digits is already a section prefix,
+ * so there is no fifty-third to take — and this does not need one. `H:` is the
+ * services section; `H:b` and `H:b:<token>` are a screen INSIDE it, which is what a
+ * sub-code is for. The structural rule still holds: no prefix may be a prefix of
+ * another, and `H:` is matched by EQUALITY while these two are matched after it, so
+ * the queue's own bare tap can never be read as a browse.
+ *
+ * The token is base-36 digits and hex, so it can contain no colon and the split below
+ * is unambiguous. `H:b:` plus a 44-character token is 48 bytes, inside Telegram's
+ * 64-byte `callback_data` cap with room to spare.
+ */
+export const ADMIN_SERVICES_BROWSE_CALLBACK_DATA = `${ADMIN_SERVICES_CALLBACK_PREFIX}b`;
+export const ADMIN_SERVICES_BROWSE_PAGE_CALLBACK_PREFIX = `${ADMIN_SERVICES_BROWSE_CALLBACK_DATA}:`;
 export const ADMIN_SERVICE_CALLBACK_PREFIX = 'I:';
 export const ADMIN_SERVICE_SYNC_CALLBACK_PREFIX = 'J:';
 export const ADMIN_SERVICE_RESEND_CALLBACK_PREFIX = 'K:';
@@ -1092,6 +1128,48 @@ function adminServiceButtons(
  * The status rides along, because the one thing an operator scanning this list is
  * looking for is who is blocked.
  */
+/**
+ * How many rows the name lookup reads before deciding the name is not unique.
+ *
+ * Small on purpose. The question the probe answers is "is this name unique HERE", not
+ * "how many services carry it": one extra row settles it, and the rest of the bound is
+ * headroom so the disambiguation screen can actually list what it found rather than
+ * saying "more than one" and stopping. A name on more matches than this is not a
+ * support lookup any more, and the browse list is where that conversation belongs.
+ */
+const AMBIGUOUS_MATCH_PROBE = 5;
+
+/**
+ * What the name lookup found, as four cases rather than a nullable row.
+ *
+ * `NONE` and `SYNTAX` are different sentences — "no such service" and "that is not a
+ * service name" — and `MANY` is the one the Codex review of this branch added: a name
+ * unique per PANEL is not unique per tenant, so answering with one arbitrary row is how
+ * a terminate lands on the wrong customer's account.
+ */
+type AdminServiceLookup =
+  | { readonly kind: 'SYNTAX' }
+  | { readonly kind: 'NONE' }
+  | { readonly kind: 'MANY'; readonly matches: readonly ServiceRecord[] }
+  | { readonly kind: 'ONE'; readonly found: Awaited<ReturnType<ServiceAdminService['detail']>> };
+
+/**
+ * One ambiguous match, labelled by what tells it apart from the others.
+ *
+ * NOT the username: every match carries the same one, which is why this screen exists.
+ * NOT the panel's name either, however useful that would be — reading a panel charges
+ * `panels.view`, and an administrator holding `services.view` alone would get a denial
+ * per match rather than a list.
+ *
+ * So: the lifecycle state and the day the service was created, both off the row already
+ * in hand. Neither is a credential, and between them they separate "the one I sold last
+ * week" from "the one that has been terminated since spring". The detail behind the
+ * button is what confirms it, because that names the panel and the customer.
+ */
+function adminServiceMatchLabel(service: ServiceRecord): string {
+  return `${service.state} — ${service.createdAt.toISOString().slice(0, 10)}`;
+}
+
 function adminCustomerLabel(customer: CustomerRecord): string {
   const name = [customer.firstName, customer.lastName].filter((part) => part !== null).join(' ');
   const who =
@@ -1558,6 +1636,29 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
     }
     if (data === ADMIN_SERVICES_CALLBACK_PREFIX) {
       return { intent: 'ADMIN_SERVICES', targetId: null, callbackQueryId: id };
+    }
+    /*
+     * The page branch FIRST, then the bare browse.
+     *
+     * `H:b` is a prefix of `H:b:<token>`, so the equality check below could not run
+     * first without swallowing every paged tap. The queue's own `H:` is matched by
+     * equality above and is unaffected by either.
+     */
+    if (data.startsWith(ADMIN_SERVICES_BROWSE_PAGE_CALLBACK_PREFIX)) {
+      /*
+       * Decoded HERE, for the reason `ADMIN_PANELS_PAGE_CALLBACK_PREFIX` states: a
+       * crafted token must be UNSUPPORTED at the boundary rather than an invalid cast
+       * inside a query. Nothing is authorized by it — the list is tenant-scoped and
+       * `services.view` is charged in the handler — so the decode is about shape.
+       */
+      const cursor = decodeKeysetToken(
+        data.slice(ADMIN_SERVICES_BROWSE_PAGE_CALLBACK_PREFIX.length),
+      );
+      if (cursor === null) return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      return { intent: 'ADMIN_SERVICES_BROWSE_PAGE', targetId: null, cursor, callbackQueryId: id };
+    }
+    if (data === ADMIN_SERVICES_BROWSE_CALLBACK_DATA) {
+      return { intent: 'ADMIN_SERVICES_BROWSE', targetId: null, callbackQueryId: id };
     }
     if (data === ADMIN_PANELS_CALLBACK_PREFIX) {
       return { intent: 'ADMIN_PANELS', targetId: null, callbackQueryId: id };
@@ -3014,7 +3115,16 @@ export class BotRuntime {
                 input.idempotencyKey,
               );
         case 'ADMIN_SERVICES':
-          return await this.adminServices(scope, adminActor);
+          return await this.adminServices(scope, adminActor, permissions);
+        case 'ADMIN_SERVICES_BROWSE':
+          return await this.adminServicesBrowse(scope, adminActor, null);
+        case 'ADMIN_SERVICES_BROWSE_PAGE':
+          /*
+           * The cursor is decoded at the boundary, so an unparseable one never reaches
+           * here. `null` cannot happen and is handled anyway: the first page is the
+           * safe reading of "no position", the same note `ADMIN_PANELS_PAGE` carries.
+           */
+          return await this.adminServicesBrowse(scope, adminActor, command.cursor ?? null);
         case 'ADMIN_SERVICE': {
           /*
            * Reached two ways: a queue button carrying a uuid the boundary validated, and
@@ -3034,6 +3144,11 @@ export class BotRuntime {
            * it is decided, which is also where the permission is charged first, so an
            * administrator without `services.view` cannot learn whether an id is even
            * well-formed.
+           *
+           * WP3 gave the typed form a SECOND accepted shape — the name on the panel,
+           * which is the only handle a customer's message ever contains — so the one
+           * place is now `resolveAdminService`, and the syntax answer it produces is
+           * still reached only after the permission.
            */
           const typed = command.targetId ?? (command.args ?? [])[0] ?? '';
           return await this.adminService(scope, adminActor, typed, permissions);
@@ -3462,7 +3577,11 @@ export class BotRuntime {
    * are ten decisions. An installation with more than ten of either has a bigger
    * question than the eleventh row, and the Web Admin pages properly.
    */
-  private async adminServices(scope: TenantContext, actor: ActorContext): Promise<PendingReply> {
+  private async adminServices(
+    scope: TenantContext,
+    actor: ActorContext,
+    permissions: ReadonlySet<PermissionKey>,
+  ): Promise<PendingReply> {
     const [unreconciled, undelivered] = await Promise.all([
       this.deps.serviceAdmin.list(scope, actor, {
         limit: ADMIN_QUEUE_LIMIT,
@@ -3493,10 +3612,94 @@ export class BotRuntime {
         data: `${ADMIN_SERVICE_CALLBACK_PREFIX}${service.id}`,
       });
     }
+    /*
+     * The browse button, appended to BOTH answers — including the empty queue.
+     *
+     * An empty queue is the normal, healthy state, and until WP3 it was also a dead
+     * end: "nothing needs attention" with no way from there to the service a customer
+     * is asking about. `docs/wp3-service-audit.md` is blunt about what that cost —
+     * service management was the most built of the three and the least reachable.
+     *
+     * Drawn behind `services.view`, which is also what the section itself is behind, so
+     * in practice it is always drawn here; the check is written out anyway because a
+     * button is advertising and never permission — `list` charges the key again.
+     */
+    const withBrowse = permissions.has(SERVICES_VIEW_PERMISSION)
+      ? [
+          ...buttons,
+          {
+            label: { kind: 'TEMPLATE' as const, key: 'bot.admin.services_browse_button' as const },
+            data: ADMIN_SERVICES_BROWSE_CALLBACK_DATA,
+          },
+        ]
+      : buttons;
     if (buttons.length === 0) {
-      return { key: 'bot.admin.services_none', values: {}, buttons: [], orderId: null };
+      return {
+        key: 'bot.admin.services_none',
+        values: {},
+        buttons: withBrowse,
+        orderId: null,
+      };
     }
-    return { key: 'bot.admin.services_section', values: {}, buttons, orderId: null };
+    return { key: 'bot.admin.services_section', values: {}, buttons: withBrowse, orderId: null };
+  }
+
+  /**
+   * The inventory: one button per service, newest first, and a page button when there
+   * is more.
+   *
+   * Beside the queue above rather than instead of it, and the difference is what each
+   * list IS — the note `adminPanels` carries about a fleet applies here word for word.
+   * A queue of ten is ten decisions and an eleventh is a bigger question than the row;
+   * an inventory has to be able to reach the four-hundredth service, because that is
+   * where the customer who just wrote in happens to be.
+   *
+   * No filter on state and no filter on delivery: a TERMINATED service is exactly what
+   * "my account stopped working" often means, and a list that hid it would be fast at
+   * answering everything except the question people actually ask.
+   *
+   * `list` charges `services.view` itself, so an administrator who reached this through
+   * a crafted callback without it is refused there rather than here.
+   */
+  private async adminServicesBrowse(
+    scope: TenantContext,
+    actor: ActorContext,
+    cursor: KeysetToken | null,
+  ): Promise<PendingReply> {
+    const page = await this.deps.serviceAdmin.list(scope, actor, {
+      limit: ADMIN_QUEUE_LIMIT,
+      ...(cursor === null ? {} : { cursor }),
+      search: {},
+    });
+
+    const buttons: CustomerButton[] = page.items.map((service) => ({
+      /*
+       * The provider username, which is the handle an operator types into the panel and
+       * is NOT a credential — the same rule the queue above states. Not the
+       * subscription ref and not the client id: both are bearer capabilities and this
+       * message stays in that chat for ever.
+       */
+      label: { kind: 'TEXT' as const, text: service.providerUsername },
+      data: `${ADMIN_SERVICE_CALLBACK_PREFIX}${service.id}`,
+    }));
+    if (buttons.length === 0) {
+      return { key: 'bot.admin.services_browse_none', values: {}, buttons: [], orderId: null };
+    }
+
+    /*
+     * The next page, appended only when the cursor ENCODES — the rule the panels
+     * section and the customer's own services list both state: a cursor this codec
+     * cannot carry would become a button whose `callback_data` is a bare prefix, and
+     * the honest answer to that is the same as having no further page.
+     */
+    const token = page.nextCursor === null ? null : encodeKeysetToken(page.nextCursor);
+    if (token !== null) {
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.admin.services_more_button' },
+        data: `${ADMIN_SERVICES_BROWSE_PAGE_CALLBACK_PREFIX}${token}`,
+      });
+    }
+    return { key: 'bot.admin.services_browse', values: {}, buttons, orderId: null };
   }
 
   // -------------------------------------------------------------------------
@@ -4099,32 +4302,89 @@ export class BotRuntime {
   private async adminService(
     scope: TenantContext,
     actor: ActorContext,
-    serviceId: string,
+    needle: string,
     permissions: ReadonlySet<PermissionKey>,
   ): Promise<PendingReply> {
-    let found;
-    try {
-      found = await this.deps.serviceAdmin.detail(scope, actor, serviceId);
-    } catch {
+    /*
+     * The PERMISSION decides first, before the shape of the string is even considered.
+     *
+     * Without this, `/service <garbage>` from an administrator who holds no
+     * `services.view` would be answered with the syntax — which is a small thing to
+     * learn, and it is learned from a screen that is not theirs. The rule this path
+     * already stated is that one place decides the answer and the permission is
+     * charged before anything about the id is revealed; WP3 added a second shape to
+     * the argument, so it had to be stated here rather than left to the guard inside
+     * `detail`. `detail` and `list` still charge the key themselves: this is what is
+     * ADVERTISED, never what is allowed.
+     */
+    if (!permissions.has(SERVICES_VIEW_PERMISSION)) {
+      return { key: 'bot.admin.refused', values: {}, buttons: [], orderId: null };
+    }
+    const resolved = await this.resolveAdminService(scope, actor, needle);
+    if (resolved.kind === 'SYNTAX') {
+      return { key: 'bot.admin.service_usage', values: {}, buttons: [], orderId: null };
+    }
+    if (resolved.kind === 'MANY') {
       /*
-       * Unknown, another tenant's, or malformed — ONE answer for all three, which is
-       * the rule `bot.service.not_found` states on the customer side. Telling them
-       * apart would let anybody holding a service id learn whether it exists.
+       * One button per match, and NO action on this screen.
+       *
+       * Each button opens the ordinary detail, which names the panel and the customer
+       * — the two facts that tell the operator which of these is theirs. Putting the
+       * seven action buttons here instead would be offering a destructive verb against
+       * a row nobody has identified yet.
+       */
+      return {
+        key: 'bot.admin.service_ambiguous',
+        values: {},
+        buttons: resolved.matches.map((match) => ({
+          label: { kind: 'TEXT' as const, text: adminServiceMatchLabel(match) },
+          data: `${ADMIN_SERVICE_CALLBACK_PREFIX}${match.id}`,
+        })),
+        orderId: null,
+      };
+    }
+    if (resolved.kind === 'NONE') {
+      /*
+       * Unknown, another tenant's, or a name nobody here holds — ONE answer for all
+       * three, which is the rule `bot.service.not_found` states on the customer side.
+       * Telling them apart would let anybody holding a service id, or guessing a name,
+       * learn whether it exists.
        */
       return { key: 'bot.admin.service_gone', values: {}, buttons: [], orderId: null };
     }
 
-    const { service, actions } = found;
-    const [operations, title] = await Promise.all([
-      this.deps.serviceAdmin.operations(scope, actor, service.id).catch(() => []),
+    const { service, actions } = resolved.found;
+    const [history, title, customer] = await Promise.all([
+      /*
+       * `null` for a history that could not be READ, never an empty one.
+       *
+       * The first version caught the failure into `{ operations: [], limit: 0 }` and
+       * rendered `0`, which tells the operator that this service has had nothing
+       * attempted on it — the opposite of the truth when the read failed, and exactly
+       * the kind of confident wrong answer this whole package is about. Found by the
+       * Codex review of this branch.
+       */
+      this.deps.serviceAdmin
+        .operations(scope, actor, service.id)
+        .catch(() => null as ServiceOperationHistory | null),
       this.deps.purchaseTitle(scope, service.orderId),
+      this.adminServiceCustomer(scope, actor, service.customerId, permissions),
     ]);
-    const latest = operations[0];
+    const latest = history?.operations[0];
 
     return {
       key: 'bot.admin.service',
       values: {
-        customer: service.customerId,
+        /*
+         * WHO, by the identity a support conversation quotes — never the internal
+         * uuid, which was what this field carried until WP3 while the contract
+         * described it as "the numeric identity this installation holds". A uuid names
+         * the right person to nobody, cannot be typed into any command here, and is a
+         * customer identifier handed to an administrator who may not be allowed to
+         * read customers at all. `-` when they are not: the screen says nothing rather
+         * than something useless.
+         */
+        customer: customer?.telegramUserId ?? '-',
         username: service.providerUsername,
         panel: service.panelId,
         product: title ?? service.productId,
@@ -4141,10 +4401,151 @@ export class BotRuntime {
          * token for the same fact.
          */
         operation: latest === undefined ? '-' : `${latest.type} ${latest.state}`,
+        /*
+         * The bound, stated rather than implied, in THREE cases and not two.
+         *
+         * A plain count when the whole history was read, and the bound with a `+` when
+         * it was not: the reader asks for one row beyond its bound to know which, so
+         * this never means "exactly the bound" when there is more, and never claims
+         * more when the history happens to be exactly that long. An exact count past
+         * the bound would mean walking every operation the service ever had to render
+         * one figure.
+         *
+         * And `-` when the history could not be read AT ALL. That is the third case,
+         * and collapsing it into `0` was this screen's own version of the defect the
+         * package exists to fix: "nothing has been attempted on this service" is a
+         * diagnosis, and the read having failed is the absence of one.
+         */
+        history:
+          history === null
+            ? '-'
+            : history.hasMore
+              ? `${history.limit}+`
+              : String(history.operations.length),
       },
-      buttons: adminServiceButtons(service.id, actions, permissions),
+      buttons: [
+        ...adminServiceButtons(service.id, actions, permissions),
+        /*
+         * The person, one tap away, and only for an administrator who may read them.
+         *
+         * `9:v:<customerId>` is the customers section's own detail callback, so this is
+         * a link into a screen that already exists rather than a second rendering of a
+         * customer — and that screen charges `users.view` again when it is tapped. Not
+         * drawn without the key, because a button whose every tap records a denial is
+         * an invitation to produce denials.
+         */
+        ...(customer === null
+          ? []
+          : [
+              {
+                label: {
+                  kind: 'TEMPLATE' as const,
+                  key: 'bot.admin.service_customer_button' as const,
+                },
+                data: `${ADMIN_CUSTOMER_CALLBACK_PREFIX}v:${customer.id}`,
+              },
+            ]),
+        {
+          label: { kind: 'TEMPLATE' as const, key: 'bot.admin.services_back_button' as const },
+          data: ADMIN_SERVICES_CALLBACK_PREFIX,
+        },
+      ],
       orderId: null,
     };
+  }
+
+  /**
+   * One service, from EITHER the internal id or the name on the panel.
+   *
+   * The two are told apart by shape, not by trying one and falling back: a uuid is
+   * never a provider username and a provider username is never a uuid, so a string
+   * that parses as neither is a syntax answer rather than a lookup that finds nothing.
+   * `SYNTAX` and `null` are different sentences for a reason — "that is not a service
+   * name" and "no such service" are different facts, and only the second is about what
+   * this installation holds.
+   *
+   * The username path goes through `list` with its EXACT filter, which is the one way
+   * this codebase asks that question. `limit: 1` because the answer is at most one row
+   * per tenant: `services_panel_provider_username_key` makes the name unique per panel,
+   * and two panels of one tenant pointing at different machines may legitimately hold
+   * the same name — in which case the newest wins, which is the row a support
+   * conversation is almost always about. Stated rather than hidden: the list ordering
+   * is newest-first and that is what decides it.
+   */
+  private async resolveAdminService(
+    scope: TenantContext,
+    actor: ActorContext,
+    needle: string,
+  ): Promise<AdminServiceLookup> {
+    const raw = needle.trim();
+    if (raw === '') return { kind: 'SYNTAX' };
+    if (uuidV7Schema.safeParse(raw).success) {
+      try {
+        return { kind: 'ONE', found: await this.deps.serviceAdmin.detail(scope, actor, raw) };
+      } catch {
+        return { kind: 'NONE' };
+      }
+    }
+    const parsed = providerUsernameLookupSchema.safeParse(raw);
+    if (!parsed.success) return { kind: 'SYNTAX' };
+    /*
+     * MORE than one row, deliberately, and this is the Codex round's P1.
+     *
+     * `services_panel_provider_username_key` is unique per PANEL, not per tenant —
+     * `schema.ts` says so where the namespace is explained — and two panels of one
+     * tenant may point at different machines, so one name legitimately names two
+     * accounts. The first version asked for `limit: 1` and took the newest, with a
+     * docblock calling it "the row a support conversation is almost always about".
+     * That is a guess wearing a rule's clothes, and the screen it produced carried
+     * SUSPEND and TERMINATE: the wrong customer's service under a right answer's
+     * heading.
+     *
+     * So the bound is `AMBIGUOUS_MATCH_PROBE` and anything past one is handed back for
+     * the operator to choose. The probe is small because the question is only "is this
+     * unique", not "how many are there" — a name on more matches than fit one keyboard
+     * is a different conversation, and the browse list is where it happens.
+     */
+    const page = await this.deps.serviceAdmin.list(scope, actor, {
+      limit: AMBIGUOUS_MATCH_PROBE,
+      search: { providerUsername: parsed.data },
+    });
+    const first = page.items[0];
+    if (first === undefined) return { kind: 'NONE' };
+    if (page.items.length > 1) return { kind: 'MANY', matches: page.items };
+    try {
+      return { kind: 'ONE', found: await this.deps.serviceAdmin.detail(scope, actor, first.id) };
+    } catch {
+      return { kind: 'NONE' };
+    }
+  }
+
+  /**
+   * The customer behind a service, or nothing.
+   *
+   * `null` for two different reasons, deliberately collapsed: this administrator may
+   * not read customers, or the row could not be read. Both produce the same screen —
+   * no identity and no link — because the alternative is a service screen that fails
+   * entirely over a permission the service itself does not need.
+   *
+   * The read is skipped, not caught, when the key is absent: `customers.get` charges
+   * `users.view` through the guard and a denial is an operational event, so asking
+   * anyway would manufacture a denial per service screen an operator opens.
+   */
+  private async adminServiceCustomer(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: string,
+    permissions: ReadonlySet<PermissionKey>,
+  ): Promise<CustomerRecord | null> {
+    if (!permissions.has(CUSTOMERS_VIEW_PERMISSION)) return null;
+    try {
+      return await this.deps.customers.get(scope, actor, customerId);
+    } catch (error) {
+      // NARROW, the rule `isCustomerMiss` states: anything else is a real failure and
+      // must not be quietly rendered as "this service has no customer".
+      if (isCustomerMiss(error)) return null;
+      throw error;
+    }
   }
 
   /**

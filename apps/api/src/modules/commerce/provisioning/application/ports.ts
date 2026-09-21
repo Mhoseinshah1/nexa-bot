@@ -138,6 +138,21 @@ export interface ServiceSearch {
   readonly panelId?: PanelId;
   readonly state?: ServiceState;
   readonly deliveryState?: ServiceDeliveryState;
+  /**
+   * The account name on the panel, matched EXACTLY and never as a prefix.
+   *
+   * Exact because a prefix search over account names is an enumeration of a
+   * panel's accounts: `nx` returns every service this installation ever sold,
+   * and a `subscriptionUrl` is a bearer capability. The caller that wants
+   * browsing has a cursor; this one answers "which service is THIS name".
+   *
+   * The value arrives already canonicalised by `providerUsernameLookupSchema`
+   * — trimmed, ASCII-folded to lowercase, and validated against the grammar
+   * this product actually stores — so the repository compares it as written
+   * and the index above can serve it. A repository that folded case itself
+   * would be a second opinion about what a username is.
+   */
+  readonly providerUsername?: string;
 }
 
 /**

@@ -8,6 +8,7 @@ import {
 } from './notifications.js';
 import { uuidV7Schema } from './ids.js';
 import {
+  providerUsernameLookupSchema,
   USERNAME_PREFIX_MAX_LENGTH,
   USERNAME_STRATEGIES,
   USERNAME_TEMPLATE_MAX_LENGTH,
@@ -2970,6 +2971,20 @@ export const serviceListQuerySchema = z.object({
   /* Ids, validated HERE: these reach `uuid` columns. See `orderListQuerySchema`. */
   customerId: uuidV7Schema.optional(),
   panelId: uuidV7Schema.optional(),
+  /*
+   * The name a customer quotes, matched EXACTLY.
+   *
+   * The one handle a support conversation actually contains: a customer writes "my
+   * account nx-7f3a91 stopped working", and until this existed every surface in this
+   * product could operate that service and none could find it. The two ways in were
+   * the internal uuid, which appears nowhere outside this admin's own URLs, and the
+   * customer — if the operator could work out which customer that was.
+   *
+   * `providerUsernameLookupSchema` folds ASCII case and admits the legacy shape as
+   * well as the current one; see its docblock for why it is exact rather than a
+   * prefix, and why a prefix here would be an enumeration of a panel's accounts.
+   */
+  providerUsername: providerUsernameLookupSchema.optional(),
 });
 export type ServiceListQuery = z.infer<typeof serviceListQuerySchema>;
 
@@ -3007,8 +3022,32 @@ export const serviceOperationSchema = z.object({
 });
 export type ServiceOperationResponse = z.infer<typeof serviceOperationSchema>;
 
+/**
+ * A service's recent operations, with the bound that produced them.
+ *
+ * `operations` alone was the whole response, and a client reading fifty rows could not
+ * tell whether there had been fifty-one. The Web Admin's copy filled the gap with an
+ * opinion — that a service with dozens of operations is itself the problem — which a
+ * service renewing monthly for two years falsifies, and which was never a measurement
+ * anyway. A truncated list that reads like a complete one is the defect the
+ * administrator roster was fixed for in WP1.
+ *
+ * So the bound travels with the rows: `limit` is what was asked for and `hasMore` is
+ * whether the server found one beyond it. Both are facts about THIS response, so a
+ * surface can state the bound it is actually subject to rather than a constant it
+ * imported.
+ */
 export const serviceOperationsResponseSchema = z.object({
   operations: z.array(serviceOperationSchema),
+  /** How many rows this response was bounded to. Not a constant a client may assume. */
+  limit: z.number().int().positive(),
+  /**
+   * Whether the server saw at least one older operation than the last row here.
+   *
+   * Measured by reading `limit + 1` and discarding the extra, which is how every paged
+   * read in this repository answers the same question without a second COUNT.
+   */
+  hasMore: z.boolean(),
 });
 export type ServiceOperationsResponse = z.infer<typeof serviceOperationsResponseSchema>;
 

@@ -198,7 +198,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.services_none':
     'در حال حاضر هیچ سرویسی رسیدگی نمی‌خواهد. برای دیدن یک سرویس مشخص: /service <شناسهٔ سرویس>',
   'bot.admin.service':
-    'مشتری: {customer}\nنام کاربری روی پنل: {username}\nپنل: {panel}\nپلن: {product}\nوضعیت: {state}\nتحویل به مشتری: {delivery}\nمصرف: {usedTrafficBytes} از {totalTrafficBytes}\nآخرین خواندن مصرف: {syncedAt}\nانقضا: {expiresAt}\nآخرین عملیات: {operation}',
+    'مشتری: {customer}\nنام کاربری روی پنل: {username}\nپنل: {panel}\nپلن: {product}\nوضعیت: {state}\nتحویل به مشتری: {delivery}\nمصرف: {usedTrafficBytes} از {totalTrafficBytes}\nآخرین خواندن مصرف: {syncedAt}\nانقضا: {expiresAt}\nآخرین عملیات: {operation}\nشمار عملیات ثبت‌شده: {history}',
   'bot.admin.service_gone': 'این سرویس پیدا نشد.',
   'bot.admin.service_sync_button': '🔄 خواندن مصرف از پنل',
   'bot.admin.service_resend_button': '📨 ارسال مجدد لینک',
@@ -307,6 +307,17 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.username_strategy_prefix_random': 'پیشوند + تصادفی',
   'bot.admin.username_strategy_telegram_id_random': 'شناسهٔ تلگرام + تصادفی',
   'bot.admin.username_refused': 'ذخیره نشد: {reason}',
+  'bot.admin.services_browse_button': '📋 همهٔ سرویس‌ها',
+  'bot.admin.services_browse':
+    'سرویس‌های این نصب، از تازه‌ترین. برای دیدن جزئیات و کارهای ممکن، روی نام هرکدام بزنید.\n\nبرای یافتن یک سرویس با نام کاربری‌اش روی پنل:\n/service <نام کاربری یا شناسهٔ سرویس>',
+  'bot.admin.services_browse_none': 'سرویسی برای نمایش نیست.',
+  'bot.admin.services_more_button': '▶️ صفحهٔ بعد',
+  'bot.admin.services_back_button': 'بازگشت به بخش سرویس‌ها',
+  'bot.admin.service_customer_button': '👤 مشتری این سرویس',
+  'bot.admin.service_ambiguous':
+    'این نام کاربری روی بیش از یک سرویس در این نصب وجود دارد؛ یکتا بودن نام فقط در محدودهٔ هر پنل تضمین شده است.\n\nبرای اینکه کاری روی سرویس اشتباه انجام نشود، انتخاب با شماست:',
+  'bot.admin.service_usage':
+    'دستور ناقص یا نامعتبر است.\n\n/service <نام کاربری روی پنل یا شناسهٔ سرویس>',
   'bot.admin.customers_button': '👤 مشتری‌ها',
   'bot.admin.customers_section':
     'مشتری‌های این نصب، از قدیمی‌ترین. برای دیدن جزئیات و مسدود کردن یا رفع مسدودی، روی نام هرکدام بزنید.\n\nبرای یافتن یک مشتری با شناسهٔ عددی تلگرام:\n/customer <شناسهٔ عددی تلگرام>',

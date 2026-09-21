@@ -61,6 +61,20 @@ const RECORDS = [
   'docs/phase6b-falsification.md',
   'docs/phase6c-username-falsification.md',
   'docs/wp2-falsification.md',
+  'docs/wp3-falsification.md',
+  /*
+   * `docs/wp1-falsification.md` is DELIBERATELY absent, and that is a gap rather
+   * than a decision this script is happy with.
+   *
+   * It cites SUITES — `admin-http`, `telegram-admin` — where every other record
+   * cites the test that dies, so registering it fails this check outright: there
+   * is no citation column to resolve. Converting its twenty-one rows would mean
+   * re-running twenty-one mutations to learn which test each one kills, and
+   * writing the names without running them is the exact "claim about testing
+   * that leaves no test behind" the review rules forbid. So it stays
+   * unregistered and said so, here and in `docs/wp3-falsification.md`, rather
+   * than being quietly admitted or quietly forgotten.
+   */
 ];
 /**
  * The fewest citations this record may contain.
@@ -87,7 +101,7 @@ const RECORDS = [
  * have to be a map, and a map is a place for a record to be added with no entry
  * and checked against nothing — which is this script's own failure mode.
  */
-const EXPECTED = 1239;
+const EXPECTED = 1257;
 /**
  * A table whose last column is one of these is making citations.
  *
