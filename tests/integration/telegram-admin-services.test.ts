@@ -106,7 +106,14 @@ describe('the services section of the Telegram management panel', () => {
     support: '700002',
     /** A custom role holding `services.view` alone. */
     viewer: '700003',
-    /** `sales`: no `services.*` at all, and no other admin section either. */
+    /*
+     * An administrator with NO section of the management panel.
+     *
+     * It was `sales` until WP2, and the field name is kept because the cases reading it
+     * are about an administrator the panel does not open for. `sales` holds
+     * `users.view`, so the customers section gives it a panel now; the cases below
+     * build a role holding `catalog.view` alone instead, which opens nothing here.
+     */
     sales: '700004',
     /** An ordinary customer. No administrator row anywhere. */
     customer: '910910',
@@ -289,11 +296,20 @@ describe('the services section of the Telegram management panel', () => {
 
   it('answers an administrator with no services permission as unknown input, not as a refusal', async () => {
     /*
-     * `sales` holds no admin section at all, so `adminTurn` returns null before any
-     * service is read — which is the same answer a customer gets, and deliberately so:
-     * a distinct refusal would confirm that the id names something.
+     * A hand-made role holding `catalog.view` alone — NOT `sales`, which was the
+     * fixture until WP2 and stopped being one.
+     *
+     * The premise this case needs is an administrator with NO section of the panel at
+     * all, so `adminTurn` returns null before any service is read and the answer is the
+     * one a customer gets. `sales` was that until the customers section shipped: it
+     * holds `users.view`, so it now HAS a section, opens the panel, and a callback into
+     * a section it lacks reaches the handler and is denied there — which is correct and
+     * is a different case from this one.
+     *
+     * `catalog.view` opens nothing in Telegram, and the case still proves what it says:
+     * a distinct refusal here would confirm that the id names something.
      */
-    await bindNewAdmin('sales-tg', TG.sales, { roleKeys: ['sales'] });
+    await bindNewAdmin('no-section-tg', TG.sales, { permissions: ['catalog.view'] });
     const serviceId = (await activeService('sales-probe')).id;
 
     const result = await runtime().handle(
