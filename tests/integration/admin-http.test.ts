@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   ADMIN_ROUTES,
   adminListResponseSchema,
+  adminSessionListResponseSchema,
   API_PREFIX,
   AUTH_ROUTES,
   loginResponseSchema,
@@ -725,6 +726,363 @@ describe('admin HTTP surface', () => {
       expect(crossTenant.statusCode).toBe(404);
       expect(await bindingOf(target)).toBeNull();
       expect((await bindingAudits()).filter((row) => row.result === 'SUCCESS')).toHaveLength(0);
+    });
+
+    it('resets another administrator\u2019s password, ends their sessions, and leaks nothing', async () => {
+      await createAdmin(api.container, tenantA, {
+        username: 'forgetful',
+        password: 'the-forgetful-password',
+        roleKeys: ['support'],
+      });
+      const target = await idOf('forgetful');
+
+      // Two live sessions for the target, so "revoked" is a COUNT and not a
+      // boolean wearing a number.
+      const theirs = await cookieFor('forgetful', 'the-forgetful-password');
+      await cookieFor('forgetful', 'the-forgetful-password');
+      const owner = await cookieFor('owner', 'the-owners-real-password');
+
+      const listed = await inject({
+        method: 'GET',
+        url: `${API_PREFIX}${ADMIN_ROUTES.sessions(target)}`,
+        headers: asAdmin(owner),
+      });
+      expect(listed.statusCode).toBe(200);
+      const sessions = adminSessionListResponseSchema.parse(listed.json()).sessions;
+      expect(sessions).toHaveLength(2);
+      /*
+       * The RAW body, not the parsed one. A zod object strips keys it does not
+       * declare, so asserting on the parse result would prove only that the
+       * schema is narrow — and a mutation that added `token_hash` to the
+       * repository projection survived exactly that assertion. What reaches a
+       * browser is what the controller returned, which is this string.
+       *
+       * Not the token, not a hash of it, not a masked stand-in: `********` can
+       * be resubmitted, and a hash is the thing a session cookie is compared
+       * against.
+       */
+      expect(listed.body).not.toMatch(/token|hash|secret/i);
+      // And none of them is the OWNER's own session, which is a different
+      // administrator's and not this route's to show.
+      expect(sessions.every((one) => !one.current)).toBe(true);
+
+      const reset = await inject({
+        method: 'POST',
+        url: `${API_PREFIX}${ADMIN_ROUTES.password(target)}`,
+        headers: asAdmin(owner),
+        payload: { newPassword: 'a-brand-new-password', reason: 'they forgot it' },
+      });
+      expect(reset.statusCode).toBe(201);
+      const body = reset.json();
+      expect(body).toMatchObject({ sessionsRevoked: 2, admin: { id: target } });
+      // The RESPONSE carries no credential either — not the password that was
+      // just set, not a hash, not a confirmation of what it was set to.
+      expect(JSON.stringify(body)).not.toMatch(/a-brand-new-password|hash|password_hash/);
+
+      // The old sessions are dead, the old password is dead, the new one works.
+      const stale = await inject({
+        method: 'GET',
+        url: `${API_PREFIX}${ADMIN_ROUTES.list}`,
+        headers: asAdmin(theirs),
+      });
+      expect(stale.statusCode).toBe(401);
+      expect((await login('forgetful', 'the-forgetful-password')).statusCode).toBe(401);
+      expect((await login('forgetful', 'a-brand-new-password')).statusCode).toBe(201);
+
+      // The audit row records that a rotation happened and NOT what it was to.
+      const rows = await api.container.database.db.execute<{ after: unknown }>(
+        sql`SELECT after FROM audit_logs
+            WHERE action = 'admin.password_reset' AND entity_id = ${target} AND result = 'SUCCESS'`,
+      );
+      expect(rows.rows).toHaveLength(1);
+      /*
+       * `rotated` and `endedSignIns`, NOT `passwordRotated` and
+       * `sessionsRevoked`. The audit writer redacts any key containing
+       * `password` or `session`, so the obvious names wrote `[redacted]` twice
+       * and the row lost both facts it carries. This assertion is what caught
+       * that, and pinning the KEYS is what stops the next rename undoing it.
+       */
+      expect(rows.rows[0]?.after).toEqual({ rotated: true, endedSignIns: 2 });
+    });
+
+    it('refuses a reset of the caller\u2019s own password, and one by an unprivileged caller', async () => {
+      const ownerId = await idOf('owner');
+      const owner = await cookieFor('owner', 'the-owners-real-password');
+
+      // Self-service rotation takes the CURRENT password, and that proof is the
+      // whole of its security. This route does not ask for one, so it must not
+      // be a way around it.
+      const self = await inject({
+        method: 'POST',
+        url: `${API_PREFIX}${ADMIN_ROUTES.password(ownerId)}`,
+        headers: asAdmin(owner),
+        payload: { newPassword: 'no-current-password-needed', reason: 'shortcut' },
+      });
+      // 409, the same answer every other self-modification refusal gives: the
+      // caller is permitted and the TARGET is the problem, which is a conflict
+      // rather than a denial.
+      expect(self.statusCode).toBe(409);
+      expect((await login('owner', 'the-owners-real-password')).statusCode).toBe(201);
+
+      await createAdmin(api.container, tenantA, {
+        username: 'reset-target',
+        roleKeys: ['support'],
+      });
+      const target = await idOf('reset-target');
+      const support = await cookieFor('support', 'the-support-password');
+      const denied = await inject({
+        method: 'POST',
+        url: `${API_PREFIX}${ADMIN_ROUTES.password(target)}`,
+        headers: asAdmin(support),
+        payload: { newPassword: 'not-yours-to-set', reason: 'escalation' },
+      });
+      expect(denied.statusCode).toBe(403);
+
+      // Reading somebody's sessions is a read, and takes `admins.view` — which
+      // `support` does not hold either.
+      expect(
+        (
+          await inject({
+            method: 'GET',
+            url: `${API_PREFIX}${ADMIN_ROUTES.sessions(target)}`,
+            headers: asAdmin(support),
+          })
+        ).statusCode,
+      ).toBe(403);
+
+      // Nothing was written by either refusal.
+      expect(
+        (
+          await api.container.database.db.execute(
+            sql`SELECT 1 FROM audit_logs WHERE action = 'admin.password_reset' AND result = 'SUCCESS'`,
+          )
+        ).rows,
+      ).toHaveLength(0);
+    });
+
+    it('refuses a reset that would hand the caller authority they do not hold', async () => {
+      /*
+       * `admins.edit` is not enough, and this is the case that says why.
+       *
+       * Setting somebody\u2019s password is TAKING THEIR ACCOUNT: whoever does it can
+       * sign in as them afterwards. So it is bound by the same question as
+       * re-enabling a disabled administrator \u2014 "may you BECOME this one" \u2014 and an
+       * actor holding `admins.edit` but not what the target holds is refused.
+       *
+       * Without that bound this route is the escalation path `UNK-ADM-005` names,
+       * reached with a permission the Mirza research found every one of its four
+       * production administrators holding. The mutation that removed the bound
+       * survived every other case in this file, which is why this one exists.
+       */
+      await createAdmin(api.container, tenantA, {
+        username: 'roster-manager',
+        password: 'the-manager-password',
+        roleKeys: ['support'],
+      });
+      await createAdmin(api.container, tenantA, {
+        username: 'better-armed',
+        password: 'the-armed-password',
+        roleKeys: ['support'],
+      });
+      const manager = await idOf('roster-manager');
+      const target = await idOf('better-armed');
+      await api.container.database.db.execute(sql`
+        INSERT INTO admin_permission_overrides (tenant_id, admin_id, permission_key, effect, reason)
+        VALUES
+          (${tenantA.tenantId}, ${manager}, 'admins.edit', 'GRANT', 'Administers the roster.'),
+          (${tenantA.tenantId}, ${target}, 'backup.run', 'GRANT', 'Runs the backups.')`);
+
+      const cookie = await cookieFor('roster-manager', 'the-manager-password');
+      const refused = await inject({
+        method: 'POST',
+        url: `${API_PREFIX}${ADMIN_ROUTES.password(target)}`,
+        headers: asAdmin(cookie),
+        payload: { newPassword: 'becoming-somebody-else', reason: 'escalation' },
+      });
+      expect(refused.statusCode).toBe(403);
+      expect(refused.json()).toMatchObject({
+        error: { code: 'admin.privilege_escalation_denied' },
+      });
+
+      // Nothing was taken: the old password still works and the account is theirs.
+      expect((await login('better-armed', 'the-armed-password')).statusCode).toBe(201);
+      expect((await login('better-armed', 'becoming-somebody-else')).statusCode).toBe(401);
+
+      // The NEGATIVE half. The same manager may reset an administrator who holds
+      // nothing they do not, so the rule above is a bound and not a blanket ban
+      // that a test would be satisfied by either way.
+      await createAdmin(api.container, tenantA, {
+        username: 'equally-armed',
+        password: 'the-equal-password',
+        roleKeys: ['support'],
+      });
+      const peer = await idOf('equally-armed');
+      const allowed = await inject({
+        method: 'POST',
+        url: `${API_PREFIX}${ADMIN_ROUTES.password(peer)}`,
+        headers: asAdmin(cookie),
+        payload: { newPassword: 'a-legitimate-reset', reason: 'they forgot it' },
+      });
+      expect(allowed.statusCode).toBe(201);
+      expect((await login('equally-armed', 'a-legitimate-reset')).statusCode).toBe(201);
+    });
+
+    it('revokes sessions without touching the password, and lets an actor end their own', async () => {
+      await createAdmin(api.container, tenantA, {
+        username: 'revokable',
+        password: 'the-revokable-password',
+        roleKeys: ['support'],
+      });
+      const target = await idOf('revokable');
+      const theirs = await cookieFor('revokable', 'the-revokable-password');
+      const owner = await cookieFor('owner', 'the-owners-real-password');
+
+      const revoked = await inject({
+        method: 'POST',
+        url: `${API_PREFIX}${ADMIN_ROUTES.revokeSessions(target)}`,
+        headers: asAdmin(owner),
+        payload: { reason: 'lost laptop' },
+      });
+      expect(revoked.statusCode).toBe(201);
+      expect(revoked.json()).toEqual({ revoked: 1 });
+
+      // The session is gone.
+      expect(
+        (
+          await inject({
+            method: 'GET',
+            url: `${API_PREFIX}${ADMIN_ROUTES.list}`,
+            headers: asAdmin(theirs),
+          })
+        ).statusCode,
+      ).toBe(401);
+
+      // A second call finds nothing left, and says zero rather than failing.
+      // Checked BEFORE the password is exercised: signing in again would create
+      // a session, and this assertion would then be measuring the test.
+      expect(
+        (
+          await inject({
+            method: 'POST',
+            url: `${API_PREFIX}${ADMIN_ROUTES.revokeSessions(target)}`,
+            headers: asAdmin(owner),
+            payload: { reason: 'again' },
+          })
+        ).json(),
+      ).toEqual({ revoked: 0 });
+
+      // And the PASSWORD is untouched: this is not a reset.
+      expect((await login('revokable', 'the-revokable-password')).statusCode).toBe(201);
+
+      /*
+       * Revoking your OWN sessions is allowed, and is the one place this
+       * differs from the password route. Signing every device out is something
+       * an administrator may do to themselves — it takes authority AWAY, so the
+       * self-modification refusal that protects an account from its holder does
+       * not apply. The call ends the very session making it, which is why the
+       * response is checked before the cookie is used again.
+       */
+      const ownerId = await idOf('owner');
+      const own = await inject({
+        method: 'POST',
+        url: `${API_PREFIX}${ADMIN_ROUTES.revokeSessions(ownerId)}`,
+        headers: asAdmin(owner),
+        payload: { reason: 'signing out everywhere' },
+      });
+      expect(own.statusCode).toBe(201);
+      expect(
+        (
+          await inject({
+            method: 'GET',
+            url: `${API_PREFIX}${ADMIN_ROUTES.list}`,
+            headers: asAdmin(owner),
+          })
+        ).statusCode,
+      ).toBe(401);
+    });
+
+    it('refuses a REPLAYED self sign-out at authentication, having already done it', async () => {
+      /*
+       * What actually happens, pinned because an earlier version of the service
+       * claimed something else.
+       *
+       * `revokeSessions` used to skip its session-liveness check for the
+       * caller's own id, on the reasoning that a replayed second click should
+       * report zero rather than "your session is invalid". That branch cannot
+       * fire: the session is resolved by the controller BEFORE the service is
+       * called, so a replay is refused at authentication and never reaches the
+       * transaction. A mutation that removed the branch changed nothing, which
+       * is how it was found; the branch is gone and this is the behaviour.
+       *
+       * It is the right answer anyway. The first call did the work and said so;
+       * the second arrives with a credential that is no longer one.
+       */
+      const ownerId = await idOf('owner');
+      const cookie = await cookieFor('owner', 'the-owners-real-password');
+      const first = await inject({
+        method: 'POST',
+        url: `${API_PREFIX}${ADMIN_ROUTES.revokeSessions(ownerId)}`,
+        headers: asAdmin(cookie),
+        payload: { reason: 'signing out everywhere' },
+      });
+      expect(first.json()).toEqual({ revoked: 1 });
+
+      const replay = await inject({
+        method: 'POST',
+        url: `${API_PREFIX}${ADMIN_ROUTES.revokeSessions(ownerId)}`,
+        headers: asAdmin(cookie),
+        payload: { reason: 'signing out everywhere' },
+      });
+      expect(replay.statusCode).toBe(401);
+    });
+
+    it('will not let another tenant read or end an administrator\u2019s sessions', async () => {
+      await createAdmin(api.container, tenantA, {
+        username: 'cross-target',
+        password: 'the-cross-password',
+        roleKeys: ['support'],
+      });
+      const target = await idOf('cross-target');
+      await cookieFor('cross-target', 'the-cross-password');
+      await createAdmin(api.container, tenantB, {
+        username: 'owner-b-sessions',
+        password: 'the-owner-b-password',
+        roleKeys: ['owner'],
+      });
+
+      api.container.setInstallationTenant(tenantB.tenantId);
+      let listed;
+      let revoked;
+      let reset;
+      try {
+        const cookieB = await cookieFor('owner-b-sessions', 'the-owner-b-password');
+        listed = await inject({
+          method: 'GET',
+          url: `${API_PREFIX}${ADMIN_ROUTES.sessions(target)}`,
+          headers: asAdmin(cookieB),
+        });
+        revoked = await inject({
+          method: 'POST',
+          url: `${API_PREFIX}${ADMIN_ROUTES.revokeSessions(target)}`,
+          headers: asAdmin(cookieB),
+          payload: { reason: 'not mine' },
+        });
+        reset = await inject({
+          method: 'POST',
+          url: `${API_PREFIX}${ADMIN_ROUTES.password(target)}`,
+          headers: asAdmin(cookieB),
+          payload: { newPassword: 'taking-this-account', reason: 'not mine' },
+        });
+      } finally {
+        api.container.setInstallationTenant(tenantA.tenantId);
+      }
+      expect(listed.statusCode).toBe(404);
+      expect(revoked.statusCode).toBe(404);
+      expect(reset.statusCode).toBe(404);
+
+      // The session survived and so did the password: a 404 that had already
+      // done the work would be the worst of both.
+      expect((await login('cross-target', 'the-cross-password')).statusCode).toBe(201);
     });
 
     it('refuses a cookie-authenticated binding from an unlisted origin', async () => {

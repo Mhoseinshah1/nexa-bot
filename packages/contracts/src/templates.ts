@@ -1894,6 +1894,24 @@ export const TEMPLATES = [
     ],
   },
   {
+    key: 'bot.admin.admin_gone',
+    description:
+      'The administrator behind that button is not one this caller may see. ONE answer ' +
+      'for unknown, another tenant\u2019s and malformed alike \u2014 telling them apart would ' +
+      'let anybody holding an id learn whether it names anything.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.revoke_button',
+    description:
+      'Removes one administrator\u2019s Telegram access from their detail screen. Their ' +
+      'account, their roles and their Web Admin sign-in are untouched: this ends a ' +
+      'CHANNEL, not an identity.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.admin.admins_back_button',
     description: 'Returns from one administrator to the roster.',
     format: 'PLAIN_TEXT',

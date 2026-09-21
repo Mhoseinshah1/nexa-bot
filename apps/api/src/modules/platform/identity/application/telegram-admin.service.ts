@@ -35,7 +35,10 @@ export interface TelegramAdminDeps {
       tx?: unknown,
     ): Promise<ReadonlySet<PermissionKey>>;
   };
-  readonly management: Pick<AdminManagementService, 'setTelegramBinding' | 'setRoles' | 'list'>;
+  readonly management: Pick<
+    AdminManagementService,
+    'setTelegramBinding' | 'setRoles' | 'list' | 'setStatus'
+  >;
 }
 
 /**
@@ -127,6 +130,49 @@ export class TelegramAdminService {
     // product, and it is charged here through the same guard the Web Admin uses.
     await this.deps.management.list(scope, actor);
     return this.deps.admins.listTelegramBound(scope);
+  }
+
+  /**
+   * Every administrator on this tenant, with their roles — the roster.
+   *
+   * `management.list` rather than a second query, so the permission, the projection
+   * and the tenant scope are the Web Admin's. It returns everyone, not only the
+   * Telegram-bound: the administrator an operator most needs on this surface is the
+   * one they want to STOP, and there is no reason that person holds a binding. It is
+   * also what makes `listBound` still worth having — that one answers a different
+   * question, "who can be reached here".
+   *
+   * Unbounded on purpose, and bounded in fact: an administrator roster is people an
+   * operator created by hand. The customer-sized sets in this product are the ones
+   * that page.
+   */
+  async listAll(
+    scope: TenantContext,
+    actor: ActorContext,
+  ): Promise<readonly { admin: Admin; roleKeys: string[] }[]> {
+    return this.deps.management.list(scope, actor);
+  }
+
+  /**
+   * Activates or disables one administrator, through the SAME method the Web Admin
+   * calls — so the self-modification refusal, the last-owner rule, the privilege bound,
+   * the tenant lock and the in-transaction authorization are all the ones already
+   * tested, and this surface adds none of its own.
+   *
+   * No idempotency key is threaded, and that is a property of the operation rather than
+   * an omission: `setStatus` reads the target under the lock and returns the same
+   * projection when the status already matches. A redelivered Telegram update therefore
+   * produces one audit row and one answer, and the answer names the STATUS rather than
+   * the button, so a replay reads as the state it found.
+   */
+  async setStatus(
+    scope: TenantContext,
+    actor: ActorContext,
+    targetId: AdminId,
+    status: 'ACTIVE' | 'DISABLED',
+    reason: string,
+  ): Promise<{ admin: Admin; roleKeys: string[] }> {
+    return this.deps.management.setStatus(scope, actor, targetId, { status, reason });
   }
 
   /**

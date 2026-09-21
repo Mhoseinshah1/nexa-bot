@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { ActorContext, AdminSessionId, BotInstanceId, UserId } from '@nexa/contracts';
 import {
   auditLogs,
@@ -390,6 +390,55 @@ describe('fresh transactional authorization', () => {
    * password-rotated administrator's write still committed. A comment
    * promising a guarantee the code did not provide.
    */
+  it('refuses admins.password_reset when authority is revoked before the transaction', async () => {
+    /*
+     * WP1's new write, and the one on this list where a stale authorization is
+     * worth the most: whoever sets an administrator\u2019s password can sign in as
+     * them afterwards. The outer `assertMayAttempt` runs on the POOL, so an
+     * actor demoted while the request waits on the tenant lock still passed it;
+     * only the in-transaction `guard.check` sees the demotion.
+     *
+     * A mutation that removed that check survived every other case in this
+     * package, which is what this one is here to fix. The revocation target is
+     * `observer` rather than nothing, so A is still an administrator and still
+     * authenticates \u2014 what changed is only what they may do.
+     */
+    const victim = await createAdmin(ctx.container, tenantA, {
+      username: 'reset-race-target',
+      roleKeys: ['support'],
+    });
+    const before = (
+      await db().execute<{ password_hash: string }>(
+        sql`SELECT password_hash FROM admins WHERE id = ${victim.id}`,
+      )
+    ).rows[0]?.password_hash;
+    expect(before).toBeDefined();
+    await expectRevocationRefusal({
+      name: 'admins.password_reset',
+      action: 'admin.password_reset',
+      permission: 'admins.edit',
+      // No domain event is written by a reset, so there is nothing to look for.
+      // `AdminStatusChanged` is the nearest neighbour and must stay absent too.
+      eventType: 'AdminStatusChanged',
+      mutate: () =>
+        ctx.container.adminManagement.resetPassword(tenantA, actorA, victim.id, {
+          newPassword: 'taken-by-a-revoked-actor',
+          reason: 'Revocation race.',
+        }),
+      unchanged: async () => {
+        // Read straight out of the column, because `Admin` deliberately does
+        // not carry the hash: the projection that would have made this
+        // assertion convenient is the one that must not exist.
+        const rows = await db().execute<{ password_hash: string }>(
+          sql`SELECT password_hash FROM admins WHERE id = ${victim.id}`,
+        );
+        expect(rows.rows[0]?.password_hash, 'the password was rotated by a revoked actor').toBe(
+          before,
+        );
+      },
+    });
+  });
+
   it('records an EARLY refusal the same way in every phase', async () => {
     // Four services checked a permission before opening a transaction when
     // this was written (six do now — templates and the ping joined the shared

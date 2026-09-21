@@ -932,9 +932,18 @@ export class AdminManagementService {
              * What changed is not in dispute and does not need recording; WHAT IT
              * CHANGED TO is the thing an audit row must never carry. The counts
              * are the useful part and the safe part.
+             *
+             * The KEYS are `liveSignIns` and `rotated` rather than the obvious
+             * `sessionsLive` and `passwordRotated`, for the reason `panel.create`
+             * records above it: the audit writer redacts any key containing
+             * `session` or `password`, so the obvious names wrote `[redacted]`
+             * twice and the row lost the only two facts it carries. The fix is
+             * the name, never the redactor — a key that looks like it holds a
+             * credential SHOULD be redacted, because the next author to add one
+             * will not be as careful as this one.
              */
-            before: { sessionsLive: sessionsRevoked },
-            after: { passwordRotated: true, sessionsRevoked },
+            before: { liveSignIns: sessionsRevoked },
+            after: { rotated: true, endedSignIns: sessionsRevoked },
             reason: command.reason,
             result: 'SUCCESS',
           },
@@ -946,7 +955,9 @@ export class AdminManagementService {
           tx,
           'admin.password_reset',
           `administrator ${target.username} had their password reset by an operator`,
-          { adminId: target.id, sessionsRevoked },
+          // `endedSignIns` for the same reason the audit row above uses it:
+          // the operational log's context is redacted by the same function.
+          { adminId: target.id, endedSignIns: sessionsRevoked },
         );
 
         return { admin: target, roleKeys: targetRoleKeys, sessionsRevoked };
@@ -1007,7 +1018,9 @@ export class AdminManagementService {
    * anybody may perform on themselves, and the caller's own session is among
    * the ones that end. It is the same thing the logout button does, at a wider
    * blast radius, and it removes authority rather than conferring it — which is
-   * why it needs neither the privilege check nor the self refusal.
+   * why it needs neither the privilege check nor the self refusal. What it does
+   * still take is a live session, like every other write here; see the note in
+   * the transaction.
    */
   async revokeSessions(
     scope: ScopeContext,
@@ -1028,21 +1041,22 @@ export class AdminManagementService {
       async (tx) => {
         assertTenantActive(await this.admins.lockTenantForAdminChange(scope, tx));
         /*
-         * Deliberately NOT `assertSessionStillLive` when the caller is revoking
-         * their own sessions.
+         * Checked for EVERY caller, the caller's own id included.
          *
-         * Every other write here refuses an actor whose session died mid-request,
-         * because a revoked session is not a less-privileged actor. Revoking your
-         * OWN sessions is the one act where that refusal is wrong in a way the
-         * operator feels: a replayed request, or a second click, arrives after the
-         * first has already ended the session it came from, and answering it with
-         * "your session is invalid" makes a completed sign-out look like a failure.
-         * The act is idempotent and removes authority, so the second one is a
-         * no-op reporting zero.
+         * An earlier version skipped it for self-revocation, reasoning that a
+         * replayed second click arrives after the first has ended the session it
+         * came from and should report zero rather than "your session is invalid".
+         * That branch could not fire: over HTTP the session is resolved before
+         * the controller ever calls this, so a replay is refused at
+         * authentication and never reaches the transaction. A mutation that
+         * removed the branch changed nothing, which is how it was found.
+         *
+         * The exception is therefore gone rather than kept as an inert special
+         * case with a comment describing behaviour this product does not have —
+         * and the first call is unaffected, because liveness is checked before
+         * the revocation this transaction performs.
          */
-        if (adminIdOf(actor) !== targetId) {
-          await this.assertSessionStillLive(scope, actor, tx);
-        }
+        await this.assertSessionStillLive(scope, actor, tx);
         const now = this.clock.now();
         await this.guard.check(scope, actor, 'admins.edit', tx);
 
@@ -1062,8 +1076,11 @@ export class AdminManagementService {
             action: 'admin.sessions_revoked',
             entityType: 'Admin',
             entityId: target.id,
-            before: { sessionsLive: revoked },
-            after: { sessionsLive: 0 },
+            // `liveSignIns`, not `sessionsLive`: see the note on the reset
+            // above. A key containing `session` is redacted by the audit
+            // writer, which would have left this row saying nothing at all.
+            before: { liveSignIns: revoked },
+            after: { liveSignIns: 0 },
             reason: command.reason,
             result: 'SUCCESS',
           },

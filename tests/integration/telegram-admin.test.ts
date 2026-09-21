@@ -509,6 +509,209 @@ describe('the Telegram management panel', () => {
     ).toBe('platform.permission_denied');
   });
 
+  // -------------------------------------------------------------------------
+  // WP1: the roster, and the one write this surface may make about it
+  // -------------------------------------------------------------------------
+
+  it('lists EVERY administrator on the roster, bound or not, and charges admins.view', async () => {
+    /*
+     * The distinction that made this section worth building. `listBound` answers "who
+     * can be reached in Telegram"; an operator reaching for a phone is usually reaching
+     * for the administrator they need to STOP, and that person is under no obligation
+     * to hold a binding. Before WP1 they simply did not appear.
+     */
+    const bound = await createAdmin(ctx.container, tenantA, {
+      username: 'roster-bound',
+      roleKeys: ['support'],
+    });
+    await bind(bound.id as AdminId, '702100');
+    await createAdmin(ctx.container, tenantA, {
+      username: 'roster-unbound',
+      roleKeys: ['support'],
+    });
+
+    const roster = await ctx.container.telegramAdmins.listAll(tenantA, ownerA);
+    expect(roster.map((entry) => entry.admin.username).sort()).toEqual([
+      'owner-tg-a',
+      'roster-bound',
+      'roster-unbound',
+    ]);
+    // The projection the detail screen reads from: roles resolved, status carried.
+    const unbound = roster.find((entry) => entry.admin.username === 'roster-unbound');
+    expect(unbound?.roleKeys).toEqual(['support']);
+    expect(unbound?.admin.status).toBe('ACTIVE');
+    expect(unbound?.admin.telegramUserId).toBeNull();
+
+    expect(
+      await codeOf(
+        ctx.container.telegramAdmins.listAll(
+          tenantA,
+          telegramAdminActor(ctx.container.ids.uuid(), 'nobody'),
+        ),
+      ),
+    ).toBe('platform.permission_denied');
+  });
+
+  it('never shows one tenant its neighbour on the roster', async () => {
+    await createAdmin(ctx.container, tenantB, {
+      username: 'roster-other-tenant',
+      roleKeys: ['support'],
+    });
+    const roster = await ctx.container.telegramAdmins.listAll(tenantA, ownerA);
+    expect(roster.some((entry) => entry.admin.username === 'roster-other-tenant')).toBe(false);
+
+    // And the reverse read cannot reach tenant A's, whichever id it names.
+    const across = await ctx.container.telegramAdmins.listAll(tenantB, ownerB);
+    expect(across.some((entry) => entry.admin.username === 'owner-tg-a')).toBe(false);
+  });
+
+  it('disables and re-enables an administrator through the same guarded path as the Web Admin', async () => {
+    const target = await createAdmin(ctx.container, tenantA, {
+      username: 'roster-target',
+      roleKeys: ['support'],
+    });
+
+    const disabled = await ctx.container.telegramAdmins.setStatus(
+      tenantA,
+      ownerA,
+      target.id as AdminId,
+      'DISABLED',
+      'from telegram',
+    );
+    expect(disabled.admin.status).toBe('DISABLED');
+
+    // A REPLAY, which a redelivered Telegram update is: the same call again answers
+    // with the state it found rather than claiming a second change.
+    const replayed = await ctx.container.telegramAdmins.setStatus(
+      tenantA,
+      ownerA,
+      target.id as AdminId,
+      'DISABLED',
+      'from telegram',
+    );
+    expect(replayed.admin.status).toBe('DISABLED');
+
+    const enabled = await ctx.container.telegramAdmins.setStatus(
+      tenantA,
+      ownerA,
+      target.id as AdminId,
+      'ACTIVE',
+      'from telegram',
+    );
+    expect(enabled.admin.status).toBe('ACTIVE');
+    // Roles survived the round trip: disabling empties AUTHORITY, not assignment.
+    expect(enabled.roleKeys).toEqual(['support']);
+
+    const actions = await auditActions('admin.status_change');
+    expect(actions.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('refuses the three things a roster tap must never be able to do', async () => {
+    const target = await createAdmin(ctx.container, tenantA, {
+      username: 'roster-protected',
+      roleKeys: ['support'],
+    });
+    const bystander = adminActorFor(
+      await createAdmin(ctx.container, tenantA, {
+        username: 'roster-bystander',
+        roleKeys: ['receipt_reviewer'],
+      }),
+    );
+
+    // 1. An administrator cannot disable THEMSELVES, whatever they hold.
+    expect(
+      await codeOf(
+        ctx.container.telegramAdmins.setStatus(
+          tenantA,
+          ownerA,
+          ownerAId,
+          'DISABLED',
+          'from telegram',
+        ),
+      ),
+    ).toBe('admin.self_modification_denied');
+
+    // 2. An administrator without `admins.edit` is refused by the SERVICE, not by the
+    //    absence of a button — a crafted callback reaches the same guard.
+    expect(
+      await codeOf(
+        ctx.container.telegramAdmins.setStatus(
+          tenantA,
+          bystander,
+          target.id as AdminId,
+          'DISABLED',
+          'from telegram',
+        ),
+      ),
+    ).toBe('platform.permission_denied');
+
+    // 3. Another tenant's administrator is not found, whoever asks.
+    expect(
+      await codeOf(
+        ctx.container.telegramAdmins.setStatus(
+          tenantB,
+          ownerB,
+          target.id as AdminId,
+          'DISABLED',
+          'from telegram',
+        ),
+      ),
+    ).toBe('admin.not_found');
+  });
+
+  it('will not let Telegram disable the last owner', async () => {
+    /*
+     * The one rule that cannot be shown with an owner acting, because an owner
+     * disabling the last owner is always themselves and self-modification refuses
+     * first. So the actor is a privileged NON-owner, built the way `rbac.test.ts`
+     * builds one: roles plus two explicit permission overrides.
+     *
+     * The point of repeating it on this surface is not the rule, which is charged by
+     * `setStatus`. It is that the surface REACHES `setStatus`: a later refactor that
+     * inlined a repository write here would pass every other case in this file and
+     * fail this one.
+     */
+    const manager = await createAdmin(ctx.container, tenantA, {
+      username: 'roster-manager',
+      roleKeys: ['operator', 'support'],
+    });
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO admin_permission_overrides (tenant_id, admin_id, permission_key, effect, reason)
+      VALUES
+        (${tenantA.tenantId}, ${manager.id}, 'admins.edit', 'GRANT', 'Administers the roster.'),
+        (${tenantA.tenantId}, ${manager.id}, 'admins.permissions.edit', 'GRANT', 'Administers privileges.')`);
+    const managerActor = adminActorFor(manager);
+
+    // Two owners: disabling one is allowed, and this is what makes the next line the
+    // LAST owner rather than merely an owner.
+    const second = await createAdmin(ctx.container, tenantA, {
+      username: 'roster-second-owner',
+      roleKeys: ['owner'],
+    });
+    await ctx.container.telegramAdmins.setStatus(
+      tenantA,
+      managerActor,
+      second.id as AdminId,
+      'DISABLED',
+      'from telegram',
+    );
+
+    expect(
+      await codeOf(
+        ctx.container.telegramAdmins.setStatus(
+          tenantA,
+          managerActor,
+          ownerAId,
+          'DISABLED',
+          'from telegram',
+        ),
+      ),
+    ).toBe('admin.last_owner_protected');
+
+    // And still active, not merely reported as such.
+    expect((await ctx.container.admins.findById(tenantA, ownerAId))?.status).toBe('ACTIVE');
+  });
+
   it('names as reviewers only the administrators who are bound AND may decide', async () => {
     const reviewer = await createAdmin(ctx.container, tenantA, {
       username: 'reviewer-notified',

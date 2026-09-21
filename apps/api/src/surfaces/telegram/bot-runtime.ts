@@ -153,6 +153,20 @@ export const BOT_INTENTS = [
   'ADMIN_APPROVE',
   'ADMIN_REJECT',
   'ADMIN_SECTION',
+  /*
+   * WP1 — one administrator, and the one write this surface may make about them.
+   *
+   * `ADMIN_ADMIN_STATUS` carries the TARGET status rather than "flip it", the same
+   * shape the username toggles use: a second tap on a slow connection then writes the
+   * value already held instead of undoing the first.
+   *
+   * There is deliberately no `ADMIN_ADMIN_PASSWORD` and no session listing. A
+   * credential must not cross Telegram at all, and a message naming the IP an
+   * administrator signs in from is forwardable for ever — both stay in the Web Admin,
+   * where the operator acting on them already is.
+   */
+  'ADMIN_ADMIN',
+  'ADMIN_ADMIN_STATUS',
   'ADMIN_REVOKE',
   /*
    * Phase 6A \u2014 the services section.
@@ -562,6 +576,13 @@ const MODE_OFF = UNCAPPED;
  */
 const RECEIPTS_VIEW_PERMISSION = 'receipts.view' as PermissionKey;
 const ADMINS_VIEW_PERMISSION = 'admins.view' as PermissionKey;
+/*
+ * What the roster's status buttons are DRAWN for, and nothing more.
+ * `AdminManagementService.setStatus` charges it through the same guard the Web Admin
+ * uses, and re-checks it inside the writing transaction, so a crafted `7:` callback
+ * from an administrator who lacks it is refused there and leaves the denial record.
+ */
+const ADMINS_EDIT_PERMISSION = 'admins.edit' as PermissionKey;
 const RECEIPTS_REVIEW_PERMISSION = 'receipts.review' as PermissionKey;
 /*
  * The three the services section reads, and the same rule applies: these decide which
@@ -676,9 +697,30 @@ export const ADMIN_REMINDER_SET_CALLBACK_PREFIX = '2:';
  * value twice instead of toggling twice, which is the difference between an idempotent
  * button and one that undoes itself on a slow connection.
  */
+/*
+ * The administrator roster's two tap prefixes, WP1. Digits, for the reason the block
+ * above gives: every letter is spoken for. `7:` carries a status CODE and a uuid the
+ * way `4:` carries a field and one, which is 39 bytes at the longest.
+ */
+export const ADMIN_ADMIN_CALLBACK_PREFIX = '6:';
+export const ADMIN_ADMIN_STATUS_CALLBACK_PREFIX = '7:';
+
 export const ADMIN_USERNAME_CALLBACK_PREFIX = '3:';
 export const ADMIN_USERNAME_TOGGLE_CALLBACK_PREFIX = '4:';
 export const ADMIN_USERNAME_STRATEGY_CALLBACK_PREFIX = '5:';
+
+/**
+ * The two statuses a roster tap can set, and the letter each travels as.
+ *
+ * There is no third letter because there is no third status: `audit_logs` references
+ * administrators and refuses DELETE, so `DISABLED` is this product's answer to
+ * removing one and a deletion button would have nothing behind it.
+ */
+const ADMIN_STATUS_CODES = { a: 'ACTIVE', d: 'DISABLED' } as const;
+type AdminStatusCode = keyof typeof ADMIN_STATUS_CODES;
+function isAdminStatusCode(value: string): value is AdminStatusCode {
+  return Object.prototype.hasOwnProperty.call(ADMIN_STATUS_CODES, value);
+}
 
 /** Which of the two customer choices a `4:` tap is setting. */
 const USERNAME_TOGGLE_FIELDS = { c: 'allowCustom', a: 'allowAutomatic' } as const;
@@ -1392,6 +1434,23 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
     if (data.startsWith(ADMIN_REVOKE_CALLBACK_PREFIX)) {
       return callbackCommand('ADMIN_REVOKE', data.slice(ADMIN_REVOKE_CALLBACK_PREFIX.length), id);
     }
+    if (data.startsWith(ADMIN_ADMIN_CALLBACK_PREFIX)) {
+      return callbackCommand('ADMIN_ADMIN', data.slice(ADMIN_ADMIN_CALLBACK_PREFIX.length), id);
+    }
+    if (data.startsWith(ADMIN_ADMIN_STATUS_CALLBACK_PREFIX)) {
+      const [code, adminId] = data.slice(ADMIN_ADMIN_STATUS_CALLBACK_PREFIX.length).split(':');
+      /*
+       * The code is validated HERE, at the boundary, exactly as the username toggles
+       * are: an unreadable callback is UNSUPPORTED and never becomes an intent, so the
+       * handler receives one of the two statuses or is not reached. A cast downstream
+       * would be a third place the vocabulary is spelled out.
+       */
+      if (code === undefined || !isAdminStatusCode(code) || adminId === undefined) {
+        return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      }
+      const command = callbackCommand('ADMIN_ADMIN_STATUS', adminId, id);
+      return command.targetId === null ? command : { ...command, args: [code] };
+    }
     return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
   }
 
@@ -1901,6 +1960,41 @@ export interface TelegramAdminPort {
       readonly idempotencyKey: string;
     },
   ): Promise<{ readonly admin: { readonly username: string }; readonly roleKeys: string[] }>;
+  /**
+   * The roster: every administrator on this tenant, with their role keys.
+   *
+   * `listBound` is NOT this and is not being replaced — it answers "who can be reached
+   * in Telegram", which is what the receipt lane needs. This answers "who exists",
+   * which is what a section that can disable somebody needs.
+   */
+  listAll(scope: TenantContext, actor: ActorContext): Promise<readonly AdminRosterEntry[]>;
+  /** ACTIVE or DISABLED, through the same service and the same guard the Web Admin uses. */
+  setStatus(
+    scope: TenantContext,
+    actor: ActorContext,
+    targetId: string,
+    status: 'ACTIVE' | 'DISABLED',
+    reason: string,
+  ): Promise<AdminRosterEntry>;
+}
+
+/**
+ * One administrator, as the roster and the detail screen need them.
+ *
+ * Structural, like every other shape on this port: the surface declares what it reads
+ * and the identity module's projection satisfies it. What is NOT here is the point —
+ * no password hash, no session, no `lastLoginAt`, no IP. A detail message is
+ * forwardable for ever and a credential must never cross this surface at all.
+ */
+export interface AdminRosterEntry {
+  readonly admin: {
+    readonly id: string;
+    readonly username: string;
+    readonly displayName: string;
+    readonly status: string;
+    readonly telegramUserId: string | null;
+  };
+  readonly roleKeys: readonly string[];
 }
 
 /**
@@ -2797,6 +2891,26 @@ export class BotRuntime {
         }
         case 'ADMIN_SECTION':
           return await this.adminSection(scope, adminActor);
+        case 'ADMIN_ADMIN':
+          return command.targetId === null
+            ? null
+            : await this.adminAdmin(scope, adminActor, command.targetId, permissions);
+        case 'ADMIN_ADMIN_STATUS': {
+          /*
+           * The cast is safe because the BOUNDARY validated it: `callbackCommand` is
+           * only reached for a code in `ADMIN_STATUS_CODES`, so this is one of the two
+           * or the intent is UNSUPPORTED. The same shape the reminder codes use.
+           */
+          const code = command.args?.[0];
+          if (command.targetId === null || code === undefined) return null;
+          return await this.adminAdminStatus(
+            scope,
+            adminActor,
+            command.targetId,
+            ADMIN_STATUS_CODES[code as AdminStatusCode],
+            permissions,
+          );
+        }
         case 'ADMIN_REVOKE':
           return command.targetId === null
             ? null
@@ -3824,17 +3938,160 @@ export class BotRuntime {
    * reviewer needs to see which account they are removing.
    */
   private async adminSection(scope: TenantContext, actor: ActorContext): Promise<PendingReply> {
-    const bound = await this.deps.telegramAdmins?.listBound(scope, actor);
-    if (bound === undefined || bound.length === 0) {
+    const roster = await this.deps.telegramAdmins?.listAll(scope, actor);
+    if (roster === undefined || roster.length === 0) {
       return { key: 'bot.admin.admins_none', values: {}, buttons: [], orderId: null };
     }
     return {
       key: 'bot.admin.section',
       values: {},
-      buttons: bound.map((admin) => ({
-        label: { kind: 'TEXT' as const, text: `${admin.username} — ${admin.telegramUserId ?? ''}` },
-        data: `${ADMIN_REVOKE_CALLBACK_PREFIX}${admin.id}`,
+      /*
+       * EVERY administrator, not only the Telegram-bound ones.
+       *
+       * Until WP1 this listed `listBound`, which put the operator's most urgent reason
+       * to open this surface out of reach: the administrator you need to disable from a
+       * phone is under no obligation to have a Telegram binding, and one who had none
+       * simply did not appear. `listBound` still exists and still answers a different
+       * question — who can be REACHED here — which is what the receipt lane needs.
+       *
+       * The row carries the username and the status and nothing else. A row is a
+       * button label, so it is as forwardable as the detail screen and gets the same
+       * treatment: no numeric Telegram id, which belongs on the screen where the
+       * revoke button that acts on it is.
+       */
+      buttons: roster.map((entry) => ({
+        label: {
+          kind: 'TEXT' as const,
+          text: `${entry.admin.username} — ${entry.admin.status}`,
+        },
+        data: `${ADMIN_ADMIN_CALLBACK_PREFIX}${entry.admin.id}`,
       })),
+      orderId: null,
+    };
+  }
+
+  /**
+   * One administrator, and the two writes this surface may make about them.
+   *
+   * The roster is re-read rather than a per-administrator repository method being
+   * added, and the reason is the rule rather than convenience: `management.list` is
+   * the one projection that charges `admins.view`, scopes to the tenant and resolves
+   * role keys, and a second read path would be a second answer to "what may be shown".
+   * An administrator roster is people an operator created by hand, so the cost is a
+   * bounded scan, not a table.
+   *
+   * An id that is unknown, another tenant's or malformed gets ONE answer — the rule
+   * `bot.admin.panel_gone` states — so nobody holding an id can learn whether it names
+   * anything.
+   */
+  private async adminAdmin(
+    scope: TenantContext,
+    actor: ActorContext,
+    adminId: string,
+    permissions: ReadonlySet<PermissionKey>,
+  ): Promise<PendingReply> {
+    const roster = (await this.deps.telegramAdmins?.listAll(scope, actor)) ?? [];
+    const found = roster.find((entry) => entry.admin.id === adminId);
+    if (found === undefined) {
+      return { key: 'bot.admin.admin_gone', values: {}, buttons: [], orderId: null };
+    }
+    return this.adminAdminReply(found, actor, permissions);
+  }
+
+  /**
+   * Activates or disables one administrator.
+   *
+   * `setStatus` carries every refusal this needs — the caller may not act on
+   * themselves, the last remaining owner survives, an actor cannot restore more
+   * privilege than they hold, the tenant is locked and the permission is re-checked
+   * inside the writing transaction — so this adds none of its own and catches nothing:
+   * `adminTurn`'s single refusal is what answers a denial, and which denial it was
+   * belongs to the audit row.
+   *
+   * The reply names the STATUS the administrator now holds rather than the button that
+   * was pressed. A redelivered update therefore reads as the state it found instead of
+   * claiming a second change, which is the same property the target-valued callback
+   * gives the tap itself.
+   */
+  private async adminAdminStatus(
+    scope: TenantContext,
+    actor: ActorContext,
+    adminId: string,
+    status: 'ACTIVE' | 'DISABLED',
+    permissions: ReadonlySet<PermissionKey>,
+  ): Promise<PendingReply> {
+    const admins = this.deps.telegramAdmins;
+    if (admins === undefined) {
+      return { key: 'bot.admin.refused', values: {}, buttons: [], orderId: null };
+    }
+    const updated = await admins.setStatus(
+      scope,
+      actor,
+      adminId,
+      status,
+      'Status changed from the Telegram management panel.',
+    );
+    return {
+      key: 'bot.admin.admin_status_changed',
+      values: { username: updated.admin.username, status: updated.admin.status },
+      buttons: this.adminAdminReply(updated, actor, permissions).buttons,
+      orderId: null,
+    };
+  }
+
+  /**
+   * The detail screen for one administrator, shared by the read and the write.
+   *
+   * ONE builder, so the buttons an operator sees after a change are the buttons the
+   * new state actually offers — a second copy is how a disable leaves an "disable"
+   * button on the screen.
+   *
+   * The status button offered is the OPPOSITE of the current status, and it is not
+   * drawn at all for the caller themselves: `setStatus` refuses self-modification
+   * outright, so a button there could only ever record a refusal. That is a courtesy,
+   * not the enforcement — the service refuses it whether or not the button exists.
+   */
+  private adminAdminReply(
+    entry: AdminRosterEntry,
+    actor: ActorContext,
+    permissions: ReadonlySet<PermissionKey>,
+  ): PendingReply {
+    const isSelf = actor.id === entry.admin.id;
+    const mayEdit = permissions.has(ADMINS_EDIT_PERMISSION);
+    const buttons: CustomerButton[] = [];
+    if (mayEdit && !isSelf) {
+      const next = entry.admin.status === 'ACTIVE' ? 'd' : 'a';
+      buttons.push({
+        label: {
+          kind: 'TEMPLATE',
+          key:
+            entry.admin.status === 'ACTIVE'
+              ? 'bot.admin.admin_disable_button'
+              : 'bot.admin.admin_enable_button',
+        },
+        data: `${ADMIN_ADMIN_STATUS_CALLBACK_PREFIX}${next}:${entry.admin.id}`,
+      });
+      if (entry.admin.telegramUserId !== null) {
+        buttons.push({
+          label: { kind: 'TEMPLATE', key: 'bot.admin.revoke_button' },
+          data: `${ADMIN_REVOKE_CALLBACK_PREFIX}${entry.admin.id}`,
+        });
+      }
+    }
+    buttons.push({
+      label: { kind: 'TEMPLATE', key: 'bot.admin.admins_back_button' },
+      data: ADMIN_SECTION_CALLBACK_PREFIX,
+    });
+    return {
+      key: 'bot.admin.admin_detail',
+      values: {
+        username: entry.admin.username,
+        displayName: entry.admin.displayName,
+        status: entry.admin.status,
+        roles: entry.roleKeys.join(', '),
+        telegram: entry.admin.telegramUserId ?? '—',
+      },
+      buttons,
       orderId: null,
     };
   }

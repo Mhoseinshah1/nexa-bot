@@ -316,6 +316,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.admin_enable_button': 'فعال کردن',
   'bot.admin.admin_disable_button': 'غیرفعال کردن',
   'bot.admin.admin_status_changed': 'وضعیت {username} اکنون {status} است.',
+  'bot.admin.admin_gone': 'چنین ادمینی یافت نشد.',
+  'bot.admin.revoke_button': 'قطع دسترسی تلگرام',
   'bot.admin.admins_back_button': 'بازگشت به فهرست ادمین‌ها',
   'bot.admin.linked': 'دسترسی تلگرام برای {username} ثبت شد.',
   'bot.admin.revoked': 'دسترسی تلگرام {username} حذف شد.',

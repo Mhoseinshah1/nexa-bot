@@ -834,6 +834,21 @@ describe('profile metadata, normalised before it is ever stored', () => {
      */
     const adminKeys = [...sent].filter((key) => key.startsWith('bot.admin.')).sort();
     expect(adminKeys).toEqual([
+      /*
+       * WP1's seven, the administrator roster. Reviewed against the same rule and
+       * against one more that matters most here: not one of them carries credential
+       * material. `bot.admin.admin_detail` renders a username, a display name, a
+       * status, role keys and a numeric Telegram id, and there is no key in this
+       * group for a password, a hash, a session, an IP or a user agent — a reset is
+       * the Web Admin's and a session listing stays there, because this message is
+       * forwardable for ever.
+       */
+      'bot.admin.admin_detail',
+      'bot.admin.admin_disable_button',
+      'bot.admin.admin_enable_button',
+      'bot.admin.admin_gone',
+      'bot.admin.admin_status_changed',
+      'bot.admin.admins_back_button',
       'bot.admin.admins_none',
       'bot.admin.approve_button',
       'bot.admin.approved',
@@ -901,6 +916,7 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.admin.reminder_usage_second_button',
       'bot.admin.reminders_button',
       'bot.admin.reminders_section',
+      'bot.admin.revoke_button',
       'bot.admin.revoked',
       'bot.admin.roles_set',
       'bot.admin.section',
