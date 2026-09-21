@@ -178,7 +178,11 @@ describe('the three shapes a refusal can be reported as', () => {
 
   it('a row whose attempt was given back is never terminal, at any attempt count', () => {
     for (let attempts = 0; attempts <= OPERATION_MAX_ATTEMPTS + 1; attempts += 1) {
-      const result = shapes.refusedAndHeld.call(shapes, { ...operation, attempts }, 'TENANT_STOPPED');
+      const result = shapes.refusedAndHeld.call(
+        shapes,
+        { ...operation, attempts },
+        'TENANT_STOPPED',
+      );
       expect(result.terminal).toBe(false);
     }
   });

@@ -1147,5 +1147,4 @@ describe('provisioning invariants', () => {
       expect((row.rows[0] as { state: string } | undefined)?.state).toBe('ABANDONED');
     });
   });
-
 });

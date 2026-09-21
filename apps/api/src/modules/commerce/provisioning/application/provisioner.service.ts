@@ -2248,7 +2248,11 @@ export class ProvisionerService {
    * subscription URL or a provider's response body.
    */
   private refused(operation: OperationRecord, reason: ExecutionRefusal): ExecutionResult {
-    return this.refusal(operation, reason, refusalIsPermanent(reason) || exhausted(operation.attempts));
+    return this.refusal(
+      operation,
+      reason,
+      refusalIsPermanent(reason) || exhausted(operation.attempts),
+    );
   }
 
   /**
@@ -2259,10 +2263,7 @@ export class ProvisionerService {
    * claim it. `SERVICE_ABSENT` is the only reason that reaches here today and it
    * is in `RETRYABLE_REFUSALS`, which is exactly the disagreement this separates.
    */
-  private refusedAbandoned(
-    operation: OperationRecord,
-    reason: ExecutionRefusal,
-  ): ExecutionResult {
+  private refusedAbandoned(operation: OperationRecord, reason: ExecutionRefusal): ExecutionResult {
     return this.refusal(operation, reason, true);
   }
 

@@ -234,4 +234,4 @@ what that is worth.
 | OQ-RP-02 | Does `POST /api/user` accept `status`, as Marzban's does?               | Not declared. The adapter does not send it on create; the panel's own default applies, and a suspend is a separate PUT.    |
 | OQ-RP-03 | What does the create actually return — the user, or an acknowledgement? | "Success", no schema. The adapter does not depend on the answer: it reads the user back either way.                        |
 | OQ-RP-04 | How long does node propagation take?                                    | Unmeasured. The bounded read policy is stated in the adapter as an assumption, not a measurement.                          |
-| OQ-RP-05 | After an `UNKNOWN` create, can a found account be proved to be OURS?    | No, and not by reading harder. Needs durable per-operation provenance — a schema change. Shared with Marzban. See F-RP-4. |
+| OQ-RP-05 | After an `UNKNOWN` create, can a found account be proved to be OURS?    | No, and not by reading harder. Needs durable per-operation provenance — a schema change. Shared with Marzban. See F-RP-4.  |
