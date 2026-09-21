@@ -34,7 +34,7 @@ settlement, release — so each of these is proved once and holds at all four.
 | #   | Rule                                                        | Mutation                                                  | Named test                                                                                         | Result |
 | --- | ----------------------------------------------------------- | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ------ |
 | F6  | a create reads the user back before claiming a delivery     | the create response parsed and returned as the delivery   | `rickpanel-adapter.test.ts` › reads the user back before it claims a delivery                      | KILLED |
-| F7  | a 409 whose user we own is ADOPTED, never created again     | the adopt read replaced with a bare `PROVIDER_ERROR`      | `rickpanel-adapter.test.ts` › adopts our own existing user instead of creating a second one        | KILLED |
+| F7  | ~~a 409 whose user we own is ADOPTED, never created again~~ **SUPERSEDED by C2 below: a 409 is refused, never adopted** | the refusal replaced with the read-and-adopt branch | `rickpanel-adapter.test.ts` › refuses a name that already exists even when the panel will show it to us | KILLED |
 | F8  | a 409 for a name another admin owns is refused, not retried | `PROVIDER_REFUSED` → `PROVIDER_ERROR` on the 409+404 path | `rickpanel-adapter.test.ts` › refuses a name held by another admin instead of retrying it          | KILLED |
 | F9  | a 400/403 on create is a rule, answered once                | `PROVIDER_REFUSED` → `PROVIDER_ERROR`                     | `rickpanel-adapter.test.ts` › treats a 400 rule refusal as terminal and refundable, not as a retry | KILLED |
 | F10 | RickPanel is sent neither `inbounds` nor `proxies`          | both added to the create payload                          | `rickpanel-adapter.test.ts` › sends neither inbounds nor proxies, because the panel ignores both   | KILLED |
@@ -68,6 +68,44 @@ precisely the shape of false comfort this whole exercise exists to refuse: a
 green mutation run is supposed to mean the test cannot see the rule, and here it
 meant the test could not see the mutation. A pass that reports SURVIVED should
 always be asked which of the two it is.
+
+## The Codex round: five findings, five mutations
+
+The one authorised review of PR #58 returned five findings, two P1. All five
+were validated against the code and all five were real. Each fix is mutated the
+same way the rest of this document is — revert the single rule and watch the
+named test fail.
+
+| id | the rule the fix installed | mutation | tests that die | result |
+|----|-----------------------------|----------|----------------|--------|
+| C1a | `activationIssues` normalises an unset activation to `{}` and lets the schema decide | return `[]` for `null`/`undefined` before parsing | `panel-eligibility.test.ts` › a Marzban with no activation is refused by both, naming its fields | KILLED — 8 cases |
+| C1b | `decideOperability` normalises the same way | reject `null` outright, as it used to | `panel-eligibility.test.ts` › a RickPanel with no activation is sellable AND operable, because it needs none | KILLED — those two only |
+| C2 | a RickPanel `409` is `PROVIDER_REFUSED` with no read-back | restore the read-and-adopt branch | `rickpanel-adapter.test.ts` › refuses a name that already exists even when the panel will show it to us; `rickpanel-adapter.test.ts` › carries no subscription, token or panel text out of a conflict | KILLED — 3 cases |
+| C3 | `terminal` is what the tick did, via three named shapes | point `refusedAbandoned` and `refusedAndHeld` back at the old computation | `refusal-classification.test.ts` › a row transitioned to ABANDONED is terminal however its reason is classified; `refusal-classification.test.ts` › a row whose attempt was given back is never terminal, at any attempt count; `provisioning.test.ts` › reports an abandoned operation as terminal, however its reason is classified | KILLED — 3 cases |
+| C4/C5 | two Web Admin sentences say only what the page read | restore both original strings | `products-and-orders.test.tsx` › says a refunded order was refunded, and where the figure is; `products-and-orders.test.tsx` › does not tell an operator a refunded service purchase was not one | KILLED — 2 cases |
+
+C1a and C1b are listed separately on purpose. Each fails exactly the side it
+breaks and neither fails the other's cases, which is what says the pair measures
+the DISAGREEMENT between the two evaluators rather than one evaluator's answer.
+A single mutation failing everything would have been consistent with a test that
+merely pins both to a constant.
+
+### One case removed rather than left passing
+
+The `refusedAndHeld` shape has no end-to-end test, and the honest reason is
+worth recording. I wrote one — stop the tenant, run a tick, assert the refusal
+reports `terminal: false` and the row was queued again with its attempt refunded
+— and it returned `IDLE`. `runOnce` checks `scopeIsActive` BEFORE it claims, so
+the in-executor `TENANT_STOPPED` refusal is the inside-the-transaction backstop
+for a tenant that stops MID-tick, and a test that stops it first never reaches
+the code it names.
+
+The case was deleted rather than weakened to pass. What stands in its place is a
+contract test on the three shapes across every attempt count, which is a smaller
+claim honestly made: it proves `refusedAndHeld` can never report terminal, and
+does not pretend to prove the two call sites use it. The `ABANDONED` direction —
+the one Codex named first and the one reachable today — is proven end to end,
+asserting the flag AND that the row really is `ABANDONED`.
 
 ## What is NOT proved here
 
