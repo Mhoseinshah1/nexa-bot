@@ -231,7 +231,7 @@ describe('the customers section of the Telegram management panel', () => {
     expect((await ctx.container.customers.get(tenantA, owner, customerId)).status).toBe('ACTIVE');
   });
 
-  it('answers an administrator with no users permission as unknown input, not as a refusal', async () => {
+  it('answers an administrator with no users permission with the refusal, never customer_gone', async () => {
     /*
      * A hand-made role holding `receipts.view` alone: they HAVE a section, so the
      * panel opens, and they hold no `users.*` at all. `adminTurn` reaches the handler
