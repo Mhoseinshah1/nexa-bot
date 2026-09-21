@@ -48,7 +48,7 @@ is what can tell them apart, and it was written before the row was recorded.
 | T-04 | the status button carries the TARGET status, not the current one | the two codes transposed                    | _blocks a customer, and the reply offers the unblock rather than the block again_         | KILLED |
 | T-05 | the status button is drawn only with `users.block`               | the permission test replaced with `true`    | _draws no status button for an administrator who may view and not block_                  | KILLED |
 | T-06 | the next-page button is appended when the cursor encodes         | the append deleted                          | _offers a further page only when the server says there is one, and that page works_       | KILLED |
-| T-07 | the lookup refuses an argument that is not a numeric id          | the shape guard made unreachable            | _answers the lookup with the syntax when the argument is missing or not a number_         | KILLED |
+| T-07 | the lookup refuses an argument that is not a Telegram id         | the shape guard made unreachable            | _answers the lookup with the syntax for anything that is not a Telegram id_               | KILLED |
 | T-08 | the lookup filters on the EXACT `telegramUserId`                 | the search narrowed to `{}`                 | _never finds another tenant’s customer by their Telegram id_                              | KILLED |
 
 T-01 and T-02 are the two rows this file exists for, because each names a defect
@@ -81,3 +81,32 @@ catch is now narrow and a denial falls through to the panel's single refusal.
 | the eleven new template keys were each reviewed as customer-facing copy  | `tests/unit/bot-runtime.test.ts` pins the exact SET of `bot.admin.*` keys the runtime can send                                          |
 | a callback uuid that is not a UUIDv7 never reaches a query               | `callbackCommand` validates at the boundary; a malformed id answers `bot.unknown_command` before an intent exists                       |
 | every read and write is tenant-scoped                                    | `DrizzleCustomerRepository` puts `eq(customers.tenantId, …)` in every WHERE, including the primary-key lookup                           |
+
+## Round 2 — the one authorized Codex review
+
+One review round on PR #56, two findings, both validated against the code and
+both real. Each fix carries a mutation; one of the two mutations is recorded as
+SURVIVED because the rule it reverts is unreachable through the UI, which is a
+fact about the rule rather than a gap in the suite.
+
+| #     | Rule                                                                   | Mutation                                              | Named test                                                                  | Result   |
+| ----- | ---------------------------------------------------------------------- | ----------------------------------------------------- | --------------------------------------------------------------------------- | -------- |
+| R-01  | the lookup validates against `telegramUserIdSchema`, not a local regex | the schema check replaced with the old `/^\d{1,32}$/` | _answers the lookup with the syntax for anything that is not a Telegram id_ | KILLED   |
+| R-02  | Previous returns to the page before, not to the first page             | `back` empties the trail instead of popping one       | _steps the orders pager back one page, not all the way to the first_        | KILLED   |
+| R-02b | `forward` pushes nothing for a null cursor                             | a null cursor pushes an empty-string placeholder      | _labels the services pager for a descending traversal and sends its cursor_ | SURVIVED |
+
+R-01 is the one worth reading. `/^\d{1,32}$/` accepted a leading zero and up to
+thirty-two digits, neither of which any Telegram account has, and
+`CustomerService.list` trusts its `CustomerSearch` and validates nothing — so
+those reached the database, spent `users.search` on a value that cannot match,
+and came back `bot.admin.customer_gone`. That sentence says the person does not
+exist, for a string that is not an identifier at all, and an operator acts on it
+by telling a customer there is no account. One schema means the Telegram lookup
+and the HTTP one agree about what an id is.
+
+R-02b SURVIVED and stays SURVIVED. `CursorPager` disables Next when the page
+reports no next cursor, so a null can only reach `forward` from a caller this
+file does not have; the guard is there for the one it might gain. Writing a test
+that pressed a disabled button would be a test of `fireEvent`, not of the rule —
+and recording the row as killed on that basis is the thing this record exists to
+refuse.

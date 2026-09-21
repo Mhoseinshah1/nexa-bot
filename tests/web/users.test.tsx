@@ -1144,6 +1144,75 @@ describe("a customer's orders and services", () => {
     });
   });
 
+  /*
+   * Previous returns to the page BEFORE, not to the first page.
+   *
+   * A Codex round on this PR named the single-cursor version: after two advances,
+   * Previous jumped from page three straight to page one and page two could not be
+   * reached at all. The button says "the adjacent page" in both cards' vocabularies, so
+   * delivering the first one is a control doing something other than what it is
+   * labelled.
+   *
+   * Three pages driven from the server's own tokens, and the assertion is on the
+   * REQUEST: what proves the trail is which cursor goes back out, not which rows come
+   * back — a card that rendered page two's rows from a stale cache would pass a
+   * row-based assertion with the trail removed.
+   */
+  it('steps the orders pager back one page, not all the way to the first', async () => {
+    let page = 0;
+    const api = withCards([
+      {
+        url: '/orders',
+        get body() {
+          page += 1;
+          return {
+            orders: [order({ lineTitle: `plan-page-${String(page)}` })],
+            nextCursor: page < 3 ? `page-${String(page + 1)}` : null,
+          };
+        },
+      },
+      { url: '/services', body: { services: [], nextCursor: null } },
+    ]);
+    renderPage(
+      <UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} {...ALL_COMMERCE} denied={false} />,
+    );
+    await screen.findByText('plan-page-1');
+    const card = screen.getByText('همهٔ سفارش‌های این مشتری').closest('section') as HTMLElement;
+
+    /*
+     * Each advance waits for the ROW, not for the request.
+     *
+     * Waiting on `api.calls` resolves the moment the fetch goes out, while the card is
+     * still showing its skeleton and has no pager to press — which is how the first
+     * version of this case failed on its second click rather than on its assertion.
+     */
+    fireEvent.click(within(card).getByRole('button', { name: 'تازه‌تر' }));
+    await screen.findByText('plan-page-2');
+    expect(api.calls.some((call) => call.url.includes('cursor=page-2'))).toBe(true);
+
+    fireEvent.click(within(card).getByRole('button', { name: 'تازه‌تر' }));
+    await screen.findByText('plan-page-3');
+    expect(api.calls.some((call) => call.url.includes('cursor=page-3'))).toBe(true);
+
+    /*
+     * Back once from the third page. The cache already holds page two under its own
+     * cursor, so the proof is the QUERY KEY the card asks for — counted, because a
+     * cached hit issues no new request.
+     */
+    const before = api.calls.length;
+    fireEvent.click(within(card).getByRole('button', { name: 'قدیمی‌تر' }));
+    await screen.findByText('plan-page-2');
+
+    const after = api.calls.slice(before);
+    expect(
+      after.every((call) => !call.url.includes('/orders') || call.url.includes('cursor=page-2')),
+      'Previous went somewhere other than the page before',
+    ).toBe(true);
+    /* And the first page is only reachable by pressing it again. */
+    fireEvent.click(within(card).getByRole('button', { name: 'قدیمی‌تر' }));
+    await screen.findByText('plan-page-1');
+  });
+
   it('names the missing permission and asks for nothing when orders are withheld', async () => {
     const api = withCards([{ url: '/services', body: { services: [], nextCursor: null } }]);
     renderPage(

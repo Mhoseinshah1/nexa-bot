@@ -398,8 +398,25 @@ describe('the customers section of the Telegram management panel', () => {
     expect(lastMessage()).toContain('ali_tehran');
   });
 
-  it('answers the lookup with the syntax when the argument is missing or not a number', async () => {
-    for (const text of ['/customer', '/customer nobody']) {
+  it('answers the lookup with the syntax for anything that is not a Telegram id', async () => {
+    /*
+     * The shape is checked against `telegramUserIdSchema`, the CONTRACT's own, and the
+     * last three rows are why that matters rather than a regex written here.
+     *
+     * A Codex round on this PR found the first version — `/^\d{1,32}$/` — accepting a
+     * leading zero and up to thirty-two digits, neither of which any Telegram account
+     * has. Those reached `list`, which trusts its `CustomerSearch` and validates
+     * nothing, spent `users.search` on a value that cannot match, and came back
+     * `bot.admin.customer_gone`: the sentence saying the person does not exist, for a
+     * string that is not an identifier at all.
+     */
+    for (const text of [
+      '/customer',
+      '/customer nobody',
+      '/customer 0123456789',
+      `/customer ${'1'.repeat(25)}`,
+      '/customer 555-100-200',
+    ]) {
       sent = [];
       const result = await runtime().handle(
         tenantA,

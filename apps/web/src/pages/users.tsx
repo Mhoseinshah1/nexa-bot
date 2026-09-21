@@ -695,6 +695,46 @@ export function UserDetailPage({
 const EMBEDDED_PAGE = 10;
 
 /**
+ * The cursor trail both embedded cards page with.
+ *
+ * A single `cursor` was the first version, reset to null on Previous — which is what
+ * `WalletCard` and `/services` do, and what a Codex round on this PR named: after two
+ * advances, Previous jumped from page three straight to page one and page two could not
+ * be reached at all. The button says "the adjacent page" in both vocabularies —
+ * «تازه‌تر» on the ascending card and «قدیمی‌تر» on the descending one — so delivering
+ * the FIRST page is a control that does something other than what it is labelled, which
+ * is the class of thing this codebase refuses everywhere else.
+ *
+ * So it keeps the stack `OrdersPage` keeps, and Previous pops one. There is no filter
+ * signature to key it on, unlike `OrdersPage`: an embedded card is pinned to one
+ * customer for its whole life, and the page is keyed by that customer's id at the route,
+ * so a different customer is a different component instance with an empty trail.
+ */
+function useCursorTrail(): {
+  readonly cursor: string | undefined;
+  readonly hasPrevious: boolean;
+  readonly back: () => void;
+  readonly forward: (next: string | null) => void;
+} {
+  const [trail, setTrail] = useState<readonly string[]>([]);
+  return {
+    cursor: trail.length > 0 ? trail[trail.length - 1] : undefined,
+    hasPrevious: trail.length > 0,
+    back: () => setTrail((current) => current.slice(0, -1)),
+    /*
+     * A null next cursor pushes NOTHING.
+     *
+     * `CursorPager` disables the button when there is no next page, so this is
+     * unreachable through the UI — and it is guarded anyway, because pushing a
+     * placeholder would make Previous pop a page that was never visited.
+     */
+    forward: (next) => {
+      if (next !== null) setTrail((current) => [...current, next]);
+    },
+  };
+}
+
+/**
  * This customer's orders.
  *
  * ## Why this is a paged list and not a count or a "latest five"
@@ -720,15 +760,15 @@ const EMBEDDED_PAGE = 10;
  */
 function CustomerOrdersCard({ customerId, mayView }: { customerId: string; mayView: boolean }) {
   const onLink = useLinkHandler();
-  const [cursor, setCursor] = useState<string | null>(null);
+  const pages = useCursorTrail();
 
   const orders = useQuery({
-    queryKey: ['customer-orders', customerId, cursor],
+    queryKey: ['customer-orders', customerId, pages.cursor ?? null],
     queryFn: () =>
       fetchOrders({
         customerId,
         limit: EMBEDDED_PAGE,
-        ...(cursor === null ? {} : { cursor }),
+        ...(pages.cursor === undefined ? {} : { cursor: pages.cursor }),
       }),
     enabled: mayView,
   });
@@ -792,10 +832,10 @@ function CustomerOrdersCard({ customerId, mayView }: { customerId: string; mayVi
             */}
             <CursorPager
               shown={orders.data.orders.length}
-              hasPrevious={cursor !== null}
+              hasPrevious={pages.hasPrevious}
               hasNext={orders.data.nextCursor !== null}
-              onPrevious={() => setCursor(null)}
-              onNext={() => setCursor(orders.data?.nextCursor ?? null)}
+              onPrevious={pages.back}
+              onNext={() => pages.forward(orders.data?.nextCursor ?? null)}
               nextLabel="web.newer"
               previousLabel="web.older"
             />
@@ -831,15 +871,15 @@ function CustomerOrdersCard({ customerId, mayView }: { customerId: string; mayVi
  */
 function CustomerServicesCard({ customerId, mayView }: { customerId: string; mayView: boolean }) {
   const onLink = useLinkHandler();
-  const [cursor, setCursor] = useState<string | null>(null);
+  const pages = useCursorTrail();
 
   const services = useQuery({
-    queryKey: ['customer-services', customerId, cursor],
+    queryKey: ['customer-services', customerId, pages.cursor ?? null],
     queryFn: () =>
       fetchServices({
         customerId,
         limit: EMBEDDED_PAGE,
-        ...(cursor === null ? {} : { cursor }),
+        ...(pages.cursor === undefined ? {} : { cursor: pages.cursor }),
       }),
     enabled: mayView,
   });
@@ -906,10 +946,10 @@ function CustomerServicesCard({ customerId, mayView }: { customerId: string; may
             {/* Default labels: this traversal runs newest to oldest. */}
             <CursorPager
               shown={services.data.services.length}
-              hasPrevious={cursor !== null}
+              hasPrevious={pages.hasPrevious}
               hasNext={services.data.nextCursor !== null}
-              onPrevious={() => setCursor(null)}
-              onNext={() => setCursor(services.data?.nextCursor ?? null)}
+              onPrevious={pages.back}
+              onNext={() => pages.forward(services.data?.nextCursor ?? null)}
             />
           </>
         )}

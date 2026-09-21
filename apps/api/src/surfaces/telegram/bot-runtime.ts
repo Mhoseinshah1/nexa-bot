@@ -7,6 +7,7 @@ import {
   money,
   PAYMENT_RECEIPT_MAX_PER_PAYMENT,
   plainAmount,
+  telegramUserIdSchema,
   uuidV7Schema,
   USAGE_REMINDER_PERCENT_MAX,
   USAGE_REMINDER_PERCENT_MIN,
@@ -4394,15 +4395,26 @@ export class BotRuntime {
   ): Promise<PendingReply> {
     const needle = telegramUserId.trim();
     /*
-     * The shape is checked HERE and the permission is NOT.
+     * The shape is checked HERE, against the CONTRACT's own schema, and the permission
+     * is NOT.
      *
-     * An empty or non-numeric argument is a typing mistake, not a lookup, and answering
-     * it with the syntax costs nothing and tells nobody anything: it is a fact about the
-     * message that was sent, not about this installation's customers. Everything that
-     * IS a fact about them — whether that id exists — goes through `list`, which charges
-     * `users.view` and then `users.search` before it looks.
+     * An argument that is not a Telegram id is a typing mistake, not a lookup, and
+     * answering it with the syntax costs nothing and tells nobody anything: it is a
+     * fact about the message that was sent, not about this installation's customers.
+     * Everything that IS a fact about them — whether that id exists — goes through
+     * `list`, which charges `users.view` and then `users.search` before it looks.
+     *
+     * `telegramUserIdSchema` and not a regex written here. This was `/^\d{1,32}$/`,
+     * which is looser than the contract in both directions: it accepted a leading zero
+     * and up to thirty-two digits, neither of which any Telegram account has. Those
+     * reached `list` — which trusts its `CustomerSearch` and validates nothing — spent
+     * `users.search` on a value that cannot match, and came back `customer_gone`: the
+     * sentence that says the person does not exist, for a string that is not an id at
+     * all. One schema means the Telegram lookup and the HTTP one agree about what an
+     * id is, which is the same reason `orders.tsx` parses with `uuidV7Schema` rather
+     * than its own idea of a uuid.
      */
-    if (!/^\d{1,32}$/.test(needle)) {
+    if (!telegramUserIdSchema.safeParse(needle).success) {
       return { key: 'bot.admin.customer_usage', values: {}, buttons: [], orderId: null };
     }
     /*
