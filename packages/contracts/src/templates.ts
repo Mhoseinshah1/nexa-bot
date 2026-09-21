@@ -1004,11 +1004,27 @@ export const TEMPLATES = [
           'plain number when the whole history was read; the bound with a trailing `+` ' +
           'when it was not, because the reader stops at a bound and an exact count ' +
           'would mean walking every operation the service ever had to render one ' +
-          'figure. WP3 added it so the screen above a SINGLE operation says whether ' +
-          'that one is the whole story — the same rule the Web history now prints ' +
-          'under its table, and the reason neither surface calls a long history a ' +
-          'problem any more.',
-        required: true,
+          'figure; and `-` when the history could not be read AT ALL, which is a ' +
+          'different fact from “none” and must never render as zero. WP3 added it so ' +
+          'the screen above a SINGLE operation says whether that one is the whole ' +
+          'story — the same rule the Web history now prints under its table, and the ' +
+          'reason neither surface calls a long history a problem any more.',
+        /*
+         * NOT required, and on this key that is a decision rather than an oversight.
+         *
+         * `validateTemplateBody` refuses a body that omits a REQUIRED token. An
+         * installation that already overrode `bot.admin.service` holds a stored body
+         * predating this one — an override is raw persisted source and nothing rewrites
+         * it — so requiring the token would leave that operator with a body they cannot
+         * re-save: every attempt refused as MISSING_REQUIRED_PLACEHOLDER, for a token
+         * they never wrote and did not ask for. That is the write-only-settings failure
+         * the research records, produced by an upgrade rather than by a screen.
+         *
+         * The runtime supplies the value unconditionally, so the shipped body shows the
+         * line and an override that omits it simply does not. Requiring the token would
+         * be this catalogue dictating what a body must SAY rather than what it may use.
+         */
+        required: false,
         repeatable: false,
       },
     ],
@@ -1865,6 +1881,20 @@ export const TEMPLATES = [
       'Opens the customer this service belongs to. Drawn only for an administrator who ' +
       'holds `users.view`, and the customer screen charges that key again server-side ' +
       '— the button decides what is advertised, never what is allowed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.service_ambiguous',
+    description:
+      'The typed name belongs to more than one service in this tenant, so the lookup ' +
+      'answers with the matches instead of picking one. `services_panel_provider_' +
+      'username_key` is unique per PANEL, not per tenant, and two panels of one tenant ' +
+      'may point at different machines — so one name legitimately names two accounts. ' +
+      'Choosing the newest silently would put suspend and terminate buttons on an ' +
+      'arbitrary one of them, which is the wrong customer’s service under a right ' +
+      'answer’s heading. No action is offered on this screen: it only routes to a ' +
+      'detail, and the detail names the panel and the customer.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },

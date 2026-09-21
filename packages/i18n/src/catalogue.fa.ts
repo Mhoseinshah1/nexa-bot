@@ -314,6 +314,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.services_more_button': '▶️ صفحهٔ بعد',
   'bot.admin.services_back_button': 'بازگشت به بخش سرویس‌ها',
   'bot.admin.service_customer_button': '👤 مشتری این سرویس',
+  'bot.admin.service_ambiguous':
+    'این نام کاربری روی بیش از یک سرویس در این نصب وجود دارد؛ یکتا بودن نام فقط در محدودهٔ هر پنل تضمین شده است.\n\nبرای اینکه کاری روی سرویس اشتباه انجام نشود، انتخاب با شماست:',
   'bot.admin.service_usage':
     'دستور ناقص یا نامعتبر است.\n\n/service <نام کاربری روی پنل یا شناسهٔ سرویس>',
   'bot.admin.customers_button': '👤 مشتری‌ها',

@@ -99,6 +99,38 @@ F-02 is the rule that keeps the fold in one place. It is not about correctness
 of the result today — the server folds, so a pre-folded value finds the same row
 — it is about there being ONE opinion. Two folds agree until one of them changes.
 
+## The Codex round
+
+One review on `5223cc9`, three findings, all three real and all three fixed. Four
+mutations, all KILLED.
+
+| #    | Rule                                                    | Mutation                                           | Named test                                                                       | Result |
+| ---- | ------------------------------------------------------- | -------------------------------------------------- | -------------------------------------------------------------------------------- | ------ |
+| R-01 | a name matching more than one service hands back BOTH   | the `MANY` branch deleted, leaving the first match | _hands back BOTH matches when one name names two services, and offers no action_ | KILLED |
+| R-02 | the disambiguation screen carries no ACTION             | a terminate button added beside each match         | _hands back BOTH matches when one name names two services, and offers no action_ | KILLED |
+| R-03 | a history that could not be READ renders `-`, never `0` | the null branch renders `'0'` again                | _says the history is UNREADABLE rather than reporting it as empty_               | KILLED |
+| R-04 | `history` is an OPTIONAL placeholder                    | `required: false` set back to `true`               | _accepts a body that predates an OPTIONAL placeholder the key later gained_      | KILLED |
+
+**R-01 is the one that mattered.** The first version asked for `limit: 1` and took
+the newest match, with a docblock calling it "the row a support conversation is
+almost always about". That is a guess wearing a rule's clothes, and the screen it
+produced carried SUSPEND and TERMINATE — so `/service <name>` could end the wrong
+customer's account while looking like it had answered correctly.
+`services_panel_provider_username_key` is unique per PANEL, and `schema.ts` says
+in as many words that two panels of one tenant may point at different machines.
+
+R-02 exists because R-01 alone does not pin the safety property: a version that
+returned both matches AND offered to terminate each would satisfy the first
+assertion. The negative arm is what makes the screen a router rather than a
+control panel.
+
+**R-04 is an upgrade-path rule, not a rendering one.** An override is raw
+persisted source and nothing rewrites it, so requiring the new token would leave
+an operator who overrode this key before WP3 able to READ their body and never
+save it again — refused for a token they never wrote. The case uses the body this
+catalogue shipped BEFORE the placeholder, so it fails the moment the token is
+marked required again.
+
 ## One gap found here, and not papered over
 
 `docs/wp1-falsification.md` is NOT registered in

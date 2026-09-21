@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { sql } from 'drizzle-orm';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ADMIN_MENU_BUTTON,
   money,
@@ -640,6 +640,73 @@ describe('the services section of the Telegram management panel', () => {
     expect(result.replyKey).toBe('bot.admin.service_gone');
   });
 
+  it('hands back BOTH matches when one name names two services, and offers no action', async () => {
+    /*
+     * The Codex round's P1, and the reason this screen exists.
+     *
+     * `services_panel_provider_username_key` is unique per PANEL, not per tenant, and
+     * this installation has two panels — so one name can name two accounts. The first
+     * version asked for `limit: 1` and took the newest, which put SUSPEND and TERMINATE
+     * on an arbitrary one of them: the wrong customer's service under a right answer's
+     * heading.
+     *
+     * The second service is given the first's name directly, because the product
+     * refuses to MINT a duplicate and this state is reached the other way — two panels
+     * pointing at different machines, each legitimately holding the name. What is under
+     * test is the lookup's behaviour when the row exists, not how it got there.
+     */
+    const first = await activeService('ambiguous-a');
+    const second = await sanaeiService('ambiguous-b');
+    await ctx.container.database.db.execute(sql`
+      UPDATE services SET provider_username = ${first.username} WHERE id = ${second}`);
+
+    const result = await runtime().handle(
+      tenantA,
+      systemActor('bot'),
+      adminUpdate(`/service ${first.username}`, TG.owner),
+    );
+
+    expect(result.replyKey).toBe('bot.admin.service_ambiguous');
+    const body = lastMessage();
+    expect(body, 'the first match is reachable').toContain(`${PREFIX.service}${first.id}`);
+    expect(body, 'and so is the second').toContain(`${PREFIX.service}${second}`);
+    /*
+     * NOT one action, and terminate least of all. A screen that has not established
+     * WHICH service the operator means must not offer to end one.
+     */
+    for (const prefix of [
+      PREFIX.terminate,
+      PREFIX.terminateAsk,
+      PREFIX.suspend,
+      PREFIX.resume,
+      PREFIX.sync,
+      PREFIX.reconcile,
+      PREFIX.retry,
+      PREFIX.resend,
+    ]) {
+      expect(body, `${prefix} was offered before the service was identified`).not.toContain(
+        `"${prefix}`,
+      );
+    }
+  });
+
+  it('still opens the one match directly when the name IS unique', async () => {
+    /*
+     * The half that keeps the case above honest: a disambiguation screen that appeared
+     * for every lookup would pass the assertions there and make the ordinary path two
+     * taps instead of one.
+     */
+    const service = await activeService('unambiguous');
+
+    const result = await runtime().handle(
+      tenantA,
+      systemActor('bot'),
+      adminUpdate(`/service ${service.username}`, TG.owner),
+    );
+
+    expect(result.replyKey).toBe('bot.admin.service');
+  });
+
   it('refuses /service for an administrator who does not hold services.view', async () => {
     /*
      * The PERMISSION decides before the shape of the argument is even considered, and
@@ -759,6 +826,51 @@ describe('the services section of the Telegram management panel', () => {
      */
     expect(text, 'the operation count').toContain('2');
     expect(text, 'the count is exact, so it carries no bound marker').not.toContain('50+');
+  });
+
+  it('says the history is UNREADABLE rather than reporting it as empty', async () => {
+    /*
+     * Found by the Codex review of this branch, and it is the package's own defect
+     * class turned on itself.
+     *
+     * The screen reads the operation history behind a catch, because a services screen
+     * must not fail over a history it only summarises. The first version caught the
+     * failure into an empty history and rendered `0` — which tells the operator that
+     * NOTHING has ever been attempted on this service. That is a diagnosis, and a
+     * failed read is the absence of one: it sends somebody looking at provisioning when
+     * the database was the thing that blinked.
+     *
+     * The failure is injected on the SAME instance the runtime holds — the container
+     * wires one `ServiceAdminService` into both — so this exercises the real catch
+     * rather than a copy of it.
+     */
+    const service = await activeService('history-unreadable');
+    const operations = vi
+      .spyOn(ctx.container.serviceAdmin, 'operations')
+      .mockRejectedValue(new Error('the history could not be read'));
+
+    try {
+      const result = await runtime().handle(
+        tenantA,
+        systemActor('bot'),
+        tapUpdate(`${PREFIX.service}${service.id}`, TG.owner),
+      );
+
+      /* The SCREEN still renders: the catch is doing its job. */
+      expect(result.replyKey).toBe('bot.admin.service');
+      const text = String(lastBody()?.['text'] ?? '');
+      expect(text, 'the service itself is still described').toContain(service.username);
+      /*
+       * And the count is a dash, not a zero. Asserted on the line rather than on the
+       * whole message, because `-` appears wherever a fact is absent.
+       */
+      const line = text.split('\n').find((one) => one.includes('شمار عملیات ثبت‌شده'));
+      expect(line, 'the history line is missing entirely').toBeDefined();
+      expect(line, 'an unreadable history was reported as a count').toContain('-');
+      expect(line, 'an unreadable history was reported as none').not.toContain('0');
+    } finally {
+      operations.mockRestore();
+    }
   });
 
   it('links to the customer, and only for an administrator who may read them', async () => {

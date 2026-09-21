@@ -948,6 +948,14 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.admin.section',
       'bot.admin.section_button',
       'bot.admin.service',
+      /*
+       * The disambiguation screen (the Codex round on this branch). It carries no
+       * action and no identity: one button per match, each opening the ordinary
+       * detail. The detail is where the panel and the customer are named, and where
+       * the seven action buttons live — a screen that has not established WHICH
+       * service the operator means must not offer to end one.
+       */
+      'bot.admin.service_ambiguous',
       'bot.admin.service_customer_button',
       'bot.admin.service_gone',
       'bot.admin.service_planned',

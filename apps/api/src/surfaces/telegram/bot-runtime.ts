@@ -65,12 +65,14 @@ import { ProvisioningService } from '../../modules/commerce/provisioning/applica
 import type { CustomerServiceOperation } from '../../modules/commerce/provisioning/application/provisioning.service.js';
 import type { DeliveryService } from '../../modules/commerce/provisioning/application/delivery.service.js';
 import type {
-  OperationRecord,
   ServiceCursor,
   ServiceRecord,
 } from '../../modules/commerce/provisioning/application/ports.js';
 import type { OperatorServiceOperation } from '../../modules/commerce/provisioning/application/provisioning.service.js';
-import type { ServiceAdminService } from '../../modules/commerce/provisioning/application/service-admin.service.js';
+import type {
+  ServiceAdminService,
+  ServiceOperationHistory,
+} from '../../modules/commerce/provisioning/application/service-admin.service.js';
 import { decodeKeysetToken, encodeKeysetToken, type KeysetToken } from './keyset-token.js';
 import type { PanelService } from '../../modules/platform/panels/application/panel.service.js';
 
@@ -1126,6 +1128,48 @@ function adminServiceButtons(
  * The status rides along, because the one thing an operator scanning this list is
  * looking for is who is blocked.
  */
+/**
+ * How many rows the name lookup reads before deciding the name is not unique.
+ *
+ * Small on purpose. The question the probe answers is "is this name unique HERE", not
+ * "how many services carry it": one extra row settles it, and the rest of the bound is
+ * headroom so the disambiguation screen can actually list what it found rather than
+ * saying "more than one" and stopping. A name on more matches than this is not a
+ * support lookup any more, and the browse list is where that conversation belongs.
+ */
+const AMBIGUOUS_MATCH_PROBE = 5;
+
+/**
+ * What the name lookup found, as four cases rather than a nullable row.
+ *
+ * `NONE` and `SYNTAX` are different sentences — "no such service" and "that is not a
+ * service name" — and `MANY` is the one the Codex review of this branch added: a name
+ * unique per PANEL is not unique per tenant, so answering with one arbitrary row is how
+ * a terminate lands on the wrong customer's account.
+ */
+type AdminServiceLookup =
+  | { readonly kind: 'SYNTAX' }
+  | { readonly kind: 'NONE' }
+  | { readonly kind: 'MANY'; readonly matches: readonly ServiceRecord[] }
+  | { readonly kind: 'ONE'; readonly found: Awaited<ReturnType<ServiceAdminService['detail']>> };
+
+/**
+ * One ambiguous match, labelled by what tells it apart from the others.
+ *
+ * NOT the username: every match carries the same one, which is why this screen exists.
+ * NOT the panel's name either, however useful that would be — reading a panel charges
+ * `panels.view`, and an administrator holding `services.view` alone would get a denial
+ * per match rather than a list.
+ *
+ * So: the lifecycle state and the day the service was created, both off the row already
+ * in hand. Neither is a credential, and between them they separate "the one I sold last
+ * week" from "the one that has been terminated since spring". The detail behind the
+ * button is what confirms it, because that names the panel and the customer.
+ */
+function adminServiceMatchLabel(service: ServiceRecord): string {
+  return `${service.state} — ${service.createdAt.toISOString().slice(0, 10)}`;
+}
+
 function adminCustomerLabel(customer: CustomerRecord): string {
   const name = [customer.firstName, customer.lastName].filter((part) => part !== null).join(' ');
   const who =
@@ -4277,10 +4321,29 @@ export class BotRuntime {
       return { key: 'bot.admin.refused', values: {}, buttons: [], orderId: null };
     }
     const resolved = await this.resolveAdminService(scope, actor, needle);
-    if (resolved === 'SYNTAX') {
+    if (resolved.kind === 'SYNTAX') {
       return { key: 'bot.admin.service_usage', values: {}, buttons: [], orderId: null };
     }
-    if (resolved === null) {
+    if (resolved.kind === 'MANY') {
+      /*
+       * One button per match, and NO action on this screen.
+       *
+       * Each button opens the ordinary detail, which names the panel and the customer
+       * — the two facts that tell the operator which of these is theirs. Putting the
+       * seven action buttons here instead would be offering a destructive verb against
+       * a row nobody has identified yet.
+       */
+      return {
+        key: 'bot.admin.service_ambiguous',
+        values: {},
+        buttons: resolved.matches.map((match) => ({
+          label: { kind: 'TEXT' as const, text: adminServiceMatchLabel(match) },
+          data: `${ADMIN_SERVICE_CALLBACK_PREFIX}${match.id}`,
+        })),
+        orderId: null,
+      };
+    }
+    if (resolved.kind === 'NONE') {
       /*
        * Unknown, another tenant's, or a name nobody here holds — ONE answer for all
        * three, which is the rule `bot.service.not_found` states on the customer side.
@@ -4290,15 +4353,24 @@ export class BotRuntime {
       return { key: 'bot.admin.service_gone', values: {}, buttons: [], orderId: null };
     }
 
-    const { service, actions } = resolved;
+    const { service, actions } = resolved.found;
     const [history, title, customer] = await Promise.all([
+      /*
+       * `null` for a history that could not be READ, never an empty one.
+       *
+       * The first version caught the failure into `{ operations: [], limit: 0 }` and
+       * rendered `0`, which tells the operator that this service has had nothing
+       * attempted on it — the opposite of the truth when the read failed, and exactly
+       * the kind of confident wrong answer this whole package is about. Found by the
+       * Codex review of this branch.
+       */
       this.deps.serviceAdmin
         .operations(scope, actor, service.id)
-        .catch(() => ({ operations: [] as readonly OperationRecord[], limit: 0, hasMore: false })),
+        .catch(() => null as ServiceOperationHistory | null),
       this.deps.purchaseTitle(scope, service.orderId),
       this.adminServiceCustomer(scope, actor, service.customerId, permissions),
     ]);
-    const latest = history.operations[0];
+    const latest = history?.operations[0];
 
     return {
       key: 'bot.admin.service',
@@ -4330,20 +4402,26 @@ export class BotRuntime {
          */
         operation: latest === undefined ? '-' : `${latest.type} ${latest.state}`,
         /*
-         * The bound, stated rather than implied.
+         * The bound, stated rather than implied, in THREE cases and not two.
          *
          * A plain count when the whole history was read, and the bound with a `+` when
-         * it was not. The reader asks for one row beyond its bound to know which, so
+         * it was not: the reader asks for one row beyond its bound to know which, so
          * this never means "exactly the bound" when there is more, and never claims
          * more when the history happens to be exactly that long. An exact count past
          * the bound would mean walking every operation the service ever had to render
          * one figure.
          *
-         * `0` for the bound is the CATCH above — the history could not be read at all —
-         * and it renders as `0`, which is what a screen that has nothing to report
-         * should say.
+         * And `-` when the history could not be read AT ALL. That is the third case,
+         * and collapsing it into `0` was this screen's own version of the defect the
+         * package exists to fix: "nothing has been attempted on this service" is a
+         * diagnosis, and the read having failed is the absence of one.
          */
-        history: history.hasMore ? `${history.limit}+` : String(history.operations.length),
+        history:
+          history === null
+            ? '-'
+            : history.hasMore
+              ? `${history.limit}+`
+              : String(history.operations.length),
       },
       buttons: [
         ...adminServiceButtons(service.id, actions, permissions),
@@ -4398,28 +4476,46 @@ export class BotRuntime {
     scope: TenantContext,
     actor: ActorContext,
     needle: string,
-  ): Promise<Awaited<ReturnType<ServiceAdminService['detail']>> | null | 'SYNTAX'> {
+  ): Promise<AdminServiceLookup> {
     const raw = needle.trim();
-    if (raw === '') return 'SYNTAX';
+    if (raw === '') return { kind: 'SYNTAX' };
     if (uuidV7Schema.safeParse(raw).success) {
       try {
-        return await this.deps.serviceAdmin.detail(scope, actor, raw);
+        return { kind: 'ONE', found: await this.deps.serviceAdmin.detail(scope, actor, raw) };
       } catch {
-        return null;
+        return { kind: 'NONE' };
       }
     }
     const parsed = providerUsernameLookupSchema.safeParse(raw);
-    if (!parsed.success) return 'SYNTAX';
+    if (!parsed.success) return { kind: 'SYNTAX' };
+    /*
+     * MORE than one row, deliberately, and this is the Codex round's P1.
+     *
+     * `services_panel_provider_username_key` is unique per PANEL, not per tenant —
+     * `schema.ts` says so where the namespace is explained — and two panels of one
+     * tenant may point at different machines, so one name legitimately names two
+     * accounts. The first version asked for `limit: 1` and took the newest, with a
+     * docblock calling it "the row a support conversation is almost always about".
+     * That is a guess wearing a rule's clothes, and the screen it produced carried
+     * SUSPEND and TERMINATE: the wrong customer's service under a right answer's
+     * heading.
+     *
+     * So the bound is `AMBIGUOUS_MATCH_PROBE` and anything past one is handed back for
+     * the operator to choose. The probe is small because the question is only "is this
+     * unique", not "how many are there" — a name on more matches than fit one keyboard
+     * is a different conversation, and the browse list is where it happens.
+     */
     const page = await this.deps.serviceAdmin.list(scope, actor, {
-      limit: 1,
+      limit: AMBIGUOUS_MATCH_PROBE,
       search: { providerUsername: parsed.data },
     });
     const first = page.items[0];
-    if (first === undefined) return null;
+    if (first === undefined) return { kind: 'NONE' };
+    if (page.items.length > 1) return { kind: 'MANY', matches: page.items };
     try {
-      return await this.deps.serviceAdmin.detail(scope, actor, first.id);
+      return { kind: 'ONE', found: await this.deps.serviceAdmin.detail(scope, actor, first.id) };
     } catch {
-      return null;
+      return { kind: 'NONE' };
     }
   }
 
