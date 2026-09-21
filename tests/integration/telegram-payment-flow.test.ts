@@ -10,6 +10,7 @@ import type { ProductDraft } from '../../apps/api/src/modules/commerce/catalog/a
 import {
   adminActorFor,
   createAdmin,
+  makePanelSellable,
   migrateOnce,
   resetDatabase,
   tenantA,
@@ -114,6 +115,16 @@ describe('the customer payment flow over Telegram', () => {
     await api.container.database.db.execute(sql`
       INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
       VALUES (${panelA}, ${tenantA.tenantId}, 'Panel A', 'sanaei', 'https://a.example.test', 'ACTIVE')`);
+    /*
+     * Made GENUINELY sellable, not left as a bare row.
+     *
+     * A panel with no credentials, no activation and no probe cannot create an
+     * account, and since this hotfix `decideEligibility` refuses to take money
+     * for one. A fixture that expects a sale therefore has to describe a panel
+     * that could deliver it; `makePanelSellable` writes the three things a sale
+     * now requires, using the production identity function so it cannot drift.
+     */
+    await makePanelSellable(api.container, tenantA, panelA);
   });
 
   // -------------------------------------------------------------------------
@@ -514,6 +525,16 @@ describe('the customer payment flow over Telegram', () => {
     await api.container.database.db.execute(sql`
       INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
       VALUES (${panelB}, ${tenantB.tenantId}, 'Panel B', 'sanaei', 'https://b.example.test', 'ACTIVE')`);
+    /*
+     * Made GENUINELY sellable, not left as a bare row.
+     *
+     * A panel with no credentials, no activation and no probe cannot create an
+     * account, and since this hotfix `decideEligibility` refuses to take money
+     * for one. A fixture that expects a sale therefore has to describe a panel
+     * that could deliver it; `makePanelSellable` writes the three things a sale
+     * now requires, using the production identity function so it cannot drift.
+     */
+    await makePanelSellable(api.container, tenantB, panelB);
     const theirs = await products.create(tenantB, {
       id: api.container.ids.uuid() as ProductId,
       draft: { ...draft(), panelId: panelB as never },

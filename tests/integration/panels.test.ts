@@ -256,6 +256,9 @@ describe('panels', () => {
               return { ok: true, providerVersion: '1.0.0', degraded: false };
             },
           }),
+        // Every provider this release has a service adapter for; the sellability
+        // verdict on `PanelWithCapacity` needs it, exactly as the container wires it.
+        serviceAdapterExists: () => true,
         cadence: {
           healthyIntervalMs: 10 * 60 * 1000,
           retryableIntervalMs: 2 * 60 * 1000,
@@ -1377,6 +1380,9 @@ describe('panels', () => {
       probeCooldownMs: 0,
       probeBudget: { capacity: 10_000, refillPerMs: 1 },
       adapters: (type: ProviderType) => adapterWith(type, { supports: () => false }),
+      // Every provider this release has a service adapter for; the sellability
+      // verdict on `PanelWithCapacity` needs it, exactly as the container wires it.
+      serviceAdapterExists: () => true,
       cadence: {
         healthyIntervalMs: 10 * 60 * 1000,
         retryableIntervalMs: 2 * 60 * 1000,
@@ -1579,6 +1585,7 @@ describe('panels', () => {
         adapterWith(type, { probe: async () => outcome, ...adapterOverrides }),
       // Every probe writes the panel's next background probe time, so the
       // service needs a cadence even where these tests never read one.
+      serviceAdapterExists: () => true,
       cadence: {
         healthyIntervalMs: 10 * 60 * 1000,
         retryableIntervalMs: 2 * 60 * 1000,

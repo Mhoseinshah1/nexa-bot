@@ -1212,8 +1212,14 @@ export const WEB_FA = {
   'web.refund_abandon': 'منصرف شدم',
   'web.refund_failed_done': 'بازگشت وجه منصرف شد و مبلغ آن آزاد شد.',
 
+  /*
+   * REWRITTEN. It said "service creation or delivery does not happen in this
+   * version", which stopped being true at Phase 4D and was still on the screen
+   * when order `01a0c54b` was refunded. Stale scope copy is worse than no copy:
+   * an operator reading it concludes the missing service is expected.
+   */
   'web.payment_not_settled_here':
-    'این صفحه فقط وضعیت مالی را نشان می‌دهد. ساخت یا تحویل سرویس در این نسخه انجام نمی‌شود.',
+    'این صفحه فقط وضعیت مالی را نشان می‌دهد. وضعیت ساخت و تحویل سرویس در صفحهٔ سفارش و صفحهٔ سرویس‌ها دیده می‌شود.',
 
   // --- Products (Phase 4B) -------------------------------------------------
   'web.products_title': 'محصولات',
@@ -1352,6 +1358,17 @@ export const WEB_FA = {
   'web.order_payments_denied': 'نمایش پرداخت‌های این سفارش به دسترسی payments.view نیاز دارد.',
   'web.order_payments_truncated':
     'پرداخت‌های بیشتری برای این سفارش ثبت شده است. فهرست کامل در صفحهٔ پرداخت‌ها با فیلتر همین سفارش در دسترس است.',
+  /* --- What the order produced (hotfix: the activation/sellability pass) ----- */
+  'web.order_service_title': 'سرویس این سفارش',
+  'web.order_service_hint':
+    'آنچه این سفارش ساخته است و آنچه هنگام ساخت آن اتفاق افتاده. اگر ساخت ناموفق بوده، دلیل فنی آن در جدول عملیات پایین همین صفحه دیده می‌شود.',
+  'web.order_service_denied': 'نمایش سرویس این سفارش به دسترسی services.view نیاز دارد.',
+  'web.order_service_empty': 'هنوز سرویسی برای این سفارش ساخته نشده است.',
+  'web.order_service_empty_hint':
+    'تا وقتی پول سفارش تسویه نشده باشد، سرویسی ساخته نمی‌شود. اگر سفارش تسویه شده و اینجا خالی است، یا سفارش از نوع خرید سرویس جدید نبوده، یا هنگام تسویه هیچ پنل واجد شرایطی برای تحویل آن نبوده و سفارش در همان لحظه بازگشت خورده است. وضعیت سفارش در بالای همین صفحه می‌گوید کدام‌یک.',
+  'web.order_refunded_banner_title': 'این سفارش بازگشت خورده است',
+  'web.order_refunded_banner_body':
+    'ساخت سرویس این سفارش ممکن نشد و مبلغ آن به‌طور خودکار بازگردانده شد. اگر پیش از این بخشی از همان پرداخت به‌صورت دستی بازگردانده شده باشد، تنها باقیماندهٔ آن به کیف پول مشتری واریز می‌شود و اگر تمام آن پیش‌تر بازگردانده شده باشد، واریزی به کیف پول انجام نمی‌شود. مبلغ و مقصد دقیق هر بازپرداخت در تاریخچهٔ بازپرداخت‌های همان پرداخت و در دفتر کیف پول مشتری ثبت شده است.',
   'web.order_confirmed_at': 'تأییدشده در',
   'web.order_customer': 'مشتری',
   'web.order_product': 'محصول',
@@ -1375,9 +1392,20 @@ export const WEB_FA = {
    */
   'web.order_awaiting_banner_body':
     'این سفارش در انتظار پرداخت مشتری است. تأیید دریافت وجه در صفحهٔ پرداخت‌ها و همراه با ثبت مبنای تأیید انجام می‌شود؛ در این صفحه دکمهٔ «پرداخت شد» وجود ندارد.',
-  'web.orders_scope_title': 'آنچه در این نسخه نیست',
+  /*
+   * REWRITTEN, and the heading with it. This said delivery, cancellation and
+   * refund "do not exist in this version" and that the order stops at PAID —
+   * false since 4D, 4G and the automatic-refund change respectively. It was
+   * still rendered on both the list and the detail page while a customer was
+   * being refunded by machinery it claimed did not exist.
+   *
+   * What replaces it is not a smaller scope note. It is the actual rule, which
+   * an operator does need on this page: an order has two terminal outcomes and
+   * there is no third.
+   */
+  'web.orders_scope_title': 'دو پایان ممکن برای یک سفارش',
   'web.orders_scope_body':
-    'تحویل سرویس، لغو و بازپرداخت در این نسخه وجود ندارند. سفارش تا «پرداخت‌شده» پیش می‌رود و همان‌جا می‌ماند؛ «پرداخت‌شده» یعنی پول رسیده است و نه بیشتر.',
+    'سفارشی که پول آن رسیده یا «تحویل‌شده» می‌شود یا «بازگشت‌خورده». حالت سومی برای «پرداخت شد ولی تحویل نشد» وجود ندارد: اگر ساخت سرویس ممکن نباشد، مبلغ در همان تراکنش به‌طور کامل به کیف پول مشتری برمی‌گردد و سفارش «بازگشت‌خورده» می‌شود.',
   /*
    * Owner revisions 3, 6 and 11, carried onto the LIVE page.
    *
@@ -1645,6 +1673,69 @@ export const WEB_FA = {
   'web.flag_service_expiry_reminders': 'یادآور پیش از انقضای سرویس',
   'web.flag_service_expired_notice': 'اعلام پایان اعتبار سرویس',
   'web.flag_service_usage_reminders': 'یادآور مصرف حجم سرویس',
+
+  /*
+   * The three states a panel read has to say separately, and the eight reasons.
+   *
+   * Added by the hotfix for order `01a0c54b`, where a panel that was ACTIVE,
+   * HEALTHY and had free capacity was sold onto while it had no Marzban
+   * activation configured at all. The operator's screen showed two greens and
+   * nothing that said the panel could not create anything.
+   *
+   * Every reason has a LABEL and a HELP line, and the help names a screen or a
+   * button rather than restating the problem. "This panel cannot take orders" is
+   * what the legacy system says.
+   */
+  'web.panel_sellability_title': 'قابلیت فروش',
+  'web.panel_sellability_hint':
+    'سلامت اتصال، کامل‌بودن پیکربندی و قابل‌فروش‌بودن سه چیز جداگانه‌اند. سبزبودن سلامت به‌تنهایی یعنی پنل پاسخ می‌دهد، نه اینکه می‌تواند سرویس بسازد.',
+  'web.panel_sellable': 'قابل فروش',
+  'web.panel_sellable_yes': 'بله',
+  'web.panel_sellable_no': 'خیر',
+  'web.panel_activation_state': 'پیکربندی ارائه‌دهنده',
+  'web.panel_activation_complete': 'کامل',
+  'web.panel_activation_incomplete': 'ناقص',
+  'web.panel_connection_validated': 'تست اتصال',
+  'web.panel_connection_validated_yes': 'با همین پیکربندی موفق بوده',
+  'web.panel_connection_validated_no': 'برای پیکربندی فعلی انجام نشده',
+  'web.panel_activation_missing': 'فیلدهای ناقص',
+  'web.panel_activation': 'پیکربندی ارائه‌دهنده',
+  'web.panel_activation_invalid': 'این مقادیر با طرح ارائه‌دهنده سازگار نیستند:',
+  'web.panel_proxy_protocols': 'پروتکل‌ها',
+  'web.panel_proxy_protocols_hint':
+    'پروتکل‌هایی که برای هر کاربر ساخته می‌شوند. دست‌کم یکی لازم است؛ کاربری بدون پروتکل به هیچ‌جا وصل نمی‌شود.',
+  'web.panel_inbound_tags': 'تگ‌های ورودی',
+  'web.panel_inbound_tags_hint':
+    'با ویرگول جدا کنید. برای هر پروتکل انتخاب‌شده دست‌کم یک تگ لازم است. اگر خالی بماند، مرزبان همهٔ ورودی‌های آن پروتکل را حذف می‌کند و مشتری اشتراکی خالی می‌گیرد — پیش‌فرضی وجود ندارد و ساخته هم نمی‌شود.',
+  'web.panel_subscription_domain': 'دامنهٔ اشتراک',
+  'web.panel_subscription_domain_hint':
+    'میزبانی که /sub/ را سرو می‌کند؛ در صورت نیاز با پورت. این همان آدرس پنل نیست.',
+  'web.panel_inbound_id': 'شناسهٔ ورودی',
+  'web.panel_inbound_id_hint': 'ورودی‌ای که کلاینت ساخته‌شده به آن اضافه می‌شود. یک عدد صحیح مثبت.',
+  'web.panel_reason_archived': 'بایگانی شده',
+  'web.panel_reason_archived_help':
+    'این پنل بایگانی شده است. محصولی که هنوز به آن اشاره می‌کند باید به پنل دیگری منتقل شود.',
+  'web.panel_reason_disabled': 'غیرفعال',
+  'web.panel_reason_disabled_help':
+    'شما این پنل را غیرفعال کرده‌اید. تا زمانی که دوباره فعال نشود فروشی روی آن انجام نمی‌شود.',
+  'web.panel_reason_unhealthy': 'ناسالم',
+  'web.panel_reason_unhealthy_help':
+    'چند بررسی پیاپی و تازه شکست خورده‌اند. آدرس و اعتبارنامه‌ها را بررسی کنید و تست اتصال بگیرید.',
+  'web.panel_reason_at_capacity': 'پر شده',
+  'web.panel_reason_at_capacity_help':
+    'سقف سرویس‌های این پنل پر است. سقف را بالا ببرید یا روی پنل دیگری بفروشید.',
+  'web.panel_reason_activation_incomplete': 'پیکربندی ناقص',
+  'web.panel_reason_activation_incomplete_help':
+    'فیلدهای لازم ارائه‌دهنده تکمیل نشده‌اند. همین صفحه، بخش «پیکربندی ارائه‌دهنده».',
+  'web.panel_reason_credentials_missing': 'اعتبارنامه ناقص',
+  'web.panel_reason_credentials_missing_help':
+    'اعتبارنامه‌هایی که این ارائه‌دهنده لازم دارد ثبت نشده‌اند. همین صفحه، بخش اعتبارنامه‌ها.',
+  'web.panel_reason_provision_unsupported': 'ساخت سرویس پشتیبانی نمی‌شود',
+  'web.panel_reason_provision_unsupported_help':
+    'این نسخه برای این ارائه‌دهنده کدی برای ساخت کاربر ندارد. با تنظیمات درست نمی‌شود؛ نیازمند نسخهٔ جدید است.',
+  'web.panel_reason_unvalidated': 'تست اتصال انجام نشده',
+  'web.panel_reason_unvalidated_help':
+    'برای پیکربندی فعلی هیچ تست اتصال موفقی ثبت نشده است. دکمهٔ «تست اتصال» در همین صفحه کافی است.',
 } as const;
 
 export type WebKey = keyof typeof WEB_FA;

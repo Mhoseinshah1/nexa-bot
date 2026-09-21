@@ -22,6 +22,7 @@ import {
   adminActorFor,
   createAdmin,
   createTestContext,
+  makePanelSellable,
   SEED_IDS,
   tenantA,
   tenantB,
@@ -94,6 +95,17 @@ describe('orders, up to the payment boundary', () => {
       INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
       VALUES (${panelA}, ${tenantA.tenantId}, 'Panel A', 'sanaei', 'https://a.example.test', 'ACTIVE'),
              (${panelB}, ${tenantB.tenantId}, 'Panel B', 'sanaei', 'https://b.example.test', 'ACTIVE')`);
+    /*
+     * Made GENUINELY sellable, not left as a bare row.
+     *
+     * A panel with no credentials, no activation and no probe cannot create an
+     * account, and since this hotfix `decideEligibility` refuses to take money
+     * for one. A fixture that expects a sale therefore has to describe a panel
+     * that could deliver it; `makePanelSellable` writes the three things a sale
+     * now requires, using the production identity function so it cannot drift.
+     */
+    await makePanelSellable(ctx.container, tenantA, panelA);
+    await makePanelSellable(ctx.container, tenantB, panelB);
     customerA = await customer(tenantA, BOT_A, '900100');
     owner = adminActorFor(
       await createAdmin(ctx.container, tenantA, { username: 'owner-orders', roleKeys: ['owner'] }),
@@ -689,6 +701,16 @@ describe('orders, up to the payment boundary', () => {
     await ctx.container.database.db.execute(sql`
       INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
       VALUES (${otherPanel}, ${tenantA.tenantId}, 'Panel A2', 'sanaei', 'https://a2.example.test', 'ACTIVE')`);
+    /*
+     * Made GENUINELY sellable, not left as a bare row.
+     *
+     * A panel with no credentials, no activation and no probe cannot create an
+     * account, and since this hotfix `decideEligibility` refuses to take money
+     * for one. A fixture that expects a sale therefore has to describe a panel
+     * that could deliver it; `makePanelSellable` writes the three things a sale
+     * now requires, using the production identity function so it cannot drift.
+     */
+    await makePanelSellable(ctx.container, tenantA, otherPanel);
     await products.update(tenantA, product.id, draft(otherPanel), ctx.container.clock.now());
 
     const confirmed = await confirm(tenantA, customerA, order.id, 'c-panel-go');

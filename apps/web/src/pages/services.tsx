@@ -131,7 +131,12 @@ export const DELIVERY_TONES: Readonly<Record<ServiceDeliveryState, Tone>> = {
   FAILED: 'danger',
 };
 
-const OPERATION_TYPE_LABELS: Readonly<Record<OperationType, WebKey>> = {
+/*
+ * Exported for the same reason the two state maps above are: the ORDER page draws the
+ * provisioning attempt its order produced, and a second copy of this vocabulary there
+ * would be a second answer to what a failed PROVISION looks like.
+ */
+export const OPERATION_TYPE_LABELS: Readonly<Record<OperationType, WebKey>> = {
   PROVISION: 'web.operation_type_provision',
   RENEW: 'web.operation_type_renew',
   ADD_TRAFFIC: 'web.operation_type_add_traffic',
@@ -144,7 +149,7 @@ const OPERATION_TYPE_LABELS: Readonly<Record<OperationType, WebKey>> = {
   RECONCILE: 'web.operation_type_reconcile',
 };
 
-const OPERATION_STATE_LABELS: Readonly<Record<OperationState, WebKey>> = {
+export const OPERATION_STATE_LABELS: Readonly<Record<OperationState, WebKey>> = {
   PLANNED: 'web.operation_state_planned',
   IN_FLIGHT: 'web.operation_state_in_flight',
   SUCCEEDED: 'web.operation_state_succeeded',
@@ -153,7 +158,7 @@ const OPERATION_STATE_LABELS: Readonly<Record<OperationState, WebKey>> = {
   ABANDONED: 'web.operation_state_abandoned',
 };
 
-const OPERATION_STATE_TONES: Readonly<Record<OperationState, Tone>> = {
+export const OPERATION_STATE_TONES: Readonly<Record<OperationState, Tone>> = {
   PLANNED: 'neutral',
   IN_FLIGHT: 'info',
   SUCCEEDED: 'ok',

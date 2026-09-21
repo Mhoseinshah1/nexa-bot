@@ -1,5 +1,6 @@
+import { alias } from 'drizzle-orm/pg-core';
 import { and, desc, eq, or, sql } from 'drizzle-orm';
-import { money } from '@nexa/contracts';
+import { money, type Money } from '@nexa/contracts';
 import type {
   CurrencyCode,
   LedgerDirection,
@@ -189,6 +190,95 @@ export class DrizzleWalletRepository implements WalletRepository {
        */
       amountMinor: row === undefined ? 0n : BigInt(row.balance),
       entryCount: row === undefined ? 0 : Number(row.entries),
+    };
+  }
+
+  /**
+   * What an order's automatic refund put back, and what the wallet held once it
+   * had.
+   *
+   * Both derived from the append-only ledger and NOTHING stored, which is what
+   * lets a message sent a week later state the same two figures it would have
+   * stated at the time — and keeps the non-negotiable that a balance is derived
+   * and never a column.
+   *
+   * ## Why not the order total, and why not today's balance
+   *
+   * The AMOUNT is the sum of the order's own REFUND credits rather than
+   * `order.totals.total`, because an operator may already have returned part of
+   * a payment by bank transfer; `refundUndeliverable` credits only what is left.
+   * The sentence has to name what reached the wallet.
+   *
+   * The BALANCE is taken as of the last of those credits, not as of now. A
+   * customer who has spent money since must not be told the refund produced a
+   * balance they never had, and a resend must not disagree with the first copy.
+   * `(created_at, id)` is a total order over an immutable table — `id` is uuidv7
+   * and nothing updates an entry — and `wallet_entries_customer_created_idx`
+   * serves exactly this comparison.
+   *
+   * Null when the order has no refund credit: nothing was given back, so there
+   * is no sentence to send. The caller treats that as a message it must not send
+   * rather than as zero, because «۰ تومان بازگردانده شد» is worse than silence.
+   */
+  async refundedForOrder(
+    scope: TenantContext,
+    orderId: string,
+    tx?: unknown,
+  ): Promise<{ readonly amount: Money; readonly balanceAfter: Money } | null> {
+    const tenantId = requireTenantId(scope);
+    const credit = alias(walletEntries, 'refund_credit');
+    const rows = await this.exec(tx)
+      .select({
+        currency: credit.currency,
+        customerId: credit.customerId,
+        createdAt: credit.createdAt,
+        id: credit.id,
+        /*
+         * Summed in the same statement that finds the latest one, so the two
+         * cannot describe different sets. A correlated subquery rather than two
+         * round trips: the second read could see a credit the first did not.
+         */
+        refunded: sql<string>`COALESCE((
+          SELECT SUM(${walletEntries.amount}) FROM ${walletEntries}
+           WHERE ${walletEntries.tenantId} = ${tenantId}
+             AND ${walletEntries.orderId} = ${orderId}
+             AND ${walletEntries.reason} = 'REFUND'
+             AND ${walletEntries.direction} = 'CREDIT'
+             AND ${walletEntries.currency} = ${credit.currency}
+        ), 0)`,
+        balance: sql<string>`COALESCE((
+          SELECT SUM(CASE WHEN ${walletEntries.direction} = 'CREDIT'
+                          THEN ${walletEntries.amount}
+                          ELSE -${walletEntries.amount} END)
+            FROM ${walletEntries}
+           WHERE ${walletEntries.tenantId} = ${tenantId}
+             AND ${walletEntries.customerId} = ${credit.customerId}
+             AND ${walletEntries.currency} = ${credit.currency}
+             AND (${walletEntries.createdAt}, ${walletEntries.id})
+                 <= (${credit.createdAt}, ${credit.id})
+        ), 0)`,
+      })
+      .from(credit)
+      .where(
+        and(
+          eq(credit.tenantId, tenantId),
+          eq(credit.orderId, orderId),
+          eq(credit.reason, 'REFUND'),
+          eq(credit.direction, 'CREDIT'),
+        ),
+      )
+      // The LAST credit, so a refund written as two entries reports the balance
+      // after both rather than after the first.
+      .orderBy(desc(credit.createdAt), desc(credit.id))
+      .limit(1);
+
+    const row = rows[0];
+    if (row === undefined) return null;
+    const currency = row.currency as CurrencyCode;
+    // `BigInt(string)`, for the reason `balanceOf` above states at length.
+    return {
+      amount: money(BigInt(row.refunded), currency),
+      balanceAfter: money(BigInt(row.balance), currency),
     };
   }
 

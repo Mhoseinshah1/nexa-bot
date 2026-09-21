@@ -624,6 +624,8 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
            * to ask.
            */
           mayViewPayments={may('payments.view')}
+          /* Same rule, same reason: `services.view` is its own grant. */
+          mayViewServices={may('services.view')}
         />
       ),
       crumbs: [nav('orders'), { label: t('web.order_detail') }],

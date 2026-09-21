@@ -22,6 +22,8 @@ import {
   adminActorFor,
   createAdmin,
   createTestContext,
+  validatePanelConnection,
+  makePanelSellable,
   SEED_IDS,
   tenantA,
   tenantB,
@@ -205,6 +207,17 @@ describe('the services section of the Telegram management panel', () => {
       idempotencyKey: 'panel-tg-admin-sanaei',
     });
     sanaeiPanelId = sanaei.view.panel.id;
+    /*
+     * And CONNECTION-TESTED, which the create alone is not.
+     *
+     * `panels.create` writes an ACTIVE row and contacts nothing, so since this
+     * hotfix the panel is `UNVALIDATED` and cannot be sold onto — a brand-new
+     * row being immediately sellable is one of the holes being closed. These
+     * fake panels are real and reachable, so recording a successful connection
+     * test is exactly what an operator would do next.
+     */
+    await validatePanelConnection(ctx.container, tenantA, panelId);
+    await validatePanelConnection(ctx.container, tenantA, sanaeiPanelId);
 
     customerA = await customerWithTelegramId(TG.customer);
   });
@@ -1619,6 +1632,16 @@ describe('the services section of the Telegram management panel', () => {
     await ctx.container.database.db.execute(sql`
       INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
       VALUES (${panelB}, ${tenantB.tenantId}, 'Panel B', 'marzban', 'https://b.example.test', 'ACTIVE')`);
+    /*
+     * Made GENUINELY sellable, not left as a bare row.
+     *
+     * A panel with no credentials, no activation and no probe cannot create an
+     * account, and since this hotfix `decideEligibility` refuses to take money
+     * for one. A fixture that expects a sale therefore has to describe a panel
+     * that could deliver it; `makePanelSellable` writes the three things a sale
+     * now requires, using the production identity function so it cannot drift.
+     */
+    await makePanelSellable(ctx.container, tenantB, panelB);
     const customerB = (
       await ctx.container.customers.resolveFromUpdate(tenantB, systemActor('resolve-b'), {
         idempotencyKey: 'resolve-b',

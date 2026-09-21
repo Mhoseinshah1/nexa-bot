@@ -116,6 +116,30 @@ export class ProvisionerLoop {
         const result = await this.executor.runOnce(scope);
         if (result.kind === 'IDLE') break;
         /*
+         * ONE LINE PER OPERATION, and the reason it is here rather than inside
+         * the executor.
+         *
+         * The production report for order `01a0c54b` says the provisioner logs
+         * "contained no useful per-operation failure entry", and that was exactly
+         * true: this loop logged only a thrown tick, and a refusal does not throw
+         * — it returns a value. Seven minutes of retries produced no line at all.
+         *
+         * At `info` rather than `error`, including for failures: every one of
+         * these is an expected outcome the database already records, and a log
+         * level is how an operator decides what to wake up for. The operational
+         * event and `provisioning.stalled` are the alerting path; this is the
+         * trail that says what happened in what order.
+         *
+         * `secretsSafe` is the shape rather than a filter: `ExecutionResult`
+         * carries ids and enums and has nowhere to put a credential, a
+         * subscription URL or a provider's body. Spreading it is safe BECAUSE
+         * that is true, which is why the type says so at length.
+         */
+        this.options.logger.info(
+          { ...result, worker: 'provisioner' },
+          result.kind === 'REFUSED' ? 'provisioning refused' : 'provisioning attempted',
+        );
+        /*
          * Announced BEFORE the `REFUSED` break, and for a refusal too.
          *
          * Three refusal paths terminalise the operation to `ABANDONED` — a missing

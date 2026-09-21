@@ -243,6 +243,7 @@ describe('the panel health monitor', () => {
       adapters: deps.adapters,
       probeCooldownMs: deps.probeCooldownMs,
       probeBudget: deps.probeBudget,
+      serviceAdapterExists: () => true,
       cadence: deps.cadence,
     });
   }

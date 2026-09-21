@@ -86,6 +86,7 @@ export class ServicesController {
       ...(query.state === undefined ? {} : { state: query.state }),
       ...(query.deliveryState === undefined ? {} : { deliveryState: query.deliveryState }),
       ...(query.customerId === undefined ? {} : { customerId: query.customerId }),
+      ...(query.orderId === undefined ? {} : { orderId: query.orderId }),
       ...(query.panelId === undefined ? {} : { panelId: query.panelId }),
       ...(query.providerUsername === undefined ? {} : { providerUsername: query.providerUsername }),
     });
@@ -96,6 +97,7 @@ export class ServicesController {
         ...(page.state === undefined ? {} : { state: page.state }),
         ...(page.deliveryState === undefined ? {} : { deliveryState: page.deliveryState }),
         ...(page.customerId === undefined ? {} : { customerId: page.customerId as UserId }),
+        ...(page.orderId === undefined ? {} : { orderId: page.orderId }),
         ...(page.panelId === undefined ? {} : { panelId: page.panelId as PanelId }),
         /*
          * Already canonicalised by the schema — trimmed, folded to lowercase, and

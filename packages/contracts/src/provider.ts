@@ -152,7 +152,7 @@ export function shapeIsSatisfiedBy(
  * there would let an operator name a provider with no code behind it, and the
  * first thing that happens next is a panel pointing at it.
  */
-export const PROVIDER_TYPES = ['marzban', 'sanaei'] as const;
+export const PROVIDER_TYPES = ['marzban', 'rickpanel', 'sanaei'] as const;
 export type ProviderType = (typeof PROVIDER_TYPES)[number];
 
 export function isProviderType(value: string): value is ProviderType {
@@ -265,17 +265,85 @@ export const sanaeiActivationSchema = z.object({
 });
 export type SanaeiActivation = z.infer<typeof sanaeiActivationSchema>;
 
-export const panelActivationSchema = z.union([marzbanActivationSchema, sanaeiActivationSchema]);
-export type PanelActivation = MarzbanActivation | SanaeiActivation;
+/**
+ * RickPanel needs NOTHING configured before it can create a user.
+ *
+ * An empty object, and it is a statement rather than a placeholder. The attached
+ * RickPanel contract says of `POST /api/user`: "`inbounds` and a partial
+ * `proxies` set are accepted but ignored: every user gets every protocol and
+ * every inbound." There is no protocol to choose and no inbound to name, because
+ * the panel chooses both and does not offer the caller a say.
+ *
+ * Marzban's schema is the opposite and is right to be: omitting `inboundTags`
+ * there excludes every inbound and delivers a zero-byte subscription, which is
+ * why those two fields have no default and cannot have one. Sharing one schema
+ * between the two panels would mean either weakening Marzban's rule — the
+ * expensive one, measured on a binary — or demanding two fields from a RickPanel
+ * operator that their panel will throw away. Both are worse than two schemas.
+ *
+ * `.strict()` is deliberate: a `proxyProtocols` key arriving here is a
+ * misconfigured panel or a copied Marzban payload, and accepting it silently
+ * would let an operator believe they had configured something.
+ */
+export const rickpanelActivationSchema = z.object({}).strict();
+export type RickpanelActivation = z.infer<typeof rickpanelActivationSchema>;
+
+export const panelActivationSchema = z.union([
+  marzbanActivationSchema,
+  rickpanelActivationSchema,
+  sanaeiActivationSchema,
+]);
+export type PanelActivation = MarzbanActivation | RickpanelActivation | SanaeiActivation;
 
 /** The schema a panel's activation must satisfy, by provider type. Exhaustive. */
 export const PANEL_ACTIVATION_SCHEMAS: Readonly<{
   marzban: typeof marzbanActivationSchema;
+  rickpanel: typeof rickpanelActivationSchema;
   sanaei: typeof sanaeiActivationSchema;
 }> = {
   marzban: marzbanActivationSchema,
+  rickpanel: rickpanelActivationSchema,
   sanaei: sanaeiActivationSchema,
 };
+
+/**
+ * Parse a panel's stored activation against its provider's schema, treating an
+ * UNSET activation as an empty one.
+ *
+ * The normalisation is the whole point, and it exists because leaving it to each
+ * caller produced the bug this function was extracted to kill. A panel row's
+ * `activation` is nullable, so every evaluator has to decide what `null` means,
+ * and two of them decided differently: one answered "the fields this provider
+ * requires, and RickPanel requires none, so nothing is missing"; the other asked
+ * zod, which rejects `null` whatever the schema is. A RickPanel with no
+ * activation row was therefore SELLABLE and NOT OPERABLE at the same time —
+ * which is `decideEligibility` and `decideOperability` disagreeing about whether
+ * an order can be delivered, and that disagreement is exactly what takes a
+ * customer's money for an account that cannot be made.
+ *
+ * `{}` is the truthful normalisation rather than a convenient one. "Unset" and
+ * "set to nothing" are the same fact about a panel, and each provider's own
+ * schema is then left to decide whether nothing is enough: `rickpanelActivationSchema`
+ * accepts `{}` because a RickPanel has nothing to configure, while Marzban's and
+ * 3X-UI's reject it and name the fields they are missing — `proxyProtocols`,
+ * `inboundTags`, `subscriptionDomain`, `inboundId` — which is strictly better
+ * than a hand-kept list of required keys, because it cannot fall out of step
+ * with the schema it describes.
+ *
+ * The inverse rule matters as much: this NEVER rewrites an activation an
+ * operator set. A present-but-invalid activation is passed through unchanged and
+ * fails, because silently repairing a misconfiguration is how the legacy system
+ * hid them.
+ */
+export function parsePanelActivation(
+  providerType: ProviderType,
+  activation: unknown,
+): z.ZodSafeParseResult<PanelActivation> {
+  const candidate = activation === null || activation === undefined ? {} : activation;
+  return PANEL_ACTIVATION_SCHEMAS[providerType].safeParse(
+    candidate,
+  ) as z.ZodSafeParseResult<PanelActivation>;
+}
 
 /**
  * Static description of a provider type. Display names come from the template
@@ -485,6 +553,32 @@ export const PROVIDER_FAILURE_KINDS = [
   'RATE_LIMITED',
   'MALFORMED_RESPONSE',
   'PROVIDER_ERROR',
+  /**
+   * The panel understood the request and REFUSED it, for a reason that will not
+   * change by asking again.
+   *
+   * Split out of `PROVIDER_ERROR`, which is declared retryable and rightly so:
+   * a 500 is a panel having a bad moment and the next attempt may well work.
+   * This is the opposite statement — the panel is healthy, it read the request,
+   * and it says no. An admin's user limit is reached; the service will not
+   * accept a subscription this short; the account may only delete expired
+   * users. Each is an operator's decision on their own panel, and each will be
+   * made again identically at every attempt.
+   *
+   * It is declared because RickPanel makes the distinction explicit — its
+   * `POST /api/user` answers `400` "saying which rule was hit" — and because
+   * retrying one is the exact shape of the incident this release is fixing:
+   * five attempts, seven minutes, a deterministic refusal each time, and a
+   * customer whose money was already taken. An adapter must raise it only when
+   * the panel's own answer says the refusal is a RULE rather than a fault; a
+   * status code alone is not enough, and where an adapter cannot tell, the
+   * retryable kind is the safer mistake.
+   *
+   * `DEFINITIVE`, and that is load-bearing for a mutating call: the panel
+   * answered, so nothing was left in flight and there is no phantom account to
+   * reconcile.
+   */
+  'PROVIDER_REFUSED',
   'UNSUPPORTED_CAPABILITY',
 ] as const;
 export type ProviderFailureKind = (typeof PROVIDER_FAILURE_KINDS)[number];
@@ -513,6 +607,9 @@ export const PROVIDER_FAILURE_RETRYABLE: Readonly<Record<ProviderFailureKind, bo
   RATE_LIMITED: true,
   MALFORMED_RESPONSE: false,
   PROVIDER_ERROR: true,
+  // The panel said no and will say no again. Retrying it is a schedule pointed
+  // at an operator's own panel that cannot produce a different answer.
+  PROVIDER_REFUSED: false,
   UNSUPPORTED_CAPABILITY: false,
 };
 
@@ -540,7 +637,7 @@ export const PROVIDER_FAILURE_RETRYABLE: Readonly<Record<ProviderFailureKind, bo
  *   - `UNKNOWN` — a request may have been written to the socket and the verdict
  *     lost. Nothing may be blindly retried; the next step is reconciliation.
  *
- * Two kinds are `UNKNOWN` and the reasoning for each is below. The other eight
+ * Two kinds are `UNKNOWN` and the reasoning for each is below. The other nine
  * are `DEFINITIVE`, and `BLOCKED_TARGET` is the one worth saying out loud: it is
  * definitive because NOTHING WAS SENT — the URL policy refused before a socket
  * opened — which is a stronger guarantee than an answer.
@@ -589,6 +686,11 @@ export const PROVIDER_FAILURE_DEFINITIVE: Readonly<
   // A 5xx is an answer. Retryable for a READ; for a mutation an adapter must
   // still decide whether the provider is idempotent on that path.
   PROVIDER_ERROR: 'DEFINITIVE',
+  // The panel read the request and refused it by a rule of its own. It
+  // answered, and it did nothing — which is the point: a refused create leaves
+  // no account behind to reconcile, so a mutating call may treat this as FAILED
+  // rather than UNKNOWN and refund at once.
+  PROVIDER_REFUSED: 'DEFINITIVE',
   // Refused locally, before anything was sent.
   UNSUPPORTED_CAPABILITY: 'DEFINITIVE',
 };
@@ -1201,6 +1303,82 @@ const MARZBAN: ProviderDescriptor = {
 };
 
 /**
+ * RickPanel.
+ *
+ * A Marzban-DERIVED panel, and the derivation is what makes it dangerous: it
+ * speaks `POST /api/admin/token`, `POST /api/user` and
+ * `GET /api/user/{username}` on the same paths, with the same bearer scheme and
+ * several of Marzban v0.8.4's own field names — `data_limit_reset_strategy`,
+ * `on_hold_expire_duration`, `sub_updated_at`. A panel that answers the same
+ * routes reads as the same product, which is exactly how the production
+ * deployment came to register one as `marzban`, and how the legacy system did
+ * too: the corpus's own test panel is labelled `TEST_MARZBAN_RICKPANEL`.
+ *
+ * It is not the same product. `docs/rickpanel-adapter-audit.md` has the full
+ * comparison; three differences are why this is a separate type rather than a
+ * flag on the other one:
+ *
+ *   1. **Activation is meaningless here.** RickPanel documents that `inbounds`
+ *      and a partial `proxies` set "are accepted but ignored: every user gets
+ *      every protocol and every inbound". Marzban's rule — name your inbounds or
+ *      deliver zero bytes — is the opposite fact about the opposite panel.
+ *      `requiredActivationFields` is therefore empty, and that emptiness is
+ *      measured against the contract rather than assumed for convenience.
+ *   2. **A create returns before the nodes have the user.** The adapter reads
+ *      the user back before reporting a delivery, because a 200 here proves
+ *      acceptance and nothing about existence.
+ *   3. **400 is a deterministic refusal**, carrying an admin's user limit or a
+ *      service rule, where Marzban's equivalent is a 422 about a status value.
+ *
+ * **On the capabilities below.** They are declared without a real-panel
+ * acceptance, which is a deliberate and recorded deviation from this
+ * repository's declare-after-acceptance rule — see
+ * `docs/rickpanel-adapter-audit.md` §4. Declaring nothing would leave every
+ * RickPanel unsellable and the production incident unfixed;
+ * `tests/acceptance/real-panel-rickpanel.test.ts` is what turns the promise into
+ * evidence, and it has not been run. `ROTATE_SUBSCRIPTION` is absent even so,
+ * because `POST /api/user/{username}/revoke_sub` exists in the contract and no
+ * code in this release calls it.
+ */
+const RICKPANEL: ProviderDescriptor = {
+  key: 'rickpanel',
+  canonicalName: 'RickPanel',
+  /*
+   * An admin username and password, exchanged for a bearer JWT at
+   * `POST /api/admin/token`. The same shape as Marzban's and for the same
+   * reason: the token is ephemeral, lives for one exchange and is never stored,
+   * so there is no third credential to rotate.
+   */
+  credentialShape: 'USERNAME_PASSWORD',
+  capabilities: [
+    'HEALTH_CHECK',
+    'CREATE_USER',
+    'READ_USAGE',
+    'DELIVER_SUBSCRIPTION_LINK',
+    'DISABLE_USER',
+    'ENABLE_USER',
+    'DELETE_USER',
+    'RENEW_USER',
+    'ADD_VOLUME',
+    'ADD_TIME',
+  ],
+  // A token exchange, then a status read. The create path's read-back is not a
+  // probe and is budgeted by the operation, not by this number.
+  maxRequestsPerProbe: 2,
+  /*
+   * EMPTY, and this is the field the hotfix turns on.
+   *
+   * `decideEligibility` refuses a sale when a panel's activation does not parse,
+   * so a RickPanel registered as `marzban` would need two fields configured that
+   * RickPanel throws away — a fiction an operator would have to invent to make
+   * their own panel sellable. Under its own type there is nothing to configure,
+   * which is the truth about this panel, and a `rickpanel` panel with working
+   * credentials and a successful connection test is sellable immediately.
+   */
+  requiredActivationFields: [],
+};
+
+/**
  * Sanaei / 3X-UI.
  *
  * TWO authentication modes, and that is a fact from the source rather than an
@@ -1258,7 +1436,7 @@ const SANAEI: ProviderDescriptor = {
   requiredActivationFields: ['subscriptionDomain', 'inboundId'],
 };
 
-export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = [MARZBAN, SANAEI];
+export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = [MARZBAN, RICKPANEL, SANAEI];
 
 /**
  * The most requests any registered provider's probe can make.

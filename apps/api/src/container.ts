@@ -879,6 +879,17 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     capacity: panelCapacity,
     ids,
     clock,
+    /*
+     * The SERVICE list, and the same one `panelOperability` below passes for the
+     * same reason: a provider can legitimately have a connection adapter — enough
+     * to probe it and report it healthy — and no code that can create a user.
+     *
+     * Sharing the constant rather than the closure keeps the two evaluators
+     * independent, which they must stay; sharing the LIST is what stops them
+     * disagreeing about which providers this release can actually deliver on.
+     */
+    serviceAdapterExists: (providerType) =>
+      SERVICE_PROVIDER_TYPES.includes(providerType as (typeof SERVICE_PROVIDER_TYPES)[number]),
   });
 
   const productService = new ProductService({
@@ -1535,6 +1546,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     probeCooldownMs: probeCore.probeCooldownMs,
     probeBudget: probeCore.probeBudget,
     adapters: probeCore.adapters,
+    serviceAdapterExists: (providerType) =>
+      SERVICE_PROVIDER_TYPES.includes(providerType as (typeof SERVICE_PROVIDER_TYPES)[number]),
     cadence: probeCore.cadence,
   });
 
@@ -1825,6 +1838,14 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const customerNotificationLoop = new CustomerNotificationLoop(
     new CustomerNotificationService({
       notifications: customerNotificationRepository,
+      /*
+       * The ledger reader the refund sentence renders from. The wallet repository
+       * itself, because both figures are derived from `wallet_entries` and a
+       * second implementation would be a second answer to "how much did we give
+       * back" — which is the thing `RefundService`'s one credit path exists to
+       * prevent, applied to the reading side.
+       */
+      refundFigures: walletRepository,
       contacts: {
         contactFor: async (scope, customerId, tx) => {
           const customer = await customerRepository.findById(scope, customerId, tx);

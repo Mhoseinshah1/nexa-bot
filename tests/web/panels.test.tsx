@@ -2715,3 +2715,207 @@ describe('the new-panel form', () => {
     });
   });
 });
+
+/**
+ * The three states, and the form that lets an operator fix the middle one.
+ *
+ * Order `01a0c54b` is what these are written against. The panel behind it was
+ * `ACTIVE`, `HEALTHY` and had free capacity — every signal this page rendered was
+ * green — and it had no Marzban activation at all, so the create refused with
+ * `ACTIVATION_INCOMPLETE` after the money had moved. Two things were missing and
+ * both are asserted here: the page never said the panel was unsellable, and it
+ * offered no way to make it sellable.
+ */
+describe('panel sellability', () => {
+  const detail = (overrides: Record<string, unknown> = {}) => [
+    { url: '/panels/', body: { panel: panel(overrides) } },
+  ];
+
+  const SELLABLE = {
+    sellable: true,
+    reason: null,
+    activationComplete: true,
+    missingActivationFields: [],
+    connectionValidated: true,
+  };
+
+  it('says a healthy panel with incomplete activation is not sellable, and why', async () => {
+    stubApi(detail());
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    expect(screen.getByText(t('web.panel_sellable_no'))).toBeTruthy();
+    expect(screen.getByText(t('web.panel_activation_incomplete'))).toBeTruthy();
+    expect(screen.getByText(t('web.panel_connection_validated_no'))).toBeTruthy();
+    // The reason in Persian, and the remedy under it.
+    expect(screen.getByText(t('web.panel_reason_activation_incomplete'))).toBeTruthy();
+    expect(screen.getByText(t('web.panel_reason_activation_incomplete_help'))).toBeTruthy();
+    // And the FIELDS, because "incomplete" alone sends an operator looking.
+    expect(screen.getByText(/proxyProtocols, inboundTags/)).toBeTruthy();
+  });
+
+  it('says a fully configured panel is sellable', async () => {
+    stubApi(
+      detail({
+        sellability: SELLABLE,
+        activation: { proxyProtocols: ['vless'], inboundTags: { vless: ['VLESS_TCP'] } },
+      }),
+    );
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    expect(screen.getByText(t('web.panel_sellable_yes'))).toBeTruthy();
+    expect(screen.getByText(t('web.panel_activation_complete'))).toBeTruthy();
+    expect(screen.getByText(t('web.panel_connection_validated_yes'))).toBeTruthy();
+    // No reason banner: there is no reason.
+    expect(screen.queryByText(t('web.panel_reason_activation_incomplete'))).toBeNull();
+    expect(screen.queryByText(t('web.panel_reason_unvalidated'))).toBeNull();
+  });
+
+  /**
+   * Green health, and NOT sellable, on one screen.
+   *
+   * The single most important assertion in this file: it is the exact
+   * combination an operator read as "ready" in production. If a future change
+   * folds sellability into health — or derives one from the other — this fails.
+   */
+  it('distinguishes healthy from sellable, and does not let one imply the other', async () => {
+    stubApi(detail());
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    // The overview says NOT SELLABLE...
+    expect(screen.getByText(t('web.panel_sellable_no'))).toBeTruthy();
+    expect(screen.queryByText(t('web.panel_sellable_yes'))).toBeNull();
+
+    // ...while the health tab, for the same panel, still says HEALTHY. Both are
+    // true at once, and the production incident is what happens when a reader is
+    // only ever shown the second one.
+    fireEvent.click(screen.getByRole('tab', { name: t('web.panel_tab_health') }));
+    expect(await screen.findByText(t('web.health_healthy'))).toBeTruthy();
+  });
+
+  /** A validated connection is still not a sellable panel. The converse case. */
+  it('says a validated, capable panel at capacity is not sellable either', async () => {
+    stubApi(
+      detail({
+        sellability: {
+          sellable: false,
+          reason: 'AT_CAPACITY',
+          activationComplete: true,
+          missingActivationFields: [],
+          connectionValidated: true,
+        },
+      }),
+    );
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    expect(screen.getByText(t('web.panel_activation_complete'))).toBeTruthy();
+    expect(screen.getByText(t('web.panel_connection_validated_yes'))).toBeTruthy();
+    expect(screen.getByText(t('web.panel_sellable_no'))).toBeTruthy();
+    expect(screen.getByText(t('web.panel_reason_at_capacity'))).toBeTruthy();
+  });
+});
+
+/**
+ * The activation form: the thing that did not exist.
+ *
+ * `docs/hotfix-activation-audit.md` F4. The page rendered the NAMES of the
+ * required fields in a warning banner and no input for any of them, so a Marzban
+ * panel could not be completed from the Web Admin at all.
+ */
+describe('panel activation editing', () => {
+  const PANEL_ID = '01a05e35-c9ad-7e93-bef3-1ed9b55292c8';
+  const detail = (overrides: Record<string, unknown> = {}) => [
+    { url: '/panels/', body: { panel: panel(overrides) } },
+  ];
+
+  it('offers a field for every Marzban activation field, and sends what was typed', async () => {
+    const api = stubApi([...detail(), { url: `/panels/${PANEL_ID}`, body: { panel: panel() } }]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    fireEvent.click(screen.getByLabelText('vless'));
+    fireEvent.change(screen.getByLabelText(`${t('web.panel_inbound_tags')} — vless`), {
+      target: { value: 'VLESS_TCP, VLESS_WS' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
+    });
+    const write = api.calls.filter((call) => call.method === 'POST').at(-1);
+    const body = write?.body as { activation?: Record<string, unknown> };
+    expect(body.activation).toEqual({
+      proxyProtocols: ['vless'],
+      // Split and trimmed, and the trailing empty dropped rather than sent as a
+      // zero-length tag the schema would then refuse.
+      inboundTags: { vless: ['VLESS_TCP', 'VLESS_WS'] },
+    });
+  });
+
+  /**
+   * It refuses rather than inventing.
+   *
+   * A protocol with no tags means "every inbound" to a reader and NONE to
+   * Marzban — a 200, a subscription URL and zero bytes for the customer. The
+   * form must not fill that in, and must not send it.
+   */
+  it('refuses a protocol with no inbound tags instead of guessing one', async () => {
+    const api = stubApi([...detail(), { url: `/panels/${PANEL_ID}`, body: { panel: panel() } }]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    fireEvent.click(screen.getByLabelText('vless'));
+    // The tag box is left empty on purpose.
+    fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+
+    // Named with the schema's own path, so the operator knows which box.
+    expect(await screen.findAllByText(/inboundTags\.vless/)).not.toHaveLength(0);
+    expect(api.calls.some((call) => call.method === 'POST')).toBe(false);
+  });
+
+  /** The configuration reads BACK. A field an operator can write and not read is the legacy screen. */
+  it('renders the stored activation into the form', async () => {
+    stubApi(
+      detail({
+        activation: { proxyProtocols: ['vmess'], inboundTags: { vmess: ['VMESS_TCP'] } },
+      }),
+    );
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    expect((screen.getByLabelText('vmess') as HTMLInputElement).checked).toBe(true);
+    expect(
+      (screen.getByLabelText(`${t('web.panel_inbound_tags')} — vmess`) as HTMLInputElement).value,
+    ).toBe('VMESS_TCP');
+  });
+
+  /** An untouched activation is not mentioned, so a rename cannot erase a configuration. */
+  it('omits activation from the command when the operator did not touch it', async () => {
+    const api = stubApi([...detail(), { url: `/panels/${PANEL_ID}`, body: { panel: panel() } }]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    fireEvent.change(screen.getByLabelText('نام'), { target: { value: 'Frankfurt B' } });
+    fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
+    });
+    const write = api.calls.filter((call) => call.method === 'POST').at(-1);
+    expect(Object.keys((write?.body as Record<string, unknown>) ?? {})).not.toContain('activation');
+  });
+
+  /** 3X-UI gets ITS two fields, and not Marzban's. The form is per provider. */
+  it('offers the 3X-UI fields for a 3X-UI panel', async () => {
+    stubApi(detail({ providerType: 'sanaei', providerName: '3X-UI', activation: null }));
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    expect(screen.getByLabelText(t('web.panel_subscription_domain'))).toBeTruthy();
+    expect(screen.getByLabelText(t('web.panel_inbound_id'))).toBeTruthy();
+    expect(screen.queryByLabelText('vless')).toBeNull();
+  });
+});

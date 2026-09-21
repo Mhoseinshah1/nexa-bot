@@ -1,4 +1,4 @@
-import type { PanelIneligibilityReason, TenantContext } from '@nexa/contracts';
+import type { PanelSellability, PanelIneligibilityReason, TenantContext } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { PanelView } from './ports.js';
 
@@ -182,4 +182,17 @@ export interface PanelIneligible {
  */
 export interface PanelWithCapacity extends PanelView {
   readonly capacity: PanelCapacity;
+  /**
+   * Whether this panel may be sold onto, and what to fix if not.
+   *
+   * Composed here for the same reason `capacity` is: it answers a question no
+   * single repository can — the verdict reads the panel row, the credential
+   * summary, the health row and the descriptor — and a surface computing it
+   * would be the second place the rule lives.
+   *
+   * It exists because a panel read used to answer only health and capacity, and
+   * an operator reading two greens took it to mean ready to sell. Order
+   * `01a0c54b` is what that cost.
+   */
+  readonly sellability: PanelSellability;
 }

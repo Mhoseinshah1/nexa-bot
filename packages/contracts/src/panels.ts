@@ -241,9 +241,19 @@ export const PANEL_UNUSABLE_HEALTH_STATES: readonly PanelHealthState[] = [
  * and the separation is load-bearing. Operability asks "can this OPERATION run
  * against this panel" and is checked at the moment of the provider call;
  * eligibility asks "may we SELL onto this panel" and is checked before a
- * customer is charged. A panel can be eligible and inoperable — a fresh one
- * whose credentials are missing — and it can be operable and ineligible, which
- * is exactly the case this vocabulary adds: full, or failing every probe.
+ * customer is charged.
+ *
+ * The two still disagree in both directions, and the examples are worth keeping
+ * exact because one of them used to be wrong. A full panel is OPERABLE and
+ * ineligible — its existing services keep working. A panel whose adapter cannot
+ * SUSPEND is ELIGIBLE and inoperable for that one operation — it can still sell
+ * and deliver, and suspension is not what a customer is buying.
+ *
+ * What was wrong was "a fresh one whose credentials are missing" as the second
+ * example. That panel cannot deliver anything, and calling it eligible is how a
+ * customer came to pay for a service this installation had no way to create.
+ * The four PROVISIONABILITY reasons below close that: eligibility now also asks
+ * whether the thing being sold could be produced.
  */
 export const PANEL_INELIGIBILITY_REASONS = [
   /** Archived. The panel is finished and its name has been released. */
@@ -269,6 +279,73 @@ export const PANEL_INELIGIBILITY_REASONS = [
    * customers reaching for the last slot cannot both be sold it.
    */
   'AT_CAPACITY',
+  /*
+   * The four below are PROVISIONABILITY, and they exist because a panel that
+   * passed every test above sold a service it could not create.
+   *
+   * Order `01a0c54b` on v0.2.8: `ACTIVE`, `HEALTHY`, free capacity, and no
+   * Marzban activation. It took the customer's money, spent five attempts over
+   * seven minutes discovering `ACTIVATION_INCOMPLETE`, terminated the service
+   * and refunded. `docs/hotfix-activation-audit.md` reconstructs it line by line.
+   *
+   * Every one of these was ALREADY checked — by `decideOperability`, at the
+   * moment of the provider call, which is after the money has moved. The rule
+   * this vocabulary adds is that they are checked BEFORE it moves as well. The
+   * two evaluators stay separate and go on answering different questions; what
+   * changes is that "may we sell onto this panel" now includes "could we deliver
+   * what we are selling".
+   *
+   * They are FOUR reasons rather than one `NOT_PROVISIONABLE`, because each is a
+   * different screen and a different field. "This panel cannot take orders" is
+   * what the legacy system says; naming the missing thing is the alternative,
+   * and it is the whole reason `PanelOperabilityRefusal` is a closed set too.
+   */
+  /**
+   * The provider configuration is unset, or does not satisfy
+   * `PANEL_ACTIVATION_SCHEMAS[providerType]`.
+   *
+   * For Marzban that is `proxyProtocols` and an `inboundTags` entry for each of
+   * them; for 3X-UI a `subscriptionDomain` and an `inboundId`. Not defaulted and
+   * not guessable — choosing an inbound is choosing which server a customer
+   * connects to, and `marzbanActivationSchema` records what an absent one
+   * actually does on the binary: a 200, a subscription URL, and zero bytes.
+   */
+  'ACTIVATION_INCOMPLETE',
+  /**
+   * The credentials this provider's `credentialShape` requires are not all set.
+   *
+   * Eligible-and-inoperable used to be the worked example of why these two
+   * questions differ — "a fresh one whose credentials are missing". It was the
+   * wrong example: a panel nobody can authenticate against cannot deliver, so
+   * selling onto it is selling something that will be refunded.
+   */
+  'CREDENTIALS_MISSING',
+  /**
+   * This release has no adapter for the provider, or its adapter does not
+   * declare `CREATE_USER`.
+   *
+   * A statement about CODE, so no operator action fixes it and the catalogue
+   * must not offer it. Distinct from the three configuration reasons for exactly
+   * that: the remedy is a release, not a screen.
+   */
+  'PROVISION_UNSUPPORTED',
+  /**
+   * No connection test has ever succeeded against the panel AS IT IS NOW.
+   *
+   * `validated_identity` is provider, address, activation and the three
+   * credential timestamps — so a test stops counting the moment somebody changes
+   * any of them, which is the point.
+   *
+   * Deliberately NOT a freshness rule. `validationAuthorisesEnable` requires the
+   * probe to be recent because it authorises an ACT; this authorises a standing
+   * state, and requiring recency here would let a monitor stopped for an
+   * afternoon close every shop in the installation — the exact failure
+   * `decideEligibility`'s own docblock refuses, reintroduced as a sales rule.
+   * Old evidence about an unchanged configuration is still evidence; staleness
+   * stays the health lane's business, where `isConfirmedUnusable` handles it with
+   * hysteresis.
+   */
+  'UNVALIDATED',
 ] as const;
 export type PanelIneligibilityReason = (typeof PANEL_INELIGIBILITY_REASONS)[number];
 

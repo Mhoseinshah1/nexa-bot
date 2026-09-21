@@ -20,6 +20,7 @@ import {
   adminActorFor,
   createAdmin,
   createTestContext,
+  validatePanelConnection,
   SEED_IDS,
   tenantA,
   type TestContext,
@@ -154,6 +155,16 @@ describe('a customer manages the service they bought', () => {
       idempotencyKey: 'panel-manage-create',
     });
     panelId = created.view.panel.id;
+    /*
+     * And CONNECTION-TESTED, which the create alone is not.
+     *
+     * `panels.create` writes an ACTIVE row and contacts nothing, so since this
+     * hotfix the panel is `UNVALIDATED` and cannot be sold onto — a brand-new
+     * row being immediately sellable is one of the holes being closed. The
+     * fake panel here is real and reachable, so recording a successful
+     * connection test is exactly what an operator would do next.
+     */
+    await validatePanelConnection(ctx.container, tenantA, panelId);
 
     const resolved = await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('r'), {
       idempotencyKey: 'resolve-manage',

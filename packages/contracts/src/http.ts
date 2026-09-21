@@ -66,6 +66,7 @@ import { PLACEHOLDER_TYPES, TEMPLATE_FORMATS, TEMPLATE_REVISION_ACTIONS } from '
 import {
   PANEL_BASE_URL_MAX_LENGTH,
   PANEL_HEALTH_VIEWS,
+  PANEL_INELIGIBILITY_REASONS,
   PANEL_NAME_MAX_LENGTH,
   PANEL_PAGE_MAX,
   PANEL_NAME_MIN_LENGTH,
@@ -1191,6 +1192,66 @@ export const panelUsernamePolicySchema = z.object({
 });
 export type PanelUsernamePolicyResponse = z.infer<typeof panelUsernamePolicySchema>;
 
+/**
+ * THREE STATES, SAID SEPARATELY, BECAUSE THEY ARE THREE QUESTIONS.
+ *
+ * A panel read used to answer two of them — `health` said whether the address
+ * and credentials reach something, `capacity` said whether there is room — and a
+ * screen that showed both green was read as "ready to sell". It was not. Order
+ * `01a0c54b` on v0.2.8 was taken by a panel that was ACTIVE, HEALTHY and had
+ * free capacity, and that had no Marzban activation configured at all: the
+ * customer paid, waited seven minutes and was refunded.
+ *
+ * So the response now says all three, and never lets one stand in for another:
+ *
+ *   - `health` (beside this): can we reach it and authenticate?
+ *   - `activationComplete` / `missingActivationFields`: is the provider
+ *     configuration complete for THIS provider's schema?
+ *   - `sellable` / `reason`: may a customer be charged for a new account on it?
+ *
+ * `sellable` is the one a surface may gate a sale on, and the other two exist so
+ * that a `false` is actionable rather than merely disappointing. A panel is not
+ * described as unhealthy when what is missing is an inbound tag.
+ */
+export const panelSellabilitySchema = z.object({
+  /**
+   * The server's verdict, from the ONE evaluator with four callers.
+   *
+   * Advisory in exactly the sense `PanelSalesGate` already documents: a read is
+   * a snapshot, and confirmation re-decides under the panel's lock while
+   * settlement re-decides again. A surface uses this to avoid offering something
+   * that will be refused; nothing hangs on it.
+   */
+  sellable: z.boolean(),
+  /** Null exactly when `sellable`. The first reason, in the evaluator's order. */
+  reason: z.enum(PANEL_INELIGIBILITY_REASONS).nullable(),
+  /**
+   * Whether the stored `activation` parses against this provider's schema.
+   *
+   * Reported even when the panel is unsellable for some other reason, because an
+   * operator fixing a disabled panel needs to know whether enabling it will be
+   * enough. A single `reason` can only name one thing at a time.
+   */
+  activationComplete: z.boolean(),
+  /**
+   * The field paths the schema rejected, as the schema names them — never a
+   * provider default invented here.
+   *
+   * Paths rather than a sentence, so the Web Admin can point at the input that
+   * is wrong instead of printing a paragraph. Empty when `activationComplete`.
+   */
+  missingActivationFields: z.array(z.string()),
+  /**
+   * Whether a probe ever concluded something usable against the panel's CURRENT
+   * identity.
+   *
+   * Not "recently" — see `UNVALIDATED` in `PANEL_INELIGIBILITY_REASONS` for why
+   * freshness is deliberately not part of this.
+   */
+  connectionValidated: z.boolean(),
+});
+export type PanelSellability = z.infer<typeof panelSellabilitySchema>;
+
 export const panelSummarySchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -1251,6 +1312,8 @@ export const panelSummarySchema = z.object({
   capacity: panelCapacitySchema,
   /** Which names this panel accepts. See `panelUsernamePolicySchema`. */
   usernamePolicy: panelUsernamePolicySchema,
+  /** Whether this panel may be sold onto, and if not, what to fix. */
+  sellability: panelSellabilitySchema,
   createdAt: isoTimestamp,
   updatedAt: isoTimestamp,
 });
@@ -2970,6 +3033,14 @@ export const serviceListQuerySchema = z.object({
   deliveryState: z.enum(SERVICE_DELIVERY_STATES).optional(),
   /* Ids, validated HERE: these reach `uuid` columns. See `orderListQuerySchema`. */
   customerId: uuidV7Schema.optional(),
+  /**
+   * The order that bought the service. At most one row can match.
+   *
+   * Added so the Web Admin order page can show what its order produced. It had
+   * no route to that at all: an operator reading a REFUNDED order saw the money
+   * and nothing about the service, the provisioning attempt or why it failed.
+   */
+  orderId: uuidV7Schema.optional(),
   panelId: uuidV7Schema.optional(),
   /*
    * The name a customer quotes, matched EXACTLY.

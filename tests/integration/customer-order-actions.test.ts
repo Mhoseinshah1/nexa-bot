@@ -17,6 +17,7 @@ import {
   adminActorFor,
   createAdmin,
   createTestContext,
+  makePanelSellable,
   SEED_IDS,
   tenantA,
   tenantB,
@@ -77,6 +78,17 @@ describe('a customer acting on their own order', () => {
       INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
       VALUES (${panelA}, ${tenantA.tenantId}, 'Panel A', 'sanaei', 'https://a.example.test', 'ACTIVE'),
              (${panelB}, ${tenantB.tenantId}, 'Panel B', 'sanaei', 'https://b.example.test', 'ACTIVE')`);
+    /*
+     * Made GENUINELY sellable, not left as a bare row.
+     *
+     * A panel with no credentials, no activation and no probe cannot create an
+     * account, and since this hotfix `decideEligibility` refuses to take money
+     * for one. A fixture that expects a sale therefore has to describe a panel
+     * that could deliver it; `makePanelSellable` writes the three things a sale
+     * now requires, using the production identity function so it cannot drift.
+     */
+    await makePanelSellable(ctx.container, tenantA, panelA);
+    await makePanelSellable(ctx.container, tenantB, panelB);
     customerA = await customer(tenantA, BOT_A, '910100');
     owner = adminActorFor(
       await createAdmin(ctx.container, tenantA, {

@@ -113,20 +113,89 @@ export function provisioningConditionKey(serviceId: string): string {
 }
 
 /**
- * Which refusals can never be fixed without a new release.
+ * Which refusals are DETERMINISTIC — the same answer on the next attempt, and on
+ * the fifth.
  *
- * `PROVIDER_NOT_OPERABLE` and `CAPABILITY_UNSUPPORTED` are statements about CODE: no
- * amount of operator configuration makes this release able to create a user on a
- * provider it has no adapter for. Retrying them four more times spends attempts to
- * learn nothing and delays the terminal state an operator needs to see.
+ * ## What this used to be, and what it cost
  *
- * The other four are configuration, and configuration can change in the minute after
- * the refusal — a panel re-enabled, a credential set, an activation completed — so
- * those back off and try again.
+ * It used to return true for `PROVIDER_NOT_OPERABLE` and `CAPABILITY_UNSUPPORTED`
+ * only, on the argument that "the other four are configuration, and configuration
+ * can change in the minute after the refusal — a panel re-enabled, a credential
+ * set, an activation completed".
+ *
+ * That argument is true and it is not a reason to retry. Order `01a0c54b` on
+ * v0.2.8 refused `ACTIVATION_INCOMPLETE` five times over roughly seven minutes —
+ * 30s, 60s, 120s, 240s of backoff — because nobody completes a panel's activation
+ * inside four minutes without knowing they need to, and the thing that would tell
+ * them is the operational event this delays. So the customer waited seven minutes
+ * for an answer that was fully determined at the first attempt, and the operator
+ * got the alert four minutes late.
+ *
+ * A refusal is not a failure to be ridden out. NOTHING WAS CONTACTED: these are
+ * decisions this installation made about its own rows, before any socket was
+ * opened. A retry re-reads the same rows and reaches the same verdict.
+ *
+ * ## The six that are deterministic
+ *
+ * Two are about CODE — no operator action fixes them at all:
+ *   - `PROVIDER_NOT_OPERABLE`: no adapter for this provider in this release.
+ *   - `CAPABILITY_UNSUPPORTED`: the adapter does not declare what this needs.
+ *
+ * Four are about CONFIGURATION — an operator fixes them on a screen, and the
+ * remedy is the operational event, not the wait:
+ *   - `ACTIVATION_INCOMPLETE`: a required provider field is unset or invalid.
+ *   - `CREDENTIALS_MISSING`: the credentials this provider needs are not set.
+ *   - `PANEL_DISABLED`: the operator said stop using this panel.
+ *   - `PANEL_ABSENT`: archived, or gone.
+ *
+ * `PANEL_DISABLED` deserves its own sentence, because "they might re-enable it"
+ * is the tempting objection. An operator who disabled a panel made a decision;
+ * quietly retrying against it for seven minutes in the hope they change their
+ * mind is the system second-guessing an instruction. Refunding at once and
+ * telling them a paid order hit a disabled panel is the honest answer, and it is
+ * the one that reaches them while they are still at the keyboard.
+ *
+ * ## What still backs off, and why that list is exactly right
+ *
+ * `PANEL_NOT_REACHABLE` is the URL policy refusing an address, which a DNS change
+ * can genuinely flip. `BUDGET_EXHAUSTED`, `TENANT_STOPPED` and `LEASE_LOST` are
+ * about US rather than the panel and are not failures at all — `holdOff` refunds
+ * their attempt so they do not even count. `SERVICE_ABSENT` terminalises by its
+ * own path.
+ *
+ * The invariant worth stating: a deterministic refusal is answered by a REFUND and
+ * an operational event, both within one tick. Nothing about the panel is recorded,
+ * because nothing about the panel was learned.
  */
 export function refusalIsPermanent(reason: ExecutionRefusal): boolean {
-  return reason === 'PROVIDER_NOT_OPERABLE' || reason === 'CAPABILITY_UNSUPPORTED';
+  return DETERMINISTIC_REFUSALS.has(reason);
 }
+
+/**
+ * The set, as data, so a test can enumerate it and a reader can count it.
+ *
+ * A `switch` would be equally correct and would not let
+ * `tests/unit/refusal-classification.test.ts` assert the WHOLE partition — that
+ * every `ExecutionRefusal` is in exactly one of these two groups, so a refusal
+ * added later cannot silently default to being retried five times.
+ */
+const DETERMINISTIC_REFUSALS: ReadonlySet<ExecutionRefusal> = new Set([
+  'PROVIDER_NOT_OPERABLE',
+  'CAPABILITY_UNSUPPORTED',
+  'ACTIVATION_INCOMPLETE',
+  'CREDENTIALS_MISSING',
+  'PANEL_DISABLED',
+  'PANEL_ABSENT',
+]);
+
+/** The complement, exported for the partition test. Never used to decide. */
+export const RETRYABLE_REFUSALS: readonly ExecutionRefusal[] = [
+  'PANEL_NOT_REACHABLE',
+  'BUDGET_EXHAUSTED',
+  'TENANT_STOPPED',
+  'SERVICE_ABSENT',
+  'LEASE_LOST',
+];
 
 /** How many abandoned leases one tick may return to the pool. */
 export const LEASE_SWEEP_LIMIT = 20;
@@ -376,7 +445,7 @@ export class ProvisionerService {
           tx,
         );
       });
-      return { kind: 'REFUSED', operationId: operation.id, reason: 'SERVICE_ABSENT' };
+      return this.refusedAbandoned(operation, 'SERVICE_ABSENT');
     }
 
     /*
@@ -412,7 +481,7 @@ export class ProvisionerService {
           tx,
         );
       });
-      return { kind: 'REFUSED', operationId: operation.id, reason: 'CAPABILITY_UNSUPPORTED' };
+      return this.refused(operation, 'CAPABILITY_UNSUPPORTED');
     }
 
     /*
@@ -449,7 +518,7 @@ export class ProvisionerService {
           tx,
         );
       });
-      return { kind: 'REFUSED', operationId: operation.id, reason: 'SERVICE_ABSENT' };
+      return this.refusedAbandoned(operation, 'SERVICE_ABSENT');
     }
 
     /*
@@ -465,7 +534,7 @@ export class ProvisionerService {
     );
     if (!active) {
       await this.holdOff(scope, operation, now, 'the tenant has stopped accepting work');
-      return { kind: 'REFUSED', operationId: operation.id, reason: 'TENANT_STOPPED' };
+      return this.refusedAndHeld(operation, 'TENANT_STOPPED');
     }
 
     /*
@@ -495,7 +564,7 @@ export class ProvisionerService {
     });
     if (!operable.ok) {
       await this.refuse(scope, operation, service, operable.reason, now);
-      return { kind: 'REFUSED', operationId: operation.id, reason: operable.reason };
+      return this.refused(operation, operable.reason);
     }
 
     /*
@@ -514,7 +583,7 @@ export class ProvisionerService {
        * operations log does not say "disabled" about a panel nobody disabled.
        */
       await this.refuse(scope, operation, service, 'PANEL_NOT_REACHABLE', now);
-      return { kind: 'REFUSED', operationId: operation.id, reason: 'PANEL_NOT_REACHABLE' };
+      return this.refused(operation, 'PANEL_NOT_REACHABLE');
     }
 
     const adapter = this.deps.adapters(operable.providerType as ProviderType);
@@ -529,7 +598,7 @@ export class ProvisionerService {
        * failure, because no provider was contacted.
        */
       await this.refuse(scope, operation, service, 'CREDENTIALS_MISSING', now);
-      return { kind: 'REFUSED', operationId: operation.id, reason: 'CREDENTIALS_MISSING' };
+      return this.refused(operation, 'CREDENTIALS_MISSING');
     }
 
     /*
@@ -557,7 +626,7 @@ export class ProvisionerService {
         new Date(now.getTime() + budget.retryAfterMs),
         'the tenant outbound budget had no capacity',
       );
-      return { kind: 'REFUSED', operationId: operation.id, reason: 'BUDGET_EXHAUSTED' };
+      return this.refusedAndHeld(operation, 'BUDGET_EXHAUSTED');
     }
 
     const target = { baseUrl: operable.baseUrl, credentials, activation: operable.activation };
@@ -598,7 +667,7 @@ export class ProvisionerService {
        * lease sweep; either way this worker has no standing to record an outcome for
        * it, and the attempt the claim counted is the honest cost of having stalled.
        */
-      return { kind: 'REFUSED', operationId: operation.id, reason: 'LEASE_LOST' };
+      return this.refused(operation, 'LEASE_LOST');
     }
 
     /*
@@ -637,7 +706,7 @@ export class ProvisionerService {
       case 'SUSPEND': {
         if (!canDisableUser(adapter)) {
           await this.refuse(scope, operation, service, 'CAPABILITY_UNSUPPORTED', now);
-          return { kind: 'REFUSED', operationId: operation.id, reason: 'CAPABILITY_UNSUPPORTED' };
+          return this.refused(operation, 'CAPABILITY_UNSUPPORTED');
         }
         return this.finishStateChange(
           scope,
@@ -650,7 +719,7 @@ export class ProvisionerService {
       case 'RESUME': {
         if (!canEnableUser(adapter)) {
           await this.refuse(scope, operation, service, 'CAPABILITY_UNSUPPORTED', now);
-          return { kind: 'REFUSED', operationId: operation.id, reason: 'CAPABILITY_UNSUPPORTED' };
+          return this.refused(operation, 'CAPABILITY_UNSUPPORTED');
         }
         return this.finishStateChange(
           scope,
@@ -663,7 +732,7 @@ export class ProvisionerService {
       case 'TERMINATE': {
         if (!canDeleteUser(adapter)) {
           await this.refuse(scope, operation, service, 'CAPABILITY_UNSUPPORTED', now);
-          return { kind: 'REFUSED', operationId: operation.id, reason: 'CAPABILITY_UNSUPPORTED' };
+          return this.refused(operation, 'CAPABILITY_UNSUPPORTED');
         }
         return this.finishTerminate(
           scope,
@@ -691,7 +760,7 @@ export class ProvisionerService {
       case 'RENEW': {
         if (!canRenewUser(adapter) || operation.target === null) {
           await this.refuse(scope, operation, service, 'CAPABILITY_UNSUPPORTED', now);
-          return { kind: 'REFUSED', operationId: operation.id, reason: 'CAPABILITY_UNSUPPORTED' };
+          return this.refused(operation, 'CAPABILITY_UNSUPPORTED');
         }
         return this.finishAllowance(
           scope,
@@ -704,7 +773,7 @@ export class ProvisionerService {
       case 'ADD_TRAFFIC': {
         if (!canAddVolume(adapter) || operation.target === null) {
           await this.refuse(scope, operation, service, 'CAPABILITY_UNSUPPORTED', now);
-          return { kind: 'REFUSED', operationId: operation.id, reason: 'CAPABILITY_UNSUPPORTED' };
+          return this.refused(operation, 'CAPABILITY_UNSUPPORTED');
         }
         return this.finishAllowance(
           scope,
@@ -717,7 +786,7 @@ export class ProvisionerService {
       case 'ADD_TIME': {
         if (!canAddTime(adapter) || operation.target === null) {
           await this.refuse(scope, operation, service, 'CAPABILITY_UNSUPPORTED', now);
-          return { kind: 'REFUSED', operationId: operation.id, reason: 'CAPABILITY_UNSUPPORTED' };
+          return this.refused(operation, 'CAPABILITY_UNSUPPORTED');
         }
         return this.finishAllowance(
           scope,
@@ -751,7 +820,7 @@ export class ProvisionerService {
        * that expires today.
        */
       await this.refuse(scope, operation, service, 'ACTIVATION_INCOMPLETE', now);
-      return { kind: 'REFUSED', operationId: operation.id, reason: 'ACTIVATION_INCOMPLETE' };
+      return this.refused(operation, 'ACTIVATION_INCOMPLETE');
     }
 
     /*
@@ -779,7 +848,7 @@ export class ProvisionerService {
      */
     if (bought.deviceLimit !== null && !adapter.supports('LIMIT_DEVICES')) {
       await this.refuse(scope, operation, service, 'CAPABILITY_UNSUPPORTED', now);
-      return { kind: 'REFUSED', operationId: operation.id, reason: 'CAPABILITY_UNSUPPORTED' };
+      return this.refused(operation, 'CAPABILITY_UNSUPPORTED');
     }
 
     /*
@@ -814,13 +883,7 @@ export class ProvisionerService {
         created.status,
         finishedAt,
       );
-      return {
-        kind: 'ATTEMPTED',
-        operationId: operation.id,
-        serviceId: service.id,
-        outcome,
-        failureKind: created.failure,
-      };
+      return this.attempted(operation, service.id, outcome, created.failure);
     }
 
     await this.persistSuccess(
@@ -837,13 +900,7 @@ export class ProvisionerService {
       },
       finishedAt,
     );
-    return {
-      kind: 'ATTEMPTED',
-      operationId: operation.id,
-      serviceId: service.id,
-      outcome: 'SUCCEEDED',
-      failureKind: null,
-    };
+    return this.attempted(operation, service.id, 'SUCCEEDED', null);
   }
 
   /**
@@ -1103,13 +1160,7 @@ export class ProvisionerService {
         verdict.status,
         now,
       );
-      return {
-        kind: 'ATTEMPTED',
-        operationId: operation.id,
-        serviceId,
-        outcome: 'FAILED',
-        failureKind: verdict.failure,
-      };
+      return this.attempted(operation, serviceId, 'FAILED', verdict.failure);
     }
 
     const actor = this.actor();
@@ -1310,13 +1361,7 @@ export class ProvisionerService {
       );
     });
 
-    return {
-      kind: 'ATTEMPTED',
-      operationId: operation.id,
-      serviceId,
-      outcome: 'SUCCEEDED',
-      failureKind: null,
-    };
+    return this.attempted(operation, serviceId, 'SUCCEEDED', null);
   }
 
   /**
@@ -1378,13 +1423,7 @@ export class ProvisionerService {
         read.status,
         now,
       );
-      return {
-        kind: 'ATTEMPTED',
-        operationId: operation.id,
-        serviceId,
-        outcome: 'FAILED',
-        failureKind: read.failure,
-      };
+      return this.attempted(operation, serviceId, 'FAILED', read.failure);
     }
 
     await this.deps.uow.run(scope, async (tx) => {
@@ -1414,13 +1453,7 @@ export class ProvisionerService {
      * operation row itself carries who ran it, when, and what it found, and the
      * service row carries the figure — which is the whole of what happened.
      */
-    return {
-      kind: 'ATTEMPTED',
-      operationId: operation.id,
-      serviceId,
-      outcome: 'SUCCEEDED',
-      failureKind: null,
-    };
+    return this.attempted(operation, serviceId, 'SUCCEEDED', null);
   }
 
   /**
@@ -1483,13 +1516,7 @@ export class ProvisionerService {
         failureNote(changed.failure, changed.status),
         now,
       );
-      return {
-        kind: 'ATTEMPTED',
-        operationId: operation.id,
-        serviceId,
-        outcome,
-        failureKind: changed.failure,
-      };
+      return this.attempted(operation, serviceId, outcome, changed.failure);
     }
 
     if (!changed.found) {
@@ -1519,13 +1546,7 @@ export class ProvisionerService {
         'the panel does not have this service’s account',
         now,
       );
-      return {
-        kind: 'ATTEMPTED',
-        operationId: operation.id,
-        serviceId,
-        outcome: 'FAILED',
-        failureKind: null,
-      };
+      return this.attempted(operation, serviceId, 'FAILED', null);
     }
 
     const actor = this.actor();
@@ -1570,13 +1591,7 @@ export class ProvisionerService {
       });
     });
 
-    return {
-      kind: 'ATTEMPTED',
-      operationId: operation.id,
-      serviceId,
-      outcome: 'SUCCEEDED',
-      failureKind: null,
-    };
+    return this.attempted(operation, serviceId, 'SUCCEEDED', null);
   }
 
   /**
@@ -1635,13 +1650,7 @@ export class ProvisionerService {
         failureNote(changed.failure, changed.status),
         now,
       );
-      return {
-        kind: 'ATTEMPTED',
-        operationId: operation.id,
-        serviceId,
-        outcome,
-        failureKind: changed.failure,
-      };
+      return this.attempted(operation, serviceId, outcome, changed.failure);
     }
 
     if (!changed.found) {
@@ -1661,13 +1670,7 @@ export class ProvisionerService {
         'the panel does not have this service’s account',
         now,
       );
-      return {
-        kind: 'ATTEMPTED',
-        operationId: operation.id,
-        serviceId,
-        outcome: 'FAILED',
-        failureKind: null,
-      };
+      return this.attempted(operation, serviceId, 'FAILED', null);
     }
 
     /*
@@ -1775,13 +1778,7 @@ export class ProvisionerService {
       }
     });
 
-    return {
-      kind: 'ATTEMPTED',
-      operationId: operation.id,
-      serviceId,
-      outcome: 'SUCCEEDED',
-      failureKind: null,
-    };
+    return this.attempted(operation, serviceId, 'SUCCEEDED', null);
   }
 
   /**
@@ -1818,13 +1815,7 @@ export class ProvisionerService {
         failureNote(removed.failure, removed.status),
         now,
       );
-      return {
-        kind: 'ATTEMPTED',
-        operationId: operation.id,
-        serviceId,
-        outcome,
-        failureKind: removed.failure,
-      };
+      return this.attempted(operation, serviceId, outcome, removed.failure);
     }
 
     const actor = this.actor();
@@ -1875,13 +1866,7 @@ export class ProvisionerService {
       });
     });
 
-    return {
-      kind: 'ATTEMPTED',
-      operationId: operation.id,
-      serviceId,
-      outcome: 'SUCCEEDED',
-      failureKind: null,
-    };
+    return this.attempted(operation, serviceId, 'SUCCEEDED', null);
   }
 
   /**
@@ -2227,6 +2212,109 @@ export class ProvisionerService {
       },
       tx,
     );
+  }
+
+  /**
+   * A refusal, carrying the four ids and the one bit somebody debugging a stuck
+   * order actually needs.
+   *
+   * One helper rather than the same object literal at eleven return sites, and
+   * that is the reason the fields were missing before: a literal repeated eleven
+   * times gains a field in one of them. The production report for order
+   * `01a0c54b` says the provisioner logs "contained no useful per-operation
+   * failure entry" — they contained nothing at all for a refusal, because a
+   * refusal returns a value and the value carried an id and a reason.
+   *
+   * `terminal` is what this tick actually DID to the row, and it is the one field
+   * a helper must not compute for itself. Codex C3 on PR #58: recomputing it from
+   * the reason and the claimed attempt count was wrong in both directions.
+   *
+   *   - `SERVICE_ABSENT` is classified retryable, and both of its paths transition
+   *     the row to `ABANDONED` first. The line said "will retry" about a row that
+   *     can never run again.
+   *   - `holdOff` refunds the attempt the claim counted, and `operation.attempts`
+   *     was read BEFORE that. A hold-off at the ceiling said "terminal" about a
+   *     row whose next tick will pick it up.
+   *
+   * Both are reachable — a tenant stopped mid-tick, an exhausted outbound budget,
+   * a service that left a legal state between the plan and the claim — and both
+   * hand an operator the opposite of the truth in the one field they are reading
+   * the line for. So the three shapes are named and each caller says which it is:
+   * `refusedAbandoned` for a row just made terminal, `refusedAndHeld` for one whose
+   * attempt was given back, and this for the ordinary accounted refusal where the
+   * classification IS the answer.
+   *
+   * Every field is an id or an enum. Nothing here can carry a credential, a
+   * subscription URL or a provider's response body.
+   */
+  private refused(operation: OperationRecord, reason: ExecutionRefusal): ExecutionResult {
+    return this.refusal(
+      operation,
+      reason,
+      refusalIsPermanent(reason) || exhausted(operation.attempts),
+    );
+  }
+
+  /**
+   * A refusal whose row this tick transitioned to `ABANDONED`.
+   *
+   * Terminal regardless of how the reason is classified, because the row is: the
+   * state exists for situations nothing else can resolve, and no later tick will
+   * claim it. `SERVICE_ABSENT` is the only reason that reaches here today and it
+   * is in `RETRYABLE_REFUSALS`, which is exactly the disagreement this separates.
+   */
+  private refusedAbandoned(operation: OperationRecord, reason: ExecutionRefusal): ExecutionResult {
+    return this.refusal(operation, reason, true);
+  }
+
+  /**
+   * A refusal whose attempt `holdOff` gave back.
+   *
+   * Never terminal, and that is not a judgement about the reason — it is what the
+   * UPDATE did. `holdOff` sets `attempts = GREATEST(attempts - 1, 0)` and a
+   * `retry_at`, so the row is queued for a later tick with its count restored.
+   * These refusals are about US rather than the panel — a stopped tenant, an
+   * exhausted outbound budget — and are deliberately not charged as failures.
+   */
+  private refusedAndHeld(operation: OperationRecord, reason: ExecutionRefusal): ExecutionResult {
+    return this.refusal(operation, reason, false);
+  }
+
+  /** The shared shape. `terminal` is always supplied by a caller that knows. */
+  private refusal(
+    operation: OperationRecord,
+    reason: ExecutionRefusal,
+    terminal: boolean,
+  ): ExecutionResult {
+    return {
+      kind: 'REFUSED',
+      operationId: operation.id,
+      reason,
+      serviceId: operation.serviceId,
+      orderId: operation.orderId,
+      panelId: operation.panelId,
+      attempt: operation.attempts,
+      terminal,
+    };
+  }
+
+  /** An attempt that reached a provider, with the same context attached. */
+  private attempted(
+    operation: OperationRecord,
+    serviceId: string,
+    outcome: OperationState,
+    failureKind: ProviderFailureKind | null,
+  ): ExecutionResult {
+    return {
+      kind: 'ATTEMPTED',
+      operationId: operation.id,
+      serviceId,
+      outcome,
+      failureKind,
+      orderId: operation.orderId,
+      panelId: operation.panelId,
+      attempt: operation.attempts,
+    };
   }
 
   /** A refusal: nothing was contacted, so nothing about a provider is recorded. */

@@ -364,6 +364,9 @@ describe('panel service under concurrency', () => {
       // hit the tenant-wide bound. Its own suite pins it low.
       probeBudget: { capacity: 10_000, refillPerMs: 1 },
       adapters: (type: ProviderType) => adapterWith(type, { probe }),
+      // Every provider this release has a service adapter for; the sellability
+      // verdict on `PanelWithCapacity` needs it, exactly as the container wires it.
+      serviceAdapterExists: () => true,
       cadence: {
         healthyIntervalMs: 10 * 60 * 1000,
         retryableIntervalMs: 2 * 60 * 1000,

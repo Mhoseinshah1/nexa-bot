@@ -28,7 +28,7 @@ import {
   providerDescriptor,
   validateUsernamePolicy as decideUsernamePolicy,
 } from '@nexa/contracts';
-import type { PanelActivation } from '@nexa/contracts';
+import type { PanelActivation, PanelSellability } from '@nexa/contracts';
 import type { PermissionGuard } from '../../access/application/permission-guard.js';
 import {
   recordMutationDenial,
@@ -63,9 +63,20 @@ import type {
   PanelUsernamePolicy,
 } from './ports.js';
 import { capacityOf } from './panel-capacity.js';
-import { connectionIdentityOf, validationAuthorisesEnable } from './panel-eligibility.js';
+import {
+  activationIssues,
+  connectionIdentityOf,
+  connectionValidated,
+  decideEligibility,
+  provisioningInputFor,
+  validationAuthorisesEnable,
+} from './panel-eligibility.js';
 import { attemptProbe, persistProbeResult, type ProbeCoreDeps } from './probe-core.js';
-import type { PanelCapacityRepository, PanelWithCapacity } from './capacity-ports.js';
+import type {
+  PanelCapacity,
+  PanelCapacityRepository,
+  PanelWithCapacity,
+} from './capacity-ports.js';
 import {
   effectivePreviousFailures,
   scheduleAfterProbe,
@@ -145,6 +156,14 @@ export interface PanelServiceDeps {
    * know about both.
    */
   readonly capacity: PanelCapacityRepository;
+  /**
+   * Whether this release has a service adapter for a provider type.
+   *
+   * The same function `PanelSalesGate` takes, wired from the same
+   * `SERVICE_PROVIDER_TYPES` list. A panel read must not report a panel as
+   * sellable that the gate would refuse, so both ask this the same way.
+   */
+  readonly serviceAdapterExists: (providerType: string) => boolean;
   readonly credentials: PanelCredentialStore;
   /**
    * The username holds this panel carries, for the one edit that can move them.
@@ -411,10 +430,60 @@ export class PanelService {
       views.map((view) => view.panel.id),
       now,
     );
-    return views.map((view) => ({
-      ...view,
-      capacity: found.get(view.panel.id) ?? capacityOf(view.panel.maxServices, 0, 0),
-    }));
+    return views.map((view) => {
+      const capacity = found.get(view.panel.id) ?? capacityOf(view.panel.maxServices, 0, 0);
+      return { ...view, capacity, sellability: this.sellabilityOf(view, capacity, now) };
+    });
+  }
+
+  /**
+   * The three states a panel read has to say separately, decided HERE rather
+   * than by the surface that renders them.
+   *
+   * The same `decideEligibility` the sales gate calls, through the same
+   * `provisioningInputFor`. A screen computing its own verdict would be the
+   * second place the rule lives, and the one that disagrees: an operator would
+   * read "ready to sell" off a page while confirmation refused the sale, which
+   * is exactly this hotfix's own defect with the sign flipped.
+   *
+   * `activationComplete` and `connectionValidated` are reported even when some
+   * other reason is the blocker, because `reason` can only name one thing at a
+   * time and an operator fixing a disabled panel needs to know whether enabling
+   * it will be enough.
+   */
+  private sellabilityOf(view: PanelView, capacity: PanelCapacity, now: Date): PanelSellability {
+    const provisioning = provisioningInputFor({
+      providerType: view.panel.providerType,
+      baseUrl: view.panel.baseUrl,
+      activation: view.panel.activation,
+      credentials: view.credentials,
+      serviceAdapterExists: this.deps.serviceAdapterExists(view.panel.providerType),
+    });
+    const verdict = decideEligibility({
+      status: view.panel.status,
+      health: view.health,
+      maxServices: capacity.maxServices,
+      used: capacity.used,
+      now,
+      provisioning,
+    });
+    const missing = activationIssues(view.panel.providerType, view.panel.activation);
+    return {
+      sellable: verdict.eligible,
+      reason: verdict.eligible ? null : verdict.reason,
+      activationComplete: missing.length === 0,
+      missingActivationFields: [...missing],
+      /*
+       * Computed, NEVER derived from `reason`.
+       *
+       * The first version of this line read `verdict.eligible || verdict.reason
+       * !== 'UNVALIDATED'`, which reports TRUE for every panel that failed for
+       * some earlier reason — a disabled panel that has never been tested would
+       * have said "connection validated". That is the class of thing this whole
+       * change exists to stop: a surface stating something it did not check.
+       */
+      connectionValidated: connectionValidated(view.health, provisioning),
+    };
   }
 
   /** The same, for one panel. */

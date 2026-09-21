@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   money,
+  templateDefinition,
   PANEL_UNHEALTHY_AFTER_FAILURES,
   type ActorContext,
   type BotInstanceId,
@@ -10,7 +11,9 @@ import {
   type ProductId,
   type UserId,
 } from '@nexa/contracts';
+import { CATALOGUE_FA, formatMoney, renderTemplateBody } from '@nexa/i18n';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
+import { DrizzleWalletRepository } from '../../apps/api/src/modules/commerce/wallet/infrastructure/drizzle-wallet.repository';
 import type { ProductDraft } from '../../apps/api/src/modules/commerce/catalog/application/ports';
 import type { OrderRecord } from '../../apps/api/src/modules/commerce/orders/application/ports';
 import {
@@ -18,6 +21,7 @@ import {
   adminActorFor,
   createAdmin,
   createTestContext,
+  makePanelSellable,
   tenantA,
   tenantB,
   type SeededAdmin,
@@ -106,6 +110,19 @@ describe('an order that cannot be delivered is refunded', () => {
       VALUES (${panelA}, ${tenantA.tenantId}, 'Panel A', 'sanaei', 'https://a.example.test', 'ACTIVE'),
              (${panelSpare}, ${tenantA.tenantId}, 'Panel Spare', 'sanaei', 'https://s.example.test', 'ACTIVE'),
              (${panelForeign}, ${tenantB.tenantId}, 'Panel B', 'sanaei', 'https://b.example.test', 'ACTIVE')`);
+    /*
+     * Each one made GENUINELY sellable, rather than left as a bare row.
+     *
+     * A panel with no credentials, no activation and no probe cannot create an
+     * account, and since this hotfix `decideEligibility` refuses to take money
+     * for one — which is the whole fix. These cases are about what happens when
+     * a panel that COULD deliver stops being able to, so the fixture has to be a
+     * panel that could. `makePanelSellable` writes the three things a sale now
+     * requires, using the production identity function so it cannot drift.
+     */
+    await makePanelSellable(ctx.container, tenantA, panelA);
+    await makePanelSellable(ctx.container, tenantA, panelSpare);
+    await makePanelSellable(ctx.container, tenantB, panelForeign);
     customerA = await customer('900801');
     owner = adminActorFor(
       await createAdmin(ctx.container, tenantA, {
@@ -454,6 +471,75 @@ describe('an order that cannot be delivered is refunded', () => {
       'ORDER_REFUNDED_TO_WALLET',
     ]);
   }
+
+  /**
+   * THE SENTENCE THE CUSTOMER ACTUALLY RECEIVES.
+   *
+   * v0.2.8 told them the money had come back and named no amount and no balance.
+   * A customer who cannot see their own wallet had then no way to tell a full
+   * refund from a partial one, or from a message about a different order.
+   *
+   * The figures are read from the LEDGER by order id at send time, not carried
+   * in a payload: ADR-0030 §1 refuses a parameterised payload on this lane, and
+   * the reminder kinds already establish that a frozen figure is read back from
+   * its durable subject. So this asserts that what `refundedForOrder` produces
+   * IS what the transaction committed — the same two numbers the ledger and the
+   * balance hold, read independently of the notification.
+   *
+   * It also asserts what must NOT be there. `ACTIVATION_INCOMPLETE` is the
+   * operator's word for a panel they can go and fix; to a customer it is a code
+   * they can do nothing with, and the order page is where it belongs.
+   */
+  it('gives the customer notice the exact committed refund and the resulting balance', async () => {
+    await ctx.container.wallet.adjust(tenantA, owner, customerA, {
+      idempotencyKey: key(),
+      direction: 'CREDIT',
+      amountMinor: 2_000_000n,
+      currency: 'IRT',
+      note: 'موجودی اولیه',
+    });
+
+    const order = await awaitingPayment(panelA);
+    const paymentId = await pendingTransfer(order);
+    await setStatus(panelA, 'DISABLED');
+    await confirmTransfer(paymentId);
+
+    // What the ledger committed, read without going near the notification.
+    const credits = (await walletEntriesFor(customerA)).filter((one) => one.reason === 'REFUND');
+    expect(credits, 'exactly one credit to describe').toHaveLength(1);
+    const committed = BigInt(credits[0]?.amount ?? '0');
+    const balance = await ctx.container.wallet.balanceForCustomer(tenantA, owner, customerA);
+
+    // And what the lane will render from, read through the production path.
+    const figures = await new DrizzleWalletRepository(ctx.container.database.db).refundedForOrder(
+      tenantA,
+      order.id,
+    );
+    expect(figures, 'the lane can name a figure at all').not.toBeNull();
+    if (figures === null) return;
+    expect(figures.amount.amountMinor, 'the amount is the committed credit').toBe(committed);
+    expect(figures.amount.currency).toBe('IRT');
+    expect(figures.balanceAfter.amountMinor, 'the balance is the one that resulted').toBe(
+      balance.amountMinor,
+    );
+
+    /*
+     * The rendered sentence, through the SAME catalogue the dispatcher uses.
+     * A test that built its own string would pass while the template said
+     * something else, which is the shape `check:i18n` exists to refuse.
+     */
+    const body = renderTemplateBody(
+      templateDefinition('bot.order.refunded_to_wallet'),
+      CATALOGUE_FA['bot.order.refunded_to_wallet'],
+      { refundAmount: figures.amount, walletBalance: figures.balanceAfter },
+    );
+    expect(body).toContain(formatMoney(figures.amount));
+    expect(body).toContain(formatMoney(figures.balanceAfter));
+    for (const internal of ['ACTIVATION_INCOMPLETE', 'PANEL', 'PROVIDER', 'UNKNOWN']) {
+      expect(body, `the customer was shown "${internal}"`).not.toContain(internal);
+    }
+    expect(await customerNotices(order.id)).toEqual(['ORDER_REFUNDED_TO_WALLET']);
+  });
 
   // -------------------------------------------------------------------------
   // A transfer that arrived, for a purchase that cannot be delivered

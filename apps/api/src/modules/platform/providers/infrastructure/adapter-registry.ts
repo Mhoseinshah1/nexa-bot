@@ -9,6 +9,7 @@ import {
   type ProviderType,
 } from '@nexa/contracts';
 import { MarzbanAdapter } from './marzban.adapter.js';
+import { RickpanelAdapter } from './rickpanel.adapter.js';
 import { SanaeiAdapter } from './sanaei.adapter.js';
 
 /**
@@ -35,6 +36,14 @@ import { SanaeiAdapter } from './sanaei.adapter.js';
  */
 const ADAPTERS: Partial<Record<ProviderType, () => ProviderConnectionAdapter>> = {
   marzban: () => new MarzbanAdapter(),
+  /*
+   * A SEPARATE entry, never an alias of `marzban`, and that is the whole point
+   * of the type. The two panels answer the same routes and mean different things
+   * by them — `docs/rickpanel-adapter-audit.md` — so operating one with the
+   * other's adapter is exactly the "panel of one type silently operated by a
+   * DIFFERENT adapter" this file exists to make impossible.
+   */
+  rickpanel: () => new RickpanelAdapter(),
   sanaei: () => new SanaeiAdapter(),
 };
 

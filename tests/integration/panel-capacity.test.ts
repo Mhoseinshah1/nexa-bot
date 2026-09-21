@@ -18,6 +18,7 @@ import {
   adminActorFor,
   createAdmin,
   createTestContext,
+  makePanelSellable,
   SEED_IDS,
   tenantA,
   tenantB,
@@ -81,6 +82,17 @@ describe('panel capacity and sales eligibility', () => {
       INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
       VALUES (${panelA}, ${tenantA.tenantId}, 'Panel A', 'sanaei', 'https://a.example.test', 'ACTIVE'),
              (${panelForeign}, ${tenantB.tenantId}, 'Panel B', 'sanaei', 'https://b.example.test', 'ACTIVE')`);
+    /*
+     * Made GENUINELY sellable, not left as a bare row.
+     *
+     * A panel with no credentials, no activation and no probe cannot create an
+     * account, and since this hotfix `decideEligibility` refuses to take money
+     * for one. A fixture that expects a sale therefore has to describe a panel
+     * that could deliver it; `makePanelSellable` writes the three things a sale
+     * now requires, using the production identity function so it cannot drift.
+     */
+    await makePanelSellable(ctx.container, tenantA, panelA);
+    await makePanelSellable(ctx.container, tenantB, panelForeign);
     customerA = await customer('900201');
     customerB = await customer('900202');
     owner = adminActorFor(
@@ -583,6 +595,16 @@ describe('panel capacity and sales eligibility', () => {
     await ctx.container.database.db.execute(sql`
       INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
       VALUES (${roomy}, ${tenantA.tenantId}, 'Panel C', 'sanaei', 'https://c.example.test', 'ACTIVE')`);
+    /*
+     * Made GENUINELY sellable, not left as a bare row.
+     *
+     * A panel with no credentials, no activation and no probe cannot create an
+     * account, and since this hotfix `decideEligibility` refuses to take money
+     * for one. A fixture that expects a sale therefore has to describe a panel
+     * that could deliver it; `makePanelSellable` writes the three things a sale
+     * now requires, using the production identity function so it cannot drift.
+     */
+    await makePanelSellable(ctx.container, tenantA, roomy);
     for (let index = 0; index < 20; index += 1) await activeProduct(panelA);
     // Created last, so it sorts last: same `sortOrder`, and the tie breaks on
     // `createdAt` then id. It is the row the old code could never reach.
@@ -640,6 +662,13 @@ describe('panel capacity and sales eligibility', () => {
     await ctx.container.database.db.execute(sql`
       INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
       VALUES (${roomy}, ${tenantA.tenantId}, 'Panel D', 'sanaei', 'https://d.example.test', 'ACTIVE')`);
+    /*
+     * Sellable in full, not just a row: since this hotfix a panel also needs
+     * credentials, an activation and a recorded connection test before the
+     * catalogue will offer it. These cases are about capacity and eligibility
+     * ORDER, so the panel that is supposed to be reachable has to actually be.
+     */
+    await makePanelSellable(ctx.container, tenantA, roomy);
     await bulkActiveProducts(panelA, PRODUCT_PAGE_MAX * 5 + 1);
     const wanted = await activeProduct(roomy);
     await setStatus(panelA, 'DISABLED');
@@ -667,6 +696,7 @@ describe('panel capacity and sales eligibility', () => {
         INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status, max_services)
         VALUES (${id}, ${tenantA.tenantId}, ${`Panel ${String(index)}`}, 'sanaei',
                 ${`https://p${String(index)}.example.test`}, 'ACTIVE', NULL)`);
+      await makePanelSellable(ctx.container, tenantA, id);
     }
     for (const id of [disabled, archived, unhealthy, full]) await bulkActiveProducts(id, 30);
     const wanted = await activeProduct(roomy);
