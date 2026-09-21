@@ -1775,6 +1775,191 @@ export const TEMPLATES = [
       },
     ],
   },
+  /*
+   * The customers section, WP2.
+   *
+   * Eleven keys, and what they do NOT carry is the point. A customer row is a person,
+   * so nothing here renders a wallet balance, an order, a service or a subscription:
+   * those are four other permissions and four other surfaces, and a message an
+   * administrator can forward is the worst place to put any of them in bulk. What the
+   * section answers is the one question a support conversation asks — "who is this
+   * Telegram account to us, and should the bot still talk to them".
+   */
+  {
+    key: 'bot.admin.customers_button',
+    description:
+      'Opens the customers section of the management panel. Drawn only for an ' +
+      'administrator who holds `users.view`, and the section charges that key again ' +
+      'server-side — the button decides what is advertised, never what is allowed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.customers_section',
+    description:
+      'Introduces the customer list: one button per customer, oldest first, a further ' +
+      'page when the server says there is one, and the exact syntax of the lookup ' +
+      'command. No counts, for the reason `bot.admin.panels_section` gives — a figure ' +
+      'here goes stale between the render and the tap. The lookup is a COMMAND ' +
+      'carrying its argument rather than a prompt that captures the next message: ' +
+      'INCIDENT-FIN-001 is a captured prompt swallowing an ordinary message and ' +
+      'overwriting a production gateway setting.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.customers_none',
+    description:
+      'No customer has ever contacted this installation. States it rather than ' +
+      'rendering an empty list, because an empty list of buttons is indistinguishable ' +
+      'from a list that failed to load.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.customers_more_button',
+    description:
+      'The next page of customers, carrying the keyset cursor the server minted. The ' +
+      'same rule `bot.admin.panels_more_button` states: drawn only when the page says ' +
+      'there is more, and a cursor that cannot be carried is a list that ends.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.customers_back_button',
+    description: 'Returns from one customer to the first page of the list.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.customer_detail',
+    description:
+      'One customer, as an administrator sees them in Telegram. Carries the numeric ' +
+      'Telegram id (which is the handle a support conversation quotes), the Telegram ' +
+      'username, the name Telegram reported, the status from the frozen vocabulary, ' +
+      'the operator note recorded with a block, and when they were first and last ' +
+      'heard from. It carries NO wallet balance, no order, no service, no ' +
+      'subscription reference and no provider username: each of those is a different ' +
+      'permission, and this message is forwardable.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'telegramId',
+        type: 'STRING',
+        description: 'The numeric Telegram account id — this customer’s identity here.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'username',
+        type: 'STRING',
+        description:
+          'The Telegram username, or a dash. Not an identifier: a customer may change ' +
+          'it at will, which is why the id above is what an operator quotes.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'name',
+        type: 'STRING',
+        description: 'The name Telegram reported, or a dash. Also not an identifier.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'status',
+        type: 'STRING',
+        description: 'ACTIVE or BLOCKED, from `CUSTOMER_STATUSES`. There is no third.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'reason',
+        type: 'STRING',
+        description:
+          'The operator note recorded when this customer was blocked, or a dash. An ' +
+          'operator note, never shown to the customer, and cleared by an unblock so a ' +
+          'stale reason cannot read as current.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'firstSeen',
+        type: 'DATETIME',
+        description: 'When this installation first heard from them.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'lastSeen',
+        type: 'DATETIME',
+        description:
+          'When it last did. Written on every contact, and never allowed to move ' +
+          'backwards — see `drizzle-customer.repository.ts`.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.customer_gone',
+    description:
+      'ONE answer for an id that is unknown, malformed, or another tenant’s — the rule ' +
+      '`bot.admin.panel_gone` states. Nobody holding an id may learn whether it names ' +
+      'anything on this installation.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.customer_block_button',
+    description:
+      'Blocks this customer. Drawn only for an administrator who holds `users.block`, ' +
+      'and `CustomerService.block` charges that key again inside the writing ' +
+      'transaction — the missing button is a courtesy, never the enforcement.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.customer_unblock_button',
+    description: 'Lifts a block. The same permission and the same machinery, reversed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.customer_status_changed',
+    description:
+      'Names the status the customer now HOLDS rather than the button that was ' +
+      'pressed, so a redelivered update reads as the state it found instead of ' +
+      'claiming a second change. The same property `bot.admin.admin_status_changed` ' +
+      'has, for the same reason.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'telegramId',
+        type: 'STRING',
+        description: 'Which customer, by the id an operator quotes.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'status',
+        type: 'STRING',
+        description: 'ACTIVE or BLOCKED — what holds now.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.customer_usage',
+    description:
+      'The lookup command was sent without a readable Telegram id. Repeats the syntax ' +
+      'rather than opening a prompt for the missing argument, which is the whole ' +
+      'reason it is a command: a prompt that outlives its question swallows the next ' +
+      'unrelated message (INCIDENT-FIN-001).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
   {
     key: 'bot.admin.section',
     description:

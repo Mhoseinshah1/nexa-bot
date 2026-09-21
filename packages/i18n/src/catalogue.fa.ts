@@ -307,6 +307,19 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.username_strategy_prefix_random': 'پیشوند + تصادفی',
   'bot.admin.username_strategy_telegram_id_random': 'شناسهٔ تلگرام + تصادفی',
   'bot.admin.username_refused': 'ذخیره نشد: {reason}',
+  'bot.admin.customers_button': '👤 مشتری‌ها',
+  'bot.admin.customers_section':
+    'مشتری‌های این نصب، از قدیمی‌ترین. برای دیدن جزئیات و مسدود کردن یا رفع مسدودی، روی نام هرکدام بزنید.\n\nبرای یافتن یک مشتری با شناسهٔ عددی تلگرام:\n/customer <شناسهٔ عددی تلگرام>',
+  'bot.admin.customers_none': 'هنوز هیچ مشتری‌ای با این ربات تماس نگرفته است.',
+  'bot.admin.customers_more_button': '▶️ صفحهٔ بعد',
+  'bot.admin.customers_back_button': 'بازگشت به فهرست مشتری‌ها',
+  'bot.admin.customer_detail':
+    'شناسهٔ تلگرام: {telegramId}\nنام کاربری: {username}\nنام: {name}\nوضعیت: {status}\nدلیل مسدودی: {reason}\n\nاولین تماس: {firstSeen}\nآخرین تماس: {lastSeen}',
+  'bot.admin.customer_gone': 'چنین مشتری‌ای یافت نشد.',
+  'bot.admin.customer_block_button': '⛔️ مسدود کردن',
+  'bot.admin.customer_unblock_button': '✅ رفع مسدودی',
+  'bot.admin.customer_status_changed': 'وضعیت {telegramId} اکنون {status} است.',
+  'bot.admin.customer_usage': 'دستور ناقص یا نامعتبر است.\n\n/customer <شناسهٔ عددی تلگرام>',
   'bot.admin.section':
     'فهرست ادمین‌های این نصب ({shown} از {total}). برای دیدن جزئیات و تغییر وضعیت، روی نام هرکدام بزنید.\n\nبرای دادن دسترسی تلگرام به یک ادمین موجود:\n/link <شناسهٔ عددی تلگرام> <نام کاربری ادمین>\n\nبرای تعیین نقش یک ادمین:\n/role <نام کاربری ادمین> <کلید نقش>',
   'bot.admin.admins_none':
