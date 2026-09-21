@@ -607,11 +607,24 @@ describe('a customer acting on their own order', () => {
     expect((await orderRow(order.id)).state).toBe('AWAITING_PAYMENT');
   });
 
-  it('cancels once when two taps arrive together', async () => {
+  it('answers both when two taps arrive together', async () => {
     /*
-     * The conditional UPDATE carrying the whole concurrency story. Two commands with
-     * different keys, started together: one moves the row, the other finds it already
-     * CANCELLED and returns the end state. Neither throws.
+     * Two commands with different keys, started together: both are answered with the
+     * end state the customer asked for, and neither throws.
+     *
+     * What this case does NOT establish, despite how it reads: the interleaving. It
+     * used to claim it was "the conditional UPDATE carrying the whole concurrency
+     * story", and it is not — `Promise.all` does not interleave these two inside the
+     * window. The second transaction's opening read happens after the first has
+     * committed, so it takes the EARLY return at the top of `cancelByCustomer` and
+     * never reaches the `!changed` branch at all. Measured, not assumed: this case
+     * passes with the WP4 fix reverted.
+     *
+     * That is the shape `CLAUDE.md` names and the C4 case below already had to solve
+     * once. The real race is driven with a row lock in
+     * `writes no audit row for a cancellation that lost the transition`; this case
+     * keeps its own smaller claim — that two taps are both answered, and that the
+     * ordinary path logs exactly one cancellation.
      */
     const order = await awaitingPayment(tenantA, customerA, panelA, 'cancel-9');
 
@@ -765,6 +778,108 @@ describe('a customer acting on their own order', () => {
       expect(settled.state).toBe('PAID');
       /* And never the impossible pair: PAID carrying a cancellation stamp. */
       expect(settled.cancelled_at).toBeNull();
+    });
+
+    /**
+     * WP4. A cancellation that LOST must not claim it performed one.
+     *
+     * The loser's conditional UPDATE matches nothing, so `changed` is false — but by
+     * then the winner has committed, so the re-read says `CANCELLED` and the guard
+     * above admits it. That is correct for the ANSWER: the customer asked for a
+     * cancelled order and has one. What was wrong is that it went on to write a
+     * second `order.cancel` row with `result: 'SUCCESS'` for a transition it did not
+     * perform.
+     *
+     * The proof this was a defect rather than a policy is an asymmetry. A request
+     * arriving AFTER the cancellation commits reads `CANCELLED` at the top, takes the
+     * early return, and writes NO audit row. Same customer, same intent, same end
+     * state — one row or two depending purely on interleaving, in the one log that
+     * exists to answer who did what and when.
+     *
+     * ## Why the winner is a raw UPDATE
+     *
+     * `Promise.all` does not reproduce this, and the case above already records why
+     * in full: the two never interleave inside the window, so the second call reads
+     * `CANCELLED` and takes the early return. `cancel-9` above is exactly that shape
+     * and it passes with this fix reverted — it is measuring serialisation, not the
+     * race it names. So this drives the window with the same row lock C4 uses.
+     *
+     * The winner is a direct UPDATE rather than a second service call because both
+     * service calls would block on the SAME payment lock, which is the only seam
+     * there is. It produces precisely the state the branch exists for and it writes
+     * no audit row of its own, which is what makes the assertion exact: every
+     * `order.cancel` row this test can see belongs to the LOSER, so the count is a
+     * direct measurement of what the loser claimed.
+     */
+    it('writes no audit row for a cancellation that lost the transition', async () => {
+      const order = await awaitingPayment(tenantA, customerA, panelA, 'race-4');
+      const payment = await transferFor(tenantA, customerA, order.id, 'race-4-pay');
+
+      const losing = await ctx.container.database.withClient(async (holder) => {
+        await holder.query('BEGIN');
+        try {
+          await holder.query('SELECT id FROM payments WHERE id = $1 FOR UPDATE', [payment.id]);
+
+          const attempt = ctx.container.orders.cancelByCustomer(tenantA, systemActor('race-4-c'), {
+            idempotencyKey: 'race-4-cancel',
+            customerId: customerA,
+            orderId: order.id,
+          });
+          const settled = attempt.then(
+            (row) => ({ ok: true, state: row.state }) as const,
+            (error: unknown) => ({ ok: false, error }) as const,
+          );
+
+          /* Long enough to reach the lock and stop there, establishing the order. */
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          /*
+           * The winner, as the database sees it. `cancelled_at` travels with the state
+           * because `orders_cancelled_at_check` binds them.
+           */
+          await holder.query(
+            "UPDATE orders SET state = 'CANCELLED', cancelled_at = now(), updated_at = now() WHERE id = $1",
+            [order.id],
+          );
+          await holder.query('COMMIT');
+          return settled;
+        } catch (error: unknown) {
+          await holder.query('ROLLBACK');
+          throw error;
+        }
+      });
+
+      const outcome = await losing;
+      /*
+       * The customer is still answered, and answered truthfully: their order is
+       * cancelled. Narrowing what the loser CLAIMS must not change what it RETURNS.
+       */
+      expect(outcome.ok, 'the loser must still answer the customer').toBe(true);
+      if (outcome.ok) expect(outcome.state).toBe('CANCELLED');
+
+      /*
+       * And it claimed nothing. Zero rather than one because the winner here is a raw
+       * UPDATE that writes none — so this counts only what the LOSER wrote.
+       */
+      expect(
+        (await auditActions(order.id)).filter((a) => a === 'order.cancel'),
+        'a cancellation that moved no row claimed one in the audit log',
+      ).toHaveLength(0);
+    });
+
+    /**
+     * The other half, so the fix cannot be satisfied by writing no rows at all: the
+     * transaction that DID perform the cancellation still records it, exactly once.
+     */
+    it('still records the cancellation that did perform one', async () => {
+      const order = await awaitingPayment(tenantA, customerA, panelA, 'race-5');
+
+      await ctx.container.orders.cancelByCustomer(tenantA, systemActor('race-5-c'), {
+        idempotencyKey: 'race-5-cancel',
+        customerId: customerA,
+        orderId: order.id,
+      });
+
+      expect((await auditActions(order.id)).filter((a) => a === 'order.cancel')).toHaveLength(1);
     });
 
     /**
