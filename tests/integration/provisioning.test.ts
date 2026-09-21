@@ -18,6 +18,7 @@ import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/ca
 import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
 import { DrizzleOperationRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-operation.repository';
 import type { OrderRecord } from '../../apps/api/src/modules/commerce/orders/application/ports';
+import { RETRYABLE_REFUSALS } from '../../apps/api/src/modules/commerce/provisioning/application/provisioner.service';
 import {
   adminActorFor,
   createAdmin,
@@ -1089,4 +1090,62 @@ describe('provisioning invariants', () => {
       expect(otherTenant, 'tenant B cannot see tenant A operations').not.toContain(id);
     });
   });
+
+  /**
+   * What the per-operation log line says happened, against what happened.
+   *
+   * Requirement 9 of the hotfix asks the provisioner to record a terminal outcome
+   * per operation, and the field it added was computed rather than observed:
+   * `refusalIsPermanent(reason) || exhausted(operation.attempts)`. Codex C3 on
+   * PR #58 showed that wrong in both directions, and both are reachable.
+   *
+   * These assert the CORRESPONDENCE — the flag against the row the same tick
+   * wrote — rather than a constant, because a constant is what the computation
+   * already was.
+   */
+  describe('the per-operation log line and the row it describes', () => {
+    async function plannedProvision(key: string): Promise<{
+      readonly operationId: string;
+      readonly serviceId: string;
+    }> {
+      const order = await awaitingPayment(key);
+      await settle(key, order);
+      const service = await services.findByOrderId(tenantA, order.id);
+      const serviceId = service?.id ?? '';
+      const planned = await operations.listForService(tenantA, serviceId, 10);
+      return { operationId: planned[0]?.id ?? '', serviceId };
+    }
+
+    /**
+     * The other direction. An operation whose service has left every state the
+     * operation is legal from is transitioned to `ABANDONED` — terminal, nothing
+     * will ever claim it again — and answered `SERVICE_ABSENT`, which is in
+     * `RETRYABLE_REFUSALS`. The computed flag therefore said "will retry" about a
+     * row that cannot.
+     */
+    it('reports an abandoned operation as terminal, however its reason is classified', async () => {
+      const { operationId, serviceId } = await plannedProvision('abandon');
+      // The service leaves the state PROVISION is legal from, which is the race
+      // this refusal exists for: a terminate landing between the plan and the claim.
+      await ctx.container.database.db.execute(
+        sql`UPDATE services SET state = 'TERMINATED', terminated_at = now() WHERE id = ${serviceId}`,
+      );
+
+      const result = await ctx.container.provisioner.runOnce(tenantA);
+
+      expect(result.kind).toBe('REFUSED');
+      if (result.kind !== 'REFUSED') return;
+      expect(result.reason).toBe('SERVICE_ABSENT');
+      expect(result.terminal).toBe(true);
+      // Named rather than inferred: the reason really is the retryable-classified
+      // one, so this case cannot pass by the classification quietly changing.
+      expect(RETRYABLE_REFUSALS).toContain(result.reason);
+
+      const row = await ctx.container.database.db.execute(
+        sql`SELECT state FROM provisioning_operations WHERE id = ${operationId}`,
+      );
+      expect((row.rows[0] as { state: string } | undefined)?.state).toBe('ABANDONED');
+    });
+  });
+
 });

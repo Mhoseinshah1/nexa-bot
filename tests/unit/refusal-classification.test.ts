@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ProvisionerService,
   refusalIsPermanent,
   RETRYABLE_REFUSALS,
 } from '../../apps/api/src/modules/commerce/provisioning/application/provisioner.service';
@@ -123,3 +124,69 @@ describe('how a refusal is classified', () => {
 type Unlisted = Exclude<ExecutionRefusal, (typeof ALL_REFUSALS)[number]>;
 const _exhaustive: Unlisted extends never ? true : never = true;
 void _exhaustive;
+
+/**
+ * What the per-operation log line claims about the row, and who decides it.
+ *
+ * Requirement 9 of the hotfix added a `terminal` field to the provisioner's
+ * one-line-per-operation record, computed as
+ * `refusalIsPermanent(reason) || exhausted(attempts)`. Codex C3 on PR #58 showed
+ * a computed answer is wrong in both directions, because the classification of a
+ * REASON and the fate of a ROW are different facts:
+ *
+ *   - `SERVICE_ABSENT` is retryable-classified and both of its paths transition
+ *     the row to `ABANDONED` first, so the line said "will retry" about a row
+ *     that never can. Proven end to end in
+ *     `tests/integration/provisioning.test.ts` › "reports an abandoned operation
+ *     as terminal".
+ *   - `holdOff` sets `attempts = GREATEST(attempts - 1, 0)`, and the count was
+ *     read before that, so a hold-off at the ceiling said "terminal" about a row
+ *     the next tick will pick up.
+ *
+ * This pins the three shapes the service now chooses between. It is a contract
+ * test on the helpers, not on the wiring: which shape each call site uses is a
+ * separate question, and only the `ABANDONED` one is reachable end to end — see
+ * the note in `docs/hotfix-activation-falsification.md`.
+ */
+describe('the three shapes a refusal can be reported as', () => {
+  /** Only the four fields these helpers read. */
+  const operation = {
+    id: 'operation-1',
+    serviceId: 'service-1',
+    orderId: 'order-1',
+    panelId: 'panel-1',
+    attempts: 1,
+  };
+
+  type Shapes = {
+    refused(op: typeof operation, reason: ExecutionRefusal): { readonly terminal: boolean };
+    refusedAbandoned(
+      op: typeof operation,
+      reason: ExecutionRefusal,
+    ): { readonly terminal: boolean };
+    refusedAndHeld(op: typeof operation, reason: ExecutionRefusal): { readonly terminal: boolean };
+  };
+
+  /* The helpers are private to the service and carry no state, so they are read
+   * off the prototype rather than through an instance nothing here could build. */
+  const shapes = ProvisionerService.prototype as unknown as Shapes;
+
+  it('a row transitioned to ABANDONED is terminal however its reason is classified', () => {
+    expect(refusalIsPermanent('SERVICE_ABSENT')).toBe(false);
+    expect(shapes.refusedAbandoned.call(shapes, operation, 'SERVICE_ABSENT').terminal).toBe(true);
+  });
+
+  it('a row whose attempt was given back is never terminal, at any attempt count', () => {
+    for (let attempts = 0; attempts <= OPERATION_MAX_ATTEMPTS + 1; attempts += 1) {
+      const result = shapes.refusedAndHeld.call(shapes, { ...operation, attempts }, 'TENANT_STOPPED');
+      expect(result.terminal).toBe(false);
+    }
+  });
+
+  it('the ordinary accounted refusal still answers from the classification', () => {
+    expect(shapes.refused.call(shapes, operation, 'ACTIVATION_INCOMPLETE').terminal).toBe(true);
+    expect(shapes.refused.call(shapes, operation, 'PANEL_NOT_REACHABLE').terminal).toBe(false);
+    const atCeiling = { ...operation, attempts: OPERATION_MAX_ATTEMPTS };
+    expect(shapes.refused.call(shapes, atCeiling, 'PANEL_NOT_REACHABLE').terminal).toBe(true);
+  });
+});

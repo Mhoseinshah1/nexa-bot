@@ -445,7 +445,7 @@ export class ProvisionerService {
           tx,
         );
       });
-      return this.refused(operation, 'SERVICE_ABSENT');
+      return this.refusedAbandoned(operation, 'SERVICE_ABSENT');
     }
 
     /*
@@ -518,7 +518,7 @@ export class ProvisionerService {
           tx,
         );
       });
-      return this.refused(operation, 'SERVICE_ABSENT');
+      return this.refusedAbandoned(operation, 'SERVICE_ABSENT');
     }
 
     /*
@@ -534,7 +534,7 @@ export class ProvisionerService {
     );
     if (!active) {
       await this.holdOff(scope, operation, now, 'the tenant has stopped accepting work');
-      return this.refused(operation, 'TENANT_STOPPED');
+      return this.refusedAndHeld(operation, 'TENANT_STOPPED');
     }
 
     /*
@@ -626,7 +626,7 @@ export class ProvisionerService {
         new Date(now.getTime() + budget.retryAfterMs),
         'the tenant outbound budget had no capacity',
       );
-      return this.refused(operation, 'BUDGET_EXHAUSTED');
+      return this.refusedAndHeld(operation, 'BUDGET_EXHAUSTED');
     }
 
     const target = { baseUrl: operable.baseUrl, credentials, activation: operable.activation };
@@ -2225,15 +2225,66 @@ export class ProvisionerService {
    * failure entry" — they contained nothing at all for a refusal, because a
    * refusal returns a value and the value carried an id and a reason.
    *
-   * `terminal` is computed from the SAME predicate the transition uses, so the
-   * line cannot say "will retry" about a row that was just made terminal.
-   * `exhausted` is not consulted here on purpose: this reports the CLASSIFICATION,
-   * and a deterministic refusal is terminal on its first attempt.
+   * `terminal` is what this tick actually DID to the row, and it is the one field
+   * a helper must not compute for itself. Codex C3 on PR #58: recomputing it from
+   * the reason and the claimed attempt count was wrong in both directions.
+   *
+   *   - `SERVICE_ABSENT` is classified retryable, and both of its paths transition
+   *     the row to `ABANDONED` first. The line said "will retry" about a row that
+   *     can never run again.
+   *   - `holdOff` refunds the attempt the claim counted, and `operation.attempts`
+   *     was read BEFORE that. A hold-off at the ceiling said "terminal" about a
+   *     row whose next tick will pick it up.
+   *
+   * Both are reachable — a tenant stopped mid-tick, an exhausted outbound budget,
+   * a service that left a legal state between the plan and the claim — and both
+   * hand an operator the opposite of the truth in the one field they are reading
+   * the line for. So the three shapes are named and each caller says which it is:
+   * `refusedAbandoned` for a row just made terminal, `refusedAndHeld` for one whose
+   * attempt was given back, and this for the ordinary accounted refusal where the
+   * classification IS the answer.
    *
    * Every field is an id or an enum. Nothing here can carry a credential, a
    * subscription URL or a provider's response body.
    */
   private refused(operation: OperationRecord, reason: ExecutionRefusal): ExecutionResult {
+    return this.refusal(operation, reason, refusalIsPermanent(reason) || exhausted(operation.attempts));
+  }
+
+  /**
+   * A refusal whose row this tick transitioned to `ABANDONED`.
+   *
+   * Terminal regardless of how the reason is classified, because the row is: the
+   * state exists for situations nothing else can resolve, and no later tick will
+   * claim it. `SERVICE_ABSENT` is the only reason that reaches here today and it
+   * is in `RETRYABLE_REFUSALS`, which is exactly the disagreement this separates.
+   */
+  private refusedAbandoned(
+    operation: OperationRecord,
+    reason: ExecutionRefusal,
+  ): ExecutionResult {
+    return this.refusal(operation, reason, true);
+  }
+
+  /**
+   * A refusal whose attempt `holdOff` gave back.
+   *
+   * Never terminal, and that is not a judgement about the reason — it is what the
+   * UPDATE did. `holdOff` sets `attempts = GREATEST(attempts - 1, 0)` and a
+   * `retry_at`, so the row is queued for a later tick with its count restored.
+   * These refusals are about US rather than the panel — a stopped tenant, an
+   * exhausted outbound budget — and are deliberately not charged as failures.
+   */
+  private refusedAndHeld(operation: OperationRecord, reason: ExecutionRefusal): ExecutionResult {
+    return this.refusal(operation, reason, false);
+  }
+
+  /** The shared shape. `terminal` is always supplied by a caller that knows. */
+  private refusal(
+    operation: OperationRecord,
+    reason: ExecutionRefusal,
+    terminal: boolean,
+  ): ExecutionResult {
     return {
       kind: 'REFUSED',
       operationId: operation.id,
@@ -2242,7 +2293,7 @@ export class ProvisionerService {
       orderId: operation.orderId,
       panelId: operation.panelId,
       attempt: operation.attempts,
-      terminal: refusalIsPermanent(reason) || exhausted(operation.attempts),
+      terminal,
     };
   }
 
