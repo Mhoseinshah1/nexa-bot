@@ -39,10 +39,15 @@ describe('the Telegram command menu', () => {
      * registering it would put a command in their menu that reads as theirs and
      * answers as somebody else's.
      *
+     * `/customer` is WP2's exact lookup by Telegram id, and joins them for both
+     * reasons at once: registering it would advertise the panel, and a customer
+     * reading «customer» in their own command menu would reasonably expect it to be
+     * about them.
+     *
      * `/admin` is matched through `ADMIN_MENU_COMMAND` rather than a literal, so it
      * does not appear in `parsed` at all; the assertion below covers it.
      */
-    const ADMIN_ONLY = new Set(['link', 'role', 'service']);
+    const ADMIN_ONLY = new Set(['link', 'role', 'service', 'customer']);
     const answered = parsed.filter((command) => !ADMIN_ONLY.has(command)).sort();
 
     expect([...BOT_COMMANDS].map((entry) => entry.command).sort()).toEqual(answered);
@@ -56,7 +61,7 @@ describe('the Telegram command menu', () => {
      * about the installation and not about them.
      */
     const registered = new Set([...BOT_COMMANDS].map((entry) => entry.command));
-    for (const command of [ADMIN_MENU_COMMAND, 'link', 'role', 'service']) {
+    for (const command of [ADMIN_MENU_COMMAND, 'link', 'role', 'service', 'customer']) {
       expect(registered.has(command as never), command).toBe(false);
     }
   });
