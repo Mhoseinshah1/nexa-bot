@@ -8,6 +8,7 @@ import {
   type PanelSummaryResponse,
   type ProviderCapability,
   type ProviderType,
+  type PanelIneligibilityReason,
   type UsernamePolicyDraft,
   type UsernameStrategy,
   providerDescriptor,
@@ -38,6 +39,13 @@ import { formatTimestamp, splitDuration } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { mayRequest, queryState, shownData } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
+import {
+  ActivationFields,
+  activationFromDraft,
+  draftFromActivation,
+  sameActivationDraft,
+  type ActivationDraft,
+} from './panel-activation';
 import { navigate, setQuery, useLinkHandler, type Route } from '../router';
 import { messageFor } from './settings';
 import { HEALTH_TONES } from './dashboard';
@@ -474,6 +482,37 @@ function probeable(panel: PanelSummaryResponse): boolean {
   );
 }
 
+/**
+ * Every ineligibility reason, in Persian, and the sentence that says what to do.
+ *
+ * `Record<PanelIneligibilityReason, …>` rather than a lookup with a fallback, so
+ * a reason added to the contract fails to typecheck here. A fallback would have
+ * rendered `PROVISION_UNSUPPORTED` to an operator, which is the legacy behaviour
+ * of showing an enum to somebody who cannot act on it.
+ */
+const SELLABILITY_REASON_LABELS: Readonly<Record<PanelIneligibilityReason, WebKey>> = {
+  ARCHIVED: 'web.panel_reason_archived',
+  DISABLED: 'web.panel_reason_disabled',
+  UNHEALTHY: 'web.panel_reason_unhealthy',
+  AT_CAPACITY: 'web.panel_reason_at_capacity',
+  ACTIVATION_INCOMPLETE: 'web.panel_reason_activation_incomplete',
+  CREDENTIALS_MISSING: 'web.panel_reason_credentials_missing',
+  PROVISION_UNSUPPORTED: 'web.panel_reason_provision_unsupported',
+  UNVALIDATED: 'web.panel_reason_unvalidated',
+};
+
+/** What to do about it. One remedy per reason, and each names a screen or a button. */
+const SELLABILITY_REASON_HELP: Readonly<Record<PanelIneligibilityReason, WebKey>> = {
+  ARCHIVED: 'web.panel_reason_archived_help',
+  DISABLED: 'web.panel_reason_disabled_help',
+  UNHEALTHY: 'web.panel_reason_unhealthy_help',
+  AT_CAPACITY: 'web.panel_reason_at_capacity_help',
+  ACTIVATION_INCOMPLETE: 'web.panel_reason_activation_incomplete_help',
+  CREDENTIALS_MISSING: 'web.panel_reason_credentials_missing_help',
+  PROVISION_UNSUPPORTED: 'web.panel_reason_provision_unsupported_help',
+  UNVALIDATED: 'web.panel_reason_unvalidated_help',
+};
+
 export function PanelDetailPage({
   id,
   mayEdit,
@@ -746,6 +785,16 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
   const [strategy, setStrategy] = useState<UsernameStrategy>(panel.usernamePolicy.strategy);
   const [usernamePrefix, setUsernamePrefix] = useState(panel.usernamePolicy.prefix ?? '');
   const [usernameTemplate, setUsernameTemplate] = useState(panel.usernamePolicy.template ?? '');
+  /*
+   * The provider configuration, as a draft.
+   *
+   * Seeded from `basis` rather than from `panel`, exactly like every other field
+   * here: the basis is what this operator's edits are relative to, and seeding
+   * from the live query would silently adopt somebody else's change mid-edit.
+   */
+  const [activationDraft, setActivationDraft] = useState<ActivationDraft>(() =>
+    draftFromActivation(basis.activation),
+  );
   const [written, setWritten] = useState<string | null>(null);
   const submission = useSubmissionKey();
   const statusSubmission = useSubmissionKey();
@@ -898,6 +947,22 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
     draftPolicy.prefix !== basis.usernamePolicy.prefix ||
     draftPolicy.template !== basis.usernamePolicy.template;
 
+  /*
+   * The activation, asked the same two questions every other field is asked:
+   * did the operator change it, and does it parse.
+   *
+   * Parsed through `PANEL_ACTIVATION_SCHEMAS` — the same schema
+   * `decideEligibility` refuses a sale on — so a form that accepts a
+   * configuration and a server that will not sell onto it cannot disagree. That
+   * disagreement is the whole shape of this incident, and a second opinion here
+   * would be a new place for it to appear.
+   */
+  const activationChanged = !sameActivationDraft(
+    activationDraft,
+    draftFromActivation(basis.activation),
+  );
+  const activationParse = activationFromDraft(panel.providerType, activationDraft);
+
   const draftCap = capFromInput(maxServices);
   const overwritesCap =
     remote.maxServices &&
@@ -964,6 +1029,10 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
     setStrategy(fresh.usernamePolicy.strategy);
     setUsernamePrefix(fresh.usernamePolicy.prefix ?? '');
     setUsernameTemplate(fresh.usernamePolicy.template ?? '');
+    // The activation too, for the reason the cap comment above gives: a partial
+    // re-sync leaves one field holding a value the server no longer has, and the
+    // next save writes it back over somebody else's change.
+    setActivationDraft(draftFromActivation(fresh.activation));
   };
 
   const refresh = async () => {
@@ -1172,12 +1241,46 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
       return;
     }
 
+    /*
+     * The activation, refused locally with the SCHEMA'S OWN field paths.
+     *
+     * Locally as a courtesy and never as the authority — `PanelService`
+     * re-validates against the panel's own provider — but the paths matter: an
+     * operator told "activation is invalid" goes looking for a screen they have
+     * already found, and one told `inboundTags.vmess` fills in the box in front
+     * of them. Nothing is coerced on the way past: a value that does not parse
+     * is not sent, because the alternative is the product choosing an inbound,
+     * and choosing an inbound is choosing which server a customer connects to.
+     */
+    if (activationChanged && activationParse.kind === 'INVALID') {
+      toast({
+        tone: 'danger',
+        message: `${t('web.panel_activation_invalid')} ${activationParse.fields.join(', ')}`,
+      });
+      return;
+    }
+
+    /*
+     * Computed HERE rather than inside the object literal, because a narrowing
+     * expression inside a spread reads as an accident. `INVALID` returned above
+     * and `EMPTY` is the operator clearing the configuration, so `null` is the
+     * one answer both remaining branches that reach the spread can give.
+     */
+    const activationValue = activationParse.kind === 'VALUE' ? activationParse.value : null;
+
     const command = {
       ...(name === basis.name ? {} : { name }),
       ...(baseUrl === basis.baseUrl ? {} : { baseUrl }),
       ...(capValue === basis.capacity.maxServices ? {} : { maxServices: capValue }),
       // The whole policy, exactly as it was validated and previewed above.
       ...(policyChanged ? { usernamePolicy: draftPolicy } : {}),
+      /*
+       * The same tri-state the cap and the credentials use: absent leaves what is
+       * stored, `null` clears it, an object replaces it. An operator who emptied
+       * every box is asking to unset the configuration, which is a different
+       * instruction from not mentioning it.
+       */
+      ...(activationChanged ? { activation: activationValue } : {}),
     };
     if (Object.keys(command).length === 0) {
       toast({ tone: 'warn', message: t('web.no_changes') });
@@ -1220,6 +1323,80 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
         who cannot tell the two apart terminates a customer's service to make
         room that was about to free itself.
       */}
+      {/*
+        THE THREE STATES, SAID SEPARATELY.
+
+        This page used to show health and capacity, and an operator reading two
+        greens took it to mean the panel was ready to sell. Order `01a0c54b` was
+        taken by a panel that was ACTIVE, HEALTHY and had room, and that had no
+        Marzban activation at all.
+
+        `sellable` is the server's own verdict from the ONE evaluator the
+        catalogue, confirmation and settlement all use — not a rule recomputed
+        here, which would be the second place it lives and the one that disagrees.
+        The two lines under it exist so that a `false` is actionable: a single
+        `reason` can only name one thing, and an operator fixing a disabled panel
+        needs to know whether enabling it will be enough.
+      */}
+      <Card title={t('web.panel_sellability_title')} hint={t('web.panel_sellability_hint')}>
+        <KV
+          items={[
+            [
+              t('web.panel_sellable'),
+              panel.sellability.sellable ? (
+                <Badge key="s" tone="ok">
+                  {t('web.panel_sellable_yes')}
+                </Badge>
+              ) : (
+                <Badge key="s" tone="warn">
+                  {t('web.panel_sellable_no')}
+                </Badge>
+              ),
+            ],
+            [
+              t('web.panel_activation_state'),
+              panel.sellability.activationComplete ? (
+                <Badge key="a" tone="ok">
+                  {t('web.panel_activation_complete')}
+                </Badge>
+              ) : (
+                <Badge key="a" tone="warn">
+                  {t('web.panel_activation_incomplete')}
+                </Badge>
+              ),
+            ],
+            [
+              t('web.panel_connection_validated'),
+              panel.sellability.connectionValidated ? (
+                <Badge key="v" tone="ok">
+                  {t('web.panel_connection_validated_yes')}
+                </Badge>
+              ) : (
+                <Badge key="v" tone="warn">
+                  {t('web.panel_connection_validated_no')}
+                </Badge>
+              ),
+            ],
+          ]}
+        />
+        {!panel.sellability.sellable && panel.sellability.reason !== null && (
+          /*
+            The REASON in Persian, from a frozen map rather than the enum name.
+            `SELLABILITY_REASON_LABELS` is exhaustive over the contract, so a
+            reason added later fails to typecheck here instead of rendering as an
+            English constant on an operator's screen.
+          */
+          <Banner tone="warn" title={t(SELLABILITY_REASON_LABELS[panel.sellability.reason])}>
+            {t(SELLABILITY_REASON_HELP[panel.sellability.reason])}
+          </Banner>
+        )}
+        {panel.sellability.missingActivationFields.length > 0 && (
+          <Banner tone="warn" title={t('web.panel_activation_missing')}>
+            <Ltr>{panel.sellability.missingActivationFields.join(', ')}</Ltr>
+          </Banner>
+        )}
+      </Card>
+
       <Card title={t('web.panel_capacity_title')} hint={t('web.panel_capacity_hint')}>
         <KV
           items={[
@@ -1291,6 +1468,33 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
               disabled={!mayWrite}
             />
           </Field>
+          {/*
+            THE PROVIDER CONFIGURATION, EDITABLE.
+
+            It was not, and that is the proximate cause of order `01a0c54b`: this
+            page rendered the NAMES of the required fields in a warning banner and
+            offered no input for any of them, so a Marzban panel could not be
+            completed from the admin an operator was given. It stayed enabled and
+            unconfigured, and the catalogue sold onto it.
+
+            Read back in full for the reason `activation` on the response states:
+            a setting an operator can write and cannot read is the legacy screen
+            where "the only way to read a price is to overwrite it". None of it is
+            a secret — an inbound tag is configuration copied off a panel they
+            already administer.
+          */}
+          <p className="field-group-head">{t('web.panel_activation')}</p>
+          <ActivationFields
+            providerType={panel.providerType}
+            draft={activationDraft}
+            onChange={setActivationDraft}
+            disabled={!mayWrite}
+          />
+          {activationChanged && activationParse.kind === 'INVALID' && (
+            <Banner tone="danger" title={t('web.panel_activation_invalid')}>
+              <Ltr>{activationParse.fields.join(', ')}</Ltr>
+            </Banner>
+          )}
           {/*
             The username policy: two switches and a template, read back in full.
 

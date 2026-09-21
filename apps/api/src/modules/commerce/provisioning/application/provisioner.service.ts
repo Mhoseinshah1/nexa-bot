@@ -2214,7 +2214,6 @@ export class ProvisionerService {
     );
   }
 
-
   /**
    * A refusal, carrying the four ids and the one bit somebody debugging a stuck
    * order actually needs.

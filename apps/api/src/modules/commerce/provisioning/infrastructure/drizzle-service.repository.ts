@@ -214,6 +214,11 @@ export class DrizzleServiceRepository implements ServiceRepository {
     const tenantId = requireTenantId(scope);
     const filters: SQL[] = [eq(services.tenantId, tenantId)];
     if (search.customerId !== undefined) filters.push(eq(services.customerId, search.customerId));
+    /*
+     * At most one row: `services_tenant_order_key` is unique on
+     * `(tenant_id, order_id)` and serves this without a scan.
+     */
+    if (search.orderId !== undefined) filters.push(eq(services.orderId, search.orderId));
     if (search.panelId !== undefined) filters.push(eq(services.panelId, search.panelId));
     if (search.state !== undefined) filters.push(eq(services.state, search.state));
     if (search.deliveryState !== undefined) {

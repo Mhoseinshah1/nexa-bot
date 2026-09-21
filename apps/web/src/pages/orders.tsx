@@ -8,12 +8,35 @@ import {
   type OrderState,
   type OrderSummaryResponse,
   type PaymentState,
+  type ServiceOperationResponse,
 } from '@nexa/contracts';
-import { fetchOrder, fetchOrders, fetchPayments } from '../api/client';
+import {
+  fetchOrder,
+  fetchOrders,
+  fetchPayments,
+  fetchServiceOperations,
+  fetchServices,
+} from '../api/client';
 import { formatNumber, formatTimestamp, splitBytes } from '../format';
 import { mayRequest, queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
+/*
+ * The SERVICES page's vocabularies, borrowed rather than copied — the same rule
+ * `users.tsx` follows when it borrows this page's order maps. A second
+ * `FAILED: 'danger'` here would be a second answer to what a failed provisioning
+ * attempt looks like, and the two would drift the first time one of them gained a
+ * state.
+ */
+import {
+  DELIVERY_LABELS as SERVICE_DELIVERY_LABELS,
+  DELIVERY_TONES as SERVICE_DELIVERY_TONES,
+  OPERATION_STATE_LABELS,
+  OPERATION_STATE_TONES,
+  OPERATION_TYPE_LABELS,
+  STATE_LABELS as SERVICE_STATE_LABELS,
+  STATE_TONES as SERVICE_STATE_TONES,
+} from './services';
 import {
   Badge,
   Banner,
@@ -26,6 +49,7 @@ import {
   KV,
   Ltr,
   Money,
+  Num,
   PageHead,
   Pills,
   StateSwitch,
@@ -407,10 +431,12 @@ export function OrderDetailPage({
   id,
   denied,
   mayViewPayments,
+  mayViewServices,
 }: {
   id: string;
   denied: boolean;
   mayViewPayments: boolean;
+  mayViewServices: boolean;
 }) {
   const onLink = useLinkHandler();
   const order = useQuery({
@@ -440,6 +466,21 @@ export function OrderDetailPage({
                */
               <Banner tone="info" title={t('web.order_awaiting_banner_title')}>
                 {t('web.order_awaiting_banner_body')}
+              </Banner>
+            )}
+
+            {row.state === 'REFUNDED' && (
+              /*
+               * The other terminal outcome, said out loud.
+               *
+               * A `REFUNDED` badge in the lifecycle card is a state; this says what
+               * it MEANS — the money went back to the wallet automatically, in the
+               * transaction that found the order undeliverable — and points at the
+               * two places the exact figure is recorded. The card below shows what
+               * was attempted and why it failed.
+               */
+              <Banner tone="info" title={t('web.order_refunded_banner_title')}>
+                {t('web.order_refunded_banner_body')}
               </Banner>
             )}
 
@@ -555,6 +596,8 @@ export function OrderDetailPage({
 
             <OrderPayments orderId={row.id} mayView={mayViewPayments} />
 
+            <OrderService orderId={row.id} mayView={mayViewServices} />
+
             <Card title={t('web.orders_scope_title')}>
               <p className="muted">{t('web.orders_scope_body')}</p>
             </Card>
@@ -564,6 +607,210 @@ export function OrderDetailPage({
     </>
   );
 }
+
+/**
+ * What this order actually PRODUCED, and what happened when we tried to produce it.
+ *
+ * The order page had no route to this at all. An operator reading order
+ * `01a0c54b` in production saw ten thousand toman taken, a `REFUNDED` badge and
+ * nothing else: not the service row, not the five PROVISION attempts against it,
+ * not the reason every one of them failed. The answer existed the whole time — one
+ * `services` row and its operations — and this surface simply never asked.
+ *
+ * `orderId` is a filter on the services list rather than a new aggregate endpoint,
+ * because `services_tenant_order_key` already makes this a one-row question and the
+ * read goes through the same tenant-scoped, permission-checked service the services
+ * page uses.
+ *
+ * `services.view` is its own permission and is decided by the caller, for the reason
+ * `mayViewPayments` gives: an operator holding `orders.view` and not this one would
+ * otherwise log a 403 on every order they open.
+ */
+function OrderService({ orderId, mayView }: { orderId: string; mayView: boolean }) {
+  const onLink = useLinkHandler();
+  const services = useQuery({
+    queryKey: ['services', 'order', orderId],
+    queryFn: () => fetchServices({ orderId, limit: 1 }),
+    enabled: mayView,
+  });
+
+  if (!mayView) {
+    return (
+      <Card title={t('web.order_service_title')}>
+        <Banner tone="info">{t('web.order_service_denied')}</Banner>
+      </Card>
+    );
+  }
+
+  const service = services.data?.services[0];
+
+  return (
+    <>
+      <Card title={t('web.order_service_title')} hint={t('web.order_service_hint')}>
+        <StateSwitch query={services}>
+          {services.data === undefined ? null : service === undefined ? (
+            <Empty title={t('web.order_service_empty')} hint={t('web.order_service_empty_hint')} />
+          ) : (
+            <KV
+              items={[
+                [
+                  t('web.service_username'),
+                  <a
+                    key="u"
+                    href={`/services/${encodeURIComponent(service.id)}`}
+                    onClick={onLink}
+                    className="strong"
+                  >
+                    <Ltr>{service.providerUsername}</Ltr>
+                  </a>,
+                ],
+                [
+                  t('web.service_state'),
+                  <Badge key="s" tone={SERVICE_STATE_TONES[service.state]}>
+                    {t(SERVICE_STATE_LABELS[service.state])}
+                  </Badge>,
+                ],
+                [
+                  t('web.service_delivery'),
+                  <Badge key="d" tone={SERVICE_DELIVERY_TONES[service.deliveryState]}>
+                    {t(SERVICE_DELIVERY_LABELS[service.deliveryState])}
+                  </Badge>,
+                ],
+                /*
+                 * The panel's own id for the account, and the most telling field on
+                 * this card. NULL beside an assigned username is exactly the
+                 * production shape: a name was reserved, the create never landed, and
+                 * no screen said so.
+                 */
+                [
+                  t('web.service_provider_user_id'),
+                  service.providerUserId === null ? (
+                    <Dash key="pu" />
+                  ) : (
+                    <Copyable key="pu" value={service.providerUserId} />
+                  ),
+                ],
+                [
+                  t('web.service_provisioned_at'),
+                  service.provisionedAt === null ? (
+                    <Dash key="pa" />
+                  ) : (
+                    formatTimestamp(service.provisionedAt)
+                  ),
+                ],
+                [
+                  t('web.service_delivered_at'),
+                  service.deliveredAt === null ? (
+                    <Dash key="da" />
+                  ) : (
+                    formatTimestamp(service.deliveredAt)
+                  ),
+                ],
+                [
+                  t('web.service_terminated_at'),
+                  service.terminatedAt === null ? (
+                    <Dash key="ta" />
+                  ) : (
+                    formatTimestamp(service.terminatedAt)
+                  ),
+                ],
+              ]}
+            />
+          )}
+        </StateSwitch>
+      </Card>
+
+      {service === undefined ? null : <OrderServiceOperations serviceId={service.id} />}
+    </>
+  );
+}
+
+/**
+ * Every attempt against that service, newest first, with the reason it failed.
+ *
+ * `failureMessage` is the INTERNAL reason and belongs here: `ACTIVATION_INCOMPLETE`
+ * names a panel an operator can go and finish configuring, and saying so is this
+ * surface's whole job. The customer is told something else entirely — the committed
+ * refund and their new balance — and the two must not converge. A customer shown a
+ * refusal code learns nothing they can act on; an operator shown only «خطایی رخ داد»
+ * has no way to find the panel that caused it.
+ *
+ * The bound travels with the rows, so the truncation notice states what the server
+ * actually applied rather than a constant this page imported.
+ */
+function OrderServiceOperations({ serviceId }: { serviceId: string }) {
+  const operations = useQuery({
+    queryKey: ['service-operations', serviceId],
+    queryFn: () => fetchServiceOperations(serviceId),
+  });
+
+  return (
+    <Card title={t('web.service_operations_title')} hint={t('web.service_operations_hint')}>
+      <StateSwitch query={operations}>
+        {operations.data === undefined ? null : operations.data.operations.length === 0 ? (
+          <Empty title={t('web.service_operations_empty')} />
+        ) : (
+          <>
+            <DataTable
+              caption={t('web.service_operations_title')}
+              columns={OPERATION_COLUMNS}
+              rows={operations.data.operations}
+              rowKey={(op) => op.id}
+            />
+            {operations.data.hasMore && (
+              <p className="muted small">
+                {t('web.service_operations_truncated')} <Num value={operations.data.limit} />
+              </p>
+            )}
+          </>
+        )}
+      </StateSwitch>
+    </Card>
+  );
+}
+
+/*
+ * Five columns, not the services page's seven. `scheduledAt` and `createdAt` answer
+ * "when is the next attempt due", which is a question about a live operation; an
+ * order page is read after the fact, and the four facts that matter there are what
+ * was attempted, how it ended, how many times, and why.
+ */
+const OPERATION_COLUMNS: readonly Column<ServiceOperationResponse>[] = [
+  {
+    key: 'type',
+    header: t('web.operation_type'),
+    render: (op) => t(OPERATION_TYPE_LABELS[op.type]),
+  },
+  {
+    key: 'state',
+    header: t('web.operation_state'),
+    render: (op) => (
+      <Badge tone={OPERATION_STATE_TONES[op.state]}>{t(OPERATION_STATE_LABELS[op.state])}</Badge>
+    ),
+  },
+  {
+    key: 'attempts',
+    header: t('web.operation_attempts'),
+    render: (op) => <Ltr>{formatNumber(op.attempts)}</Ltr>,
+  },
+  {
+    key: 'completed',
+    header: t('web.operation_completed_at'),
+    render: (op) =>
+      op.completedAt === null ? (
+        <Dash />
+      ) : (
+        <span className="nowrap">{formatTimestamp(op.completedAt)}</span>
+      ),
+  },
+  {
+    key: 'failure',
+    header: t('web.operation_failure'),
+    // The adapter's own words, or the refusal the provisioner classified. It is what
+    // tells a panel refusing a duplicate apart from a panel nobody finished setting up.
+    render: (op) => (op.failureMessage === null ? <Dash /> : <span>{op.failureMessage}</span>),
+  },
+];
 
 /**
  * The payments against one order.

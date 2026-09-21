@@ -388,8 +388,17 @@ describe('the payment detail', () => {
       for (const claim of ['در حال آماده‌سازی', 'سرویس ساخته', 'تحویل شد', 'در حال ساخت']) {
         expect(text, `the payment page claims "${claim}"`).not.toContain(claim);
       }
-      // And it says so outright, rather than merely omitting it.
-      expect(text).toContain('ساخت یا تحویل سرویس در این نسخه انجام نمی‌شود');
+      /*
+       * And it says where that state IS, rather than merely omitting it.
+       *
+       * This assertion used to pin the sentence «ساخت یا تحویل سرویس در این نسخه
+       * انجام نمی‌شود». That stopped being true at Phase 4D and was still on the
+       * screen in v0.2.8 while order `01a0c54b` was provisioned, failed and
+       * refunded — so the test was holding a false claim in place. What the page
+       * owes a reader is unchanged: it must not assert anything about a service it
+       * did not read. It now points at the two pages that did read one.
+       */
+      expect(text).toContain('وضعیت ساخت و تحویل سرویس در صفحهٔ سفارش');
       view.unmount();
     }
   });

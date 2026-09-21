@@ -236,6 +236,27 @@ export function panel(overrides: Record<string, unknown> = {}): Record<string, u
       available: null,
     },
     /*
+     * NOT sellable, which is what this fixture's own fields say.
+     *
+     * `activation: null` above means nobody has chosen which inbound this panel
+     * sells from, and that is precisely the state the hotfix stops being sold: the
+     * production panel behind order `01a0c54b` was ACTIVE, HEALTHY, had free
+     * capacity and looked ready on every screen. A default of `sellable: true`
+     * here would be a fixture asserting the opposite of its own activation, and
+     * every case about selling would rest on it.
+     *
+     * A case that means to sell overrides the whole object, the same rule
+     * `capacity` follows, so no fixture can describe a sellable panel whose
+     * activation it left empty.
+     */
+    sellability: {
+      sellable: false,
+      reason: 'ACTIVATION_INCOMPLETE',
+      activationComplete: false,
+      missingActivationFields: ['proxyProtocols', 'inboundTags'],
+      connectionValidated: false,
+    },
+    /*
      * Both modes and the derived generator: what a panel that nobody has configured a
      * username policy for looks like, and what migration 0088 gave every panel that
      * existed before the policy did.

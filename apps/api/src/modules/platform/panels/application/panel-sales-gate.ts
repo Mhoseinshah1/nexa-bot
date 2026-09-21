@@ -2,7 +2,11 @@ import { PANEL_RESERVATION_TTL_MS, type TenantContext } from '@nexa/contracts';
 import type { Clock, IdGenerator } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { PanelCapacity, PanelCapacityRepository } from './capacity-ports.js';
-import { decideEligibility, provisioningInputFor, type PanelEligibility } from './panel-eligibility.js';
+import {
+  decideEligibility,
+  provisioningInputFor,
+  type PanelEligibility,
+} from './panel-eligibility.js';
 import type { PanelRepository, PanelView } from './ports.js';
 
 export interface PanelSalesGateDeps {

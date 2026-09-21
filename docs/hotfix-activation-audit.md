@@ -15,16 +15,16 @@ Nothing in that sequence is a bug in the sense of a line that does the wrong
 thing. It is four correct components answering four different questions, none of
 which is "may we sell this".
 
-| Production fact | The code that produces it |
-| --- | --- |
-| The panel was sellable while unprovisionable | `decideEligibility` reads status, health and capacity. It does not read activation, credentials, capability or whether a connection test ever passed. |
-| Payment was accepted | `PanelSalesGate.acquire` (confirmation) and `.consume` (settlement) both decide through that same evaluator, so the transaction-level recheck re-asked the same incomplete question. |
-| `attempts = 5` | `OPERATION_MAX_ATTEMPTS = 5`. |
-| `failure_message = ACTIVATION_INCOMPLETE` | `decideOperability` — the evaluator that DOES check activation — runs in the provisioner, which is after the money has moved. |
-| ~7 minutes | `refusalIsPermanent` returns true only for `PROVIDER_NOT_OPERABLE` and `CAPABILITY_UNSUPPORTED`. `ACTIVATION_INCOMPLETE` backs off: 30s + 60s + 120s + 240s = 450s ≈ 7.5 min. |
-| No useful provisioner log | `ProvisionerService` takes no logger. `ProvisionerLoop` has one and uses it on exactly one line — a thrown tick. A refusal returns a value and logs nothing. |
-| `services.state = TERMINATED`, `delivery_state = PENDING` | `refundPurchase` transitions the service to `TERMINATED` and does not touch `delivery_state`, which no longer means anything for a service that will never be delivered. |
-| Wallet 4,870,000 → 4,880,000 | Correct, and the one part of the incident that worked as designed. |
+| Production fact                                           | The code that produces it                                                                                                                                                            |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| The panel was sellable while unprovisionable              | `decideEligibility` reads status, health and capacity. It does not read activation, credentials, capability or whether a connection test ever passed.                                |
+| Payment was accepted                                      | `PanelSalesGate.acquire` (confirmation) and `.consume` (settlement) both decide through that same evaluator, so the transaction-level recheck re-asked the same incomplete question. |
+| `attempts = 5`                                            | `OPERATION_MAX_ATTEMPTS = 5`.                                                                                                                                                        |
+| `failure_message = ACTIVATION_INCOMPLETE`                 | `decideOperability` — the evaluator that DOES check activation — runs in the provisioner, which is after the money has moved.                                                        |
+| ~7 minutes                                                | `refusalIsPermanent` returns true only for `PROVIDER_NOT_OPERABLE` and `CAPABILITY_UNSUPPORTED`. `ACTIVATION_INCOMPLETE` backs off: 30s + 60s + 120s + 240s = 450s ≈ 7.5 min.        |
+| No useful provisioner log                                 | `ProvisionerService` takes no logger. `ProvisionerLoop` has one and uses it on exactly one line — a thrown tick. A refusal returns a value and logs nothing.                         |
+| `services.state = TERMINATED`, `delivery_state = PENDING` | `refundPurchase` transitions the service to `TERMINATED` and does not touch `delivery_state`, which no longer means anything for a service that will never be delivered.             |
+| Wallet 4,870,000 → 4,880,000                              | Correct, and the one part of the incident that worked as designed.                                                                                                                   |
 
 ## The two evaluators, and the gap between them
 
@@ -33,11 +33,11 @@ questions — `CLAUDE.md` states it as a Phase 6B rule, and both docblocks argue
 at length. What neither of them says, and what this incident is, is that
 **eligibility is missing a term that operability has**.
 
-- `decideOperability` (`provisioning/application/panel-operability.ts`) asks *may
-  this one operation run*: adapter exists, capability supported, credentials
+- `decideOperability` (`provisioning/application/panel-operability.ts`) asks _may
+  this one operation run_: adapter exists, capability supported, credentials
   shaped, activation parses. It ignores health, deliberately.
-- `decideEligibility` (`panels/application/panel-eligibility.ts`) asks *may we
-  take money for a new account*: not archived, not disabled, not confirmed-down,
+- `decideEligibility` (`panels/application/panel-eligibility.ts`) asks _may we
+  take money for a new account_: not archived, not disabled, not confirmed-down,
   not full. It ignores capabilities, deliberately.
 
 The deliberate ignorance in the second is the defect. "Ignores capabilities" was
@@ -55,18 +55,18 @@ architecture this repository already chose.
 
 ## Findings
 
-| # | Finding | Verdict |
-| --- | --- | --- |
-| F1 | `decideEligibility` omits activation, credentials, `PROVISION` and any connection-test evidence. | **CONFIRMED** — root cause. |
-| F2 | The Web Admin has no input for `proxyProtocols` or `inboundTags` at all. `requiredActivationFields` is rendered as a read-only banner naming the field names, and the table column prints the same list. An operator cannot configure a Marzban panel from the Web Admin — the only route is a raw `PATCH /panels/:id`. | **CONFIRMED** — proximate cause. |
-| F3 | `refusalIsPermanent` treats four operator-configuration refusals as transient. | **CONFIRMED.** |
-| F4 | `ProvisionerService` has no logger. Per-operation outcomes are invisible. | **CONFIRMED.** |
-| F5 | `ORDER_REFUNDED_TO_WALLET` renders a frozen template with no placeholders and the lane carries no payload. The required message names an amount and a balance. | **CONFIRMED — needs a design decision**, see below. |
-| F6 | `web.orders_scope_body` says delivery, cancellation and refund do not exist in this version; `web.payment_not_settled_here` says service creation does not happen in this version. Both false since 4D/4G. | **CONFIRMED.** |
-| F7 | The order detail page shows payments and nothing about the service, the provisioning operation, the terminal failure or the refund. | **CONFIRMED.** |
-| F8 | A terminated-never-provisioned service still reads `delivery_state = PENDING`. | **CONFIRMED**, cosmetic; fixed at the surface, not by rewriting the column. |
-| F9 | The already-paid defensive path refunds exactly once. `UndeliverableOrderRefunder` is idempotent at three independent levels — conditional order transition, payment-locking `refundUndeliverable` returning null, and a unique `(tenant, kind, subject)` on the notification. | **ALREADY CORRECT** — has no test naming it. |
-| F10 | A planned operation is due immediately: `plan` writes `nextAttemptAt: now`, and the claim orders by that column. The first attempt waits at most one tick. | **ALREADY CORRECT** — has no test naming it. |
+| #   | Finding                                                                                                                                                                                                                                                                                                                 | Verdict                                                                     |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| F1  | `decideEligibility` omits activation, credentials, `PROVISION` and any connection-test evidence.                                                                                                                                                                                                                        | **CONFIRMED** — root cause.                                                 |
+| F2  | The Web Admin has no input for `proxyProtocols` or `inboundTags` at all. `requiredActivationFields` is rendered as a read-only banner naming the field names, and the table column prints the same list. An operator cannot configure a Marzban panel from the Web Admin — the only route is a raw `PATCH /panels/:id`. | **CONFIRMED** — proximate cause.                                            |
+| F3  | `refusalIsPermanent` treats four operator-configuration refusals as transient.                                                                                                                                                                                                                                          | **CONFIRMED.**                                                              |
+| F4  | `ProvisionerService` has no logger. Per-operation outcomes are invisible.                                                                                                                                                                                                                                               | **CONFIRMED.**                                                              |
+| F5  | `ORDER_REFUNDED_TO_WALLET` renders a frozen template with no placeholders and the lane carries no payload. The required message names an amount and a balance.                                                                                                                                                          | **CONFIRMED — needs a design decision**, see below.                         |
+| F6  | `web.orders_scope_body` says delivery, cancellation and refund do not exist in this version; `web.payment_not_settled_here` says service creation does not happen in this version. Both false since 4D/4G.                                                                                                              | **CONFIRMED.**                                                              |
+| F7  | The order detail page shows payments and nothing about the service, the provisioning operation, the terminal failure or the refund.                                                                                                                                                                                     | **CONFIRMED.**                                                              |
+| F8  | A terminated-never-provisioned service still reads `delivery_state = PENDING`.                                                                                                                                                                                                                                          | **CONFIRMED**, cosmetic; fixed at the surface, not by rewriting the column. |
+| F9  | The already-paid defensive path refunds exactly once. `UndeliverableOrderRefunder` is idempotent at three independent levels — conditional order transition, payment-locking `refundUndeliverable` returning null, and a unique `(tenant, kind, subject)` on the notification.                                          | **ALREADY CORRECT** — has no test naming it.                                |
+| F10 | A planned operation is due immediately: `plan` writes `nextAttemptAt: now`, and the claim orders by that column. The first attempt waits at most one tick.                                                                                                                                                              | **ALREADY CORRECT** — has no test naming it.                                |
 
 ## Two decisions this hotfix has to take, and takes explicitly
 
@@ -77,9 +77,9 @@ obvious implementation reuses `validationAuthorisesEnable`, which requires the
 probe to be **fresh** (`PANEL_HEALTH_FRESH_FOR_MS`).
 
 That would reintroduce, as a sales rule, the exact failure `decideEligibility`'s
-docblock already refuses: *"A panel whose health is STALE is eligible, and this is
+docblock already refuses: _"A panel whose health is STALE is eligible, and this is
 the rule that keeps a stopped monitor from closing every shop in the
-installation."* A monitor stopped for an afternoon would take every panel in the
+installation."_ A monitor stopped for an afternoon would take every panel in the
 installation out of the catalogue.
 
 So sellability requires that a probe **concluded something usable against the
@@ -131,7 +131,7 @@ exists to prevent; a lane that carries two money fields for one kind is not.
 - `services.transfer` — untouched, still deferred.
 - Anything in Phase 7.
 - Provider adapter wire behaviour. The attached RickPanel OpenAPI document
-  describes a *different* panel whose `/api/user` ignores `inbounds` and gives
+  describes a _different_ panel whose `/api/user` ignores `inbounds` and gives
   every user every protocol. That is evidence about RickPanel, not about Marzban
   v0.8.4, whose measured behaviour is recorded in `docs/providers/marzban.md`. A
   provider rule is verified against the real binary and corrected in the same

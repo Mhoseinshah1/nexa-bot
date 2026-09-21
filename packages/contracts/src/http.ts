@@ -3033,6 +3033,14 @@ export const serviceListQuerySchema = z.object({
   deliveryState: z.enum(SERVICE_DELIVERY_STATES).optional(),
   /* Ids, validated HERE: these reach `uuid` columns. See `orderListQuerySchema`. */
   customerId: uuidV7Schema.optional(),
+  /**
+   * The order that bought the service. At most one row can match.
+   *
+   * Added so the Web Admin order page can show what its order produced. It had
+   * no route to that at all: an operator reading a REFUNDED order saw the money
+   * and nothing about the service, the provisioning attempt or why it failed.
+   */
+  orderId: uuidV7Schema.optional(),
   panelId: uuidV7Schema.optional(),
   /*
    * The name a customer quotes, matched EXACTLY.

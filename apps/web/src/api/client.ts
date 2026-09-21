@@ -888,6 +888,7 @@ export function fetchServices(
     state?: ServiceState;
     deliveryState?: ServiceDeliveryState;
     customerId?: string;
+    orderId?: string;
     panelId?: string;
     providerUsername?: string;
   } = {},
@@ -900,6 +901,11 @@ export function fetchServices(
   if (query.customerId !== undefined && query.customerId !== '') {
     params.set('customerId', query.customerId);
   }
+  /*
+   * The order that bought it. One row at most, which is the whole point: the order
+   * page asks "what did this order produce" and gets an answer rather than a guess.
+   */
+  if (query.orderId !== undefined && query.orderId !== '') params.set('orderId', query.orderId);
   if (query.panelId !== undefined && query.panelId !== '') params.set('panelId', query.panelId);
   /*
    * The account name, sent RAW and canonicalised by the server.

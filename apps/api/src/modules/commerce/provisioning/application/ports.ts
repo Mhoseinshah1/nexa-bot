@@ -135,6 +135,15 @@ export interface ServicePage {
 
 export interface ServiceSearch {
   readonly customerId?: UserId;
+  /**
+   * The order that bought this service. EXACT, and at most one row can match.
+   *
+   * `services_tenant_order_key` is unique on `(tenant_id, order_id)`, so this is
+   * a lookup rather than a filter — it exists because the Web Admin order page
+   * had no way to reach the service its order produced, and an operator reading
+   * a REFUNDED order could see the money and nothing about why.
+   */
+  readonly orderId?: string;
   readonly panelId?: PanelId;
   readonly state?: ServiceState;
   readonly deliveryState?: ServiceDeliveryState;

@@ -462,6 +462,7 @@ describe('the order detail', () => {
         id="019230ab-cdef-7012-8345-6789abcdef01"
         denied={false}
         mayViewPayments={mayViewPayments}
+        mayViewServices={false}
       />,
     );
   };
@@ -493,12 +494,146 @@ describe('the order detail', () => {
         id="019230ab-cdef-7012-8345-6789abcdef01"
         denied={false}
         mayViewPayments={false}
+        mayViewServices={false}
       />,
     );
 
     await screen.findByText('بازپرداخت‌شده');
     expect(api.calls.filter((call) => call.method !== 'GET')).toHaveLength(0);
     expect(api.calls.some((call) => call.url.includes('/fulfil'))).toBe(false);
+  });
+
+  /*
+   * WHAT THE ORDER PRODUCED.
+   *
+   * v0.2.8 rendered order `01a0c54b` as `REFUNDED` and said nothing else: not the
+   * service row it had created, not the five PROVISION attempts against it, not
+   * `ACTIVATION_INCOMPLETE`. Every one of those facts was already in the database.
+   * These four cases are what stops the page going quiet about them again.
+   */
+  const SERVICE_ID = '019240ab-cdef-7012-8345-6789abcdef01';
+
+  const failedService = {
+    id: SERVICE_ID,
+    customerId: '019210ab-cdef-7012-8345-6789abcdef01',
+    orderId: '019230ab-cdef-7012-8345-6789abcdef01',
+    panelId: '01a05e35-c9ad-7e93-bef3-1ed9b55292c8',
+    productId: '019220ab-cdef-7012-8345-6789abcdef01',
+    state: 'TERMINATED',
+    providerUsername: 'nxuhdjwuc3m5',
+    // The production shape: a name was reserved, the create never landed.
+    providerUserId: null,
+    hasSubscription: false,
+    expiresAt: null,
+    trafficLimitBytes: '53687091200',
+    trafficUsedBytes: '0',
+    usageSyncedAt: null,
+    deliveryState: 'PENDING',
+    deliveredAt: null,
+    provisionedAt: null,
+    terminatedAt: '2026-09-10T12:47:00.000Z',
+    createdAt: '2026-09-10T12:40:00.000Z',
+    updatedAt: '2026-09-10T12:47:00.000Z',
+  };
+
+  const failedOperation = {
+    id: '019250ab-cdef-7012-8345-6789abcdef01',
+    type: 'PROVISION',
+    state: 'FAILED',
+    attempts: 5,
+    failureMessage: 'ACTIVATION_INCOMPLETE',
+    scheduledAt: null,
+    startedAt: '2026-09-10T12:46:00.000Z',
+    completedAt: '2026-09-10T12:47:00.000Z',
+    createdAt: '2026-09-10T12:40:00.000Z',
+  };
+
+  const withService = (
+    orderOverrides: Record<string, unknown>,
+    services: unknown[],
+    operations: unknown[] = [],
+  ) =>
+    stubApi([
+      { url: '/orders/019230ab', body: { order: order(orderOverrides) } },
+      { url: '/services?', body: { services, nextCursor: null } },
+      {
+        url: `/services/${SERVICE_ID}/operations`,
+        body: { operations, limit: 50, hasMore: false },
+      },
+    ]);
+
+  it('shows the service the order produced, and the attempt that failed', async () => {
+    const api = withService({ state: 'REFUNDED' }, [failedService], [failedOperation]);
+    renderPage(
+      <OrderDetailPage
+        id="019230ab-cdef-7012-8345-6789abcdef01"
+        denied={false}
+        mayViewPayments={false}
+        mayViewServices
+      />,
+    );
+
+    // The service, by the name the panel would have used.
+    expect(await screen.findByText('nxuhdjwuc3m5')).toBeTruthy();
+    // The operation, its attempt count and the INTERNAL reason — this is the
+    // operator surface, and `ACTIVATION_INCOMPLETE` names a panel they can fix.
+    const failure = await screen.findByText('ACTIVATION_INCOMPLETE');
+    // The attempt count on the SAME row as the failure, so the assertion cannot be
+    // satisfied by a stray digit elsewhere on the page.
+    const row = failure.closest('tr');
+    expect(row?.textContent ?? '').toContain('5');
+
+    // It reached the service through the ORDER, not by guessing.
+    const read = api.calls.find((call) => call.url.includes('/services?'));
+    expect(read?.url).toContain('orderId=019230ab-cdef-7012-8345-6789abcdef01');
+  });
+
+  it('says a refunded order was refunded, and where the figure is', async () => {
+    withService({ state: 'REFUNDED' }, [failedService], [failedOperation]);
+    const { container } = renderPage(
+      <OrderDetailPage
+        id="019230ab-cdef-7012-8345-6789abcdef01"
+        denied={false}
+        mayViewPayments={false}
+        mayViewServices
+      />,
+    );
+    await screen.findByText('nxuhdjwuc3m5');
+
+    const text = container.textContent ?? '';
+    expect(text).toContain('این سفارش بازگشت خورده است');
+    // No claim about an amount this page did not read. It points at the two
+    // records that hold it instead of rendering a number it computed.
+    expect(text).toContain('کیف پول');
+  });
+
+  it('asks for no service, and says why, without services.view', async () => {
+    const api = stubApi([{ url: '/orders/019230ab', body: { order: order() } }]);
+    renderPage(
+      <OrderDetailPage
+        id="019230ab-cdef-7012-8345-6789abcdef01"
+        denied={false}
+        mayViewPayments={false}
+        mayViewServices={false}
+      />,
+    );
+    await screen.findByText('services.view', { exact: false });
+    expect(api.calls.some((call) => call.url.includes('/services'))).toBe(false);
+  });
+
+  it('says an order produced no service rather than leaving the card blank', async () => {
+    withService({ state: 'AWAITING_PAYMENT' }, []);
+    const { container } = renderPage(
+      <OrderDetailPage
+        id="019230ab-cdef-7012-8345-6789abcdef01"
+        denied={false}
+        mayViewPayments={false}
+        mayViewServices
+      />,
+    );
+    expect(await screen.findByText('هنوز سرویسی برای این سفارش ساخته نشده است.')).toBeTruthy();
+    // And no operations table for a service that does not exist.
+    expect(container.textContent ?? '').not.toContain('ACTIVATION_INCOMPLETE');
   });
 
   /*
@@ -517,6 +652,7 @@ describe('the order detail', () => {
         id="019230ab-cdef-7012-8345-6789abcdef01"
         denied={false}
         mayViewPayments={false}
+        mayViewServices={false}
       />,
     );
     await screen.findByText('payments.view', { exact: false });
