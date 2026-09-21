@@ -91,7 +91,27 @@ activation or a credential, and the evidence stops counting the moment it stops
 describing the panel. Staleness remains the health lane's business, where
 `isConfirmedUnusable` already handles it with hysteresis.
 
-### D2 — the refund message needs a payload, which ADR 0030 §1 refuses
+### D2 — the refund message needs figures, and NOT a payload
+
+> **Corrected during implementation.** What follows was the reasoning at audit
+> time and its conclusion was wrong in one respect, so it is kept with the
+> correction attached rather than rewritten — the whole point of writing the
+> audit first is that it records what was believed before the code was read
+> properly.
+>
+> The lane already renders values for a kind, without a payload:
+> `SERVICE_REMINDER_NOTIFICATION_KINDS` have their frozen figures **read back by
+> subject id** at send time (`reminderValues`). The same works here and is
+> strictly better. The subject is the order; the wallet ledger is append-only, so
+> "what was credited for this order" is the sum of its REFUND entries and "the
+> balance as of that credit" is the sum of every entry up to and including the
+> last of them. Both are derived, both are stable for ever, and a resend states
+> the same figures.
+>
+> **So ADR 0030 §1 stands unamended, no column is added, and no balance is
+> stored** — which also keeps the non-negotiable that balance is derived from the
+> ledger and never a column. The reasoning below is superseded from "so it is
+> made as one" onwards.
 
 `CUSTOMER_NOTIFICATION_KINDS` carries no payload by design, and `CLAUDE.md` states
 it as a rule. The required message quotes a committed refund amount and a
