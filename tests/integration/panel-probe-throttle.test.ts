@@ -123,6 +123,9 @@ describe('the panel connection-test throttle', () => {
             return answer();
           },
         }),
+      // Every provider this release has a service adapter for; the sellability
+      // verdict on `PanelWithCapacity` needs it, exactly as the container wires it.
+      serviceAdapterExists: () => true,
       cadence: {
         healthyIntervalMs: 10 * 60 * 1000,
         retryableIntervalMs: 2 * 60 * 1000,

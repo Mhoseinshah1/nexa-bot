@@ -113,20 +113,89 @@ export function provisioningConditionKey(serviceId: string): string {
 }
 
 /**
- * Which refusals can never be fixed without a new release.
+ * Which refusals are DETERMINISTIC — the same answer on the next attempt, and on
+ * the fifth.
  *
- * `PROVIDER_NOT_OPERABLE` and `CAPABILITY_UNSUPPORTED` are statements about CODE: no
- * amount of operator configuration makes this release able to create a user on a
- * provider it has no adapter for. Retrying them four more times spends attempts to
- * learn nothing and delays the terminal state an operator needs to see.
+ * ## What this used to be, and what it cost
  *
- * The other four are configuration, and configuration can change in the minute after
- * the refusal — a panel re-enabled, a credential set, an activation completed — so
- * those back off and try again.
+ * It used to return true for `PROVIDER_NOT_OPERABLE` and `CAPABILITY_UNSUPPORTED`
+ * only, on the argument that "the other four are configuration, and configuration
+ * can change in the minute after the refusal — a panel re-enabled, a credential
+ * set, an activation completed".
+ *
+ * That argument is true and it is not a reason to retry. Order `01a0c54b` on
+ * v0.2.8 refused `ACTIVATION_INCOMPLETE` five times over roughly seven minutes —
+ * 30s, 60s, 120s, 240s of backoff — because nobody completes a panel's activation
+ * inside four minutes without knowing they need to, and the thing that would tell
+ * them is the operational event this delays. So the customer waited seven minutes
+ * for an answer that was fully determined at the first attempt, and the operator
+ * got the alert four minutes late.
+ *
+ * A refusal is not a failure to be ridden out. NOTHING WAS CONTACTED: these are
+ * decisions this installation made about its own rows, before any socket was
+ * opened. A retry re-reads the same rows and reaches the same verdict.
+ *
+ * ## The six that are deterministic
+ *
+ * Two are about CODE — no operator action fixes them at all:
+ *   - `PROVIDER_NOT_OPERABLE`: no adapter for this provider in this release.
+ *   - `CAPABILITY_UNSUPPORTED`: the adapter does not declare what this needs.
+ *
+ * Four are about CONFIGURATION — an operator fixes them on a screen, and the
+ * remedy is the operational event, not the wait:
+ *   - `ACTIVATION_INCOMPLETE`: a required provider field is unset or invalid.
+ *   - `CREDENTIALS_MISSING`: the credentials this provider needs are not set.
+ *   - `PANEL_DISABLED`: the operator said stop using this panel.
+ *   - `PANEL_ABSENT`: archived, or gone.
+ *
+ * `PANEL_DISABLED` deserves its own sentence, because "they might re-enable it"
+ * is the tempting objection. An operator who disabled a panel made a decision;
+ * quietly retrying against it for seven minutes in the hope they change their
+ * mind is the system second-guessing an instruction. Refunding at once and
+ * telling them a paid order hit a disabled panel is the honest answer, and it is
+ * the one that reaches them while they are still at the keyboard.
+ *
+ * ## What still backs off, and why that list is exactly right
+ *
+ * `PANEL_NOT_REACHABLE` is the URL policy refusing an address, which a DNS change
+ * can genuinely flip. `BUDGET_EXHAUSTED`, `TENANT_STOPPED` and `LEASE_LOST` are
+ * about US rather than the panel and are not failures at all — `holdOff` refunds
+ * their attempt so they do not even count. `SERVICE_ABSENT` terminalises by its
+ * own path.
+ *
+ * The invariant worth stating: a deterministic refusal is answered by a REFUND and
+ * an operational event, both within one tick. Nothing about the panel is recorded,
+ * because nothing about the panel was learned.
  */
 export function refusalIsPermanent(reason: ExecutionRefusal): boolean {
-  return reason === 'PROVIDER_NOT_OPERABLE' || reason === 'CAPABILITY_UNSUPPORTED';
+  return DETERMINISTIC_REFUSALS.has(reason);
 }
+
+/**
+ * The set, as data, so a test can enumerate it and a reader can count it.
+ *
+ * A `switch` would be equally correct and would not let
+ * `tests/unit/refusal-classification.test.ts` assert the WHOLE partition — that
+ * every `ExecutionRefusal` is in exactly one of these two groups, so a refusal
+ * added later cannot silently default to being retried five times.
+ */
+const DETERMINISTIC_REFUSALS: ReadonlySet<ExecutionRefusal> = new Set([
+  'PROVIDER_NOT_OPERABLE',
+  'CAPABILITY_UNSUPPORTED',
+  'ACTIVATION_INCOMPLETE',
+  'CREDENTIALS_MISSING',
+  'PANEL_DISABLED',
+  'PANEL_ABSENT',
+]);
+
+/** The complement, exported for the partition test. Never used to decide. */
+export const RETRYABLE_REFUSALS: readonly ExecutionRefusal[] = [
+  'PANEL_NOT_REACHABLE',
+  'BUDGET_EXHAUSTED',
+  'TENANT_STOPPED',
+  'SERVICE_ABSENT',
+  'LEASE_LOST',
+];
 
 /** How many abandoned leases one tick may return to the pool. */
 export const LEASE_SWEEP_LIMIT = 20;

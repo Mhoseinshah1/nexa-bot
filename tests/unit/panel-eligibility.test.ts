@@ -6,11 +6,14 @@ import {
   type PanelHealthState,
 } from '@nexa/contracts';
 import {
+  activationIssues,
   connectionIdentityOf,
   decideEligibility,
   isConfirmedUnusable,
+  provisioningInputFor,
   validationAuthorisesEnable,
   type EligibilityInput,
+  type ProvisioningInput,
 } from '../../apps/api/src/modules/platform/panels/application/panel-eligibility';
 
 /**
@@ -33,19 +36,56 @@ const NOW = new Date('2026-09-18T12:00:00.000Z');
 const FRESH = new Date(NOW.getTime() - 60_000);
 const STALE = new Date(NOW.getTime() - PANEL_HEALTH_FRESH_FOR_MS - 1);
 
+/**
+ * A panel that could actually deliver: Marzban, both credentials set, an
+ * activation that parses, and a service adapter in this release.
+ *
+ * Every case below starts from one, because the question each of them asks is
+ * "what ELSE stops this selling". A fixture missing any of these four would make
+ * every assertion in the file pass for the wrong reason — which is exactly what
+ * the old fixture did, by not carrying them at all.
+ */
+const CREDENTIALS = {
+  usernameSetAt: new Date('2026-09-01T00:00:00.000Z'),
+  passwordSetAt: new Date('2026-09-01T00:00:00.000Z'),
+  apiTokenSetAt: null,
+};
+
+const PROVISIONING: ProvisioningInput = provisioningInputFor({
+  providerType: 'marzban',
+  baseUrl: 'https://panel.example.test',
+  activation: { proxyProtocols: ['vless'], inboundTags: { vless: ['VLESS_TCP'] } },
+  credentials: CREDENTIALS,
+  serviceAdapterExists: true,
+});
+
 const base: EligibilityInput = {
   status: 'ACTIVE',
-  health: null,
+  /*
+   * A probe that validated THIS configuration, because an unprobed panel is no
+   * longer sellable and that is the point of the change. `health: null` is its
+   * own case below rather than the default every other case inherits.
+   */
+  health: {
+    state: 'HEALTHY',
+    checkedAt: FRESH,
+    unusableStreak: 0,
+    validatedIdentity: PROVISIONING.currentIdentity,
+  },
   maxServices: null,
   used: 0,
   now: NOW,
+  provisioning: PROVISIONING,
 };
 
 const withHealth = (
   state: PanelHealthState,
   unusableStreak: number,
   checkedAt: Date = FRESH,
-): EligibilityInput => ({ ...base, health: { state, checkedAt, unusableStreak } });
+): EligibilityInput => ({
+  ...base,
+  health: { state, checkedAt, unusableStreak, validatedIdentity: PROVISIONING.currentIdentity },
+});
 
 describe('whether a panel may be sold onto', () => {
   // -------------------------------------------------------------------------
@@ -143,14 +183,43 @@ describe('whether a panel may be sold onto', () => {
     });
   });
 
-  it('keeps selling when nobody has ever probed the panel', () => {
+  it('refuses a panel nobody has ever probed, as UNVALIDATED and not as UNHEALTHY', () => {
     /*
-     * `UNCHECKED` is the absence of evidence, not evidence of absence. A fresh
-     * installation whose monitor has not run yet must be able to sell;
-     * otherwise the shop opens empty and stays that way until a background
-     * process nobody has heard of has succeeded once.
+     * THIS ASSERTION IS THE INVERSE OF WHAT IT USED TO BE, DELIBERATELY.
+     *
+     * It used to read "keeps selling when nobody has ever probed the panel", on
+     * the argument that `UNCHECKED` is the absence of evidence and a fresh
+     * installation must be able to sell. The first half is still true and is
+     * why the reason here is `UNVALIDATED` rather than `UNHEALTHY`. The second
+     * half is how order `01a0c54b` happened: `DrizzlePanelRepository.create`
+     * writes `status: 'ACTIVE'`, so under the old rule a panel created seconds
+     * ago — no credentials, no activation, never contacted — was immediately
+     * sellable.
+     *
+     * The remedy was never "wait for the monitor". It is the operator pressing
+     * Test Connection, which they must do anyway before they can enable a panel
+     * they have disabled, and which is one button on the panel's own page.
      */
-    expect(decideEligibility({ ...base, health: null })).toEqual({ eligible: true });
+    expect(decideEligibility({ ...base, health: null })).toEqual({
+      eligible: false,
+      reason: 'UNVALIDATED',
+    });
+  });
+
+  it('keeps selling on evidence that is old but SUCCEEDED', () => {
+    /*
+     * The rule that stops a stopped monitor closing every shop in the
+     * installation, and it is not hypothetical: only a probe can overwrite a
+     * health row, so a monitor that is down leaves the last row frozen.
+     *
+     * This is the case that rule is actually about, and it is asserted
+     * explicitly now because the hotfix below narrows its neighbour. A panel
+     * whose last probe SUCCEEDED against the configuration it still has goes on
+     * selling however old that probe is: old evidence stops being evidence, it
+     * does not become counter-evidence, and `UNVALIDATED` asks WHAT was
+     * validated rather than WHEN.
+     */
+    expect(decideEligibility(withHealth('HEALTHY', 0, STALE))).toEqual({ eligible: true });
   });
 
   it('keeps selling when the failing evidence is too old to believe', () => {
@@ -160,6 +229,14 @@ describe('whether a panel may be sold onto', () => {
      * health row, so a monitor that is down leaves the last row frozen. Without
      * the freshness bound a panel that failed three times before an outage of
      * OUR OWN machinery would never sell again, however healthy it had become.
+     *
+     * UNCHANGED by the provisionability hotfix, and that is worth saying because
+     * one draft of it broke this case. `connectionValidated` asks only whether a
+     * probe has run against the configuration the panel HAS NOW; whether what
+     * that probe learned is bad enough to stop selling stays entirely the health
+     * lane's question, with its streak and its freshness bound. Reading the
+     * probe's STATE in both places counted the same evidence twice and moved
+     * `PANEL_UNHEALTHY_AFTER_FAILURES` to one.
      */
     expect(
       decideEligibility(withHealth('UNREACHABLE', PANEL_UNHEALTHY_AFTER_FAILURES, STALE)),
@@ -193,6 +270,157 @@ describe('whether a panel may be sold onto', () => {
       isConfirmedUnusable({ ...health, checkedAt: new Date(exactly.getTime() - 1) }, NOW),
       'one millisecond past it is not',
     ).toBe(false);
+  });
+
+  // -------------------------------------------------------------------------
+  // Provisionability: could this panel actually produce what is being sold
+  // -------------------------------------------------------------------------
+
+  it('refuses a panel whose activation does not parse, however healthy it is', () => {
+    /*
+     * THE PRODUCTION INCIDENT, as one assertion.
+     *
+     * Order `01a0c54b` on v0.2.8: the panel was ACTIVE, the probe said HEALTHY,
+     * there was free capacity, and the Marzban activation was absent. The
+     * customer paid 10,000 toman, the provisioner refused `ACTIVATION_INCOMPLETE`
+     * five times over seven minutes, and the order was refunded.
+     *
+     * Every fact in this fixture is a fact from that order. If this assertion
+     * ever goes back to `{ eligible: true }`, that order happens again.
+     */
+    const decision = decideEligibility({
+      ...base,
+      maxServices: 100,
+      used: 0,
+      provisioning: provisioningInputFor({
+        providerType: 'marzban',
+        baseUrl: 'https://panel.example.test',
+        activation: null,
+        credentials: CREDENTIALS,
+        serviceAdapterExists: true,
+      }),
+    });
+    expect(decision).toEqual({ eligible: false, reason: 'ACTIVATION_INCOMPLETE' });
+  });
+
+  it('refuses a Marzban panel configured for a protocol it names no inbound for', () => {
+    /*
+     * The narrower half of the same defect, and the one a schema catches where a
+     * "is activation null" check would not. `marzbanActivationSchema` refuses a
+     * record that names `vmess` in `proxyProtocols` and gives tags only for
+     * `vless`, because Marzban computes `excluded_inbounds` as every inbound for
+     * a requested protocol that is not listed — so the vmess half of that
+     * customer's subscription would carry nothing, behind a 200 and a URL.
+     */
+    const decision = decideEligibility({
+      ...base,
+      provisioning: provisioningInputFor({
+        providerType: 'marzban',
+        baseUrl: 'https://panel.example.test',
+        activation: { proxyProtocols: ['vless', 'vmess'], inboundTags: { vless: ['VLESS_TCP'] } },
+        credentials: CREDENTIALS,
+        serviceAdapterExists: true,
+      }),
+    });
+    expect(decision).toEqual({ eligible: false, reason: 'ACTIVATION_INCOMPLETE' });
+  });
+
+  it('refuses a panel whose credentials are not set', () => {
+    /*
+     * The case the OLD docblock offered as the worked example of a panel that is
+     * "eligible and inoperable", which was the defect described as the design. A
+     * panel nobody can authenticate against cannot deliver anything.
+     */
+    const decision = decideEligibility({
+      ...base,
+      provisioning: provisioningInputFor({
+        providerType: 'marzban',
+        baseUrl: 'https://panel.example.test',
+        activation: { proxyProtocols: ['vless'], inboundTags: { vless: ['VLESS_TCP'] } },
+        credentials: { usernameSetAt: null, passwordSetAt: null, apiTokenSetAt: null },
+        serviceAdapterExists: true,
+      }),
+    });
+    expect(decision).toEqual({ eligible: false, reason: 'CREDENTIALS_MISSING' });
+  });
+
+  it('refuses a provider this release has no service adapter for', () => {
+    /*
+     * A statement about CODE, so it comes FIRST among the four: no operator
+     * action fixes it, and reporting it as configuration would send somebody to a
+     * form that cannot help them.
+     */
+    const decision = decideEligibility({
+      ...base,
+      provisioning: { ...PROVISIONING, serviceAdapterExists: false },
+    });
+    expect(decision).toEqual({ eligible: false, reason: 'PROVISION_UNSUPPORTED' });
+  });
+
+  it('stops counting a connection test the moment the configuration changes', () => {
+    /*
+     * The mechanism, asserted directly rather than inferred. The panel was
+     * probed, that probe validated the identity it had then, and an operator has
+     * since changed the activation — so the evidence no longer describes the
+     * panel and the verdict is `UNVALIDATED` rather than a stale `true`.
+     *
+     * This is the case that separates the fix from a one-off: it holds for an
+     * address change, a password rotation and an activation edit alike, because
+     * `connectionIdentityOf` covers all three.
+     */
+    const changed = provisioningInputFor({
+      providerType: 'marzban',
+      baseUrl: 'https://panel.example.test',
+      activation: { proxyProtocols: ['vless'], inboundTags: { vless: ['VLESS_WS'] } },
+      credentials: CREDENTIALS,
+      serviceAdapterExists: true,
+    });
+    expect(changed.currentIdentity).not.toBe(PROVISIONING.currentIdentity);
+    expect(decideEligibility({ ...base, provisioning: changed })).toEqual({
+      eligible: false,
+      reason: 'UNVALIDATED',
+    });
+  });
+
+  it('reports configuration before health, because one is certain and one is measured', () => {
+    /*
+     * A panel that is BOTH unreachable and unconfigured. `UNHEALTHY` would send
+     * an operator to tcpdump; `ACTIVATION_INCOMPLETE` sends them to the field
+     * they have to fill in either way. The configuration is a fact about our own
+     * row; the health is a measurement that can be stale or simply wrong.
+     */
+    const decision = decideEligibility({
+      ...withHealth('UNREACHABLE', PANEL_UNHEALTHY_AFTER_FAILURES),
+      provisioning: provisioningInputFor({
+        providerType: 'marzban',
+        baseUrl: 'https://panel.example.test',
+        activation: null,
+        credentials: CREDENTIALS,
+        serviceAdapterExists: true,
+      }),
+    });
+    expect(decision).toEqual({ eligible: false, reason: 'ACTIVATION_INCOMPLETE' });
+  });
+
+  it("names the schema's own field paths, so a form can point at the input", () => {
+    /*
+     * Paths rather than a sentence, and the evaluator and the surface read the
+     * SAME function — `activationIssues` — so a screen cannot list one set of
+     * missing fields while the sale is refused for another.
+     */
+    expect(activationIssues('marzban', null)).toEqual(['proxyProtocols', 'inboundTags']);
+    expect(
+      activationIssues('marzban', {
+        proxyProtocols: ['vless', 'vmess'],
+        inboundTags: { vless: ['VLESS_TCP'] },
+      }),
+    ).toEqual(['inboundTags.vmess']);
+    expect(
+      activationIssues('marzban', {
+        proxyProtocols: ['vless'],
+        inboundTags: { vless: ['VLESS_TCP'] },
+      }),
+    ).toEqual([]);
   });
 
   // -------------------------------------------------------------------------

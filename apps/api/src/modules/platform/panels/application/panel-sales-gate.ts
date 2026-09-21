@@ -2,7 +2,7 @@ import { PANEL_RESERVATION_TTL_MS, type TenantContext } from '@nexa/contracts';
 import type { Clock, IdGenerator } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { PanelCapacity, PanelCapacityRepository } from './capacity-ports.js';
-import { decideEligibility, type PanelEligibility } from './panel-eligibility.js';
+import { decideEligibility, provisioningInputFor, type PanelEligibility } from './panel-eligibility.js';
 import type { PanelRepository, PanelView } from './ports.js';
 
 export interface PanelSalesGateDeps {
@@ -10,6 +10,15 @@ export interface PanelSalesGateDeps {
   readonly capacity: PanelCapacityRepository;
   readonly ids: IdGenerator;
   readonly clock: Clock;
+  /**
+   * Whether this release has a service adapter for a provider type.
+   *
+   * A function rather than the registry, because the registry is infrastructure
+   * and this is the application layer — the same seam `OperabilityInput` names,
+   * and the reason `decideOperability` takes `serviceAdapterExists` as an input
+   * instead of importing it.
+   */
+  readonly serviceAdapterExists: (providerType: string) => boolean;
 }
 
 /**
@@ -36,6 +45,24 @@ export interface PanelSalesGateDeps {
  */
 export class PanelSalesGate {
   constructor(private readonly deps: PanelSalesGateDeps) {}
+
+  /**
+   * The provisionability half for one panel, through the SHARED assembler.
+   *
+   * `provisioningInputFor` rather than a local object literal, because
+   * `PanelService` reports this same state to an operator and the two must read
+   * the same fields. A screen that says sellable while confirmation refuses is
+   * this hotfix's own bug, inverted.
+   */
+  private provisioningOf(view: PanelView) {
+    return provisioningInputFor({
+      providerType: view.panel.providerType,
+      baseUrl: view.panel.baseUrl,
+      activation: view.panel.activation,
+      credentials: view.credentials,
+      serviceAdapterExists: this.deps.serviceAdapterExists(view.panel.providerType),
+    });
+  }
 
   /**
    * Whether this panel may be sold onto, as of now. A READ: locks nothing,
@@ -131,6 +158,7 @@ export class PanelSalesGate {
           maxServices: capacity?.maxServices ?? view.panel.maxServices,
           used: capacity?.used ?? 0,
           now,
+          provisioning: this.provisioningOf(view),
         }),
       );
     }
@@ -194,6 +222,17 @@ export class PanelSalesGate {
       maxServices: null,
       used: 0,
       now,
+      /*
+       * AND THE PROVISIONABILITY HALF, HERE, UNDER THE PANEL'S LOCK.
+       *
+       * This is the recheck that had to exist. The catalogue's verdict is a
+       * snapshot and an activation can be cleared in the second between it and
+       * this, so asking again in the transaction that takes the money is what
+       * makes the answer binding rather than advisory — the same argument the
+       * class docblock already makes about status and capacity, applied to the
+       * facts that decide whether the thing being sold can be produced.
+       */
+      provisioning: this.provisioningOf(view),
     });
     if (!before.eligible) return before;
 
@@ -258,6 +297,15 @@ export class PanelSalesGate {
       maxServices: capacity?.maxServices ?? view.panel.maxServices,
       used: capacity?.used ?? 0,
       now,
+      /*
+       * Asked a THIRD time, in the settling transaction, and that is not
+       * belt-and-braces. Confirmation and settlement are separated by however
+       * long a customer takes to pay — days, for a bank transfer an operator
+       * reviews — and an activation cleared in that window must refuse the
+       * settlement rather than be discovered by the provisioner afterwards.
+       * Which is precisely what happened to order `01a0c54b`.
+       */
+      provisioning: this.provisioningOf(view),
     });
   }
 

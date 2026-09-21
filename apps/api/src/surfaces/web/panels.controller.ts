@@ -217,6 +217,13 @@ export class PanelsController {
        * back to work out why a customer's username looks the way it does.
        */
       usernamePolicy: view.panel.usernamePolicy,
+      /*
+       * Computed by the service, never by this file — the same rule `capacity`
+       * above states, and here it matters more. This verdict is the one a
+       * surface may gate a sale on, and a second implementation of it is a
+       * second answer to "may we take money for this".
+       */
+      sellability: view.sellability,
       createdAt: view.panel.createdAt.toISOString(),
       updatedAt: view.panel.updatedAt.toISOString(),
     };
