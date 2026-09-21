@@ -1778,10 +1778,13 @@ export const TEMPLATES = [
   {
     key: 'bot.admin.section',
     description:
-      'The administrator section, and the exact syntax of the two commands it accepts. ' +
-      'Commands rather than a prompt that captures the next message: INCIDENT-FIN-001 is ' +
-      'a captured prompt swallowing an ordinary message and overwriting a production ' +
-      'gateway setting, and a command carries its argument in the same message.',
+      'The administrator section: the roster, and the exact syntax of the two commands ' +
+      'it accepts. Commands rather than a prompt that captures the next message: ' +
+      'INCIDENT-FIN-001 is a captured prompt swallowing an ordinary message and ' +
+      'overwriting a production gateway setting, and a command carries its argument in ' +
+      'the same message. The roster is EVERY administrator rather than only the ' +
+      'Telegram-bound ones, because an administrator an operator most needs to find on ' +
+      'this surface \u2014 one to disable \u2014 is exactly the one who may hold no binding.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -1791,6 +1794,108 @@ export const TEMPLATES = [
       'No administrator on this installation has Telegram access yet. Names where one is ' +
       'created \u2014 the Web Admin \u2014 because this product will not invent an administrator ' +
       'with no credentials in order to keep a menu shorter.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.admin_detail',
+    description:
+      'One administrator, as another administrator sees them in Telegram. Carries the ' +
+      'username, the display name, the status from the frozen vocabulary, the role keys ' +
+      'and whether a Telegram account is bound. It carries NO password, no hash, no ' +
+      'masked stand-in for one, no session, and no IP or user agent from a session row: ' +
+      'a credential must never cross this surface, and a forwardable message naming ' +
+      'where an administrator signs in from is most of the way to finding them.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'username',
+        type: 'STRING',
+        description: 'The administrator, by the name they sign in with.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'displayName',
+        type: 'STRING',
+        description: 'The name an operator gave them, which is not an identifier.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'status',
+        type: 'STRING',
+        description:
+          'ACTIVE or DISABLED, as the frozen vocabulary spells it. There is no third ' +
+          'status and no deletion: `audit_logs` references administrators and refuses ' +
+          'DELETE, so disabling is this product\u2019s answer.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'roles',
+        type: 'STRING',
+        description:
+          'The role KEYS, joined. Keys rather than display names because `/role` takes a ' +
+          'key, so what is shown is what can be typed back.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'telegram',
+        type: 'STRING',
+        description:
+          'Whether a Telegram account is bound, and which numeric id when one is \u2014 the ' +
+          'id is not a secret and is what `/link` and a revocation both name.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.admin_enable_button',
+    description:
+      'Returns a disabled administrator to ACTIVE. Their roles and their Telegram ' +
+      'binding were never removed by disabling, so this restores exactly what they had.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.admin_disable_button',
+    description:
+      'Disables an administrator: every permission empties and every live session stops ' +
+      'being one on the next request. Refused for the caller themselves and for the ' +
+      'last remaining owner, by the same service the Web Admin calls.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.admin_status_changed',
+    description:
+      'The administrator\u2019s status is now what the button asked for. Names the status ' +
+      'rather than the button pressed, so a replayed tap reads as the state it found ' +
+      'rather than as a second change.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'username',
+        type: 'STRING',
+        description: 'The administrator whose status this is.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'status',
+        type: 'STRING',
+        description: 'ACTIVE or DISABLED, as the frozen vocabulary spells it.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.admins_back_button',
+    description: 'Returns from one administrator to the roster.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
