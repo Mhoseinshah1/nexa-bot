@@ -127,6 +127,38 @@ export const PERMISSIONS = [
   p('services.view', 'View provisioned services', 'LOW'),
   p('services.edit', 'Edit a service'),
   p('services.terminate', 'Terminate a service', 'HIGH'),
+  /*
+   * DECLARED, seeded to nothing, and charged by nothing — deliberately, and not the
+   * way `users.edit` is.
+   *
+   * `users.edit` is uncharged because the product has an answer: every customer
+   * attribute comes from Telegram and is overwritten on the next update, so an
+   * operator edit would look like a correction and silently not be one.
+   *
+   * This one is uncharged because the product has NO answer, and each of the four
+   * unresolved questions is one a wrong guess makes expensive:
+   *
+   *   - the ORDER. A service is the thing an order bought. Moving the service without
+   *     the order leaves a customer's purchase history naming an account they do not
+   *     have; moving it with the order rewrites what somebody paid for.
+   *   - the PAYMENT. Money moved from one wallet. A transfer either leaves the payer
+   *     paying for somebody else's account or implies a refund nobody requested, and
+   *     `RefundService.refundUndeliverable` is the ONE credit path — a second answer
+   *     to "how much did we give back" is the thing a ledger exists to prevent.
+   *   - the LINK. `subscriptionUrl` is a BEARER capability: whoever holds it has the
+   *     service. A transfer that does not rotate it hands the new owner an account the
+   *     old owner can still use, and rotating it is a provider operation with no
+   *     capability declared for it on either adapter.
+   *   - the CAPACITY SLOT and the username RESERVATION, both of which are keyed to a
+   *     customer and a panel and would have to move atomically with the row.
+   *
+   * `web.services_transfer_absent` says the same thing to an operator, in words, rather
+   * than as a disabled button — a disabled control claims "this exists and you lack
+   * permission", which is a different and false statement.
+   *
+   * So the key stays declared and unreachable until the owner settles the rule. Do not
+   * wire it to an endpoint to make a permission matrix look complete.
+   */
   p('services.transfer', 'Transfer a service to another customer', 'HIGH'),
 
   // Catalog

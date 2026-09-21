@@ -905,8 +905,12 @@ export const TEMPLATES = [
         token: 'customer',
         type: 'STRING',
         description:
-          'Whose service it is, by the numeric identity this installation holds \u2014 ' +
-          'never a display name, for the reason `bot.admin.receipt` gives.',
+          'Whose service it is, by the numeric Telegram identity this installation ' +
+          'holds \u2014 the handle a support conversation quotes. WP3 made this true: ' +
+          'the description already said "numeric identity" while the runtime passed ' +
+          'the INTERNAL uuid, which names the right person to nobody and cannot be ' +
+          'typed into any command. It is still not a display name, and the service ' +
+          'screen carries no wallet balance, order or payment beside it.',
         required: true,
         repeatable: false,
       },
@@ -1785,6 +1789,80 @@ export const TEMPLATES = [
    * section answers is the one question a support conversation asks — "who is this
    * Telegram account to us, and should the bot still talk to them".
    */
+  /*
+   * WP3 — browsing services, and reaching the customer from one.
+   *
+   * Six keys. The services section was a QUEUE and nothing else: the ten things needing
+   * attention, with its `nextCursor` dropped deliberately because the eleventh
+   * unreconciled service is not a thing an operator scrolls to. That stays. What these
+   * add is the other half — a browsable, paged inventory, so a service that is
+   * perfectly healthy is reachable from a phone at all — and one button, so the person
+   * a service belongs to is one tap away instead of a UUID an operator cannot read.
+   */
+  {
+    key: 'bot.admin.services_browse_button',
+    description:
+      'Opens the browsable list from the services section. Beside the queue, never ' +
+      'instead of it: a queue answers "what needs me" and an inventory answers "where ' +
+      'is this one", and collapsing them loses the first.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.services_browse',
+    description:
+      'Introduces the browsable list: one button per service, newest first, and a ' +
+      'further page when the server says there is one. No counts — the rule ' +
+      '`bot.admin.panels_section` states, that a figure here goes stale between the ' +
+      'render and the tap. It also names the lookup command, because paging to the ' +
+      'four-hundredth service is forty taps and the name a customer quotes is one ' +
+      'message.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.services_browse_none',
+    description:
+      'No service on this installation, or none left beyond this page. Says nobody is ' +
+      'here rather than that nobody exists, because it is reachable with a cursor.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.services_more_button',
+    description:
+      'The next page of services, carrying the keyset cursor the server minted. Drawn ' +
+      'only when the page says there is more AND the cursor fits Telegram’s ' +
+      '64-byte callback limit; a cursor that cannot be carried is a list that ends, ' +
+      'which is the safe direction.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.services_back_button',
+    description: 'Returns from one service to the services section.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.service_customer_button',
+    description:
+      'Opens the customer this service belongs to. Drawn only for an administrator who ' +
+      'holds `users.view`, and the customer screen charges that key again server-side ' +
+      '— the button decides what is advertised, never what is allowed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.service_usage',
+    description:
+      'The lookup command was sent without a readable argument. Repeats the syntax, ' +
+      'which now accepts EITHER the internal id or the provider username, rather than ' +
+      'opening a prompt for the missing one: a prompt that outlives its question ' +
+      'swallows the next unrelated message (INCIDENT-FIN-001).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
   {
     key: 'bot.admin.customers_button',
     description:

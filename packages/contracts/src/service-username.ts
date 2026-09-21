@@ -638,6 +638,57 @@ export const USERNAME_CAPTURE_TTL_MS = 10 * 60 * 1000;
  */
 export const LEGACY_USERNAME_PATTERN = /^nx[0-9a-f]{32}$/;
 
+/**
+ * The longest name this product could have STORED, which is not the longest it may mint.
+ *
+ * Thirty-four: `nx` plus 32 hex, the shape the derived generator produced before the
+ * twenty-character contract existed. Services carrying one keep it, so a lookup that
+ * bounded itself at twenty could not find the oldest services on an installation —
+ * exactly the set an operator is most likely to be asked about.
+ *
+ * Derived from the two patterns rather than asserted: `providerUsernameLookupSchema`
+ * uses it only as a cheap ceiling before any matching work, and
+ * `isSendableProviderUsername` remains the grammar.
+ */
+export const STORED_PROVIDER_USERNAME_MAX_LENGTH = 34;
+
+/**
+ * One provider username, as an operator quotes it, on its way to an EXACT lookup.
+ *
+ * ## Exact, and never a prefix
+ *
+ * `CustomerSearch.usernamePrefix` is a prefix because a Telegram username is
+ * half-remembered and a prefix is what an operator actually has.
+ * `CustomerSearch.telegramUserId` is exact because a partial match would be a way to
+ * enumerate ids. A provider username is the second kind: it is generated or chosen, it
+ * is quoted whole out of a support conversation, and it names somebody's ACCOUNT on a
+ * panel. A prefix search over account names is an enumeration of that panel's accounts,
+ * so this schema exists to make the exact form the only form the surface can express.
+ *
+ * ## Folded, then validated, and the order is safe here
+ *
+ * `canonicalizeCustomUsername` documents the opposite order for a name being MINTED,
+ * because `toLowerCase` is Unicode-aware and a Cyrillic `А` or a Turkish `İ` can fold
+ * into something the validator would then accept. The fold below cannot: it replaces
+ * ASCII `A`-`Z` and nothing else, so it can neither introduce a character nor change a
+ * non-ASCII one, and `isSendableProviderUsername` still decides. Folding is needed
+ * because an operator reads a name off a screenshot and types `NX-7F3A91`.
+ *
+ * ## Sendable, not mintable
+ *
+ * The predicate is `isSendableProviderUsername`, which admits the legacy shape too. A
+ * lookup that used `isNewProviderUsername` would refuse to search for the names this
+ * installation itself created — the "never retroactively rejected" rule broken by the
+ * code meant to enforce it, one layer up.
+ */
+export const providerUsernameLookupSchema = z
+  .string()
+  .trim()
+  /* A ceiling before any work, not the grammar. The refine below is the grammar. */
+  .max(STORED_PROVIDER_USERNAME_MAX_LENGTH)
+  .transform((raw) => raw.replace(/[A-Z]/g, (letter) => letter.toLowerCase()))
+  .refine(isSendableProviderUsername, 'must be a provider username this product stores');
+
 // ---------------------------------------------------------------------------
 // The whole policy: one evaluator, and one preview
 // ---------------------------------------------------------------------------

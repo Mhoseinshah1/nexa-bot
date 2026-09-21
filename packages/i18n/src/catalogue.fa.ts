@@ -307,6 +307,15 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.username_strategy_prefix_random': 'پیشوند + تصادفی',
   'bot.admin.username_strategy_telegram_id_random': 'شناسهٔ تلگرام + تصادفی',
   'bot.admin.username_refused': 'ذخیره نشد: {reason}',
+  'bot.admin.services_browse_button': '📋 همهٔ سرویس‌ها',
+  'bot.admin.services_browse':
+    'سرویس‌های این نصب، از تازه‌ترین. برای دیدن جزئیات و کارهای ممکن، روی نام هرکدام بزنید.\n\nبرای یافتن یک سرویس با نام کاربری‌اش روی پنل:\n/service <نام کاربری یا شناسهٔ سرویس>',
+  'bot.admin.services_browse_none': 'سرویسی برای نمایش نیست.',
+  'bot.admin.services_more_button': '▶️ صفحهٔ بعد',
+  'bot.admin.services_back_button': 'بازگشت به بخش سرویس‌ها',
+  'bot.admin.service_customer_button': '👤 مشتری این سرویس',
+  'bot.admin.service_usage':
+    'دستور ناقص یا نامعتبر است.\n\n/service <نام کاربری روی پنل یا شناسهٔ سرویس>',
   'bot.admin.customers_button': '👤 مشتری‌ها',
   'bot.admin.customers_section':
     'مشتری‌های این نصب، از قدیمی‌ترین. برای دیدن جزئیات و مسدود کردن یا رفع مسدودی، روی نام هرکدام بزنید.\n\nبرای یافتن یک مشتری با شناسهٔ عددی تلگرام:\n/customer <شناسهٔ عددی تلگرام>',
