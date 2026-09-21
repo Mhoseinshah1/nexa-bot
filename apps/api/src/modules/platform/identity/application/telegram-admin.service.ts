@@ -159,11 +159,16 @@ export class TelegramAdminService {
    * the tenant lock and the in-transaction authorization are all the ones already
    * tested, and this surface adds none of its own.
    *
-   * No idempotency key is threaded, and that is a property of the operation rather than
-   * an omission: `setStatus` reads the target under the lock and returns the same
-   * projection when the status already matches. A redelivered Telegram update therefore
-   * produces one audit row and one answer, and the answer names the STATUS rather than
-   * the button, so a replay reads as the state it found.
+   * The update's key IS threaded, and the no-op path is not a substitute for it.
+   *
+   * `setStatus` returns the same projection when the status already matches, which
+   * answers a replay that arrives while nothing else has happened. A Telegram
+   * redelivery does not promise that: if this tap disabled Alice, a second operator
+   * re-enabled her, and Telegram then redelivered this update, there is no longer a
+   * no-op to find — the old command would run again, disable her a second time and
+   * revoke her sessions, silently undoing the other operator's decision from a tap
+   * nobody made twice. `setRoles` carries the key for exactly this reason and this
+   * is the same shape.
    */
   async setStatus(
     scope: TenantContext,
@@ -171,8 +176,15 @@ export class TelegramAdminService {
     targetId: AdminId,
     status: 'ACTIVE' | 'DISABLED',
     reason: string,
+    idempotencyKey: string,
   ): Promise<{ admin: Admin; roleKeys: string[] }> {
-    return this.deps.management.setStatus(scope, actor, targetId, { status, reason });
+    return this.deps.management.setStatus(
+      scope,
+      actor,
+      targetId,
+      { status, reason },
+      { namespace: 'TELEGRAM', idempotencyKey: `${idempotencyKey}:admin-status` },
+    );
   }
 
   /**

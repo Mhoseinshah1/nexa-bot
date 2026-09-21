@@ -193,6 +193,24 @@ export class DrizzleSessionRepository implements SessionRepository {
           eq(adminSessions.tenantId, tenantId),
           eq(adminSessions.adminId, adminId),
           isNull(adminSessions.revokedAt),
+          /*
+           * Expired rows are NOT revoked, and the count is the reason.
+           *
+           * Sessions are retained after they expire, so an account can hold
+           * dozens of rows that are unrevoked and long dead. Revoking those
+           * changes nothing — an expired session is already not a session —
+           * but it made the RETURNED COUNT include them, and that count is
+           * what a reset and a revocation report to an operator asking "is
+           * that person still signed in". `listForAdmin` above filters on the
+           * same expiry, so the two disagreed on one screen: a panel showing
+           * no live sessions, above a message claiming three were ended.
+           *
+           * The predicate here is what makes the number true. The bookkeeping
+           * it gives up — a `revoked_reason` stamped on rows that expired on
+           * their own — is not a fact anybody reads, and it would be a false
+           * one: they were not revoked, they ran out.
+           */
+          gt(adminSessions.expiresAt, now),
         ),
       )
       .returning({ id: adminSessions.id });

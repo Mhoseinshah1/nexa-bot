@@ -1786,7 +1786,29 @@ export const TEMPLATES = [
       'Telegram-bound ones, because an administrator an operator most needs to find on ' +
       'this surface \u2014 one to disable \u2014 is exactly the one who may hold no binding.',
     format: 'PLAIN_TEXT',
-    placeholders: [],
+    placeholders: [
+      {
+        token: 'shown',
+        type: 'NUMBER',
+        description:
+          'How many administrators the buttons below carry. A Telegram inline ' +
+          'keyboard has a size limit, so the rows are bounded; the count is printed ' +
+          'rather than left implicit because a silently truncated list reads exactly ' +
+          'like a complete one.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'total',
+        type: 'NUMBER',
+        description:
+          'How many there are. Equal to `shown` unless the bound was reached, which ' +
+          'is what tells an operator to finish the job in the Web Admin rather than ' +
+          'conclude the roster ends here.',
+        required: true,
+        repeatable: false,
+      },
+    ],
   },
   {
     key: 'bot.admin.admins_none',

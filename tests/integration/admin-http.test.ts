@@ -796,6 +796,18 @@ describe('admin HTTP surface', () => {
       );
       expect(rows.rows).toHaveLength(1);
       /*
+       * And the DOMAIN EVENT, which is not the audit row and not a substitute
+       * for it (ADR-0006). `AdminPasswordChanged`'s frozen payload has carried
+       * `bySelf` since Phase 1 — the contract anticipated an operator path
+       * before one existed — and writing only the audit row left every outbox
+       * consumer unable to see that this credential changed at all.
+       */
+      const events = await api.container.database.db.execute<{ payload: { bySelf: boolean } }>(
+        sql`SELECT payload FROM outbox_messages
+            WHERE event_type = 'AdminPasswordChanged' AND aggregate_id = ${target}`,
+      );
+      expect(events.rows.map((row) => row.payload)).toEqual([{ bySelf: false }]);
+      /*
        * `rotated` and `endedSignIns`, NOT `passwordRotated` and
        * `sessionsRevoked`. The audit writer redacts any key containing
        * `password` or `session`, so the obvious names wrote `[redacted]` twice
@@ -858,6 +870,103 @@ describe('admin HTTP surface', () => {
           )
         ).rows,
       ).toHaveLength(0);
+    });
+
+    it('counts only LIVE sessions as ended, never expired rows it also owns', async () => {
+      /*
+       * The number the operator acts on.
+       *
+       * Sessions are retained after they expire, so an account accumulates
+       * unrevoked-but-dead rows. `revokeAllForAdmin` used to update and count
+       * those, while `listForAdmin` filtered them out — so one screen could
+       * show no live sessions above a message claiming several were ended, and
+       * an operator asking "is that person still signed in" got a yes from a
+       * row that expired last week.
+       */
+      await createAdmin(api.container, tenantA, {
+        username: 'long-history',
+        password: 'the-history-password',
+        roleKeys: ['support'],
+      });
+      const target = await idOf('long-history');
+      await cookieFor('long-history', 'the-history-password');
+
+      // Three rows that are unrevoked and long dead, beside the one live one.
+      await api.container.database.db.execute(sql`
+        INSERT INTO admin_sessions (id, tenant_id, admin_id, token_hash, issued_at, expires_at, last_seen_at)
+        SELECT gen_random_uuid(), ${tenantA.tenantId}, ${target},
+               md5(n::text || 'expired-session-fixture'),
+               now() - interval '40 days', now() - interval '39 days', now() - interval '39 days'
+        FROM generate_series(1, 3) AS n`);
+
+      const owner = await cookieFor('owner', 'the-owners-real-password');
+      const listed = await inject({
+        method: 'GET',
+        url: `${API_PREFIX}${ADMIN_ROUTES.sessions(target)}`,
+        headers: asAdmin(owner),
+      });
+      expect(adminSessionListResponseSchema.parse(listed.json()).sessions).toHaveLength(1);
+
+      const revoked = await inject({
+        method: 'POST',
+        url: `${API_PREFIX}${ADMIN_ROUTES.revokeSessions(target)}`,
+        headers: asAdmin(owner),
+        payload: { reason: 'lost laptop' },
+      });
+      expect(revoked.json(), 'the count included sessions that had already expired').toEqual({
+        revoked: 1,
+      });
+
+      // And the expired rows were left alone rather than stamped as revoked,
+      // which would be a false record: they were not revoked, they ran out.
+      const stale = await api.container.database.db.execute<{ n: string }>(sql`
+        SELECT count(*)::text AS n FROM admin_sessions
+        WHERE admin_id = ${target} AND revoked_at IS NULL AND expires_at <= now()`);
+      expect(stale.rows[0]?.n).toBe('3');
+    });
+
+    it('answers a RETRIED creation with the administrator the first attempt made', async () => {
+      /*
+       * `mutations.retry` re-sends a write the server did not answer. Create has
+       * no natural no-op, so without a key the retry finds the username taken
+       * and the operator is told the creation FAILED — for an account that
+       * exists holding the credential they just chose.
+       */
+      const owner = await cookieFor('owner', 'the-owners-real-password');
+      const body = {
+        username: 'retried-admin',
+        displayName: 'Retried',
+        password: 'the-retried-password',
+        roleKeys: ['support'],
+        idempotencyKey: 'create-retry-0001',
+      };
+      const create = (payload: Record<string, unknown>) =>
+        inject({
+          method: 'POST',
+          url: `${API_PREFIX}${ADMIN_ROUTES.create}`,
+          headers: asAdmin(owner),
+          payload,
+        });
+
+      const first = await create(body);
+      expect(first.statusCode).toBe(201);
+      const id = (first.json() as { id: string }).id;
+
+      const retry = await create(body);
+      expect(retry.statusCode, 'the retry was reported as a failure').toBe(201);
+      expect((retry.json() as { id: string }).id).toBe(id);
+
+      // ONE administrator, not two, and one audit row.
+      const rows = await api.container.database.db.execute<{ n: string }>(sql`
+        SELECT count(*)::text AS n FROM admins
+        WHERE tenant_id = ${tenantA.tenantId} AND username = 'retried-admin'`);
+      expect(rows.rows[0]?.n).toBe('1');
+
+      // A DIFFERENT administrator under the same key is a caller bug and is
+      // refused as a payload mismatch rather than answered with the first one.
+      const reused = await create({ ...body, username: 'someone-else' });
+      expect(reused.statusCode).toBe(409);
+      expect(await api.container.admins.findByUsername(tenantA, 'someone-else')).toBeNull();
     });
 
     it('refuses a reset that would hand the caller authority they do not hold', async () => {

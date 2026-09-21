@@ -438,6 +438,21 @@ export const createAdminRequestSchema = z.object({
     .regex(/^[0-9]{1,20}$/)
     .nullable()
     .optional(),
+  /*
+   * OPTIONAL, and what it buys is the difference between a retry and a second
+   * command.
+   *
+   * Create is the one administrator write with no natural no-op: if it commits
+   * and the response is lost, the caller's retry finds the username taken and
+   * is told the creation FAILED — for an account that exists, holding a
+   * credential the operator chose and now believes was never set. `setRoles`
+   * and `setStatus` carry the same option for redelivered Telegram updates;
+   * here the redeliverer is the browser's own retry policy.
+   *
+   * Optional rather than required so that a caller with no retry of its own —
+   * the bootstrap CLI, a test — is not made to invent one.
+   */
+  idempotencyKey: z.string().min(8).max(255).optional(),
 });
 export type CreateAdminRequest = z.infer<typeof createAdminRequestSchema>;
 

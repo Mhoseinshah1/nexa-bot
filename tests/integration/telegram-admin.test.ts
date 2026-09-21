@@ -577,17 +577,19 @@ describe('the Telegram management panel', () => {
       target.id as AdminId,
       'DISABLED',
       'from telegram',
+      'tg-status-1',
     );
     expect(disabled.admin.status).toBe('DISABLED');
 
-    // A REPLAY, which a redelivered Telegram update is: the same call again answers
-    // with the state it found rather than claiming a second change.
+    // A REPLAY, which a redelivered Telegram update is: the SAME key, answered
+    // from the store rather than run a second time.
     const replayed = await ctx.container.telegramAdmins.setStatus(
       tenantA,
       ownerA,
       target.id as AdminId,
       'DISABLED',
       'from telegram',
+      'tg-status-1',
     );
     expect(replayed.admin.status).toBe('DISABLED');
 
@@ -597,6 +599,7 @@ describe('the Telegram management panel', () => {
       target.id as AdminId,
       'ACTIVE',
       'from telegram',
+      'tg-status-3',
     );
     expect(enabled.admin.status).toBe('ACTIVE');
     // Roles survived the round trip: disabling empties AUTHORITY, not assignment.
@@ -604,6 +607,59 @@ describe('the Telegram management panel', () => {
 
     const actions = await auditActions('admin.status_change');
     expect(actions.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('answers a redelivered status tap from the store instead of overwriting a newer decision', async () => {
+    /*
+     * The interleaving the update key exists for, and the one the no-op path
+     * cannot cover.
+     *
+     * A no-op answers a replay that arrives while nothing else has happened.
+     * This is the other case: the tap committed, its reply was lost, ANOTHER
+     * operator made the opposite decision, and Telegram then redelivered the
+     * original update. Without the key there is no longer a no-op to find, so
+     * the old command runs again — disabling the administrator a second time,
+     * revoking their sessions again, and silently undoing a decision nobody
+     * asked it to touch, from a tap nobody made twice.
+     */
+    const target = await createAdmin(ctx.container, tenantA, {
+      username: 'roster-redelivered',
+      roleKeys: ['support'],
+    });
+    const update = 'telegram-update-77';
+
+    await ctx.container.telegramAdmins.setStatus(
+      tenantA,
+      ownerA,
+      target.id as AdminId,
+      'DISABLED',
+      'from telegram',
+      update,
+    );
+
+    // A second operator, through the Web Admin, reverses it.
+    await ctx.container.adminManagement.setStatus(tenantA, ownerA, target.id as AdminId, {
+      status: 'ACTIVE',
+      reason: 'reinstated by somebody else',
+    });
+    expect((await ctx.container.admins.findById(tenantA, target.id as AdminId))?.status).toBe(
+      'ACTIVE',
+    );
+
+    // Telegram redelivers the ORIGINAL update. It must write nothing.
+    await ctx.container.telegramAdmins.setStatus(
+      tenantA,
+      ownerA,
+      target.id as AdminId,
+      'DISABLED',
+      'from telegram',
+      update,
+    );
+
+    expect(
+      (await ctx.container.admins.findById(tenantA, target.id as AdminId))?.status,
+      'a redelivered tap overwrote a newer decision',
+    ).toBe('ACTIVE');
   });
 
   it('refuses the three things a roster tap must never be able to do', async () => {
@@ -627,6 +683,7 @@ describe('the Telegram management panel', () => {
           ownerAId,
           'DISABLED',
           'from telegram',
+          'tg-status-4',
         ),
       ),
     ).toBe('admin.self_modification_denied');
@@ -641,6 +698,7 @@ describe('the Telegram management panel', () => {
           target.id as AdminId,
           'DISABLED',
           'from telegram',
+          'tg-status-5',
         ),
       ),
     ).toBe('platform.permission_denied');
@@ -654,6 +712,7 @@ describe('the Telegram management panel', () => {
           target.id as AdminId,
           'DISABLED',
           'from telegram',
+          'tg-status-6',
         ),
       ),
     ).toBe('admin.not_found');
@@ -694,6 +753,7 @@ describe('the Telegram management panel', () => {
       second.id as AdminId,
       'DISABLED',
       'from telegram',
+      'tg-status-7',
     );
 
     expect(
@@ -704,6 +764,7 @@ describe('the Telegram management panel', () => {
           ownerAId,
           'DISABLED',
           'from telegram',
+          'tg-status-8',
         ),
       ),
     ).toBe('admin.last_owner_protected');

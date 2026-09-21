@@ -175,6 +175,45 @@ export class AdminManagementService {
     const username = adminUsernameSchema.parse(command.username.trim().toLowerCase());
     adminPasswordSchema.parse(command.password);
 
+    /*
+     * The replay lookup, AFTER the cheap authorization and BEFORE the KDF.
+     *
+     * Create is the one write here with no natural no-op. If it commits and the
+     * response is lost, the retry finds the username taken and reports FAILURE
+     * for an account that exists with a credential the operator chose — and the
+     * browser retries automatically, so this is not a hypothetical about a
+     * second click. With the key the retry is answered with the first run's
+     * administrator; without one it cannot be told from somebody else having
+     * taken the name.
+     *
+     * The hash deliberately excludes the PASSWORD: it binds the key to which
+     * administrator was asked for, and hashing a credential into a stored
+     * request fingerprint is not a thing this file does. Reusing one key for two
+     * different usernames is still refused as a payload mismatch.
+     */
+    const createRequestHash = hashRequest({
+      username,
+      displayName: command.displayName,
+      roleKeys: [...new Set(command.roleKeys)].sort(),
+      telegramUserId: command.telegramUserId ?? null,
+    });
+    const createReplay =
+      command.idempotencyKey === undefined
+        ? undefined
+        : ({ namespace: 'WEB', idempotencyKey: command.idempotencyKey } as const);
+    if (createReplay !== undefined) {
+      const found = await this.idempotency.find<{ readonly adminId: string }>(
+        scope,
+        createReplay.namespace,
+        createReplay.idempotencyKey,
+        createRequestHash,
+      );
+      if (found !== null) {
+        const already = await this.requireAdmin(scope, found.result.adminId as AdminId);
+        return { admin: already, roleKeys: await this.admins.roleKeysFor(scope, already.id) };
+      }
+    }
+
     const adminId = this.ids.uuid() as AdminId;
     // Hashing is deliberately outside the transaction: it is intentionally slow,
     // and holding a database transaction open for the duration of a KDF turns
@@ -309,6 +348,20 @@ export class AdminManagementService {
           aggregateId: adminId,
           payload: { username, roleKeys },
         });
+
+        // Inside the transaction that created them, so a crash between the two
+        // cannot leave a key claiming an administrator that does not exist.
+        if (createReplay !== undefined) {
+          await rememberOnce(
+            this.idempotency,
+            scope,
+            createReplay.namespace,
+            createReplay.idempotencyKey,
+            createRequestHash,
+            { adminId },
+            tx,
+          );
+        }
       },
     );
 
@@ -327,6 +380,23 @@ export class AdminManagementService {
     actor: ActorContext,
     targetId: AdminId,
     input: unknown,
+    /*
+     * The update's key, for a caller whose request can be DELIVERED TWICE.
+     *
+     * Optional, and `setRoles` carries the same option for the same reason. A
+     * Web Admin request is a click, so a replay there is a person asking "did
+     * that work" and the no-op path already answers it. A Telegram callback is
+     * REDELIVERED by Telegram when its reply is lost, and that is a different
+     * animal: if an operator disabled Alice, a second operator re-enabled her,
+     * and Telegram then redelivered the first update, the old command ran again
+     * and disabled her a second time — revoking her sessions again and silently
+     * undoing somebody else's decision, from a tap nobody made twice.
+     *
+     * With the key the redelivery is answered from the store with the first
+     * run's outcome and writes nothing. Without one the no-op path is not
+     * enough, because by then the status is no longer what the first run left.
+     */
+    replay?: { readonly namespace: IdempotencyNamespace; readonly idempotencyKey: string },
   ): Promise<{ admin: Admin; roleKeys: string[] }> {
     // A cheap rejection, NOT the authorization. It is read on the pool, so by
     // the time this request reaches the lock the actor may have been disabled
@@ -336,6 +406,31 @@ export class AdminManagementService {
       entityId: targetId,
     });
     const command = setAdminStatusRequestSchema.parse(input);
+
+    /*
+     * The replay lookup, AFTER the cheap authorization, exactly as `setRoles`
+     * orders it: a replay returns a row, and an unauthorized caller must not
+     * learn that one exists. The hash binds the key to what was asked, so the
+     * same key carrying a different status is refused as a payload mismatch
+     * rather than answered with the first run's result.
+     */
+    const statusRequestHash = hashRequest({
+      targetId,
+      status: command.status,
+      reason: command.reason,
+    });
+    if (replay !== undefined) {
+      const found = await this.idempotency.find<{ readonly status: string }>(
+        scope,
+        replay.namespace,
+        replay.idempotencyKey,
+        statusRequestHash,
+      );
+      if (found !== null) {
+        const admin = await this.requireAdmin(scope, targetId);
+        return { admin, roleKeys: await this.admins.roleKeysFor(scope, admin.id) };
+      }
+    }
 
     // Refused before anything is read: an admin cannot disable themselves, and
     // this holds no matter which permissions they carry.
@@ -385,6 +480,12 @@ export class AdminManagementService {
           // The no-op path returns the same projection as the change path, read
           // under the same lock — so the response shape does not depend on
           // whether the status happened to differ.
+          //
+          // Remembered too, and that is not redundant with the no-op itself: a
+          // redelivery arriving AFTER somebody else changed the status would
+          // not find a no-op, and would re-apply this command's status over
+          // theirs. The stored answer is what stops it.
+          await this.rememberStatus(scope, replay, statusRequestHash, target.status, tx);
           return { admin: target, roleKeys: await this.admins.roleKeysFor(scope, target.id, tx) };
         }
 
@@ -466,6 +567,8 @@ export class AdminManagementService {
         // so a concurrent role change made the response combine a status from
         // one moment with roles from another, and a web surface was reaching
         // past the application layer to finish a business response.
+        await this.rememberStatus(scope, replay, statusRequestHash, command.status, tx);
+
         return {
           admin: { ...target, status: command.status as AdminStatus },
           roleKeys: targetRoleKeys,
@@ -952,6 +1055,25 @@ export class AdminManagementService {
           { adminId: target.id, endedSignIns: sessionsRevoked },
         );
 
+        /*
+         * The SAME domain event the self-service rotation writes, with the
+         * boolean that tells them apart.
+         *
+         * `AdminPasswordChanged`'s frozen payload is `{ bySelf: boolean }` and
+         * has been since Phase 1 — the contract anticipated an operator path
+         * before one existed, and writing only the audit row would have left
+         * every outbox consumer unable to see that this administrator's
+         * credential changed at all. An audit row answers "who did what"; a
+         * domain event is what other modules react to, and the two are not
+         * substitutes (ADR-0006).
+         */
+        await this.outbox.write(tx, actor, {
+          eventType: 'AdminPasswordChanged',
+          aggregateType: 'Admin',
+          aggregateId: target.id,
+          payload: { bySelf: false },
+        });
+
         return { admin: target, roleKeys: targetRoleKeys, sessionsRevoked };
       },
     );
@@ -1005,14 +1127,21 @@ export class AdminManagementService {
    * session open somewhere" does not. Folding them together would make every
    * lock-out also a password the owner no longer knows.
    *
-   * Self-revocation is ALLOWED here, unlike everywhere else in this file, and
-   * that is deliberate: signing yourself out of every device is a safe act
-   * anybody may perform on themselves, and the caller's own session is among
-   * the ones that end. It is the same thing the logout button does, at a wider
-   * blast radius, and it removes authority rather than conferring it — which is
-   * why it needs neither the privilege check nor the self refusal. What it does
-   * still take is a live session, like every other write here; see the note in
-   * the transaction.
+   * Self-revocation is ALLOWED here, unlike everywhere else in this file. The
+   * exemption is from the SELF REFUSAL and the privilege bound, and from those
+   * two only: signing yourself out of every device removes authority rather
+   * than conferring it, so neither guard has anything to protect. `admins.edit`
+   * is still required, of every caller including one naming themselves, and a
+   * live session is still required — see the note in the transaction.
+   *
+   * That last point was written the other way round once, as "a safe act
+   * anybody may perform on themselves", and it was wrong: the preflight and the
+   * in-transaction check both charge the permission unconditionally. Widening
+   * them to exempt a self-target was the other available fix and was refused.
+   * Authorization here is deny-by-default, an administrator who wants only
+   * their CURRENT session ended already has the logout route, and "sign out
+   * everywhere" performed by somebody accountable leaves a better record than
+   * the same act performed by whoever is holding the session.
    */
   async revokeSessions(
     scope: ScopeContext,
@@ -1500,6 +1629,27 @@ export class AdminManagementService {
     context: Record<string, unknown>,
   ): Promise<void> {
     await this.opsLog.record(scope, { code, severity: 'INFO', message, context }, tx);
+  }
+
+  /** The replay record for `setStatus`, written only when the caller named a key. */
+  private async rememberStatus(
+    scope: ScopeContext,
+    replay:
+      { readonly namespace: IdempotencyNamespace; readonly idempotencyKey: string } | undefined,
+    requestHash: string,
+    status: string,
+    tx: TransactionScope,
+  ): Promise<void> {
+    if (replay === undefined) return;
+    await rememberOnce(
+      this.idempotency,
+      scope,
+      replay.namespace,
+      replay.idempotencyKey,
+      requestHash,
+      { status },
+      tx,
+    );
   }
 
   /** The replay record for `setRoles`, written only when the caller named a key. */

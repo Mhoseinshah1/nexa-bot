@@ -544,6 +544,16 @@ export const USERNAME_AUTOMATIC_CALLBACK_PREFIX = 'Z:';
  * same predicate — so ten rows are ten decisions still to make.
  */
 const ADMIN_QUEUE_LIMIT = 10;
+/*
+ * How many roster rows one keyboard carries.
+ *
+ * Larger than `ADMIN_QUEUE_LIMIT` because these are not work items to be
+ * cleared — an operator is looking somebody up, and a roster is people created
+ * by hand rather than a customer-sized set. Small enough that the keyboard is
+ * well inside Telegram's limit whatever the usernames are. The header prints
+ * `shown` against `total`, so reaching this bound is visible rather than silent.
+ */
+const ADMIN_ROSTER_LIMIT = 30;
 
 /**
  * What `bot.admin.panel_detail` renders for a panel with no cap.
@@ -1975,6 +1985,8 @@ export interface TelegramAdminPort {
     targetId: string,
     status: 'ACTIVE' | 'DISABLED',
     reason: string,
+    /** The update's key. A Telegram callback is redelivered, so it is replayed, not re-run. */
+    idempotencyKey: string,
   ): Promise<AdminRosterEntry>;
 }
 
@@ -2909,6 +2921,7 @@ export class BotRuntime {
             command.targetId,
             ADMIN_STATUS_CODES[code as AdminStatusCode],
             permissions,
+            input.idempotencyKey,
           );
         }
         case 'ADMIN_REVOKE':
@@ -3942,9 +3955,25 @@ export class BotRuntime {
     if (roster === undefined || roster.length === 0) {
       return { key: 'bot.admin.admins_none', values: {}, buttons: [], orderId: null };
     }
+    /*
+     * BOUNDED, and the bound is printed rather than applied silently.
+     *
+     * A Telegram inline keyboard has a size limit, and `create` enforces no
+     * ceiling on how many administrators a tenant may hold — so mapping an
+     * unbounded roster into one keyboard eventually fails the whole send, and
+     * the section stops working at exactly the size where an operator most
+     * needs it. Every other list on this surface bounds itself for the same
+     * reason.
+     *
+     * What is NOT acceptable is the quiet version: a truncated roster reads
+     * exactly like a complete one, and an operator who cannot find somebody
+     * concludes they are not an administrator. The header carries both counts,
+     * so a bound that was reached says so.
+     */
+    const page = roster.slice(0, ADMIN_ROSTER_LIMIT);
     return {
       key: 'bot.admin.section',
-      values: {},
+      values: { shown: page.length, total: roster.length },
       /*
        * EVERY administrator, not only the Telegram-bound ones.
        *
@@ -3959,7 +3988,7 @@ export class BotRuntime {
        * treatment: no numeric Telegram id, which belongs on the screen where the
        * revoke button that acts on it is.
        */
-      buttons: roster.map((entry) => ({
+      buttons: page.map((entry) => ({
         label: {
           kind: 'TEXT' as const,
           text: `${entry.admin.username} — ${entry.admin.status}`,
@@ -4019,6 +4048,7 @@ export class BotRuntime {
     adminId: string,
     status: 'ACTIVE' | 'DISABLED',
     permissions: ReadonlySet<PermissionKey>,
+    idempotencyKey: string,
   ): Promise<PendingReply> {
     const admins = this.deps.telegramAdmins;
     if (admins === undefined) {
@@ -4030,6 +4060,7 @@ export class BotRuntime {
       adminId,
       status,
       'Status changed from the Telegram management panel.',
+      idempotencyKey,
     );
     return {
       key: 'bot.admin.admin_status_changed',

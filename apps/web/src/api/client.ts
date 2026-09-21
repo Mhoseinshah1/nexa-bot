@@ -296,12 +296,23 @@ export function fetchRoles(): Promise<RoleListResponse> {
   return authedGet(ADMIN_ROUTES.rolesCatalog, roleListResponseSchema);
 }
 
-/** Create an administrator. The password leaves the browser once and is never read back. */
+/**
+ * Create an administrator. The password leaves the browser once and is never read back.
+ *
+ * `idempotencyKey` is required by this function even though the schema makes it
+ * optional, and the asymmetry is deliberate: the browser is the caller that
+ * RETRIES. `mutations.retry` in `main.tsx` re-sends a write the server did not
+ * answer, so a create that committed and lost its response comes back as
+ * `ADMIN_USERNAME_TAKEN` and the operator is told it failed — for an account
+ * that exists with the credential they just chose. A caller with no retry of its
+ * own may omit the key; this one may not.
+ */
 export function createAdmin(input: {
   username: string;
   displayName: string;
   password: string;
   roleKeys: string[];
+  idempotencyKey: string;
   telegramUserId?: string | null;
 }): Promise<AdminSummary> {
   return post(ADMIN_ROUTES.create, input, adminSummarySchema);

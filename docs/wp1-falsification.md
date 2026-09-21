@@ -27,6 +27,51 @@ run and thrown away — each row names a test that exists on this branch.
 \* Killed only after the gap the first run exposed was closed. The three are
 worth naming, because each was a real hole rather than a missing assertion.
 
+## Round 2 — the nine Codex findings
+
+One review round, nine findings, all nine validated against the code and all
+nine real. Eight of the fixes carry a mutation; the ninth is a comment.
+
+| #    | Rule reverted                                                 | Suite                | Result |
+| ---- | ------------------------------------------------------------- | -------------------- | ------ |
+| R-01 | the expiry predicate on `revokeAllForAdmin`                   | `admin-http`         | KILLED |
+| R-02 | the `AdminPasswordChanged` write on an operator reset         | `admin-http`         | KILLED |
+| R-03 | the replay lookup on `create`                                 | `admin-http`         | KILLED |
+| R-04 | the replay lookup on `setStatus`                              | `telegram-admin`     | KILLED |
+| R-05 | the non-empty requirement put back on the role EDIT           | `web/administrators` | KILLED |
+| R-06 | the role picker snapshots the row instead of deriving from it | `web/administrators` | KILLED |
+| R-07 | revoke gated on a cached empty session list again             | `web/administrators` | KILLED |
+| R-08 | the creation stops sending its idempotency key                | `web/administrators` | KILLED |
+
+### The two with no mutation row, and why
+
+**The self-revocation docblock.** The fix is prose: the method claimed
+self-revocation was "a safe act anybody may perform on themselves" while both
+the preflight and the in-transaction check charge `admins.edit` unconditionally.
+Widening the permission to match the sentence was the other available fix and
+was refused — authorization here is deny-by-default, an administrator who wants
+their current session ended already has the logout route, and "sign out
+everywhere" performed by somebody accountable leaves the better record. So the
+sentence changed, not the code, and there is nothing to mutate.
+
+**The Telegram roster bound.** `adminSection` now slices to
+`ADMIN_ROSTER_LIMIT` and prints `shown` against `total`, because an unbounded
+map into one inline keyboard eventually exceeds Telegram's limit and fails the
+whole send — at exactly the roster size where an operator most needs it.
+
+That slice has **no test**, and neither does any other part of this section's
+RENDERING: nothing in the suite drives `adminSection` or `adminAdmin` at all.
+What is covered is the layer beneath them — `listAll`, `setStatus`, tenant
+isolation, the permission, the last-owner rule and the redelivery replay, eight
+integration cases and two killed mutations. What is not covered is which buttons
+a reply carries, and the bound is part of that.
+
+It is recorded here rather than asserted because the honest options were a test
+or a note, and a note is what this is. The damage a silent revert would do is
+bounded by the counts being printed: a reverted slice makes `shown` equal
+`total` again, which is visible in the message rather than silent — but visible
+to an operator, not to CI, and that is the gap.
+
 ## W-02 — the bound that nothing tested
 
 Setting somebody's password is taking their account: whoever does it can sign in

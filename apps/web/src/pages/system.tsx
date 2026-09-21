@@ -463,10 +463,29 @@ function CreateAdmin() {
       displayName: string;
       password: string;
       roleKeys: string[];
-    }) => {
-      submission.current(input);
-      return createAdmin(input);
-    },
+    }) =>
+      /*
+       * The key is SENT, not merely minted.
+       *
+       * It was computed here and thrown away, which made the submission-key
+       * mechanism present in appearance only: `mutations.retry` re-sends a
+       * write the server did not answer, and a create that committed then
+       * came back as "that username is taken" — the operator told their new
+       * administrator failed, for an account that exists holding the password
+       * they just typed.
+       *
+       * The fingerprint deliberately excludes the password, matching what the
+       * server hashes the key against: changing the credential on a held key
+       * is the same command, and a different username is a new one.
+       */
+      createAdmin({
+        ...input,
+        idempotencyKey: submission.current({
+          username: input.username,
+          displayName: input.displayName,
+          roleKeys: input.roleKeys,
+        }),
+      }),
     onSuccess: () => {
       submission.settle();
       setProblem(null);
@@ -631,6 +650,15 @@ function RolePicker({
  * only for an actor who may edit; the guard still runs on the request, so this
  * stops promising what the server would refuse rather than deciding anything.
  */
+/**
+ * How often the open sessions panel re-reads.
+ *
+ * Faster than the roster's own poll because the question is sharper: an
+ * operator watching this list is deciding whether somebody is still signed in,
+ * and the answer changes on a sign-in rather than on an administrative edit.
+ */
+const SESSIONS_REFRESH_MS = 15_000;
+
 function AdminControls({ row, mayEdit }: { row: AdminSummary; mayEdit: boolean }) {
   const notify = useToast();
   const queries = useQueryClient();
@@ -640,15 +668,38 @@ function AdminControls({ row, mayEdit }: { row: AdminSummary; mayEdit: boolean }
   const revokeKey = useSubmissionKey();
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState('');
-  const [roleKeys, setRoleKeys] = useState<readonly string[]>(row.roleKeys);
+  /*
+   * DERIVED from the row until the operator touches it, not initialised from it.
+   *
+   * The roster polls, so `row.roleKeys` changes underneath a mounted panel when
+   * another operator or the Telegram surface edits the same administrator. A
+   * `useState` initialiser runs once, so the picker went on showing the roles as
+   * they were when the panel opened — and `setRoles` sends the FULL set, so
+   * saving from that stale picker silently reverted the other change.
+   *
+   * `edited` is what distinguishes "I have not touched this" from "I deliberately
+   * unchecked everything", which the empty set above makes a real state.
+   */
+  const [edited, setEdited] = useState<readonly string[] | null>(null);
+  const roleKeys = edited ?? row.roleKeys;
   const [newPassword, setNewPassword] = useState('');
   const [problem, setProblem] = useState<string | null>(null);
 
   const roles = useQuery({ queryKey: ['roles'], queryFn: fetchRoles, enabled: open && mayEdit });
+  /*
+   * Polled while the panel is open, and the reason is the panel's own claim.
+   *
+   * `refetchOnWindowFocus` is off globally, so without an interval this list is
+   * whatever it was when the panel opened: a target who signs in afterwards
+   * never appears, and one whose session expires never leaves. A screen whose
+   * whole job is "who is signed in right now" cannot be a snapshot from minutes
+   * ago.
+   */
   const sessions = useQuery({
     queryKey: ['admin-sessions', row.id],
     queryFn: () => fetchAdminSessions(row.id),
     enabled: open,
+    refetchInterval: open ? SESSIONS_REFRESH_MS : false,
   });
 
   const reasonGiven = reason.trim().length > 0;
@@ -812,9 +863,17 @@ function AdminControls({ row, mayEdit }: { row: AdminSummary; mayEdit: boolean }
             <button
               type="button"
               className="btn danger sm"
-              // Disabled only when we KNOW there is nothing to revoke. If the
-              // listing failed we do not know, and revoking blind is safe.
-              disabled={busy || !reasonGiven || (sessions.isSuccess && live.length === 0)}
+              /*
+               * NOT gated on the listing at all any more.
+               *
+               * Gating on "we know there is nothing to revoke" sounds careful
+               * and is a trap: a cached empty result keeps the button disabled
+               * after the target signs in, and the operator is locked out of
+               * the action by a fact that stopped being true. Revoking when
+               * there is nothing to revoke is safe and answers zero, so the
+               * server is the right place to find that out.
+               */
+              disabled={busy || !reasonGiven}
               onClick={() => revoke.mutate()}
             >
               {t('web.admin_sessions_revoke')}
@@ -826,14 +885,23 @@ function AdminControls({ row, mayEdit }: { row: AdminSummary; mayEdit: boolean }
               idPrefix={`admin-${row.id}`}
               available={roles.data?.roles ?? []}
               selected={roleKeys}
-              onChange={setRoleKeys}
+              onChange={setEdited}
             />
           </Field>
           <div className="toolbar">
             <button
               type="button"
               className="btn sm"
-              disabled={busy || !reasonGiven || roleKeys.length === 0}
+              /*
+               * NOT gated on a non-empty set. `setAdminRolesRequestSchema`
+               * accepts an empty array and the domain supports an
+               * administrator with none — parking an account without
+               * disabling it. Requiring one here made the last role
+               * unremovable, which is the advertised operation refused by the
+               * button rather than by the server. Creation is the arm that
+               * genuinely needs a role, and it keeps the requirement.
+               */
+              disabled={busy || !reasonGiven}
               onClick={() => rolesMutation.mutate()}
             >
               {t('web.admin_roles_save')}
