@@ -27,6 +27,7 @@ import {
   adminActorFor,
   createAdmin,
   createTestContext,
+  validatePanelConnection,
   SEED_IDS,
   tenantA,
   type TestContext,
@@ -173,6 +174,16 @@ describe('a provisioned service announces itself', () => {
       idempotencyKey: 'panel-deliv-create',
     });
     panelId = created.view.panel.id;
+    /*
+     * And CONNECTION-TESTED, which the create alone is not.
+     *
+     * `panels.create` writes an ACTIVE row and contacts nothing, so since this
+     * hotfix the panel is `UNVALIDATED` and cannot be sold onto — a brand-new
+     * row being immediately sellable is one of the holes being closed. The
+     * fake panel here is real and reachable, so recording a successful
+     * connection test is exactly what an operator would do next.
+     */
+    await validatePanelConnection(ctx.container, tenantA, panelId);
 
     const resolved = await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('r'), {
       idempotencyKey: 'resolve-deliv',
@@ -891,11 +902,23 @@ describe('a provisioned service announces itself', () => {
      * unattended wrong logins on a 30/60/120-second backoff, which is how an operator
      * gets locked out of their own panel by their own bot.
      */
+    /*
+     * BOUGHT FIRST, then the password is broken — and that order is now forced
+     * rather than incidental.
+     *
+     * Replacing a credential changes `connectionIdentityOf`, so the panel's
+     * recorded connection test stops vouching for what it is NOW and the sale is
+     * refused as `UNVALIDATED`. That is the hotfix working: a panel whose
+     * password was changed after its last probe is not a panel this installation
+     * has evidence about. What this case is about is what the PROVISIONER does
+     * with a wrong password, which needs an order that was legitimately taken
+     * while the panel was still sound.
+     */
+    const orderId = await paidOrder('bad-password');
     await ctx.container.panels.setCredentials(tenantA, owner, panelId, {
       credentials: { password: 'not-the-panel-password' },
       idempotencyKey: 'wrong-password',
     });
-    const orderId = await paidOrder('bad-password');
 
     await ctx.container.provisionerLoop.tick();
 

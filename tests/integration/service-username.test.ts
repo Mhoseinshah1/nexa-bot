@@ -25,6 +25,7 @@ import {
   adminActorFor,
   createAdmin,
   createTestContext,
+  makePanelSellable,
   tenantA,
   tenantB,
   type TestContext,
@@ -110,6 +111,15 @@ describe('the name a service is sold under', () => {
              (${panelShared}, ${tenantB.tenantId}, 'Shared host', 'sanaei',
               'https://shared.example.test', 'ACTIVE', true, true,
               'PREFIX_RANDOM', 'nx', NULL)`);
+    /*
+     * Sellable in full, not just rows. Since this hotfix a confirmation also
+     * needs credentials, an activation and a recorded connection test, and
+     * these cases are about the NAME a sale is made under — so the sale has to
+     * be able to happen.
+     */
+    await makePanelSellable(ctx.container, tenantA, panelLegacy);
+    await makePanelSellable(ctx.container, tenantA, panelTemplated);
+    await makePanelSellable(ctx.container, tenantB, panelShared);
     customerA = await customer(tenantA, '900901');
     customerB = await customer(tenantA, '900902');
     owner = adminActorFor(

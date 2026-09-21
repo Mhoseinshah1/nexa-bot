@@ -32,6 +32,7 @@ import { startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
 import {
   adminActorFor,
   createAdmin,
+  validatePanelConnection,
   migrateOnce,
   resetDatabase,
   tenantA,
@@ -198,6 +199,17 @@ describe('operator service actions over HTTP', () => {
       idempotencyKey: 'panel-ops-sanaei',
     });
     sanaeiPanelId = sanaei.view.panel.id;
+    /*
+     * And CONNECTION-TESTED, which the create alone is not.
+     *
+     * `panels.create` writes an ACTIVE row and contacts nothing, so since this
+     * hotfix the panel is `UNVALIDATED` and cannot be sold onto — a brand-new
+     * row being immediately sellable is one of the holes being closed. These
+     * fake panels are real and reachable, so recording a successful connection
+     * test is exactly what an operator would do next.
+     */
+    await validatePanelConnection(api.container, tenantA, marzbanPanelId);
+    await validatePanelConnection(api.container, tenantA, sanaeiPanelId);
 
     ownerCookie = await cookieFor('owner-ops', 'the-owners-password');
     editorCookie = await cookieFor('editor', 'the-editors-password');
@@ -907,6 +919,10 @@ describe('operator service actions over HTTP', () => {
       activation: { subscriptionDomain: 'sub-b.example.test', inboundId: 1 },
       idempotencyKey: 'panel-b-ops',
     });
+    // Connection-tested like the tenant-A panels above: a create alone leaves it
+    // UNVALIDATED, and this case needs tenant B to have a REAL service for the
+    // 404 to be about scope rather than about a sale that never happened.
+    await validatePanelConnection(api.container, tenantB, panelB.view.panel.id);
     const customerB = await customer('920920', tenantB, SEED_IDS.botB1 as BotInstanceId);
     const orderB = await paidOrder('foreign', {
       scope: tenantB,

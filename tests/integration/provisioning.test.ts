@@ -22,6 +22,7 @@ import {
   adminActorFor,
   createAdmin,
   createTestContext,
+  validatePanelConnection,
   SEED_IDS,
   tenantA,
   tenantB,
@@ -95,6 +96,16 @@ describe('provisioning invariants', () => {
         tx,
       );
     });
+    /*
+     * And a recorded connection test, which no part of the fixture above is.
+     *
+     * Since this hotfix a sale also needs evidence that the panel was CONTACTED
+     * with the configuration it has now — `connectionIdentityOf` covers the
+     * activation and the three credential timestamps, so this has to come after
+     * both. A panel nobody ever probed is not the panel any of these cases are
+     * about, exactly as the credential comment above says.
+     */
+    await validatePanelConnection(ctx.container, tenantA, panelA);
     const resolved = await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('r'), {
       idempotencyKey: 'resolve-prov',
       telegramUserId: '910910',

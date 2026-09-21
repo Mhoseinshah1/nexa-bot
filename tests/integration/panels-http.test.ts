@@ -156,7 +156,14 @@ describe('panel HTTP surface', () => {
     // advertising it would have offered a configuration every create rejects.
     // Phase 3B implemented it, so it is listed now — and it is listed because
     // the adapter exists, not because the name does.
-    expect(body.providers.map((provider) => provider.key).sort()).toEqual(['marzban', 'sanaei']);
+    expect(body.providers.map((provider) => provider.key).sort()).toEqual([
+      'marzban',
+      // Listed because `RickpanelAdapter` exists and is registered, not because
+      // the contract names the type: a provider with no adapter is a provider
+      // this endpoint must not offer an operator.
+      'rickpanel',
+      'sanaei',
+    ]);
     // A catalogue of code: every tenant sees the same list, and it describes
     // what an adapter declares rather than what a panel row happens to say.
     const marzban = body.providers.find((provider) => provider.key === 'marzban');
@@ -203,6 +210,32 @@ describe('panel HTTP surface', () => {
        */
       const PUBLISHED: Record<string, readonly string[]> = {
         marzban: [
+          'HEALTH_CHECK',
+          'CREATE_USER',
+          'READ_USAGE',
+          'DELIVER_SUBSCRIPTION_LINK',
+          'DISABLE_USER',
+          'ENABLE_USER',
+          'DELETE_USER',
+          'RENEW_USER',
+          'ADD_VOLUME',
+          'ADD_TIME',
+        ],
+        /*
+         * The same ten as Marzban, and NOT because RickPanel is a Marzban.
+         *
+         * The two are separate provider types precisely because they mean
+         * different things by the same routes — `docs/rickpanel-adapter-audit.md`.
+         * The lists coincide because `RickpanelAdapter` implements the same ten
+         * operations, and they are written out separately so that one moving
+         * does not silently move the other.
+         *
+         * `LIMIT_DEVICES` is absent: the RickPanel contract describes no field
+         * for a device limit, so the adapter sends none and the endpoint must
+         * not publish a promise nothing keeps. That asymmetry with Sanaei is the
+         * whole reason this map is per provider.
+         */
+        rickpanel: [
           'HEALTH_CHECK',
           'CREATE_USER',
           'READ_USAGE',

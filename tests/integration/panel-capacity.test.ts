@@ -662,6 +662,13 @@ describe('panel capacity and sales eligibility', () => {
     await ctx.container.database.db.execute(sql`
       INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
       VALUES (${roomy}, ${tenantA.tenantId}, 'Panel D', 'sanaei', 'https://d.example.test', 'ACTIVE')`);
+    /*
+     * Sellable in full, not just a row: since this hotfix a panel also needs
+     * credentials, an activation and a recorded connection test before the
+     * catalogue will offer it. These cases are about capacity and eligibility
+     * ORDER, so the panel that is supposed to be reachable has to actually be.
+     */
+    await makePanelSellable(ctx.container, tenantA, roomy);
     await bulkActiveProducts(panelA, PRODUCT_PAGE_MAX * 5 + 1);
     const wanted = await activeProduct(roomy);
     await setStatus(panelA, 'DISABLED');
@@ -689,6 +696,7 @@ describe('panel capacity and sales eligibility', () => {
         INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status, max_services)
         VALUES (${id}, ${tenantA.tenantId}, ${`Panel ${String(index)}`}, 'sanaei',
                 ${`https://p${String(index)}.example.test`}, 'ACTIVE', NULL)`);
+      await makePanelSellable(ctx.container, tenantA, id);
     }
     for (const id of [disabled, archived, unhealthy, full]) await bulkActiveProducts(id, 30);
     const wanted = await activeProduct(roomy);
