@@ -447,31 +447,45 @@ describe('RickPanel create', () => {
 // 409
 // ---------------------------------------------------------------------------
 
-describe('RickPanel 409 recovery', () => {
-  it('adopts our own existing user instead of creating a second one', async () => {
+describe('RickPanel 409 is refused, never adopted', () => {
+  /**
+   * The name exists and the panel will show it to us, and we still refuse.
+   *
+   * This case used to assert the opposite — that the record was adopted as our
+   * own earlier create landing — and Codex C2 (P1) on PR #58 is why it now
+   * asserts a refusal. A panel answers for every user ITS ADMIN owns, not for
+   * every user WE made, so "visible to us" never proved "created by us". An
+   * operator pointing Nexa at a panel that already has customers on it is the
+   * documented way to adopt one, and a customer typing an existing CUSTOM name
+   * would have been handed that account's subscription URL as their own.
+   *
+   * The delivery assertion is the load-bearing one: whatever else changes, the
+   * outcome must not carry a URL read off somebody else's record.
+   */
+  it('refuses a name that already exists even when the panel will show it to us', async () => {
     createMode = 'conflict-owned';
     const outcome = await adapter().createUser(target(), http(), CREATE);
-    expect(outcome.ok).toBe(true);
-    if (!outcome.ok) return;
-    expect(outcome.delivery).toEqual({
-      kind: 'SUBSCRIPTION_LINK',
-      url: `${base}/sub/nxuhdjwuc3m5-token`,
-    });
-    // ONE create, and the read that adopted it. Never a second create, and
-    // never a create under a different name.
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.failure).toBe('PROVIDER_REFUSED');
+    expect(outcome.status).toBe(409);
+    // Never a second create, and never a create under a different name.
     const creates = requests.filter((one) => one.method === 'POST' && one.path === '/api/user');
     expect(creates).toHaveLength(1);
-    expect(users.size).toBe(1);
+    // And no read at all: there is no question a read could answer here, and
+    // asking one is what produced the adoption this case exists to forbid.
+    expect(reads()).toHaveLength(0);
   });
 
   /**
-   * A 409 from the panel and a 404 from the read is the name belonging to
-   * ANOTHER admin — the document says a user you do not own answers 404 "the
-   * same as one that does not exist".
+   * The same answer when the name belongs to another admin and the read would
+   * have returned 404 — the document says a user you do not own answers 404
+   * "the same as one that does not exist".
    *
-   * No amount of retrying makes it ours, so it is a refusal: the order fails
-   * once and the customer is refunded, rather than waiting out five attempts on
-   * a reconciliation that can only ever find nothing.
+   * Both 409 shapes now end identically, which is the point: the adapter cannot
+   * tell them apart and no longer pretends to. Terminal on the first attempt, so
+   * the order fails once and the customer is refunded rather than waiting out
+   * five attempts against a name that will never be free.
    */
   it('refuses a name held by another admin instead of retrying it', async () => {
     createMode = 'conflict-foreign';
@@ -482,8 +496,21 @@ describe('RickPanel 409 recovery', () => {
     expect(outcome.status).toBe(409);
     expect(PROVIDER_FAILURE_RETRYABLE[outcome.failure]).toBe(false);
     expect(operationFailureOutcome(outcome.failure, 'PROVISION')).toBe('FAILED');
-    // One read, not the full poll: the answer does not get better by asking again.
-    expect(reads()).toHaveLength(1);
+    expect(reads()).toHaveLength(0);
+  });
+
+  /**
+   * A refusal must not leak what it saw. `conflict-owned` is the case where a
+   * real subscription URL was within reach, so this asserts the refusal carries
+   * a status and a kind and nothing read off the panel.
+   */
+  it('carries no subscription, token or panel text out of a conflict', async () => {
+    createMode = 'conflict-owned';
+    const outcome = await adapter().createUser(target(), http(), CREATE);
+    const logged = asLogged(outcome);
+    expect(logged).not.toContain('token');
+    expect(logged).not.toContain('/sub/');
+    expect(logged).not.toContain('already exists');
   });
 });
 

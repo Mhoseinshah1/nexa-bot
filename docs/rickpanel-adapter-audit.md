@@ -118,14 +118,45 @@ five attempts and seven minutes against a panel that will refuse identically
 every time — the precise shape of the production incident, reached by a second
 path.
 
-### F-RP-4 — 409 should be read, not re-sent
+### F-RP-4 — 409 is a refusal, and never an adoption
 
-Both panels answer 409 for a name in use, and today both route to reconciliation,
-which does eventually read the user back. That is acceptable and slow. RickPanel
-makes it worth doing directly: with an idempotency-safe username, a 409 means
-_this installation's own earlier create landed_, and the correct next move is one
-`GET /api/user/{username}` to adopt it. Never a second create under a different
-name — that is a second paid-for account on somebody's panel.
+Both panels answer 409 for a name in use, and today both route to
+reconciliation, which does eventually read the user back.
+
+**This finding was originally written the other way round and was wrong.** It
+said that with an idempotency-safe username a 409 means _this installation's own
+earlier create landed_, so the adapter should read the user back and adopt it.
+Codex C2 (P1) on PR #58 falsified both halves, and the corrected rule is that a
+409 on the create path is `PROVIDER_REFUSED` with no read at all.
+
+It is unsafe. The panel answers for every user **its admin owns**, not for every
+user **we made**, and those sets differ the moment an operator points Nexa at a
+panel that already has customers on it — which is the adoption procedure in
+`docs/providers/rickpanel.md`. Nexa's reservations only know names Nexa issued,
+so on a panel whose policy allows CUSTOM names a customer typing an existing name
+would have been handed that account's subscription URL as their own: another
+person's credentials delivered to the wrong customer, and the service recorded as
+delivered.
+
+It is also unnecessary. A CREATE is re-issued only after a failure in
+`SAFE_TO_REPLAY_FAILURE_KINDS` — unreachable, TLS, blocked, authentication,
+rate-limited — every one of which means the panel did not read the request. Where
+the panel might have acted (a timeout, an unreadable body, a 5xx) the outcome is
+`UNKNOWN`, the service goes to `UNRECONCILED`, and a READ settles it. So "our own
+earlier create landed" is unreachable at the 409 branch, and adoption belongs to
+the reconciliation path that already exists for it.
+
+What remains true is the original last sentence: never a second create under a
+different name. Refusing achieves that more simply than adopting did.
+
+**The residual, recorded rather than fixed here: OQ-RP-05.** The reconciliation
+READ has the same provenance limit — an account it finds after an `UNKNOWN`
+create could be ours or could have pre-existed — and it cannot be closed by
+reading harder. It needs durable provenance for the operation, which is a schema
+change and not a hotfix. It is narrower than the 409 case (it needs the name to
+pre-exist AND our create to lose its answer, where a pre-existing name normally
+answers 409 at once) and it is not specific to RickPanel: Marzban's reconciliation
+shares it.
 
 ---
 
@@ -203,3 +234,4 @@ what that is worth.
 | OQ-RP-02 | Does `POST /api/user` accept `status`, as Marzban's does?               | Not declared. The adapter does not send it on create; the panel's own default applies, and a suspend is a separate PUT.    |
 | OQ-RP-03 | What does the create actually return — the user, or an acknowledgement? | "Success", no schema. The adapter does not depend on the answer: it reads the user back either way.                        |
 | OQ-RP-04 | How long does node propagation take?                                    | Unmeasured. The bounded read policy is stated in the adapter as an assumption, not a measurement.                          |
+| OQ-RP-05 | After an `UNKNOWN` create, can a found account be proved to be OURS?    | No, and not by reading harder. Needs durable per-operation provenance — a schema change. Shared with Marzban. See F-RP-4. |

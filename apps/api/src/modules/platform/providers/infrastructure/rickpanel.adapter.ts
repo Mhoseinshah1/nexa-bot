@@ -405,27 +405,38 @@ export class RickpanelAdapter implements ProviderAdapter {
 
     if (created.status === 409) {
       /*
-       * The name is taken. By whom is the entire question.
+       * The name is taken, and this create does not get to decide by whom.
        *
-       * A read answers it, because the document says a user this admin does not
-       * own answers 404 "the same as one that does not exist". So:
+       * It used to read the user back and ADOPT it when the panel returned one,
+       * on the reasoning that a name we asked for and were refused must be one
+       * our own earlier create had landed. Codex C2 (P1) on PR #58 showed both
+       * halves of that wrong.
        *
-       *   found     -> our own earlier create landed. Adopt it. This is what
-       *                makes a replayed provision idempotent without a second
-       *                account, and it is why the read is by the SAME username
-       *                rather than by a freshly minted one.
-       *   not found -> the name belongs to another admin on this panel. No
-       *                amount of retrying will make it ours, so this is a
-       *                refusal rather than an unknown: the order is failed and
-       *                the customer refunded rather than left waiting on a
-       *                reconciliation that can only ever find nothing.
+       * It is unsafe. A panel answers for every user ITS ADMIN owns, not for
+       * every user WE made, and those are different sets the moment an operator
+       * points Nexa at a panel that already has customers on it — which
+       * `docs/providers/rickpanel.md` describes as the ordinary way to adopt
+       * one. Our reservations only know names Nexa issued, so a customer typing
+       * a CUSTOM name that already exists there would have been handed that
+       * account's subscription URL and told it was theirs: somebody else's
+       * credentials, delivered to the wrong person, and the service marked
+       * successful.
+       *
+       * And it is unnecessary, which is what makes refusing cost nothing. A
+       * CREATE is re-issued only after a failure in `SAFE_TO_REPLAY_FAILURE_KINDS`
+       * — unreachable, TLS, blocked, auth, rate-limited — and every one of those
+       * means the panel did not read the request. When the panel MIGHT have
+       * acted (a timeout, an unreadable body, a 5xx) the outcome is `UNKNOWN`,
+       * the service goes to `UNRECONCILED`, and a READ settles it. So "our own
+       * earlier create landed" cannot reach this line, and adoption belongs to
+       * the reconciliation path that exists for it.
+       *
+       * `PROVIDER_REFUSED`: the panel read the request and refused it by a rule.
+       * Terminal on the first attempt, and the order is refunded in that
+       * transaction rather than retried against a name that will never be free.
+       * The remedy is a different username, which is the customer's to choose.
        */
-      const existing = await this.readBack(target, http, auth.token, input.username, 1);
-      if (!existing.ok) return existing;
-      if (!existing.found) {
-        return { ok: false, failure: 'PROVIDER_REFUSED', status: 409 };
-      }
-      return this.delivered(target, existing.record, created.status);
+      return { ok: false, failure: 'PROVIDER_REFUSED', status: 409 };
     }
 
     if (created.status === 400 || created.status === 403) {

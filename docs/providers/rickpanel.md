@@ -104,6 +104,23 @@ release a hotfix.
 A `429` is different and is retried, and a `5xx` is different again: that one may
 have created the account, so it reconciles rather than refunding.
 
+### A name already on the panel is refused, never taken over
+
+If a create answers `409` — the username already exists on that panel — Nexa
+**refuses the order and refunds the customer.** It does not read the account back
+and it does not hand it to the customer, even when your admin account can see it.
+
+This matters most in exactly the situation the section above describes: moving a
+panel that already has customers on it. Nexa's reservations only know the names
+Nexa itself issued, so on a panel whose username policy allows customers to
+choose their own name, an account you created by hand years ago is a name a new
+customer can ask for. Delivering it would send your existing customer's
+subscription link to somebody else.
+
+The customer is told the name is unavailable and picks another, which is the only
+remedy that is theirs to apply. If you see this often on a migrated panel,
+consider setting that panel's username policy to `RANDOM`.
+
 ---
 
 ## What has NOT been verified
