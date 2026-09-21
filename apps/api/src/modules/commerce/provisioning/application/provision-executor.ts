@@ -56,12 +56,41 @@ export type ExecutionRefusal =
    */
   | 'LEASE_LOST';
 
+/**
+ * What a tick did, and enough about it to write one log line.
+ *
+ * `orderId`, `panelId`, `attempt` and `terminal` were added by the hotfix for
+ * order `01a0c54b`, whose report says in as many words: "Provisioner logs
+ * contained no useful per-operation failure entry". They were not missing
+ * because logging was forgotten — `ProvisionerLoop` has a logger and uses it —
+ * but because a refusal RETURNS A VALUE, and the value did not carry the four
+ * things somebody debugging a stuck order actually needs.
+ *
+ * Every field here is an ID or an enum. None of them is a credential, a
+ * subscription URL, a token or a provider's response body, and that is a
+ * property of the type rather than a rule about the logger: a shape with nowhere
+ * to put a secret cannot leak one.
+ */
 export type ExecutionResult =
   | { readonly kind: 'IDLE' }
   | {
       readonly kind: 'REFUSED';
       readonly operationId: string;
       readonly reason: ExecutionRefusal;
+      /** Null only for a refusal reached before the operation was read. */
+      readonly serviceId?: string | null;
+      readonly orderId?: string | null;
+      readonly panelId?: string | null;
+      readonly attempt?: number;
+      /**
+       * Whether this refusal ended the operation, rather than scheduling it again.
+       *
+       * The single most useful bit in the line: it separates "this is over, the
+       * customer has their money back" from "this will be tried again shortly",
+       * which the reason alone no longer tells you now that six refusals are
+       * deterministic and five are not.
+       */
+      readonly terminal?: boolean;
     }
   | {
       readonly kind: 'ATTEMPTED';
@@ -69,6 +98,9 @@ export type ExecutionResult =
       readonly serviceId: string;
       readonly outcome: OperationState;
       readonly failureKind: ProviderFailureKind | null;
+      readonly orderId?: string | null;
+      readonly panelId?: string | null;
+      readonly attempt?: number;
     };
 
 /**

@@ -445,7 +445,7 @@ export class ProvisionerService {
           tx,
         );
       });
-      return { kind: 'REFUSED', operationId: operation.id, reason: 'SERVICE_ABSENT' };
+      return this.refused(operation, 'SERVICE_ABSENT');
     }
 
     /*
@@ -481,7 +481,7 @@ export class ProvisionerService {
           tx,
         );
       });
-      return { kind: 'REFUSED', operationId: operation.id, reason: 'CAPABILITY_UNSUPPORTED' };
+      return this.refused(operation, 'CAPABILITY_UNSUPPORTED');
     }
 
     /*
@@ -518,7 +518,7 @@ export class ProvisionerService {
           tx,
         );
       });
-      return { kind: 'REFUSED', operationId: operation.id, reason: 'SERVICE_ABSENT' };
+      return this.refused(operation, 'SERVICE_ABSENT');
     }
 
     /*
@@ -534,7 +534,7 @@ export class ProvisionerService {
     );
     if (!active) {
       await this.holdOff(scope, operation, now, 'the tenant has stopped accepting work');
-      return { kind: 'REFUSED', operationId: operation.id, reason: 'TENANT_STOPPED' };
+      return this.refused(operation, 'TENANT_STOPPED');
     }
 
     /*
@@ -564,7 +564,7 @@ export class ProvisionerService {
     });
     if (!operable.ok) {
       await this.refuse(scope, operation, service, operable.reason, now);
-      return { kind: 'REFUSED', operationId: operation.id, reason: operable.reason };
+      return this.refused(operation, operable.reason);
     }
 
     /*
@@ -583,7 +583,7 @@ export class ProvisionerService {
        * operations log does not say "disabled" about a panel nobody disabled.
        */
       await this.refuse(scope, operation, service, 'PANEL_NOT_REACHABLE', now);
-      return { kind: 'REFUSED', operationId: operation.id, reason: 'PANEL_NOT_REACHABLE' };
+      return this.refused(operation, 'PANEL_NOT_REACHABLE');
     }
 
     const adapter = this.deps.adapters(operable.providerType as ProviderType);
@@ -598,7 +598,7 @@ export class ProvisionerService {
        * failure, because no provider was contacted.
        */
       await this.refuse(scope, operation, service, 'CREDENTIALS_MISSING', now);
-      return { kind: 'REFUSED', operationId: operation.id, reason: 'CREDENTIALS_MISSING' };
+      return this.refused(operation, 'CREDENTIALS_MISSING');
     }
 
     /*
@@ -626,7 +626,7 @@ export class ProvisionerService {
         new Date(now.getTime() + budget.retryAfterMs),
         'the tenant outbound budget had no capacity',
       );
-      return { kind: 'REFUSED', operationId: operation.id, reason: 'BUDGET_EXHAUSTED' };
+      return this.refused(operation, 'BUDGET_EXHAUSTED');
     }
 
     const target = { baseUrl: operable.baseUrl, credentials, activation: operable.activation };
@@ -667,7 +667,7 @@ export class ProvisionerService {
        * lease sweep; either way this worker has no standing to record an outcome for
        * it, and the attempt the claim counted is the honest cost of having stalled.
        */
-      return { kind: 'REFUSED', operationId: operation.id, reason: 'LEASE_LOST' };
+      return this.refused(operation, 'LEASE_LOST');
     }
 
     /*
@@ -706,7 +706,7 @@ export class ProvisionerService {
       case 'SUSPEND': {
         if (!canDisableUser(adapter)) {
           await this.refuse(scope, operation, service, 'CAPABILITY_UNSUPPORTED', now);
-          return { kind: 'REFUSED', operationId: operation.id, reason: 'CAPABILITY_UNSUPPORTED' };
+          return this.refused(operation, 'CAPABILITY_UNSUPPORTED');
         }
         return this.finishStateChange(
           scope,
@@ -719,7 +719,7 @@ export class ProvisionerService {
       case 'RESUME': {
         if (!canEnableUser(adapter)) {
           await this.refuse(scope, operation, service, 'CAPABILITY_UNSUPPORTED', now);
-          return { kind: 'REFUSED', operationId: operation.id, reason: 'CAPABILITY_UNSUPPORTED' };
+          return this.refused(operation, 'CAPABILITY_UNSUPPORTED');
         }
         return this.finishStateChange(
           scope,
@@ -732,7 +732,7 @@ export class ProvisionerService {
       case 'TERMINATE': {
         if (!canDeleteUser(adapter)) {
           await this.refuse(scope, operation, service, 'CAPABILITY_UNSUPPORTED', now);
-          return { kind: 'REFUSED', operationId: operation.id, reason: 'CAPABILITY_UNSUPPORTED' };
+          return this.refused(operation, 'CAPABILITY_UNSUPPORTED');
         }
         return this.finishTerminate(
           scope,
@@ -760,7 +760,7 @@ export class ProvisionerService {
       case 'RENEW': {
         if (!canRenewUser(adapter) || operation.target === null) {
           await this.refuse(scope, operation, service, 'CAPABILITY_UNSUPPORTED', now);
-          return { kind: 'REFUSED', operationId: operation.id, reason: 'CAPABILITY_UNSUPPORTED' };
+          return this.refused(operation, 'CAPABILITY_UNSUPPORTED');
         }
         return this.finishAllowance(
           scope,
@@ -773,7 +773,7 @@ export class ProvisionerService {
       case 'ADD_TRAFFIC': {
         if (!canAddVolume(adapter) || operation.target === null) {
           await this.refuse(scope, operation, service, 'CAPABILITY_UNSUPPORTED', now);
-          return { kind: 'REFUSED', operationId: operation.id, reason: 'CAPABILITY_UNSUPPORTED' };
+          return this.refused(operation, 'CAPABILITY_UNSUPPORTED');
         }
         return this.finishAllowance(
           scope,
@@ -786,7 +786,7 @@ export class ProvisionerService {
       case 'ADD_TIME': {
         if (!canAddTime(adapter) || operation.target === null) {
           await this.refuse(scope, operation, service, 'CAPABILITY_UNSUPPORTED', now);
-          return { kind: 'REFUSED', operationId: operation.id, reason: 'CAPABILITY_UNSUPPORTED' };
+          return this.refused(operation, 'CAPABILITY_UNSUPPORTED');
         }
         return this.finishAllowance(
           scope,
@@ -820,7 +820,7 @@ export class ProvisionerService {
        * that expires today.
        */
       await this.refuse(scope, operation, service, 'ACTIVATION_INCOMPLETE', now);
-      return { kind: 'REFUSED', operationId: operation.id, reason: 'ACTIVATION_INCOMPLETE' };
+      return this.refused(operation, 'ACTIVATION_INCOMPLETE');
     }
 
     /*
@@ -848,7 +848,7 @@ export class ProvisionerService {
      */
     if (bought.deviceLimit !== null && !adapter.supports('LIMIT_DEVICES')) {
       await this.refuse(scope, operation, service, 'CAPABILITY_UNSUPPORTED', now);
-      return { kind: 'REFUSED', operationId: operation.id, reason: 'CAPABILITY_UNSUPPORTED' };
+      return this.refused(operation, 'CAPABILITY_UNSUPPORTED');
     }
 
     /*
@@ -883,13 +883,7 @@ export class ProvisionerService {
         created.status,
         finishedAt,
       );
-      return {
-        kind: 'ATTEMPTED',
-        operationId: operation.id,
-        serviceId: service.id,
-        outcome,
-        failureKind: created.failure,
-      };
+      return this.attempted(operation, service.id, outcome, created.failure);
     }
 
     await this.persistSuccess(
@@ -906,13 +900,7 @@ export class ProvisionerService {
       },
       finishedAt,
     );
-    return {
-      kind: 'ATTEMPTED',
-      operationId: operation.id,
-      serviceId: service.id,
-      outcome: 'SUCCEEDED',
-      failureKind: null,
-    };
+    return this.attempted(operation, service.id, 'SUCCEEDED', null);
   }
 
   /**
@@ -1172,13 +1160,7 @@ export class ProvisionerService {
         verdict.status,
         now,
       );
-      return {
-        kind: 'ATTEMPTED',
-        operationId: operation.id,
-        serviceId,
-        outcome: 'FAILED',
-        failureKind: verdict.failure,
-      };
+      return this.attempted(operation, serviceId, 'FAILED', verdict.failure);
     }
 
     const actor = this.actor();
@@ -1379,13 +1361,7 @@ export class ProvisionerService {
       );
     });
 
-    return {
-      kind: 'ATTEMPTED',
-      operationId: operation.id,
-      serviceId,
-      outcome: 'SUCCEEDED',
-      failureKind: null,
-    };
+    return this.attempted(operation, serviceId, 'SUCCEEDED', null);
   }
 
   /**
@@ -1447,13 +1423,7 @@ export class ProvisionerService {
         read.status,
         now,
       );
-      return {
-        kind: 'ATTEMPTED',
-        operationId: operation.id,
-        serviceId,
-        outcome: 'FAILED',
-        failureKind: read.failure,
-      };
+      return this.attempted(operation, serviceId, 'FAILED', read.failure);
     }
 
     await this.deps.uow.run(scope, async (tx) => {
@@ -1483,13 +1453,7 @@ export class ProvisionerService {
      * operation row itself carries who ran it, when, and what it found, and the
      * service row carries the figure — which is the whole of what happened.
      */
-    return {
-      kind: 'ATTEMPTED',
-      operationId: operation.id,
-      serviceId,
-      outcome: 'SUCCEEDED',
-      failureKind: null,
-    };
+    return this.attempted(operation, serviceId, 'SUCCEEDED', null);
   }
 
   /**
@@ -1552,13 +1516,7 @@ export class ProvisionerService {
         failureNote(changed.failure, changed.status),
         now,
       );
-      return {
-        kind: 'ATTEMPTED',
-        operationId: operation.id,
-        serviceId,
-        outcome,
-        failureKind: changed.failure,
-      };
+      return this.attempted(operation, serviceId, outcome, changed.failure);
     }
 
     if (!changed.found) {
@@ -1588,13 +1546,7 @@ export class ProvisionerService {
         'the panel does not have this service’s account',
         now,
       );
-      return {
-        kind: 'ATTEMPTED',
-        operationId: operation.id,
-        serviceId,
-        outcome: 'FAILED',
-        failureKind: null,
-      };
+      return this.attempted(operation, serviceId, 'FAILED', null);
     }
 
     const actor = this.actor();
@@ -1639,13 +1591,7 @@ export class ProvisionerService {
       });
     });
 
-    return {
-      kind: 'ATTEMPTED',
-      operationId: operation.id,
-      serviceId,
-      outcome: 'SUCCEEDED',
-      failureKind: null,
-    };
+    return this.attempted(operation, serviceId, 'SUCCEEDED', null);
   }
 
   /**
@@ -1704,13 +1650,7 @@ export class ProvisionerService {
         failureNote(changed.failure, changed.status),
         now,
       );
-      return {
-        kind: 'ATTEMPTED',
-        operationId: operation.id,
-        serviceId,
-        outcome,
-        failureKind: changed.failure,
-      };
+      return this.attempted(operation, serviceId, outcome, changed.failure);
     }
 
     if (!changed.found) {
@@ -1730,13 +1670,7 @@ export class ProvisionerService {
         'the panel does not have this service’s account',
         now,
       );
-      return {
-        kind: 'ATTEMPTED',
-        operationId: operation.id,
-        serviceId,
-        outcome: 'FAILED',
-        failureKind: null,
-      };
+      return this.attempted(operation, serviceId, 'FAILED', null);
     }
 
     /*
@@ -1844,13 +1778,7 @@ export class ProvisionerService {
       }
     });
 
-    return {
-      kind: 'ATTEMPTED',
-      operationId: operation.id,
-      serviceId,
-      outcome: 'SUCCEEDED',
-      failureKind: null,
-    };
+    return this.attempted(operation, serviceId, 'SUCCEEDED', null);
   }
 
   /**
@@ -1887,13 +1815,7 @@ export class ProvisionerService {
         failureNote(removed.failure, removed.status),
         now,
       );
-      return {
-        kind: 'ATTEMPTED',
-        operationId: operation.id,
-        serviceId,
-        outcome,
-        failureKind: removed.failure,
-      };
+      return this.attempted(operation, serviceId, outcome, removed.failure);
     }
 
     const actor = this.actor();
@@ -1944,13 +1866,7 @@ export class ProvisionerService {
       });
     });
 
-    return {
-      kind: 'ATTEMPTED',
-      operationId: operation.id,
-      serviceId,
-      outcome: 'SUCCEEDED',
-      failureKind: null,
-    };
+    return this.attempted(operation, serviceId, 'SUCCEEDED', null);
   }
 
   /**
@@ -2296,6 +2212,58 @@ export class ProvisionerService {
       },
       tx,
     );
+  }
+
+
+  /**
+   * A refusal, carrying the four ids and the one bit somebody debugging a stuck
+   * order actually needs.
+   *
+   * One helper rather than the same object literal at eleven return sites, and
+   * that is the reason the fields were missing before: a literal repeated eleven
+   * times gains a field in one of them. The production report for order
+   * `01a0c54b` says the provisioner logs "contained no useful per-operation
+   * failure entry" — they contained nothing at all for a refusal, because a
+   * refusal returns a value and the value carried an id and a reason.
+   *
+   * `terminal` is computed from the SAME predicate the transition uses, so the
+   * line cannot say "will retry" about a row that was just made terminal.
+   * `exhausted` is not consulted here on purpose: this reports the CLASSIFICATION,
+   * and a deterministic refusal is terminal on its first attempt.
+   *
+   * Every field is an id or an enum. Nothing here can carry a credential, a
+   * subscription URL or a provider's response body.
+   */
+  private refused(operation: OperationRecord, reason: ExecutionRefusal): ExecutionResult {
+    return {
+      kind: 'REFUSED',
+      operationId: operation.id,
+      reason,
+      serviceId: operation.serviceId,
+      orderId: operation.orderId,
+      panelId: operation.panelId,
+      attempt: operation.attempts,
+      terminal: refusalIsPermanent(reason) || exhausted(operation.attempts),
+    };
+  }
+
+  /** An attempt that reached a provider, with the same context attached. */
+  private attempted(
+    operation: OperationRecord,
+    serviceId: string,
+    outcome: OperationState,
+    failureKind: ProviderFailureKind | null,
+  ): ExecutionResult {
+    return {
+      kind: 'ATTEMPTED',
+      operationId: operation.id,
+      serviceId,
+      outcome,
+      failureKind,
+      orderId: operation.orderId,
+      panelId: operation.panelId,
+      attempt: operation.attempts,
+    };
   }
 
   /** A refusal: nothing was contacted, so nothing about a provider is recorded. */

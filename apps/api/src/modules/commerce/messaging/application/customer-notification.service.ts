@@ -1,3 +1,4 @@
+import type { Money } from '@nexa/contracts';
 import {
   CUSTOMER_NOTIFICATION_BACKOFF_MS,
   CUSTOMER_NOTIFICATION_MAX_ATTEMPTS,
@@ -127,6 +128,21 @@ export interface CustomerNotificationDeps {
    * parameters, which is why `values` was an empty object until now.
    */
   readonly reminderSnapshots: ServiceReminderSnapshotReader;
+  /**
+   * What an order's automatic refund actually put back, read off the ledger.
+   *
+   * A READER, not a payload. ADR 0030 §1 refuses a producer-supplied payload and
+   * this is not one: the producer passed a kind and an order id, and both figures
+   * are derived from the append-only entries that id names — exactly as
+   * `reminderSnapshots` above derives its figures from the row its subject id
+   * names.
+   */
+  readonly refundFigures: {
+    refundedForOrder: (
+      scope: TenantContext,
+      orderId: string,
+    ) => Promise<{ readonly amount: Money; readonly balanceAfter: Money } | null>;
+  };
   readonly uow: UnitOfWork<TransactionScope>;
   readonly clock: Clock;
   readonly scopeIsActive: (scope: TenantContext) => Promise<boolean>;
@@ -237,6 +253,22 @@ export class CustomerNotificationService {
     scope: TenantContext,
     row: CustomerNotificationRecord,
   ): Promise<TemplateValues | null> {
+    /*
+     * The refund sentence, and the ONE other kind in this lane that renders a
+     * figure.
+     *
+     * `null` when the ledger holds no refund credit for this order — the same
+     * "do not send this" the reminder branch returns, and for a stronger reason.
+     * The old sentence said the money came back without saying how much, so it
+     * was true whatever the ledger held; this one names an amount, and sending
+     * «مبلغ ۰ تومان بازگردانده شد» because a read came back empty would be the
+     * product stating a figure it has not got. Silence is better.
+     */
+    if (row.kind === 'ORDER_REFUNDED_TO_WALLET') {
+      const refund = await this.deps.refundFigures.refundedForOrder(scope, row.subjectId);
+      if (refund === null) return null;
+      return { refundAmount: refund.amount, walletBalance: refund.balanceAfter };
+    }
     if (!REMINDER_NOTIFICATION_KINDS.has(row.kind)) return {};
     const snapshot = await this.deps.reminderSnapshots.snapshotOf(scope, row.subjectId);
     if (snapshot === null) return null;

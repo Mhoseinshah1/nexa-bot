@@ -21,6 +21,7 @@ import type {
   CustomerSendResult,
 } from '../../apps/api/src/modules/commerce/messaging/application/ports';
 import { DrizzleCustomerRepository } from '../../apps/api/src/modules/commerce/customers/infrastructure/drizzle-customer.repository';
+import { DrizzleWalletRepository } from '../../apps/api/src/modules/commerce/wallet/infrastructure/drizzle-wallet.repository';
 import { DrizzleNotificationSubjectReader } from '../../apps/api/src/modules/commerce/messaging/infrastructure/drizzle-notification-subject.reader';
 import { createTestContext, SEED_IDS, tenantA, tenantB, type TestContext } from './harness';
 import { DrizzleServiceReminderSnapshotReader } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service-reminder.repository';
@@ -98,6 +99,9 @@ describe('the customer notification lane', () => {
   /** A lane whose messenger is ours, so an outcome is a fixture rather than a network. */
   function lane(options: { readonly stillHolds?: boolean; readonly active?: boolean } = {}) {
     return new CustomerNotificationService({
+      // The ledger reader the refund sentence renders from; the real repository,
+      // so a test cannot assert a figure the production query would not produce.
+      refundFigures: new DrizzleWalletRepository(ctx.container.database.db),
       notifications: repo,
       /*
        * The REAL reader, over the real table.

@@ -1838,6 +1838,14 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const customerNotificationLoop = new CustomerNotificationLoop(
     new CustomerNotificationService({
       notifications: customerNotificationRepository,
+      /*
+       * The ledger reader the refund sentence renders from. The wallet repository
+       * itself, because both figures are derived from `wallet_entries` and a
+       * second implementation would be a second answer to "how much did we give
+       * back" — which is the thing `RefundService`'s one credit path exists to
+       * prevent, applied to the reading side.
+       */
+      refundFigures: walletRepository,
       contacts: {
         contactFor: async (scope, customerId, tx) => {
           const customer = await customerRepository.findById(scope, customerId, tx);
