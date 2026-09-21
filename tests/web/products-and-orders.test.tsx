@@ -605,6 +605,17 @@ describe('the order detail', () => {
     // No claim about an amount this page did not read. It points at the two
     // records that hold it instead of rendering a number it computed.
     expect(text).toContain('کیف پول');
+    /*
+     * And it must not claim the WHOLE payment reached the wallet, which is Codex
+     * C4 (P2) on PR #58. `refundUndeliverable` credits only what is left of the
+     * payment: if an operator already returned part of it by bank transfer, only
+     * the remainder is credited, and if they returned all of it, nothing is. The
+     * banner used to say «تمام مبلغ ... به کیف پول مشتری بازگشت» under a refund
+     * history that said otherwise a few rows below.
+     */
+    expect(text).not.toContain('تمام مبلغ');
+    // It says the partial case out loud rather than staying silent about it.
+    expect(text).toContain('باقیمانده');
   });
 
   it('asks for no service, and says why, without services.view', async () => {
@@ -634,6 +645,37 @@ describe('the order detail', () => {
     expect(await screen.findByText('هنوز سرویسی برای این سفارش ساخته نشده است.')).toBeTruthy();
     // And no operations table for a service that does not exist.
     expect(container.textContent ?? '').not.toContain('ACTIVATION_INCOMPLETE');
+  });
+
+  /**
+   * A settled order with no service is not proof it was not a service purchase.
+   *
+   * Codex C5 (P2) on PR #58. A NEW_SERVICE order whose panel fails
+   * `panelSales.consume` inside the settling transaction is refunded straight
+   * from `AWAITING_PAYMENT` — `undeliverable.refund` never passes through `PAID`
+   * and `planForSettledOrder` never inserts the service row. So the order settles,
+   * carries no service, and IS a new-service purchase: exactly the failure this
+   * card was added to explain, and the hint told the operator to look elsewhere.
+   *
+   * This branch strengthened `consume`, so the path got MORE reachable, not less.
+   */
+  it('does not tell an operator a refunded service purchase was not one', async () => {
+    withService({ state: 'REFUNDED' }, []);
+    const { container } = renderPage(
+      <OrderDetailPage
+        id="019230ab-cdef-7012-8345-6789abcdef01"
+        denied={false}
+        mayViewPayments={false}
+        mayViewServices
+      />,
+    );
+    await screen.findByText('هنوز سرویسی برای این سفارش ساخته نشده است.');
+
+    const text = container.textContent ?? '';
+    // The claim that is false for this order.
+    expect(text).not.toContain('سفارش از نوع خرید سرویس جدید نبوده است');
+    // The settlement-time refusal is named as the other possibility.
+    expect(text).toContain('پنل واجد شرایطی');
   });
 
   /*
