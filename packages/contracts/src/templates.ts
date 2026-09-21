@@ -620,11 +620,49 @@ export const TEMPLATES = [
       'produced no service, because there is no third outcome — the product has ' +
       'no “we owe you one, an operator will look at it” state, and the sentence ' +
       'that used to stand in for one told a customer nothing they could act on. ' +
-      'It carries no amount: `CUSTOMER_NOTIFICATION_KINDS` renders one frozen ' +
-      'template with no payload (ADR 0030 §1), and the figure is on the wallet ' +
-      'page this sends them to.',
+      'It names the amount and the resulting balance, both read back from the ' +
+      'append-only ledger at send time — see the two placeholders below.',
     format: 'PLAIN_TEXT',
-    placeholders: [],
+    placeholders: [
+      /*
+       * BOTH OPTIONAL, AND THAT IS THE WP3 LESSON APPLIED RATHER THAN RE-LEARNED.
+       *
+       * A template body is stored RAW and nothing rewrites it, so an installation
+       * that overrode this key before this release holds a body with neither token.
+       * Declared required, `validateTemplateBody` would refuse that body as
+       * `MISSING_REQUIRED_PLACEHOLDER` — the operator could read their own override
+       * and never save it again, for tokens they never wrote. That is the
+       * write-only-settings failure the research records, arriving by upgrade
+       * instead of by screen, and PR #57 shipped exactly this defect before Codex
+       * found it.
+       *
+       * The runtime supplies both unconditionally, so the shipped body shows them
+       * and an override that omits them simply does not. Requiring the token would
+       * be the catalogue dictating what a body must SAY rather than what it may use.
+       */
+      {
+        token: 'refundAmount',
+        type: 'MONEY',
+        description:
+          'What was actually credited, summed from the REFUND entries the ledger ' +
+          'holds for this order. Never the order total: an operator may already ' +
+          'have returned part of it by bank transfer, and the sentence has to name ' +
+          'what reached the wallet.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'walletBalance',
+        type: 'MONEY',
+        description:
+          'The balance as of that credit — summed over every entry up to and ' +
+          'including it, not read live. A resend a week later must say what was ' +
+          'true when the refund landed rather than what the wallet holds today, ' +
+          'or two copies of one message state two different balances.',
+        required: false,
+        repeatable: false,
+      },
+    ],
   },
   {
     key: 'bot.order.cancel_button',

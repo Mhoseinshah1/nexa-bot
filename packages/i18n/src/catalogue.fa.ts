@@ -146,8 +146,24 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    */
   'bot.order.settled': 'پرداخت با موفقیت تأیید شد و سفارش شما پرداخت‌شده است.',
   'bot.order.cancelled': 'سفارش لغو شد.',
+  /*
+   * Three lines, and the two figures are the point of the change.
+   *
+   * The old sentence said the money came back and sent the customer to /wallet to
+   * find out how much — which is the legacy answer the research records: true,
+   * useless, and impossible to reconcile against what they paid. Both figures come
+   * from the committed ledger, rendered by `formatMoney`, so no currency unit is
+   * typed here.
+   *
+   * It says an error occurred and the order did not complete. It does NOT say
+   * `ACTIVATION_INCOMPLETE` or any other internal code: which of the operator's
+   * machines was misconfigured is not a fact a customer is owed, and it is not
+   * something they can act on.
+   */
   'bot.order.refunded_to_wallet':
-    'این سفارش قابل تحویل نبود و مبلغ پرداختی به‌طور کامل به کیف پول شما بازگشت. موجودی را با /wallet ببینید.',
+    'در ساخت سرویس شما خطایی رخ داد و سفارش انجام نشد.\n' +
+    'مبلغ {refundAmount} به کیف پول شما بازگردانده شد.\n' +
+    'موجودی جدید کیف پول: {walletBalance}',
   'bot.order.cancel_button': 'لغو سفارش',
   /*
    * The two things the customer cannot take back, said before the destructive tap.
