@@ -31,7 +31,11 @@ import {
   type WalletResponse,
   ADMIN_ROUTES,
   adminListResponseSchema,
+  adminSessionListResponseSchema,
+  roleListResponseSchema,
   adminSummarySchema,
+  resetAdminPasswordResponseSchema,
+  revokeAdminSessionsResponseSchema,
   API_PREFIX,
   AUTH_ROUTES,
   errorResponseSchema,
@@ -40,7 +44,11 @@ import {
   logoutResponseSchema,
   sessionResponseSchema,
   type AdminListResponse,
+  type AdminSessionListResponse,
+  type RoleListResponse,
   type AdminSummary,
+  type ResetAdminPasswordResponse,
+  type RevokeAdminSessionsResponse,
   type HealthInfoResponse,
   type LoginResponse,
   type LogoutResponse,
@@ -281,6 +289,67 @@ export async function fetchAdmins(): Promise<AdminListResponse> {
   const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) throw toApiError(response.status, payload);
   return adminListResponseSchema.parse(payload);
+}
+
+/** The role catalogue, for the checkboxes that assign them. */
+export function fetchRoles(): Promise<RoleListResponse> {
+  return authedGet(ADMIN_ROUTES.rolesCatalog, roleListResponseSchema);
+}
+
+/** Create an administrator. The password leaves the browser once and is never read back. */
+export function createAdmin(input: {
+  username: string;
+  displayName: string;
+  password: string;
+  roleKeys: string[];
+  telegramUserId?: string | null;
+}): Promise<AdminSummary> {
+  return post(ADMIN_ROUTES.create, input, adminSummarySchema);
+}
+
+export function setAdminStatus(input: {
+  id: string;
+  status: 'ACTIVE' | 'DISABLED';
+  reason: string;
+}): Promise<AdminSummary> {
+  const { id, ...body } = input;
+  return post(ADMIN_ROUTES.status(id), body, adminSummarySchema);
+}
+
+export function setAdminRoles(input: {
+  id: string;
+  roleKeys: string[];
+  reason: string;
+}): Promise<AdminSummary> {
+  const { id, ...body } = input;
+  return post(ADMIN_ROUTES.roles(id), body, adminSummarySchema);
+}
+
+/**
+ * Set a new password for an administrator who is NOT the signed-in one.
+ *
+ * The response carries no credential — the administrator as anybody may see
+ * them, and how many sessions the reset ended.
+ */
+export function resetAdminPassword(input: {
+  id: string;
+  newPassword: string;
+  reason: string;
+}): Promise<ResetAdminPasswordResponse> {
+  const { id, ...body } = input;
+  return post(ADMIN_ROUTES.password(id), body, resetAdminPasswordResponseSchema);
+}
+
+export function fetchAdminSessions(id: string): Promise<AdminSessionListResponse> {
+  return authedGet(ADMIN_ROUTES.sessions(id), adminSessionListResponseSchema);
+}
+
+export function revokeAdminSessions(input: {
+  id: string;
+  reason: string;
+}): Promise<RevokeAdminSessionsResponse> {
+  const { id, ...body } = input;
+  return post(ADMIN_ROUTES.revokeSessions(id), body, revokeAdminSessionsResponseSchema);
 }
 
 /** Connect (`telegramUserId`), replace, or remove (`null`) an administrator's Telegram binding. */
