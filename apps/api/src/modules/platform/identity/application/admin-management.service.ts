@@ -818,14 +818,6 @@ export class AdminManagementService {
   }
 
   /**
-   * Changing one's OWN password.
-   *
-   * Not covered by `assertNotSelf`: it requires the current password, grants
-   * nothing, and refusing it would mean an administrator could never rotate a
-   * credential they believe is exposed. It needs no catalog permission for the
-   * same reason — the current password IS the authorization.
-   */
-  /**
    * Sets a NEW password for an administrator who is not the caller.
    *
    * The operator's answer to a credential that has to change without its owner
@@ -1100,6 +1092,14 @@ export class AdminManagementService {
     );
   }
 
+  /**
+   * Changing one's OWN password.
+   *
+   * Not covered by `assertNotSelf`: it requires the current password, grants
+   * nothing, and refusing it would mean an administrator could never rotate a
+   * credential they believe is exposed. It needs no catalog permission for the
+   * same reason — the current password IS the authorization.
+   */
   async changeOwnPassword(
     scope: ScopeContext,
     actor: ActorContext,
