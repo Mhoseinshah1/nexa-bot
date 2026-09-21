@@ -114,14 +114,15 @@ export const STATE_TONES: Readonly<Record<ServiceState, Tone>> = {
   UNRECONCILED: 'warn',
 };
 
-const DELIVERY_LABELS: Readonly<Record<ServiceDeliveryState, WebKey>> = {
+/* Exported alongside `STATE_LABELS`: `/users/:id` draws both axes, never one. */
+export const DELIVERY_LABELS: Readonly<Record<ServiceDeliveryState, WebKey>> = {
   PENDING: 'web.service_delivery_pending',
   DELIVERED: 'web.service_delivery_delivered',
   UNCONFIRMED: 'web.service_delivery_unconfirmed',
   FAILED: 'web.service_delivery_failed',
 };
 
-const DELIVERY_TONES: Readonly<Record<ServiceDeliveryState, Tone>> = {
+export const DELIVERY_TONES: Readonly<Record<ServiceDeliveryState, Tone>> = {
   PENDING: 'neutral',
   DELIVERED: 'ok',
   UNCONFIRMED: 'warn',

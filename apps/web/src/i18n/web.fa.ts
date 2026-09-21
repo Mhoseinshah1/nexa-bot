@@ -870,7 +870,33 @@ export const WEB_FA = {
    */
   'web.users_scope_title': 'آنچه در این نسخه نیست',
   'web.users_scope_body':
-    'سرویس، تخفیف و نمایندگی در این نسخه وجود ندارند؛ بنابراین هیچ عدد یا ستونی برای آنها نشان داده نمی‌شود. نمایش صفر برای چیزی که ساخته نشده، گزارشِ نادرست است.',
+    'تخفیف و نمایندگی در این نسخه وجود ندارند؛ بنابراین هیچ عدد یا ستونی برای آنها نشان داده نمی‌شود. نمایش صفر برای چیزی که ساخته نشده، گزارشِ نادرست است.',
+
+  // --- A customer's orders and services (WP2) ------------------------------
+  /*
+   * Two lists the scope card used to say did not exist.
+   *
+   * Each card is an embedded, paged view of the SAME list the top-level screen
+   * pages, filtered to this customer — not a summary and not a count. A count
+   * would be a number this page cannot recompute, which is the legacy
+   * statistics screen's whole failure; a bounded "recent N" would be a claim
+   * about ordering that `/orders` does not make, because it pages oldest-first
+   * while `/services` pages newest-first.
+   *
+   * So the copy names the direction rather than leaving an operator to infer it
+   * from two pagers whose buttons mean opposite things.
+   */
+  'web.user_orders_title': 'سفارش‌های این مشتری',
+  'web.user_orders_empty': 'این مشتری هنوز سفارشی ثبت نکرده است.',
+  'web.user_orders_denied': 'برای دیدن سفارش‌های این مشتری دسترسی orders.view لازم است.',
+  'web.user_orders_hint':
+    'این فهرست از قدیمی‌ترین سفارش شروع می‌شود؛ دکمهٔ «تازه‌تر» به سفارش‌های جدیدتر می‌رود.',
+  'web.user_orders_all': 'همهٔ سفارش‌های این مشتری',
+  'web.user_services_title': 'سرویس‌های این مشتری',
+  'web.user_services_empty': 'این مشتری هنوز سرویسی ندارد.',
+  'web.user_services_denied': 'برای دیدن سرویس‌های این مشتری دسترسی services.view لازم است.',
+  'web.user_services_hint': 'این فهرست از تازه‌ترین سرویس شروع می‌شود.',
+  'web.user_services_all': 'همهٔ سرویس‌های این مشتری',
 
   // --- Wallet (Phase 4C) ---------------------------------------------------
   /*

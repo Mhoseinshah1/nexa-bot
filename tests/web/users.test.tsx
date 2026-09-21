@@ -3,7 +3,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { UsersPage, UserDetailPage } from '../../apps/web/src/pages/users';
 import { resolve } from '../../apps/web/src/app';
-import { customer, renderPage, stubApi } from './harness';
+import { customer, order, renderPage, stubApi } from './harness';
 
 /**
  * The Users surface, rendered against the shapes the server actually returns.
@@ -30,6 +30,16 @@ const ROW_ID = '019210ab-cdef-7012-8345-6789abcdef01';
  * they were written for. A case about the wallet names its own permissions.
  */
 const NO_WALLET = { mayViewWallet: false, mayCredit: false, mayDebit: false } as const;
+/*
+ * `orders.view` and `services.view` withheld.
+ *
+ * Separate from `NO_WALLET` because they are separate permissions on separate
+ * modules: an operator may read wallets and not orders. The detail tests below
+ * are about identity, blocking and the wallet, so they withhold both and assert
+ * against the two denial sentences where it matters; the commerce cards have
+ * their own describe block.
+ */
+const NO_COMMERCE = { mayViewOrders: false, mayViewServices: false } as const;
 
 const walletRoutes = (balance: Record<string, unknown> = {}, entries: readonly unknown[] = []) => [
   {
@@ -454,7 +464,7 @@ describe('the customer detail', () => {
   it('carries no recent-activity feed and no commercial cards', async () => {
     stubApi(detail());
     const { container } = renderPage(
-      <UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} denied={false} />,
+      <UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} {...NO_COMMERCE} denied={false} />,
     );
     await screen.findByText('ali_tehran', { exact: false });
     const text = container.textContent ?? '';
@@ -485,7 +495,9 @@ describe('the customer detail', () => {
         },
       },
     ]);
-    renderPage(<UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} denied={false} />);
+    renderPage(
+      <UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} {...NO_COMMERCE} denied={false} />,
+    );
     await screen.findByLabelText('دلیل (اختیاری)');
 
     fireEvent.change(screen.getByLabelText('دلیل (اختیاری)'), { target: { value: 'spam' } });
@@ -508,7 +520,9 @@ describe('the customer detail', () => {
 
   it('offers unblock instead of block once the customer is blocked', async () => {
     stubApi(detail({ status: 'BLOCKED', blockedAt: '2026-09-11T09:00:00.000Z' }));
-    renderPage(<UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} denied={false} />);
+    renderPage(
+      <UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} {...NO_COMMERCE} denied={false} />,
+    );
     await screen.findByRole('button', { name: 'رفع مسدودی' });
     // Never both. Two enabled controls for opposite directions is how a
     // double-click blocks and unblocks in one gesture.
@@ -520,7 +534,9 @@ describe('the customer detail', () => {
       ...detail(),
       { url: `/users/${ROW_ID}/block`, body: { customer: customer({ status: 'BLOCKED' }) } },
     ]);
-    renderPage(<UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} denied={false} />);
+    renderPage(
+      <UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} {...NO_COMMERCE} denied={false} />,
+    );
     await screen.findByRole('button', { name: 'مسدود کردن' });
     fireEvent.click(screen.getByRole('button', { name: 'مسدود کردن' }));
 
@@ -536,7 +552,15 @@ describe('the customer detail', () => {
 
   it('draws no block control at all without users.block', async () => {
     stubApi(detail());
-    renderPage(<UserDetailPage id={ROW_ID} mayBlock={false} {...NO_WALLET} denied={false} />);
+    renderPage(
+      <UserDetailPage
+        id={ROW_ID}
+        mayBlock={false}
+        {...NO_WALLET}
+        {...NO_COMMERCE}
+        denied={false}
+      />,
+    );
     await screen.findByText(/users\.block/);
     expect(screen.queryByRole('button', { name: 'مسدود کردن' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'رفع مسدودی' })).toBeNull();
@@ -561,7 +585,9 @@ describe('the customer detail', () => {
         },
       },
     ]);
-    renderPage(<UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} denied={false} />);
+    renderPage(
+      <UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} {...NO_COMMERCE} denied={false} />,
+    );
     await screen.findByRole('button', { name: 'مسدود کردن' });
     fireEvent.click(screen.getByRole('button', { name: 'مسدود کردن' }));
 
@@ -609,6 +635,58 @@ describe('the route table', () => {
    * left that whole suite green. This is the call site, and debit is the half worth
    * asserting because it takes money away.
    */
+  /*
+   * The ROUTE deriving the two commerce cards from their OWN permissions.
+   *
+   * Same failure mode as the debit case above and the same reason to assert it
+   * here: every card test below passes `mayViewOrders`/`mayViewServices`
+   * directly, which proves the card honours a prop and nothing about `app.tsx`
+   * computing it. `mayViewOrders={may('users.view')}` would hand every customer
+   * reader an order list the server's `orders.view` guard would have refused,
+   * and would leave the whole card suite green.
+   */
+  it('derives the two commerce cards from orders.view and services.view', async () => {
+    stubApi([
+      { url: `/users/${ROW_ID}`, body: { customer: customer() } },
+      { url: '/orders', body: { orders: [order()], nextCursor: null } },
+    ]);
+    const resolved = resolve({ path: `/users/${ROW_ID}`, query: new URLSearchParams() }, [
+      'users.view',
+      'orders.view',
+    ]);
+    renderPage(resolved.element as ReactElement);
+
+    // Orders granted, so the card has drawn — the services denial below is a
+    // decision rather than a card that has not rendered yet.
+    await screen.findByText('پلن یک‌ماهه');
+    expect(screen.getByText(/services\.view/u)).toBeTruthy();
+    expect(screen.queryByText(/orders\.view/u)).toBeNull();
+  });
+
+  /*
+   * The other half of the same wiring, and the half that catches the likelier slip.
+   *
+   * The positive case above still passes when the route reads
+   * `mayViewOrders={may('users.view')}`, because that actor holds `users.view`
+   * too — which is exactly how a derived-from-the-wrong-key bug survives a green
+   * suite. An actor holding ONLY `users.view` is the one that can tell them
+   * apart: it must see BOTH denial sentences, because neither commerce key is in
+   * its set.
+   */
+  it('withholds both commerce cards from an actor holding only users.view', async () => {
+    const api = stubApi([{ url: `/users/${ROW_ID}`, body: { customer: customer() } }]);
+    const resolved = resolve({ path: `/users/${ROW_ID}`, query: new URLSearchParams() }, [
+      'users.view',
+    ]);
+    renderPage(resolved.element as ReactElement);
+    await screen.findByText('ali_tehran', { exact: false });
+
+    expect(screen.getByText(/orders\.view/u)).toBeTruthy();
+    expect(screen.getByText(/services\.view/u)).toBeTruthy();
+    expect(api.calls.some((call) => call.url.includes('/orders'))).toBe(false);
+    expect(api.calls.some((call) => call.url.includes('/services'))).toBe(false);
+  });
+
   it('derives debit from users.wallet.debit, not from a permission that merely reads', async () => {
     stubApi([{ url: `/users/${ROW_ID}`, body: { customer: customer() } }, ...walletRoutes()]);
     const resolved = resolve({ path: `/users/${ROW_ID}`, query: new URLSearchParams() }, [
@@ -640,7 +718,9 @@ describe('the wallet card', () => {
       { url: `/users/${ROW_ID}`, body: { customer: customer() } },
       ...walletRoutes({ balanceAmount: '750000', entryCount: 3 }, [walletEntry()]),
     ]);
-    renderPage(<UserDetailPage id={ROW_ID} mayBlock {...ALL_WALLET} denied={false} />);
+    renderPage(
+      <UserDetailPage id={ROW_ID} mayBlock {...ALL_WALLET} {...NO_COMMERCE} denied={false} />,
+    );
 
     await screen.findByText('کیف پول');
     // The formatted amount, not the raw minor units.
@@ -658,7 +738,9 @@ describe('the wallet card', () => {
         walletEntry({ direction: 'DEBIT', reason: 'PURCHASE', note: null }),
       ]),
     ]);
-    renderPage(<UserDetailPage id={ROW_ID} mayBlock {...ALL_WALLET} denied={false} />);
+    renderPage(
+      <UserDetailPage id={ROW_ID} mayBlock {...ALL_WALLET} {...NO_COMMERCE} denied={false} />,
+    );
 
     await screen.findByText('تاریخچه تراکنش‌ها');
     expect(await screen.findByText('برداشت')).toBeTruthy();
@@ -675,7 +757,7 @@ describe('the wallet card', () => {
       ...walletRoutes({ balanceAmount: '250000', entryCount: 1 }, [walletEntry()]),
     ]);
     const { container } = renderPage(
-      <UserDetailPage id={ROW_ID} mayBlock {...ALL_WALLET} denied={false} />,
+      <UserDetailPage id={ROW_ID} mayBlock {...ALL_WALLET} {...NO_COMMERCE} denied={false} />,
     );
     await screen.findByText('کیف پول');
 
@@ -716,7 +798,9 @@ describe('the wallet card', () => {
         body: { entry: walletEntry() },
       },
     ]);
-    renderPage(<UserDetailPage id={ROW_ID} mayBlock {...ALL_WALLET} denied={false} />);
+    renderPage(
+      <UserDetailPage id={ROW_ID} mayBlock {...ALL_WALLET} {...NO_COMMERCE} denied={false} />,
+    );
     await screen.findByText('ثبت تراکنش دستی');
 
     fireEvent.change(screen.getByLabelText('مبلغ (واحد خرد)'), { target: { value: '250000' } });
@@ -746,7 +830,9 @@ describe('the wallet card', () => {
       ...walletRoutes(),
       { url: `/users/${ROW_ID}/wallet/adjust`, body: { entry: walletEntry() } },
     ]);
-    renderPage(<UserDetailPage id={ROW_ID} mayBlock {...ALL_WALLET} denied={false} />);
+    renderPage(
+      <UserDetailPage id={ROW_ID} mayBlock {...ALL_WALLET} {...NO_COMMERCE} denied={false} />,
+    );
     await screen.findByText('ثبت تراکنش دستی');
 
     fireEvent.change(screen.getByLabelText('مبلغ (واحد خرد)'), { target: { value: '1000' } });
@@ -794,7 +880,9 @@ describe('the wallet card', () => {
        */
       { url: `/users/${ROW_ID}/wallet/adjust`, status: 503, body: { error: { code: 'x' } } },
     ]);
-    renderPage(<UserDetailPage id={ROW_ID} mayBlock {...ALL_WALLET} denied={false} />);
+    renderPage(
+      <UserDetailPage id={ROW_ID} mayBlock {...ALL_WALLET} {...NO_COMMERCE} denied={false} />,
+    );
     await screen.findByText('ثبت تراکنش دستی');
 
     const submit = (amount: string, note: string) => {
@@ -838,6 +926,7 @@ describe('the wallet card', () => {
         mayViewWallet
         mayCredit
         mayDebit={false}
+        {...NO_COMMERCE}
         denied={false}
       />,
     );
@@ -858,6 +947,7 @@ describe('the wallet card', () => {
         mayViewWallet={false}
         mayCredit={false}
         mayDebit={false}
+        {...NO_COMMERCE}
         denied={false}
       />,
     );
@@ -878,7 +968,9 @@ describe('the wallet card', () => {
       },
       ...walletRoutes({ balanceAmount: '250000', entryCount: 2 }),
     ]);
-    renderPage(<UserDetailPage id={ROW_ID} mayBlock {...ALL_WALLET} denied={false} />);
+    renderPage(
+      <UserDetailPage id={ROW_ID} mayBlock {...ALL_WALLET} {...NO_COMMERCE} denied={false} />,
+    );
     await screen.findByText('تاریخچه تراکنش‌ها');
 
     fireEvent.click(await screen.findByText('قدیمی‌تر'));
@@ -889,5 +981,257 @@ describe('the wallet card', () => {
         'the pager did not send the cursor the server minted',
       ).toBe(true);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// This customer's orders and services (WP2)
+// ---------------------------------------------------------------------------
+
+const SERVICE_ID = '019250ab-cdef-7012-8345-6789abcdef01';
+
+/** One service, exactly as `serviceSummarySchema` describes it. */
+function service(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: SERVICE_ID,
+    customerId: ROW_ID,
+    orderId: '019230ab-cdef-7012-8345-6789abcdef01',
+    panelId: '019220ab-cdef-7012-8345-6789abcdef01',
+    productId: '019215ab-cdef-7012-8345-6789abcdef01',
+    state: 'ACTIVE',
+    providerUsername: 'nx-7f3a91',
+    providerUserId: '4821',
+    hasSubscription: true,
+    expiresAt: '2026-12-01T00:00:00.000Z',
+    trafficLimitBytes: '53687091200',
+    trafficUsedBytes: '1073741824',
+    usageSyncedAt: '2026-09-15T08:00:00.000Z',
+    deliveryState: 'DELIVERED',
+    deliveredAt: '2026-09-10T12:35:00.000Z',
+    provisionedAt: '2026-09-10T12:34:00.000Z',
+    terminatedAt: null,
+    createdAt: '2026-09-10T12:30:00.000Z',
+    updatedAt: '2026-09-10T12:35:00.000Z',
+    ...overrides,
+  };
+}
+
+const ALL_COMMERCE = { mayViewOrders: true, mayViewServices: true } as const;
+
+/**
+ * The two cards the stale docblock said could not exist.
+ *
+ * Each is a paged view of the SAME list its top-level screen pages, filtered to
+ * this customer. The cases below cover the four ways that can go wrong: asking
+ * for somebody else's rows, drawing a list a permission would have refused,
+ * collapsing a service's two state axes into one, and labelling an ascending
+ * pager as if it ran the other way.
+ */
+describe("a customer's orders and services", () => {
+  const withCards = (routes: readonly { url: string; body: unknown }[]) =>
+    stubApi([{ url: `/users/${ROW_ID}`, body: { customer: customer() } }, ...routes]);
+
+  it('asks for THIS customer, with the embedded bound, on both lists', async () => {
+    const api = withCards([
+      { url: '/orders', body: { orders: [order()], nextCursor: null } },
+      { url: '/services', body: { services: [service()], nextCursor: null } },
+    ]);
+    renderPage(
+      <UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} {...ALL_COMMERCE} denied={false} />,
+    );
+    await screen.findByText('پلن یک‌ماهه');
+    await screen.findByText('nx-7f3a91');
+
+    /*
+     * `customerId=` and not merely "a request to /orders".
+     *
+     * The card renders whatever the list returns, so a query that lost the
+     * filter would draw the whole installation's orders under one customer's
+     * name and every assertion about the rows would still pass.
+     */
+    const orders = api.calls.find((call) => call.url.includes('/orders'));
+    const services = api.calls.find((call) => call.url.includes('/services'));
+    expect(orders?.url).toContain(`customerId=${ROW_ID}`);
+    expect(orders?.url).toContain('limit=10');
+    expect(services?.url).toContain(`customerId=${ROW_ID}`);
+    expect(services?.url).toContain('limit=10');
+  });
+
+  /*
+   * `state` and `deliveryState` are TWO facts and this draws both.
+   *
+   * `services.tsx` states the rule: 4D's `recordDelivery` exists precisely so a
+   * failed Telegram send cannot move a service out of `ACTIVE`, and a card that
+   * merged the two axes would show a provisioned account whose message bounced
+   * as unprovisioned — for which the obvious remedy is to provision it again,
+   * on somebody's panel, a second time.
+   */
+  it('draws a delivered failure as ACTIVE and FAILED, never as one merged state', async () => {
+    withCards([
+      { url: '/orders', body: { orders: [], nextCursor: null } },
+      {
+        url: '/services',
+        body: {
+          services: [service({ state: 'ACTIVE', deliveryState: 'FAILED', deliveredAt: null })],
+          nextCursor: null,
+        },
+      },
+    ]);
+    renderPage(
+      <UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} {...ALL_COMMERCE} denied={false} />,
+    );
+    await screen.findByText('nx-7f3a91');
+
+    const row = screen.getByText('nx-7f3a91').closest('tr');
+    expect(row).not.toBeNull();
+    expect(within(row as HTMLElement).getByText('فعال')).toBeTruthy();
+    expect(within(row as HTMLElement).getByText('رد شد')).toBeTruthy();
+  });
+
+  /*
+   * The pager label, which is the one thing that differs between the two cards.
+   *
+   * `/orders` pages ASCENDING — `nextCursor` walks towards NEWER rows — so the
+   * button that fetches it must say "newer". Leaving `CursorPager` on its
+   * defaults would have labelled it "older", and an operator paging forward
+   * through a customer's history would have believed they were going backwards.
+   */
+  it('labels the orders pager for an ascending traversal and sends its cursor', async () => {
+    const api = withCards([
+      { url: '/orders', body: { orders: [order()], nextCursor: 'orders-next' } },
+      { url: '/services', body: { services: [], nextCursor: null } },
+    ]);
+    renderPage(
+      <UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} {...ALL_COMMERCE} denied={false} />,
+    );
+    // The ROW first, so the card below is the loaded one and not its skeleton.
+    await screen.findByText('پلن یک‌ماهه');
+    // Located by the "all orders" link, which is the one string in this card that
+    // the table caption does not also carry.
+    const card = screen.getByText('همهٔ سفارش‌های این مشتری').closest('section');
+    expect(card).not.toBeNull();
+
+    fireEvent.click(within(card as HTMLElement).getByRole('button', { name: 'تازه‌تر' }));
+
+    await waitFor(() => {
+      expect(
+        api.calls.some((call) => call.url.includes('cursor=orders-next')),
+        'the orders pager did not send the cursor the server minted',
+      ).toBe(true);
+    });
+  });
+
+  /* `/services` pages DESCENDING, so its pager keeps the default labels. */
+  it('labels the services pager for a descending traversal and sends its cursor', async () => {
+    const api = withCards([
+      { url: '/orders', body: { orders: [], nextCursor: null } },
+      { url: '/services', body: { services: [service()], nextCursor: 'services-next' } },
+    ]);
+    renderPage(
+      <UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} {...ALL_COMMERCE} denied={false} />,
+    );
+    await screen.findByText('nx-7f3a91');
+    const card = screen.getByText('همهٔ سرویس‌های این مشتری').closest('section');
+    expect(card).not.toBeNull();
+
+    fireEvent.click(within(card as HTMLElement).getByRole('button', { name: 'قدیمی‌تر' }));
+
+    await waitFor(() => {
+      expect(
+        api.calls.some((call) => call.url.includes('cursor=services-next')),
+        'the services pager did not send the cursor the server minted',
+      ).toBe(true);
+    });
+  });
+
+  it('names the missing permission and asks for nothing when orders are withheld', async () => {
+    const api = withCards([{ url: '/services', body: { services: [], nextCursor: null } }]);
+    renderPage(
+      <UserDetailPage
+        id={ROW_ID}
+        mayBlock
+        {...NO_WALLET}
+        mayViewOrders={false}
+        mayViewServices
+        denied={false}
+      />,
+    );
+    await screen.findByText('سرویس‌های این مشتری');
+
+    expect(screen.getByText(/orders\.view/u)).toBeTruthy();
+    // DISABLED, not merely undrawn: a card that fetches a list it will not draw
+    // is a card that records a denial on every render.
+    expect(api.calls.some((call) => call.url.includes('/orders'))).toBe(false);
+  });
+
+  it('names the missing permission and asks for nothing when services are withheld', async () => {
+    const api = withCards([{ url: '/orders', body: { orders: [], nextCursor: null } }]);
+    renderPage(
+      <UserDetailPage
+        id={ROW_ID}
+        mayBlock
+        {...NO_WALLET}
+        mayViewOrders
+        mayViewServices={false}
+        denied={false}
+      />,
+    );
+    await screen.findByText('سفارش‌های این مشتری');
+
+    expect(screen.getByText(/services\.view/u)).toBeTruthy();
+    expect(api.calls.some((call) => call.url.includes('/services'))).toBe(false);
+  });
+
+  /*
+   * An empty list says so in words and invents no number.
+   *
+   * A `0` for something the page cannot recompute is the legacy statistics
+   * screen counting configured panels as connected; the cards therefore carry
+   * no count at all, empty or not.
+   */
+  it('says a customer has none rather than showing a count', async () => {
+    withCards([
+      { url: '/orders', body: { orders: [], nextCursor: null } },
+      { url: '/services', body: { services: [], nextCursor: null } },
+    ]);
+    const { container } = renderPage(
+      <UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} {...ALL_COMMERCE} denied={false} />,
+    );
+    await screen.findByText('این مشتری هنوز سفارشی ثبت نکرده است.');
+    await screen.findByText('این مشتری هنوز سرویسی ندارد.');
+
+    const text = container.textContent ?? '';
+    expect(text).not.toContain('تعداد سفارش');
+    expect(text).not.toContain('تعداد سرویس');
+  });
+
+  /*
+   * No bearer capability reaches this card, structurally.
+   *
+   * `serviceSummarySchema` carries neither `subscriptionUrl`, `subscriptionRef`
+   * nor `providerClientId`, so there is nothing here to leak. Asserted anyway,
+   * because the thing that would break it is somebody widening the schema and
+   * this card rendering the new field by accident — and a list an operator pages
+   * through is the worst place to put a capability in bulk.
+   */
+  it('renders no subscription link for a service that has one', async () => {
+    withCards([
+      { url: '/orders', body: { orders: [], nextCursor: null } },
+      {
+        url: '/services',
+        body: { services: [service({ hasSubscription: true })], nextCursor: null },
+      },
+    ]);
+    const { container } = renderPage(
+      <UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} {...ALL_COMMERCE} denied={false} />,
+    );
+    await screen.findByText('nx-7f3a91');
+
+    const card = (screen.getByText('همهٔ سرویس‌های این مشتری').closest('section') ??
+      container) as HTMLElement;
+    expect(card.textContent ?? '').not.toContain('http');
+    for (const anchor of Array.from(card.querySelectorAll('a'))) {
+      expect(anchor.getAttribute('href') ?? '').not.toContain('http');
+    }
   });
 });

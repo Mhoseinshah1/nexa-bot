@@ -458,6 +458,8 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
           mayViewWallet={may('users.view')}
           mayCredit={may('users.wallet.credit')}
           mayDebit={may('users.wallet.debit')}
+          mayViewOrders={may('orders.view')}
+          mayViewServices={may('services.view')}
           denied={!may('users.view')}
         />
       ),
