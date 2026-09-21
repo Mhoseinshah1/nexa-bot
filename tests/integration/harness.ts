@@ -1,4 +1,6 @@
 import { randomBytes } from 'node:crypto';
+import { sql } from 'drizzle-orm';
+import { isProviderType } from '@nexa/contracts';
 import type {
   ActorContext,
   AdminId,
@@ -300,4 +302,90 @@ export async function validatePanelConnection(
       tx,
     ),
   );
+}
+
+/**
+ * The activation each provider needs before a panel of that type may be sold.
+ *
+ * Built from `PANEL_ACTIVATION_SCHEMAS`'s own shapes rather than hand-written
+ * JSON, so a provider whose required configuration changes breaks this map
+ * instead of silently producing fixtures that the sale evaluator will refuse.
+ * `rickpanel` gets `{}` because it genuinely needs nothing — see
+ * `docs/rickpanel-adapter-audit.md`.
+ */
+const SELLABLE_ACTIVATION: Readonly<Record<ProviderType, unknown>> = {
+  marzban: { proxyProtocols: ['vless'], inboundTags: { vless: ['VLESS_TCP'] } },
+  rickpanel: {},
+  sanaei: { subscriptionDomain: 'sub.example.test', inboundId: 1 },
+};
+
+/**
+ * A fixture panel that could actually deliver what it is sold for.
+ *
+ * ## Why this exists
+ *
+ * Most suites create a panel with a raw `INSERT INTO panels`, because their
+ * subject is an order, a payment or a reminder rather than a panel. Until this
+ * hotfix that was harmless: `decideEligibility` asked about status, health and
+ * capacity, and a bare row passed all three.
+ *
+ * It no longer does, and that is the fix. A row with no credentials, no
+ * activation and no probe is a panel that cannot create an account — which is
+ * exactly the shape of the production panel behind order `01a0c54b`, and the
+ * catalogue must now refuse it. A fixture describing such a panel and expecting
+ * a sale to succeed is a fixture describing the bug.
+ *
+ * So this makes the fixture TRUE rather than making the rule lenient: it sets
+ * the credential timestamps the provider's shape requires, writes an activation
+ * that parses against that provider's own schema, and records a successful
+ * connection test bound to the identity all of that produces.
+ *
+ * It writes CIPHERTEXT placeholders and not real secrets. Nothing here dials a
+ * panel: `decideEligibility` reads only the three set-at timestamps, which is
+ * the whole point of the repository projection never selecting a ciphertext.
+ * A suite that actually connects builds its panel through `PanelService`.
+ */
+export async function makePanelSellable(
+  container: Container,
+  scope: TenantContext,
+  panelId: string,
+): Promise<void> {
+  const db = container.database.db;
+  const rows = await db.execute<{ provider_type: string }>(
+    sql`SELECT provider_type FROM panels WHERE id = ${panelId} AND tenant_id = ${scope.tenantId}`,
+  );
+  const providerType = rows.rows[0]?.provider_type;
+  if (providerType === undefined) throw new Error(`no panel ${panelId} to make sellable`);
+  if (!isProviderType(providerType)) {
+    throw new Error(`panel ${panelId} names a provider this release does not know`);
+  }
+
+  await db.execute(sql`
+    UPDATE panels SET activation = ${JSON.stringify(SELLABLE_ACTIVATION[providerType])}::jsonb
+    WHERE id = ${panelId} AND tenant_id = ${scope.tenantId}`);
+
+  /*
+   * Both timestamps, whatever the provider's shape asks for. Setting only the
+   * two `USERNAME_PASSWORD` needs would leave a `TOKEN_OR_USERNAME_PASSWORD`
+   * provider satisfied by accident rather than on purpose, and the next provider
+   * added would inherit the accident.
+   */
+  await db.execute(sql`
+    INSERT INTO panel_credentials (
+      panel_id, tenant_id,
+      username_ciphertext, username_key_id, username_set_at,
+      password_ciphertext, password_key_id, password_set_at,
+      api_token_ciphertext, api_token_key_id, api_token_set_at)
+    VALUES (
+      ${panelId}, ${scope.tenantId},
+      'fixture-not-a-real-ciphertext', 'fixture', now(),
+      'fixture-not-a-real-ciphertext', 'fixture', now(),
+      'fixture-not-a-real-ciphertext', 'fixture', now())
+    ON CONFLICT (panel_id) DO UPDATE SET
+      username_set_at = now(), password_set_at = now(), api_token_set_at = now()`);
+
+  // LAST, and it has to be: the identity a probe validates covers the activation
+  // and the three timestamps, so a validation recorded before them would be
+  // stale the moment they were written — which is the rule this hotfix adds.
+  await validatePanelConnection(container, scope, panelId);
 }
