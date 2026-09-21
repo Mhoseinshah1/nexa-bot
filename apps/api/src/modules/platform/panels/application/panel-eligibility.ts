@@ -1,9 +1,9 @@
 import {
-  PANEL_ACTIVATION_SCHEMAS,
   PANEL_HEALTH_FRESH_FOR_MS,
   PANEL_UNHEALTHY_AFTER_FAILURES,
   PANEL_UNUSABLE_HEALTH_STATES,
   isProviderType,
+  parsePanelActivation,
   providerDescriptor,
   shapeIsSatisfiedBy,
   supportsCapability,
@@ -284,21 +284,25 @@ export function connectionValidated(
  * `inboundTags.vless` for a protocol with no tags, which is exactly the string a
  * form needs.
  *
- * An unset activation reports the provider's required top-level fields rather
- * than "activation". Zod given `null` produces one issue at the root, and "the
- * activation is invalid" is the message that sends an operator looking for a
- * screen they have already found.
+ * An unset activation is parsed as `{}` by `parsePanelActivation`, so the
+ * missing names come from the SCHEMA's own issues rather than from a list of
+ * required keys kept beside it. That is what stops this function and
+ * `decideOperability` from answering differently about the same NULL: the list
+ * was empty for a provider whose schema requires nothing, which reported a
+ * RickPanel with no activation as complete while the provisioner refused it.
+ * Codex C1 on PR #58, and the contracts commit states the whole shape of it.
+ *
+ * Deriving the names this way is also better than the list was: zod reports
+ * `inboundTags.vless` for a protocol with no tags, which a top-level key name
+ * could never say.
  *
  * Exported because the surface reports it and the evaluator decides on it, and
  * those two must not be able to disagree about what is missing.
  */
 export function activationIssues(providerType: string, activation: unknown): readonly string[] {
   if (!isProviderType(providerType)) return ['providerType'];
-  const parsed = PANEL_ACTIVATION_SCHEMAS[providerType].safeParse(activation);
+  const parsed = parsePanelActivation(providerType, activation);
   if (parsed.success) return [];
-  if (activation === null || activation === undefined) {
-    return Object.keys(PANEL_ACTIVATION_SCHEMAS[providerType].def.shape);
-  }
   const paths = parsed.error.issues.map((issue) =>
     issue.path.length === 0 ? 'activation' : issue.path.join('.'),
   );

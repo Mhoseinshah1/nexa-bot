@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   PANEL_HEALTH_FRESH_FOR_MS,
+  PROVIDER_TYPES,
   PANEL_HEALTH_STATES,
   PANEL_UNHEALTHY_AFTER_FAILURES,
   type PanelHealthState,
@@ -15,6 +16,7 @@ import {
   type EligibilityInput,
   type ProvisioningInput,
 } from '../../apps/api/src/modules/platform/panels/application/panel-eligibility';
+import { decideOperability } from '../../apps/api/src/modules/commerce/provisioning/application/panel-operability';
 
 /**
  * Whether a panel may be SOLD onto, and whether it may be ENABLED.
@@ -619,5 +621,122 @@ describe('whether a stored validation may enable a panel', () => {
       apiTokenSetAt: new Date(0),
     });
     expect(never).toBe(epoch);
+  });
+});
+
+/**
+ * The sale and the provisioner must read ONE activation the same way.
+ *
+ * These two evaluators are deliberately different questions — `decideOperability`
+ * ignores health, `decideEligibility` ignores capabilities — and the separation is
+ * recorded as a rule. What they may never disagree about is whether a given stored
+ * activation is usable at all, because that disagreement has exactly one shape: the
+ * sale says yes, the money moves, and the provisioner says no.
+ *
+ * Codex C1 on PR #58 found it in the provider this hotfix added.
+ * `activationIssues` answered an unset activation with the provider's required
+ * field NAMES, and `rickpanelActivationSchema` is `z.object({}).strict()`, so that
+ * list was EMPTY — no issues, therefore sellable — while `decideOperability` asked
+ * zod, which rejects `null` whatever the schema is. A RickPanel with no activation
+ * row was sellable and not operable simultaneously, which is order `01a0c54b`
+ * reached through a second door.
+ *
+ * So this asserts AGREEMENT rather than either answer, across every provider type
+ * and every shape of stored activation. Written this way it cannot be satisfied by
+ * a matching pair of hardcoded expectations, and a provider added later is covered
+ * the day its type joins `PROVIDER_TYPES`.
+ */
+describe('the sale and the provisioner agree about one activation', () => {
+  const CREDENTIALLED = {
+    usernameSetAt: new Date('2026-09-01T00:00:00.000Z'),
+    passwordSetAt: new Date('2026-09-01T00:00:00.000Z'),
+    apiTokenSetAt: new Date('2026-09-01T00:00:00.000Z'),
+  };
+
+  /**
+   * Every shape a `panels.activation` column can actually hold, plus the two
+   * spellings of absent. `undefined` is not reachable from a row and is included
+   * because a caller assembling the struct by hand can produce it.
+   */
+  const ACTIVATIONS: readonly (readonly [string, unknown])[] = [
+    ['unset (null)', null],
+    ['unset (undefined)', undefined],
+    ['empty object', {}],
+    ['a Marzban activation', { proxyProtocols: ['vless'], inboundTags: { vless: ['T'] } }],
+    ['a 3X-UI activation', { subscriptionDomain: 'sub.example.test', inboundId: 1 }],
+    ['a foreign key', { proxyProtocols: ['vless'] }],
+    ['not an object', 'vless'],
+  ];
+
+  for (const providerType of PROVIDER_TYPES) {
+    for (const [label, activation] of ACTIVATIONS) {
+      it(`${providerType}: ${label} is complete to both or to neither`, () => {
+        const sellable = activationIssues(providerType, activation).length === 0;
+        const operable = decideOperability({
+          panel: {
+            status: 'ACTIVE',
+            providerType,
+            baseUrl: 'https://panel.example.test',
+            archivedAt: null,
+            activation,
+          },
+          credentials: CREDENTIALLED,
+          type: 'PROVISION',
+          serviceAdapterExists: true,
+        });
+        const operableOnActivation = operable.ok || operable.reason !== 'ACTIVATION_INCOMPLETE';
+        expect(operableOnActivation).toBe(sellable);
+      });
+    }
+  }
+
+  /**
+   * The specific row the incident would be reached through, asserted on its own so
+   * the reason is named rather than inferred from an agreement that could also be
+   * reached by both sides refusing.
+   */
+  it('a RickPanel with no activation is sellable AND operable, because it needs none', () => {
+    expect(activationIssues('rickpanel', null)).toEqual([]);
+    const operable = decideOperability({
+      panel: {
+        status: 'ACTIVE',
+        providerType: 'rickpanel',
+        baseUrl: 'https://panel.example.test',
+        archivedAt: null,
+        activation: null,
+      },
+      credentials: CREDENTIALLED,
+      type: 'PROVISION',
+      serviceAdapterExists: true,
+    });
+    expect(operable.ok).toBe(true);
+  });
+
+  /**
+   * And the other half: a provider that DOES require fields is refused by both, with
+   * the missing names coming from the schema's own issues. Without this, normalising
+   * `null` to `{}` could be "fixed" by making everything complete.
+   */
+  it('a Marzban with no activation is refused by both, naming its fields', () => {
+    expect(activationIssues('marzban', null)).toEqual(['proxyProtocols', 'inboundTags']);
+    const operable = decideOperability({
+      panel: {
+        status: 'ACTIVE',
+        providerType: 'marzban',
+        baseUrl: 'https://panel.example.test',
+        archivedAt: null,
+        activation: null,
+      },
+      credentials: CREDENTIALLED,
+      type: 'PROVISION',
+      serviceAdapterExists: true,
+    });
+    expect(operable).toEqual({ ok: false, reason: 'ACTIVATION_INCOMPLETE' });
+  });
+
+  /** An activation an operator set is never repaired into one that parses. */
+  it('a present but invalid activation is refused, not normalised', () => {
+    expect(activationIssues('rickpanel', { proxyProtocols: ['vless'] })).not.toEqual([]);
+    expect(activationIssues('marzban', { proxyProtocols: [] })).toContain('proxyProtocols');
   });
 });

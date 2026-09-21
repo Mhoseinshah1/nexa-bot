@@ -1,12 +1,11 @@
 import {
   OPERATION_REQUIRED_CAPABILITIES,
-  PANEL_ACTIVATION_SCHEMAS,
   isProviderType,
+  parsePanelActivation,
   providerDescriptor,
   shapeIsSatisfiedBy,
   supportsCapability,
   type OperationType,
-  type PanelActivation,
   type ProviderCapability,
 } from '@nexa/contracts';
 import type { PanelOperability } from './ports.js';
@@ -105,16 +104,25 @@ export function decideOperability(input: OperabilityInput): PanelOperability {
   ) {
     return { ok: false, reason: 'CREDENTIALS_MISSING' };
   }
-  const activation = PANEL_ACTIVATION_SCHEMAS[panel.providerType].safeParse(panel.activation);
+  const activation = parsePanelActivation(panel.providerType, panel.activation);
   if (!activation.success) {
     /*
-     * Unset, or set to something this provider's schema does not accept.
+     * Set to something this provider's schema does not accept — or unset, for a
+     * provider that requires anything at all.
      *
      * The same answer for both, because the remedy is the same screen and the same
      * field. A row that was valid under an older schema and is not under this one is
      * the interesting case, and it is handled here rather than at read time: refusing
      * the operation is right, and rewriting somebody's configuration to make it parse
      * would be the legacy behaviour of silently changing what an operator set.
+     *
+     * `parsePanelActivation` rather than a bare `safeParse`, and that is Codex C1 on
+     * PR #58. Deciding here what an unset activation means is what let this function
+     * and `decideEligibility` answer differently about the same NULL: a RickPanel
+     * requires no fields, so the sale said complete and this said incomplete, and an
+     * order that could never be delivered was paid for. The two questions stay
+     * deliberately separate — this one ignores health, that one ignores capabilities —
+     * but they must read one activation the same way.
      */
     return { ok: false, reason: 'ACTIVATION_INCOMPLETE' };
   }
@@ -122,6 +130,6 @@ export function decideOperability(input: OperabilityInput): PanelOperability {
     ok: true,
     providerType: panel.providerType,
     baseUrl: panel.baseUrl,
-    activation: activation.data as PanelActivation,
+    activation: activation.data,
   };
 }
