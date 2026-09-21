@@ -783,10 +783,24 @@ describe('the services section of the Telegram management panel', () => {
     expect(lastMessage(), 'the owner holds users.view').toContain(`9:v:${customerA}`);
 
     await bindNewAdmin('services-only-detail', TG.viewer, { permissions: ['services.view'] });
-    await runtime().handle(
+    const viewer = await runtime().handle(
       tenantA,
       systemActor('bot'),
       tapUpdate(`${PREFIX.service}${service.id}`, TG.viewer),
+    );
+    /*
+     * The SCREEN still renders, and that is the half a "no button" assertion alone
+     * cannot see.
+     *
+     * The customer read is SKIPPED when the key is absent rather than attempted and
+     * caught: `CustomerService.get` charges `users.view` through the guard, so asking
+     * anyway would both manufacture a denial per service screen an operator opens and —
+     * because a denial is not `isCustomerMiss` — rethrow, turning a services screen into
+     * an error over a permission the service itself does not need. Reverting the skip
+     * leaves the button absent either way; what it breaks is this line.
+     */
+    expect(viewer.replyKey, 'a permission the SERVICE does not need broke its screen').toBe(
+      'bot.admin.service',
     );
     const viewerText = lastMessage();
     expect(viewerText, 'a button whose every tap is a denial').not.toContain('9:v:');
