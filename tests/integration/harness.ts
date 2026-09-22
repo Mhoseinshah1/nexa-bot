@@ -104,9 +104,32 @@ export async function resetDatabase(db: Database): Promise<void> {
        -- backtick in a comment ends it and the parse error lands twenty lines away.
        wallet_entries, discount_redemptions, referrals, trial_grants, resellers,
        provisioning_operations, services, payments, orders, discounts, products,
+       -- AFTER products, which reference it. Named for the same reason as the rest:
+       -- the tenants table above does CASCADE to it today, and a table whose clearing
+       -- depends on a foreign key somebody may later make nullable is a table that
+       -- silently stops being cleared.
+       --
+       -- (No backticks. The warning twenty lines up is there because this is a plain
+       -- template literal, and the first version of THIS comment ignored it.)
+       product_categories,
        customers
      RESTART IDENTITY CASCADE` as never,
   );
+}
+
+/**
+ * The seeded category belonging to the tenant a fixture is building for.
+ *
+ * A product's category must be its OWN tenant's — `products_tenant_category_fk` is a
+ * composite key precisely so that it cannot be somebody else's — and the three
+ * cross-tenant cases in `orders.test.ts` and `catalog.test.ts` are the ones that
+ * noticed: they build a tenant B product, and a fixture hard-coding tenant A's category
+ * made them fail on the foreign key rather than on the rule they exist to test.
+ *
+ * So the fixture asks which tenant it is in, exactly as production would.
+ */
+export function seededCategoryFor(scope: { readonly tenantId: unknown }): string {
+  return scope.tenantId === SEED_IDS.tenantB ? SEED_IDS.categoryB : SEED_IDS.categoryA;
 }
 
 export interface TestContext {

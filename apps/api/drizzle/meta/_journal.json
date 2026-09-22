@@ -687,6 +687,13 @@
       "when": 1790092220619,
       "tag": "0097_product_categories",
       "breakpoints": true
+    },
+    {
+      "idx": 98,
+      "version": "7",
+      "when": 1790093139229,
+      "tag": "0098_category_paging_indexes",
+      "breakpoints": true
     }
   ]
 }

@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { ProductCategoryId } from '@nexa/contracts';
 import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -269,6 +270,7 @@ describe('operator service actions over HTTP', () => {
         audience: 'EVERYONE',
         sortOrder: 10,
         panelId: panelId as PanelId,
+        categoryId: SEED_IDS.categoryA as ProductCategoryId,
         /* No device limit: Marzban does not declare `LIMIT_DEVICES`. */
         specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: null },
         price: money(250_000n, 'IRT'),

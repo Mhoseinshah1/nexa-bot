@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { ProductCategoryId } from '@nexa/contracts';
 import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -1541,6 +1542,7 @@ describe('the services section of the Telegram management panel', () => {
         audience: 'EVERYONE',
         sortOrder: 10,
         panelId: where.panelId as PanelId,
+        categoryId: SEED_IDS.categoryA as ProductCategoryId,
         specification: {
           durationDays: 30,
           trafficBytes: 53_687_091_200n,
@@ -1658,6 +1660,7 @@ describe('the services section of the Telegram management panel', () => {
         audience: 'EVERYONE',
         sortOrder: 10,
         panelId: panelB as PanelId,
+        categoryId: SEED_IDS.categoryA as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 1_000n, deviceLimit: null },
         price: money(100_000n, 'IRT'),
       },

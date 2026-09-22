@@ -2,6 +2,9 @@ import type {
   Money,
   PanelId,
   ProductAudience,
+  ProductCategoryId,
+  ProductCategoryStatus,
+  ProductCategoryVisibility,
   ProductId,
   ProductSpecification,
   ProductStatus,
@@ -32,6 +35,16 @@ export interface ProductRecord {
    * message an operator needs names the product".
    */
   readonly panelId: PanelId | null;
+  /**
+   * The category a customer browses this under, or null.
+   *
+   * Null is a real state and it is UNSELLABLE, unlike `panelId`'s null which is merely
+   * unfulfillable-yet. Migration 0097 gave every existing product a category, so a null
+   * here means an operator deleted an emptied category out from under a product, or a
+   * path created one without a category. Either way it is refused at confirmation with
+   * a reason naming which rule failed, rather than the product silently vanishing.
+   */
+  readonly categoryId: ProductCategoryId | null;
   readonly specification: ProductSpecification;
   /**
    * The price as ONE nullable value rather than two nullable columns.
@@ -105,6 +118,8 @@ export interface ProductDraft {
   readonly audience: ProductAudience;
   readonly sortOrder: number;
   readonly panelId: PanelId | null;
+  /** The category this product is filed under. Reassignment is an ordinary edit. */
+  readonly categoryId: ProductCategoryId | null;
   readonly specification: ProductSpecification;
   readonly price: Money | null;
 }
@@ -154,6 +169,28 @@ export interface ProductRepository {
   ): Promise<ProductRecord>;
 
   findById(scope: TenantContext, id: ProductId, tx?: unknown): Promise<ProductRecord | null>;
+
+  /**
+   * One PAGE of the categories a customer may browse. See the implementation for why
+   * emptiness is a property of the query's shape rather than a check it performs.
+   */
+  listCustomerCategories(
+    scope: TenantContext,
+    limit: number,
+    offset: number,
+    eligiblePanelIds: readonly string[],
+    tx?: unknown,
+  ): Promise<CustomerPage<ProductCategoryRecord>>;
+
+  /** One PAGE of the products inside one category, every predicate applied in SQL. */
+  listCustomerProductsInCategory(
+    scope: TenantContext,
+    categoryId: string,
+    limit: number,
+    offset: number,
+    eligiblePanelIds: readonly string[],
+    tx?: unknown,
+  ): Promise<CustomerPage<ProductRecord>>;
 
   list(
     scope: TenantContext,
@@ -222,4 +259,64 @@ export interface ProductRepository {
     eligiblePanelIds: readonly string[],
     tx?: unknown,
   ): Promise<{ readonly items: readonly ProductRecord[]; readonly hasMore: boolean }>;
+}
+
+/**
+ * A category row as the application layer sees it.
+ *
+ * `status` and `visibility` are the two dimensions `catalog.ts` explains, and they do
+ * different things: status decides whether the products inside may be BOUGHT,
+ * visibility only whether the category is LISTED. Nothing here caches how many products
+ * it holds — `productCategories` in the schema says why a count would be a second
+ * answer that goes stale the moment a product is deactivated.
+ */
+export interface ProductCategoryRecord {
+  readonly id: ProductCategoryId;
+  readonly name: string;
+  readonly description: string | null;
+  /** Optional. Absence is ordinary and renders as an ordinary category. */
+  readonly emoji: string | null;
+  readonly status: ProductCategoryStatus;
+  readonly visibility: ProductCategoryVisibility;
+  readonly sortOrder: number;
+  readonly createdAt: Date;
+  readonly updatedAt: Date;
+}
+
+/**
+ * One page of an OFFSET-paged customer list.
+ *
+ * `hasMore` is READ rather than computed: the query asks for `limit + 1` rows and
+ * discards the extra, so "there is a next page" is a fact about the data instead of an
+ * inference from a count. `hasPrevious` is the caller's `page > 1` and is not carried
+ * here, because it is not a question about the data at all.
+ *
+ * There is deliberately no `total`. It would need a second COUNT over the same
+ * predicates, it would be stale the instant it was read, and neither Next nor Previous
+ * needs it to be shown truthfully. `docs/wp5-categories-audit.md` §6.4 records that this
+ * offset is not snapshot-stable — an operator reordering while a customer pages can move
+ * a row across a boundary — and a printed total would imply a stability it does not have.
+ */
+export interface CustomerPage<T> {
+  readonly items: readonly T[];
+  readonly hasMore: boolean;
+}
+
+/**
+ * Categories, as the application reads and writes them.
+ *
+ * Separate from `ProductRepository` because they are separate aggregates with separate
+ * lifecycles — a category outlives the products filed under it, and deleting one is a
+ * question about the products rather than about the category.
+ *
+ * `findById` takes a NULLABLE id and answers null for null. That is not laziness: every
+ * caller holds `product.categoryId`, which is nullable by design, and making each of
+ * them write the same guard is how one of them eventually forgets.
+ */
+export interface ProductCategoryRepository {
+  findById(
+    scope: TenantContext,
+    id: ProductCategoryId | null,
+    tx?: unknown,
+  ): Promise<ProductCategoryRecord | null>;
 }

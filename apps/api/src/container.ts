@@ -131,6 +131,7 @@ import { DrizzleCommercialActionRepository } from './modules/commerce/commercial
 import { DrizzleServiceAddonRepository } from './modules/commerce/catalog/infrastructure/drizzle-addon.repository.js';
 import {
   DrizzlePanelDirectory,
+  DrizzleProductCategoryRepository,
   DrizzleProductRepository,
 } from './modules/commerce/catalog/infrastructure/drizzle-product.repository.js';
 import { DrizzleWalletRepository } from './modules/commerce/wallet/infrastructure/drizzle-wallet.repository.js';
@@ -1039,8 +1040,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     panels: panelRepository,
     customers: customerRepository,
   });
+  const productCategoryRepository = new DrizzleProductCategoryRepository(database.db);
   const orderService = new OrderService({
     panelSales: panelSalesGate,
+    categories: productCategoryRepository,
     usernames: usernameLane,
     repository: orderRepository,
     /*

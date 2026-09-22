@@ -2646,13 +2646,17 @@ export const productCategories = pgTable(
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
   (table) => [
-    /** The customer's order: sort, then created, then id — the catalogue's own shape. */
-    index('product_categories_tenant_sort_idx').on(
-      table.tenantId,
-      table.sortOrder,
-      table.createdAt,
-      table.id,
-    ),
+    /**
+     * The customer's order, and it matches the ORDER BY exactly.
+     *
+     * `(tenant, sort_order, id)` rather than `(tenant, sort_order, created_at, id)`,
+     * because the owner specified `sort_order ASC, id ASC` for the paged customer
+     * surfaces and an index whose columns are a superset still leaves the planner
+     * sorting on `id` within each `sort_order` group. Added by 0098 for that reason;
+     * 0097 shipped the four-column shape, which was right for the ordering assumed
+     * before the paging decision and wrong for the one specified after it.
+     */
+    index('product_categories_tenant_sort_id_idx').on(table.tenantId, table.sortOrder, table.id),
     /** The admin list's keyset, on the IMMUTABLE pair. Migration 0026's lesson. */
     index('product_categories_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
     check('product_categories_status_check', enumCheck('status', PRODUCT_CATEGORY_STATUSES)),
@@ -2800,11 +2804,18 @@ export const products = pgTable(
       foreignColumns: [productCategories.tenantId, productCategories.id],
       name: 'products_tenant_category_fk',
     }),
-    index('products_tenant_category_sort_idx').on(
+    /**
+     * The customer's page within one category, matching `sort_order ASC, id ASC`.
+     *
+     * Every predicate the paged query applies is either in this index's leading
+     * columns or cheap on the rows it returns — the point being that the LIMIT applies
+     * to rows already filtered, never to rows a surface filters afterwards. §1.4 of
+     * `docs/wp5-categories-audit.md` is the failure this shape exists to prevent.
+     */
+    index('products_tenant_category_sort_id_idx').on(
       table.tenantId,
       table.categoryId,
       table.sortOrder,
-      table.createdAt,
       table.id,
     ),
     unique('products_tenant_id_key').on(table.tenantId, table.id),

@@ -14,7 +14,7 @@ import {
   type ProductWriteRequest,
   type TenantContext,
 } from '@nexa/contracts';
-import type { ProductId } from '@nexa/contracts';
+import type { ProductCategoryId, ProductId } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
 import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
 import { singleValued } from './query.js';
@@ -180,6 +180,7 @@ function draftFrom(command: ProductWriteRequest): ProductDraft {
     audience: command.audience,
     sortOrder: command.sortOrder,
     panelId: command.panelId as PanelId | null,
+    categoryId: command.categoryId as ProductCategoryId | null,
     specification: {
       durationDays: command.durationDays,
       trafficBytes: BigInt(command.trafficBytes),

@@ -10,6 +10,7 @@ import {
   type PanelId,
   type ProductId,
   type UserId,
+  type ProductCategoryId,
 } from '@nexa/contracts';
 import { CATALOGUE_FA, formatMoney, renderTemplateBody } from '@nexa/i18n';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
@@ -171,6 +172,7 @@ describe('an order that cannot be delivered is refunded', () => {
     audience: 'EVERYONE',
     sortOrder: 10,
     panelId: panelId as PanelId,
+    categoryId: SEED_IDS.categoryA as ProductCategoryId,
     specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: 2 },
     price: money(250_000n, 'IRT'),
   });

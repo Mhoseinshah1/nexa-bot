@@ -1874,6 +1874,21 @@ export const productWriteSchema = z
       .regex(/^\d{1,19}$/u)
       .nullable(),
     priceCurrency: z.enum(CURRENCY_CODES).nullable(),
+    /**
+     * The category to file this product under.
+     *
+     * NULLABLE on the wire and required as a FIELD, which is the distinction that
+     * matters: an operator must say something, and "none" is a thing they can say. It
+     * produces a product no customer can reach, refused at confirmation with
+     * `PRODUCT_NOT_CATEGORISED` rather than silently absent from every list — because a
+     * product that vanishes teaches nobody anything, which is the rule
+     * `catalog.ts` already applies to an unbound panel.
+     *
+     * Reassignment is this same field on an edit. It does not disturb history: an
+     * order's category is snapshotted at confirmation, so moving a product changes what
+     * NEW customers browse and nothing about what past ones bought.
+     */
+    categoryId: z.string().uuid().nullable(),
   })
   .refine((p) => (p.priceAmount === null) === (p.priceCurrency === null), {
     message: 'A price is an amount and a currency, or it is absent.',

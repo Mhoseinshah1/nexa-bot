@@ -8,6 +8,7 @@ import {
   type PanelId,
   type ProductId,
   type UserId,
+  type ProductCategoryId,
 } from '@nexa/contracts';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { DrizzleServiceReminderRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service-reminder.repository';
@@ -115,6 +116,7 @@ describe('a customer is warned before their service runs out', () => {
     audience: 'EVERYONE',
     sortOrder: 10,
     panelId: panelId as PanelId,
+    categoryId: SEED_IDS.categoryA as ProductCategoryId,
     specification: { durationDays: 30, trafficBytes: ALLOWANCE, deviceLimit: 2 },
     price: money(250_000n, 'IRT'),
   });

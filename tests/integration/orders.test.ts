@@ -10,6 +10,7 @@ import {
   type ProductId,
   type ProductStatus,
   type UserId,
+  type ProductCategoryId,
 } from '@nexa/contracts';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import type {
@@ -27,6 +28,7 @@ import {
   tenantA,
   tenantB,
   type TestContext,
+  seededCategoryFor,
 } from './harness';
 
 /**
@@ -141,6 +143,7 @@ describe('orders, up to the payment boundary', () => {
     audience: 'EVERYONE',
     sortOrder: 10,
     panelId: panelId as PanelId,
+    categoryId: SEED_IDS.categoryA as ProductCategoryId,
     specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: 2 },
     price: money(250_000n, 'IRT'),
     ...overrides,
@@ -154,7 +157,19 @@ describe('orders, up to the payment boundary', () => {
   ): Promise<ProductRecord> {
     const created = await products.create(scope, {
       id: ctx.container.ids.uuid() as ProductId,
-      draft: draft(panelId, overrides),
+      /*
+       * The category comes from the SCOPE, never from a constant.
+       *
+       * `products_tenant_category_fk` is composite, so a tenant B product filed under
+       * tenant A's category is refused by the database — which is the rule working, and
+       * which is what a hard-coded `SEED_IDS.categoryA` here turned into three
+       * cross-tenant tests failing on a foreign key instead of on their own subject.
+       */
+      draft: {
+        ...draft(panelId, overrides),
+        categoryId: seededCategoryFor(scope) as ProductCategoryId,
+        ...overrides,
+      },
       now: ctx.container.clock.now(),
     });
     if (status === 'ACTIVE') {

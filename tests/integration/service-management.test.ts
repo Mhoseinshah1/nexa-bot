@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { ProductCategoryId } from '@nexa/contracts';
 import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -185,6 +186,7 @@ describe('a customer manages the service they bought', () => {
         audience: 'EVERYONE',
         sortOrder: 10,
         panelId: panelId as PanelId,
+        categoryId: SEED_IDS.categoryA as ProductCategoryId,
         /*
          * No device limit. Marzban's descriptor does not declare `LIMIT_DEVICES` and
          * the executor refuses to sell one a panel cannot apply, so a fixture with a

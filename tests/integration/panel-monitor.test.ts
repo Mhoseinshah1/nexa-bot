@@ -1,4 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import type { ProductCategoryId } from '@nexa/contracts';
 import { and, eq, isNull, like, sql } from 'drizzle-orm';
 import { errors, money, PANEL_UNHEALTHY_AFTER_FAILURES } from '@nexa/contracts';
 import type {
@@ -3407,6 +3408,7 @@ describe('the panel health monitor', () => {
           audience: 'EVERYONE',
           sortOrder: 10,
           panelId: panelId as PanelId,
+          categoryId: SEED_IDS.categoryA as ProductCategoryId,
           specification: { durationDays: 30, trafficBytes: 0n, deviceLimit: 1 },
           price: money(120_000n, 'IRT'),
         },

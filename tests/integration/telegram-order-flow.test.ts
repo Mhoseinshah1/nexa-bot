@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { ProductCategoryId } from '@nexa/contracts';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { TELEGRAM_SECRET_TOKEN_HEADER, money, type ProductId } from '@nexa/contracts';
@@ -187,6 +188,7 @@ describe('the customer purchase flow over Telegram', () => {
     audience: 'EVERYONE',
     sortOrder: 10,
     panelId: panelA as never,
+    categoryId: SEED_IDS.categoryA as ProductCategoryId,
     specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: 2 },
     price: money(250_000n, 'IRT'),
     ...overrides,

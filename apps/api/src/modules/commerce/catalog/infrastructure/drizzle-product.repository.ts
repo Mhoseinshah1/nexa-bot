@@ -4,6 +4,9 @@ import type {
   CurrencyCode,
   PanelId,
   ProductAudience,
+  ProductCategoryId,
+  ProductCategoryStatus,
+  ProductCategoryVisibility,
   ProductId,
   ProductStatus,
   TenantContext,
@@ -13,9 +16,16 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
-import { panels, products } from '../../../../infrastructure/persistence/schema.js';
+import {
+  panels,
+  productCategories,
+  products,
+} from '../../../../infrastructure/persistence/schema.js';
 import type {
+  CustomerPage,
   PanelDirectory,
+  ProductCategoryRecord,
+  ProductCategoryRepository,
   ProductCursor,
   ProductDraft,
   ProductEdit,
@@ -205,6 +215,143 @@ export class DrizzleProductRepository implements ProductRepository {
    * skip a product an operator re-ordered mid-browse. A catalogue is small and finite;
    * being told there are more is honest, and a cursor that silently drops one is not.
    */
+  /**
+   * The predicates a product must satisfy to be SHOWN to a customer, as SQL.
+   *
+   * Extracted so the two paged queries and `listCatalog` state the rule once. The
+   * TypeScript twin is `isCustomerVisible`, and `catalog.test.ts` runs both over the
+   * same matrix and asserts they agree — the duplication is deliberate and the test is
+   * what stops it drifting.
+   *
+   * The category join is INNER, which is what makes an uncategorised product invisible
+   * without a separate `IS NOT NULL`: a product whose category was deleted out from
+   * under it simply has no row to match.
+   */
+  private customerVisibleProduct(tenantId: string, eligiblePanelIds: readonly string[]): SQL {
+    return and(
+      eq(products.tenantId, tenantId),
+      eq(products.status, 'ACTIVE'),
+      sql`${products.panelId} = ANY(${sql.param([...eligiblePanelIds])}::uuid[])`,
+      sql`${products.audience} NOT IN ('HIDDEN', 'RESELLERS_ONLY')`,
+      isNotNull(products.priceAmount),
+      isNotNull(products.panelId),
+      /* The category's BOTH terms — browsing asks whether it is listed, not only sold. */
+      eq(productCategories.status, 'ACTIVE'),
+      eq(productCategories.visibility, 'VISIBLE'),
+    ) as SQL;
+  }
+
+  /**
+   * One PAGE of the categories a customer may browse, ordered `sort_order ASC, id ASC`.
+   *
+   * ## Emptiness is structural, not a second question
+   *
+   * A category appears only where an `EXISTS` finds at least one product that passes
+   * `customerVisibleProduct` inside it. So "an empty category is never shown" is not a
+   * rule this method applies — it is a property of the query's shape, and there is no
+   * code path that could show an empty one by forgetting to check. A `LEFT JOIN` with a
+   * count, or a filter over the returned page, would both have reintroduced the
+   * possibility.
+   *
+   * ## Offset, and what it does not promise
+   *
+   * `sort_order` is what an operator drags, so it cannot be a cursor key — that is
+   * migration 0026's defect and `ports.ts` records it for the admin list. The owner
+   * therefore chose an OFFSET, accepting that a reorder during paging can move a row
+   * across a boundary. Nothing here claims otherwise; see
+   * `docs/wp5-categories-audit.md` §6.4.
+   *
+   * `limit + 1` rows are read and the extra discarded, so `hasMore` is a fact about the
+   * data rather than an inference from a COUNT that was true a moment ago. Previous is
+   * the caller's `page > 1` and needs no query at all.
+   */
+  async listCustomerCategories(
+    scope: TenantContext,
+    limit: number,
+    offset: number,
+    eligiblePanelIds: readonly string[],
+    tx?: unknown,
+  ): Promise<CustomerPage<ProductCategoryRecord>> {
+    const tenantId = requireTenantId(scope);
+    /* No eligible panel is no catalogue, answered without a round trip. */
+    if (eligiblePanelIds.length === 0) return { items: [], hasMore: false };
+
+    const rows = await this.exec(tx)
+      .select(getTableColumns(productCategories))
+      .from(productCategories)
+      .where(
+        and(
+          eq(productCategories.tenantId, tenantId),
+          eq(productCategories.status, 'ACTIVE'),
+          eq(productCategories.visibility, 'VISIBLE'),
+          sql`EXISTS (
+            SELECT 1 FROM ${products}
+            WHERE ${products.categoryId} = ${productCategories.id}
+              AND ${products.tenantId} = ${productCategories.tenantId}
+              AND ${products.status} = 'ACTIVE'
+              AND ${products.audience} NOT IN ('HIDDEN', 'RESELLERS_ONLY')
+              AND ${products.priceAmount} IS NOT NULL
+              AND ${products.panelId} IS NOT NULL
+              AND ${products.panelId} = ANY(${sql.param([...eligiblePanelIds])}::uuid[])
+          )`,
+        ),
+      )
+      .orderBy(asc(productCategories.sortOrder), asc(productCategories.id))
+      .limit(limit + 1)
+      .offset(offset);
+
+    return {
+      items: rows.slice(0, limit).map(toCategoryRecord),
+      hasMore: rows.length > limit,
+    };
+  }
+
+  /**
+   * One PAGE of the products inside one category, ordered `sort_order ASC, id ASC`.
+   *
+   * Every predicate is in this statement, before `LIMIT`/`OFFSET`: tenant, category,
+   * the category's own status and visibility, the product's status and audience, panel
+   * eligibility, price and panel presence. That ordering is the whole point and it has
+   * a history — filtering a bounded result in memory emptied this shop three times, at
+   * twenty, then a hundred, then five hundred, each "fix" only moving the threshold.
+   *
+   * The owner's instruction restates it for this query: never fetch a bounded page and
+   * then filter in memory.
+   */
+  async listCustomerProductsInCategory(
+    scope: TenantContext,
+    categoryId: string,
+    limit: number,
+    offset: number,
+    eligiblePanelIds: readonly string[],
+    tx?: unknown,
+  ): Promise<CustomerPage<ProductRecord>> {
+    const tenantId = requireTenantId(scope);
+    if (eligiblePanelIds.length === 0) return { items: [], hasMore: false };
+
+    const rows = await this.exec(tx)
+      .select(getTableColumns(products))
+      .from(products)
+      .innerJoin(
+        productCategories,
+        and(
+          eq(productCategories.id, products.categoryId),
+          eq(productCategories.tenantId, products.tenantId),
+        ),
+      )
+      .where(
+        and(
+          this.customerVisibleProduct(tenantId, eligiblePanelIds),
+          eq(products.categoryId, categoryId),
+        ),
+      )
+      .orderBy(asc(products.sortOrder), asc(products.id))
+      .limit(limit + 1)
+      .offset(offset);
+
+    return { items: rows.slice(0, limit).map(toRecord), hasMore: rows.length > limit };
+  }
+
   async listCatalog(
     scope: TenantContext,
     limit: number,
@@ -276,6 +423,18 @@ function columnsFor(draft: ProductDraft) {
     audience: draft.audience,
     sortOrder: draft.sortOrder,
     panelId: draft.panelId,
+    /*
+     * The category, and it is mapped HERE rather than at the two call sites.
+     *
+     * `create` and `update` both spread this function, so a field missing from it is a
+     * field silently dropped on the way to the database — which is exactly what happened
+     * when `categoryId` was added to `ProductDraft` and not to this map: the type system
+     * was satisfied at every layer, the INSERT omitted the column, and every product
+     * came back uncategorised. Twenty-seven integration tests failed with
+     * `PRODUCT_NOT_CATEGORISED`, which was the new rule correctly refusing a row this
+     * function had quietly made unsellable.
+     */
+    categoryId: draft.categoryId,
     durationDays: draft.specification.durationDays,
     trafficBytes: draft.specification.trafficBytes,
     deviceLimit: draft.specification.deviceLimit,
@@ -291,6 +450,20 @@ function columnsFor(draft: ProductDraft) {
   };
 }
 
+function toCategoryRecord(row: typeof productCategories.$inferSelect): ProductCategoryRecord {
+  return {
+    id: row.id as ProductCategoryId,
+    name: row.name,
+    description: row.description,
+    emoji: row.emoji,
+    status: row.status as ProductCategoryStatus,
+    visibility: row.visibility as ProductCategoryVisibility,
+    sortOrder: row.sortOrder,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
 function toRecord(row: typeof products.$inferSelect): ProductRecord {
   return {
     id: row.id as ProductId,
@@ -300,6 +473,7 @@ function toRecord(row: typeof products.$inferSelect): ProductRecord {
     audience: row.audience as ProductAudience,
     sortOrder: row.sortOrder,
     panelId: row.panelId as PanelId | null,
+    categoryId: row.categoryId as ProductCategoryId | null,
     specification: {
       durationDays: row.durationDays,
       trafficBytes: row.trafficBytes,
@@ -347,5 +521,43 @@ export class DrizzlePanelDirectory implements PanelDirectory {
       .where(and(eq(panels.tenantId, tenantId), eq(panels.id, panelId)))
       .limit(1);
     return rows.length > 0;
+  }
+}
+
+/**
+ * Categories, in PostgreSQL.
+ *
+ * One method for now, and it is the one the order path needs: the authoritative read
+ * inside the confirming transaction. The admin surfaces get theirs when they are built;
+ * a repository full of methods nothing calls is the "placeholder abstraction" the
+ * conventions forbid.
+ */
+export class DrizzleProductCategoryRepository implements ProductCategoryRepository {
+  constructor(private readonly db: Database) {}
+
+  private exec(tx?: unknown): Executor {
+    return (tx as TransactionScope | undefined)?.tx ?? this.db;
+  }
+
+  /**
+   * Null in, null out — and the tenant predicate is carried even for a primary key.
+   *
+   * A primary-key lookup without the tenant returns another tenant's row and leaves the
+   * caller holding something it should never have seen. Filtering in the query means it
+   * never leaves the database, which is the same rule every other read here follows.
+   */
+  async findById(
+    scope: TenantContext,
+    id: ProductCategoryId | null,
+    tx?: unknown,
+  ): Promise<ProductCategoryRecord | null> {
+    if (id === null) return null;
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .select(getTableColumns(productCategories))
+      .from(productCategories)
+      .where(and(eq(productCategories.tenantId, tenantId), eq(productCategories.id, id)))
+      .limit(1);
+    return row === undefined ? null : toCategoryRecord(row);
   }
 }

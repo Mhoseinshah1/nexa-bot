@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import type { ProductCategoryId } from '@nexa/contracts';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   API_PREFIX,
@@ -15,7 +16,15 @@ import { money, type PanelId, type ProductId } from '@nexa/contracts';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
-import { createAdmin, migrateOnce, resetDatabase, tenantA, tenantB, testConfig } from './harness';
+import {
+  createAdmin,
+  migrateOnce,
+  resetDatabase,
+  tenantA,
+  tenantB,
+  testConfig,
+  SEED_IDS,
+} from './harness';
 
 /**
  * Products over real HTTP.
@@ -579,6 +588,7 @@ describe('product HTTP surface', () => {
         audience: 'EVERYONE',
         sortOrder: 5,
         panelId: bPanel as PanelId,
+        categoryId: SEED_IDS.categoryA as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 1n, deviceLimit: null },
         price: money(100000n, 'IRT'),
       },

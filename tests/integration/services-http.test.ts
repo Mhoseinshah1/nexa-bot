@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import type { ProductCategoryId } from '@nexa/contracts';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   API_PREFIX,
@@ -223,6 +224,7 @@ describe('service HTTP surface', () => {
         audience: 'EVERYONE',
         sortOrder: 10,
         panelId: panelId as PanelId,
+        categoryId: SEED_IDS.categoryA as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: 2 },
         price: money(250_000n, 'IRT'),
       },
