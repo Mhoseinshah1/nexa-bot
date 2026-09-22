@@ -2830,6 +2830,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
        * are the Web Admin's" becomes a type error rather than a convention.
        */
       panelAdmin: panelService,
+      /*
+       * The SAME `ProductCategoryService` the Web Admin's `/product-categories`
+       * controller holds, so a category has one set of rules on both surfaces.
+       */
+      productCategories: productCategoryService,
       clock,
       delivery: deliveryService,
       /*

@@ -1,6 +1,7 @@
 import {
   COMMERCE_ERROR_CODES,
   PANEL_ERROR_CODES,
+  PLATFORM_ERROR_CODES,
   providerDescriptor,
   isNexaError,
   currencyCodeSchema,
@@ -25,6 +26,7 @@ import type {
   OrderPurpose,
   PaymentId,
   PermissionKey,
+  ProductId,
   ServiceActionAvailability,
   ServiceOperatorAction,
   ServiceReminderThresholds,
@@ -53,6 +55,14 @@ import type {
 } from '../../modules/commerce/messaging/application/ports.js';
 import type { CustomerRecord } from '../../modules/commerce/customers/application/ports.js';
 import type { ProductService } from '../../modules/commerce/catalog/application/product.service.js';
+import {
+  CATEGORY_SORT_ORDER_MAX,
+  type ProductCategoryService,
+} from '../../modules/commerce/catalog/application/product-category.service.js';
+import type {
+  ProductCategoryListing,
+  ProductRecord,
+} from '../../modules/commerce/catalog/application/ports.js';
 import type { CommercialActionService } from '../../modules/commerce/commercial/application/commercial-action.service.js';
 import type { OrderService } from '../../modules/commerce/orders/application/order.service.js';
 import type { OrderRecord } from '../../modules/commerce/orders/application/ports.js';
@@ -289,6 +299,39 @@ export const BOT_INTENTS = [
   'ADMIN_CUSTOMER_FIND',
   'ADMIN_CUSTOMER_BLOCK',
   'ADMIN_CUSTOMER_UNBLOCK',
+  /*
+   * WP5 — the categories section.
+   *
+   * Every write is `ProductCategoryService`, the one the Web Admin's `/product-categories`
+   * routes call, so nothing here decides what a category may do. The taps carry a TARGET
+   * (activate, hide) rather than "flip it", for the reason `ADMIN_ADMIN_STATUS` gives: a
+   * double tap on a slow connection writes the state already held instead of undoing the
+   * first. `ADMIN_CATEGORY_DELETE_ASK` and `ADMIN_CATEGORY_DELETE` are the ask-then-act
+   * pair. The three that carry operator TEXT — a name, an emoji — are commands with their
+   * argument in the same message, never a prompt that captures the next one
+   * (INCIDENT-FIN-001).
+   *
+   * `ADMIN_CATEGORY_PRODUCTS`, `_PICK` and `_ASSIGN` are the reassignment: choose a
+   * product, then the category it should move to. Chosen from a list of products rather
+   * than from inside a category because the product that most needs a category is the one
+   * that has NONE, and no category screen would ever list it.
+   */
+  'ADMIN_CATEGORIES',
+  'ADMIN_CATEGORY',
+  'ADMIN_CATEGORY_ACTIVATE',
+  'ADMIN_CATEGORY_DEACTIVATE',
+  'ADMIN_CATEGORY_SHOW',
+  'ADMIN_CATEGORY_HIDE',
+  'ADMIN_CATEGORY_UP',
+  'ADMIN_CATEGORY_DOWN',
+  'ADMIN_CATEGORY_DELETE_ASK',
+  'ADMIN_CATEGORY_DELETE',
+  'ADMIN_CATEGORY_NEW',
+  'ADMIN_CATEGORY_RENAME',
+  'ADMIN_CATEGORY_EMOJI',
+  'ADMIN_CATEGORY_PRODUCTS',
+  'ADMIN_CATEGORY_PICK',
+  'ADMIN_CATEGORY_ASSIGN',
   'ADMIN_LINK',
   'ADMIN_ROLE',
   'UNSUPPORTED',
@@ -705,6 +748,15 @@ const PANELS_EDIT_PERMISSION = 'panels.edit' as PermissionKey;
  */
 const CUSTOMERS_VIEW_PERMISSION = 'users.view' as PermissionKey;
 const CUSTOMERS_BLOCK_PERMISSION = 'users.block' as PermissionKey;
+/*
+ * The categories section's two, and the same rule a fifth time: they decide which
+ * BUTTONS exist. `ProductCategoryService.list` charges `catalog.view`; every write charges
+ * `catalog.edit` through the guard and again inside its transaction, so a crafted `kb:`
+ * callback from an administrator who holds only the first is refused there and leaves the
+ * denial record.
+ */
+const CATALOG_VIEW_PERMISSION = 'catalog.view' as PermissionKey;
+const CATALOG_EDIT_PERMISSION = 'catalog.edit' as PermissionKey;
 
 /**
  * The key each section of the management panel is ADVERTISED by, in one list.
@@ -732,6 +784,7 @@ const PANEL_SECTION_PERMISSIONS: readonly PermissionKey[] = [
   PANELS_VIEW_PERMISSION,
   SETTINGS_VIEW_PERMISSION,
   CUSTOMERS_VIEW_PERMISSION,
+  CATALOG_VIEW_PERMISSION,
 ];
 
 /** Whether these permissions open any section of the panel. */
@@ -888,6 +941,56 @@ function isAdminCustomerCode(value: string): value is AdminCustomerCode {
 }
 
 export const ADMIN_USERNAME_CALLBACK_PREFIX = '3:';
+
+/*
+ * The categories section, WP5 — and the first ADMIN section with two-character prefixes.
+ *
+ * The comment on `ADMIN_CUSTOMERS_CALLBACK_PREFIX` says a seventh section would need the
+ * registry reorganised, because `10:` would break the rule that no prefix begins another.
+ * The customer catalogue found the way out: a LETTER then a letter then a colon. `k:` is
+ * `k` then a colon and these are `k` then a letter, so neither begins the other — which
+ * `bot-runtime.test.ts` checks over every exported prefix rather than trusting.
+ *
+ * - `ka:<page>` is one page of the operator's category list. A PAGE, not a keyset cursor,
+ *   for the reason §6.4 of the WP5 audit gives about the customer list: `sort_order` is
+ *   operator-mutable, so a cursor on it is not a stable position.
+ * - `kb:<code>:<uuid>` is one category and what to do with it; the code is looked up in
+ *   `ADMIN_CATEGORY_CODES`, so an unknown one is UNSUPPORTED. 41 bytes at the longest.
+ * - `kc:` is the product list for reassignment, and `kc:<token>` a later page of it —
+ *   products ARE keyset-paged, by the immutable `(created_at, id)`.
+ * - `kd:<product uuid>.<page>` is the destination picker for one product. 43 bytes.
+ * - `ke:<pair>` moves a product: `encodeIdPair(product, category)`, 46 bytes.
+ */
+export const ADMIN_CATEGORIES_CALLBACK_PREFIX = 'ka:';
+export const ADMIN_CATEGORY_CALLBACK_PREFIX = 'kb:';
+export const ADMIN_CATEGORY_PRODUCTS_CALLBACK_PREFIX = 'kc:';
+export const ADMIN_CATEGORY_PICK_CALLBACK_PREFIX = 'kd:';
+export const ADMIN_CATEGORY_ASSIGN_CALLBACK_PREFIX = 'ke:';
+
+/** How many categories one page of the operator list — and of the picker — shows. */
+const ADMIN_CATEGORY_PAGE_SIZE = 8;
+
+/**
+ * What a `kb:` code means. A table, for the reason `ADMIN_CUSTOMER_CODES` is one: the row
+ * that matters is the LAST, where a transposition would make the asking tap the deleting
+ * one. Lower-case `x` asks; upper-case `X` deletes, and only the ask screen draws it.
+ */
+const ADMIN_CATEGORY_CODES = {
+  v: 'ADMIN_CATEGORY',
+  a: 'ADMIN_CATEGORY_ACTIVATE',
+  d: 'ADMIN_CATEGORY_DEACTIVATE',
+  s: 'ADMIN_CATEGORY_SHOW',
+  h: 'ADMIN_CATEGORY_HIDE',
+  u: 'ADMIN_CATEGORY_UP',
+  w: 'ADMIN_CATEGORY_DOWN',
+  x: 'ADMIN_CATEGORY_DELETE_ASK',
+  X: 'ADMIN_CATEGORY_DELETE',
+} as const satisfies Record<string, BotIntent>;
+type AdminCategoryCode = keyof typeof ADMIN_CATEGORY_CODES;
+
+function isAdminCategoryCode(value: string): value is AdminCategoryCode {
+  return Object.hasOwn(ADMIN_CATEGORY_CODES, value);
+}
 export const ADMIN_USERNAME_TOGGLE_CALLBACK_PREFIX = '4:';
 export const ADMIN_USERNAME_STRATEGY_CALLBACK_PREFIX = '5:';
 
@@ -1321,6 +1424,117 @@ function isCustomerMiss(error: unknown): boolean {
     code === COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND ||
     code === COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID
   );
+}
+
+/**
+ * The categories section's three fixed answers.
+ *
+ * `CATEGORY_GONE` and `PRODUCT_GONE` are the section's one answer for an id that is
+ * unknown or another tenant's — the rule `bot.admin.panel_gone` states — and
+ * `CATEGORY_USAGE` repeats the syntax of the three commands rather than opening a prompt
+ * for what was missing.
+ */
+const CATEGORY_GONE: PendingReply = {
+  key: 'bot.admin.category_gone',
+  values: {},
+  buttons: [],
+  orderId: null,
+};
+const PRODUCT_GONE: PendingReply = {
+  key: 'bot.admin.product_gone',
+  values: {},
+  buttons: [],
+  orderId: null,
+};
+const CATEGORY_USAGE: PendingReply = {
+  key: 'bot.admin.category_usage',
+  values: {},
+  buttons: [],
+  orderId: null,
+};
+
+/**
+ * Whether a refusal means "no such category" rather than "not you".
+ *
+ * NARROW, for the reason `isCustomerMiss` gives: a permission denial answered as
+ * `category_gone` tells an operator the category does not exist when they were only
+ * refused, and they act on it. `COMMERCE_REQUEST_INVALID` is deliberately NOT here —
+ * the service also raises it for a name or emoji it will not store, and for a transition
+ * that lost a race, neither of which means the category is gone. Every id that reaches
+ * the service from a button has passed `uuidV7Schema` at the boundary already.
+ */
+function isCategoryMiss(error: unknown): boolean {
+  return isNexaError(error) && error.code === COMMERCE_ERROR_CODES.CATEGORY_NOT_FOUND;
+}
+
+/** As `isCategoryMiss`, for the product a reassignment names. */
+function isProductMiss(error: unknown): boolean {
+  return isNexaError(error) && error.code === COMMERCE_ERROR_CODES.PRODUCT_NOT_FOUND;
+}
+
+/**
+ * A category as one button: its emoji and name, then the two flags that decide what a
+ * customer sees, then how many products are filed under it.
+ *
+ * The flags are the frozen vocabulary rather than words, the way a customer's status is
+ * on `adminCustomerLabel` — they are what the detail screen and the Web Admin show, so an
+ * operator reads the same token in all three places.
+ */
+function adminCategoryLabel(category: ProductCategoryListing): string {
+  const name = category.emoji === null ? category.name : `${category.emoji} ${category.name}`;
+  return `${name} · ${category.status} · ${category.visibility} · ${category.productCount}`;
+}
+
+/**
+ * The detail screen for one category, shared by the read and by every write.
+ *
+ * ONE builder, the rule `adminCustomerReply` states: the buttons an operator sees after a
+ * change are the ones the new state offers. Each flag button carries the TARGET state —
+ * the opposite of what the category holds — and up and down are drawn only where the
+ * category can move. None of the write buttons is drawn without `catalog.edit`, and the
+ * service charges it again whatever is drawn.
+ */
+function adminCategoryReply(
+  category: ProductCategoryListing,
+  index: number,
+  total: number,
+  mayEdit: boolean,
+): PendingReply {
+  const buttons: CustomerButton[] = [];
+  const act = (code: AdminCategoryCode, key: TemplateKey): CustomerButton => ({
+    label: { kind: 'TEMPLATE', key },
+    data: `${ADMIN_CATEGORY_CALLBACK_PREFIX}${code}:${category.id}`,
+  });
+  if (mayEdit) {
+    buttons.push(
+      category.status === 'ACTIVE'
+        ? act('d', 'bot.admin.category_deactivate_button')
+        : act('a', 'bot.admin.category_activate_button'),
+      category.visibility === 'VISIBLE'
+        ? act('h', 'bot.admin.category_hide_button')
+        : act('s', 'bot.admin.category_show_button'),
+    );
+    if (index > 0) buttons.push(act('u', 'bot.admin.category_up_button'));
+    if (index < total - 1) buttons.push(act('w', 'bot.admin.category_down_button'));
+    buttons.push(act('x', 'bot.admin.category_delete_button'));
+  }
+  buttons.push({
+    label: { kind: 'TEMPLATE', key: 'bot.admin.categories_back_button' },
+    data: `${ADMIN_CATEGORIES_CALLBACK_PREFIX}${Math.floor(index / ADMIN_CATEGORY_PAGE_SIZE)}`,
+  });
+  return {
+    key: 'bot.admin.category_detail',
+    values: {
+      id: category.id,
+      name: category.name,
+      emoji: category.emoji ?? '—',
+      status: category.status,
+      visibility: category.visibility,
+      products: category.productCount,
+    },
+    buttons,
+    orderId: null,
+  };
 }
 
 /**
@@ -1918,6 +2132,8 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
       const command = callbackCommand('ADMIN_ADMIN_STATUS', adminId, id);
       return command.targetId === null ? command : { ...command, args: [code] };
     }
+    const categories = adminCategoryCommand(data, id);
+    if (categories !== null) return categories;
     return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
   }
 
@@ -2033,6 +2249,31 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
   if (command === '/customer') {
     return {
       intent: 'ADMIN_CUSTOMER_FIND',
+      targetId: null,
+      args: asCommand.trim().split(/\s+/).slice(1),
+      callbackQueryId: null,
+    };
+  }
+  /*
+   * `/category_new <name>`, `/category_rename <id> <name>`, `/category_emoji <id> <emoji>`.
+   *
+   * Commands carrying their argument, for the reason `/panel_prefix` states. Nothing is
+   * validated here: a name's length and an emoji's shape are `ProductCategoryService`'s
+   * questions, answered once for both surfaces. Not registered with `setMyCommands`, for
+   * the reason `/admin` is not.
+   */
+  if (
+    command === '/category_new' ||
+    command === '/category_rename' ||
+    command === '/category_emoji'
+  ) {
+    return {
+      intent:
+        command === '/category_new'
+          ? 'ADMIN_CATEGORY_NEW'
+          : command === '/category_rename'
+            ? 'ADMIN_CATEGORY_RENAME'
+            : 'ADMIN_CATEGORY_EMOJI',
       targetId: null,
       args: asCommand.trim().split(/\s+/).slice(1),
       callbackQueryId: null,
@@ -2204,6 +2445,75 @@ function callbackCommand(
 }
 
 /**
+ * The categories section's five callbacks, or null when `data` is none of them.
+ *
+ * Every payload is validated HERE and nowhere later: a page through `parseCatalogPage`,
+ * an id through `uuidV7Schema`, a code through `ADMIN_CATEGORY_CODES`, a pair through
+ * `decodeIdPair` and then both halves as UUIDv7s, a product-list position through
+ * `decodeKeysetToken`. Anything that fails is UNSUPPORTED, so a handler receives a
+ * well-formed command or is not reached — and none of this authorizes anything: the
+ * service charges the permission.
+ */
+function adminCategoryCommand(data: string, id: string | null): BotCommand | null {
+  const unsupported: BotCommand = { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+  if (data.startsWith(ADMIN_CATEGORIES_CALLBACK_PREFIX)) {
+    const page = parseCatalogPage(data.slice(ADMIN_CATEGORIES_CALLBACK_PREFIX.length));
+    return page === null
+      ? unsupported
+      : { intent: 'ADMIN_CATEGORIES', targetId: null, page, callbackQueryId: id };
+  }
+  if (data.startsWith(ADMIN_CATEGORY_CALLBACK_PREFIX)) {
+    const [code, categoryId, ...rest] = data
+      .slice(ADMIN_CATEGORY_CALLBACK_PREFIX.length)
+      .split(':');
+    if (code === undefined || !isAdminCategoryCode(code) || categoryId === undefined) {
+      return unsupported;
+    }
+    return rest.length > 0
+      ? unsupported
+      : callbackCommand(ADMIN_CATEGORY_CODES[code], categoryId, id);
+  }
+  if (data.startsWith(ADMIN_CATEGORY_PRODUCTS_CALLBACK_PREFIX)) {
+    const raw = data.slice(ADMIN_CATEGORY_PRODUCTS_CALLBACK_PREFIX.length);
+    if (raw === '') {
+      return {
+        intent: 'ADMIN_CATEGORY_PRODUCTS',
+        targetId: null,
+        cursor: null,
+        callbackQueryId: id,
+      };
+    }
+    const cursor = decodeKeysetToken(raw);
+    return cursor === null
+      ? unsupported
+      : { intent: 'ADMIN_CATEGORY_PRODUCTS', targetId: null, cursor, callbackQueryId: id };
+  }
+  if (data.startsWith(ADMIN_CATEGORY_PICK_CALLBACK_PREFIX)) {
+    const [rawId, rawPage, ...rest] = data
+      .slice(ADMIN_CATEGORY_PICK_CALLBACK_PREFIX.length)
+      .split('.');
+    const page = rawPage === undefined ? null : parseCatalogPage(rawPage);
+    const product = uuidV7Schema.safeParse(rawId);
+    if (rest.length > 0 || page === null || !product.success) return unsupported;
+    return { intent: 'ADMIN_CATEGORY_PICK', targetId: product.data, page, callbackQueryId: id };
+  }
+  if (data.startsWith(ADMIN_CATEGORY_ASSIGN_CALLBACK_PREFIX)) {
+    const pair = decodeIdPair(data.slice(ADMIN_CATEGORY_ASSIGN_CALLBACK_PREFIX.length));
+    if (pair === null) return unsupported;
+    const product = uuidV7Schema.safeParse(pair.first);
+    const category = uuidV7Schema.safeParse(pair.second);
+    if (!product.success || !category.success) return unsupported;
+    return {
+      intent: 'ADMIN_CATEGORY_ASSIGN',
+      targetId: product.data,
+      secondaryId: category.data,
+      callbackQueryId: id,
+    };
+  }
+  return null;
+}
+
+/**
  * The customer's chat id for a private conversation.
  *
  * Telegram's private chat id IS the user id, but the update carries both and they can
@@ -2274,6 +2584,25 @@ export interface BotRuntimeDeps {
   readonly panelAdmin: Pick<
     PanelService,
     'list' | 'get' | 'testConnection' | 'setStatus' | 'update'
+  >;
+  /**
+   * The categories section's one service — the SAME instance the Web Admin's
+   * `/product-categories` controller holds, so there is one set of rules for both
+   * surfaces. Optional only so the customer-side unit fixtures need not build it; the
+   * composition root always supplies it, and without it the section is not drawn.
+   */
+  readonly productCategories?: Pick<
+    ProductCategoryService,
+    | 'list'
+    | 'create'
+    | 'update'
+    | 'activate'
+    | 'deactivate'
+    | 'show'
+    | 'hide'
+    | 'reorder'
+    | 'reassignProduct'
+    | 'remove'
   >;
   /**
    * The clock, for the ONE thing this surface decides about time.
@@ -3121,6 +3450,8 @@ export class BotRuntime {
      */
     const maySeeReminders = permissions.has(SETTINGS_VIEW_PERMISSION);
     const maySeeCustomers = permissions.has(CUSTOMERS_VIEW_PERMISSION);
+    const maySeeCategories =
+      permissions.has(CATALOG_VIEW_PERMISSION) && this.deps.productCategories !== undefined;
     if (!hasAnyPanelSection(permissions)) return null;
 
     try {
@@ -3182,6 +3513,17 @@ export class BotRuntime {
                         key: 'bot.admin.customers_button' as const,
                       },
                       data: ADMIN_CUSTOMERS_CALLBACK_PREFIX,
+                    },
+                  ]
+                : []),
+              ...(maySeeCategories
+                ? [
+                    {
+                      label: {
+                        kind: 'TEMPLATE' as const,
+                        key: 'bot.admin.categories_button' as const,
+                      },
+                      data: `${ADMIN_CATEGORIES_CALLBACK_PREFIX}0`,
                     },
                   ]
                 : []),
@@ -3451,6 +3793,29 @@ export class BotRuntime {
                 permissions,
                 input.idempotencyKey,
               );
+        case 'ADMIN_CATEGORIES':
+        case 'ADMIN_CATEGORY':
+        case 'ADMIN_CATEGORY_ACTIVATE':
+        case 'ADMIN_CATEGORY_DEACTIVATE':
+        case 'ADMIN_CATEGORY_SHOW':
+        case 'ADMIN_CATEGORY_HIDE':
+        case 'ADMIN_CATEGORY_UP':
+        case 'ADMIN_CATEGORY_DOWN':
+        case 'ADMIN_CATEGORY_DELETE_ASK':
+        case 'ADMIN_CATEGORY_DELETE':
+        case 'ADMIN_CATEGORY_NEW':
+        case 'ADMIN_CATEGORY_RENAME':
+        case 'ADMIN_CATEGORY_EMOJI':
+        case 'ADMIN_CATEGORY_PRODUCTS':
+        case 'ADMIN_CATEGORY_PICK':
+        case 'ADMIN_CATEGORY_ASSIGN':
+          return await this.adminCategoryTurn(
+            scope,
+            adminActor,
+            command,
+            permissions,
+            input.idempotencyKey,
+          );
         case 'ADMIN_SECTION':
           return await this.adminSection(scope, adminActor);
         case 'ADMIN_ADMIN':
@@ -4987,6 +5352,603 @@ export class BotRuntime {
       buttons: adminCustomerReply(updated, permissions).buttons,
       orderId: null,
     };
+  }
+
+  /**
+   * The categories section: one dispatcher, so the switch in `adminTurn` has one arm.
+   *
+   * Every branch calls `ProductCategoryService` or `ProductService` and nothing else, so
+   * this surface decides which buttons to draw and how to word an outcome, and never
+   * whether something is allowed. The permission is charged by the service on every call
+   * — including the reads — and a denial is left to reach `adminTurn`'s single refusal.
+   *
+   * The idempotency key is the TURN's, suffixed by the action, the shape `adminPanelAct`
+   * uses: a redelivered update is the same command twice and replays.
+   */
+  private async adminCategoryTurn(
+    scope: TenantContext,
+    actor: ActorContext,
+    command: BotCommand,
+    permissions: ReadonlySet<PermissionKey>,
+    idempotencyKey: string,
+  ): Promise<PendingReply | null> {
+    const categories = this.deps.productCategories;
+    if (categories === undefined) return null;
+    const mayEdit = permissions.has(CATALOG_EDIT_PERMISSION);
+    const id = command.targetId;
+
+    switch (command.intent) {
+      case 'ADMIN_CATEGORIES':
+        return this.adminCategoryList(
+          await categories.list(scope, actor),
+          command.page ?? 0,
+          mayEdit,
+        );
+      case 'ADMIN_CATEGORY':
+        return id === null ? null : this.adminCategoryDetail(scope, actor, id, mayEdit);
+      case 'ADMIN_CATEGORY_ACTIVATE':
+      case 'ADMIN_CATEGORY_DEACTIVATE':
+      case 'ADMIN_CATEGORY_SHOW':
+      case 'ADMIN_CATEGORY_HIDE': {
+        if (id === null) return null;
+        const input = {
+          idempotencyKey: `${idempotencyKey}:category-${command.intent.slice('ADMIN_CATEGORY_'.length).toLowerCase()}`,
+          categoryId: id,
+        };
+        try {
+          if (command.intent === 'ADMIN_CATEGORY_ACTIVATE')
+            await categories.activate(scope, actor, input);
+          else if (command.intent === 'ADMIN_CATEGORY_DEACTIVATE')
+            await categories.deactivate(scope, actor, input);
+          else if (command.intent === 'ADMIN_CATEGORY_SHOW')
+            await categories.show(scope, actor, input);
+          else await categories.hide(scope, actor, input);
+        } catch (error) {
+          if (isCategoryMiss(error)) return CATEGORY_GONE;
+          throw error;
+        }
+        // The state it HOLDS now, from the same builder the read uses — so a redelivered
+        // tap reads as the state it found, and the button left on the screen is the
+        // opposite of the state rather than the one just pressed.
+        return this.adminCategoryDetail(scope, actor, id, mayEdit);
+      }
+      case 'ADMIN_CATEGORY_UP':
+      case 'ADMIN_CATEGORY_DOWN':
+        return id === null
+          ? null
+          : this.adminCategoryMove(
+              scope,
+              actor,
+              id,
+              command.intent === 'ADMIN_CATEGORY_UP',
+              mayEdit,
+              idempotencyKey,
+            );
+      case 'ADMIN_CATEGORY_DELETE_ASK':
+        return id === null ? null : this.adminCategoryDeleteAsk(scope, actor, id, mayEdit);
+      case 'ADMIN_CATEGORY_DELETE':
+        return id === null ? null : this.adminCategoryDelete(scope, actor, id, idempotencyKey);
+      case 'ADMIN_CATEGORY_NEW':
+        return this.adminCategoryNew(scope, actor, command.args ?? [], mayEdit, idempotencyKey);
+      case 'ADMIN_CATEGORY_RENAME':
+      case 'ADMIN_CATEGORY_EMOJI':
+        return this.adminCategoryEdit(
+          scope,
+          actor,
+          command.intent === 'ADMIN_CATEGORY_RENAME' ? 'name' : 'emoji',
+          command.args ?? [],
+          mayEdit,
+          idempotencyKey,
+        );
+      case 'ADMIN_CATEGORY_PRODUCTS':
+        return this.adminCategoryProducts(scope, actor, command.cursor ?? null);
+      case 'ADMIN_CATEGORY_PICK':
+        return id === null ? null : this.adminCategoryPick(scope, actor, id, command.page ?? 0);
+      case 'ADMIN_CATEGORY_ASSIGN':
+        return id === null || command.secondaryId === undefined || command.secondaryId === null
+          ? null
+          : this.adminCategoryAssign(scope, actor, id, command.secondaryId, idempotencyKey);
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * One page of the operator's category list.
+   *
+   * EVERY category, in the order customers see them — empty, hidden and inactive ones
+   * included, because this is where an operator finds them to fix. Paged in memory from
+   * `list`, which returns the whole list the Web Admin's screen draws: an operator's own
+   * categories are a hand-made list, and the reorder buttons need its full order anyway.
+   *
+   * A page past the end — a delete shrank the list since the button was drawn — shows the
+   * LAST page rather than an empty one: the list exists, it is just shorter now.
+   */
+  private adminCategoryList(
+    list: readonly ProductCategoryListing[],
+    requested: number,
+    mayEdit: boolean,
+  ): PendingReply {
+    if (list.length === 0) {
+      return { key: 'bot.admin.categories_none', values: {}, buttons: [], orderId: null };
+    }
+    const lastPage = Math.floor((list.length - 1) / ADMIN_CATEGORY_PAGE_SIZE);
+    const page = Math.min(requested, lastPage);
+    const start = page * ADMIN_CATEGORY_PAGE_SIZE;
+    const buttons: CustomerButton[] = list
+      .slice(start, start + ADMIN_CATEGORY_PAGE_SIZE)
+      .map((category) => ({
+        label: { kind: 'TEXT' as const, text: adminCategoryLabel(category) },
+        data: `${ADMIN_CATEGORY_CALLBACK_PREFIX}v:${category.id}`,
+      }));
+    if (page > 0) {
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.admin.categories_previous_button' },
+        data: `${ADMIN_CATEGORIES_CALLBACK_PREFIX}${page - 1}`,
+      });
+    }
+    if (page < lastPage) {
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.admin.categories_next_button' },
+        data: `${ADMIN_CATEGORIES_CALLBACK_PREFIX}${page + 1}`,
+      });
+    }
+    if (mayEdit) {
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.admin.category_products_button' },
+        data: ADMIN_CATEGORY_PRODUCTS_CALLBACK_PREFIX,
+      });
+    }
+    return { key: 'bot.admin.categories_section', values: {}, buttons, orderId: null };
+  }
+
+  /**
+   * One category, re-read from the list rather than trusted from the callback.
+   *
+   * From `list` and not `get`, because the screen needs two things `get` does not carry:
+   * the product count, which decides whether the delete is possible, and the category's
+   * POSITION, which decides whether up and down are drawn. Both are read now, so a stale
+   * tap lands on the state that is true rather than on the one the old screen showed.
+   */
+  private async adminCategoryDetail(
+    scope: TenantContext,
+    actor: ActorContext,
+    categoryId: string,
+    mayEdit: boolean,
+  ): Promise<PendingReply> {
+    const list = await this.requireCategories().list(scope, actor);
+    const index = list.findIndex((category) => category.id === categoryId);
+    const category = list[index];
+    if (category === undefined) return CATEGORY_GONE;
+    return adminCategoryReply(category, index, list.length, mayEdit);
+  }
+
+  /**
+   * Moves a category one place, by writing the WHOLE order back.
+   *
+   * The service's reorder takes positions for any subset, and swapping only the two
+   * neighbours' `sort_order` values looks simpler — and does nothing at all when they are
+   * equal, which the default of every category created without a position is. So the
+   * current order is renumbered in steps of ten with the two swapped, and the service
+   * refuses the lot if any of them has gone.
+   *
+   * A redelivered update recomputes the order from the state its first delivery left and
+   * sends a DIFFERENT position list under the same key, which the idempotency store
+   * refuses as a payload mismatch. That refusal means "this update already ran", so it
+   * is answered with the list as it now stands rather than with a refusal for a move
+   * that happened.
+   */
+  private async adminCategoryMove(
+    scope: TenantContext,
+    actor: ActorContext,
+    categoryId: string,
+    up: boolean,
+    mayEdit: boolean,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    const categories = this.requireCategories();
+    const list = await categories.list(scope, actor);
+    const index = list.findIndex((category) => category.id === categoryId);
+    if (index < 0) return CATEGORY_GONE;
+    const target = up ? index - 1 : index + 1;
+    if (target < 0 || target >= list.length) {
+      // Already at that end: nothing to move, and the list says so.
+      return this.adminCategoryList(list, Math.floor(index / ADMIN_CATEGORY_PAGE_SIZE), mayEdit);
+    }
+    const order = [...list];
+    [order[index], order[target]] = [
+      order[target] as ProductCategoryListing,
+      order[index] as ProductCategoryListing,
+    ];
+    let after: readonly ProductCategoryListing[];
+    try {
+      after = await categories.reorder(scope, actor, {
+        idempotencyKey: `${idempotencyKey}:category-move`,
+        positions: order.map((category, position) => ({
+          id: category.id,
+          sortOrder: (position + 1) * 10,
+        })),
+      });
+    } catch (error) {
+      if (
+        isNexaError(error) &&
+        (error.code === PLATFORM_ERROR_CODES.IDEMPOTENCY_PAYLOAD_MISMATCH ||
+          error.code === COMMERCE_ERROR_CODES.CATEGORY_NOT_FOUND)
+      ) {
+        /*
+         * Either this update already ran, or a category in the list was deleted between
+         * the read and the write — in which case the service refused the WHOLE reorder
+         * and nothing moved. Both are answered with the list as it is now, which is the
+         * truth in either case.
+         */
+        const now = await categories.list(scope, actor);
+        const at = now.findIndex((category) => category.id === categoryId);
+        return this.adminCategoryList(
+          now,
+          Math.floor(Math.max(at, 0) / ADMIN_CATEGORY_PAGE_SIZE),
+          mayEdit,
+        );
+      }
+      throw error;
+    }
+    const moved = after.findIndex((category) => category.id === categoryId);
+    return this.adminCategoryList(
+      after,
+      Math.floor(Math.max(moved, 0) / ADMIN_CATEGORY_PAGE_SIZE),
+      mayEdit,
+    );
+  }
+
+  /**
+   * The question before a delete, or the refusal it would get.
+   *
+   * A category that still holds products is answered with the count and no confirm
+   * button: the delete would be refused, and a button whose every press is refused is
+   * the "silent success" shape the other way round. The count here is a COURTESY read
+   * when the screen is drawn; `ProductCategoryService.remove` counts again under the
+   * category's lock and refuses on that number, not this one.
+   */
+  private async adminCategoryDeleteAsk(
+    scope: TenantContext,
+    actor: ActorContext,
+    categoryId: string,
+    mayEdit: boolean,
+  ): Promise<PendingReply> {
+    if (!mayEdit) return { key: 'bot.admin.refused', values: {}, buttons: [], orderId: null };
+    const list = await this.requireCategories().list(scope, actor);
+    const category = list.find((candidate) => candidate.id === categoryId);
+    if (category === undefined) return CATEGORY_GONE;
+    const back: CustomerButton = {
+      label: { kind: 'TEMPLATE', key: 'bot.admin.categories_back_button' },
+      data: `${ADMIN_CATEGORY_CALLBACK_PREFIX}v:${category.id}`,
+    };
+    if (category.productCount > 0) {
+      return {
+        key: 'bot.admin.category_not_empty',
+        values: { products: category.productCount },
+        buttons: [back],
+        orderId: null,
+      };
+    }
+    return {
+      key: 'bot.admin.category_delete_ask',
+      values: { name: category.name },
+      buttons: [
+        {
+          label: { kind: 'TEMPLATE', key: 'bot.admin.category_delete_confirm_button' },
+          data: `${ADMIN_CATEGORY_CALLBACK_PREFIX}X:${category.id}`,
+        },
+        back,
+      ],
+      orderId: null,
+    };
+  }
+
+  /**
+   * Deletes a category — and says how many products stopped it when it cannot.
+   *
+   * The count in the refusal is the one `remove` took under the category's lock and put on
+   * the error, not one read here: a product filed under the category between the ask and
+   * the confirm is exactly the case the lock exists for, and this reply names it.
+   *
+   * The name is read BEFORE the delete, because afterwards there is nothing to read it
+   * from. A redelivered confirm finds no row to read, and `remove` replays its first
+   * answer; the reply then names nothing rather than inventing a name.
+   */
+  private async adminCategoryDelete(
+    scope: TenantContext,
+    actor: ActorContext,
+    categoryId: string,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    const categories = this.requireCategories();
+    const before = (await categories.list(scope, actor)).find(
+      (candidate) => candidate.id === categoryId,
+    );
+    try {
+      await categories.remove(scope, actor, {
+        idempotencyKey: `${idempotencyKey}:category-delete`,
+        categoryId,
+      });
+    } catch (error) {
+      if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.CATEGORY_NOT_EMPTY) {
+        const held = error.details?.['productCount'];
+        return {
+          key: 'bot.admin.category_not_empty',
+          values: { products: typeof held === 'number' ? held : (before?.productCount ?? 0) },
+          buttons: [
+            {
+              label: { kind: 'TEMPLATE', key: 'bot.admin.categories_back_button' },
+              data: `${ADMIN_CATEGORY_CALLBACK_PREFIX}v:${categoryId}`,
+            },
+          ],
+          orderId: null,
+        };
+      }
+      if (isCategoryMiss(error)) return CATEGORY_GONE;
+      throw error;
+    }
+    return {
+      key: 'bot.admin.category_deleted',
+      values: { name: before?.name ?? '—' },
+      buttons: [
+        {
+          label: { kind: 'TEMPLATE', key: 'bot.admin.categories_back_button' },
+          data: `${ADMIN_CATEGORIES_CALLBACK_PREFIX}0`,
+        },
+      ],
+      orderId: null,
+    };
+  }
+
+  /**
+   * `/category_new <name>` — a new category at the END of the list.
+   *
+   * At the end because that is where an operator looks for the thing they just made, and
+   * because putting it anywhere else would reorder what customers already see. It is
+   * created ACTIVE and VISIBLE by the service, and an empty category is invisible to
+   * customers whatever its flags say, so nothing reaches a customer until a product is
+   * filed under it.
+   *
+   * The position is part of what the idempotency key hashes, and a redelivered update
+   * computes it from a list that now includes the category it created — a payload
+   * mismatch meaning "this already ran", answered with the list that shows it.
+   */
+  private async adminCategoryNew(
+    scope: TenantContext,
+    actor: ActorContext,
+    args: readonly string[],
+    mayEdit: boolean,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    const categories = this.requireCategories();
+    const name = args.join(' ').trim();
+    if (name === '') return CATEGORY_USAGE;
+    const list = await categories.list(scope, actor);
+    const last = list.reduce((max, category) => Math.max(max, category.sortOrder), 0);
+    let created;
+    try {
+      created = await categories.create(scope, actor, {
+        idempotencyKey: `${idempotencyKey}:category-new`,
+        draft: {
+          name,
+          description: null,
+          emoji: null,
+          sortOrder: Math.min(last + 10, CATEGORY_SORT_ORDER_MAX),
+        },
+      });
+    } catch (error) {
+      if (isNexaError(error) && error.code === PLATFORM_ERROR_CODES.IDEMPOTENCY_PAYLOAD_MISMATCH) {
+        const now = await categories.list(scope, actor);
+        return this.adminCategoryList(now, Number.MAX_SAFE_INTEGER, mayEdit);
+      }
+      if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID) {
+        return CATEGORY_USAGE;
+      }
+      throw error;
+    }
+    return this.adminCategoryDetail(scope, actor, created.id, mayEdit);
+  }
+
+  /**
+   * `/category_rename <id> <name>` and `/category_emoji <id> <emoji or ->`.
+   *
+   * The service's edit replaces name, description and emoji together — the Web Admin's
+   * form sends all three — so the current values are read first and only the one this
+   * command names is changed. `-` clears the emoji, because absence is a valid state
+   * and a command needs a way to say it.
+   *
+   * A malformed id, an empty name, a name too long for a button or a string that is not
+   * an emoji all answer with the syntax: each is a fact about the message that was sent,
+   * and the service is what decided it. An id that is well-formed and names nothing here
+   * is `category_gone`, the section's one answer for that.
+   */
+  private async adminCategoryEdit(
+    scope: TenantContext,
+    actor: ActorContext,
+    field: 'name' | 'emoji',
+    args: readonly string[],
+    mayEdit: boolean,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    const categories = this.requireCategories();
+    const [categoryId, ...rest] = args;
+    const value = rest.join(' ').trim();
+    if (categoryId === undefined || value === '') return CATEGORY_USAGE;
+    const current = (await categories.list(scope, actor)).find(
+      (candidate) => candidate.id === categoryId.toLowerCase(),
+    );
+    if (current === undefined) {
+      return uuidV7Schema.safeParse(categoryId).success ? CATEGORY_GONE : CATEGORY_USAGE;
+    }
+    try {
+      await categories.update(scope, actor, {
+        idempotencyKey: `${idempotencyKey}:category-${field}`,
+        categoryId: current.id,
+        edit: {
+          name: field === 'name' ? value : current.name,
+          description: current.description,
+          emoji: field === 'emoji' ? (value === '-' ? null : value) : current.emoji,
+        },
+      });
+    } catch (error) {
+      if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID) {
+        return CATEGORY_USAGE;
+      }
+      if (isCategoryMiss(error)) return CATEGORY_GONE;
+      throw error;
+    }
+    return this.adminCategoryDetail(scope, actor, current.id, mayEdit);
+  }
+
+  /**
+   * The products an operator can move, each labelled with the category it is in NOW.
+   *
+   * Every product of this tenant, whatever its status, by `ProductService.list` — the
+   * same list the Web Admin's products screen pages — so an uncategorised product, the
+   * one no customer can buy, is on it. Keyset-paged by `(created_at, id)`, which no
+   * operator action changes, so the next page is stable.
+   */
+  private async adminCategoryProducts(
+    scope: TenantContext,
+    actor: ActorContext,
+    cursor: KeysetToken | null,
+  ): Promise<PendingReply> {
+    const [page, list] = await Promise.all([
+      this.deps.products.list(scope, actor, {
+        limit: ADMIN_QUEUE_LIMIT,
+        search: {},
+        ...(cursor === null
+          ? {}
+          : { cursor: { createdAt: cursor.createdAt, id: cursor.id as ProductId } }),
+      }),
+      this.requireCategories().list(scope, actor),
+    ]);
+    if (page.items.length === 0) {
+      return { key: 'bot.admin.category_products_none', values: {}, buttons: [], orderId: null };
+    }
+    const names = new Map(list.map((category) => [category.id as string, category.name]));
+    const buttons: CustomerButton[] = page.items.map((product) => ({
+      label: {
+        kind: 'TEXT' as const,
+        text: `${product.title} — ${product.categoryId === null ? '—' : (names.get(product.categoryId) ?? '—')}`,
+      },
+      data: `${ADMIN_CATEGORY_PICK_CALLBACK_PREFIX}${product.id}.0`,
+    }));
+    const token = page.nextCursor === null ? null : encodeKeysetToken(page.nextCursor);
+    if (token !== null) {
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.admin.category_products_more_button' },
+        data: `${ADMIN_CATEGORY_PRODUCTS_CALLBACK_PREFIX}${token}`,
+      });
+    }
+    return { key: 'bot.admin.category_products', values: {}, buttons, orderId: null };
+  }
+
+  /**
+   * Which category one product should move to: every category except its current one.
+   *
+   * Inactive and hidden categories are offered too. Filing a product under one is a real
+   * operator choice — staging a category before showing it — and the customer-facing
+   * rules decide separately whether anybody can buy it there.
+   */
+  private async adminCategoryPick(
+    scope: TenantContext,
+    actor: ActorContext,
+    productId: string,
+    requested: number,
+  ): Promise<PendingReply> {
+    let product: ProductRecord;
+    try {
+      product = await this.deps.products.get(scope, actor, productId);
+    } catch (error) {
+      if (isProductMiss(error)) return PRODUCT_GONE;
+      throw error;
+    }
+    const list = await this.requireCategories().list(scope, actor);
+    const current = list.find((category) => category.id === product.categoryId);
+    const choices = list.filter((category) => category.id !== product.categoryId);
+    if (choices.length === 0) {
+      return { key: 'bot.admin.category_pick_none', values: {}, buttons: [], orderId: null };
+    }
+    const lastPage = Math.floor((choices.length - 1) / ADMIN_CATEGORY_PAGE_SIZE);
+    const page = Math.min(requested, lastPage);
+    const start = page * ADMIN_CATEGORY_PAGE_SIZE;
+    const buttons: CustomerButton[] = choices
+      .slice(start, start + ADMIN_CATEGORY_PAGE_SIZE)
+      .map((category) => ({
+        label: { kind: 'TEXT' as const, text: adminCategoryLabel(category) },
+        data: `${ADMIN_CATEGORY_ASSIGN_CALLBACK_PREFIX}${encodeIdPair(product.id, category.id)}`,
+      }));
+    if (page > 0) {
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.admin.categories_previous_button' },
+        data: `${ADMIN_CATEGORY_PICK_CALLBACK_PREFIX}${product.id}.${page - 1}`,
+      });
+    }
+    if (page < lastPage) {
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.admin.categories_next_button' },
+        data: `${ADMIN_CATEGORY_PICK_CALLBACK_PREFIX}${product.id}.${page + 1}`,
+      });
+    }
+    return {
+      key: 'bot.admin.category_pick',
+      values: { product: product.title, category: current?.name ?? '—' },
+      buttons,
+      orderId: null,
+    };
+  }
+
+  /**
+   * Moves one product into one category, through `ProductCategoryService.reassignProduct`,
+   * which locks the destination first so the category it names still exists at commit.
+   *
+   * The names in the reply are read AFTER the move, so they are the ones that are true
+   * now — a rename between the pick and the tap shows the new name, not the button's.
+   */
+  private async adminCategoryAssign(
+    scope: TenantContext,
+    actor: ActorContext,
+    productId: string,
+    categoryId: string,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    const categories = this.requireCategories();
+    try {
+      await categories.reassignProduct(scope, actor, {
+        idempotencyKey: `${idempotencyKey}:category-assign`,
+        productId,
+        categoryId,
+      });
+    } catch (error) {
+      if (isProductMiss(error)) return PRODUCT_GONE;
+      if (isCategoryMiss(error)) return CATEGORY_GONE;
+      throw error;
+    }
+    const [product, list] = await Promise.all([
+      this.deps.products.get(scope, actor, productId),
+      categories.list(scope, actor),
+    ]);
+    const category = list.find((candidate) => candidate.id === product.categoryId);
+    return {
+      key: 'bot.admin.category_moved',
+      values: { product: product.title, category: category?.name ?? '—' },
+      buttons: [
+        {
+          label: { kind: 'TEMPLATE', key: 'bot.admin.categories_back_button' },
+          data: `${ADMIN_CATEGORIES_CALLBACK_PREFIX}0`,
+        },
+      ],
+      orderId: null,
+    };
+  }
+
+  /** The categories service, which `adminCategoryTurn` has already proven present. */
+  private requireCategories(): NonNullable<BotRuntimeDeps['productCategories']> {
+    const categories = this.deps.productCategories;
+    if (categories === undefined) throw new Error('The categories section is not configured.');
+    return categories;
   }
 
   /**

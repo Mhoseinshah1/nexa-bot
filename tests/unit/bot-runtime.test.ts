@@ -879,6 +879,41 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.admin.approve_button',
       'bot.admin.approved',
       /*
+       * WP5's twenty-eight, the categories section (the twenty-seven here and
+       * `bot.admin.product_gone` further down). Reviewed against the same rule: the
+       * commands they name — `/category_new`, `/category_rename`, `/category_emoji` — are
+       * parsed by `intentOf` and deliberately unregistered, which
+       * `telegram-command-menu.test.ts` asserts. None of them carries a price, a panel
+       * or anything a customer bought: a category is a name, two flags and a count.
+       */
+      'bot.admin.categories_back_button',
+      'bot.admin.categories_button',
+      'bot.admin.categories_next_button',
+      'bot.admin.categories_none',
+      'bot.admin.categories_previous_button',
+      'bot.admin.categories_section',
+      'bot.admin.category_activate_button',
+      'bot.admin.category_deactivate_button',
+      'bot.admin.category_delete_ask',
+      'bot.admin.category_delete_button',
+      'bot.admin.category_delete_confirm_button',
+      'bot.admin.category_deleted',
+      'bot.admin.category_detail',
+      'bot.admin.category_down_button',
+      'bot.admin.category_gone',
+      'bot.admin.category_hide_button',
+      'bot.admin.category_moved',
+      'bot.admin.category_not_empty',
+      'bot.admin.category_pick',
+      'bot.admin.category_pick_none',
+      'bot.admin.category_products',
+      'bot.admin.category_products_button',
+      'bot.admin.category_products_more_button',
+      'bot.admin.category_products_none',
+      'bot.admin.category_show_button',
+      'bot.admin.category_up_button',
+      'bot.admin.category_usage',
+      /*
        * WP2's eleven, the customers section. Reviewed against the same rule, and
        * against the one that matters most for a screen about a PERSON: not one of
        * them carries anything the customer bought. No wallet balance, no order, no
@@ -938,6 +973,7 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.admin.panels_more_button',
       'bot.admin.panels_none',
       'bot.admin.panels_section',
+      'bot.admin.product_gone',
       'bot.admin.receipt',
       'bot.admin.receipt_gone',
       'bot.admin.receipts_button',
@@ -1552,5 +1588,117 @@ describe('choosing a photo size', () => {
 
   it('still chooses a size that declared no dimensions at all, rather than nothing', () => {
     expect(chosen([{ file_id: 'bare', file_unique_id: 'u-bare' }])).toBe('bare');
+  });
+});
+
+describe('the Telegram Admin categories section, at the boundary', () => {
+  /*
+   * WP5. Every payload is client-supplied `callback_data`, so these are the ways a
+   * modified client could try to turn one tap into another — above all an ASK into the
+   * DELETE, and a page turn into a write.
+   */
+  const category = '0191f4a0-2d3c-7c2b-9a41-6f2b0c7e51aa';
+  const product = '0191f4a0-2d3c-7c2b-9a41-6f2b0c7e51bb';
+  const tap = (data: string) => intentOf({ callback_query: { id: 'cbq', data } });
+  const typed = (text: string) => intentOf({ message: { text } });
+
+  it('routes each of the nine category codes to its own intent, and no other', () => {
+    const expected: Record<string, string> = {
+      v: 'ADMIN_CATEGORY',
+      a: 'ADMIN_CATEGORY_ACTIVATE',
+      d: 'ADMIN_CATEGORY_DEACTIVATE',
+      s: 'ADMIN_CATEGORY_SHOW',
+      h: 'ADMIN_CATEGORY_HIDE',
+      u: 'ADMIN_CATEGORY_UP',
+      w: 'ADMIN_CATEGORY_DOWN',
+      x: 'ADMIN_CATEGORY_DELETE_ASK',
+      X: 'ADMIN_CATEGORY_DELETE',
+    };
+    for (const [code, intent] of Object.entries(expected)) {
+      expect(tap(`kb:${code}:${category}`), `kb:${code}`).toMatchObject({
+        intent,
+        targetId: category,
+      });
+    }
+  });
+
+  it.each([
+    ['an unknown code', `kb:q:${category}`],
+    ['a missing id', 'kb:v:'],
+    ['a v4 id', 'kb:v:0191f4a0-2d3c-4c2b-9a41-6f2b0c7e51aa'],
+    ['a trailing segment', `kb:X:${category}:extra`],
+    ['a page that is not a number', 'ka:one'],
+    ['a page with a leading zero', 'ka:01'],
+    ['a garbled product-list position', 'kc:not-a-token'],
+    ['a picker with no page', `kd:${product}`],
+    ['a picker with a v4 product', 'kd:0191f4a0-2d3c-4c2b-9a41-6f2b0c7e51aa.0'],
+    ['a move with a truncated pair', `ke:${encodeIdPair(product, category).slice(1)}`],
+  ])('refuses %s as UNSUPPORTED', (_label, data) => {
+    expect(tap(data).intent).toBe('UNSUPPORTED');
+  });
+
+  it('carries a list page, a picker page and a product-list start through', () => {
+    expect(tap('ka:3')).toMatchObject({ intent: 'ADMIN_CATEGORIES', page: 3 });
+    expect(tap(`kd:${product}.2`)).toMatchObject({
+      intent: 'ADMIN_CATEGORY_PICK',
+      targetId: product,
+      page: 2,
+    });
+    expect(tap('kc:')).toMatchObject({ intent: 'ADMIN_CATEGORY_PRODUCTS', cursor: null });
+  });
+
+  it('decodes a move into BOTH ids, product first, and fits it inside 64 bytes', () => {
+    const data = `ke:${encodeIdPair(product, category)}`;
+    expect(Buffer.byteLength(data, 'utf8')).toBeLessThanOrEqual(64);
+    expect(tap(data)).toMatchObject({
+      intent: 'ADMIN_CATEGORY_ASSIGN',
+      targetId: product,
+      secondaryId: category,
+    });
+  });
+
+  it('carries a command argument untouched, spaces included, for the service to judge', () => {
+    expect(typed('/category_new پلن های ویژه')).toMatchObject({
+      intent: 'ADMIN_CATEGORY_NEW',
+      args: ['پلن', 'های', 'ویژه'],
+    });
+    expect(typed(`/category_rename ${category} نام تازه`)).toMatchObject({
+      intent: 'ADMIN_CATEGORY_RENAME',
+      args: [category, 'نام', 'تازه'],
+    });
+    expect(typed(`/category_emoji ${category} -`)).toMatchObject({
+      intent: 'ADMIN_CATEGORY_EMOJI',
+      args: [category, '-'],
+    });
+  });
+
+  it('lets no exported callback prefix begin another, across every section', async () => {
+    /*
+     * The registry above covers the customer prefixes by name. This one reads EVERY
+     * exported `*_CALLBACK_PREFIX` from the module, so a new section cannot add a prefix
+     * that shadows an old one without failing here — which matters more now that the
+     * categories section is the first ADMIN one with two-character prefixes, `ka:` to
+     * `ke:`, beside the one-character `k:` that TERMINATES a customer's service.
+     *
+     * One documented exception: `H:b:` is the services section's browse page and is a
+     * sub-code of `H:` BY DESIGN — `H:` is matched by equality, so it never reaches a
+     * `startsWith`. It is named here so that exception cannot grow silently.
+     */
+    const runtime = await import('../../apps/api/src/surfaces/telegram/bot-runtime.js');
+    const prefixes = Object.entries(runtime)
+      .filter(([name, value]) => name.endsWith('_CALLBACK_PREFIX') && typeof value === 'string')
+      .map(([name, value]) => [name, value as string] as const)
+      .filter(([name]) => name !== 'ADMIN_SERVICES_BROWSE_PAGE_CALLBACK_PREFIX');
+    expect(prefixes.length, 'the export scan found almost nothing').toBeGreaterThan(50);
+    for (const [name, one] of prefixes) {
+      for (const [otherName, other] of prefixes) {
+        if (name === otherName) continue;
+        expect(one, `${name} and ${otherName} are the same prefix`).not.toBe(other);
+        expect(
+          other.startsWith(one),
+          `${otherName} (${other}) is shadowed by ${name} (${one})`,
+        ).toBe(false);
+      }
+    }
   });
 });
