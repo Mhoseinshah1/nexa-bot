@@ -1823,6 +1823,19 @@ export const productSummarySchema = z
     audience: z.enum(PRODUCT_AUDIENCES),
     sortOrder: z.number().int(),
     panelId: z.string().nullable(),
+    /*
+     * The category this product is filed under, or null.
+     *
+     * Null is UNCATEGORISED here — unlike the order snapshot's null, which is unknown —
+     * and it is a real state an operator needs to see: such a product is refused at
+     * checkout by `PRODUCT_NOT_CATEGORISED`, so a list that hid the absence would hide
+     * the reason a plan cannot be sold.
+     *
+     * The NAME is not carried. A client that needs it joins against the category list
+     * it already loads, and a second copy of the name here would go stale the moment a
+     * category is renamed.
+     */
+    categoryId: z.string().nullable(),
     durationDays: z.number().int(),
     trafficBytes: z.string(),
     deviceLimit: z.number().int().nullable(),
@@ -1935,6 +1948,15 @@ export const productListQuerySchema = z.object({
    * 500. `serviceListQuerySchema` already carries this filter and this rule.
    */
   panelId: uuidV7Schema.optional(),
+  /*
+   * The category filter, and `'none'` is one of its values.
+   *
+   * A plain uuid could not express "the products with NO category", which is the
+   * filter an operator most needs — it is the list of plans that cannot be sold until
+   * they are filed somewhere. Modelled as a sentinel rather than a second boolean
+   * parameter, so the two cannot be sent together and contradict each other.
+   */
+  categoryId: z.union([uuidV7Schema, z.literal('none')]).optional(),
 });
 export type ProductListQuery = z.infer<typeof productListQuerySchema>;
 
@@ -2054,6 +2076,23 @@ export const productCategoryAssignSchema = z.object({
   productId: z.string().uuid(),
 });
 export type ProductCategoryAssignRequest = z.infer<typeof productCategoryAssignSchema>;
+
+/**
+ * The two acknowledgements the category routes answer with.
+ *
+ * Declared here with every other HTTP shape rather than inline in a client, because a
+ * response body that one surface parses with its own private schema is a contract only
+ * that surface knows about — and `apps/web` may import `@nexa/contracts` and nothing
+ * else, so there is nowhere else for them to live.
+ */
+export const categoryDeletedResponseSchema = z.object({ deleted: z.literal(true) });
+export type CategoryDeletedResponse = z.infer<typeof categoryDeletedResponseSchema>;
+
+export const productCategoryAssignedResponseSchema = z.object({
+  productId: z.string(),
+  categoryId: z.string(),
+});
+export type ProductCategoryAssignedResponse = z.infer<typeof productCategoryAssignedResponseSchema>;
 
 export const PRODUCT_CATEGORY_ROUTES = {
   list: '/product-categories',

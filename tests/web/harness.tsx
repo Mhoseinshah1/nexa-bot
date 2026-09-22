@@ -152,6 +152,13 @@ export function product(overrides: Record<string, unknown> = {}): Record<string,
     audience: 'EVERYONE',
     sortOrder: 10,
     panelId: '01a05e35-c9ad-7e93-bef3-1ed9b55292c8',
+    /*
+     * A real category id by default, because the DEFAULT fixture is a sellable product
+     * and an uncategorised one is not — it is refused at checkout by
+     * `PRODUCT_NOT_CATEGORISED`. A case that wants the unsellable shape overrides this
+     * to null and says so.
+     */
+    categoryId: '01a05e35-c9ad-7e93-bef3-1ed9b55292ca',
     durationDays: 30,
     trafficBytes: '53687091200',
     deviceLimit: 2,
@@ -172,6 +179,16 @@ export function order(overrides: Record<string, unknown> = {}): Record<string, u
     productId: '019220ab-cdef-7012-8345-6789abcdef01',
     panelId: '01a05e35-c9ad-7e93-bef3-1ed9b55292c8',
     lineTitle: 'پلن یک‌ماهه',
+    /*
+     * The category SNAPSHOT, present by default and nullable together.
+     *
+     * A case covering an order that predates the columns — or a renewal, which is not
+     * bought from a category at all — overrides all three to null, which is what the
+     * screen must render as "not recorded" rather than filling from the live product.
+     */
+    lineCategoryId: '01a05e35-c9ad-7e93-bef3-1ed9b55292ca',
+    lineCategoryName: 'عمومی',
+    lineCategoryEmoji: null,
     lineDurationDays: 30,
     lineTrafficBytes: '53687091200',
     lineDeviceLimit: 2,

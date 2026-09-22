@@ -19,7 +19,9 @@ import {
 import {
   activateProduct,
   createProduct,
+  assignProductCategory,
   deactivateProduct,
+  fetchProductCategories,
   fetchPanels,
   fetchProduct,
   fetchProducts,
@@ -180,6 +182,15 @@ export function ProductsPage({
   const appliedStatus = statusFromQuery(route.query.get('status'));
   const appliedAudience = audienceFromQuery(route.query.get('audience'));
   const appliedTitle = route.query.get('title') ?? '';
+  /*
+   * The category filter, and `'none'` is one of its values.
+   *
+   * A bare id could not express "the products with NO category", which is the filter
+   * that matters most here: such a product is refused at checkout by
+   * `PRODUCT_NOT_CATEGORISED`, so this is the list of plans that cannot be sold until
+   * somebody files them. The server validates the same union.
+   */
+  const appliedCategory = route.query.get('categoryId') ?? '';
 
   /*
    * The draft FOLLOWS the applied value, derived rather than initialised — the shape
@@ -200,7 +211,14 @@ export function ProductsPage({
    * on `|`, which cannot appear in a status or an audience; the title can contain
    * anything, so it goes LAST — no other field can absorb its separator.
    */
-  const searchSignature = [appliedStatus ?? '', appliedAudience ?? '', appliedTitle].join('|');
+  const searchSignature = [
+    appliedStatus ?? '',
+    appliedAudience ?? '',
+    // Before the title, which must stay last: a category id cannot contain `|`, and the
+    // title can contain anything.
+    appliedCategory,
+    appliedTitle,
+  ].join('|');
   const [trail, setTrail] = useState<{ signature: string; cursors: readonly string[] }>({
     signature: searchSignature,
     cursors: [],
@@ -219,9 +237,33 @@ export function ProductsPage({
         ...(appliedStatus === null ? {} : { status: appliedStatus }),
         ...(appliedAudience === null ? {} : { audience: appliedAudience }),
         ...(appliedTitle === '' ? {} : { title: appliedTitle }),
+        ...(appliedCategory === '' ? {} : { categoryId: appliedCategory }),
       }),
     enabled: !denied,
   });
+
+  /*
+   * The categories, loaded for NAMES and for the filter.
+   *
+   * The product summary carries `categoryId` and not the name, deliberately: a name
+   * copied onto every product row is a second copy that goes stale the moment a
+   * category is renamed. The join happens here, where one list answers every row.
+   *
+   * A product whose id is not in this list renders as unknown rather than blank —
+   * which is what a category deleted between the two reads looks like, and saying so
+   * is better than an empty cell that reads as "uncategorised".
+   */
+  const categories = useQuery({
+    queryKey: ['product-categories'],
+    queryFn: () => fetchProductCategories(),
+    enabled: !denied,
+  });
+  const categoryNames = new Map(
+    (categories.data?.categories ?? []).map((category) => [
+      category.id,
+      category.emoji === null ? category.name : `${category.emoji} ${category.name}`,
+    ]),
+  );
 
   const rows = products.data?.products ?? [];
   const nextCursor = products.data?.nextCursor ?? null;
@@ -254,6 +296,19 @@ export function ProductsPage({
       key: 'catalogue',
       header: t('web.product_catalogue'),
       render: (row) => <CatalogueBadge row={row} />,
+    },
+    {
+      key: 'category',
+      header: t('web.product_category'),
+      render: (row) => {
+        // Null is UNCATEGORISED and is SHOWN, because such a product is refused at
+        // checkout — hiding the absence would hide the reason a plan cannot be sold.
+        if (row.categoryId === null) {
+          return <Badge tone="warn">{t('web.product_category_unset')}</Badge>;
+        }
+        const name = categoryNames.get(row.categoryId);
+        return name === undefined ? <Dash /> : <span>{name}</span>;
+      },
     },
     {
       key: 'audience',
@@ -335,6 +390,23 @@ export function ProductsPage({
                 { id: 'EVERYONE' as const, label: t('web.product_audience_everyone') },
                 { id: 'RESELLERS_ONLY' as const, label: t('web.product_audience_resellers') },
                 { id: 'HIDDEN' as const, label: t('web.product_audience_hidden') },
+              ]}
+            />
+            {/*
+              Categories as pills rather than a select, matching the two filters beside
+              it. `none` is offered explicitly because it is the operator's most useful
+              view — the plans that cannot be sold yet.
+            */}
+            <Pills
+              value={appliedCategory === '' ? 'ALL' : appliedCategory}
+              onChange={(next) => setQuery(route, 'categoryId', next === 'ALL' ? null : next)}
+              items={[
+                { id: 'ALL', label: t('web.category_filter_all') },
+                { id: 'none', label: t('web.category_filter_none') },
+                ...(categories.data?.categories ?? []).map((category) => ({
+                  id: category.id,
+                  label: category.name,
+                })),
               ]}
             />
           </div>
@@ -839,6 +911,43 @@ export function ProductDetailPage({
     onError: (error) => submission.settleOn(error),
   });
 
+  /*
+   * The categories, for the name this product is filed under and for the move control.
+   *
+   * Loaded here rather than joined on the server, for the reason the list page states:
+   * the product carries the id and not the name, so one read answers both questions
+   * without a copy of the name that can go stale.
+   */
+  const categories = useQuery({
+    queryKey: ['product-categories'],
+    queryFn: () => fetchProductCategories(),
+    enabled: !denied,
+  });
+  const categoryList = categories.data?.categories ?? [];
+
+  /** The id the select is showing. Follows the product until the operator changes it. */
+  const [moveTo, setMoveTo] = useState<string>('');
+  const chosen = moveTo === '' ? (row?.categoryId ?? '') : moveTo;
+
+  const assign = useMutation({
+    mutationFn: (categoryId: string) =>
+      assignProductCategory({
+        categoryId,
+        productId: id,
+        idempotencyKey: submission.current({ assign: id, categoryId }),
+      }),
+    onSuccess: () => {
+      submission.settle();
+      notify({ tone: 'ok', message: t('web.product_category_assigned') });
+      setMoveTo('');
+      void queries.invalidateQueries({ queryKey: ['product', id] });
+      void queries.invalidateQueries({ queryKey: ['products'] });
+      // The counts on the category screen moved, in two categories at once.
+      void queries.invalidateQueries({ queryKey: ['product-categories'] });
+    },
+    onError: (error) => submission.settleOn(error),
+  });
+
   const gap = row === undefined ? null : catalogueGap(row);
 
   return (
@@ -881,6 +990,21 @@ export function ProductDetailPage({
                     </Badge>,
                   ],
                   [t('web.product_catalogue'), <CatalogueBadge key="c" row={row} />],
+                  [
+                    t('web.product_category'),
+                    // Absence is shown as a warning rather than a dash: an uncategorised
+                    // product is refused at checkout, which is a state an operator has
+                    // to act on rather than merely notice.
+                    row.categoryId === null ? (
+                      <Badge key="cat" tone="warn">
+                        {t('web.product_category_unset')}
+                      </Badge>
+                    ) : (
+                      (categoryList.find((c) => c.id === row.categoryId)?.name ?? (
+                        <Dash key="cat" />
+                      ))
+                    ),
+                  ],
                   [t('web.product_audience'), t(AUDIENCE_LABELS[row.audience])],
                   [t('web.product_price'), <Price key="p" row={row} />],
                   [t('web.product_duration'), <Duration key="dur" days={row.durationDays} />],
@@ -910,6 +1034,54 @@ export function ProductDetailPage({
 
             {mayEdit ? (
               <>
+                {/*
+                  Moving a product between categories, on its OWN card.
+                  A reassignment is not an edit of the product's properties: it writes a
+                  different column, takes the destination category's row lock, and leaves
+                  an audit row naming where it moved FROM. Folding it into the edit form
+                  would make "who moved this plan" answerable only by diffing payloads —
+                  the defect `payment-accounts.tsx` records from the other end.
+                */}
+                <Card
+                  title={t('web.product_category_assign')}
+                  hint={t('web.product_category_assign_hint')}
+                >
+                  <Field label={t('web.product_category')} htmlFor="pd-category">
+                    <select
+                      id="pd-category"
+                      value={chosen}
+                      onChange={(event) => setMoveTo(event.target.value)}
+                    >
+                      {/*
+                        No blank option. Every sellable product belongs to exactly one
+                        category, so "move to nothing" is not an operation this offers —
+                        the product would become unsellable and nothing would say why.
+                      */}
+                      {row.categoryId === null && (
+                        <option value="">{t('web.product_category_unset')}</option>
+                      )}
+                      {categoryList.map((category) => (
+                        <option key={category.id} value={category.id}>
+                          {category.name}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <div className="toolbar">
+                    <button
+                      type="button"
+                      className="btn primary sm"
+                      disabled={assign.isPending || chosen === '' || chosen === row.categoryId}
+                      onClick={() => assign.mutate(chosen)}
+                    >
+                      {t('web.product_category_assign')}
+                    </button>
+                  </div>
+                  {assign.error != null && (
+                    <Banner tone="danger">{messageFor(assign.error)}</Banner>
+                  )}
+                </Card>
+
                 <Card title={t('web.product_status_title')} hint={t('web.product_status_hint')}>
                   <div className="toolbar">
                     {row.status === 'INACTIVE' ? (

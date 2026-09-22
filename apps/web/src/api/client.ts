@@ -117,6 +117,13 @@ import {
   PRODUCT_ROUTES,
   productListResponseSchema,
   productResponseSchema,
+  PRODUCT_CATEGORY_ROUTES,
+  productCategoryListResponseSchema,
+  productCategoryResponseSchema,
+  productCategoryAssignedResponseSchema,
+  categoryDeletedResponseSchema,
+  type ProductCategoryListResponse,
+  type ProductCategoryResponse,
   ORDER_ROUTES,
   orderListResponseSchema,
   orderResponseSchema,
@@ -205,6 +212,32 @@ async function post<T>(
 ): Promise<T> {
   const response = await fetch(`${API_PREFIX}${path}`, {
     method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json', accept: 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  const payload: unknown = await response.json().catch(() => null);
+  if (!response.ok) throw toApiError(response.status, payload);
+  return schema.parse(payload);
+}
+
+/**
+ * DELETE, with a body.
+ *
+ * Unusual, and deliberate: every mutation on this surface carries an idempotency key,
+ * and a delete is where a lost response most needs one — without it the operator's
+ * second press either removes something recreated since or reports failure for work
+ * that already succeeded. `fetch` sends a body on DELETE and Fastify parses it, so the
+ * only cost is this note.
+ */
+async function del<T>(
+  path: string,
+  body: unknown,
+  schema: { parse: (v: unknown) => T },
+): Promise<T> {
+  const response = await fetch(`${API_PREFIX}${path}`, {
+    method: 'DELETE',
     credentials: 'same-origin',
     headers: { 'content-type': 'application/json', accept: 'application/json' },
     body: JSON.stringify(body),
@@ -689,6 +722,8 @@ export function fetchProducts(
     audience?: ProductAudience;
     title?: string;
     panelId?: string;
+    /** A category id, or the literal `'none'` for the products filed under nothing. */
+    categoryId?: string;
   } = {},
 ): Promise<ProductListResponse> {
   const params = new URLSearchParams();
@@ -703,6 +738,10 @@ export function fetchProducts(
   // its two ids: an empty string is not a filter, and the server validates this one as
   // a UUID rather than passing it to a `uuid` column.
   if (query.panelId !== undefined && query.panelId !== '') params.set('panelId', query.panelId);
+  // Same emptiness rule. `'none'` is a real value here and passes through unchanged.
+  if (query.categoryId !== undefined && query.categoryId !== '') {
+    params.set('categoryId', query.categoryId);
+  }
   const suffix = params.toString();
   return authedGet(
     suffix ? `${PRODUCT_ROUTES.list}?${suffix}` : PRODUCT_ROUTES.list,
@@ -758,6 +797,97 @@ export function deactivateProduct(input: {
 }): Promise<ProductResponse> {
   const { id, ...body } = input;
   return post(PRODUCT_ROUTES.deactivate(id), body, productResponseSchema);
+}
+
+// --- Product categories ------------------------------------------------------
+
+/**
+ * Every category, with its product count.
+ *
+ * Unpaged, and that is the server's decision rather than this client's: a category
+ * list is a handful of rows an operator arranges by hand, and paging it would make
+ * "move this to the top" a question about which page the top is on.
+ */
+export function fetchProductCategories(): Promise<ProductCategoryListResponse> {
+  return authedGet(PRODUCT_CATEGORY_ROUTES.list, productCategoryListResponseSchema);
+}
+
+export interface ProductCategoryWriteInput {
+  name: string;
+  description: string | null;
+  emoji: string | null;
+  idempotencyKey: string;
+}
+
+export function createProductCategory(
+  input: ProductCategoryWriteInput & { sortOrder: number },
+): Promise<ProductCategoryResponse> {
+  return post(PRODUCT_CATEGORY_ROUTES.create, input, productCategoryResponseSchema);
+}
+
+export function updateProductCategory(
+  input: ProductCategoryWriteInput & { id: string },
+): Promise<ProductCategoryResponse> {
+  const { id, ...body } = input;
+  return post(PRODUCT_CATEGORY_ROUTES.update(id), body, productCategoryResponseSchema);
+}
+
+/**
+ * The four flag transitions, through one function.
+ *
+ * `which` names the ROUTE rather than a target state, because status and visibility are
+ * independent — `docs/wp5-categories-audit.md` §6.3 — and a single `setEnabled(flag)`
+ * would be the shape that eventually lets one of them be written as the other.
+ */
+export function transitionProductCategory(input: {
+  id: string;
+  which: 'activate' | 'deactivate' | 'show' | 'hide';
+  idempotencyKey: string;
+}): Promise<ProductCategoryResponse> {
+  const { id, which, ...body } = input;
+  return post(PRODUCT_CATEGORY_ROUTES[which](id), body, productCategoryResponseSchema);
+}
+
+/**
+ * A whole new order for every category named.
+ *
+ * The server refuses a SHORT match rather than reordering what it recognises, so this
+ * always sends the complete list as the operator now has it — a subset believed
+ * complete would otherwise be half-applied under a success message.
+ */
+export function reorderProductCategories(input: {
+  positions: readonly { id: string; sortOrder: number }[];
+  idempotencyKey: string;
+}): Promise<ProductCategoryListResponse> {
+  return post(PRODUCT_CATEGORY_ROUTES.reorder, input, productCategoryListResponseSchema);
+}
+
+export function assignProductCategory(input: {
+  categoryId: string;
+  productId: string;
+  idempotencyKey: string;
+}): Promise<{ productId: string; categoryId: string }> {
+  const { categoryId, ...body } = input;
+  return post(
+    PRODUCT_CATEGORY_ROUTES.assign(categoryId),
+    body,
+    productCategoryAssignedResponseSchema,
+  );
+}
+
+/**
+ * Deletes a category, and is REFUSED while it still holds products.
+ *
+ * The refusal carries the count in `details.productCount`, which is what the screen
+ * renders — "this category still holds eleven products" is what an operator can act on
+ * where "cannot delete" is not.
+ */
+export function deleteProductCategory(input: {
+  id: string;
+  idempotencyKey: string;
+}): Promise<{ deleted: true }> {
+  const { id, ...body } = input;
+  return del(PRODUCT_CATEGORY_ROUTES.remove(id), body, categoryDeletedResponseSchema);
 }
 
 /**

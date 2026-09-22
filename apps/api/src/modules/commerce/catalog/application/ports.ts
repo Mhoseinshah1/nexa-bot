@@ -102,6 +102,16 @@ export interface ProductSearch {
    * not a `IS NULL OR =`.
    */
   readonly panelId?: PanelId;
+  /**
+   * One category's products, or the UNCATEGORISED ones.
+   *
+   * `'UNCATEGORISED'` is a member of the type rather than a separate boolean, because
+   * the two cannot be true at once and a pair of optional fields would let a caller ask
+   * for both and get whichever the predicate order happened to apply. It is the filter
+   * an operator most needs: a product with no category is refused at checkout by
+   * `PRODUCT_NOT_CATEGORISED`, so this is the list of plans that cannot be sold yet.
+   */
+  readonly categoryId?: ProductCategoryId | 'UNCATEGORISED';
 }
 
 /**
