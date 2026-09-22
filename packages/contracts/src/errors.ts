@@ -683,6 +683,24 @@ export const COMMERCE_ERROR_CODES = {
    */
   CATEGORY_NOT_PURCHASABLE: 'commerce.category_not_purchasable',
 
+  /** No such category in this tenant. Another tenant's is answered the same way. */
+  CATEGORY_NOT_FOUND: 'commerce.category_not_found',
+  /**
+   * The category still holds products, so it cannot be deleted.
+   *
+   * A refusal rather than a cascade, and rather than an "uncategorise these first"
+   * silently performed on the operator's behalf. Deleting a category that holds
+   * products would either strand them uncategorised — unsellable, by
+   * `PRODUCT_NOT_CATEGORISED` — or delete them, and neither is what somebody tidying
+   * a list meant. The detail carries the count, because "you cannot" without "there
+   * are eleven" leaves the operator hunting.
+   *
+   * The database agrees independently: `products_tenant_category_fk` is
+   * `ON DELETE NO ACTION`. This code exists so the operator meets a sentence rather
+   * than a constraint name.
+   */
+  CATEGORY_NOT_EMPTY: 'commerce.category_not_empty',
+
   ORDER_NOT_FOUND: 'commerce.order_not_found',
   /** The order is not in the state this command needs. The machine refused it. */
   ORDER_STATE_INVALID: 'commerce.order_state_invalid',
