@@ -125,6 +125,7 @@ import { CustomerService } from './modules/commerce/customers/application/custom
 import { DrizzleCustomerRepository } from './modules/commerce/customers/infrastructure/drizzle-customer.repository.js';
 import { TelegramCustomerMessenger } from './modules/commerce/messaging/infrastructure/telegram-customer-messenger.js';
 import { ProductService } from './modules/commerce/catalog/application/product.service.js';
+import { ProductCategoryService } from './modules/commerce/catalog/application/product-category.service.js';
 import { ServiceAddonService } from './modules/commerce/catalog/application/addon.service.js';
 import { CommercialActionService } from './modules/commerce/commercial/application/commercial-action.service.js';
 import { DrizzleCommercialActionRepository } from './modules/commerce/commercial/infrastructure/drizzle-commercial-action.repository.js';
@@ -382,6 +383,7 @@ export interface Container {
    */
   readonly customers: CustomerService;
   readonly products: ProductService;
+  readonly productCategories: ProductCategoryService;
   readonly serviceAddons: ServiceAddonService;
   readonly commercialActions: CommercialActionService;
   readonly wallet: WalletService;
@@ -893,6 +895,14 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       SERVICE_PROVIDER_TYPES.includes(providerType as (typeof SERVICE_PROVIDER_TYPES)[number]),
   });
 
+  /*
+   * Constructed HERE rather than beside `OrderService`, which was its only reader
+   * until the admin surfaces existed. Two consumers now share this one instance for
+   * the reason the Telegram wiring states below: two repositories are two views of
+   * the same rows, and nothing in the type system would notice them diverging.
+   */
+  const productCategoryRepository = new DrizzleProductCategoryRepository(database.db);
+
   const productService = new ProductService({
     panelSales: panelSalesGate,
     repository: productRepository,
@@ -906,6 +916,33 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     panels: new DrizzlePanelDirectory(database.db),
     /* `sales.currency`. A product is priced in what the tenant sells in, or refused. */
     settings: settingsResolver,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    uow,
+    idempotency,
+    clock,
+    ids,
+  });
+
+  /**
+   * Categories, under the SAME `catalog.*` permissions as products.
+   *
+   * `permissions.ts` labels those two keys "View products and categories" and "Create
+   * or edit products and categories", so an operator holding them can already do this
+   * by the product's own promise. A `categories.edit` invented here would have meant a
+   * contracts change and a migration backfilling grants into every existing role, to
+   * deliver a separation nobody asked for.
+   *
+   * It takes `productRepository` as well, for the one write that moves a product
+   * between categories — the CATEGORY owns that, because what it has to be atomic with
+   * is the destination category's continued existence.
+   */
+  const productCategoryService = new ProductCategoryService({
+    categories: productCategoryRepository,
+    products: productRepository,
     guard,
     audit,
     opsLog,
@@ -1040,7 +1077,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     panels: panelRepository,
     customers: customerRepository,
   });
-  const productCategoryRepository = new DrizzleProductCategoryRepository(database.db);
   const orderService = new OrderService({
     panelSales: panelSalesGate,
     categories: productCategoryRepository,
@@ -2658,6 +2694,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     recordPing,
     customers: customerService,
     products: productService,
+    productCategories: productCategoryService,
     serviceAddons: serviceAddonService,
     commercialActions: commercialActionService,
     wallet: walletService,

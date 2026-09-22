@@ -1983,14 +1983,27 @@ export const productCategorySummarySchema = z.object({
   status: z.enum(PRODUCT_CATEGORY_STATUSES),
   visibility: z.enum(PRODUCT_CATEGORY_VISIBILITIES),
   sortOrder: z.number().int(),
-  productCount: z.number().int(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
 });
 export type ProductCategorySummaryResponse = z.infer<typeof productCategorySummarySchema>;
 
+/**
+ * A category in the LIST, which is the only response that counts its products.
+ *
+ * A separate type rather than an optional field on the summary, because the alternative
+ * is a single-category response carrying a `productCount` that nothing computed. Zero
+ * there would be a number an operator can act on — "this is empty, I may delete it" —
+ * that is not a fact about anything, and `null` would push the same decision onto every
+ * client. The count is asked for where it is answered.
+ */
+export const productCategoryListingSchema = productCategorySummarySchema.extend({
+  productCount: z.number().int(),
+});
+export type ProductCategoryListingResponse = z.infer<typeof productCategoryListingSchema>;
+
 export const productCategoryListResponseSchema = z.object({
-  categories: z.array(productCategorySummarySchema),
+  categories: z.array(productCategoryListingSchema),
 });
 export type ProductCategoryListResponse = z.infer<typeof productCategoryListResponseSchema>;
 
