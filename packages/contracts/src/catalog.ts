@@ -86,6 +86,23 @@ export function isCategoryPurchasable(status: ProductCategoryStatus): boolean {
   return status === 'ACTIVE';
 }
 
+/**
+ * The name a tenant's first category is created with.
+ *
+ * ONE constant, because three places need the same value and two of them cannot import
+ * each other: migration 0097's backfill (raw SQL, self-contained by necessity), the
+ * 0099 backfill that catches the tenants 0097's predicate missed, and the provisioning
+ * path that gives a brand-new tenant its first category. A test pins the migrations'
+ * literal against this so the three cannot drift.
+ *
+ * It is the starting value of TENANT DATA, not surface text, which is why it lives here
+ * as a constant rather than in the template catalogue. A category's name is the
+ * operator's own words in exactly the way a product's title is — rendered as data,
+ * never translated — and the operator renames it from either admin surface. What would
+ * have been wrong is a name the operator CANNOT change, and this is not that.
+ */
+export const DEFAULT_PRODUCT_CATEGORY_NAME = 'عمومی';
+
 export const PRODUCT_CATEGORY_NAME_MAX_LENGTH = 120;
 
 /**
