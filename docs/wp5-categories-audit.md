@@ -262,10 +262,67 @@ list from the visible products, rather than listing categories and then asking e
 whether it has any, means an empty category cannot be shown by an oversight: there is no
 code path that could.
 
+## 6.4 Pagination — the owner's resolution of OQ-4B-01
+
+OQ-4B-01 is closed by this package, explicitly rather than by implication, and the
+shape is the owner's:
+
+> Category -> paginated Products within that Category. Do NOT treat Categories as a
+> substitute for Product pagination.
+
+That sentence forecloses the cheap reading of this whole package. Categories make a
+long catalogue _navigable_; they do not make it _bounded_. A tenant with forty products
+in one category still needs pages, and a design that quietly relied on "well, each
+category is small" would have reproduced `CATALOG_PAGE_SIZE`'s silent truncation one
+level down.
+
+**Offset pagination, ordered `sort_order ASC, id ASC`.** The owner ruled out a keyset
+cursor, and the reason is the one `ports.ts` and migration 0026 already record from the
+other side: `sort_order` is what an operator drags, so a cursor built on it is a cursor
+over a mutable column. Rather than key on something immutable and lose the operator's
+ordering, WP5 takes the offset and accepts what an offset costs.
+
+**What that costs, stated rather than glossed.** An operator reordering products while a
+customer is paging can change page membership — a product can be missed or repeated
+across a page boundary. The owner has accepted that for WP5. So this package does not
+claim snapshot-stable pagination anywhere, and a future immutable ranking scheme may
+replace the offset if scale requires it.
+
+**Every predicate goes in the SQL, before `LIMIT`/`OFFSET`.** Tenant, category,
+category visibility and activity, product status and audience, panel eligibility, price
+and panel presence. This is §1.4's rule applied to a second query, and the failure it
+prevents is the same one that has now been found three times: a page filtered in memory
+after a bounded fetch is a page that silently empties when enough ineligible rows
+precede an eligible one. **Never fetch a bounded page and then filter in memory.**
+
+**Next and Previous appear only when they are true.** `hasNext` comes from reading
+`limit + 1` rows and discarding the extra — the shape `listCatalog` already uses — so it
+is a fact about the data rather than an assumption; `hasPrevious` is simply page > 1. No
+`COUNT(*)`, because a total is not needed to answer either question truthfully.
+
+**Category lists page too**, on the same terms, once they exceed the keyboard bound.
+
+**A stale page or callback fails or recovers truthfully.** It must never silently select
+a different product — which is exactly what an offset into a changed list does if the
+surface trusts the position instead of the identity. The callback carries the product
+id, and the id is what is acted on.
+
+**The Web Admin keeps its own pagination conventions** and consumes the same eligibility
+rules. The rule is shared; the paging mechanism need not be.
+
 ## 7. Migration
 
 Next number is **0097** (`apps/api/drizzle/` ends at
 `0096_provider_refused_failure_kind.sql`). Forward-only; never edit an applied one.
+
+**0098 follows it, and the reason is worth recording.** 0097's indexes lead
+`(tenant_id, category_id, sort_order, created_at, id)`, which was right for the ordering
+this audit assumed. The owner then specified `sort_order ASC, id ASC` — no `created_at`
+— so the index no longer matches the sort it exists to serve. The fix is a NEW migration
+adding the matching indexes, not an edit to 0097, even though 0097 has been applied
+nowhere but a development database. `nexa-migrations` is explicit that the rule does not
+get an exception because the case looks harmless, and `0002_drop_callback_refs.sql` is
+the worked example of exactly this restraint.
 
 **The backfill is the dangerous part.** `products.tenant_id` is `NOT NULL`, so a
 `NOT NULL` `category_id` needs a value for every existing product in every tenant.
