@@ -607,6 +607,33 @@ describe('a customer acting on their own order', () => {
     expect((await orderRow(order.id)).state).toBe('AWAITING_PAYMENT');
   });
 
+  /**
+   * The same refusal, with the OWNERSHIP predicate taken out of the argument.
+   *
+   * The case above passes a different tenant AND a different customer, so either
+   * predicate alone refuses it — which means it cannot tell you that tenant scoping
+   * works. Measured rather than reasoned: removing `orders.tenantId` from the
+   * repository's `findById` leaves that case green.
+   *
+   * Here the customer id is tenant A's own, so `before.customerId !== customerId` is
+   * FALSE and cannot refuse anything. The only thing left that can is the tenant
+   * predicate in the repository query, which is exactly what this asserts. Deleting
+   * that predicate turns this red.
+   */
+  it('refuses another tenant even when the customer id would match', async () => {
+    const order = await awaitingPayment(tenantA, customerA, panelA, 'cancel-10');
+
+    await expect(
+      ctx.container.orders.cancelByCustomer(tenantB, systemActor('cancel-10-do'), {
+        idempotencyKey: 'cancel-10-do',
+        /* Tenant A's customer, asked for through tenant B's scope. */
+        customerId: customerA,
+        orderId: order.id,
+      }),
+    ).rejects.toMatchObject({ code: 'commerce.order_not_found' });
+    expect((await orderRow(order.id)).state).toBe('AWAITING_PAYMENT');
+  });
+
   it('answers both when two taps arrive together', async () => {
     /*
      * Two commands with different keys, started together: both are answered with the
@@ -778,6 +805,197 @@ describe('a customer acting on their own order', () => {
       expect(settled.state).toBe('PAID');
       /* And never the impossible pair: PAID carrying a cancellation stamp. */
       expect(settled.cancelled_at).toBeNull();
+    });
+
+    /**
+     * WP4. The loser releases nothing twice, and leaves nothing behind.
+     *
+     * Both releases run unconditionally, including for a loser, and that is
+     * deliberate: a winner that cancelled and then died before releasing would leave
+     * the hold standing until its deadline. It is safe only because each is a single
+     * conditional DELETE returning a boolean, so a second call deletes nothing.
+     *
+     * This asserts the OUTCOME of that rather than the shape of the SQL — after a
+     * race in which both transactions ran the releases, the order holds neither a
+     * capacity slot nor a username reservation, and nothing errored. A release that
+     * stopped being idempotent would surface here as a failed transaction rather than
+     * as a duplicate row, which is why the loser's own success is asserted too.
+     */
+    it('releases the slot and the name exactly once across a lost race', async () => {
+      const order = await awaitingPayment(tenantA, customerA, panelA, 'race-7');
+      const payment = await transferFor(tenantA, customerA, order.id, 'race-7-pay');
+
+      const losing = await ctx.container.database.withClient(async (holder) => {
+        await holder.query('BEGIN');
+        try {
+          await holder.query('SELECT id FROM payments WHERE id = $1 FOR UPDATE', [payment.id]);
+          const attempt = ctx.container.orders.cancelByCustomer(tenantA, systemActor('race-7-c'), {
+            idempotencyKey: 'race-7-cancel',
+            customerId: customerA,
+            orderId: order.id,
+          });
+          const settled = attempt.then(
+            () => ({ ok: true }) as const,
+            (error: unknown) => ({ ok: false, error }) as const,
+          );
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          await holder.query(
+            "UPDATE orders SET state = 'CANCELLED', cancelled_at = now(), updated_at = now() WHERE id = $1",
+            [order.id],
+          );
+          await holder.query('COMMIT');
+          return settled;
+        } catch (error: unknown) {
+          await holder.query('ROLLBACK');
+          throw error;
+        }
+      });
+
+      expect((await losing).ok, 'an idempotent release must not fail the loser').toBe(true);
+
+      const slots = (await ctx.container.database.db.execute(
+        sql`SELECT count(*)::int AS n FROM panel_capacity_reservations WHERE order_id = ${order.id}` as never,
+      )) as unknown as { rows: { n: number }[] };
+      const names = (await ctx.container.database.db.execute(
+        sql`SELECT count(*)::int AS n FROM service_username_reservations WHERE order_id = ${order.id}` as never,
+      )) as unknown as { rows: { n: number }[] };
+      expect(slots.rows[0]?.n, 'a capacity slot survived the cancellation').toBe(0);
+      expect(names.rows[0]?.n, 'a username reservation survived the cancellation').toBe(0);
+    });
+
+    /**
+     * WP4. Cancellation has no asynchronous effect to duplicate.
+     *
+     * Recorded as an assertion rather than trusted: the audit found that
+     * `cancelByCustomer` writes no outbox row and enqueues no customer notification —
+     * the `ORDER_CANCELLED` fallback lives in `BotRuntime`, outside the transaction,
+     * and fires per REPLY rather than per transition.
+     *
+     * If either ever gains one, the duplicate-effect question this package answers
+     * reopens, and it reopens HERE rather than in production.
+     */
+    it('enqueues nothing asynchronous for either racer to duplicate', async () => {
+      const order = await awaitingPayment(tenantA, customerA, panelA, 'race-8');
+
+      await ctx.container.orders.cancelByCustomer(tenantA, systemActor('race-8-a'), {
+        idempotencyKey: 'race-8-a',
+        customerId: customerA,
+        orderId: order.id,
+      });
+      /* A different key, so this is a genuine second command reaching the service. */
+      await ctx.container.orders.cancelByCustomer(tenantA, systemActor('race-8-b'), {
+        idempotencyKey: 'race-8-b',
+        customerId: customerA,
+        orderId: order.id,
+      });
+
+      const outbox = (await ctx.container.database.db.execute(
+        sql`SELECT count(*)::int AS n FROM outbox_messages WHERE payload::text LIKE ${'%' + order.id + '%'}` as never,
+      )) as unknown as { rows: { n: number }[] };
+      const notes = (await ctx.container.database.db.execute(
+        sql`SELECT count(*)::int AS n FROM customer_notifications WHERE subject_id = ${order.id}` as never,
+      )) as unknown as { rows: { n: number }[] };
+      expect(outbox.rows[0]?.n, 'cancellation gained an outbox message').toBe(0);
+      expect(notes.rows[0]?.n, 'cancellation gained a customer notification').toBe(0);
+    });
+
+    /**
+     * WP4. The same key twice is a REPLAY, and is answered from the record.
+     *
+     * The other half of the concurrency story, and a different mechanism from the one
+     * above: Telegram redelivering ONE update reuses its id, so the key is the same
+     * and `replay` short-circuits before the transaction opens. No second transition,
+     * and no second audit row — which the winner's own row must survive.
+     */
+    it('answers a redelivered cancellation from the idempotency record', async () => {
+      const order = await awaitingPayment(tenantA, customerA, panelA, 'race-9');
+
+      const first = await ctx.container.orders.cancelByCustomer(tenantA, systemActor('race-9'), {
+        idempotencyKey: 'race-9-cancel',
+        customerId: customerA,
+        orderId: order.id,
+      });
+      const replayed = await ctx.container.orders.cancelByCustomer(tenantA, systemActor('race-9'), {
+        idempotencyKey: 'race-9-cancel',
+        customerId: customerA,
+        orderId: order.id,
+      });
+
+      expect(replayed.id).toBe(first.id);
+      expect(replayed.state).toBe('CANCELLED');
+      /* Exactly the winner's row: the replay added none and removed none. */
+      expect((await auditActions(order.id)).filter((a) => a === 'order.cancel')).toHaveLength(1);
+    });
+
+    /**
+     * WP4. The rollback path leaves neither the transition nor a claim behind.
+     *
+     * The second `claimedPendingFor`, asked AFTER the withdrawal, is the one that
+     * throws: a customer's claim committing between the pre-write guard and the write
+     * means `withdrawPendingFor`'s UPDATE refuses the signalled row, and carrying on
+     * would be a partial cancellation with a live transfer instruction still attached.
+     *
+     * Throwing rolls back the withdrawal, and it must roll back everything else with
+     * it. Asserted as three absences rather than one, because a rollback that leaves
+     * ANY of them is the failure: no transition, no cancellation stamp, and no
+     * `order.cancel` row claiming an order was withdrawn that is still awaiting
+     * payment.
+     *
+     * Driven with the row lock rather than hoped for, for the reason the C4 case
+     * carries in full.
+     */
+    it('leaves no transition and no claim when the cancellation rolls back', async () => {
+      const order = await awaitingPayment(tenantA, customerA, panelA, 'race-6');
+      const payment = await transferFor(tenantA, customerA, order.id, 'race-6-pay');
+
+      const attempted = await ctx.container.database.withClient(async (holder) => {
+        await holder.query('BEGIN');
+        try {
+          await holder.query('SELECT id FROM payments WHERE id = $1 FOR UPDATE', [payment.id]);
+
+          const attempt = ctx.container.orders.cancelByCustomer(tenantA, systemActor('race-6-c'), {
+            idempotencyKey: 'race-6-cancel',
+            customerId: customerA,
+            orderId: order.id,
+          });
+          const settled = attempt.then(
+            () => ({ ok: true }) as const,
+            (error: unknown) => ({ ok: false, error }) as const,
+          );
+
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          /*
+           * The customer's claim lands while the cancellation is blocked. Written
+           * directly because `signalTransferSent` would queue behind the same lock.
+           */
+          await holder.query(
+            'UPDATE payments SET customer_signalled_at = now(), updated_at = now() WHERE id = $1',
+            [payment.id],
+          );
+          await holder.query('COMMIT');
+          return settled;
+        } catch (error: unknown) {
+          await holder.query('ROLLBACK');
+          throw error;
+        }
+      });
+
+      const outcome = await attempted;
+      expect(outcome.ok, 'a cancellation that could not withdraw the claim must refuse').toBe(
+        false,
+      );
+
+      const row = await orderRow(order.id);
+      expect(row.state, 'the order moved despite the rollback').toBe('AWAITING_PAYMENT');
+      expect(row.cancelled_at, 'a cancellation stamp survived the rollback').toBeNull();
+      expect(
+        (await auditActions(order.id)).filter((a) => a === 'order.cancel'),
+        'a rolled-back cancellation left a claim in the audit log',
+      ).toHaveLength(0);
+      /* And the claim it refused to cancel is still there for an operator. */
+      const stillPending = await paymentRow(payment.id);
+      expect(stillPending.state).toBe('PENDING');
+      expect(stillPending.customer_signalled_at).not.toBeNull();
     });
 
     /**
