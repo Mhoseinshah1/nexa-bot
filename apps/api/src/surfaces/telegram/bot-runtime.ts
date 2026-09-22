@@ -1497,7 +1497,7 @@ function adminCategoryLabel(category: ProductCategoryListing): string {
 function adminCategoryReply(
   category: ProductCategoryListing,
   index: number,
-  total: number,
+  count: number,
   mayEdit: boolean,
 ): PendingReply {
   const buttons: CustomerButton[] = [];
@@ -1515,7 +1515,7 @@ function adminCategoryReply(
         : act('s', 'bot.admin.category_show_button'),
     );
     if (index > 0) buttons.push(act('u', 'bot.admin.category_up_button'));
-    if (index < total - 1) buttons.push(act('w', 'bot.admin.category_down_button'));
+    if (index < count - 1) buttons.push(act('w', 'bot.admin.category_down_button'));
     buttons.push(act('x', 'bot.admin.category_delete_button'));
   }
   buttons.push({
