@@ -261,7 +261,52 @@ describe('the customer purchase flow over Telegram', () => {
     expect(lastMessage()?.body['reply_markup']).toBeUndefined();
   });
 
-  it('lists every sellable product as a button carrying its id, and nothing else', async () => {
+  /*
+   * The categorised catalogue — WP5 and OQ-4B-01.
+   *
+   * `/catalog` opens on CATEGORIES, and a category opens on a PAGE of its products.
+   * Every predicate is applied in SQL ahead of LIMIT/OFFSET, so what these cases assert
+   * is what a customer can reach — not what a surface decided to hide afterwards.
+   */
+  const SEEDED_CATEGORY = () => seededCategoryFor(tenantA);
+
+  /** A category of tenant A, written directly: these cases are about what the BOT reads. */
+  async function category(
+    fields: {
+      name?: string;
+      status?: 'ACTIVE' | 'INACTIVE';
+      visibility?: 'VISIBLE' | 'HIDDEN';
+      sortOrder?: number;
+    } = {},
+  ): Promise<string> {
+    const id = api.container.ids.uuid();
+    await api.container.database.db.execute(sql`
+      INSERT INTO product_categories (id, tenant_id, name, status, visibility, sort_order)
+      VALUES (${id}, ${tenantA.tenantId}, ${fields.name ?? 'دسته'}, ${fields.status ?? 'ACTIVE'},
+              ${fields.visibility ?? 'VISIBLE'}, ${fields.sortOrder ?? 5})`);
+    return id;
+  }
+
+  const setCategory = async (id: string, column: 'status' | 'visibility', value: string) =>
+    api.container.database.db.execute(
+      column === 'status'
+        ? sql`UPDATE product_categories SET status = ${value} WHERE id = ${id}`
+        : sql`UPDATE product_categories SET visibility = ${value} WHERE id = ${id}`,
+    );
+
+  it('opens on the CATEGORIES, each a button carrying its id, and never a product', async () => {
+    const sellable = await product(tenantA, 'ACTIVE');
+
+    await command('/catalog');
+    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.catalog.categories_heading']);
+    const buttons = buttonsOf(lastMessage());
+    expect(buttons.map((b) => b.callback_data)).toStrictEqual([`ck:${SEEDED_CATEGORY()}.0`]);
+    // Nothing on the first level is a product: a `p:` here would be the flat list back.
+    expect(buttons.some((b) => b.callback_data.startsWith('p:'))).toBe(false);
+    expect(sellable.categoryId).toBe(SEEDED_CATEGORY());
+  });
+
+  it('lists every sellable product in the category as a button carrying its id, and nothing else', async () => {
     const sellable = await product(tenantA, 'ACTIVE');
     // One of each way a product fails the catalogue's four predicates.
     await product(tenantA, 'INACTIVE');
@@ -269,18 +314,145 @@ describe('the customer purchase flow over Telegram', () => {
     await product(tenantA, 'ACTIVE', { price: null });
     await product(tenantA, 'ACTIVE', { panelId: null });
 
-    await command('/catalog');
+    await tap(`ck:${SEEDED_CATEGORY()}.0`);
     expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.catalog.heading']);
 
     const buttons = buttonsOf(lastMessage());
-    expect(buttons).toHaveLength(1);
-    expect(buttons[0]?.callback_data).toBe(`p:${sellable.id}`);
+    const products = buttons.filter((b) => b.callback_data.startsWith('p:'));
+    expect(products).toHaveLength(1);
+    expect(products[0]?.callback_data).toBe(`p:${sellable.id}`);
     // The label is the tenant's own title and the shared money rendering — the SAME
     // function the message body uses, so a button and a summary cannot disagree.
-    expect(buttons[0]?.text).toBe(`پلن پایه — ${formatMoney(money(250_000n, 'IRT'))}`);
-    // 38 bytes: Telegram caps `callback_data` at 64, which is why the prefix is one
-    // letter and not a word.
-    expect(Buffer.byteLength(buttons[0]?.callback_data ?? '', 'utf8')).toBeLessThanOrEqual(64);
+    expect(products[0]?.text).toBe(`پلن پایه — ${formatMoney(money(250_000n, 'IRT'))}`);
+    // One page: no Next and no Previous, only the way back.
+    expect(buttons.map((b) => b.callback_data)).toStrictEqual([`p:${sellable.id}`, 'cg:0']);
+    expect(Buffer.byteLength(products[0]?.callback_data ?? '', 'utf8')).toBeLessThanOrEqual(64);
+  });
+
+  it('never lists a HIDDEN category, and still sells its product by direct reference', async () => {
+    /*
+     * §6.3, the half that is easy to implement as the other one: hidden is unlisted,
+     * NOT unorderable. A customer holding a `p:` button for a product in a hidden
+     * category may still buy it, because product-level eligibility still applies and
+     * a hidden category is not a withdrawn one.
+     */
+    const hiddenId = await category({ visibility: 'HIDDEN' });
+    const inHidden = await product(tenantA, 'ACTIVE', {
+      categoryId: hiddenId as ProductCategoryId,
+    });
+
+    await command('/catalog');
+    const listed = buttonsOf(lastMessage()).map((b) => b.callback_data);
+    expect(
+      listed.some((data) => data.includes(hiddenId)),
+      'a hidden category was listed',
+    ).toBe(false);
+
+    await tap(`p:${inHidden.id}`);
+    expect((await orders()).length, 'a hidden category stopped a direct purchase').toBe(1);
+  });
+
+  it('never lists an INACTIVE category, and refuses its product even by direct reference', async () => {
+    /*
+     * The other half. INACTIVE withdraws the whole group from new purchases, a button
+     * the customer already holds included — which is exactly what separates it from
+     * HIDDEN. The refusal is decided by `createDraft` inside its transaction, not by
+     * this list, so a button older than the deactivation is refused rather than honoured.
+     */
+    const inactiveId = await category({ status: 'INACTIVE' });
+    const inInactive = await product(tenantA, 'ACTIVE', {
+      categoryId: inactiveId as ProductCategoryId,
+    });
+
+    await command('/catalog');
+    const listed = buttonsOf(lastMessage()).map((b) => b.callback_data);
+    expect(listed.some((data) => data.includes(inactiveId))).toBe(false);
+
+    await tap(`p:${inInactive.id}`);
+    expect(await orders(), 'an inactive category was sold through a direct reference').toHaveLength(
+      0,
+    );
+    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.order.unavailable']);
+  });
+
+  it('never lists a category with nothing sellable in it', async () => {
+    // Emptiness is structural — an EXISTS in the query — so an empty category never
+    // reaches the list to be filtered out afterwards.
+    const emptyId = await category({ name: 'خالی' });
+    await product(tenantA, 'INACTIVE', { categoryId: emptyId as ProductCategoryId });
+    await product(tenantA, 'ACTIVE');
+
+    await command('/catalog');
+    const listed = buttonsOf(lastMessage()).map((b) => b.callback_data);
+    expect(listed).toStrictEqual([`ck:${SEEDED_CATEGORY()}.0`]);
+  });
+
+  it('orders categories by sort order, then by id, and never by name', async () => {
+    await product(tenantA, 'ACTIVE');
+    const late = await category({ name: 'الف', sortOrder: 50 });
+    const early = await category({ name: 'ی', sortOrder: 1 });
+    await product(tenantA, 'ACTIVE', { categoryId: late as ProductCategoryId });
+    await product(tenantA, 'ACTIVE', { categoryId: early as ProductCategoryId });
+
+    await command('/catalog');
+    const listed = buttonsOf(lastMessage()).map((b) => b.callback_data);
+    // The seeded category sits at sort order 0.
+    expect(listed).toStrictEqual([`ck:${SEEDED_CATEGORY()}.0`, `ck:${early}.0`, `ck:${late}.0`]);
+  });
+
+  it('pages a long category, drawing Next and Previous only when that page exists', async () => {
+    /*
+     * Nine products and a page of eight: page 0 has eight and a Next, page 1 has one
+     * and a Previous. Asserted as the WHOLE button list so an extra Next on the last
+     * page — the button that leads to an empty page — fails here.
+     */
+    const made = [];
+    for (let i = 0; i < 9; i += 1) {
+      made.push(await product(tenantA, 'ACTIVE', { title: `پلن ${i}`, sortOrder: 10 + i }));
+    }
+    const ids = made.map((p) => `p:${p.id}`);
+
+    await tap(`ck:${SEEDED_CATEGORY()}.0`);
+    expect(buttonsOf(lastMessage()).map((b) => b.callback_data)).toStrictEqual([
+      ...ids.slice(0, 8),
+      `ck:${SEEDED_CATEGORY()}.1`,
+      'cg:0',
+    ]);
+
+    await tap(`ck:${SEEDED_CATEGORY()}.1`);
+    expect(buttonsOf(lastMessage()).map((b) => b.callback_data)).toStrictEqual([
+      ids[8],
+      `ck:${SEEDED_CATEGORY()}.0`,
+      'cg:0',
+    ]);
+  });
+
+  it('recovers a STALE page past the end to the first page, rather than an empty one', async () => {
+    // A button minted when the category was longer. It selects nothing: it is a page
+    // turn, and the truthful answer is the page that exists.
+    const only = await product(tenantA, 'ACTIVE');
+    await tap(`ck:${SEEDED_CATEGORY()}.5`);
+    expect(buttonsOf(lastMessage()).map((b) => b.callback_data)).toStrictEqual([
+      `p:${only.id}`,
+      'cg:0',
+    ]);
+  });
+
+  it('answers a category emptied between two taps with a sentence and a way back', async () => {
+    const withdrawn = await category({ name: 'موقت' });
+    await tap(`ck:${withdrawn}.0`);
+    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.catalog.category_empty']);
+    expect(buttonsOf(lastMessage()).map((b) => b.callback_data)).toStrictEqual(['cg:0']);
+  });
+
+  it('answers a category turned INACTIVE after its button was drawn as empty, selling nothing', async () => {
+    await product(tenantA, 'ACTIVE');
+    await command('/catalog');
+    await setCategory(SEEDED_CATEGORY(), 'status', 'INACTIVE');
+
+    await tap(`ck:${SEEDED_CATEGORY()}.0`);
+    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.catalog.category_empty']);
+    expect(buttonsOf(lastMessage()).some((b) => b.callback_data.startsWith('p:'))).toBe(false);
   });
 
   it('shows nothing from another tenant', async () => {

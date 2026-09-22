@@ -32,6 +32,7 @@ import type { SettingsResolver } from '../../../control/settings/application/set
 import type { OperationalEventRecorder } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type {
+  CustomerPage,
   PanelDirectory,
   ProductDraft,
   ProductEdit,
@@ -40,6 +41,7 @@ import type {
   ProductRepository,
   ProductSearch,
   ProductCursor,
+  ProductCategoryRecord,
 } from './ports.js';
 
 /**
@@ -188,6 +190,75 @@ export class ProductService {
      */
     const eligiblePanelIds = await this.deps.panelSales.eligiblePanelIds(scope);
     return this.deps.repository.listCatalog(scope, bounded, eligiblePanelIds);
+  }
+
+  /**
+   * One PAGE of the categories a customer may browse.
+   *
+   * Offset-paged, which the owner settled in `docs/wp5-categories-audit.md` §6.4 — and
+   * deliberately NOT a keyset cursor on `sort_order`, because `sort_order` is
+   * operator-mutable and so is not a stable cursor key. The consequence is stated
+   * rather than hidden: an operator reordering while a customer pages can move a row
+   * across a boundary, and this offset is therefore not snapshot-stable.
+   *
+   * `hasMore` is READ and not computed — the query asks for `limit + 1` rows and
+   * discards the extra — so "there is a next page" is a fact about the data rather
+   * than an inference from a count that would be stale anyway.
+   *
+   * Emptiness is structural. A category with no sellable product is excluded by the
+   * SQL's own EXISTS, not by a count taken here; counting to decide what a customer
+   * sees is precisely what §6.4 forbids, and a category that passed a count and then
+   * showed an empty list is the failure it exists to prevent.
+   */
+  async browseCategories(
+    scope: TenantContext,
+    actor: ActorContext,
+    limit: number,
+    offset: number,
+  ): Promise<CustomerPage<ProductCategoryRecord>> {
+    await this.deps.guard.check(scope, actor, CATALOG_BROWSE_PERMISSION);
+    const bounded = Math.min(Math.max(limit, 1), PRODUCT_PAGE_MAX);
+    // The same eligible-panel set the flat browse uses, and for the same reason:
+    // every predicate goes into the query, ahead of LIMIT/OFFSET.
+    const eligiblePanelIds = await this.deps.panelSales.eligiblePanelIds(scope);
+    return this.deps.repository.listCustomerCategories(
+      scope,
+      bounded,
+      Math.max(offset, 0),
+      eligiblePanelIds,
+    );
+  }
+
+  /**
+   * One PAGE of the products inside one category.
+   *
+   * The category id is passed straight to the query rather than validated against a
+   * separate read first. That is not a missing check: the SQL carries the category's
+   * own status and visibility predicates, so an id naming an INACTIVE category — or
+   * another tenant's — matches no rows and the page is empty. Reading the category
+   * first would be a second decision about what a customer may see, which §6.3 forbids.
+   *
+   * An empty page for a category the customer was just offered is possible and is
+   * ORDINARY: the last product in it can be withdrawn between the two taps. The
+   * surface says so rather than pretending the category is gone.
+   */
+  async browseCategory(
+    scope: TenantContext,
+    actor: ActorContext,
+    categoryId: string,
+    limit: number,
+    offset: number,
+  ): Promise<CustomerPage<ProductRecord>> {
+    await this.deps.guard.check(scope, actor, CATALOG_BROWSE_PERMISSION);
+    const bounded = Math.min(Math.max(limit, 1), PRODUCT_PAGE_MAX);
+    const eligiblePanelIds = await this.deps.panelSales.eligiblePanelIds(scope);
+    return this.deps.repository.listCustomerProductsInCategory(
+      scope,
+      categoryId,
+      bounded,
+      Math.max(offset, 0),
+      eligiblePanelIds,
+    );
   }
 
   /** Creates an INACTIVE product. Idempotent, audited. */

@@ -29,6 +29,10 @@ import {
   BOT_INTENTS,
   CONFIRM_CALLBACK_PREFIX,
   REFUSAL_REPLIES,
+  CATALOG_PAGE_CALLBACK_PREFIX,
+  CATEGORY_CALLBACK_PREFIX,
+  CATALOG_BROWSE_MAX_PAGE,
+  parseCatalogPage,
   refusalValuesFor,
   followUpForSettlement,
   GATEWAY_PAY_CALLBACK_PREFIX,
@@ -590,8 +594,30 @@ describe('profile metadata, normalised before it is ever stored', () => {
      */
     expect([...sent].filter((key) => !key.startsWith('bot.admin.')).sort()).toEqual([
       'bot.blocked',
+      /*
+       * The five catalogue keys WP5 added, each reviewed against this case's rule.
+       *
+       *   `back_to_categories_button`  returns to page 0 of a list that exists.
+       *   `categories_heading`         introduces a list the SQL guarantees is non-empty
+       *                                per row — a category with nothing to buy is not
+       *                                in it, so the heading never promises a dead end.
+       *   `category_empty`             the one honest answer when the last product in a
+       *                                category was withdrawn between two taps; it says
+       *                                to look at the other categories, which exist.
+       *   `next_page_button`, `previous_page_button`
+       *                                drawn only when that page really exists, so
+       *                                neither can lead to an empty page.
+       *
+       * `bot.catalog.heading` STAYS, now introducing the list inside a category; reused
+       * rather than replaced so a tenant's existing override keeps its wording.
+       */
+      'bot.catalog.back_to_categories_button',
+      'bot.catalog.categories_heading',
+      'bot.catalog.category_empty',
       'bot.catalog.empty',
       'bot.catalog.heading',
+      'bot.catalog.next_page_button',
+      'bot.catalog.previous_page_button',
       /*
        * `bot.help` is 4H's, and it is the one key here that exists to make the OTHERS
        * findable. `docs/phase4h-audit.md` §9: four commands answered, none registered
@@ -1236,7 +1262,25 @@ describe('a callback prefix decides what happens, so no prefix may shadow anothe
     SERVICE_BUY_TIME: SERVICE_BUY_TIME_CALLBACK_PREFIX,
   };
 
-  const ALL_PREFIXES: Readonly<Record<string, string>> = { ...PREFIXES, ...PAIR_PREFIXES };
+  /*
+   * The two catalogue prefixes (WP5), and the only TWO-character ones.
+   *
+   * Every single character was taken, so `cg:` and `ck:` begin with `c` — the same
+   * letter as confirm's `c:`. The shadowing case below is what proves that is safe:
+   * `c:` is `c` then a colon and these are `c` then a letter, so neither begins the
+   * other. Registered here rather than trusted, because a careless third one — `c:x`,
+   * say — would route a page turn to "confirm this order" with nothing else noticing.
+   */
+  const PAGE_PREFIXES: Readonly<Record<string, string>> = {
+    CATALOG_PAGE: CATALOG_PAGE_CALLBACK_PREFIX,
+    CATEGORY: CATEGORY_CALLBACK_PREFIX,
+  };
+
+  const ALL_PREFIXES: Readonly<Record<string, string>> = {
+    ...PREFIXES,
+    ...PAIR_PREFIXES,
+    ...PAGE_PREFIXES,
+  };
 
   it('gives every prefix a distinct string that no other prefix begins with', () => {
     const values = Object.values(ALL_PREFIXES);
@@ -1247,6 +1291,74 @@ describe('a callback prefix decides what happens, so no prefix may shadow anothe
         expect(other.startsWith(one), `${other} is shadowed by ${one}`).toBe(false);
       }
     }
+  });
+
+  describe('the two catalogue callbacks', () => {
+    /*
+     * A page number and, for `ck:`, a category id — and nothing else survives the
+     * boundary. `callback_data` is whatever the client sent; these cases are the ways a
+     * modified client could try to turn a page turn into something else.
+     */
+    const category = '0191f4a0-2d3c-7c2b-9a41-6f2b0c7e51aa';
+    const tap = (data: string) => intentOf({ callback_query: { id: 'cbq', data } });
+
+    it('routes a category-list page and carries the page through', () => {
+      expect(tap(`${CATALOG_PAGE_CALLBACK_PREFIX}0`)).toMatchObject({
+        intent: 'CATALOG_PAGE',
+        page: 0,
+      });
+      expect(tap(`${CATALOG_PAGE_CALLBACK_PREFIX}7`)).toMatchObject({
+        intent: 'CATALOG_PAGE',
+        page: 7,
+      });
+    });
+
+    it('routes a category page with BOTH its id and its page', () => {
+      expect(tap(`${CATEGORY_CALLBACK_PREFIX}${category}.3`)).toMatchObject({
+        intent: 'CATEGORY',
+        targetId: category,
+        page: 3,
+      });
+    });
+
+    it.each([
+      ['a negative page', '-1'],
+      ['a leading zero', '01'],
+      ['an exponent', '1e2'],
+      ['a hex literal', '0x10'],
+      ['whitespace', ' 1'],
+      ['a fraction', '1.5'],
+      ['nothing at all', ''],
+      ['a page past the bound', String(CATALOG_BROWSE_MAX_PAGE + 1)],
+    ])('refuses %s as a page', (_label, raw) => {
+      /*
+       * `Number` would accept most of these — `' 1'` is 1, `'1e2'` is 100, `'0x10'` is
+       * 16 — which is why the parser is a digits-only pattern and not a cast. A page
+       * that reached the query as something other than what the button said would be
+       * a list position the customer never saw.
+       */
+      expect(parseCatalogPage(raw)).toBeNull();
+      expect(tap(`${CATALOG_PAGE_CALLBACK_PREFIX}${raw}`).intent).toBe('UNSUPPORTED');
+    });
+
+    it('accepts exactly the bound and nothing above it', () => {
+      expect(parseCatalogPage(String(CATALOG_BROWSE_MAX_PAGE))).toBe(CATALOG_BROWSE_MAX_PAGE);
+    });
+
+    it.each([
+      ['a malformed id', `not-a-uuid.0`],
+      ['no page', `${category}`],
+      ['an extra segment', `${category}.0.1`],
+      ['a bad page', `${category}.x`],
+    ])('refuses a category callback with %s', (_label, payload) => {
+      expect(tap(`${CATEGORY_CALLBACK_PREFIX}${payload}`).intent).toBe('UNSUPPORTED');
+    });
+
+    it('fits the largest category callback in 64 bytes', () => {
+      // Two for the prefix's letters, one colon, 36 for the id, a dot and three digits.
+      const largest = `${CATEGORY_CALLBACK_PREFIX}${category}.${CATALOG_BROWSE_MAX_PAGE}`;
+      expect(Buffer.byteLength(largest, 'utf8')).toBeLessThanOrEqual(64);
+    });
   });
 
   it('routes each prefix to its own intent, and carries the id through unchanged', () => {

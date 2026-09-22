@@ -93,6 +93,16 @@ import { readHealth } from '../../modules/platform/panels/application/panel-heal
 export const BOT_INTENTS = [
   'START',
   'CATALOG',
+  /*
+   * The two levels of the categorised catalogue (WP5, OQ-4B-01).
+   *
+   * Their own intents rather than `CATALOG` with an optional payload, for the reason
+   * `SERVICES_PAGE` states: `CATALOG` arrives from a command or the main-menu keyboard
+   * carrying nothing, and these carry a PAGE NUMBER the boundary validates before any
+   * handler sees it. `CATEGORY` also carries the category's id.
+   */
+  'CATALOG_PAGE',
+  'CATEGORY',
   'ORDER',
   'CONFIRM',
   'WALLET',
@@ -342,6 +352,19 @@ export interface BotCommand {
    * to the repository that minted it.
    */
   readonly cursor?: KeysetToken | null;
+  /**
+   * A PAGE NUMBER, for the two catalogue callbacks.
+   *
+   * Offset paging, as the owner settled in `docs/wp5-categories-audit.md` §6.4 — and
+   * carried as a page rather than a raw offset, so a modified client can ask for a page
+   * and nothing else. Parsed and bounded at the boundary by `parseCatalogPage`; a value
+   * that fails is UNSUPPORTED before a handler sees it.
+   *
+   * Not `cursor`, and deliberately: a keyset cursor names a row, and `sort_order` is
+   * operator-mutable, so a cursor on it is not a stable position. §6.4 forbids exactly
+   * that, and a page number makes no claim of stability it could break.
+   */
+  readonly page?: number;
   /** Telegram's id for the tapped button, so the spinner can be stopped. */
   readonly callbackQueryId: string | null;
   /**
@@ -1375,6 +1398,53 @@ export const SERVICES_PAGE_SIZE = 20;
 export const CATALOG_PAGE_SIZE = 20;
 
 /**
+ * How many rows one page of the CATEGORISED catalogue shows, at either level.
+ *
+ * A page, not a bound — unlike `CATALOG_PAGE_SIZE` above, which this browse replaces for
+ * customers. Eight because a Telegram inline keyboard is read on a phone: eight rows plus
+ * a navigation row fits one screen, and a page the customer has to scroll to find the
+ * Next button on is a page they give up on.
+ */
+export const CATALOG_BROWSE_PAGE_SIZE = 8;
+
+/**
+ * The highest page number a catalogue callback may name.
+ *
+ * A bound on what a MODIFIED client can ask the database to OFFSET past, not a limit on
+ * a real catalogue: a thousand pages of eight is eight thousand categories. A value
+ * above it is UNSUPPORTED at the boundary.
+ */
+export const CATALOG_BROWSE_MAX_PAGE = 999;
+
+/**
+ * The two catalogue callbacks. TWO characters, because every single character is taken.
+ *
+ * `cg:<page>` is a page of the category list; `ck:<categoryId>.<page>` is a page of one
+ * category's products. Neither is shadowed by the single-letter `c:` (confirm): that
+ * prefix is `c` then `:`, and these are `c` then a letter. The registry test in
+ * `bot-runtime.test.ts` asserts it over every prefix this runtime knows.
+ *
+ * A category button carries the category's ID, and a product button its product's ID —
+ * never a position in a list. §6.4: a stale callback must fail or recover truthfully and
+ * never silently select a different product, and an index into a list that has since
+ * been reordered is exactly how that happens.
+ */
+export const CATALOG_PAGE_CALLBACK_PREFIX = 'cg:';
+export const CATEGORY_CALLBACK_PREFIX = 'ck:';
+
+/**
+ * A page number out of callback data, or null.
+ *
+ * Digits only — no sign, no exponent, no leading zeros beyond a lone `0` — so `Number`'s
+ * leniency (`' 1'`, `'1e2'`, `'0x10'`) cannot turn a crafted string into a page.
+ */
+export function parseCatalogPage(raw: string): number | null {
+  if (!/^(0|[1-9][0-9]{0,3})$/.test(raw)) return null;
+  const page = Number(raw);
+  return page <= CATALOG_BROWSE_MAX_PAGE ? page : null;
+}
+
+/**
  * Reads the intent out of an update.
  *
  * Reads through passthrough fields rather than a modelled `message` shape, exactly as
@@ -1424,6 +1494,27 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
      * take an id. A malformed one is UNSUPPORTED, which answers the customer, rather
      * than a 500 at the `uuid` cast or a refusal that names the column.
      */
+    /*
+     * The two catalogue callbacks, before every single-letter prefix.
+     *
+     * Order does not matter today — no single-letter prefix is a prefix of `cg:` or
+     * `ck:` — and they are placed first anyway, because if one ever were, the failure
+     * would be silent: a tap routed to confirm an order instead of turning a page.
+     */
+    if (data.startsWith(CATALOG_PAGE_CALLBACK_PREFIX)) {
+      const page = parseCatalogPage(data.slice(CATALOG_PAGE_CALLBACK_PREFIX.length));
+      if (page === null) return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      return { intent: 'CATALOG_PAGE', targetId: null, page, callbackQueryId: id };
+    }
+    if (data.startsWith(CATEGORY_CALLBACK_PREFIX)) {
+      const [rawId, rawPage, ...rest] = data.slice(CATEGORY_CALLBACK_PREFIX.length).split('.');
+      const page = rawPage === undefined ? null : parseCatalogPage(rawPage);
+      const category = uuidV7Schema.safeParse(rawId);
+      if (rest.length > 0 || page === null || !category.success) {
+        return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      }
+      return { intent: 'CATEGORY', targetId: category.data, page, callbackQueryId: id };
+    }
     if (data.startsWith(ORDER_CALLBACK_PREFIX)) {
       return callbackCommand('ORDER', data.slice(ORDER_CALLBACK_PREFIX.length), id);
     }
@@ -5208,7 +5299,13 @@ export class BotRuntime {
       readonly telegramUserId: string;
     },
   ): Promise<PendingReply> {
-    if (command.intent === 'CATALOG') return this.catalogue(scope, actor);
+    if (command.intent === 'CATALOG') return this.catalogue(scope, actor, 0);
+    if (command.intent === 'CATALOG_PAGE') {
+      return this.catalogue(scope, actor, command.page ?? 0);
+    }
+    if (command.intent === 'CATEGORY' && command.targetId !== null) {
+      return this.categoryPage(scope, actor, command.targetId, command.page ?? 0);
+    }
     if (command.intent === 'ORDER' && command.targetId !== null) {
       return this.draft(
         scope,
@@ -5984,23 +6081,123 @@ export class BotRuntime {
    * under it: `bot.catalog.empty` says why there is nothing, and an empty list reads as
    * a failure.
    */
-  private async catalogue(scope: TenantContext, actor: ActorContext): Promise<PendingReply> {
-    const { items } = await this.deps.products.browse(scope, actor, CATALOG_PAGE_SIZE);
+  /**
+   * One page of the CATEGORY list — the first of the two steps (OQ-4B-01).
+   *
+   * What reaches this list is decided entirely in SQL, ahead of LIMIT/OFFSET: tenant,
+   * category status and visibility, and non-emptiness by EXISTS over products that are
+   * themselves listed, priced and on an eligible panel. Nothing here filters what came
+   * back — §6.4 forbids fetching a page and then trimming it, which is the shape that
+   * emptied this catalogue three times at three different thresholds.
+   *
+   * Next and Previous are drawn only when TRUE: Previous when this is not the first
+   * page, Next when the query read a row beyond this one. `hasMore` is a fact about the
+   * data, not an inference from a count.
+   *
+   * A page past the end — a stale button after categories were withdrawn — recovers to
+   * the first page rather than showing an empty list with a Previous button. That is a
+   * navigation recovery and selects nothing: the customer taps again from what exists.
+   */
+  private async catalogue(
+    scope: TenantContext,
+    actor: ActorContext,
+    page: number,
+  ): Promise<PendingReply> {
+    const { items, hasMore } = await this.deps.products.browseCategories(
+      scope,
+      actor,
+      CATALOG_BROWSE_PAGE_SIZE,
+      page * CATALOG_BROWSE_PAGE_SIZE,
+    );
     if (items.length === 0) {
+      if (page > 0) return this.catalogue(scope, actor, 0);
       return { key: 'bot.catalog.empty', values: {}, buttons: [], orderId: null };
+    }
+    const buttons: CustomerButton[] = items.map((category) => ({
+      // Operator text, exactly as a product title is. The emoji is optional and its
+      // absence renders as an ordinary category — §6.1.
+      label: {
+        kind: 'TEXT' as const,
+        text: category.emoji === null ? category.name : `${category.emoji} ${category.name}`,
+      },
+      data: `${CATEGORY_CALLBACK_PREFIX}${category.id}.0`,
+    }));
+    if (page > 0) {
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.catalog.previous_page_button' },
+        data: `${CATALOG_PAGE_CALLBACK_PREFIX}${page - 1}`,
+      });
+    }
+    if (hasMore && page < CATALOG_BROWSE_MAX_PAGE) {
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.catalog.next_page_button' },
+        data: `${CATALOG_PAGE_CALLBACK_PREFIX}${page + 1}`,
+      });
+    }
+    return { key: 'bot.catalog.categories_heading', values: {}, buttons, orderId: null };
+  }
+
+  /**
+   * One page of the products inside one category — the second step.
+   *
+   * The category id comes from a button, so it may be stale: withdrawn, hidden, emptied
+   * or another tenant's since the list was drawn. None of that is decided HERE. The
+   * query carries the category's own status and visibility predicates and the tenant,
+   * so every one of those cases reaches this handler as an empty page — and an empty
+   * first page is answered with `bot.catalog.category_empty` and a way back, which is
+   * the truthful outcome whichever of them it was.
+   *
+   * A product button carries the PRODUCT'S id. Tapping it goes through `createDraft`,
+   * which re-reads the product and its category inside its own transaction and refuses
+   * what is no longer orderable — so a button older than a withdrawal is refused with a
+   * sentence rather than honoured, and nothing a position in this page could mean is
+   * ever looked up.
+   */
+  private async categoryPage(
+    scope: TenantContext,
+    actor: ActorContext,
+    categoryId: string,
+    page: number,
+  ): Promise<PendingReply> {
+    const { items, hasMore } = await this.deps.products.browseCategory(
+      scope,
+      actor,
+      categoryId,
+      CATALOG_BROWSE_PAGE_SIZE,
+      page * CATALOG_BROWSE_PAGE_SIZE,
+    );
+    const back: CustomerButton = {
+      label: { kind: 'TEMPLATE', key: 'bot.catalog.back_to_categories_button' },
+      data: `${CATALOG_PAGE_CALLBACK_PREFIX}0`,
+    };
+    if (items.length === 0) {
+      if (page > 0) return this.categoryPage(scope, actor, categoryId, 0);
+      return { key: 'bot.catalog.category_empty', values: {}, buttons: [back], orderId: null };
     }
     const buttons: CustomerButton[] = [];
     for (const product of items) {
-      // `browse` returns only priced products — that is one of its four predicates — so
-      // a null price here would mean the read model had changed under this surface.
-      // Skipped rather than rendered as a button with no amount, because a plan whose
-      // price a customer cannot see is a plan they cannot consent to.
+      // The SQL returns only priced products; a null here would mean the read model
+      // changed under this surface. Skipped rather than drawn without an amount,
+      // because a plan whose price a customer cannot see is one they cannot consent to.
       if (product.price === null) continue;
       buttons.push({
         label: { kind: 'TEXT', text: product.title, amount: product.price },
         data: `${ORDER_CALLBACK_PREFIX}${product.id}`,
       });
     }
+    if (page > 0) {
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.catalog.previous_page_button' },
+        data: `${CATEGORY_CALLBACK_PREFIX}${categoryId}.${page - 1}`,
+      });
+    }
+    if (hasMore && page < CATALOG_BROWSE_MAX_PAGE) {
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.catalog.next_page_button' },
+        data: `${CATEGORY_CALLBACK_PREFIX}${categoryId}.${page + 1}`,
+      });
+    }
+    buttons.push(back);
     return { key: 'bot.catalog.heading', values: {}, buttons, orderId: null };
   }
 
