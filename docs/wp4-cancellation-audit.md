@@ -27,10 +27,10 @@ bot-runtime.ts:6854         `${idempotencyKey}:cancel-order`
 That distinction decides which of the brief's two concurrency requirements is
 which, and they are different mechanisms:
 
-| what the customer does | update id | idempotency key | collapsed by the replay guard? |
-|---|---|---|---|
-| taps the button twice, fast | two different ids | **two different keys** | **no** |
-| Telegram redelivers one update | the same id | the same key | yes |
+| what the customer does         | update id         | idempotency key        | collapsed by the replay guard? |
+| ------------------------------ | ----------------- | ---------------------- | ------------------------------ |
+| taps the button twice, fast    | two different ids | **two different keys** | **no**                         |
+| Telegram redelivers one update | the same id       | the same key           | yes                            |
 
 So "two different idempotency keys racing" is not a theoretical HTTP-retry case.
 It is a customer double-tapping an inline button, which is the single most
@@ -61,8 +61,9 @@ Verified by reading the code, not assumed:
   `ORDER_STATE_INVALID`, and a claimed pending transfer throws
   `ORDER_TRANSFER_UNDER_REVIEW` — asked twice, once before the withdrawal and
   again after it, which is the PR #30 Codex fix.
-- **A lost transition is not reported as a cancellation.** `if (!changed &&
-  after.state !== 'CANCELLED') throw` is the PR #30 fix for exactly that.
+- **A lost transition is not reported as a cancellation.** The guard that throws
+  when nothing moved and the order is not already `CANCELLED` is the PR #30 fix
+  for exactly that.
 - **`runAuthorizedMutation` is not a second audit writer.** It records only
   DENIED rows, and only for this permission's own denial.
 
