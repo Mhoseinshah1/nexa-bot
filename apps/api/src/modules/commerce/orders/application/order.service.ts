@@ -1296,27 +1296,59 @@ export class OrderService {
          */
         await this.deps.usernames.releaseUnfunded(scope, orderId, tx);
 
-        await this.deps.audit.record(
-          scope,
-          actor,
-          {
-            action: 'order.cancel',
-            entityType: 'Order',
-            entityId: orderId,
-            before: { state: before.state },
-            after: {
-              state: after.state,
-              changed,
-              /*
-               * How many transfer instructions this closed, so the log distinguishes a
-               * customer abandoning a quote from one abandoning a payment in progress.
-               */
-              paymentsWithdrawn: withdrawn.length,
+        /*
+         * The audit row belongs to the transaction that PERFORMED the cancellation,
+         * and to no other.
+         *
+         * `changed` was already computed and was already written into the row as a
+         * field; what it was not doing was deciding whether to write the row at all.
+         * Two customers cannot race here, but one customer tapping twice can: the
+         * Telegram key is per-UPDATE (`telegramUpdateKey(botInstance.id, updateId)`),
+         * so two fast taps are two update ids and two DIFFERENT idempotency keys that
+         * the replay guard above cannot collapse. Both then reach this far, and the
+         * loser wrote a second `order.cancel` SUCCESS row for a transition it did not
+         * perform.
+         *
+         * Falling through is still right for the ANSWER — the customer asked for a
+         * cancelled order and has one, which is why the guard above admits
+         * `CANCELLED` — so this narrows what the loser CLAIMS rather than what it
+         * returns.
+         *
+         * The asymmetry that made this a defect rather than a policy is now closed:
+         * a request arriving after the cancellation commits takes the early return at
+         * the top and writes no audit row either. Same customer, same intent, same end
+         * state, and now the same number of rows whichever way the interleaving falls
+         * — which is the only way the log can answer who cancelled this order and
+         * when.
+         *
+         * Everything below stays unconditional on purpose. `rememberOnce` records
+         * THIS key's answer, and both releases are idempotent DELETEs that must run
+         * even for a loser, because a winner that cancelled and died before releasing
+         * would otherwise leave the hold standing until its deadline.
+         */
+        if (changed) {
+          await this.deps.audit.record(
+            scope,
+            actor,
+            {
+              action: 'order.cancel',
+              entityType: 'Order',
+              entityId: orderId,
+              before: { state: before.state },
+              after: {
+                state: after.state,
+                changed,
+                /*
+                 * How many transfer instructions this closed, so the log distinguishes a
+                 * customer abandoning a quote from one abandoning a payment in progress.
+                 */
+                paymentsWithdrawn: withdrawn.length,
+              },
+              result: 'SUCCESS',
             },
-            result: 'SUCCESS',
-          },
-          tx,
-        );
+            tx,
+          );
+        }
 
         await rememberOnce(
           this.deps.idempotency,
