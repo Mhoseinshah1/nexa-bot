@@ -150,7 +150,7 @@ describe('product categories — the admin service', () => {
       expect(count.rows[0]?.n).toBe(1);
     });
 
-    it('refuses an emoji that is not one, and accepts none at all', async () => {
+    it('refuses an emoji longer than the eight code points an icon needs, and accepts none at all', async () => {
       expect(
         await codeOf(
           service().create(tenantA, owner, {
@@ -372,25 +372,38 @@ describe('product categories — the admin service', () => {
   describe('tenant isolation', () => {
     it('answers another tenant category as unknown on every path', async () => {
       const theirs = SEED_IDS.categoryB;
-      const paths: readonly [string, Promise<unknown>][] = [
-        ['get', service().get(tenantA, owner, theirs)],
+      /*
+       * THUNKS, called one at a time. The first version built all five promises up
+       * front and awaited them in turn, so the later ones rejected before anything
+       * was listening — five concurrent writes against one row, and two unhandled
+       * rejections that failed the whole run while every assertion here passed.
+       */
+      const paths: readonly [string, () => Promise<unknown>][] = [
+        ['get', () => service().get(tenantA, owner, theirs)],
         [
           'update',
-          service().update(tenantA, owner, {
-            idempotencyKey: key(),
-            categoryId: theirs,
-            edit: { name: 'x', description: null, emoji: null },
-          }),
+          () =>
+            service().update(tenantA, owner, {
+              idempotencyKey: key(),
+              categoryId: theirs,
+              edit: { name: 'x', description: null, emoji: null },
+            }),
         ],
-        ['hide', service().hide(tenantA, owner, { idempotencyKey: key(), categoryId: theirs })],
+        [
+          'hide',
+          () => service().hide(tenantA, owner, { idempotencyKey: key(), categoryId: theirs }),
+        ],
         [
           'deactivate',
-          service().deactivate(tenantA, owner, { idempotencyKey: key(), categoryId: theirs }),
+          () => service().deactivate(tenantA, owner, { idempotencyKey: key(), categoryId: theirs }),
         ],
-        ['remove', service().remove(tenantA, owner, { idempotencyKey: key(), categoryId: theirs })],
+        [
+          'remove',
+          () => service().remove(tenantA, owner, { idempotencyKey: key(), categoryId: theirs }),
+        ],
       ];
       for (const [label, attempt] of paths) {
-        expect(await codeOf(attempt), label).toBe('commerce.category_not_found');
+        expect(await codeOf(attempt()), label).toBe('commerce.category_not_found');
       }
       // And theirs is untouched.
       const still = await service().get(tenantB, ownerB, theirs);
