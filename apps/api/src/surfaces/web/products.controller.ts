@@ -14,7 +14,7 @@ import {
   type ProductWriteRequest,
   type TenantContext,
 } from '@nexa/contracts';
-import type { ProductId } from '@nexa/contracts';
+import type { ProductCategoryId, ProductId } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
 import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
 import { singleValued } from './query.js';
@@ -58,6 +58,7 @@ export class ProductsController {
       ...(query.audience === undefined ? {} : { audience: query.audience }),
       ...(query.title === undefined ? {} : { title: query.title }),
       ...(query.panelId === undefined ? {} : { panelId: query.panelId }),
+      ...(query.categoryId === undefined ? {} : { categoryId: query.categoryId }),
     });
     const result = await this.container.products.list(scope, actor, {
       ...(page.limit === undefined ? {} : { limit: page.limit }),
@@ -69,6 +70,22 @@ export class ProductsController {
         ...(page.audience === undefined ? {} : { audience: page.audience }),
         ...(page.title === undefined ? {} : { titlePrefix: page.title }),
         ...(page.panelId === undefined ? {} : { panelId: page.panelId as PanelId }),
+        /*
+         * `'none'` on the wire becomes `'UNCATEGORISED'` in the search.
+         *
+         * Two names for one idea, deliberately: the query parameter is short because an
+         * operator sees it in a URL, and the domain value is spelled out because it sits
+         * beside a `ProductCategoryId` in a union where `'none'` would read as a name
+         * somebody could have given a category.
+         */
+        ...(page.categoryId === undefined
+          ? {}
+          : {
+              categoryId:
+                page.categoryId === 'none'
+                  ? ('UNCATEGORISED' as const)
+                  : (page.categoryId as ProductCategoryId),
+            }),
       },
     });
     return {
@@ -180,6 +197,7 @@ function draftFrom(command: ProductWriteRequest): ProductDraft {
     audience: command.audience,
     sortOrder: command.sortOrder,
     panelId: command.panelId as PanelId | null,
+    categoryId: command.categoryId as ProductCategoryId | null,
     specification: {
       durationDays: command.durationDays,
       trafficBytes: BigInt(command.trafficBytes),
@@ -214,6 +232,9 @@ function toSummary(record: ProductRecord): ProductSummaryResponse {
     audience: record.audience,
     sortOrder: record.sortOrder,
     panelId: record.panelId,
+    // Null is UNCATEGORISED, and it is shown rather than hidden: such a product is
+    // refused at checkout, so an absence here is the reason a plan cannot be sold.
+    categoryId: record.categoryId,
     durationDays: record.specification.durationDays,
     // Text on the wire. A traffic allowance in bytes passes 2^53 at eight petabytes and
     // an amount in minor units well before that, and JSON has one number type.

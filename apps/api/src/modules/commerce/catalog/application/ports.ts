@@ -2,6 +2,9 @@ import type {
   Money,
   PanelId,
   ProductAudience,
+  ProductCategoryId,
+  ProductCategoryStatus,
+  ProductCategoryVisibility,
   ProductId,
   ProductSpecification,
   ProductStatus,
@@ -32,6 +35,16 @@ export interface ProductRecord {
    * message an operator needs names the product".
    */
   readonly panelId: PanelId | null;
+  /**
+   * The category a customer browses this under, or null.
+   *
+   * Null is a real state and it is UNSELLABLE, unlike `panelId`'s null which is merely
+   * unfulfillable-yet. Migration 0097 gave every existing product a category, so a null
+   * here means an operator deleted an emptied category out from under a product, or a
+   * path created one without a category. Either way it is refused at confirmation with
+   * a reason naming which rule failed, rather than the product silently vanishing.
+   */
+  readonly categoryId: ProductCategoryId | null;
   readonly specification: ProductSpecification;
   /**
    * The price as ONE nullable value rather than two nullable columns.
@@ -89,6 +102,16 @@ export interface ProductSearch {
    * not a `IS NULL OR =`.
    */
   readonly panelId?: PanelId;
+  /**
+   * One category's products, or the UNCATEGORISED ones.
+   *
+   * `'UNCATEGORISED'` is a member of the type rather than a separate boolean, because
+   * the two cannot be true at once and a pair of optional fields would let a caller ask
+   * for both and get whichever the predicate order happened to apply. It is the filter
+   * an operator most needs: a product with no category is refused at checkout by
+   * `PRODUCT_NOT_CATEGORISED`, so this is the list of plans that cannot be sold yet.
+   */
+  readonly categoryId?: ProductCategoryId | 'UNCATEGORISED';
 }
 
 /**
@@ -105,6 +128,8 @@ export interface ProductDraft {
   readonly audience: ProductAudience;
   readonly sortOrder: number;
   readonly panelId: PanelId | null;
+  /** The category this product is filed under. Reassignment is an ordinary edit. */
+  readonly categoryId: ProductCategoryId | null;
   readonly specification: ProductSpecification;
   readonly price: Money | null;
 }
@@ -155,6 +180,28 @@ export interface ProductRepository {
 
   findById(scope: TenantContext, id: ProductId, tx?: unknown): Promise<ProductRecord | null>;
 
+  /**
+   * One PAGE of the categories a customer may browse. See the implementation for why
+   * emptiness is a property of the query's shape rather than a check it performs.
+   */
+  listCustomerCategories(
+    scope: TenantContext,
+    limit: number,
+    offset: number,
+    eligiblePanelIds: readonly string[],
+    tx?: unknown,
+  ): Promise<CustomerPage<ProductCategoryRecord>>;
+
+  /** One PAGE of the products inside one category, every predicate applied in SQL. */
+  listCustomerProductsInCategory(
+    scope: TenantContext,
+    categoryId: string,
+    limit: number,
+    offset: number,
+    eligiblePanelIds: readonly string[],
+    tx?: unknown,
+  ): Promise<CustomerPage<ProductRecord>>;
+
   list(
     scope: TenantContext,
     search: ProductSearch,
@@ -190,6 +237,23 @@ export interface ProductRepository {
   ): Promise<boolean>;
 
   /**
+   * Files a product under a category, and answers the product as it now stands.
+   *
+   * A plain assignment rather than a `from`-conditional transition, unlike `setStatus`:
+   * a status is a state machine where a repeat press must not count twice, and a
+   * category is a pointer where writing the value it already holds is exactly what was
+   * asked for. The caller reads the row first so the audit trail carries where it moved
+   * FROM, which may be null.
+   */
+  setCategory(
+    scope: TenantContext,
+    id: ProductId,
+    categoryId: ProductCategoryId,
+    now: Date,
+    tx?: unknown,
+  ): Promise<ProductRecord | null>;
+
+  /**
    * The customer-visible catalogue, in `sortOrder, createdAt, id` order.
    *
    * A BOUNDED page rather than a traversal, and the bound is the point. The ordering
@@ -222,4 +286,222 @@ export interface ProductRepository {
     eligiblePanelIds: readonly string[],
     tx?: unknown,
   ): Promise<{ readonly items: readonly ProductRecord[]; readonly hasMore: boolean }>;
+}
+
+/**
+ * A category row as the application layer sees it.
+ *
+ * `status` and `visibility` are the two dimensions `catalog.ts` explains, and they do
+ * different things: status decides whether the products inside may be BOUGHT,
+ * visibility only whether the category is LISTED. Nothing here caches how many products
+ * it holds — `productCategories` in the schema says why a count would be a second
+ * answer that goes stale the moment a product is deactivated.
+ */
+export interface ProductCategoryRecord {
+  readonly id: ProductCategoryId;
+  readonly name: string;
+  readonly description: string | null;
+  /** Optional. Absence is ordinary and renders as an ordinary category. */
+  readonly emoji: string | null;
+  readonly status: ProductCategoryStatus;
+  readonly visibility: ProductCategoryVisibility;
+  readonly sortOrder: number;
+  readonly createdAt: Date;
+  readonly updatedAt: Date;
+}
+
+/**
+ * One page of an OFFSET-paged customer list.
+ *
+ * `hasMore` is READ rather than computed: the query asks for `limit + 1` rows and
+ * discards the extra, so "there is a next page" is a fact about the data instead of an
+ * inference from a count. `hasPrevious` is the caller's `page > 1` and is not carried
+ * here, because it is not a question about the data at all.
+ *
+ * There is deliberately no `total`. It would need a second COUNT over the same
+ * predicates, it would be stale the instant it was read, and neither Next nor Previous
+ * needs it to be shown truthfully. `docs/wp5-categories-audit.md` §6.4 records that this
+ * offset is not snapshot-stable — an operator reordering while a customer pages can move
+ * a row across a boundary — and a printed total would imply a stability it does not have.
+ */
+export interface CustomerPage<T> {
+  readonly items: readonly T[];
+  readonly hasMore: boolean;
+}
+
+/**
+ * Categories, as the application reads and writes them.
+ *
+ * Separate from `ProductRepository` because they are separate aggregates with separate
+ * lifecycles — a category outlives the products filed under it, and deleting one is a
+ * question about the products rather than about the category.
+ *
+ * `findById` takes a NULLABLE id and answers null for null. That is not laziness: every
+ * caller holds `product.categoryId`, which is nullable by design, and making each of
+ * them write the same guard is how one of them eventually forgets.
+ */
+/**
+ * What an operator may change about a category.
+ *
+ * `sortOrder` is absent on purpose: reordering is its own operation because it names
+ * several categories at once, and folding it in here would let an edit of one category
+ * silently collide with an edit of another onto the same position.
+ */
+export interface ProductCategoryEdit {
+  readonly name: string;
+  readonly description: string | null;
+  readonly emoji: string | null;
+}
+
+/** A new category. `status` and `visibility` are not chosen at creation — see the service. */
+export interface ProductCategoryDraft extends ProductCategoryEdit {
+  readonly sortOrder: number;
+}
+
+/**
+ * A category in an operator's list, with the count an operator actually needs.
+ *
+ * `productCount` counts EVERY product filed under it, active or not, because the
+ * question it answers is "may I delete this" and an inactive product blocks a delete
+ * exactly as an active one does. The customer-facing emptiness rule is a different
+ * question with a different predicate, and lives in the SQL of `listCustomerCategories`
+ * rather than here — counting to decide what a customer sees is the mistake
+ * `docs/wp5-categories-audit.md` §6.4 forbids.
+ */
+export interface ProductCategoryListing extends ProductCategoryRecord {
+  readonly productCount: number;
+}
+
+export interface ProductCategoryRepository {
+  findById(
+    scope: TenantContext,
+    id: ProductCategoryId | null,
+    tx?: unknown,
+  ): Promise<ProductCategoryRecord | null>;
+
+  /**
+   * Gives a tenant a first category IF it has none, and reports whether it wrote one.
+   *
+   * The idempotency key is "this tenant has at least one category", not the name and
+   * not the id — which is what makes a rerun safe in the two ways that matter. An
+   * installer that reruns after a later failure writes nothing the second time, and a
+   * tenant whose operator has RENAMED the default keeps the rename, because the
+   * predicate asks whether any category exists rather than whether one called
+   * `DEFAULT_PRODUCT_CATEGORY_NAME` does.
+   *
+   * There is no unique index to lean on here — `(tenant_id, name)` is deliberately not
+   * unique, since an operator may legitimately want two categories with similar names
+   * — so the conditional is `WHERE NOT EXISTS`, taken inside the caller's transaction.
+   */
+  ensureDefault(
+    scope: TenantContext,
+    input: { readonly id: ProductCategoryId; readonly name: string; readonly now: Date },
+    tx?: unknown,
+  ): Promise<{ readonly created: boolean }>;
+
+  /**
+   * Every category the tenant has, with its product count, in the operator's order.
+   *
+   * Unpaged, and that is a decision rather than an omission. A category list is a
+   * handful of rows an operator arranges by hand — `sort_order` is capped at 100000 by
+   * a CHECK and the reorder operation names them all at once — so paging it would
+   * make "move this to the top" a question about which page the top is on. The
+   * CUSTOMER list is paged, because it is read by somebody who did not create it.
+   */
+  listForOperator(scope: TenantContext, tx?: unknown): Promise<readonly ProductCategoryListing[]>;
+
+  create(
+    scope: TenantContext,
+    input: {
+      readonly id: ProductCategoryId;
+      readonly draft: ProductCategoryDraft;
+      readonly now: Date;
+    },
+    tx?: unknown,
+  ): Promise<ProductCategoryRecord>;
+
+  update(
+    scope: TenantContext,
+    id: ProductCategoryId,
+    edit: ProductCategoryEdit,
+    now: Date,
+    tx?: unknown,
+  ): Promise<ProductCategoryRecord | null>;
+
+  /**
+   * Moves a category from one status to another, and answers null when it was not in
+   * `from`.
+   *
+   * Conditional on the CURRENT status rather than a blind write, for the reason every
+   * transition in this codebase is: two operators pressing the same button, or one
+   * pressing it twice, must produce one transition and one audit row. The caller
+   * distinguishes "already there" from "not found" by reading the row afterwards.
+   */
+  setStatus(
+    scope: TenantContext,
+    id: ProductCategoryId,
+    from: ProductCategoryStatus,
+    to: ProductCategoryStatus,
+    now: Date,
+    tx?: unknown,
+  ): Promise<ProductCategoryRecord | null>;
+
+  /** As `setStatus`, for visibility. The two are independent: §6.3 of the audit. */
+  setVisibility(
+    scope: TenantContext,
+    id: ProductCategoryId,
+    from: ProductCategoryVisibility,
+    to: ProductCategoryVisibility,
+    now: Date,
+    tx?: unknown,
+  ): Promise<ProductCategoryRecord | null>;
+
+  /**
+   * Writes a new position for each named category, in ONE statement.
+   *
+   * One statement because the order is a property of the SET rather than of any row in
+   * it: applied one UPDATE at a time, a concurrent read between them sees an order that
+   * no operator ever asked for, and a failure halfway leaves one.
+   */
+  reorder(
+    scope: TenantContext,
+    positions: readonly { readonly id: ProductCategoryId; readonly sortOrder: number }[],
+    now: Date,
+    tx?: unknown,
+  ): Promise<number>;
+
+  /**
+   * Counts the products filed under a category — ALL of them, whatever their status.
+   *
+   * Read under the category's row lock by the delete path, because a count taken before
+   * the lock answers the state the loser of a race started from. `products_tenant_category_fk`
+   * is `ON DELETE NO ACTION`, so the database refuses the delete anyway; this count
+   * exists so the operator is told how many products are in the way instead of meeting
+   * a constraint name.
+   */
+  countProducts(scope: TenantContext, id: ProductCategoryId, tx?: unknown): Promise<number>;
+
+  /** Deletes the row and reports whether one was there. Never cascades. */
+  delete(scope: TenantContext, id: ProductCategoryId, tx?: unknown): Promise<boolean>;
+
+  /** Takes the category's row lock, so a count read after it is the state we commit on. */
+  lock(scope: TenantContext, id: ProductCategoryId, tx: unknown): Promise<boolean>;
+
+  /**
+   * Reads the category under a SHARE lock, for the two writes that DEPEND on it.
+   *
+   * Confirming an order checks that its category is still ACTIVE, and writing a product
+   * checks that its category exists in this tenant. A plain read answers both with the
+   * state as it was, and a concurrent deactivation — or delete — could commit before the
+   * dependent write does, which is exactly the window the check exists to close.
+   *
+   * SHARE and not UPDATE, deliberately: every confirmation in a busy category takes this,
+   * and SHARE locks do not wait for each other. A status or visibility change is an
+   * UPDATE, which does wait for them, so the two serialise and nothing else does.
+   */
+  findForShare(
+    scope: TenantContext,
+    id: ProductCategoryId,
+    tx: unknown,
+  ): Promise<ProductCategoryRecord | null>;
 }

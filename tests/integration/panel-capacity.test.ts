@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import type { ProductCategoryId } from '@nexa/contracts';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   money,
@@ -130,6 +131,7 @@ describe('panel capacity and sales eligibility', () => {
         audience: 'EVERYONE',
         sortOrder: 10,
         panelId: panelId as PanelId,
+        categoryId: SEED_IDS.categoryA as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 0n, deviceLimit: 1 },
         price: money(120_000n, 'IRT'),
       },
@@ -766,6 +768,13 @@ describe('panel capacity and sales eligibility', () => {
         audience: 'EVERYONE',
         sortOrder: 10,
         panelId: panelForeign as PanelId,
+        /*
+         * Tenant B's OWN category. `products_tenant_category_fk` is composite, so a
+         * tenant B product filed under tenant A's category is refused by the
+         * database — which would turn this cross-tenant isolation case into a
+         * foreign-key error instead of the assertion it was written to make.
+         */
+        categoryId: SEED_IDS.categoryB as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 0n, deviceLimit: 1 },
         price: money(120_000n, 'IRT'),
       },

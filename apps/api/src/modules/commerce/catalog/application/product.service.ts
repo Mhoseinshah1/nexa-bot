@@ -12,6 +12,7 @@ import {
   type IdGenerator,
   type IdempotencyStore,
   type PanelId,
+  type ProductCategoryId,
   type PermissionKey,
   type ProductId,
   type ProductStatus,
@@ -32,6 +33,7 @@ import type { SettingsResolver } from '../../../control/settings/application/set
 import type { OperationalEventRecorder } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type {
+  CustomerPage,
   PanelDirectory,
   ProductDraft,
   ProductEdit,
@@ -40,6 +42,8 @@ import type {
   ProductRepository,
   ProductSearch,
   ProductCursor,
+  ProductCategoryRecord,
+  ProductCategoryRepository,
 } from './ports.js';
 
 /**
@@ -82,6 +86,12 @@ export interface ProductServiceDeps {
    * `PanelSalesGate`.
    */
   readonly panelSales: PanelSalesGate;
+  /**
+   * The category a product is filed under, read under a SHARE lock by the two writes
+   * that name one. Only `findForShare`: this service decides whether a category EXISTS
+   * in the tenant, and every other category rule belongs to `ProductCategoryService`.
+   */
+  readonly categories: Pick<ProductCategoryRepository, 'findForShare'>;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly audit: AuditWriter;
@@ -190,6 +200,75 @@ export class ProductService {
     return this.deps.repository.listCatalog(scope, bounded, eligiblePanelIds);
   }
 
+  /**
+   * One PAGE of the categories a customer may browse.
+   *
+   * Offset-paged, which the owner settled in `docs/wp5-categories-audit.md` §6.4 — and
+   * deliberately NOT a keyset cursor on `sort_order`, because `sort_order` is
+   * operator-mutable and so is not a stable cursor key. The consequence is stated
+   * rather than hidden: an operator reordering while a customer pages can move a row
+   * across a boundary, and this offset is therefore not snapshot-stable.
+   *
+   * `hasMore` is READ and not computed — the query asks for `limit + 1` rows and
+   * discards the extra — so "there is a next page" is a fact about the data rather
+   * than an inference from a count that would be stale anyway.
+   *
+   * Emptiness is structural. A category with no sellable product is excluded by the
+   * SQL's own EXISTS, not by a count taken here; counting to decide what a customer
+   * sees is precisely what §6.4 forbids, and a category that passed a count and then
+   * showed an empty list is the failure it exists to prevent.
+   */
+  async browseCategories(
+    scope: TenantContext,
+    actor: ActorContext,
+    limit: number,
+    offset: number,
+  ): Promise<CustomerPage<ProductCategoryRecord>> {
+    await this.deps.guard.check(scope, actor, CATALOG_BROWSE_PERMISSION);
+    const bounded = Math.min(Math.max(limit, 1), PRODUCT_PAGE_MAX);
+    // The same eligible-panel set the flat browse uses, and for the same reason:
+    // every predicate goes into the query, ahead of LIMIT/OFFSET.
+    const eligiblePanelIds = await this.deps.panelSales.eligiblePanelIds(scope);
+    return this.deps.repository.listCustomerCategories(
+      scope,
+      bounded,
+      Math.max(offset, 0),
+      eligiblePanelIds,
+    );
+  }
+
+  /**
+   * One PAGE of the products inside one category.
+   *
+   * The category id is passed straight to the query rather than validated against a
+   * separate read first. That is not a missing check: the SQL carries the category's
+   * own status and visibility predicates, so an id naming an INACTIVE category — or
+   * another tenant's — matches no rows and the page is empty. Reading the category
+   * first would be a second decision about what a customer may see, which §6.3 forbids.
+   *
+   * An empty page for a category the customer was just offered is possible and is
+   * ORDINARY: the last product in it can be withdrawn between the two taps. The
+   * surface says so rather than pretending the category is gone.
+   */
+  async browseCategory(
+    scope: TenantContext,
+    actor: ActorContext,
+    categoryId: string,
+    limit: number,
+    offset: number,
+  ): Promise<CustomerPage<ProductRecord>> {
+    await this.deps.guard.check(scope, actor, CATALOG_BROWSE_PERMISSION);
+    const bounded = Math.min(Math.max(limit, 1), PRODUCT_PAGE_MAX);
+    const eligiblePanelIds = await this.deps.panelSales.eligiblePanelIds(scope);
+    return this.deps.repository.listCustomerProductsInCategory(
+      scope,
+      categoryId,
+      bounded,
+      Math.max(offset, 0),
+      eligiblePanelIds,
+    );
+  }
+
   /** Creates an INACTIVE product. Idempotent, audited. */
   async create(
     scope: TenantContext,
@@ -245,6 +324,7 @@ export class ProductService {
       async (tx) => {
         await this.assertScopeActive(scope, tx);
         await this.assertPanelIsOurs(scope, input.draft.panelId, tx);
+        await this.assertCategoryIsOurs(scope, input.draft.categoryId, tx);
         await this.assertPriceCurrency(scope, input.draft.price, tx);
 
         const created = await this.deps.repository.create(
@@ -330,6 +410,7 @@ export class ProductService {
       async (tx) => {
         await this.assertScopeActive(scope, tx);
         await this.assertPanelIsOurs(scope, input.edit.panelId, tx);
+        await this.assertCategoryIsOurs(scope, input.edit.categoryId, tx);
         await this.assertPriceCurrency(scope, input.edit.price, tx);
 
         const before = await this.deps.repository.findById(scope, productId, tx);
@@ -575,6 +656,30 @@ export class ProductService {
   }
 
   /**
+   * The category a product is filed under exists, in THIS tenant.
+   *
+   * `products_tenant_category_fk` refuses anything else — but as a constraint violation,
+   * which `DomainErrorFilter` answers with a 500, where the dedicated reassignment
+   * endpoint answers the same foreign or unknown id with `CATEGORY_NOT_FOUND`. Two
+   * answers to one question depending on which route asked it. Found by the Codex review
+   * of this branch.
+   *
+   * Under a SHARE lock, so a delete of the category cannot commit between this check and
+   * the write: the delete takes the row FOR UPDATE and waits. Null is allowed and means
+   * uncategorised — a real state, refused at confirmation with `PRODUCT_NOT_CATEGORISED`.
+   */
+  private async assertCategoryIsOurs(
+    scope: TenantContext,
+    categoryId: ProductCategoryId | null,
+    tx: TransactionScope,
+  ): Promise<void> {
+    if (categoryId === null) return;
+    if ((await this.deps.categories.findForShare(scope, categoryId, tx)) === null) {
+      throw errors.notFound(COMMERCE_ERROR_CODES.CATEGORY_NOT_FOUND, 'Unknown category.');
+    }
+  }
+
+  /**
    * A product is priced in the currency the tenant SELLS in, and in no other.
    *
    * `sales.currency` was declared, rendered by the admin, and enforced by nothing — the
@@ -660,6 +765,12 @@ function serialisableDraft(draft: ProductDraft): Record<string, unknown> {
     audience: draft.audience,
     sortOrder: draft.sortOrder,
     panelId: draft.panelId,
+    /*
+     * In the fingerprint because it is writable: without it, reusing a key with only the
+     * category changed replayed the earlier product instead of refusing a different
+     * request under the same key. Found by the Codex review of this branch.
+     */
+    categoryId: draft.categoryId,
     durationDays: draft.specification.durationDays,
     trafficBytes: draft.specification.trafficBytes.toString(),
     deviceLimit: draft.specification.deviceLimit,
@@ -685,6 +796,9 @@ function auditView(product: ProductRecord): Record<string, unknown> {
     audience: product.audience,
     sortOrder: product.sortOrder,
     panelId: product.panelId,
+    // A move between categories is an edit like any other, and an audit pair that
+    // omitted the field recorded it as a change of nothing.
+    categoryId: product.categoryId,
     durationDays: product.specification.durationDays,
     trafficBytes: product.specification.trafficBytes.toString(),
     deviceLimit: product.specification.deviceLimit,

@@ -29,6 +29,9 @@ import {
   MAX_DURATION_DAYS,
   MAX_TRAFFIC_BYTES,
   PRODUCT_AUDIENCES,
+  PRODUCT_CATEGORY_NAME_MAX_LENGTH,
+  PRODUCT_CATEGORY_STATUSES,
+  PRODUCT_CATEGORY_VISIBILITIES,
   PRODUCT_DESCRIPTION_MAX_LENGTH,
   PRODUCT_SORT_MAX,
   PRODUCT_SORT_MIN,
@@ -37,6 +40,7 @@ import {
   SERVICE_ADDON_KINDS,
   SERVICE_ADDON_STATUSES,
   SERVICE_ADDON_TITLE_MAX_LENGTH,
+  productCategoryEmojiSchema,
 } from './catalog.js';
 import { ORDER_STATES } from './commerce.js';
 import {
@@ -1819,6 +1823,19 @@ export const productSummarySchema = z
     audience: z.enum(PRODUCT_AUDIENCES),
     sortOrder: z.number().int(),
     panelId: z.string().nullable(),
+    /*
+     * The category this product is filed under, or null.
+     *
+     * Null is UNCATEGORISED here — unlike the order snapshot's null, which is unknown —
+     * and it is a real state an operator needs to see: such a product is refused at
+     * checkout by `PRODUCT_NOT_CATEGORISED`, so a list that hid the absence would hide
+     * the reason a plan cannot be sold.
+     *
+     * The NAME is not carried. A client that needs it joins against the category list
+     * it already loads, and a second copy of the name here would go stale the moment a
+     * category is renamed.
+     */
+    categoryId: z.string().nullable(),
     durationDays: z.number().int(),
     trafficBytes: z.string(),
     deviceLimit: z.number().int().nullable(),
@@ -1874,6 +1891,21 @@ export const productWriteSchema = z
       .regex(/^\d{1,19}$/u)
       .nullable(),
     priceCurrency: z.enum(CURRENCY_CODES).nullable(),
+    /**
+     * The category to file this product under.
+     *
+     * NULLABLE on the wire and required as a FIELD, which is the distinction that
+     * matters: an operator must say something, and "none" is a thing they can say. It
+     * produces a product no customer can reach, refused at confirmation with
+     * `PRODUCT_NOT_CATEGORISED` rather than silently absent from every list — because a
+     * product that vanishes teaches nobody anything, which is the rule
+     * `catalog.ts` already applies to an unbound panel.
+     *
+     * Reassignment is this same field on an edit. It does not disturb history: an
+     * order's category is snapshotted at confirmation, so moving a product changes what
+     * NEW customers browse and nothing about what past ones bought.
+     */
+    categoryId: z.string().uuid().nullable(),
   })
   .refine((p) => (p.priceAmount === null) === (p.priceCurrency === null), {
     message: 'A price is an amount and a currency, or it is absent.',
@@ -1916,6 +1948,15 @@ export const productListQuerySchema = z.object({
    * 500. `serviceListQuerySchema` already carries this filter and this rule.
    */
   panelId: uuidV7Schema.optional(),
+  /*
+   * The category filter, and `'none'` is one of its values.
+   *
+   * A plain uuid could not express "the products with NO category", which is the
+   * filter an operator most needs — it is the list of plans that cannot be sold until
+   * they are filed somewhere. Modelled as a sentinel rather than a second boolean
+   * parameter, so the two cannot be sent together and contradict each other.
+   */
+  categoryId: z.union([uuidV7Schema, z.literal('none')]).optional(),
 });
 export type ProductListQuery = z.infer<typeof productListQuerySchema>;
 
@@ -1941,6 +1982,131 @@ export const PRODUCT_ROUTES = {
   update: (id: string) => `/products/${encodeURIComponent(id)}`,
   activate: (id: string) => `/products/${encodeURIComponent(id)}/activate`,
   deactivate: (id: string) => `/products/${encodeURIComponent(id)}/deactivate`,
+} as const;
+
+// --- Product categories ------------------------------------------------------
+
+/**
+ * One category, as an operator's list renders it.
+ *
+ * `productCount` counts EVERY product filed under it, active or withdrawn, because the
+ * question it answers is "may I delete this" and an inactive product blocks a delete
+ * exactly as an active one does. It is deliberately NOT the number a customer would
+ * see: customer-facing emptiness is a different predicate, decided in SQL, and a client
+ * that used this count to hide a category would be the second interpretation the audit
+ * forbids.
+ */
+export const productCategorySummarySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string().nullable(),
+  /** Absence is ordinary. A category with no emoji renders as an ordinary category. */
+  emoji: z.string().nullable(),
+  status: z.enum(PRODUCT_CATEGORY_STATUSES),
+  visibility: z.enum(PRODUCT_CATEGORY_VISIBILITIES),
+  sortOrder: z.number().int(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+export type ProductCategorySummaryResponse = z.infer<typeof productCategorySummarySchema>;
+
+/**
+ * A category in the LIST, which is the only response that counts its products.
+ *
+ * A separate type rather than an optional field on the summary, because the alternative
+ * is a single-category response carrying a `productCount` that nothing computed. Zero
+ * there would be a number an operator can act on — "this is empty, I may delete it" —
+ * that is not a fact about anything, and `null` would push the same decision onto every
+ * client. The count is asked for where it is answered.
+ */
+export const productCategoryListingSchema = productCategorySummarySchema.extend({
+  productCount: z.number().int(),
+});
+export type ProductCategoryListingResponse = z.infer<typeof productCategoryListingSchema>;
+
+export const productCategoryListResponseSchema = z.object({
+  categories: z.array(productCategoryListingSchema),
+});
+export type ProductCategoryListResponse = z.infer<typeof productCategoryListResponseSchema>;
+
+export const productCategoryResponseSchema = z.object({
+  category: productCategorySummarySchema,
+});
+export type ProductCategoryResponse = z.infer<typeof productCategoryResponseSchema>;
+
+/**
+ * The body a create or an edit sends.
+ *
+ * `status` and `visibility` are ABSENT, and that is the point: both move through their
+ * own endpoints, so a rename cannot silently withdraw a category from sale because a
+ * client sent a stale copy of a field it was not editing. It is the shape products
+ * already use, where `status` is likewise not part of the write body.
+ */
+export const productCategoryWriteSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  name: z.string().min(1).max(PRODUCT_CATEGORY_NAME_MAX_LENGTH),
+  description: z.string().max(500).nullable(),
+  emoji: productCategoryEmojiSchema.nullable(),
+});
+export type ProductCategoryWriteRequest = z.infer<typeof productCategoryWriteSchema>;
+
+export const productCategoryCreateSchema = productCategoryWriteSchema.extend({
+  sortOrder: z.number().int().min(0).max(100_000),
+});
+export type ProductCategoryCreateRequest = z.infer<typeof productCategoryCreateSchema>;
+
+/**
+ * A whole new order for the categories named.
+ *
+ * The WHOLE order, not a move of one — the server refuses a short match rather than
+ * reordering what it recognises, so a client that sends a subset it believes complete
+ * finds out instead of silently getting half of what it asked for.
+ */
+export const productCategoryReorderSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  positions: z
+    .array(z.object({ id: z.string().uuid(), sortOrder: z.number().int().min(0).max(100_000) }))
+    .min(1)
+    .max(200),
+});
+export type ProductCategoryReorderRequest = z.infer<typeof productCategoryReorderSchema>;
+
+export const productCategoryAssignSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  productId: z.string().uuid(),
+});
+export type ProductCategoryAssignRequest = z.infer<typeof productCategoryAssignSchema>;
+
+/**
+ * The two acknowledgements the category routes answer with.
+ *
+ * Declared here with every other HTTP shape rather than inline in a client, because a
+ * response body that one surface parses with its own private schema is a contract only
+ * that surface knows about — and `apps/web` may import `@nexa/contracts` and nothing
+ * else, so there is nowhere else for them to live.
+ */
+export const categoryDeletedResponseSchema = z.object({ deleted: z.literal(true) });
+export type CategoryDeletedResponse = z.infer<typeof categoryDeletedResponseSchema>;
+
+export const productCategoryAssignedResponseSchema = z.object({
+  productId: z.string(),
+  categoryId: z.string(),
+});
+export type ProductCategoryAssignedResponse = z.infer<typeof productCategoryAssignedResponseSchema>;
+
+export const PRODUCT_CATEGORY_ROUTES = {
+  list: '/product-categories',
+  create: '/product-categories',
+  reorder: '/product-categories/reorder',
+  detail: (id: string) => `/product-categories/${encodeURIComponent(id)}`,
+  update: (id: string) => `/product-categories/${encodeURIComponent(id)}`,
+  remove: (id: string) => `/product-categories/${encodeURIComponent(id)}`,
+  activate: (id: string) => `/product-categories/${encodeURIComponent(id)}/activate`,
+  deactivate: (id: string) => `/product-categories/${encodeURIComponent(id)}/deactivate`,
+  show: (id: string) => `/product-categories/${encodeURIComponent(id)}/show`,
+  hide: (id: string) => `/product-categories/${encodeURIComponent(id)}/hide`,
+  /** Files a product under this category. The CATEGORY owns the move — see the service. */
+  assign: (id: string) => `/product-categories/${encodeURIComponent(id)}/products`,
 } as const;
 
 // --- Service add-ons ---------------------------------------------------------
@@ -2102,6 +2268,17 @@ export const orderSummarySchema = z.object({
   productId: z.string(),
   panelId: z.string(),
   lineTitle: z.string(),
+  /*
+   * The category snapshot, and all three are NULLABLE together.
+   *
+   * Null means UNKNOWN — either an order that predates the columns, or a renewal, which
+   * is not bought from a category at all. A client renders the absence as absence; it
+   * must never fill it from `productId`'s current category, which would be the
+   * fabrication the write path refuses, performed at read time instead.
+   */
+  lineCategoryId: z.string().nullable(),
+  lineCategoryName: z.string().nullable(),
+  lineCategoryEmoji: z.string().nullable(),
   lineDurationDays: z.number().int(),
   lineTrafficBytes: z.string(),
   lineDeviceLimit: z.number().int().nullable(),

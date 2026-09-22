@@ -2,6 +2,7 @@ import type {
   CurrencyCode,
   Money,
   OrderId,
+  OrderCategorySnapshot,
   OrderPurpose,
   OrderState,
   PanelId,
@@ -25,6 +26,21 @@ export interface OrderLine {
   readonly productId: ProductId;
   readonly panelId: PanelId;
   readonly title: string;
+  /**
+   * The category this was bought from, COPIED, or null when there is no record.
+   *
+   * A copy for the same reason `title` is one: the category may since have been
+   * renamed, hidden, withdrawn, or deleted, and the product may since have been filed
+   * somewhere else. Joining to `products.category_id` at read time would report what is
+   * true now as though it were true then — the legacy «محصول حذف‌شده», performed on a
+   * different column.
+   *
+   * NULL means UNKNOWN and never "uncategorised". Orders that predate WP5 have no
+   * record of what they were browsed from, and the owner's instruction is explicit that
+   * such an order must not be shown the product's CURRENT category as history. Every
+   * surface renders the null as unknown; none of them falls back.
+   */
+  readonly category: OrderCategorySnapshot | null;
   readonly specification: ProductSpecification;
   readonly unitPrice: Money;
   readonly quantity: number;

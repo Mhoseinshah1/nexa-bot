@@ -1,5 +1,5 @@
-import { isListed, isPurchasable } from '@nexa/contracts';
-import type { ProductRecord } from './ports.js';
+import { isCategoryListed, isCategoryPurchasable, isListed, isPurchasable } from '@nexa/contracts';
+import type { ProductCategoryRecord, ProductRecord } from './ports.js';
 
 /**
  * Whether a product may be shown to an ORDINARY customer. ONE statement of the rule.
@@ -38,12 +38,24 @@ import type { ProductRecord } from './ports.js';
  * rule slightly differently. `catalog.test.ts` runs both over the same matrix of
  * products and asserts they agree, so the pair cannot drift silently.
  */
-export function isCustomerVisible(product: ProductRecord): boolean {
+export function isCustomerVisible(
+  product: ProductRecord,
+  category: ProductCategoryRecord | null,
+): boolean {
   return (
     isListed(product.status, product.audience) &&
     product.audience !== 'RESELLERS_ONLY' &&
     product.price !== null &&
-    product.panelId !== null
+    product.panelId !== null &&
+    /*
+     * The category's BOTH terms, because browsing asks both questions.
+     *
+     * A null category is not visible either. Migration 0097 gave every product one, so
+     * a null means the product has fallen out of the catalogue's structure, and showing
+     * it would put an unfilable product in front of a customer.
+     */
+    category !== null &&
+    isCategoryListed(category.status, category.visibility)
   );
 }
 
@@ -73,12 +85,36 @@ export function isCustomerVisible(product: ProductRecord): boolean {
  * whole point of failing closed is that both halves close.
  */
 export type ProductUnorderableReason =
-  'NOT_PURCHASABLE' | 'NOT_FOR_AUDIENCE' | 'NOT_PRICED' | 'NOT_FULFILLABLE';
+  | 'NOT_PURCHASABLE'
+  | 'NOT_FOR_AUDIENCE'
+  | 'NOT_PRICED'
+  | 'NOT_FULFILLABLE'
+  | 'NOT_CATEGORISED'
+  | 'CATEGORY_NOT_PURCHASABLE';
 
-export function unorderableReason(product: ProductRecord): ProductUnorderableReason | null {
+export function unorderableReason(
+  product: ProductRecord,
+  category: ProductCategoryRecord | null,
+): ProductUnorderableReason | null {
   if (!isPurchasable(product.status)) return 'NOT_PURCHASABLE';
   if (product.audience === 'RESELLERS_ONLY') return 'NOT_FOR_AUDIENCE';
   if (product.price === null) return 'NOT_PRICED';
   if (product.panelId === null) return 'NOT_FULFILLABLE';
+  /*
+   * The category, and ONLY its status.
+   *
+   * `isCategoryPurchasable`, never `isCategoryListed`. A HIDDEN category is unlisted and
+   * still sells — that is the whole reason the state exists, exactly as it is for a
+   * HIDDEN product — so consulting visibility here would collapse "unlist this group"
+   * into "withdraw this group" and delete the distinction `catalog.ts` draws. The owner
+   * stated it directly: hidden alone does NOT make an otherwise valid product
+   * unorderable through a valid direct reference.
+   *
+   * An INACTIVE category is the opposite and IS refused, including for a direct
+   * reference, because an operator saying "stop selling this group" that a screenshot
+   * could bypass would not be a rule at all.
+   */
+  if (category === null) return 'NOT_CATEGORISED';
+  if (!isCategoryPurchasable(category.status)) return 'CATEGORY_NOT_PURCHASABLE';
   return null;
 }

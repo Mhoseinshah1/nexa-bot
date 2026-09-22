@@ -663,6 +663,43 @@ export const COMMERCE_ERROR_CODES = {
   PRODUCT_NOT_PRICED: 'commerce.product_not_priced',
   /** No panel bound, so nothing could deliver it. Named rather than hidden. */
   PRODUCT_NOT_FULFILLABLE: 'commerce.product_not_fulfillable',
+  /**
+   * The product is filed under no category, so nothing can list or sell it.
+   *
+   * Distinct from `PRODUCT_NOT_FULFILLABLE`, which means no PANEL. A product can be
+   * perfectly deliverable and still unreachable: migration 0097 gave every product a
+   * category, so this state means one was deleted out from under it or a path created a
+   * product without one. An operator needs to know which of the two gaps to fix.
+   */
+  PRODUCT_NOT_CATEGORISED: 'commerce.product_not_categorised',
+  /**
+   * The category is INACTIVE — the operator has withdrawn the whole group.
+   *
+   * Deliberately NOT raised for a HIDDEN category. Hidden means unlisted and still
+   * sellable through a direct reference, exactly as it does on a product; collapsing the
+   * two would delete the distinction `catalog.ts` exists to draw. A separate code from
+   * `PRODUCT_NOT_PURCHASABLE` because the customer's answer differs: nothing is wrong
+   * with the product, and every other product in a different category is still for sale.
+   */
+  CATEGORY_NOT_PURCHASABLE: 'commerce.category_not_purchasable',
+
+  /** No such category in this tenant. Another tenant's is answered the same way. */
+  CATEGORY_NOT_FOUND: 'commerce.category_not_found',
+  /**
+   * The category still holds products, so it cannot be deleted.
+   *
+   * A refusal rather than a cascade, and rather than an "uncategorise these first"
+   * silently performed on the operator's behalf. Deleting a category that holds
+   * products would either strand them uncategorised — unsellable, by
+   * `PRODUCT_NOT_CATEGORISED` — or delete them, and neither is what somebody tidying
+   * a list meant. The detail carries the count, because "you cannot" without "there
+   * are eleven" leaves the operator hunting.
+   *
+   * The database agrees independently: `products_tenant_category_fk` is
+   * `ON DELETE NO ACTION`. This code exists so the operator meets a sentence rather
+   * than a constraint name.
+   */
+  CATEGORY_NOT_EMPTY: 'commerce.category_not_empty',
 
   ORDER_NOT_FOUND: 'commerce.order_not_found',
   /** The order is not in the state this command needs. The machine refused it. */

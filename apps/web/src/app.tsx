@@ -21,6 +21,7 @@ import { PaymentsPage, PaymentDetailPage } from './pages/payments';
 import { PaymentAccountsPage } from './pages/payment-accounts';
 import { PaymentGatewaysPage } from './pages/payment-gateways';
 import { ProductDetailPage, ProductsPage } from './pages/products';
+import { ProductCategoriesPage } from './pages/product-categories';
 import { OrderDetailPage, OrdersPage } from './pages/orders';
 import { ServiceDetailPage, ServicesPage } from './pages/services';
 import { UsersPage, UserDetailPage } from './pages/users';
@@ -197,6 +198,17 @@ export const NAV: readonly NavEntry[] = [
     // `catalog.edit` alone — so gating the link on `catalog.view` hid a page that
     // would have served a custom-role editor correctly. Found by the Codex review of
     // this branch, which is the third time this shape has been the answer.
+    permission: ['catalog.view', 'catalog.edit'],
+    group: 'web.navgroup_sales',
+  },
+  {
+    id: 'product-categories',
+    path: '/product-categories',
+    label: 'web.nav_product_categories',
+    icon: 'products',
+    // EITHER, for the reason `/products` above gives in full: the route renders the
+    // create form on `catalog.edit` whether or not `catalog.view` is held, and the
+    // server authorizes every write on `catalog.edit` alone.
     permission: ['catalog.view', 'catalog.edit'],
     group: 'web.navgroup_sales',
   },
@@ -475,6 +487,16 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
       ),
       crumbs: [{ label: t('web.products_title') }],
       title: t('web.products_title'),
+    };
+  }
+
+  if (route.path === '/product-categories') {
+    return {
+      element: (
+        <ProductCategoriesPage mayEdit={may('catalog.edit')} denied={!may('catalog.view')} />
+      ),
+      crumbs: [{ label: t('web.categories_title') }],
+      title: t('web.categories_title'),
     };
   }
 

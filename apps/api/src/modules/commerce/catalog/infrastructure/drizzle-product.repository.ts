@@ -1,9 +1,12 @@
-import { and, asc, eq, getTableColumns, isNotNull, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, getTableColumns, isNotNull, isNull, sql, type SQL } from 'drizzle-orm';
 import { money } from '@nexa/contracts';
 import type {
   CurrencyCode,
   PanelId,
   ProductAudience,
+  ProductCategoryId,
+  ProductCategoryStatus,
+  ProductCategoryVisibility,
   ProductId,
   ProductStatus,
   TenantContext,
@@ -13,9 +16,19 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
-import { panels, products } from '../../../../infrastructure/persistence/schema.js';
+import {
+  panels,
+  productCategories,
+  products,
+} from '../../../../infrastructure/persistence/schema.js';
 import type {
+  CustomerPage,
   PanelDirectory,
+  ProductCategoryDraft,
+  ProductCategoryEdit,
+  ProductCategoryListing,
+  ProductCategoryRecord,
+  ProductCategoryRepository,
   ProductCursor,
   ProductDraft,
   ProductEdit,
@@ -128,6 +141,11 @@ export class DrizzleProductRepository implements ProductRepository {
     if (search.status !== undefined) conditions.push(eq(products.status, search.status));
     if (search.audience !== undefined) conditions.push(eq(products.audience, search.audience));
     if (search.panelId !== undefined) conditions.push(eq(products.panelId, search.panelId));
+    if (search.categoryId === 'UNCATEGORISED') {
+      conditions.push(isNull(products.categoryId));
+    } else if (search.categoryId !== undefined) {
+      conditions.push(eq(products.categoryId, search.categoryId));
+    }
     if (search.titlePrefix !== undefined && search.titlePrefix !== '') {
       // Escaped, so a title containing `%` or `_` matches no more than it spells.
       const needle = search.titlePrefix.toLowerCase().replace(/[\\%_]/g, '\\$&');
@@ -192,6 +210,30 @@ export class DrizzleProductRepository implements ProductRepository {
   }
 
   /**
+   * Moves a product into a category. Tenant-predicated, like every write here.
+   *
+   * `products_tenant_category_fk` is composite, so a category belonging to another
+   * tenant is refused by the database even if this predicate were ever dropped. The
+   * service takes the destination's row lock first, so the category named here is one
+   * that still exists at commit rather than one that did when the request arrived.
+   */
+  async setCategory(
+    scope: TenantContext,
+    id: ProductId,
+    categoryId: ProductCategoryId,
+    now: Date,
+    tx?: unknown,
+  ): Promise<ProductRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .update(products)
+      .set({ categoryId, updatedAt: now })
+      .where(and(eq(products.tenantId, tenantId), eq(products.id, id)))
+      .returning();
+    return row === undefined ? null : toRecord(row);
+  }
+
+  /**
    * The customer catalogue: listed, priced, fulfillable — in SQL.
    *
    * The four predicates are the frozen description of `bot.catalog.empty`, applied in
@@ -205,6 +247,143 @@ export class DrizzleProductRepository implements ProductRepository {
    * skip a product an operator re-ordered mid-browse. A catalogue is small and finite;
    * being told there are more is honest, and a cursor that silently drops one is not.
    */
+  /**
+   * The predicates a product must satisfy to be SHOWN to a customer, as SQL.
+   *
+   * Extracted so the two paged queries and `listCatalog` state the rule once. The
+   * TypeScript twin is `isCustomerVisible`, and `catalog.test.ts` runs both over the
+   * same matrix and asserts they agree — the duplication is deliberate and the test is
+   * what stops it drifting.
+   *
+   * The category join is INNER, which is what makes an uncategorised product invisible
+   * without a separate `IS NOT NULL`: a product whose category was deleted out from
+   * under it simply has no row to match.
+   */
+  private customerVisibleProduct(tenantId: string, eligiblePanelIds: readonly string[]): SQL {
+    return and(
+      eq(products.tenantId, tenantId),
+      eq(products.status, 'ACTIVE'),
+      sql`${products.panelId} = ANY(${sql.param([...eligiblePanelIds])}::uuid[])`,
+      sql`${products.audience} NOT IN ('HIDDEN', 'RESELLERS_ONLY')`,
+      isNotNull(products.priceAmount),
+      isNotNull(products.panelId),
+      /* The category's BOTH terms — browsing asks whether it is listed, not only sold. */
+      eq(productCategories.status, 'ACTIVE'),
+      eq(productCategories.visibility, 'VISIBLE'),
+    ) as SQL;
+  }
+
+  /**
+   * One PAGE of the categories a customer may browse, ordered `sort_order ASC, id ASC`.
+   *
+   * ## Emptiness is structural, not a second question
+   *
+   * A category appears only where an `EXISTS` finds at least one product that passes
+   * `customerVisibleProduct` inside it. So "an empty category is never shown" is not a
+   * rule this method applies — it is a property of the query's shape, and there is no
+   * code path that could show an empty one by forgetting to check. A `LEFT JOIN` with a
+   * count, or a filter over the returned page, would both have reintroduced the
+   * possibility.
+   *
+   * ## Offset, and what it does not promise
+   *
+   * `sort_order` is what an operator drags, so it cannot be a cursor key — that is
+   * migration 0026's defect and `ports.ts` records it for the admin list. The owner
+   * therefore chose an OFFSET, accepting that a reorder during paging can move a row
+   * across a boundary. Nothing here claims otherwise; see
+   * `docs/wp5-categories-audit.md` §6.4.
+   *
+   * `limit + 1` rows are read and the extra discarded, so `hasMore` is a fact about the
+   * data rather than an inference from a COUNT that was true a moment ago. Previous is
+   * the caller's `page > 1` and needs no query at all.
+   */
+  async listCustomerCategories(
+    scope: TenantContext,
+    limit: number,
+    offset: number,
+    eligiblePanelIds: readonly string[],
+    tx?: unknown,
+  ): Promise<CustomerPage<ProductCategoryRecord>> {
+    const tenantId = requireTenantId(scope);
+    /* No eligible panel is no catalogue, answered without a round trip. */
+    if (eligiblePanelIds.length === 0) return { items: [], hasMore: false };
+
+    const rows = await this.exec(tx)
+      .select(getTableColumns(productCategories))
+      .from(productCategories)
+      .where(
+        and(
+          eq(productCategories.tenantId, tenantId),
+          eq(productCategories.status, 'ACTIVE'),
+          eq(productCategories.visibility, 'VISIBLE'),
+          sql`EXISTS (
+            SELECT 1 FROM ${products}
+            WHERE ${products.categoryId} = ${productCategories.id}
+              AND ${products.tenantId} = ${productCategories.tenantId}
+              AND ${products.status} = 'ACTIVE'
+              AND ${products.audience} NOT IN ('HIDDEN', 'RESELLERS_ONLY')
+              AND ${products.priceAmount} IS NOT NULL
+              AND ${products.panelId} IS NOT NULL
+              AND ${products.panelId} = ANY(${sql.param([...eligiblePanelIds])}::uuid[])
+          )`,
+        ),
+      )
+      .orderBy(asc(productCategories.sortOrder), asc(productCategories.id))
+      .limit(limit + 1)
+      .offset(offset);
+
+    return {
+      items: rows.slice(0, limit).map(toCategoryRecord),
+      hasMore: rows.length > limit,
+    };
+  }
+
+  /**
+   * One PAGE of the products inside one category, ordered `sort_order ASC, id ASC`.
+   *
+   * Every predicate is in this statement, before `LIMIT`/`OFFSET`: tenant, category,
+   * the category's own status and visibility, the product's status and audience, panel
+   * eligibility, price and panel presence. That ordering is the whole point and it has
+   * a history — filtering a bounded result in memory emptied this shop three times, at
+   * twenty, then a hundred, then five hundred, each "fix" only moving the threshold.
+   *
+   * The owner's instruction restates it for this query: never fetch a bounded page and
+   * then filter in memory.
+   */
+  async listCustomerProductsInCategory(
+    scope: TenantContext,
+    categoryId: string,
+    limit: number,
+    offset: number,
+    eligiblePanelIds: readonly string[],
+    tx?: unknown,
+  ): Promise<CustomerPage<ProductRecord>> {
+    const tenantId = requireTenantId(scope);
+    if (eligiblePanelIds.length === 0) return { items: [], hasMore: false };
+
+    const rows = await this.exec(tx)
+      .select(getTableColumns(products))
+      .from(products)
+      .innerJoin(
+        productCategories,
+        and(
+          eq(productCategories.id, products.categoryId),
+          eq(productCategories.tenantId, products.tenantId),
+        ),
+      )
+      .where(
+        and(
+          this.customerVisibleProduct(tenantId, eligiblePanelIds),
+          eq(products.categoryId, categoryId),
+        ),
+      )
+      .orderBy(asc(products.sortOrder), asc(products.id))
+      .limit(limit + 1)
+      .offset(offset);
+
+    return { items: rows.slice(0, limit).map(toRecord), hasMore: rows.length > limit };
+  }
+
   async listCatalog(
     scope: TenantContext,
     limit: number,
@@ -276,6 +455,18 @@ function columnsFor(draft: ProductDraft) {
     audience: draft.audience,
     sortOrder: draft.sortOrder,
     panelId: draft.panelId,
+    /*
+     * The category, and it is mapped HERE rather than at the two call sites.
+     *
+     * `create` and `update` both spread this function, so a field missing from it is a
+     * field silently dropped on the way to the database — which is exactly what happened
+     * when `categoryId` was added to `ProductDraft` and not to this map: the type system
+     * was satisfied at every layer, the INSERT omitted the column, and every product
+     * came back uncategorised. Twenty-seven integration tests failed with
+     * `PRODUCT_NOT_CATEGORISED`, which was the new rule correctly refusing a row this
+     * function had quietly made unsellable.
+     */
+    categoryId: draft.categoryId,
     durationDays: draft.specification.durationDays,
     trafficBytes: draft.specification.trafficBytes,
     deviceLimit: draft.specification.deviceLimit,
@@ -291,6 +482,20 @@ function columnsFor(draft: ProductDraft) {
   };
 }
 
+function toCategoryRecord(row: typeof productCategories.$inferSelect): ProductCategoryRecord {
+  return {
+    id: row.id as ProductCategoryId,
+    name: row.name,
+    description: row.description,
+    emoji: row.emoji,
+    status: row.status as ProductCategoryStatus,
+    visibility: row.visibility as ProductCategoryVisibility,
+    sortOrder: row.sortOrder,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
 function toRecord(row: typeof products.$inferSelect): ProductRecord {
   return {
     id: row.id as ProductId,
@@ -300,6 +505,7 @@ function toRecord(row: typeof products.$inferSelect): ProductRecord {
     audience: row.audience as ProductAudience,
     sortOrder: row.sortOrder,
     panelId: row.panelId as PanelId | null,
+    categoryId: row.categoryId as ProductCategoryId | null,
     specification: {
       durationDays: row.durationDays,
       trafficBytes: row.trafficBytes,
@@ -347,5 +553,323 @@ export class DrizzlePanelDirectory implements PanelDirectory {
       .where(and(eq(panels.tenantId, tenantId), eq(panels.id, panelId)))
       .limit(1);
     return rows.length > 0;
+  }
+}
+
+/**
+ * Categories, in PostgreSQL.
+ *
+ * The reads the order path needs and the writes an operator's surfaces perform. Every
+ * one of them carries the tenant predicate, primary-key lookups included, for the reason
+ * `DrizzleProductRepository` states above: a row filtered in the query never leaves the
+ * database, and a row filtered afterwards has already been handed to code that must then
+ * remember to throw it away.
+ */
+export class DrizzleProductCategoryRepository implements ProductCategoryRepository {
+  constructor(private readonly db: Database) {}
+
+  private exec(tx?: unknown): Executor {
+    return (tx as TransactionScope | undefined)?.tx ?? this.db;
+  }
+
+  /**
+   * Null in, null out — and the tenant predicate is carried even for a primary key.
+   *
+   * A primary-key lookup without the tenant returns another tenant's row and leaves the
+   * caller holding something it should never have seen. Filtering in the query means it
+   * never leaves the database, which is the same rule every other read here follows.
+   */
+  async findById(
+    scope: TenantContext,
+    id: ProductCategoryId | null,
+    tx?: unknown,
+  ): Promise<ProductCategoryRecord | null> {
+    if (id === null) return null;
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .select(getTableColumns(productCategories))
+      .from(productCategories)
+      .where(and(eq(productCategories.tenantId, tenantId), eq(productCategories.id, id)))
+      .limit(1);
+    return row === undefined ? null : toCategoryRecord(row);
+  }
+
+  /**
+   * `INSERT … SELECT … WHERE NOT EXISTS`, in ONE statement.
+   *
+   * One statement rather than a read followed by a write, because the two-statement
+   * form is a race: two installers, or an installer and an operator creating their
+   * first category by hand, both see "none" and both insert. The conditional is
+   * evaluated by the same statement that writes, under the caller's transaction.
+   *
+   * The predicate is "this tenant has ANY category", which is what makes it survive a
+   * rename — see `ProductCategoryRepository.ensureDefault` for why that is the property
+   * worth having rather than a name or id match.
+   */
+  async ensureDefault(
+    scope: TenantContext,
+    input: { readonly id: ProductCategoryId; readonly name: string; readonly now: Date },
+    tx?: unknown,
+  ): Promise<{ readonly created: boolean }> {
+    const tenantId = requireTenantId(scope);
+    /*
+     * Raw SQL rather than the query builder, because `insert().select()` does not chain
+     * a WHERE — and splitting this into a read then a write would reintroduce the race
+     * it exists to avoid.
+     *
+     * `status`, `visibility` and `sort_order` are left to their column defaults
+     * (`ACTIVE`, `VISIBLE`, `0`), which is where those decisions already live.
+     */
+    const result = (await this.exec(tx).execute(
+      sql`
+      INSERT INTO ${productCategories} (id, tenant_id, name, created_at, updated_at)
+      SELECT ${input.id}::uuid, ${tenantId}::uuid, ${input.name}::text,
+             ${input.now}::timestamptz, ${input.now}::timestamptz
+      WHERE NOT EXISTS (
+        SELECT 1 FROM ${productCategories} WHERE tenant_id = ${tenantId}::uuid
+      )
+      RETURNING id` as never,
+    )) as unknown as { rows: readonly unknown[] };
+    return { created: result.rows.length > 0 };
+  }
+
+  /**
+   * Every category, in the operator's order, each with the number of products in it.
+   *
+   * A LEFT JOIN rather than a correlated subquery per row, and the join carries the
+   * tenant on BOTH sides. `products.tenant_id = product_categories.tenant_id` looks
+   * redundant next to the WHERE — it is not: without it the count would include another
+   * tenant's products that name an id equal to one of this tenant's, which the composite
+   * foreign key makes impossible today and which a future schema change could make
+   * possible again. The predicate costs nothing and cannot rot.
+   */
+  async listForOperator(
+    scope: TenantContext,
+    tx?: unknown,
+  ): Promise<readonly ProductCategoryListing[]> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({
+        ...getTableColumns(productCategories),
+        productCount: sql<number>`count(${products.id})::int`,
+      })
+      .from(productCategories)
+      .leftJoin(
+        products,
+        and(
+          eq(products.categoryId, productCategories.id),
+          eq(products.tenantId, productCategories.tenantId),
+        ),
+      )
+      .where(eq(productCategories.tenantId, tenantId))
+      .groupBy(productCategories.id)
+      .orderBy(asc(productCategories.sortOrder), asc(productCategories.id));
+    return rows.map((row) => ({
+      ...toCategoryRecord(row),
+      productCount: Number(row.productCount),
+    }));
+  }
+
+  async create(
+    scope: TenantContext,
+    input: {
+      readonly id: ProductCategoryId;
+      readonly draft: ProductCategoryDraft;
+      readonly now: Date;
+    },
+    tx?: unknown,
+  ): Promise<ProductCategoryRecord> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .insert(productCategories)
+      .values({
+        id: input.id,
+        tenantId,
+        name: input.draft.name,
+        description: input.draft.description,
+        emoji: input.draft.emoji,
+        sortOrder: input.draft.sortOrder,
+        createdAt: input.now,
+        updatedAt: input.now,
+      })
+      .returning();
+    if (row === undefined) throw new Error('insert returned no row');
+    return toCategoryRecord(row);
+  }
+
+  async update(
+    scope: TenantContext,
+    id: ProductCategoryId,
+    edit: ProductCategoryEdit,
+    now: Date,
+    tx?: unknown,
+  ): Promise<ProductCategoryRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .update(productCategories)
+      .set({
+        name: edit.name,
+        description: edit.description,
+        emoji: edit.emoji,
+        updatedAt: now,
+      })
+      .where(and(eq(productCategories.tenantId, tenantId), eq(productCategories.id, id)))
+      .returning();
+    return row === undefined ? null : toCategoryRecord(row);
+  }
+
+  /**
+   * Conditional on the CURRENT status, so a replay and a race both write once.
+   *
+   * `eq(status, from)` in the WHERE is what makes this a transition rather than an
+   * assignment. Two operators pressing Deactivate at the same moment produce one UPDATE
+   * and one audit row; the loser gets null and its caller reads the row to find out it
+   * was already there — a success that changed nothing, rather than a second transition
+   * to the same place.
+   */
+  async setStatus(
+    scope: TenantContext,
+    id: ProductCategoryId,
+    from: ProductCategoryStatus,
+    to: ProductCategoryStatus,
+    now: Date,
+    tx?: unknown,
+  ): Promise<ProductCategoryRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .update(productCategories)
+      .set({ status: to, updatedAt: now })
+      .where(
+        and(
+          eq(productCategories.tenantId, tenantId),
+          eq(productCategories.id, id),
+          eq(productCategories.status, from),
+        ),
+      )
+      .returning();
+    return row === undefined ? null : toCategoryRecord(row);
+  }
+
+  /** As `setStatus`, for visibility. The two are independent — audit §6.3. */
+  async setVisibility(
+    scope: TenantContext,
+    id: ProductCategoryId,
+    from: ProductCategoryVisibility,
+    to: ProductCategoryVisibility,
+    now: Date,
+    tx?: unknown,
+  ): Promise<ProductCategoryRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .update(productCategories)
+      .set({ visibility: to, updatedAt: now })
+      .where(
+        and(
+          eq(productCategories.tenantId, tenantId),
+          eq(productCategories.id, id),
+          eq(productCategories.visibility, from),
+        ),
+      )
+      .returning();
+    return row === undefined ? null : toCategoryRecord(row);
+  }
+
+  /**
+   * One UPDATE for the whole new order, driven by a pair of arrays unnested and joined
+   * on the id.
+   *
+   * One statement rather than N, because the order is a property of the SET and not of
+   * any row in it. Applied one at a time, a concurrent reader between two of them sees
+   * an arrangement no operator asked for — two categories at position 3, or a gap — and
+   * a failure halfway leaves the tenant in one permanently.
+   *
+   * Two bind parameters rather than 2N, which is the shape R4-N4 settled on for panel
+   * ids: a keyboard's worth of categories would otherwise be a statement whose parameter
+   * count grows with the tenant's catalogue.
+   *
+   * `sql.param(array)` and NOT the bare array. Drizzle's template expands a bare JS array
+   * into a parenthesised list — a ROW constructor — and PostgreSQL then refuses
+   * `record::uuid[]`. The first version of this method did exactly that and would have
+   * failed on every reorder; `product-categories.test.ts` is what found it.
+   *
+   * The tenant predicate is on the UPDATE, so an id belonging to somebody else matches
+   * nothing and the returned count is short. The caller compares that count against what
+   * it asked for rather than assuming success.
+   */
+  async reorder(
+    scope: TenantContext,
+    positions: readonly { readonly id: ProductCategoryId; readonly sortOrder: number }[],
+    now: Date,
+    tx?: unknown,
+  ): Promise<number> {
+    if (positions.length === 0) return 0;
+    const tenantId = requireTenantId(scope);
+    const result = (await this.exec(tx).execute(
+      sql`
+      UPDATE ${productCategories} AS c
+      SET sort_order = w.sort_order, updated_at = ${now}::timestamptz
+      FROM (
+        SELECT unnest(${sql.param(positions.map((p) => p.id))}::uuid[]) AS id,
+               unnest(${sql.param(positions.map((p) => p.sortOrder))}::integer[]) AS sort_order
+      ) AS w
+      WHERE c.id = w.id AND c.tenant_id = ${tenantId}::uuid
+      RETURNING c.id` as never,
+    )) as unknown as { rows: readonly unknown[] };
+    return result.rows.length;
+  }
+
+  async countProducts(scope: TenantContext, id: ProductCategoryId, tx?: unknown): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .select({ n: sql<number>`count(*)::int` })
+      .from(products)
+      .where(and(eq(products.tenantId, tenantId), eq(products.categoryId, id)));
+    return Number(row?.n ?? 0);
+  }
+
+  async delete(scope: TenantContext, id: ProductCategoryId, tx?: unknown): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .delete(productCategories)
+      .where(and(eq(productCategories.tenantId, tenantId), eq(productCategories.id, id)))
+      .returning({ id: productCategories.id });
+    return rows.length > 0;
+  }
+
+  /**
+   * `SELECT … FOR UPDATE` on the category, so what is counted afterwards is what we
+   * commit on.
+   *
+   * The delete path reads a product count and then deletes. Without the lock, a product
+   * created into this category between the two makes the count a statement about a state
+   * we are no longer in. The database's own foreign key catches that particular case —
+   * but it catches it as a constraint violation, which is a 500 where the operator was
+   * owed a sentence saying how many products are in the way.
+   */
+  async lock(scope: TenantContext, id: ProductCategoryId, tx: unknown): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .select({ id: productCategories.id })
+      .from(productCategories)
+      .where(and(eq(productCategories.tenantId, tenantId), eq(productCategories.id, id)))
+      .for('update')
+      .limit(1);
+    return row !== undefined;
+  }
+
+  /** `SELECT … FOR SHARE` on the category. See the port for why SHARE and not UPDATE. */
+  async findForShare(
+    scope: TenantContext,
+    id: ProductCategoryId,
+    tx: unknown,
+  ): Promise<ProductCategoryRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .select(getTableColumns(productCategories))
+      .from(productCategories)
+      .where(and(eq(productCategories.tenantId, tenantId), eq(productCategories.id, id)))
+      .for('share')
+      .limit(1);
+    return row === undefined ? null : toCategoryRecord(row);
   }
 }

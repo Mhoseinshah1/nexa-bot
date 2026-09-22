@@ -94,7 +94,7 @@ describe('the panels section of the Telegram management panel', () => {
      * It was `sales` until WP2, and the field name is kept because the cases reading it
      * are about an administrator the panel does not open for. `sales` holds
      * `users.view`, so the customers section gives it a panel now; the cases below
-     * build a role holding `catalog.view` alone instead, which opens nothing here.
+     * build a role holding `reports.view` alone instead, which opens nothing here.
      */
     sales: '710003',
     /** An ordinary customer. No administrator row anywhere. */
@@ -252,7 +252,7 @@ describe('the panels section of the Telegram management panel', () => {
 
   it('answers an administrator with no panels permission as unknown input, not as a refusal', async () => {
     /*
-     * A hand-made role holding `catalog.view` alone — NOT `sales`, which was the
+     * A hand-made role holding `reports.view` alone — NOT `sales`, which was the
      * fixture until WP2 and stopped being one.
      *
      * The premise this case needs is an administrator with NO section of the panel at
@@ -262,10 +262,11 @@ describe('the panels section of the Telegram management panel', () => {
      * a section it lacks reaches the handler and is denied there — which is correct and
      * is a different case from this one.
      *
-     * `catalog.view` opens nothing in Telegram, and the case still proves what it says:
+     * `reports.view` opens nothing in Telegram (WP5 gave `catalog.view` the categories
+     * section, so it stopped being this fixture the way `sales` did), and the case still proves what it says:
      * a distinct refusal here would confirm that the id names something.
      */
-    await bindNewAdmin('no-section-tg-panels', TG.sales, { permissions: ['catalog.view'] });
+    await bindNewAdmin('no-section-tg-panels', TG.sales, { permissions: ['reports.view'] });
 
     const result = await runtime().handle(
       tenantA,

@@ -46,6 +46,10 @@ import type {
 import type { UsernameReservation } from '../../provisioning/application/username-ports.js';
 import type { ProductRecord, ProductRepository } from '../../catalog/application/ports.js';
 import { unorderableReason } from '../../catalog/application/catalog-visibility.js';
+import type {
+  ProductCategoryRecord,
+  ProductCategoryRepository,
+} from '../../catalog/application/ports.js';
 import { quoteProduct } from './order-pricing.js';
 import type { OrderCursor, OrderPage, OrderRecord, OrderRepository, OrderSearch } from './ports.js';
 
@@ -123,6 +127,14 @@ export interface OrderServiceDeps {
   /** How a cancellation reaches the payments against the order. See `OrderPaymentLane`. */
   readonly payments: OrderPaymentLane;
   readonly products: ProductRepository;
+  /**
+   * Categories, read inside the transaction that decides whether a sale may happen.
+   *
+   * A separate port rather than a method on `products` because they are separate
+   * aggregates: a category outlives the products in it, and "may this be sold" asks
+   * about both independently.
+   */
+  readonly categories: ProductCategoryRepository;
   readonly customers: CustomerRepository;
   readonly settings: SettingsResolver;
   readonly guard: PermissionGuard;
@@ -279,7 +291,15 @@ export class OrderService {
         if (product === null) {
           throw errors.notFound(COMMERCE_ERROR_CODES.PRODUCT_NOT_FOUND, 'Unknown product.');
         }
-        const { price, panelId } = this.assertOrderable(product);
+        /*
+         * The category is read INSIDE the transaction, like every other rule here.
+         *
+         * A surface may have filtered on it a moment ago; that is a courtesy. The
+         * authoritative question is asked here, under the same transaction that will
+         * write the order.
+         */
+        const category = await this.deps.categories.findById(scope, product.categoryId, tx);
+        const { price, panelId } = this.assertOrderable(product, category);
 
         const totals = quoteProduct(product, price, MAX_ORDER_QUANTITY, now);
         const expiresAt = new Date(now.getTime() + (await this.expiryMinutes(scope, tx)) * 60_000);
@@ -293,6 +313,26 @@ export class OrderService {
               productId: product.id,
               panelId,
               title: product.title,
+              /*
+               * Snapshotted HERE, beside the title and the price, and not at
+               * confirmation.
+               *
+               * The rest of the line is fixed at draft creation because a draft is the
+               * quote the customer was shown; the category belongs to that same picture.
+               * Taken at confirmation instead, an order would record a category the
+               * customer never saw whenever an operator renamed one in the minutes
+               * between the two — which is the class of after-the-fact rewriting this
+               * whole snapshot exists to prevent.
+               *
+               * `assertOrderable` has already refused a null category above, so this is
+               * never null on a new order. The FIELD is nullable for the orders that
+               * predate the column, which carry no record and must not be given one.
+               */
+              category: {
+                categoryId: category!.id,
+                name: category!.name,
+                emoji: category!.emoji,
+              },
               specification: product.specification,
               unitPrice: price,
               quantity: MAX_ORDER_QUANTITY,
@@ -867,7 +907,27 @@ export class OrderService {
         if (product === null) {
           throw errors.notFound(COMMERCE_ERROR_CODES.PRODUCT_NOT_FOUND, 'Unknown product.');
         }
-        this.assertOrderable(product);
+        /*
+         * Re-read and re-checked, not carried from the draft.
+         *
+         * The owner's requirement is explicit that the authoritative confirmation
+         * transaction re-checks the category rule, and the window it closes is real: an
+         * operator can deactivate a category between the summary a customer is looking
+         * at and the tap that answers it. This is the same discipline `PanelSalesGate`
+         * already applies to the panel three lines below.
+         *
+         * Under a SHARE lock, and that is what makes the re-check a guarantee rather than
+         * a narrower window. A plain read returned ACTIVE and a deactivation could commit
+         * before this transaction moved the order on — confirming a sale the operator had
+         * already withdrawn. Deactivation is an UPDATE, which waits for this lock, so the
+         * two now serialise: either the deactivation lands first and is read here, or it
+         * waits for this confirmation to finish. Found by the Codex review of this branch.
+         */
+        const category =
+          product.categoryId === null
+            ? null
+            : await this.deps.categories.findForShare(scope, product.categoryId, tx);
+        this.assertOrderable(product, category);
 
         /*
          * The panel is re-decided here, and the SLOT is taken here.
@@ -1456,11 +1516,14 @@ export class OrderService {
    * WHICH of withdrawn, unpriced or unbound it was — and only one of the three is
    * something the customer could have caused.
    */
-  private assertOrderable(product: ProductRecord): {
+  private assertOrderable(
+    product: ProductRecord,
+    category: ProductCategoryRecord | null,
+  ): {
     price: NonNullable<ProductRecord['price']>;
     panelId: NonNullable<ProductRecord['panelId']>;
   } {
-    const reason = unorderableReason(product);
+    const reason = unorderableReason(product, category);
     if (reason === 'NOT_PURCHASABLE') {
       throw errors.conflict(
         COMMERCE_ERROR_CODES.PRODUCT_NOT_PURCHASABLE,
@@ -1483,6 +1546,27 @@ export class OrderService {
       throw errors.conflict(
         COMMERCE_ERROR_CODES.PRODUCT_NOT_FULFILLABLE,
         'This product is not bound to a panel and cannot be ordered.',
+      );
+    }
+    /*
+     * The two category refusals, and note which one is NOT here.
+     *
+     * A HIDDEN category does not appear: hidden means unlisted, and its products remain
+     * orderable through a direct reference, exactly as a HIDDEN product's do. Only the
+     * category's STATUS is a refusal — `unorderableReason` consults
+     * `isCategoryPurchasable` for that reason and a reader who adds the visibility term
+     * turns every operator's "unlist this group" into "withdraw this group".
+     */
+    if (reason === 'NOT_CATEGORISED') {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.PRODUCT_NOT_CATEGORISED,
+        'This product is not filed under a category and cannot be ordered.',
+      );
+    }
+    if (reason === 'CATEGORY_NOT_PURCHASABLE') {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.CATEGORY_NOT_PURCHASABLE,
+        'This category is not available for purchase.',
       );
     }
     /*

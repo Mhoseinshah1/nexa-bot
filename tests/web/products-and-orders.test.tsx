@@ -5,7 +5,7 @@ import type { ReactElement } from 'react';
 import { catalogueGap, ProductDetailPage, ProductsPage } from '../../apps/web/src/pages/products';
 import { OrderDetailPage, OrdersPage } from '../../apps/web/src/pages/orders';
 import { resolve } from '../../apps/web/src/app';
-import { order, panel, product, renderPage, stubApi } from './harness';
+import { categoryListing, order, panel, product, renderPage, stubApi } from './harness';
 
 /**
  * Products and Orders, rendered against the shapes the server actually returns.
@@ -29,7 +29,13 @@ const productList = (products: unknown[], nextCursor: string | null = null) => [
   // The form's panel picker. Registered on every products fixture so a case that is
   // not about the picker does not fail on an unrouted request.
   { url: '/panels', body: { panels: [panel()], nextCursor: null } },
+  // The category list, so the default product's category resolves to ACTIVE/VISIBLE and
+  // the badge can say "in the catalogue" — it no longer does for a category it cannot read.
+  { url: '/product-categories', body: { categories: [categoryListing()] } },
 ];
+
+/** The facts of an ACTIVE, VISIBLE category — the one case where the category is no gap. */
+const LISTED = { status: 'ACTIVE', visibility: 'VISIBLE' } as const;
 
 const orderList = (orders: unknown[], nextCursor: string | null = null) => [
   { url: '/orders', body: { orders, nextCursor } },
@@ -66,7 +72,7 @@ describe('whether a customer can see a product', () => {
             // of the three copies that have to agree.
             const visible = status === 'ACTIVE' && audience === 'EVERYONE' && priced && fulfillable;
             const label = `${status}/${audience}/priced=${String(priced)}/panel=${String(fulfillable)}`;
-            expect(catalogueGap(row as never) === null, label).toBe(visible);
+            expect(catalogueGap(row as never, LISTED) === null, label).toBe(visible);
           }
         }
       }
@@ -79,20 +85,75 @@ describe('whether a customer can see a product', () => {
     expect(
       catalogueGap(
         product({ status: 'INACTIVE', priceAmount: null, priceCurrency: null }) as never,
+        LISTED,
       ),
     ).toBe('INACTIVE');
-    expect(catalogueGap(product({ audience: 'HIDDEN', panelId: null }) as never)).toBe('UNLISTED');
+    expect(catalogueGap(product({ audience: 'HIDDEN', panelId: null }) as never, LISTED)).toBe(
+      'UNLISTED',
+    );
     // A separate badge from UNLISTED, deliberately: a HIDDEN product is still orderable
     // by anybody holding its reference and a RESELLERS_ONLY one is not.
     expect(
       catalogueGap(
         product({ audience: 'RESELLERS_ONLY', priceAmount: null, priceCurrency: null }) as never,
+        LISTED,
       ),
     ).toBe('RESELLERS');
     expect(
-      catalogueGap(product({ priceAmount: null, priceCurrency: null, panelId: null }) as never),
+      catalogueGap(
+        product({ priceAmount: null, priceCurrency: null, panelId: null }) as never,
+        LISTED,
+      ),
     ).toBe('UNPRICED');
-    expect(catalogueGap(product({ panelId: null }) as never)).toBe('NO_PANEL');
+    expect(catalogueGap(product({ panelId: null }) as never, LISTED)).toBe('NO_PANEL');
+  });
+});
+
+describe('whether the category lets a customer see a product', () => {
+  /*
+   * The Codex review of this branch found the badge contradicting its own row: the
+   * category column said "uncategorised" and the catalogue column said "in catalogue",
+   * because the gap read the product's four predicates and nothing about its category.
+   * The server refuses an uncategorised product and one in an INACTIVE category, and
+   * does not LIST one in a HIDDEN category — so neither may the badge.
+   */
+  it('names each way a category keeps an otherwise sellable product out', () => {
+    expect(catalogueGap(product({ categoryId: null }) as never, 'UNKNOWN')).toBe('UNCATEGORISED');
+    expect(catalogueGap(product() as never, { status: 'INACTIVE', visibility: 'VISIBLE' })).toBe(
+      'CATEGORY_INACTIVE',
+    );
+    expect(catalogueGap(product() as never, { status: 'ACTIVE', visibility: 'HIDDEN' })).toBe(
+      'CATEGORY_HIDDEN',
+    );
+    // A category the list could not answer for is SAID, never assumed to be fine.
+    expect(catalogueGap(product() as never, 'UNKNOWN')).toBe('CATEGORY_UNKNOWN');
+    expect(catalogueGap(product() as never, LISTED)).toBeNull();
+  });
+
+  it('shows no green badge beside an uncategorised warning on the same row', async () => {
+    stubApi(productList([product({ categoryId: null })]));
+    renderPage(<ProductsPage route={PRODUCTS_ROUTE} mayEdit denied={false} />);
+
+    expect(await screen.findByText(/در هیچ دسته‌ای نیست/)).toBeInTheDocument();
+    expect(
+      screen.queryByText('نمایش داده می‌شود'),
+      'the row claims to be in the catalogue',
+    ).toBeNull();
+  });
+
+  it('says a product in an inactive category is out, even with everything else right', async () => {
+    stubApi([
+      { url: '/products', body: { products: [product()], nextCursor: null } },
+      { url: '/panels', body: { panels: [panel()], nextCursor: null } },
+      {
+        url: '/product-categories',
+        body: { categories: [categoryListing({ status: 'INACTIVE' })] },
+      },
+    ]);
+    renderPage(<ProductsPage route={PRODUCTS_ROUTE} mayEdit denied={false} />);
+
+    expect(await screen.findByText(/دستهٔ آن غیرفعال است/)).toBeInTheDocument();
+    expect(screen.queryByText('نمایش داده می‌شود')).toBeNull();
   });
 });
 
@@ -201,6 +262,15 @@ describe('the product form', () => {
       { url: '/products/019220ab', body: { product: product(overrides) } },
       { url: '/panels', body: { panels: [panel()], nextCursor: null } },
       { url: '/products', body: { products: [product(overrides)], nextCursor: null } },
+      {
+        url: '/product-categories',
+        body: {
+          categories: [
+            categoryListing(),
+            categoryListing({ id: '01a05e35-c9ad-7e93-bef3-1ed9b55292cb', name: 'ویژه' }),
+          ],
+        },
+      },
     ]);
     renderPage(
       <ProductDetailPage id="019220ab-cdef-7012-8345-6789abcdef01" mayEdit denied={false} />,
@@ -223,6 +293,51 @@ describe('the product form', () => {
       expect(body['priceAmount']).toBeNull();
       expect(body['priceCurrency']).toBeNull();
     });
+  });
+
+  it('keeps the category an edit did not touch, rather than dropping it', async () => {
+    /*
+     * The contract REQUIRES `categoryId` on every write and the form never sent it, so
+     * every create and every edit from the Web Admin was a 400 before the service saw
+     * it. Found by the Codex review of this branch. The write replaces the whole
+     * product, so an edit must carry the category it already has.
+     */
+    const api = formFor();
+    await screen.findByLabelText('قیمت');
+    fireEvent.click(screen.getByText('ذخیرهٔ تغییرات'));
+
+    await waitFor(() => {
+      const write = api.calls.find((call) => call.method === 'POST');
+      expect(write, 'the edit was never sent').toBeDefined();
+      expect((write?.body as Record<string, unknown>)['categoryId']).toBe(
+        '01a05e35-c9ad-7e93-bef3-1ed9b55292ca',
+      );
+    });
+  });
+
+  it('sends the category chosen, and null for none', async () => {
+    const api = formFor();
+    await screen.findByLabelText('قیمت');
+    // By id: the detail page also carries the separate "move to category" control.
+    const select = document.getElementById('product-category-edit') as HTMLSelectElement;
+    expect(select.tagName, 'the category field is not a select').toBe('SELECT');
+
+    const lastWrite = () =>
+      (api.calls.filter((call) => call.method === 'POST').at(-1)?.body ?? {}) as Record<
+        string,
+        unknown
+      >;
+
+    fireEvent.change(select, { target: { value: '01a05e35-c9ad-7e93-bef3-1ed9b55292cb' } });
+    fireEvent.click(screen.getByText('ذخیرهٔ تغییرات'));
+    await waitFor(() =>
+      expect(lastWrite()['categoryId']).toBe('01a05e35-c9ad-7e93-bef3-1ed9b55292cb'),
+    );
+
+    fireEvent.change(select, { target: { value: '' } });
+    fireEvent.click(screen.getByText('ذخیرهٔ تغییرات'));
+    // `null`, present — never an omitted field, which the contract refuses outright.
+    await waitFor(() => expect(lastWrite()).toHaveProperty('categoryId', null));
   });
 
   it('refuses a zero price in the browser, naming the field', async () => {

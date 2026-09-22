@@ -488,6 +488,31 @@ export function OrderDetailPage({
               <KV
                 items={[
                   [t('web.product_title'), row.lineTitle],
+                  [
+                    t('web.order_category'),
+                    /*
+                     * The SNAPSHOT, and null is rendered as "not recorded".
+                     *
+                     * Never filled from the product's category as it reads now. Two
+                     * orders carry null here — one placed before the columns existed,
+                     * and a renewal, which is not bought from a category at all — and
+                     * in both cases the honest answer is that there is no record. A
+                     * join to the live product would report today's arrangement as
+                     * though it were the customer's, which is the legacy
+                     * «محصول حذف‌شده» performed on a different column.
+                     */
+                    row.lineCategoryName === null ? (
+                      <span key="cat" className="muted">
+                        {t('web.order_category_unknown')}
+                      </span>
+                    ) : (
+                      <span key="cat">
+                        {row.lineCategoryEmoji === null
+                          ? row.lineCategoryName
+                          : `${row.lineCategoryEmoji} ${row.lineCategoryName}`}
+                      </span>
+                    ),
+                  ],
                   [t('web.product_duration'), <Duration key="d" days={row.lineDurationDays} />],
                   [t('web.product_traffic'), <Traffic key="tr" bytes={row.lineTrafficBytes} />],
                   [

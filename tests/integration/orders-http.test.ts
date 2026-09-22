@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import type { ProductCategoryId } from '@nexa/contracts';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   API_PREFIX,
@@ -20,7 +21,15 @@ import {
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
-import { createAdmin, migrateOnce, resetDatabase, tenantA, tenantB, testConfig } from './harness';
+import {
+  createAdmin,
+  migrateOnce,
+  resetDatabase,
+  seededCategoryFor,
+  tenantA,
+  tenantB,
+  testConfig,
+} from './harness';
 
 /**
  * Orders over real HTTP. TWO ROUTES, both reads, and that is the subject.
@@ -151,6 +160,14 @@ describe('order HTTP surface', () => {
         audience: 'EVERYONE',
         sortOrder: 10,
         panelId: panelId as PanelId,
+        /*
+         * The category of the tenant this product is written for, never a fixed one.
+         * `products_tenant_category_fk` is composite, so a tenant B product filed
+         * under tenant A's category is refused by the database — turning a
+         * cross-tenant isolation test into a foreign-key error instead of the
+         * assertion it was written to make.
+         */
+        categoryId: seededCategoryFor(scope) as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: 2 },
         price: money(250_000n, 'IRT'),
       },
@@ -215,6 +232,7 @@ describe('order HTTP surface', () => {
         audience: 'EVERYONE',
         sortOrder: 10,
         panelId: panelA as PanelId,
+        categoryId: SEED_IDS.categoryA as ProductCategoryId,
         specification: { durationDays: 365, trafficBytes: 1n, deviceLimit: 9 },
         price: money(999_000n, 'IRT'),
       },
@@ -240,6 +258,7 @@ describe('order HTTP surface', () => {
         audience: 'EVERYONE',
         sortOrder: 1,
         panelId: panelA as PanelId,
+        categoryId: SEED_IDS.categoryA as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 1n, deviceLimit: null },
         // Above `Number.MAX_SAFE_INTEGER`. A JSON number would round it.
         price: money(9_007_199_254_740_993n, 'IRT'),

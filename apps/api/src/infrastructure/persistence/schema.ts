@@ -35,6 +35,12 @@ import {
   PANEL_HEALTH_STATES,
   MONITOR_DEFERRAL_REASONS,
   PANEL_STATUSES,
+  PRODUCT_SORT_MAX,
+  PRODUCT_SORT_MIN,
+  PRODUCT_CATEGORY_EMOJI_MAX_CODE_POINTS,
+  PRODUCT_CATEGORY_NAME_MAX_LENGTH,
+  PRODUCT_CATEGORY_STATUSES,
+  PRODUCT_CATEGORY_VISIBILITIES,
   PERMISSION_OVERRIDE_EFFECTS,
   PROVIDER_FAILURE_KINDS,
   PROVIDER_TYPES,
@@ -2586,6 +2592,112 @@ export const customers = pgTable(
  * configuring cannot be fulfilled, and the honest encoding of that is an absent
  * panel rather than a pointer to an arbitrary one.
  */
+/**
+ * A group a customer browses before they browse products.
+ *
+ * Tenant-scoped like everything a tenant owns, and it carries the same two dimensions a
+ * product does — `status` and `visibility` — for the reason `catalog.ts` gives: a
+ * category with its own vocabulary would be a second way to say "stop selling this",
+ * and two vocabularies for one idea disagree the first time somebody edits only one.
+ *
+ * `emoji` is nullable and ordinary when absent. It is short text with a CHECK that
+ * bounds its length and refuses control characters, and deliberately no check that it
+ * IS an emoji — `isValidCategoryEmoji` says why, and the short version is that the
+ * stronger check is an icon library wearing a regex.
+ *
+ * There is no `is_empty` column and no product counter. An empty category is one with no
+ * customer-visible product in it, which is a property of the products, and a cached
+ * count is a second answer to that question that goes stale the moment a product is
+ * deactivated. `nexa-conventions` has the same rule about balances for the same reason.
+ */
+/**
+ * The control characters a rendered label may not contain, as a PostgreSQL regex.
+ *
+ * Built from code points rather than written as a literal, because writing the class
+ * inline in a template literal is how the first version of this constraint shipped
+ * broken: TypeScript interpreted the `\u` escapes and `drizzle-kit` wrote the resulting
+ * RAW CONTROL CHARACTERS into the migration file, producing a constraint no reviewer
+ * could read and a `.sql` file carrying a literal DEL byte. Caught by reading the
+ * generated SQL, which is the artifact under review.
+ *
+ * `U&'...'` is PostgreSQL's Unicode string literal syntax, so the escapes are resolved
+ * by the SERVER from text that stays ASCII all the way through the file.
+ *
+ * NUL is deliberately absent: PostgreSQL `text` cannot hold one at all, so a term for it
+ * would be a check against a value the type system already refuses.
+ */
+const CONTROL_CHARACTER_CLASS = String.raw`U&'[\0001-\001f\007f\0085\2028\2029]'`;
+
+export const productCategories = pgTable(
+  'product_categories',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    name: text('name').notNull(),
+    description: text('description'),
+    /** Optional. Absence is ordinary, never an error. */
+    emoji: text('emoji'),
+    status: text('status').notNull().default('ACTIVE'),
+    visibility: text('visibility').notNull().default('VISIBLE'),
+    sortOrder: integer('sort_order').notNull().default(0),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    /**
+     * The customer's order, and it matches the ORDER BY exactly.
+     *
+     * `(tenant, sort_order, id)` rather than `(tenant, sort_order, created_at, id)`,
+     * because the owner specified `sort_order ASC, id ASC` for the paged customer
+     * surfaces and an index whose columns are a superset still leaves the planner
+     * sorting on `id` within each `sort_order` group. Added by 0098 for that reason;
+     * 0097 shipped the four-column shape, which was right for the ordering assumed
+     * before the paging decision and wrong for the one specified after it.
+     */
+    index('product_categories_tenant_sort_id_idx').on(table.tenantId, table.sortOrder, table.id),
+    /** The admin list's keyset, on the IMMUTABLE pair. Migration 0026's lesson. */
+    index('product_categories_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
+    check('product_categories_status_check', enumCheck('status', PRODUCT_CATEGORY_STATUSES)),
+    check(
+      'product_categories_visibility_check',
+      enumCheck('visibility', PRODUCT_CATEGORY_VISIBILITIES),
+    ),
+    check(
+      'product_categories_name_check',
+      sql`length(name) > 0 AND length(name) <= ${sql.raw(String(PRODUCT_CATEGORY_NAME_MAX_LENGTH))}`,
+    ),
+    /*
+     * The emoji's shape, at the database.
+     *
+     * Bounded in CHARACTERS, which is what PostgreSQL's `length()` counts for `text` —
+     * code points, not UTF-16 units — so this is the same measure
+     * `isValidCategoryEmoji` uses and the two cannot disagree about a family emoji.
+     *
+     * The control-character term is the one that matters for a surface: this value is
+     * rendered into a Telegram inline-keyboard label, and a newline there is a broken
+     * button. `~` with a character class is refused rather than accepted, so a row
+     * carrying one cannot be written at all.
+     */
+    check(
+      'product_categories_emoji_check',
+      sql`emoji IS NULL OR (
+        length(emoji) > 0
+        AND length(emoji) <= ${sql.raw(String(PRODUCT_CATEGORY_EMOJI_MAX_CODE_POINTS))}
+        AND btrim(emoji) <> ''
+        AND emoji !~ ${sql.raw(CONTROL_CHARACTER_CLASS)}
+      )`,
+    ),
+    check(
+      'product_categories_sort_check',
+      sql`sort_order >= ${sql.raw(String(PRODUCT_SORT_MIN))} AND sort_order <= ${sql.raw(String(PRODUCT_SORT_MAX))}`,
+    ),
+    /** What a composite foreign key from `products` needs to point at. */
+    unique('product_categories_tenant_id_key').on(table.tenantId, table.id),
+  ],
+);
+
 export const products = pgTable(
   'products',
   {
@@ -2609,6 +2721,26 @@ export const products = pgTable(
      * rolling update. Expand only.
      */
     panelId: uuid('panel_id').references(() => panels.id),
+    /**
+     * The category a customer browses this product under.
+     *
+     * NULLABLE at the database, and that is not the same as "optional to the product".
+     * Migration 0097 creates one category per tenant that has products and backfills
+     * every row, so no product reaches a customer uncategorised. The column stays
+     * nullable for two reasons: a NOT NULL on this table is a rewrite-and-lock during a
+     * rolling update, and the release still running during that update writes products
+     * without the column at all — expand only.
+     *
+     * The foreign key is `ON DELETE NO ACTION`, deliberately, and that is what makes
+     * "a category holding products cannot be deleted" true at the DATABASE rather than
+     * only in a service. `SET NULL` was considered and is worse: it would let the
+     * delete succeed and silently strand every product in it uncategorised, which is
+     * the shape where an operator's tidy-up empties a shop.
+     *
+     * The application refuses to sell a product with no category. The database's job
+     * here is to stop the pointer being wrong, not to decide the sale.
+     */
+    categoryId: uuid('category_id'),
     /** 0 means no time limit (`UNLIMITED_DURATION_DAYS`). */
     durationDays: integer('duration_days').notNull(),
     /** 0 means no traffic limit (`UNLIMITED_TRAFFIC_BYTES`). Bytes, never gigabytes. */
@@ -2661,6 +2793,31 @@ export const products = pgTable(
       foreignColumns: [panels.tenantId, panels.id],
       name: 'products_tenant_panel_fk',
     }),
+    /**
+     * The pair again, for the same reason `products_tenant_panel_fk` is a pair: a
+     * single-column reference would let a product name ANOTHER TENANT'S category, and
+     * every reader downstream — the catalogue's grouping, the order snapshot — would
+     * have believed it. MATCH SIMPLE means a NULL `category_id` is still legal.
+     */
+    foreignKey({
+      columns: [table.tenantId, table.categoryId],
+      foreignColumns: [productCategories.tenantId, productCategories.id],
+      name: 'products_tenant_category_fk',
+    }),
+    /**
+     * The customer's page within one category, matching `sort_order ASC, id ASC`.
+     *
+     * Every predicate the paged query applies is either in this index's leading
+     * columns or cheap on the rows it returns — the point being that the LIMIT applies
+     * to rows already filtered, never to rows a surface filters afterwards. §1.4 of
+     * `docs/wp5-categories-audit.md` is the failure this shape exists to prevent.
+     */
+    index('products_tenant_category_sort_id_idx').on(
+      table.tenantId,
+      table.categoryId,
+      table.sortOrder,
+      table.id,
+    ),
     unique('products_tenant_id_key').on(table.tenantId, table.id),
   ],
 );
@@ -2812,6 +2969,34 @@ export const orders = pgTable(
     lineDeviceLimit: integer('line_device_limit'),
     lineUnitPriceAmount: bigint('line_unit_price_amount', { mode: 'bigint' }).notNull(),
     lineQuantity: integer('line_quantity').notNull().default(1),
+
+    /*
+     * The category this order was bought from, snapshotted — and NULLABLE, where every
+     * other `line_*` column is NOT NULL.
+     *
+     * The nullability is the whole point and it is a decision, not a convenience. Orders
+     * placed before categories existed have no category, and the owner's instruction is
+     * that they must not be given one: a product's category TODAY is not evidence of
+     * what a customer browsed months ago, so migration 0097 adds these columns and
+     * backfills NOTHING. A null here means UNKNOWN, never "uncategorised".
+     *
+     * That is also why there is no `line_category_id` foreign key. The category may
+     * since have been deleted — deletion is permitted for an EMPTY category — and a
+     * reference would either block that deletion or cascade the order's history away.
+     * The id is kept for navigation on the same terms as `product_id`: the name and
+     * emoji beside it are the truth about the purchase.
+     *
+     * No CHECK ties the three together. A half-written snapshot is impossible because
+     * one statement writes all three at confirmation, and a CHECK requiring
+     * `(id IS NULL) = (name IS NULL)` would have to be satisfied by every pre-existing
+     * row — which it is, all three being null — but would then forbid the only shape a
+     * future reader might legitimately need: an id whose display text was redacted.
+     */
+    lineCategoryId: uuid('line_category_id'),
+    /** The category's name as it read at confirmation. Null on a pre-WP5 order. */
+    lineCategoryName: text('line_category_name'),
+    /** Its emoji as it read at confirmation. Null when absent AND when unknown. */
+    lineCategoryEmoji: text('line_category_emoji'),
 
     subtotalAmount: bigint('subtotal_amount', { mode: 'bigint' }).notNull(),
     discountAmount: bigint('discount_amount', { mode: 'bigint' })

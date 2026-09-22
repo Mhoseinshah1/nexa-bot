@@ -976,6 +976,28 @@ value, and either form inside another variable's multiline value.
 
 ## OQ-4B-01 — how a customer reaches a catalogue longer than one Telegram message
 
+**RESOLVED in WP5.** The trigger this entry named — "the phase that adds categories" —
+arrived, and the owner settled the shape: the customer browses a CATEGORY and then a
+PAGINATED list of products within it, with categories themselves paginated once they
+exceed the keyboard bound. Categories are explicitly _not_ a substitute for product
+pagination.
+
+The ordering key this entry said had to be decided at the same time was decided:
+`sort_order ASC, id ASC`, with **offset** paging rather than a keyset. That is the
+opposite of what a keyset instinct suggests, and deliberately so — a cursor over
+`sort_order` is a cursor over a column an operator drags, which is the defect migration
+0026 retired for panels and which this entry itself flagged. The cost of an offset is
+that concurrent reordering can change page membership; the owner accepted that for WP5,
+and `docs/wp5-categories-audit.md` §6.4 records it rather than claiming stability the
+implementation does not have. A future immutable ranking scheme may replace it.
+
+The text below is the question as it stood, kept because the reasoning is what the
+resolution answers.
+
+---
+
+## OQ-4B-01 — how a customer reaches a catalogue longer than one Telegram message
+
 `/catalog` answers with a heading and one inline-keyboard button per product, bounded at
 `CATALOG_PAGE_SIZE = 20`. `ProductRepository.listCatalog` reports `hasMore` and the bot
 surface **drops it**: a tenant with twenty-one sellable products shows twenty and says

@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import type { ProductCategoryId } from '@nexa/contracts';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   money,
@@ -144,6 +145,7 @@ describe('the order in which an order, its panel and its reservation are locked'
         audience: 'EVERYONE',
         sortOrder: 10,
         panelId: panelA as PanelId,
+        categoryId: SEED_IDS.categoryA as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 0n, deviceLimit: 1 },
         price: money(250_000n, 'IRT'),
       },

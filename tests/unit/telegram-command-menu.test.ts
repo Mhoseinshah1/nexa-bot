@@ -61,7 +61,21 @@ describe('the Telegram command menu', () => {
      * about the installation and not about them.
      */
     const registered = new Set([...BOT_COMMANDS].map((entry) => entry.command));
-    for (const command of [ADMIN_MENU_COMMAND, 'link', 'role', 'service', 'customer']) {
+    for (const command of [
+      ADMIN_MENU_COMMAND,
+      'link',
+      'role',
+      'service',
+      'customer',
+      /*
+       * WP5's three category commands. The underscore keeps them out of `parsed`
+       * above (its pattern is `[a-z]+`), so they are named here directly: registering
+       * any of them would advertise the management panel to every customer.
+       */
+      'category_new',
+      'category_rename',
+      'category_emoji',
+    ]) {
       expect(registered.has(command as never), command).toBe(false);
     }
   });

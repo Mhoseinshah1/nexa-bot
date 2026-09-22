@@ -4,19 +4,30 @@ import {
   money,
   type PanelId,
   type ProductAudience,
+  type ProductCategoryId,
   type ProductId,
   type ProductStatus,
 } from '@nexa/contracts';
-import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
+import {
+  DrizzleProductCategoryRepository,
+  DrizzleProductRepository,
+} from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import {
   isCustomerVisible,
   unorderableReason,
 } from '../../apps/api/src/modules/commerce/catalog/application/catalog-visibility';
 import type {
+  ProductCategoryRecord,
   ProductDraft,
   ProductRecord,
 } from '../../apps/api/src/modules/commerce/catalog/application/ports';
-import { createTestContext, tenantA, tenantB, type TestContext } from './harness';
+import {
+  createTestContext,
+  tenantA,
+  tenantB,
+  type TestContext,
+  seededCategoryFor,
+} from './harness';
 
 /**
  * The customer catalogue, and the three-way distinction it turns on.
@@ -47,6 +58,8 @@ describe('the customer catalogue', () => {
   let ctx: TestContext;
   let repository: DrizzleProductRepository;
   let panelA: string;
+  let categoryA: string;
+  let categories: DrizzleProductCategoryRepository;
 
   beforeAll(async () => {
     ctx = await createTestContext();
@@ -63,7 +76,23 @@ describe('the customer catalogue', () => {
     await ctx.container.database.db.execute(sql`
       INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
       VALUES (${panelA}, ${tenantA.tenantId}, 'Panel A', 'sanaei', 'https://a.example.test', 'ACTIVE')`);
+    /*
+     * A sellable category, because since WP5 a product without one is unsellable.
+     * Each case below spoils exactly one property, and the category is the baseline the
+     * three category cases spoil in their turn.
+     */
+    categoryA = ctx.container.ids.uuid();
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO product_categories (id, tenant_id, name, status, visibility, sort_order)
+      VALUES (${categoryA}, ${tenantA.tenantId}, 'باکیفیت', 'ACTIVE', 'VISIBLE', 0)`);
+    categories = new DrizzleProductCategoryRepository(ctx.container.database.db);
   });
+
+  /** The category a product is filed under, read the way production reads it. */
+  const categoryOf = async (
+    scope: typeof tenantA,
+    product: ProductRecord,
+  ): Promise<ProductCategoryRecord | null> => categories.findById(scope, product.categoryId);
 
   /** A sellable draft. Each case spoils exactly one property. */
   const draft = (overrides: Partial<ProductDraft> = {}): ProductDraft => ({
@@ -72,6 +101,7 @@ describe('the customer catalogue', () => {
     audience: 'EVERYONE',
     sortOrder: 10,
     panelId: panelA as PanelId,
+    categoryId: categoryA as ProductCategoryId,
     specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: 2 },
     price: money(250_000n, 'IRT'),
     ...overrides,
@@ -91,7 +121,11 @@ describe('the customer catalogue', () => {
   ): Promise<ProductRecord> {
     const created = await repository.create(scope, {
       id: ctx.container.ids.uuid() as ProductId,
-      draft: draft(overrides),
+      /* The category is the SCOPE's, never a constant — see `orders.test.ts` for why. */
+      draft: {
+        ...draft(overrides),
+        categoryId: seededCategoryFor(scope) as ProductCategoryId,
+      },
       now: ctx.container.clock.now(),
     });
     if (status === 'ACTIVE') {
@@ -136,8 +170,8 @@ describe('the customer catalogue', () => {
   it('lists a product that is listed, priced and fulfillable, and lets it be ordered', async () => {
     const product = await productIn(tenantA, 'ACTIVE');
     expect(await catalogueIds(tenantA)).toEqual([product.id]);
-    expect(isCustomerVisible(product)).toBe(true);
-    expect(unorderableReason(product)).toBeNull();
+    expect(isCustomerVisible(product, await categoryOf(tenantA, product))).toBe(true);
+    expect(unorderableReason(product, await categoryOf(tenantA, product))).toBeNull();
   });
 
   it('keeps a HIDDEN product OUT of the catalogue while leaving it orderable', async () => {
@@ -152,9 +186,12 @@ describe('the customer catalogue', () => {
     const hidden = await productIn(tenantA, 'ACTIVE', { audience: 'HIDDEN' });
 
     expect(await catalogueIds(tenantA), 'a hidden product was published').toEqual([]);
-    expect(isCustomerVisible(hidden)).toBe(false);
+    expect(isCustomerVisible(hidden, await categoryOf(tenantA, hidden))).toBe(false);
     // ...and yet it can be bought by a customer who was given its reference.
-    expect(unorderableReason(hidden), 'a hidden product was made unorderable').toBeNull();
+    expect(
+      unorderableReason(hidden, await categoryOf(tenantA, hidden)),
+      'a hidden product was made unorderable',
+    ).toBeNull();
   });
 
   it('keeps a RESELLERS_ONLY product out of the catalogue AND refuses to sell it', async () => {
@@ -172,30 +209,35 @@ describe('the customer catalogue', () => {
     const reseller = await productIn(tenantA, 'ACTIVE', { audience: 'RESELLERS_ONLY' });
 
     expect(await catalogueIds(tenantA), 'a reseller product was published').toEqual([]);
-    expect(isCustomerVisible(reseller)).toBe(false);
+    expect(isCustomerVisible(reseller, await categoryOf(tenantA, reseller))).toBe(false);
     // The half that stops the exclusion being cosmetic.
-    expect(unorderableReason(reseller), 'a reseller product was sellable').toBe('NOT_FOR_AUDIENCE');
+    expect(
+      unorderableReason(reseller, await categoryOf(tenantA, reseller)),
+      'a reseller product was sellable',
+    ).toBe('NOT_FOR_AUDIENCE');
   });
 
   it('makes an INACTIVE product neither listed nor orderable', async () => {
     const inactive = await productIn(tenantA, 'INACTIVE');
     expect(await catalogueIds(tenantA)).toEqual([]);
-    expect(isCustomerVisible(inactive)).toBe(false);
+    expect(isCustomerVisible(inactive, await categoryOf(tenantA, inactive))).toBe(false);
     // The difference from HIDDEN, stated as an assertion rather than a comment.
-    expect(unorderableReason(inactive)).toBe('NOT_PURCHASABLE');
+    expect(unorderableReason(inactive, await categoryOf(tenantA, inactive))).toBe(
+      'NOT_PURCHASABLE',
+    );
   });
 
   it('excludes an UNPRICED product, because absent is not free', async () => {
     const unpriced = await productIn(tenantA, 'ACTIVE', { price: null });
     expect(await catalogueIds(tenantA)).toEqual([]);
-    expect(isCustomerVisible(unpriced)).toBe(false);
-    expect(unorderableReason(unpriced)).toBe('NOT_PRICED');
+    expect(isCustomerVisible(unpriced, await categoryOf(tenantA, unpriced))).toBe(false);
+    expect(unorderableReason(unpriced, await categoryOf(tenantA, unpriced))).toBe('NOT_PRICED');
   });
 
   it('excludes an UNFULFILLABLE product, and names that reason rather than the price', async () => {
     const unfulfillable = await productIn(tenantA, 'ACTIVE', { panelId: null });
     expect(await catalogueIds(tenantA)).toEqual([]);
-    expect(isCustomerVisible(unfulfillable)).toBe(false);
+    expect(isCustomerVisible(unfulfillable, await categoryOf(tenantA, unfulfillable))).toBe(false);
     /*
      * The reason is FULFILLMENT, not price — this product has a price.
      *
@@ -203,14 +245,16 @@ describe('the customer catalogue', () => {
      * "because the refusal message an operator needs names the product". A reason that
      * said NOT_PRICED would send them to fix a field that is already correct.
      */
-    expect(unorderableReason(unfulfillable)).toBe('NOT_FULFILLABLE');
+    expect(unorderableReason(unfulfillable, await categoryOf(tenantA, unfulfillable))).toBe(
+      'NOT_FULFILLABLE',
+    );
   });
 
   it('reports the FIRST failing rule when a product breaks more than one', async () => {
     // Withdrawn AND unpriced. Status comes first because it is the operator's own
     // decision to stop selling; reporting "not priced" would send them to the wrong field.
     const both = await productIn(tenantA, 'INACTIVE', { price: null });
-    expect(unorderableReason(both)).toBe('NOT_PURCHASABLE');
+    expect(unorderableReason(both, await categoryOf(tenantA, both))).toBe('NOT_PURCHASABLE');
   });
 
   // -------------------------------------------------------------------------
@@ -247,7 +291,20 @@ describe('the customer catalogue', () => {
     expect(all).toHaveLength(24);
 
     const fromSql = new Set(await catalogueIds(tenantA, 100));
-    const fromTypescript = new Set(all.filter(isCustomerVisible).map((p) => p.id));
+    /*
+     * Each product is judged with ITS OWN category, read the way production reads it.
+     *
+     * This used to be a point-free `.filter(isCustomerVisible)`, which stopped compiling
+     * the moment the predicate took a second argument — and that is the useful part:
+     * `Array.filter` would have passed the INDEX as the category, so a silently
+     * type-compatible version of this line would have compared every product against
+     * `0`. The loop is longer and cannot do that.
+     */
+    const visible: ProductRecord[] = [];
+    for (const product of all) {
+      if (isCustomerVisible(product, await categoryOf(tenantA, product))) visible.push(product);
+    }
+    const fromTypescript = new Set(visible.map((p) => p.id));
 
     expect([...fromSql].sort(), 'the SQL and TypeScript rules disagree').toEqual(
       [...fromTypescript].sort(),
@@ -304,10 +361,20 @@ describe('the customer catalogue', () => {
       INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
       VALUES (${bPanel}, ${tenantB.tenantId}, 'Panel B', 'sanaei', 'https://b.example.test', 'ACTIVE')`);
 
+    /* Tenant B's own category, because the composite key refuses anybody else's. */
+    const bCategory = ctx.container.ids.uuid();
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO product_categories (id, tenant_id, name)
+      VALUES (${bCategory}, ${tenantB.tenantId}, 'B group')`);
+
     const mine = await productIn(tenantA, 'ACTIVE', { title: 'A plan' });
     const theirs = await repository.create(tenantB, {
       id: ctx.container.ids.uuid() as ProductId,
-      draft: draft({ title: 'B plan', panelId: bPanel as PanelId }),
+      draft: draft({
+        title: 'B plan',
+        panelId: bPanel as PanelId,
+        categoryId: bCategory as ProductCategoryId,
+      }),
       now: ctx.container.clock.now(),
     });
     await repository.setStatus(tenantB, theirs.id, 'INACTIVE', 'ACTIVE', ctx.container.clock.now());

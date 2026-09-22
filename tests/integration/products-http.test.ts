@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import type { ProductCategoryId } from '@nexa/contracts';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   API_PREFIX,
@@ -15,7 +16,15 @@ import { money, type PanelId, type ProductId } from '@nexa/contracts';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
-import { createAdmin, migrateOnce, resetDatabase, tenantA, tenantB, testConfig } from './harness';
+import {
+  createAdmin,
+  migrateOnce,
+  resetDatabase,
+  tenantA,
+  tenantB,
+  testConfig,
+  SEED_IDS,
+} from './harness';
 
 /**
  * Products over real HTTP.
@@ -167,6 +176,15 @@ describe('product HTTP surface', () => {
     audience: 'EVERYONE',
     sortOrder: 10,
     panelId: panelA,
+    /*
+     * Every product belongs to exactly one category, so the write schema asks for the
+     * id rather than defaulting it — a default here would let a surface create an
+     * uncategorised product that the order path then refuses with
+     * `PRODUCT_NOT_CATEGORISED`, naming a rule the operator never chose to break.
+     * `null` is still accepted by the schema and is what the deliberately-uncategorised
+     * cases send.
+     */
+    categoryId: SEED_IDS.categoryA,
     durationDays: 30,
     trafficBytes: '53687091200',
     deviceLimit: 2,
@@ -203,6 +221,9 @@ describe('product HTTP surface', () => {
     expect(Object.keys(row).sort()).toEqual(
       [
         'audience',
+        // WP5: the category a product is filed under — an id this tenant owns, never
+        // a panel fact, so it does not widen what `catalog.view` can see.
+        'categoryId',
         'createdAt',
         'deviceLimit',
         'description',
@@ -579,6 +600,13 @@ describe('product HTTP surface', () => {
         audience: 'EVERYONE',
         sortOrder: 5,
         panelId: bPanel as PanelId,
+        /*
+         * Tenant B's OWN category. `products_tenant_category_fk` is composite, so a
+         * tenant B product filed under tenant A's category is refused by the database
+         * — which would turn this cross-tenant isolation case into a foreign-key error
+         * instead of the 404 it was written to assert.
+         */
+        categoryId: SEED_IDS.categoryB as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 1n, deviceLimit: null },
         price: money(100000n, 'IRT'),
       },

@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { ProductCategoryId } from '@nexa/contracts';
 import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -35,6 +36,7 @@ import {
   validatePanelConnection,
   migrateOnce,
   resetDatabase,
+  seededCategoryFor,
   tenantA,
   tenantB,
   testConfig,
@@ -269,6 +271,14 @@ describe('operator service actions over HTTP', () => {
         audience: 'EVERYONE',
         sortOrder: 10,
         panelId: panelId as PanelId,
+        /*
+         * The category of the tenant this product is written for, never a fixed one.
+         * `products_tenant_category_fk` is composite, so a tenant B product filed
+         * under tenant A's category is refused by the database — turning a
+         * cross-tenant isolation test into a foreign-key error instead of the
+         * assertion it was written to make.
+         */
+        categoryId: seededCategoryFor(scope) as ProductCategoryId,
         /* No device limit: Marzban does not declare `LIMIT_DEVICES`. */
         specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: null },
         price: money(250_000n, 'IRT'),

@@ -375,7 +375,48 @@ export const TEMPLATES = [
   },
   {
     key: 'bot.catalog.heading',
-    description: 'Introduces the product list.',
+    description:
+      'Introduces the product list — which, since categories, is the list INSIDE one ' +
+      'category. Reused rather than replaced so an override a tenant already wrote ' +
+      'keeps working. The category NAME is not a placeholder: it is an ' +
+      'operator-editable row, and the button the customer tapped already carries it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.catalog.categories_heading',
+    description:
+      'Introduces the CATEGORY list — the first step of the two-step browse. A ' +
+      'category appears here only when it has at least one product the customer ' +
+      'could actually buy, so this list never offers a dead end.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.catalog.category_empty',
+    description:
+      'The category the customer tapped has nothing left to sell — its last product ' +
+      'was withdrawn between the two taps. An ordinary outcome rather than an error, ' +
+      'and deliberately NOT the same sentence as an unconfigured catalogue: the shop ' +
+      'has other categories and this one says so.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.catalog.next_page_button',
+    description: 'Moves to the next page. Drawn only when a next page really exists.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.catalog.previous_page_button',
+    description: 'Moves back a page. Drawn only when the customer is past the first.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.catalog.back_to_categories_button',
+    description: 'Returns from a product page to the category list.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -2118,6 +2159,327 @@ export const TEMPLATES = [
       'rather than opening a prompt for the missing argument, which is the whole ' +
       'reason it is a command: a prompt that outlives its question swallows the next ' +
       'unrelated message (INCIDENT-FIN-001).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  /*
+   * WP5 — the categories section of the Telegram management panel.
+   *
+   * Every write here is `ProductCategoryService`, the same service the Web Admin's
+   * `/product-categories` routes call, so these keys are the WORDS for outcomes that
+   * service decides and never a second statement of its rules. Text an operator
+   * authors — a name, an emoji — travels as a COMMAND carrying its argument, never as
+   * a prompt that captures the next message (INCIDENT-FIN-001).
+   */
+  {
+    key: 'bot.admin.categories_button',
+    description:
+      'Opens the categories section. Drawn for an administrator who holds ' +
+      '`catalog.view`; every write inside it charges `catalog.edit` in the service.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.categories_section',
+    description:
+      'Introduces the operator category list: one button per category in the order ' +
+      'customers see them, each labelled with its status and visibility, and the exact ' +
+      'syntax of the command that creates one. Every category is listed here, empty ' +
+      'or hidden or inactive — this is the operator list, not the customer one.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.categories_none',
+    description:
+      'This tenant has no category at all. Names the create command, because a ' +
+      'product cannot be sold until it is filed under one.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.categories_next_button',
+    description: 'The next page of the category list. Drawn only when one exists.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.categories_previous_button',
+    description: 'The previous page of the category list. Drawn only past the first.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.categories_back_button',
+    description: 'Returns to the category list.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.category_detail',
+    description:
+      'One category as an operator sees it, and the syntax of the two commands that ' +
+      'edit its text. The product count is EVERY product filed under it, active or ' +
+      'not — the number that decides whether it may be deleted — and is read when the ' +
+      'screen is drawn; the delete re-counts under a lock rather than trusting it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'id',
+        type: 'STRING',
+        description:
+          'The category id, printed so an operator can copy it into the rename and ' +
+          'emoji commands. Not a secret: it names a row this administrator can read.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'name',
+        type: 'STRING',
+        description: 'The name customers see.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'emoji',
+        type: 'STRING',
+        description: 'The emoji shown before the name, or a dash when there is none.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'status',
+        type: 'STRING',
+        description:
+          'ACTIVE or INACTIVE. INACTIVE means nothing in it can be bought, including ' +
+          'by a direct link, and is re-checked when an order is confirmed.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'visibility',
+        type: 'STRING',
+        description:
+          'VISIBLE or HIDDEN. HIDDEN means unlisted but still orderable by direct ' +
+          'reference — a different question from status.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'products',
+        type: 'NUMBER',
+        description: 'How many products are filed under it, whatever their status.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.category_gone',
+    description:
+      'ONE answer for a category id that is unknown, malformed or another tenant’s — ' +
+      'the rule `bot.admin.panel_gone` states.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.category_activate_button',
+    description: 'Makes the category ACTIVE. Drawn only for `catalog.edit`.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.category_deactivate_button',
+    description:
+      'Makes the category INACTIVE: nothing in it can be bought, including by a direct ' +
+      'link. Drawn only for `catalog.edit`.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.category_show_button',
+    description: 'Lists the category to customers again. Drawn only for `catalog.edit`.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.category_hide_button',
+    description:
+      'Unlists the category. Its products stay orderable by direct reference. Drawn ' +
+      'only for `catalog.edit`.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.category_up_button',
+    description: 'Moves the category one place earlier. Not drawn for the first one.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.category_down_button',
+    description: 'Moves the category one place later. Not drawn for the last one.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.category_delete_button',
+    description:
+      'Asks before deleting. Opens a confirmation rather than acting, the ask-then-act ' +
+      'shape every destructive admin action on this surface has.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.category_delete_ask',
+    description:
+      'The confirmation before a delete. Drawn only for an empty category; the delete ' +
+      'itself re-counts under a lock and refuses if a product arrived in between.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'name',
+        type: 'STRING',
+        description: 'The category about to be deleted.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.category_delete_confirm_button',
+    description: 'Deletes the category. Produced by the confirmation screen alone.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.category_deleted',
+    description:
+      'The category was deleted. Orders placed under it keep its name, because an ' +
+      'order carries a snapshot rather than a reference.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'name',
+        type: 'STRING',
+        description: 'The name it had.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.category_not_empty',
+    description:
+      'The delete was refused because the category still holds products. The count ' +
+      'is the one the service took under the category lock, not the one on the screen ' +
+      'the operator tapped from.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'products',
+        type: 'NUMBER',
+        description: 'How many products are still filed under it.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.category_usage',
+    description:
+      'A category command was sent without a readable argument, or the service refused ' +
+      'the name or emoji it carried. Repeats the syntax of all three commands rather ' +
+      'than opening a prompt for what was missing (INCIDENT-FIN-001).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.category_products_button',
+    description:
+      'Opens the product list from which a product is moved into another category. ' +
+      'Drawn only for `catalog.edit`.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.category_products',
+    description:
+      'Introduces the product list for reassignment. Each button names the product and ' +
+      'the category it is in now; a dash means it is in none, which is a product no ' +
+      'customer can buy until it is filed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.category_products_none',
+    description: 'There is no product on this page — none at all, or the list ended.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.category_products_more_button',
+    description: 'The next page of products. Drawn only when the server says one exists.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.category_pick',
+    description:
+      'Asks which category to move one product into. The buttons are every category ' +
+      'except the one it is in now.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'product',
+        type: 'STRING',
+        description: 'The product title.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'category',
+        type: 'STRING',
+        description: 'The category it is in now, or a dash when it is in none.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.category_pick_none',
+    description: 'There is no OTHER category to move this product into. Names the create command.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.category_moved',
+    description:
+      'A product now lives in another category. Orders already placed keep the ' +
+      'category they were bought under, because an order carries a snapshot.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'product',
+        type: 'STRING',
+        description: 'The product title.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'category',
+        type: 'STRING',
+        description: 'The category it is in now.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.product_gone',
+    description:
+      'ONE answer for a product id that is unknown, malformed or another tenant’s — ' +
+      'the rule `bot.admin.panel_gone` states.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },

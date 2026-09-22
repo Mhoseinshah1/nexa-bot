@@ -4,7 +4,13 @@ import { resolveKeyring } from '../crypto/resolve-keyring.js';
 import { loadConfig } from '../config/load-config.js';
 import { acceptsV1 } from '../config/config.schema.js';
 import { createDatabase, type Database } from './database.js';
-import { botInstances, paymentAccounts, paymentGateways, tenants } from './schema.js';
+import {
+  botInstances,
+  paymentAccounts,
+  paymentGateways,
+  productCategories,
+  tenants,
+} from './schema.js';
 
 /**
  * Deterministic seed data.
@@ -26,6 +32,8 @@ export const SEED_IDS = {
   botB1: '01900000-0000-7000-8000-00000000b001',
   paymentAccountA: '01900000-0000-7000-8000-0000000000a1',
   paymentAccountB: '01900000-0000-7000-8000-0000000000b1',
+  categoryA: '01900000-0000-7000-8000-0000000000c1',
+  categoryB: '01900000-0000-7000-8000-0000000000c2',
 } as const;
 
 /**
@@ -140,6 +148,27 @@ export async function seed(db: Database, cipher: SecretCipher): Promise<void> {
    *
    * TWO tenants, because a cross-tenant test with one seeded destination proves nothing.
    */
+  /*
+   * One default category per tenant, because a product must have one to be sold.
+   *
+   * Migration 0097 gives every EXISTING tenant this row. Without it here, a freshly
+   * provisioned installation would differ from a migrated one in a way an operator
+   * only discovers when their first product turns out to be unsellable — and the
+   * refusal would name a rule they had no way to satisfy, because there would be no
+   * category to pick.
+   *
+   * The name matches the migration's for the same reason it is a literal there: it is
+   * the starting value of TENANT DATA, exactly like a product's title, and the operator
+   * renames it from either admin surface.
+   */
+  await db
+    .insert(productCategories)
+    .values([
+      { id: SEED_IDS.categoryA, tenantId: SEED_IDS.tenantA, name: 'عمومی', sortOrder: 0 },
+      { id: SEED_IDS.categoryB, tenantId: SEED_IDS.tenantB, name: 'عمومی', sortOrder: 0 },
+    ])
+    .onConflictDoNothing();
+
   await db
     .insert(paymentAccounts)
     .values([

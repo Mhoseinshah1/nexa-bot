@@ -12,6 +12,7 @@ import {
   type PaymentReceiptId,
   type ProductId,
   type UserId,
+  type ProductCategoryId,
 } from '@nexa/contracts';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { RECEIPT_CAPTURE_LOCK_CLASS } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-receipt.repository';
@@ -25,6 +26,7 @@ import {
   tenantA,
   tenantB,
   type TestContext,
+  SEED_IDS,
 } from './harness';
 
 /**
@@ -578,6 +580,7 @@ describe('a customer sending a receipt', () => {
         audience: 'EVERYONE',
         sortOrder: 10,
         panelId: panelA as PanelId,
+        categoryId: SEED_IDS.categoryA as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: 2 },
         price: money(250_000n, 'IRT'),
       } satisfies ProductDraft,

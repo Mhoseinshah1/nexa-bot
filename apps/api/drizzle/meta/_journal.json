@@ -680,6 +680,34 @@
       "when": 1790021442562,
       "tag": "0096_provider_refused_failure_kind",
       "breakpoints": true
+    },
+    {
+      "idx": 97,
+      "version": "7",
+      "when": 1790092220619,
+      "tag": "0097_product_categories",
+      "breakpoints": true
+    },
+    {
+      "idx": 98,
+      "version": "7",
+      "when": 1790093139229,
+      "tag": "0098_category_paging_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 99,
+      "version": "7",
+      "when": 1790093140229,
+      "tag": "0099_every_tenant_has_a_category",
+      "breakpoints": true
+    },
+    {
+      "idx": 100,
+      "version": "7",
+      "when": 1790093141229,
+      "tag": "0100_category_ids_are_uuidv7",
+      "breakpoints": true
     }
   ]
 }

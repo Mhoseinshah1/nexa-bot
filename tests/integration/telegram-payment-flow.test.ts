@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { ProductCategoryId } from '@nexa/contracts';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { TELEGRAM_SECRET_TOKEN_HEADER, money, type ProductId } from '@nexa/contracts';
@@ -13,6 +14,7 @@ import {
   makePanelSellable,
   migrateOnce,
   resetDatabase,
+  seededCategoryFor,
   tenantA,
   tenantB,
   testConfig,
@@ -175,12 +177,20 @@ describe('the customer payment flow over Telegram', () => {
     });
   };
 
-  const draft = (overrides: Partial<ProductDraft> = {}): ProductDraft => ({
+  const draft = (scope: typeof tenantA, overrides: Partial<ProductDraft> = {}): ProductDraft => ({
     title: 'پلن پایه',
     description: null,
     audience: 'EVERYONE',
     sortOrder: 10,
     panelId: panelA as never,
+    /*
+     * The category of the tenant this draft is written for, never a fixed one.
+     * `products_tenant_category_fk` is composite, so a tenant B product filed under
+     * tenant A's category is refused by the database — turning a cross-tenant
+     * isolation test into a foreign-key error instead of the assertion it was
+     * written to make.
+     */
+    categoryId: seededCategoryFor(scope) as ProductCategoryId,
     specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: 2 },
     price: money(250_000n, 'IRT'),
     ...overrides,
@@ -189,7 +199,7 @@ describe('the customer payment flow over Telegram', () => {
   async function sellableProduct(overrides: Partial<ProductDraft> = {}) {
     const created = await products.create(tenantA, {
       id: api.container.ids.uuid() as ProductId,
-      draft: draft(overrides),
+      draft: draft(tenantA, overrides),
       now: api.container.clock.now(),
     });
     await products.setStatus(tenantA, created.id, 'INACTIVE', 'ACTIVE', api.container.clock.now());
@@ -537,7 +547,7 @@ describe('the customer payment flow over Telegram', () => {
     await makePanelSellable(api.container, tenantB, panelB);
     const theirs = await products.create(tenantB, {
       id: api.container.ids.uuid() as ProductId,
-      draft: { ...draft(), panelId: panelB as never },
+      draft: { ...draft(tenantB), panelId: panelB as never },
       now: api.container.clock.now(),
     });
     const theirOrder = api.container.ids.uuid();
@@ -871,6 +881,17 @@ describe('the customer payment flow over Telegram', () => {
 
     await command(CATALOGUE_FA['bot.menu.catalog']);
 
+    /*
+     * Since WP5 the catalogue opens on its CATEGORIES, and a product is one tap further
+     * in. The requirement is unchanged — the menu tap produces the same inline keyboard
+     * the command does, and the inline flow still buys — so the case follows the
+     * category button the menu drew rather than assuming which category it is.
+     */
+    const categoryButton = buttonsOf(lastMessage()).find((b) => b.callback_data.startsWith('ck:'));
+    expect(categoryButton, 'the menu tap drew no category').toBeDefined();
+
+    sent = [];
+    await tap(categoryButton?.callback_data ?? '');
     const buttons = buttonsOf(lastMessage());
     expect(buttons.map((b) => b.callback_data)).toContain(`p:${product.id}`);
 
