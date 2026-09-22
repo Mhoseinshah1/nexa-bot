@@ -881,6 +881,17 @@ describe('the customer payment flow over Telegram', () => {
 
     await command(CATALOGUE_FA['bot.menu.catalog']);
 
+    /*
+     * Since WP5 the catalogue opens on its CATEGORIES, and a product is one tap further
+     * in. The requirement is unchanged — the menu tap produces the same inline keyboard
+     * the command does, and the inline flow still buys — so the case follows the
+     * category button the menu drew rather than assuming which category it is.
+     */
+    const categoryButton = buttonsOf(lastMessage()).find((b) => b.callback_data.startsWith('ck:'));
+    expect(categoryButton, 'the menu tap drew no category').toBeDefined();
+
+    sent = [];
+    await tap(categoryButton?.callback_data ?? '');
     const buttons = buttonsOf(lastMessage());
     expect(buttons.map((b) => b.callback_data)).toContain(`p:${product.id}`);
 

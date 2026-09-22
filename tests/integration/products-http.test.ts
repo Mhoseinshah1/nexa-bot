@@ -221,6 +221,9 @@ describe('product HTTP surface', () => {
     expect(Object.keys(row).sort()).toEqual(
       [
         'audience',
+        // WP5: the category a product is filed under — an id this tenant owns, never
+        // a panel fact, so it does not widen what `catalog.view` can see.
+        'categoryId',
         'createdAt',
         'deviceLimit',
         'description',
