@@ -24,6 +24,9 @@ import {
 import type {
   CustomerPage,
   PanelDirectory,
+  ProductCategoryDraft,
+  ProductCategoryEdit,
+  ProductCategoryListing,
   ProductCategoryRecord,
   ProductCategoryRepository,
   ProductCursor,
@@ -199,6 +202,30 @@ export class DrizzleProductRepository implements ProductRepository {
       .where(and(eq(products.tenantId, tenantId), eq(products.id, id), eq(products.status, from)))
       .returning({ id: products.id });
     return rows.length > 0;
+  }
+
+  /**
+   * Moves a product into a category. Tenant-predicated, like every write here.
+   *
+   * `products_tenant_category_fk` is composite, so a category belonging to another
+   * tenant is refused by the database even if this predicate were ever dropped. The
+   * service takes the destination's row lock first, so the category named here is one
+   * that still exists at commit rather than one that did when the request arrived.
+   */
+  async setCategory(
+    scope: TenantContext,
+    id: ProductId,
+    categoryId: ProductCategoryId,
+    now: Date,
+    tx?: unknown,
+  ): Promise<ProductRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .update(products)
+      .set({ categoryId, updatedAt: now })
+      .where(and(eq(products.tenantId, tenantId), eq(products.id, id)))
+      .returning();
+    return row === undefined ? null : toRecord(row);
   }
 
   /**
@@ -527,10 +554,11 @@ export class DrizzlePanelDirectory implements PanelDirectory {
 /**
  * Categories, in PostgreSQL.
  *
- * One method for now, and it is the one the order path needs: the authoritative read
- * inside the confirming transaction. The admin surfaces get theirs when they are built;
- * a repository full of methods nothing calls is the "placeholder abstraction" the
- * conventions forbid.
+ * The reads the order path needs and the writes an operator's surfaces perform. Every
+ * one of them carries the tenant predicate, primary-key lookups included, for the reason
+ * `DrizzleProductRepository` states above: a row filtered in the query never leaves the
+ * database, and a row filtered afterwards has already been handed to code that must then
+ * remember to throw it away.
  */
 export class DrizzleProductCategoryRepository implements ProductCategoryRepository {
   constructor(private readonly db: Database) {}
@@ -598,5 +626,224 @@ export class DrizzleProductCategoryRepository implements ProductCategoryReposito
       RETURNING id` as never,
     )) as unknown as { rows: readonly unknown[] };
     return { created: result.rows.length > 0 };
+  }
+
+  /**
+   * Every category, in the operator's order, each with the number of products in it.
+   *
+   * A LEFT JOIN rather than a correlated subquery per row, and the join carries the
+   * tenant on BOTH sides. `products.tenant_id = product_categories.tenant_id` looks
+   * redundant next to the WHERE — it is not: without it the count would include another
+   * tenant's products that name an id equal to one of this tenant's, which the composite
+   * foreign key makes impossible today and which a future schema change could make
+   * possible again. The predicate costs nothing and cannot rot.
+   */
+  async listForOperator(
+    scope: TenantContext,
+    tx?: unknown,
+  ): Promise<readonly ProductCategoryListing[]> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({
+        ...getTableColumns(productCategories),
+        productCount: sql<number>`count(${products.id})::int`,
+      })
+      .from(productCategories)
+      .leftJoin(
+        products,
+        and(
+          eq(products.categoryId, productCategories.id),
+          eq(products.tenantId, productCategories.tenantId),
+        ),
+      )
+      .where(eq(productCategories.tenantId, tenantId))
+      .groupBy(productCategories.id)
+      .orderBy(asc(productCategories.sortOrder), asc(productCategories.id));
+    return rows.map((row) => ({
+      ...toCategoryRecord(row),
+      productCount: Number(row.productCount),
+    }));
+  }
+
+  async create(
+    scope: TenantContext,
+    input: {
+      readonly id: ProductCategoryId;
+      readonly draft: ProductCategoryDraft;
+      readonly now: Date;
+    },
+    tx?: unknown,
+  ): Promise<ProductCategoryRecord> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .insert(productCategories)
+      .values({
+        id: input.id,
+        tenantId,
+        name: input.draft.name,
+        description: input.draft.description,
+        emoji: input.draft.emoji,
+        sortOrder: input.draft.sortOrder,
+        createdAt: input.now,
+        updatedAt: input.now,
+      })
+      .returning();
+    if (row === undefined) throw new Error('insert returned no row');
+    return toCategoryRecord(row);
+  }
+
+  async update(
+    scope: TenantContext,
+    id: ProductCategoryId,
+    edit: ProductCategoryEdit,
+    now: Date,
+    tx?: unknown,
+  ): Promise<ProductCategoryRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .update(productCategories)
+      .set({
+        name: edit.name,
+        description: edit.description,
+        emoji: edit.emoji,
+        updatedAt: now,
+      })
+      .where(and(eq(productCategories.tenantId, tenantId), eq(productCategories.id, id)))
+      .returning();
+    return row === undefined ? null : toCategoryRecord(row);
+  }
+
+  /**
+   * Conditional on the CURRENT status, so a replay and a race both write once.
+   *
+   * `eq(status, from)` in the WHERE is what makes this a transition rather than an
+   * assignment. Two operators pressing Deactivate at the same moment produce one UPDATE
+   * and one audit row; the loser gets null and its caller reads the row to find out it
+   * was already there — a success that changed nothing, rather than a second transition
+   * to the same place.
+   */
+  async setStatus(
+    scope: TenantContext,
+    id: ProductCategoryId,
+    from: ProductCategoryStatus,
+    to: ProductCategoryStatus,
+    now: Date,
+    tx?: unknown,
+  ): Promise<ProductCategoryRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .update(productCategories)
+      .set({ status: to, updatedAt: now })
+      .where(
+        and(
+          eq(productCategories.tenantId, tenantId),
+          eq(productCategories.id, id),
+          eq(productCategories.status, from),
+        ),
+      )
+      .returning();
+    return row === undefined ? null : toCategoryRecord(row);
+  }
+
+  /** As `setStatus`, for visibility. The two are independent — audit §6.3. */
+  async setVisibility(
+    scope: TenantContext,
+    id: ProductCategoryId,
+    from: ProductCategoryVisibility,
+    to: ProductCategoryVisibility,
+    now: Date,
+    tx?: unknown,
+  ): Promise<ProductCategoryRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .update(productCategories)
+      .set({ visibility: to, updatedAt: now })
+      .where(
+        and(
+          eq(productCategories.tenantId, tenantId),
+          eq(productCategories.id, id),
+          eq(productCategories.visibility, from),
+        ),
+      )
+      .returning();
+    return row === undefined ? null : toCategoryRecord(row);
+  }
+
+  /**
+   * One UPDATE for the whole new order, driven by a pair of arrays unnested and joined
+   * on the id.
+   *
+   * One statement rather than N, because the order is a property of the SET and not of
+   * any row in it. Applied one at a time, a concurrent reader between two of them sees
+   * an arrangement no operator asked for — two categories at position 3, or a gap — and
+   * a failure halfway leaves the tenant in one permanently.
+   *
+   * Two bind parameters rather than 2N, which is the shape R4-N4 settled on for panel
+   * ids: a keyboard's worth of categories would otherwise be a statement whose parameter
+   * count grows with the tenant's catalogue.
+   *
+   * The tenant predicate is on the UPDATE, so an id belonging to somebody else matches
+   * nothing and the returned count is short. The caller compares that count against what
+   * it asked for rather than assuming success.
+   */
+  async reorder(
+    scope: TenantContext,
+    positions: readonly { readonly id: ProductCategoryId; readonly sortOrder: number }[],
+    now: Date,
+    tx?: unknown,
+  ): Promise<number> {
+    if (positions.length === 0) return 0;
+    const tenantId = requireTenantId(scope);
+    const result = (await this.exec(tx).execute(
+      sql`
+      UPDATE ${productCategories} AS c
+      SET sort_order = w.sort_order, updated_at = ${now}::timestamptz
+      FROM (
+        SELECT unnest(${positions.map((p) => p.id)}::uuid[]) AS id,
+               unnest(${positions.map((p) => p.sortOrder)}::integer[]) AS sort_order
+      ) AS w
+      WHERE c.id = w.id AND c.tenant_id = ${tenantId}::uuid
+      RETURNING c.id` as never,
+    )) as unknown as { rows: readonly unknown[] };
+    return result.rows.length;
+  }
+
+  async countProducts(scope: TenantContext, id: ProductCategoryId, tx?: unknown): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .select({ n: sql<number>`count(*)::int` })
+      .from(products)
+      .where(and(eq(products.tenantId, tenantId), eq(products.categoryId, id)));
+    return Number(row?.n ?? 0);
+  }
+
+  async delete(scope: TenantContext, id: ProductCategoryId, tx?: unknown): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .delete(productCategories)
+      .where(and(eq(productCategories.tenantId, tenantId), eq(productCategories.id, id)))
+      .returning({ id: productCategories.id });
+    return rows.length > 0;
+  }
+
+  /**
+   * `SELECT … FOR UPDATE` on the category, so what is counted afterwards is what we
+   * commit on.
+   *
+   * The delete path reads a product count and then deletes. Without the lock, a product
+   * created into this category between the two makes the count a statement about a state
+   * we are no longer in. The database's own foreign key catches that particular case —
+   * but it catches it as a constraint violation, which is a 500 where the operator was
+   * owed a sentence saying how many products are in the way.
+   */
+  async lock(scope: TenantContext, id: ProductCategoryId, tx: unknown): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .select({ id: productCategories.id })
+      .from(productCategories)
+      .where(and(eq(productCategories.tenantId, tenantId), eq(productCategories.id, id)))
+      .for('update')
+      .limit(1);
+    return row !== undefined;
   }
 }

@@ -227,6 +227,23 @@ export interface ProductRepository {
   ): Promise<boolean>;
 
   /**
+   * Files a product under a category, and answers the product as it now stands.
+   *
+   * A plain assignment rather than a `from`-conditional transition, unlike `setStatus`:
+   * a status is a state machine where a repeat press must not count twice, and a
+   * category is a pointer where writing the value it already holds is exactly what was
+   * asked for. The caller reads the row first so the audit trail carries where it moved
+   * FROM, which may be null.
+   */
+  setCategory(
+    scope: TenantContext,
+    id: ProductId,
+    categoryId: ProductCategoryId,
+    now: Date,
+    tx?: unknown,
+  ): Promise<ProductRecord | null>;
+
+  /**
    * The customer-visible catalogue, in `sortOrder, createdAt, id` order.
    *
    * A BOUNDED page rather than a traversal, and the bound is the point. The ordering
@@ -313,6 +330,38 @@ export interface CustomerPage<T> {
  * caller holds `product.categoryId`, which is nullable by design, and making each of
  * them write the same guard is how one of them eventually forgets.
  */
+/**
+ * What an operator may change about a category.
+ *
+ * `sortOrder` is absent on purpose: reordering is its own operation because it names
+ * several categories at once, and folding it in here would let an edit of one category
+ * silently collide with an edit of another onto the same position.
+ */
+export interface ProductCategoryEdit {
+  readonly name: string;
+  readonly description: string | null;
+  readonly emoji: string | null;
+}
+
+/** A new category. `status` and `visibility` are not chosen at creation — see the service. */
+export interface ProductCategoryDraft extends ProductCategoryEdit {
+  readonly sortOrder: number;
+}
+
+/**
+ * A category in an operator's list, with the count an operator actually needs.
+ *
+ * `productCount` counts EVERY product filed under it, active or not, because the
+ * question it answers is "may I delete this" and an inactive product blocks a delete
+ * exactly as an active one does. The customer-facing emptiness rule is a different
+ * question with a different predicate, and lives in the SQL of `listCustomerCategories`
+ * rather than here — counting to decide what a customer sees is the mistake
+ * `docs/wp5-categories-audit.md` §6.4 forbids.
+ */
+export interface ProductCategoryListing extends ProductCategoryRecord {
+  readonly productCount: number;
+}
+
 export interface ProductCategoryRepository {
   findById(
     scope: TenantContext,
@@ -339,4 +388,92 @@ export interface ProductCategoryRepository {
     input: { readonly id: ProductCategoryId; readonly name: string; readonly now: Date },
     tx?: unknown,
   ): Promise<{ readonly created: boolean }>;
+
+  /**
+   * Every category the tenant has, with its product count, in the operator's order.
+   *
+   * Unpaged, and that is a decision rather than an omission. A category list is a
+   * handful of rows an operator arranges by hand — `sort_order` is capped at 100000 by
+   * a CHECK and the reorder operation names them all at once — so paging it would
+   * make "move this to the top" a question about which page the top is on. The
+   * CUSTOMER list is paged, because it is read by somebody who did not create it.
+   */
+  listForOperator(scope: TenantContext, tx?: unknown): Promise<readonly ProductCategoryListing[]>;
+
+  create(
+    scope: TenantContext,
+    input: {
+      readonly id: ProductCategoryId;
+      readonly draft: ProductCategoryDraft;
+      readonly now: Date;
+    },
+    tx?: unknown,
+  ): Promise<ProductCategoryRecord>;
+
+  update(
+    scope: TenantContext,
+    id: ProductCategoryId,
+    edit: ProductCategoryEdit,
+    now: Date,
+    tx?: unknown,
+  ): Promise<ProductCategoryRecord | null>;
+
+  /**
+   * Moves a category from one status to another, and answers null when it was not in
+   * `from`.
+   *
+   * Conditional on the CURRENT status rather than a blind write, for the reason every
+   * transition in this codebase is: two operators pressing the same button, or one
+   * pressing it twice, must produce one transition and one audit row. The caller
+   * distinguishes "already there" from "not found" by reading the row afterwards.
+   */
+  setStatus(
+    scope: TenantContext,
+    id: ProductCategoryId,
+    from: ProductCategoryStatus,
+    to: ProductCategoryStatus,
+    now: Date,
+    tx?: unknown,
+  ): Promise<ProductCategoryRecord | null>;
+
+  /** As `setStatus`, for visibility. The two are independent: §6.3 of the audit. */
+  setVisibility(
+    scope: TenantContext,
+    id: ProductCategoryId,
+    from: ProductCategoryVisibility,
+    to: ProductCategoryVisibility,
+    now: Date,
+    tx?: unknown,
+  ): Promise<ProductCategoryRecord | null>;
+
+  /**
+   * Writes a new position for each named category, in ONE statement.
+   *
+   * One statement because the order is a property of the SET rather than of any row in
+   * it: applied one UPDATE at a time, a concurrent read between them sees an order that
+   * no operator ever asked for, and a failure halfway leaves one.
+   */
+  reorder(
+    scope: TenantContext,
+    positions: readonly { readonly id: ProductCategoryId; readonly sortOrder: number }[],
+    now: Date,
+    tx?: unknown,
+  ): Promise<number>;
+
+  /**
+   * Counts the products filed under a category — ALL of them, whatever their status.
+   *
+   * Read under the category's row lock by the delete path, because a count taken before
+   * the lock answers the state the loser of a race started from. `products_tenant_category_fk`
+   * is `ON DELETE NO ACTION`, so the database refuses the delete anyway; this count
+   * exists so the operator is told how many products are in the way instead of meeting
+   * a constraint name.
+   */
+  countProducts(scope: TenantContext, id: ProductCategoryId, tx?: unknown): Promise<number>;
+
+  /** Deletes the row and reports whether one was there. Never cascades. */
+  delete(scope: TenantContext, id: ProductCategoryId, tx?: unknown): Promise<boolean>;
+
+  /** Takes the category's row lock, so a count read after it is the state we commit on. */
+  lock(scope: TenantContext, id: ProductCategoryId, tx: unknown): Promise<boolean>;
 }
