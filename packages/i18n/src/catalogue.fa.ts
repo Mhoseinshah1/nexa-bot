@@ -353,6 +353,43 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.customer_unblock_button': '✅ رفع مسدودی',
   'bot.admin.customer_status_changed': 'وضعیت {telegramId} اکنون {status} است.',
   'bot.admin.customer_usage': 'دستور ناقص یا نامعتبر است.\n\n/customer <شناسهٔ عددی تلگرام>',
+  'bot.admin.categories_button': '🗂 دسته‌بندی‌ها',
+  'bot.admin.categories_section':
+    'دسته‌بندی‌ها به همان ترتیبی که مشتری می‌بیند. کنار هر دسته وضعیت و نمایش آن آمده است؛ برای مدیریت روی هرکدام بزنید.\n\nبرای ساختن دستهٔ تازه:\n/category_new <نام>',
+  'bot.admin.categories_none':
+    'هنوز هیچ دسته‌ای ساخته نشده است. تا محصولی در دسته‌ای نباشد، فروخته نمی‌شود.\n\nبرای ساختن دستهٔ تازه:\n/category_new <نام>',
+  'bot.admin.categories_next_button': '▶️ صفحهٔ بعد',
+  'bot.admin.categories_previous_button': '◀️ صفحهٔ قبل',
+  'bot.admin.categories_back_button': 'بازگشت به دسته‌بندی‌ها',
+  'bot.admin.category_detail':
+    'دسته: {emoji} {name}\nوضعیت: {status}\nنمایش: {visibility}\nتعداد محصولات: {products}\nشناسه: {id}\n\nبرای تغییر نام یا ایموجی:\n/category_rename <شناسهٔ دسته> <نام تازه>\n/category_emoji <شناسهٔ دسته> <ایموجی یا ->',
+  'bot.admin.category_gone': 'چنین دسته‌ای یافت نشد.',
+  'bot.admin.category_activate_button': '✅ فعال کردن',
+  'bot.admin.category_deactivate_button': '⏸ غیرفعال کردن',
+  'bot.admin.category_show_button': '👁 نمایش به مشتری',
+  'bot.admin.category_hide_button': '🙈 پنهان کردن',
+  'bot.admin.category_up_button': '⬆️ بالاتر',
+  'bot.admin.category_down_button': '⬇️ پایین‌تر',
+  'bot.admin.category_delete_button': '🗑 حذف دسته',
+  'bot.admin.category_delete_ask':
+    'دستهٔ «{name}» حذف شود؟ این کار برگشت‌پذیر نیست. سفارش‌های گذشته نام دسته را نگه می‌دارند.',
+  'bot.admin.category_delete_confirm_button': 'بله، حذف شود',
+  'bot.admin.category_deleted': 'دستهٔ «{name}» حذف شد.',
+  'bot.admin.category_not_empty':
+    'این دسته هنوز {products} محصول دارد و حذف نشد. ابتدا محصولاتش را به دستهٔ دیگری منتقل کنید.',
+  'bot.admin.category_usage':
+    'دستور ناقص یا نامعتبر است.\n\n/category_new <نام>\n/category_rename <شناسهٔ دسته> <نام تازه>\n/category_emoji <شناسهٔ دسته> <ایموجی یا ->',
+  'bot.admin.category_products_button': '🔀 انتقال محصول به دستهٔ دیگر',
+  'bot.admin.category_products':
+    'محصولی را که می‌خواهید جابه‌جا کنید انتخاب کنید. کنار هر محصول دستهٔ فعلی‌اش آمده است؛ «—» یعنی بدون دسته، و چنین محصولی تا در دسته‌ای قرار نگیرد فروخته نمی‌شود.',
+  'bot.admin.category_products_none': 'محصولی در این صفحه نیست.',
+  'bot.admin.category_products_more_button': '▶️ محصولات بیشتر',
+  'bot.admin.category_pick':
+    'محصول «{product}» اکنون در دستهٔ «{category}» است. دستهٔ مقصد را انتخاب کنید.',
+  'bot.admin.category_pick_none':
+    'دستهٔ دیگری برای انتقال این محصول وجود ندارد.\n\nبرای ساختن دستهٔ تازه:\n/category_new <نام>',
+  'bot.admin.category_moved': 'محصول «{product}» به دستهٔ «{category}» منتقل شد.',
+  'bot.admin.product_gone': 'چنین محصولی یافت نشد.',
   'bot.admin.section':
     'فهرست ادمین‌های این نصب ({shown} از {total}). برای دیدن جزئیات و تغییر وضعیت، روی نام هرکدام بزنید.\n\nبرای دادن دسترسی تلگرام به یک ادمین موجود:\n/link <شناسهٔ عددی تلگرام> <نام کاربری ادمین>\n\nبرای تعیین نقش یک ادمین:\n/role <نام کاربری ادمین> <کلید نقش>',
   'bot.admin.admins_none':
