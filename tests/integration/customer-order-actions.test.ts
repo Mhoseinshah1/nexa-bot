@@ -189,6 +189,38 @@ describe('a customer acting on their own order', () => {
     return row;
   };
 
+  /**
+   * Waits until `expected` transactions are actually blocked on a row lock.
+   *
+   * Replaces a fixed `setTimeout(250)`, and the difference is not cosmetic. A
+   * sleep ASSUMES the racer reached the lock; on a loaded runner it can expire
+   * first, the competing write commits, and the racer's opening read then sees
+   * the finished state and takes an early return. The case still passes — while
+   * never having entered the window it exists to test. Codex flagged exactly that
+   * on PR #59, and it is the same shape as the `Promise.all` case this file
+   * already had to correct once.
+   *
+   * `locktype IN ('tuple', 'transactionid')` is how a waiter on a row appears:
+   * it queues on the tuple, then on the holder's transaction id.
+   */
+  async function awaitBlocked(expected: number, what: string): Promise<void> {
+    const deadline = Date.now() + 5_000;
+    for (;;) {
+      const rows = (await ctx.container.database.db.execute(
+        sql`SELECT count(*)::int AS n FROM pg_locks
+             WHERE NOT granted AND locktype IN ('tuple', 'transactionid')` as never,
+      )) as unknown as { rows: { n: number }[] };
+      if ((rows.rows[0]?.n ?? 0) >= expected) return;
+      if (Date.now() > deadline) {
+        throw new Error(
+          `${what} never blocked on the payment row. Either it no longer reads that row ` +
+            'under a lock, or it does so outside the transaction this case is driving.',
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
   const auditActions = async (entityId: string): Promise<string[]> => {
     const rows = (await ctx.container.database.db.execute(
       sql`SELECT action FROM audit_logs WHERE entity_id = ${entityId} ORDER BY occurred_at ASC, id ASC` as never,
@@ -634,6 +666,97 @@ describe('a customer acting on their own order', () => {
     expect((await orderRow(order.id)).state).toBe('AWAITING_PAYMENT');
   });
 
+  it('refuses an actor that does not hold the order permission', async () => {
+    /*
+     * The guard check inside `OrderService.authorize`, measured rather than assumed.
+     *
+     * Every other case here runs as `SYSTEM_JOB`, which holds `maintenance.run` — and
+     * `ORDER_PLACE_PERMISSION` IS `maintenance.run`, so every one of them passes the
+     * check on its way through. That makes them all blind to whether the check happens
+     * at all: replacing both `guard.check` calls with no-ops left every case in this
+     * file green, and the two order suites beside it green as well. A rule with no test
+     * is a rule that will be silently reverted, and this is the test — it is what M9 in
+     * `docs/wp4-falsification.md` kills.
+     *
+     * The admin is created with NO roles rather than with a role that omits the key,
+     * because a role's contents are a seed decision that can change; holding nothing is
+     * the only permission set that cannot drift into holding this one.
+     *
+     * Two assertions, because `authorize` has two halves. The refusal is the guard; the
+     * DENIED row is `recordMutationDenial`, which exists so that charging the permission
+     * BEFORE the replay lookup does not make a denial silent.
+     */
+    const order = await awaitingPayment(tenantA, customerA, panelA, 'cancel-auth');
+    const unprivileged = await createAdmin(ctx.container, tenantA, {
+      username: 'holds-nothing',
+      roleKeys: [],
+    });
+
+    await expect(
+      ctx.container.orders.cancelByCustomer(tenantA, adminActorFor(unprivileged), {
+        idempotencyKey: 'cancel-auth-do',
+        customerId: customerA,
+        orderId: order.id,
+      }),
+    ).rejects.toMatchObject({ code: 'platform.permission_denied' });
+
+    const after = await orderRow(order.id);
+    expect(after.state).toBe('AWAITING_PAYMENT');
+    expect(after.cancelled_at).toBeNull();
+
+    /*
+     * `order.cancel` rows are counted BY RESULT, not by presence. A denial writes one
+     * under the same action name, so `not.toContain('order.cancel')` would be a
+     * contradiction: it would fail on the very row the second half of this case
+     * requires. The claim is that the refused attempt produced a DENIED row and no
+     * SUCCESS one.
+     */
+    const rows = (await ctx.container.database.db.execute(
+      sql`SELECT result, count(*)::int AS n FROM audit_logs
+          WHERE entity_id = ${order.id} AND action = 'order.cancel'
+          GROUP BY result` as never,
+    )) as unknown as { rows: { result: string; n: number }[] };
+    expect(rows.rows).toEqual([{ result: 'DENIED', n: 1 }]);
+  });
+
+  it('refuses an unauthorized replay instead of answering it from the record', async () => {
+    /*
+     * Why `authorize` charges the permission BEFORE the replay lookup, measured.
+     *
+     * A replay answers from `request_idempotency` without re-running the command. If
+     * the permission were charged inside the transaction only, a caller holding nothing
+     * could present a key somebody else had already used and be handed that order back
+     * — authorization bypassed by a lookup, with the order never re-read under scope.
+     *
+     * This is the case that separates the two checks. Removing the early one alone
+     * leaves every other case here green, because `runAuthorizedMutation` re-checks
+     * inside the transaction and a FIRST attempt is refused either way; only a replay,
+     * which never reaches that transaction, can tell them apart.
+     */
+    const order = await awaitingPayment(tenantA, customerA, panelA, 'cancel-replay-auth');
+    const command = {
+      idempotencyKey: 'cancel-replay-auth-do',
+      customerId: customerA,
+      orderId: order.id,
+    };
+
+    const first = await ctx.container.orders.cancelByCustomer(
+      tenantA,
+      systemActor('cancel-replay-auth-do'),
+      command,
+    );
+    expect(first.state).toBe('CANCELLED');
+
+    const unprivileged = await createAdmin(ctx.container, tenantA, {
+      username: 'holds-nothing-on-replay',
+      roleKeys: [],
+    });
+
+    await expect(
+      ctx.container.orders.cancelByCustomer(tenantA, adminActorFor(unprivileged), command),
+    ).rejects.toMatchObject({ code: 'platform.permission_denied' });
+  });
+
   it('answers both when two taps arrive together', async () => {
     /*
      * Two commands with different keys, started together: both are answered with the
@@ -772,11 +895,11 @@ describe('a customer acting on their own order', () => {
           );
 
           /*
-           * Long enough for the cancellation to reach the lock and stop there. It
-           * cannot proceed past `withdrawPendingFor` while this transaction holds the
-           * row, so the wait establishes the ordering rather than hoping for it.
+           * Waits for the cancellation to actually reach the lock and stop there,
+           * rather than assuming it did. It cannot proceed past `withdrawPendingFor`
+           * while this transaction holds the row, so this ESTABLISHES the ordering.
            */
-          await new Promise((resolve) => setTimeout(resolve, 250));
+          await awaitBlocked(1, 'the cancellation');
           /*
            * `settled_at` moves with the state because `orders_settled_at_check` binds
            * them — `(state = 'PAID' OR state = 'REFUNDED') = (settled_at IS NOT NULL)`.
@@ -805,6 +928,48 @@ describe('a customer acting on their own order', () => {
       expect(settled.state).toBe('PAID');
       /* And never the impossible pair: PAID carrying a cancellation stamp. */
       expect(settled.cancelled_at).toBeNull();
+    });
+
+    /**
+     * WP4. A key reused with a different payload is refused before anything happens.
+     *
+     * `find` compares the stored request hash and raises
+     * `IDEMPOTENCY_PAYLOAD_MISMATCH` — BEFORE the transaction opens — so the refusal
+     * costs nothing and leaves nothing. Asserted rather than assumed, because the
+     * alternative shape (let it run, fail at the end) is the one that would need the
+     * transaction boundary to undo a transition and an audit row.
+     *
+     * That alternative is also why `docs/wp4-falsification.md` records the transaction
+     * boundary as a mutation that kills nothing: writing the audit row outside the
+     * transaction is not detected by any case here, because no reachable path writes it
+     * and then rolls back. This case is the evidence for WHY it is unreachable, and the
+     * record says plainly that the boundary is held by review rather than by a test.
+     */
+    it('refuses a key reused with a different payload, changing nothing', async () => {
+      const order = await awaitingPayment(tenantA, customerA, panelA, 'race-10');
+      const key = 'race-10-cancel';
+
+      await ctx.container.database.db.execute(
+        sql`INSERT INTO request_idempotency (id, scope_ref, tenant_id, key, request_hash, result)
+            VALUES (${ctx.container.ids.uuid()}, ${`${tenantA.tenantId}|TELEGRAM`},
+                    ${tenantA.tenantId}, ${key}, ${'a-different-request'}, ${null})` as never,
+      );
+
+      await expect(
+        ctx.container.orders.cancelByCustomer(tenantA, systemActor('race-10'), {
+          idempotencyKey: key,
+          customerId: customerA,
+          orderId: order.id,
+        }),
+      ).rejects.toMatchObject({ code: 'platform.idempotency_payload_mismatch' });
+
+      const row = await orderRow(order.id);
+      expect(row.state, 'a refused key still moved the order').toBe('AWAITING_PAYMENT');
+      expect(row.cancelled_at).toBeNull();
+      expect(
+        (await auditActions(order.id)).filter((a) => a === 'order.cancel'),
+        'a refused key still claimed a cancellation',
+      ).toHaveLength(0);
     });
 
     /**
@@ -838,9 +1003,24 @@ describe('a customer acting on their own order', () => {
             () => ({ ok: true }) as const,
             (error: unknown) => ({ ok: false, error }) as const,
           );
-          await new Promise((resolve) => setTimeout(resolve, 250));
+          await awaitBlocked(1, 'the losing cancellation');
+          /*
+           * The winner, as the database sees it — and it RELEASES, which is the whole
+           * point of this case. Codex flagged on PR #59 that a winner which only moved
+           * the order row left the loser performing the first and only release, so the
+           * test proved nothing about calling either release twice. Deleting the
+           * reservation rows here is what the winning transaction really does, and it
+           * makes the loser's releases genuine SECOND calls.
+           */
           await holder.query(
             "UPDATE orders SET state = 'CANCELLED', cancelled_at = now(), updated_at = now() WHERE id = $1",
+            [order.id],
+          );
+          await holder.query('DELETE FROM panel_capacity_reservations WHERE order_id = $1', [
+            order.id,
+          ]);
+          await holder.query(
+            'DELETE FROM service_username_reservations WHERE order_id = $1 AND funded_at IS NULL',
             [order.id],
           );
           await holder.query('COMMIT');
@@ -851,7 +1031,12 @@ describe('a customer acting on their own order', () => {
         }
       });
 
-      expect((await losing).ok, 'an idempotent release must not fail the loser').toBe(true);
+      /*
+       * The loser ran both releases against rows the winner had already deleted. A
+       * release that stopped being idempotent surfaces HERE, as a failed transaction,
+       * rather than as a surviving row below.
+       */
+      expect((await losing).ok, 'a second release must not fail the loser').toBe(true);
 
       const slots = (await ctx.container.database.db.execute(
         sql`SELECT count(*)::int AS n FROM panel_capacity_reservations WHERE order_id = ${order.id}` as never,
@@ -963,7 +1148,7 @@ describe('a customer acting on their own order', () => {
             (error: unknown) => ({ ok: false, error }) as const,
           );
 
-          await new Promise((resolve) => setTimeout(resolve, 250));
+          await awaitBlocked(1, 'the cancellation');
           /*
            * The customer's claim lands while the cancellation is blocked. Written
            * directly because `signalTransferSent` would queue behind the same lock.
@@ -1049,7 +1234,7 @@ describe('a customer acting on their own order', () => {
           );
 
           /* Long enough to reach the lock and stop there, establishing the order. */
-          await new Promise((resolve) => setTimeout(resolve, 250));
+          await awaitBlocked(1, 'the losing cancellation');
           /*
            * The winner, as the database sees it. `cancelled_at` travels with the state
            * because `orders_cancelled_at_check` binds them.
@@ -1142,7 +1327,7 @@ describe('a customer acting on their own order', () => {
             (error: unknown) => ({ ok: false, error }) as const,
           );
 
-          await new Promise((resolve) => setTimeout(resolve, 250));
+          await awaitBlocked(1, 'the transfer signal');
           /*
            * `resolved_at` moves with the state because `payments_resolved_check` binds
            * them for FAILED, CANCELLED and EXPIRED alike.

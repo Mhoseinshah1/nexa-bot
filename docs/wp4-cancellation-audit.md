@@ -135,3 +135,17 @@ Required mutations, each reverted alone: the conditional state-transition guard;
 the winner check before the audit; the transaction boundary; the
 idempotency/replay guard; tenant and authorization scoping. Every result
 recorded, including any that survives.
+
+All of them were run, and the results are in `docs/wp4-falsification.md`: M1 the
+transition guard, M2 the winner check, M3 the replay guard, M5 ownership, M6
+tenancy, and M7–M9 authorization. Two results are recorded there in prose rather
+than as table rows, because neither kills a test and a row must name one:
+
+- the **transaction boundary** — dropping `tx` from the audit write SURVIVED, and
+  the reason is structural. No path in this suite rolls back after the audit
+  write is reached, so there is no interleaving that could observe it. Recorded
+  as a rule with no test rather than reported as covered.
+- the **inner permission check** alone. Charging the permission twice — once
+  before the replay lookup, once inside the transaction — means removing either
+  one by itself leaves every case green. That is two guards, not an untested
+  rule, so M9 removes both at once; M8 isolates what only the early one does.
