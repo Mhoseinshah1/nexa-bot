@@ -787,6 +787,11 @@ export class DrizzleProductCategoryRepository implements ProductCategoryReposito
    * ids: a keyboard's worth of categories would otherwise be a statement whose parameter
    * count grows with the tenant's catalogue.
    *
+   * `sql.param(array)` and NOT the bare array. Drizzle's template expands a bare JS array
+   * into a parenthesised list — a ROW constructor — and PostgreSQL then refuses
+   * `record::uuid[]`. The first version of this method did exactly that and would have
+   * failed on every reorder; `product-categories.test.ts` is what found it.
+   *
    * The tenant predicate is on the UPDATE, so an id belonging to somebody else matches
    * nothing and the returned count is short. The caller compares that count against what
    * it asked for rather than assuming success.
@@ -804,8 +809,8 @@ export class DrizzleProductCategoryRepository implements ProductCategoryReposito
       UPDATE ${productCategories} AS c
       SET sort_order = w.sort_order, updated_at = ${now}::timestamptz
       FROM (
-        SELECT unnest(${positions.map((p) => p.id)}::uuid[]) AS id,
-               unnest(${positions.map((p) => p.sortOrder)}::integer[]) AS sort_order
+        SELECT unnest(${sql.param(positions.map((p) => p.id))}::uuid[]) AS id,
+               unnest(${sql.param(positions.map((p) => p.sortOrder))}::integer[]) AS sort_order
       ) AS w
       WHERE c.id = w.id AND c.tenant_id = ${tenantId}::uuid
       RETURNING c.id` as never,
