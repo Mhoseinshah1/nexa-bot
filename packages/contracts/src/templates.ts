@@ -375,7 +375,48 @@ export const TEMPLATES = [
   },
   {
     key: 'bot.catalog.heading',
-    description: 'Introduces the product list.',
+    description:
+      'Introduces the product list — which, since categories, is the list INSIDE one ' +
+      'category. Reused rather than replaced so an override a tenant already wrote ' +
+      'keeps working. The category NAME is not a placeholder: it is an ' +
+      'operator-editable row, and the button the customer tapped already carries it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.catalog.categories_heading',
+    description:
+      'Introduces the CATEGORY list — the first step of the two-step browse. A ' +
+      'category appears here only when it has at least one product the customer ' +
+      'could actually buy, so this list never offers a dead end.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.catalog.category_empty',
+    description:
+      'The category the customer tapped has nothing left to sell — its last product ' +
+      'was withdrawn between the two taps. An ordinary outcome rather than an error, ' +
+      'and deliberately NOT the same sentence as an unconfigured catalogue: the shop ' +
+      'has other categories and this one says so.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.catalog.next_page_button',
+    description: 'Moves to the next page. Drawn only when a next page really exists.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.catalog.previous_page_button',
+    description: 'Moves back a page. Drawn only when the customer is past the first.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.catalog.back_to_categories_button',
+    description: 'Returns from a product page to the category list.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
