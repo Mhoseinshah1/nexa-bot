@@ -680,6 +680,13 @@
       "when": 1790021442562,
       "tag": "0096_provider_refused_failure_kind",
       "breakpoints": true
+    },
+    {
+      "idx": 97,
+      "version": "7",
+      "when": 1790092220619,
+      "tag": "0097_product_categories",
+      "breakpoints": true
     }
   ]
 }
