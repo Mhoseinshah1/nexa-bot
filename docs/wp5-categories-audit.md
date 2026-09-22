@@ -177,65 +177,90 @@ A category's fields mirror the product vocabulary rather than inventing a parall
 | emoji icon        | nullable, validated                                                 | see §6.1                                     |
 | stable identifier | `uuid` primary key, generated in-app                                | every other table                            |
 
-## 6. The three decisions that are NOT determined by the repository
+## 6. The three decisions, as the owner settled them
 
-Recorded here with their risk rather than chosen silently, as the brief requires.
+These were recorded as open when this audit was first written, because the brief says
+not to guess a dangerous default silently. The owner answered all three. Their answers
+are reproduced here as the specification the implementation is built against; where an
+answer differs from what this audit proposed, that is called out, because a proposal
+that quietly became a decision is how a guess gets laundered into a requirement.
 
-### 6.1 UNKNOWN — what an "emoji icon" is allowed to be
+### 6.1 Emoji — OPTIONAL, unicode text, no icon system
 
-The brief asks for an emoji icon. The repository has no precedent: no column anywhere
-stores a grapheme for display, and `docs/research/` does not establish what the legacy
-bot accepted. The risk of guessing is a category whose "icon" is an arbitrary string
-that a Telegram button label renders as mojibake, or a length that breaks a 64-byte
-`callback_data` neighbour.
+- nullable and optional; **absence must be valid**, everywhere, on every surface;
+- unicode text is sufficient — no separate icon library or icon system in WP5;
+- editable from **both** Web Admin and Telegram Admin;
+- the customer catalogue **displays it when present**.
 
-**Proposal, to be stated in the implementation rather than assumed here:** a nullable
-short text column with an explicit maximum, validated at the contract, with the
-validation stating what it does and does not enforce. Recorded as an open question if
-the validation turns out to need evidence the corpus does not have.
+Matches what this audit proposed. The "no icon system" clause is the load-bearing part:
+it forecloses a validated-enum-of-known-icons design, which would have been the
+defensible-looking way to get this wrong and would have made every operator's emoji a
+contract change.
 
-### 6.2 DECISION REQUIRED — does an order snapshot its category?
+### 6.2 Category snapshot — YES for new orders, and NEVER backfilled
 
-Product identity and pricing are already snapshotted (§1.6). A category is not, because
-there is no category.
+New orders snapshot the category used at purchase time, durably. The snapshot must not
+change if the product is later reassigned, the category renamed, the category
+hidden or inactivated, or the category deleted where deletion is allowed. It must carry
+enough authoritative category identity and display information to show truthfully what
+the order was bought from.
 
-- **If an order should ever display the category it was bought from**, the snapshot
-  columns must land in the same migration that adds categories. Adding them later means
-  every order written in between has no category and can never be given one truthfully.
-- **If it should not**, the audit must say so explicitly, so the absence is a decision a
-  reader can find rather than a gap they discover.
+**And the part this audit did not anticipate, stated by the owner in terms:**
 
-The brief's wording — "historical Orders preserve product/category/pricing snapshots
-unchanged after reassignment" — reads as requiring the snapshot. The implementation
-will add it, and this section is where that reading is recorded so it can be corrected
-if it is wrong.
+> Existing historical orders created before WP5 must NOT be backfilled with the
+> Product's current Category and presented as historical truth. For pre-WP5 orders:
+> category snapshot may remain NULL / unknown; do not invent historical data.
 
-### 6.3 DECISION REQUIRED — what a hidden or inactive category does to a DIRECT product reference
+Three consequences that bind the implementation:
 
-The brief says empty, inactive and hidden categories must not appear to customers. It
-does not say what happens when a customer holds a product id — from a screenshot, or
-from an operator who pasted it deliberately — whose category is hidden or inactive.
+1. the snapshot columns are **NULLABLE**, and no CHECK may require them;
+2. migration 0097 **must not** populate them from `products.category_id`. A backfill
+   would be fabricated provenance — the product's category TODAY is not evidence of
+   what the customer browsed months ago, and writing it into an order row makes a guess
+   indistinguishable from a record;
+3. every surface that renders an order must handle a NULL category **as unknown**, not
+   as an error and not by falling back to the product's current category. A fallback
+   join is the same fabrication performed at read time instead of write time.
 
-The repository has a strong precedent and it points in two different directions at once
-(§1.3):
+This is the same rule `orders.product_id`'s own comment already states for the rest of
+the line — "navigation only, the snapshot below is the truth" — extended to the one
+field that has no history to draw on.
 
-- `HIDDEN` on a product means unlisted but **still orderable**, and `catalog.ts` says
-  that is the whole point of the state existing.
-- `INACTIVE` on a product means **not orderable by anyone**, link or no link.
-- `RESELLERS_ONLY` is the one audience that is hidden AND refused, and
-  `catalog-visibility.ts` explains why: "Hiding it from the catalogue while leaving it
-  orderable would make the exclusion above cosmetic … the whole point of failing closed
-  is that both halves close."
+### 6.3 Hidden, inactive and empty — three different rules, one implementation
 
-**Proposal:** a hidden category hides its products from the listing but leaves them
-orderable, exactly like a `HIDDEN` product; an inactive category makes its products
-unorderable, exactly like an `INACTIVE` product. That is the reading that keeps one
-vocabulary rather than two, and it keeps the operator's "unlist this group" distinct
-from "stop selling this group" — the distinction `catalog.ts` says must not collapse.
+| state    | listed to customers?                            | orderable by direct reference?                                     |
+| -------- | ----------------------------------------------- | ------------------------------------------------------------------ |
+| HIDDEN   | no — not discoverable through category browsing | **YES**, if the product itself is otherwise eligible               |
+| INACTIVE | no                                              | **NO** — unavailable for new purchases, direct references included |
+| EMPTY    | never shown                                     | n/a — it has nothing to order                                      |
 
-This is a business rule, so it is recorded as a proposal with its reasoning. If the
-owner wants a hidden category to also refuse orders, that is the `RESELLERS_ONLY` shape
-instead, and it is a one-predicate change in `unorderableReason`.
+The owner confirmed the reading this audit proposed from `catalog.ts`: hidden alone does
+not make an otherwise valid product unorderable, and existing product-level eligibility
+rules still apply on top. That keeps "unlist this group" distinct from "stop selling
+this group", which is the distinction §1.3 says must not collapse.
+
+**The authoritative confirmation transaction must re-check the INACTIVE rule.** A
+catalogue filter is a courtesy — a product id travels in a screenshot, and a category
+can be deactivated between a customer's tap and their confirmation. This is the same
+discipline `PanelSalesGate` already has: filter for the shop, re-decide under lock for
+the money.
+
+**One rule, four callers**, stated by the owner as a requirement rather than a
+preference:
+
+> The same rule must be used by: catalog browsing; Telegram customer flow;
+> Web/application queries; authoritative order confirmation. Do not create separate
+> interpretations per surface.
+
+That is the shape §1.5 already describes — one evaluator plus its SQL twin, with a
+matrix test asserting the two agree — and it is what the implementation extends rather
+than duplicates.
+
+**Emptiness is structural, not a second check.** A category is empty exactly when no
+product in it passes the customer-visibility predicate. Deriving the customer's category
+list from the visible products, rather than listing categories and then asking each one
+whether it has any, means an empty category cannot be shown by an oversight: there is no
+code path that could.
 
 ## 7. Migration
 
@@ -273,3 +298,8 @@ constraints on it, both from `CLAUDE.md`:
   is not a pricing rule.
 - **No weakening of the hotfix.** `decideEligibility` and the payment-before-provisioning
   order are untouched; a category is a filter in front of them, never a replacement.
+- **No backfill of historical orders.** §6.2. Migration 0097 adds the snapshot columns
+  and leaves every pre-existing order's category NULL, and no surface may fill that NULL
+  by joining to the product's current category at read time.
+- **No icon system.** §6.1. An optional unicode text field, and nothing that would make
+  an operator's choice of emoji a contract change.
