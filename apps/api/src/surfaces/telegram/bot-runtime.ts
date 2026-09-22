@@ -2516,6 +2516,23 @@ export const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
   [COMMERCE_ERROR_CODES.PRODUCT_NOT_PRICED]: 'bot.order.unavailable',
   [COMMERCE_ERROR_CODES.PRODUCT_NOT_FULFILLABLE]: 'bot.order.unavailable',
   /*
+   * The two category refusals, answered with the SAME sentence as the five above.
+   *
+   * `PRODUCT_NOT_CATEGORISED` is an operator's half-finished product and
+   * `CATEGORY_NOT_PURCHASABLE` is a whole section they have switched off; a customer
+   * holding a direct reference can reach either, because the confirmation transaction
+   * re-decides under its own lock rather than trusting the list the message was drawn
+   * from. Neither is something the buyer can act on, and naming which one it was would
+   * tell them how the seller has arranged their shop. The reason is in the refusal's
+   * detail and the audit row, which is where an operator looks.
+   *
+   * HIDDEN is deliberately absent: it is not a refusal at all. A hidden category is
+   * left out of the lists and stays orderable through a reference the customer already
+   * holds, which is exactly what distinguishes it from INACTIVE.
+   */
+  [COMMERCE_ERROR_CODES.PRODUCT_NOT_CATEGORISED]: 'bot.order.unavailable',
+  [COMMERCE_ERROR_CODES.CATEGORY_NOT_PURCHASABLE]: 'bot.order.unavailable',
+  /*
    * The panel is archived, disabled, confirmed down, or full — and the customer is
    * told none of that.
    *

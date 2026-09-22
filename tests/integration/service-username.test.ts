@@ -27,6 +27,7 @@ import {
   createAdmin,
   createTestContext,
   makePanelSellable,
+  seededCategoryFor,
   tenantA,
   tenantB,
   type TestContext,
@@ -149,13 +150,20 @@ describe('the name a service is sold under', () => {
     return record.id;
   }
 
-  const draft = (panelId: string): ProductDraft => ({
+  const draft = (scope: typeof tenantA, panelId: string): ProductDraft => ({
     title: 'پلن پایه',
     description: 'یک ماهه',
     audience: 'EVERYONE',
     sortOrder: 10,
     panelId: panelId as PanelId,
-    categoryId: SEED_IDS.categoryA as ProductCategoryId,
+    /*
+     * The category of the tenant this draft is written for, never a fixed one.
+     * `products_tenant_category_fk` is composite, so a tenant B product filed under
+     * tenant A's category is refused by the database — turning a cross-tenant
+     * isolation test into a foreign-key error instead of the assertion it was
+     * written to make.
+     */
+    categoryId: seededCategoryFor(scope) as ProductCategoryId,
     specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: 2 },
     price: money(250_000n, 'IRT'),
   });
@@ -164,7 +172,7 @@ describe('the name a service is sold under', () => {
   async function drafted(panelId: string, who: UserId = customerA): Promise<OrderRecord> {
     const created = await products.create(tenantA, {
       id: ctx.container.ids.uuid() as ProductId,
-      draft: draft(panelId),
+      draft: draft(tenantA, panelId),
       now: ctx.container.clock.now(),
     });
     await products.setStatus(tenantA, created.id, 'INACTIVE', 'ACTIVE', ctx.container.clock.now());
@@ -339,7 +347,7 @@ describe('the name a service is sold under', () => {
     const foreignCustomer = await customer(tenantB, '900903');
     const foreignProduct = await products.create(tenantB, {
       id: ctx.container.ids.uuid() as ProductId,
-      draft: draft(panelShared),
+      draft: draft(tenantB, panelShared),
       now: ctx.container.clock.now(),
     });
     await products.setStatus(
@@ -942,7 +950,7 @@ describe('the name a service is sold under', () => {
     // The other tenant's panel, on the host this one is about to move to.
     const elsewhere = await products.create(tenantB, {
       id: ctx.container.ids.uuid() as ProductId,
-      draft: draft(panelShared),
+      draft: draft(tenantB, panelShared),
       now: ctx.container.clock.now(),
     });
     await products.setStatus(

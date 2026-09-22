@@ -26,6 +26,7 @@ import {
   createTestContext,
   makePanelSellable,
   SEED_IDS,
+  seededCategoryFor,
   tenantA,
   tenantB,
   type TestContext,
@@ -126,13 +127,24 @@ describe('payments and settlement', () => {
     return record.id;
   }
 
-  const draft = (panelId: string, overrides: Partial<ProductDraft> = {}): ProductDraft => ({
+  const draft = (
+    scope: typeof tenantA,
+    panelId: string,
+    overrides: Partial<ProductDraft> = {},
+  ): ProductDraft => ({
     title: 'پلن پایه',
     description: 'یک ماهه',
     audience: 'EVERYONE',
     sortOrder: 10,
     panelId: panelId as PanelId,
-    categoryId: SEED_IDS.categoryA as ProductCategoryId,
+    /*
+     * The category of the tenant this product is being written for, never a fixed one.
+     * `products_tenant_category_fk` is composite, so a tenant B product filed under
+     * tenant A's category is refused by the database — which is right, and which turns
+     * a cross-tenant isolation test into a foreign-key error instead of the assertion
+     * it was written to make.
+     */
+    categoryId: seededCategoryFor(scope) as ProductCategoryId,
     specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: 2 },
     price: money(250_000n, 'IRT'),
     ...overrides,
@@ -148,7 +160,7 @@ describe('payments and settlement', () => {
   ): Promise<OrderRecord> {
     const created = await products.create(scope, {
       id: ctx.container.ids.uuid() as ProductId,
-      draft: draft(panelId, overrides),
+      draft: draft(scope, panelId, overrides),
       now: ctx.container.clock.now(),
     });
     await products.setStatus(scope, created.id, 'INACTIVE', 'ACTIVE', ctx.container.clock.now());

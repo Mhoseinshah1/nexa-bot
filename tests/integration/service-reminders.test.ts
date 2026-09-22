@@ -13,7 +13,14 @@ import {
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { DrizzleServiceReminderRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service-reminder.repository';
 import type { ProductDraft } from '../../apps/api/src/modules/commerce/catalog/application/ports';
-import { SEED_IDS, createTestContext, tenantA, tenantB, type TestContext } from './harness';
+import {
+  createTestContext,
+  SEED_IDS,
+  seededCategoryFor,
+  tenantA,
+  tenantB,
+  type TestContext,
+} from './harness';
 
 /**
  * A customer is warned BEFORE their service stops working.
@@ -110,13 +117,20 @@ describe('a customer is warned before their service runs out', () => {
     return record.id;
   }
 
-  const draft = (panelId: string): ProductDraft => ({
+  const draft = (scope: typeof tenantA | typeof tenantB, panelId: string): ProductDraft => ({
     title: 'پلن پایه',
     description: 'یک ماهه',
     audience: 'EVERYONE',
     sortOrder: 10,
     panelId: panelId as PanelId,
-    categoryId: SEED_IDS.categoryA as ProductCategoryId,
+    /*
+     * The category of the tenant this draft is written for, never a fixed one.
+     * `products_tenant_category_fk` is composite, so a tenant B product filed under
+     * tenant A's category is refused by the database — turning a cross-tenant
+     * isolation test into a foreign-key error instead of the assertion it was
+     * written to make.
+     */
+    categoryId: seededCategoryFor(scope) as ProductCategoryId,
     specification: { durationDays: 30, trafficBytes: ALLOWANCE, deviceLimit: 2 },
     price: money(250_000n, 'IRT'),
   });
@@ -145,7 +159,7 @@ describe('a customer is warned before their service runs out', () => {
     const scope = options.scope;
     const created = await products.create(scope, {
       id: ctx.container.ids.uuid() as ProductId,
-      draft: draft(options.panelId),
+      draft: draft(scope, options.panelId),
       now: ctx.container.clock.now(),
     });
     await products.setStatus(scope, created.id, 'INACTIVE', 'ACTIVE', ctx.container.clock.now());

@@ -1660,7 +1660,13 @@ describe('the services section of the Telegram management panel', () => {
         audience: 'EVERYONE',
         sortOrder: 10,
         panelId: panelB as PanelId,
-        categoryId: SEED_IDS.categoryA as ProductCategoryId,
+        /*
+         * Tenant B's OWN category. `products_tenant_category_fk` is composite, so a
+         * tenant B product filed under tenant A's category is refused by the
+         * database — which would turn this cross-tenant isolation case into a
+         * foreign-key error instead of the assertion it was written to make.
+         */
+        categoryId: SEED_IDS.categoryB as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 1_000n, deviceLimit: null },
         price: money(100_000n, 'IRT'),
       },

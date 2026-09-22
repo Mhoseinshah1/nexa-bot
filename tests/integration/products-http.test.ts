@@ -176,6 +176,15 @@ describe('product HTTP surface', () => {
     audience: 'EVERYONE',
     sortOrder: 10,
     panelId: panelA,
+    /*
+     * Every product belongs to exactly one category, so the write schema asks for the
+     * id rather than defaulting it — a default here would let a surface create an
+     * uncategorised product that the order path then refuses with
+     * `PRODUCT_NOT_CATEGORISED`, naming a rule the operator never chose to break.
+     * `null` is still accepted by the schema and is what the deliberately-uncategorised
+     * cases send.
+     */
+    categoryId: SEED_IDS.categoryA,
     durationDays: 30,
     trafficBytes: '53687091200',
     deviceLimit: 2,
@@ -588,7 +597,13 @@ describe('product HTTP surface', () => {
         audience: 'EVERYONE',
         sortOrder: 5,
         panelId: bPanel as PanelId,
-        categoryId: SEED_IDS.categoryA as ProductCategoryId,
+        /*
+         * Tenant B's OWN category. `products_tenant_category_fk` is composite, so a
+         * tenant B product filed under tenant A's category is refused by the database
+         * — which would turn this cross-tenant isolation case into a foreign-key error
+         * instead of the 404 it was written to assert.
+         */
+        categoryId: SEED_IDS.categoryB as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 1n, deviceLimit: null },
         price: money(100000n, 'IRT'),
       },
