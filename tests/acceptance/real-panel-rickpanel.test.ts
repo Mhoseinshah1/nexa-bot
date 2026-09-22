@@ -138,26 +138,76 @@ describe('RickPanel acceptance', () => {
   }, 120_000);
 
   /**
-   * A2 — a replayed create adopts the existing account rather than making a second.
+   * A2 — a create for a name that already exists is REFUSED, and the account is untouched.
    *
-   * The 409 path, against a real panel. Two assertions, and the second is the one
-   * that costs money if it fails: the customer must end up with ONE account, and
-   * the subscription the second call reports must be the SAME one.
+   * This used to assert the opposite — that a replayed create adopted the account —
+   * and went stale when Codex C2 (P1) on PR #58 made a 409 a refusal: a name match
+   * cannot prove an account is ours, and on a panel that already had customers it
+   * would hand one customer's subscription to another. So the second call must
+   * answer `PROVIDER_REFUSED` with 409, and the observer must see ONE account whose
+   * subscription is exactly what the first call delivered.
+   *
+   * Assertion messages carry the failure kind only. An outcome that went wrong in
+   * the dangerous direction would carry a subscription URL, and a test log is not a
+   * place for one.
    */
-  it('A2: a replayed create adopts the existing account, never a second', async () => {
+  it('A2: a create for an existing name is refused, never adopted', async () => {
     const username = nameFor('a2');
     created.push(username);
 
     const first = await adapter.createUser(target(), http(), createFor(username));
-    expect(first.ok, JSON.stringify(first)).toBe(true);
+    expect(first.ok, first.ok ? 'ok' : first.failure).toBe(true);
     if (!first.ok || first.delivery.kind !== 'SUBSCRIPTION_LINK') return;
+    const before = await observeUser(panel, observer, username);
 
     const second = await adapter.createUser(target(), http(), createFor(username));
-    expect(second.ok, JSON.stringify(second)).toBe(true);
-    if (!second.ok || second.delivery.kind !== 'SUBSCRIPTION_LINK') return;
+    expect(second.ok, 'a 409 was adopted: a name match handed over an existing account').toBe(
+      false,
+    );
+    if (second.ok) return;
+    expect(second.failure).toBe('PROVIDER_REFUSED');
+    expect(second.status).toBe(409);
 
-    expect(second.delivery.url).toBe(first.delivery.url);
+    const after = await observeUser(panel, observer, username);
+    expect(after?.['subscription_url']).toBe(before?.['subscription_url']);
+    expect(after?.['expire']).toBe(before?.['expire']);
+    expect(after?.['data_limit']).toBe(before?.['data_limit']);
   }, 120_000);
+
+  /**
+   * A7 — the NEW_SERVICE hotfix, measured: a seeded create delivers what was sold.
+   *
+   * `docs/rickpanel-create-hotfix.md`. The owner's direct calls showed an unseeded
+   * create failing and a create seeded with `{"vless": {}}` succeeding. This is the
+   * same thing through the SHIPPED adapter: one limited plan and one unlimited plan,
+   * each read back by the observer, each carrying exactly the entitlement the order
+   * froze — a traffic cap is not dropped and no term is invented to get a create
+   * through — and each with a subscription the panel generated.
+   */
+  it('A7: creates limited and unlimited plans with exactly the entitlement sold', async () => {
+    const limited = nameFor('a7l');
+    const unlimited = nameFor('a7u');
+    created.push(limited, unlimited);
+
+    const one = await adapter.createUser(target(), http(), createFor(limited));
+    expect(one.ok, one.ok ? 'ok' : one.failure).toBe(true);
+    const oneRecord = await observeUser(panel, observer, limited);
+    expect(oneRecord?.['data_limit']).toBe(1_073_741_824);
+    expect(oneRecord?.['status']).toBe('active');
+    expect(typeof oneRecord?.['subscription_url']).toBe('string');
+
+    const two = await adapter.createUser(target(), http(), {
+      ...createFor(unlimited),
+      volumeBytes: null,
+      expiresAt: null,
+    });
+    expect(two.ok, two.ok ? 'ok' : two.failure).toBe(true);
+    const twoRecord = await observeUser(panel, observer, unlimited);
+    // The panel's own "unlimited" for both, per the create's description.
+    expect(twoRecord?.['data_limit'] ?? 0).toBe(0);
+    expect(twoRecord?.['expire'] ?? 0).toBe(0);
+    expect(twoRecord?.['status']).toBe('active');
+  }, 180_000);
 
   /**
    * A3 — suspend, resume, and what the panel says about each.

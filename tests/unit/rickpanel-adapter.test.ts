@@ -14,7 +14,10 @@ import {
   type ProviderUserRef,
 } from '@nexa/contracts';
 import { SafeHttpClient } from '../../apps/api/src/infrastructure/net/safe-http';
-import { RickpanelAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/rickpanel.adapter';
+import {
+  RICKPANEL_CREATE_PROXY_SEED,
+  RickpanelAdapter,
+} from '../../apps/api/src/modules/platform/providers/infrastructure/rickpanel.adapter';
 import {
   providerAdapter,
   providerServiceAdapter,
@@ -53,6 +56,14 @@ interface FakeUser {
   used_traffic: number;
   status: string;
   subscription_url: string;
+  /**
+   * What RickPanel materialises from the create's seed: a credential per protocol.
+   * Real-panel evidence (`docs/rickpanel-create-hotfix.md` §2) — a create seeded with
+   * `{"vless": {}}` came back holding records for SEVERAL protocols. Carried here so a
+   * test can prove none of it leaves the adapter.
+   */
+  proxies: Record<string, Record<string, string>>;
+  sub_token: string;
 }
 
 type CreateMode =
@@ -68,6 +79,8 @@ type CreateMode =
   | 'forbidden'
   | 'rate-limited'
   | 'server-error'
+  /** A body the panel will not process. What a real one answers is `OQ-RP-06`. */
+  | 'unprocessable'
   /** A 200 whose user, once readable, carries no subscription of any shape. */
   | 'no-subscription';
 
@@ -79,6 +92,17 @@ let createMode: CreateMode = 'accepts';
 let readsBeforeVisible = 0;
 let deleteStatus: number | null = null;
 let putStatus: number | null = null;
+/**
+ * The status the fake answers a create whose `proxies` is missing or empty.
+ *
+ * The REFUSAL is real-panel evidence: the create that omitted `proxies` failed on the
+ * owner's correctly connected panel, and the same create seeded with `{"vless": {}}`
+ * answered 200. The STATUS is not: nobody has captured it. 422 is what a FastAPI body
+ * validator answers and what the observed create-reconcile-create cycle needs, but it
+ * is `OQ-RP-06`, not a fact — which is why it is a variable and the tests that depend
+ * on it name both candidates.
+ */
+let missingSeedStatus = 422;
 let users = new Map<string, FakeUser>();
 let foreign = new Set<string>();
 let requests: { method: string; path: string; body: string; auth: string }[] = [];
@@ -90,7 +114,20 @@ const userRecord = (username: string): FakeUser => ({
   used_traffic: 0,
   status: 'active',
   subscription_url: `/sub/${username}-token`,
+  proxies: {
+    vless: { id: 'internal-vless-credential' },
+    vmess: { id: 'internal-vmess-credential' },
+    trojan: { password: 'internal-trojan-credential' },
+  },
+  sub_token: `${username}-token`,
 });
+
+/** A non-empty object, which is the one shape the real panel was seen to accept. */
+const isSeeded = (value: unknown): boolean =>
+  typeof value === 'object' &&
+  value !== null &&
+  !Array.isArray(value) &&
+  Object.keys(value).length > 0;
 
 beforeAll(async () => {
   server = createServer((request, response) => {
@@ -114,7 +151,17 @@ beforeAll(async () => {
       if (url === '/api/system') return json(200, { version: '2.1.0' });
 
       if (url === '/api/user' && request.method === 'POST') {
-        const name = String((JSON.parse(body) as { username?: unknown }).username ?? '');
+        const sent = JSON.parse(body) as { username?: unknown; proxies?: unknown };
+        const name = String(sent.username ?? '');
+        /*
+         * Checked BEFORE any rule, as a body validator runs before the handler that
+         * applies them: an unseeded create never reaches the user limit.
+         */
+        if (!isSeeded(sent.proxies)) {
+          return json(missingSeedStatus, {
+            detail: [{ loc: ['body', 'proxies'], msg: 'field required', type: 'value_error' }],
+          });
+        }
         switch (createMode) {
           case 'refuses-rule':
             return json(400, { detail: 'user limit reached for this admin' });
@@ -124,6 +171,8 @@ beforeAll(async () => {
             return json(429, { detail: 'slow down' });
           case 'server-error':
             return json(500, { detail: 'boom' });
+          case 'unprocessable':
+            return json(422, { detail: [{ loc: ['body'], msg: 'invalid', type: 'value_error' }] });
           case 'conflict-owned':
             users.set(name, userRecord(name));
             return json(409, { detail: 'username already exists' });
@@ -138,7 +187,13 @@ beforeAll(async () => {
           case 'accepts-after-delay':
           case 'accepts':
           default:
-            users.set(name, userRecord(name));
+            users.set(name, {
+              ...userRecord(name),
+              // The entitlement as SENT, so a test can prove the adapter asked for
+              // exactly what the order bought.
+              expire: Number((JSON.parse(body) as { expire?: unknown }).expire ?? 0),
+              data_limit: Number((JSON.parse(body) as { data_limit?: unknown }).data_limit ?? 0),
+            });
             // The documented behaviour: the response carries no proof, and the
             // adapter must not read a subscription out of it.
             return json(200, { username: name, detail: 'accepted' });
@@ -203,6 +258,7 @@ beforeEach(() => {
   readsBeforeVisible = 0;
   deleteStatus = null;
   putStatus = null;
+  missingSeedStatus = 422;
   users = new Map();
   foreign = new Set();
   requests = [];
@@ -361,7 +417,7 @@ describe('RickPanel authentication', () => {
 // ---------------------------------------------------------------------------
 
 describe('RickPanel create', () => {
-  it('sends neither inbounds nor proxies, because the panel ignores both', async () => {
+  it('sends the fixed proxies seed and no inbounds', async () => {
     await adapter().createUser(target(), http(), CREATE);
     const create = requests.find((one) => one.method === 'POST' && one.path === '/api/user');
     const payload = JSON.parse(create?.body ?? '{}') as Record<string, unknown>;
@@ -371,10 +427,14 @@ describe('RickPanel create', () => {
     // against one in 1970.
     expect(payload['expire']).toBe(Math.floor(Date.parse('2027-01-01T00:00:00.000Z') / 1000));
     expect(payload['data_limit']).toBe(53_687_091_200);
+    // The one seed measured on a real panel, byte for byte: one protocol key and an
+    // EMPTY object, which asks the panel to generate the credential. A seed that
+    // carried a credential would be Nexa inventing one.
+    expect(payload['proxies']).toEqual({ vless: {} });
+    expect(RICKPANEL_CREATE_PROXY_SEED).toEqual({ vless: {} });
     // Sending a value the panel throws away would leave an operator believing
     // they had configured something.
     expect(payload).not.toHaveProperty('inbounds');
-    expect(payload).not.toHaveProperty('proxies');
     // OQ-RP-02: the create is not documented to take a status, so none is sent.
     expect(payload).not.toHaveProperty('status');
   });
@@ -440,6 +500,111 @@ describe('RickPanel create', () => {
     // service DELIVERED that no customer received.
     expect(outcome.failure).toBe('MALFORMED_RESPONSE');
     expect(operationFailureOutcome(outcome.failure, 'PROVISION')).toBe('UNKNOWN');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The NEW_SERVICE hotfix: docs/rickpanel-create-hotfix.md
+// ---------------------------------------------------------------------------
+
+describe('RickPanel create hotfix', () => {
+  /**
+   * The defect, reproduced. A panel that refuses an unseeded create refused EVERY
+   * create this adapter sent, whichever status it used: 400 refunded at once, and 422
+   * — `PROVIDER_ERROR`, so UNKNOWN for a PROVISION — went round create, reconcile,
+   * absent, create until the cycle limit refunded it. Both end in the customer's
+   * money coming back and no service, which is what the owner saw.
+   *
+   * The seed is what changes the answer, for either status.
+   */
+  it.each([400, 422])(
+    'is delivered by a panel that refuses an unseeded create with %i',
+    async (status) => {
+      missingSeedStatus = status;
+      const outcome = await adapter().createUser(target(), http(), CREATE);
+      expect(outcome.ok, 'the create was refused: the proxies seed did not reach the panel').toBe(
+        true,
+      );
+      if (!outcome.ok) return;
+      expect(outcome.delivery).toEqual({
+        kind: 'SUBSCRIPTION_LINK',
+        url: `${base}/sub/nxuhdjwuc3m5-token`,
+      });
+      expect(users.has('nxuhdjwuc3m5')).toBe(true);
+    },
+  );
+
+  /**
+   * A 422 is NOT generalised into a refusal. Nobody has captured what this panel
+   * answers a body it will not parse (`OQ-RP-06`), and the two mistakes cost
+   * different things: calling an ambiguous answer a refusal refunds an account the
+   * customer may be holding, while calling a refusal ambiguous costs a READ. So it
+   * stays `PROVIDER_ERROR` — UNKNOWN, reconciled by a read, never a second blind
+   * create — until real evidence moves it.
+   */
+  it('keeps a 422 on create UNKNOWN until real evidence classifies it', async () => {
+    createMode = 'unprocessable';
+    const outcome = await adapter().createUser(target(), http(), CREATE);
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.failure).toBe('PROVIDER_ERROR');
+    expect(outcome.status).toBe(422);
+    expect(operationFailureOutcome(outcome.failure, 'PROVISION')).toBe('UNKNOWN');
+    expect(SAFE_TO_REPLAY_FAILURE_KINDS).not.toContain(outcome.failure);
+    // No read on the create path: the reconcile that follows is the read, once.
+    expect(reads()).toHaveLength(0);
+  });
+
+  /**
+   * A LIMITED plan reaches the panel as bought. The fake stores what it was sent,
+   * so the record read back is the request, not a default: a create that dropped the
+   * cap to satisfy a panel would show zero here.
+   */
+  it('creates a limited plan with exactly the traffic and expiry it was sold', async () => {
+    const outcome = await adapter().createUser(target(), http(), {
+      ...CREATE,
+      volumeBytes: 1_073_741_824n,
+    });
+    expect(outcome.ok).toBe(true);
+    const held = users.get('nxuhdjwuc3m5');
+    expect(held?.data_limit).toBe(1_073_741_824);
+    expect(held?.expire).toBe(Math.floor(Date.parse('2027-01-01T00:00:00.000Z') / 1000));
+  });
+
+  /**
+   * An UNLIMITED plan is the panel's 0, for traffic and for time. Nothing is
+   * invented to fill the gap: no default cap, no default term.
+   */
+  it('creates an unlimited plan as the panel unlimited, with nothing invented', async () => {
+    const outcome = await adapter().createUser(target(), http(), {
+      ...CREATE,
+      volumeBytes: null,
+      expiresAt: null,
+    });
+    expect(outcome.ok).toBe(true);
+    const create = requests.find((one) => one.method === 'POST' && one.path === '/api/user');
+    const payload = JSON.parse(create?.body ?? '{}') as Record<string, unknown>;
+    expect(payload['data_limit']).toBe(0);
+    expect(payload['expire']).toBe(0);
+    expect(users.get('nxuhdjwuc3m5')?.data_limit).toBe(0);
+  });
+
+  /**
+   * The panel's generated credentials stay on the panel.
+   *
+   * The read-back record holds a credential per protocol and a `sub_token`. The
+   * customer receives the subscription link; nothing else from that record may
+   * leave the adapter, in the delivery or beside it.
+   */
+  it('delivers the subscription link and none of the credentials the panel generated', async () => {
+    const outcome = await adapter().createUser(target(), http(), CREATE);
+    expect(outcome.ok).toBe(true);
+    const text = asLogged(outcome);
+    expect(text).not.toContain('internal-vless-credential');
+    expect(text).not.toContain('internal-vmess-credential');
+    expect(text).not.toContain('internal-trojan-credential');
+    expect(text).not.toContain('proxies');
+    expect(text).not.toContain('sub_token');
   });
 });
 
