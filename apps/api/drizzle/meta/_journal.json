@@ -701,6 +701,13 @@
       "when": 1790093140229,
       "tag": "0099_every_tenant_has_a_category",
       "breakpoints": true
+    },
+    {
+      "idx": 100,
+      "version": "7",
+      "when": 1790093141229,
+      "tag": "0100_category_ids_are_uuidv7",
+      "breakpoints": true
     }
   ]
 }

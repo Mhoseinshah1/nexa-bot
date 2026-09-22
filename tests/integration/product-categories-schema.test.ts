@@ -1,7 +1,23 @@
 import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { DEFAULT_PRODUCT_CATEGORY_NAME } from '@nexa/contracts';
-import { createTestContext, tenantA, tenantB, type TestContext } from './harness';
+import {
+  DEFAULT_PRODUCT_CATEGORY_NAME,
+  money,
+  uuidV7Schema,
+  type PanelId,
+  type ProductCategoryId,
+  type ProductId,
+} from '@nexa/contracts';
+import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
+import { intentOf } from '../../apps/api/src/surfaces/telegram/bot-runtime';
+import {
+  adminActorFor,
+  createAdmin,
+  createTestContext,
+  tenantA,
+  tenantB,
+  type TestContext,
+} from './harness';
 
 /**
  * What the DATABASE refuses about a category, measured rather than asserted in prose.
@@ -278,5 +294,176 @@ describe('every tenant has a category to sell under', () => {
         `'${DEFAULT_PRODUCT_CATEGORY_NAME}'`,
       );
     }
+  });
+});
+
+/**
+ * Every category id is a UUIDv7 — including the ones 0097 and 0099 wrote.
+ *
+ * Both backfills used `gen_random_uuid()`, a version-4 UUID, and every reader of a
+ * category id accepts version 7 only: `productCategoryIdSchema` in the service and the
+ * HTTP contract, `uuidV7Schema` at the Telegram callback boundary. So an installation
+ * upgraded into categories had exactly one category per tenant and could do nothing with
+ * it — a customer tapping it was UNSUPPORTED, an operator editing it was refused. Found
+ * while wiring the Telegram Admin categories section, whose every button carries that id.
+ *
+ * 0100 re-keys the row. These cases drive it the way an upgrade does: 0099 writes the v4
+ * category exactly as it ships, a product is filed under it, and 0100 runs from disk.
+ */
+describe('0100 gives every backfilled category a UUIDv7', () => {
+  let ctx: TestContext;
+
+  beforeAll(async () => {
+    ctx = await createTestContext();
+  }, 120_000);
+
+  afterAll(async () => {
+    await ctx?.close();
+  });
+
+  beforeEach(async () => {
+    await ctx.reset();
+  });
+
+  const query = async (text: string, params: readonly unknown[] = []) =>
+    ctx.container.database.withClient((client) => client.query(text, [...params]));
+  const run = (file: string) => query(readFileSync(`apps/api/drizzle/${file}`, 'utf8'));
+
+  /** The upgrade state: tenant B's only category, written by 0099 as it ships. */
+  async function backfilledCategory(): Promise<string> {
+    await query(`DELETE FROM product_categories WHERE tenant_id = $1`, [tenantB.tenantId]);
+    await run('0099_every_tenant_has_a_category.sql');
+    const rows = await query(`SELECT id FROM product_categories WHERE tenant_id = $1`, [
+      tenantB.tenantId,
+    ]);
+    return (rows.rows[0] as { id: string }).id;
+  }
+
+  async function productUnder(categoryId: string): Promise<string> {
+    const panelId = ctx.container.ids.uuid();
+    await query(
+      `INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
+       VALUES ($1, $2, 'B', 'sanaei', 'https://b.example.test', 'ACTIVE')`,
+      [panelId, tenantB.tenantId],
+    );
+    const created = await new DrizzleProductRepository(ctx.container.database.db).create(tenantB, {
+      id: ctx.container.ids.uuid() as ProductId,
+      draft: {
+        title: 'پلن',
+        description: null,
+        audience: 'EVERYONE',
+        sortOrder: 1,
+        panelId: panelId as PanelId,
+        categoryId: categoryId as ProductCategoryId,
+        specification: { durationDays: 30, trafficBytes: 1n, deviceLimit: null },
+        price: money(100_000n, 'IRT'),
+      },
+      now: ctx.container.clock.now(),
+    });
+    return created.id;
+  }
+
+  const tap = (data: string) => intentOf({ callback_query: { id: 'cbq', data } });
+
+  it('reproduces the defect: the backfilled id is refused by every reader before 0100', async () => {
+    /*
+     * The evidence the repair is for, kept so a later reader can see the defect was
+     * real rather than taking the migration's comment for it. If 0099 ever starts
+     * writing v7 ids itself this case fails, and the first assertion says why.
+     */
+    const legacy = await backfilledCategory();
+    expect(uuidV7Schema.safeParse(legacy).success, '0099 no longer writes a v4 id').toBe(false);
+
+    expect(tap(`ck:${legacy}.0`).intent, 'a customer could open the v4 category').toBe(
+      'UNSUPPORTED',
+    );
+    const owner = adminActorFor(
+      await createAdmin(ctx.container, tenantB, { username: 'owner-rekey', roleKeys: ['owner'] }),
+    );
+    await expect(ctx.container.productCategories.get(tenantB, owner, legacy)).rejects.toMatchObject(
+      { code: 'commerce.request_invalid' },
+    );
+  });
+
+  it('re-keys it to a v7, keeps every other column, and carries its products with it', async () => {
+    const legacy = await backfilledCategory();
+    const product = await productUnder(legacy);
+    const before = await query(
+      `SELECT name, emoji, status, visibility, sort_order, created_at FROM product_categories
+       WHERE id = $1`,
+      [legacy],
+    );
+
+    await run('0100_category_ids_are_uuidv7.sql');
+
+    const after = await query(
+      `SELECT id, name, emoji, status, visibility, sort_order, created_at FROM product_categories
+       WHERE tenant_id = $1`,
+      [tenantB.tenantId],
+    );
+    expect(after.rows, 'the re-key added or lost a row').toHaveLength(1);
+    const { id: rekeyed, ...rest } = after.rows[0] as { id: string };
+    expect(uuidV7Schema.safeParse(rekeyed).success, `${rekeyed} is not a UUIDv7`).toBe(true);
+    expect(rest, 'the re-key changed something other than the id').toEqual(before.rows[0]);
+
+    const filed = await query(`SELECT category_id FROM products WHERE id = $1`, [product]);
+    expect(
+      (filed.rows[0] as { category_id: string }).category_id,
+      'the product was left behind',
+    ).toBe(rekeyed);
+
+    // And now every reader accepts it.
+    expect(tap(`ck:${rekeyed}.0`)).toMatchObject({ intent: 'CATEGORY', targetId: rekeyed });
+    const owner = adminActorFor(
+      await createAdmin(ctx.container, tenantB, { username: 'owner-rekeyed', roleKeys: ['owner'] }),
+    );
+    await expect(
+      ctx.container.productCategories.get(tenantB, owner, rekeyed),
+    ).resolves.toMatchObject({ id: rekeyed, name: DEFAULT_PRODUCT_CATEGORY_NAME });
+  });
+
+  it('touches no category that already had a v7 id, in this tenant or any other', async () => {
+    await backfilledCategory();
+    const v7 = `SELECT id, tenant_id, name FROM product_categories
+                WHERE substring(id::text FROM 15 FOR 1) = '7' ORDER BY id`;
+    const untouched = await query(v7);
+    expect(untouched.rows.length, 'the fixture has no v7 category to leave alone').toBeGreaterThan(
+      0,
+    );
+
+    await run('0100_category_ids_are_uuidv7.sql');
+
+    const survivors = await query(
+      `SELECT id, tenant_id, name FROM product_categories WHERE id = ANY($1::uuid[]) ORDER BY id`,
+      [untouched.rows.map((row) => (row as { id: string }).id)],
+    );
+    expect(survivors.rows, 'a category that was already v7 was re-keyed').toEqual(untouched.rows);
+  });
+
+  it('restores the foreign key, so a category holding products still cannot be deleted', async () => {
+    const legacy = await backfilledCategory();
+    await productUnder(legacy);
+    await run('0100_category_ids_are_uuidv7.sql');
+
+    const constraint = await query(
+      `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint
+       WHERE conname = 'products_tenant_category_fk'`,
+    );
+    expect((constraint.rows[0] as { def: string } | undefined)?.def).toBe(
+      'FOREIGN KEY (tenant_id, category_id) REFERENCES product_categories(tenant_id, id)',
+    );
+    await expect(
+      query(`DELETE FROM product_categories WHERE tenant_id = $1`, [tenantB.tenantId]),
+    ).rejects.toThrow(/products_tenant_category_fk/);
+  });
+
+  it('changes nothing when it runs a second time', async () => {
+    await backfilledCategory();
+    await run('0100_category_ids_are_uuidv7.sql');
+    const once = await query(`SELECT id FROM product_categories ORDER BY id`);
+
+    await run('0100_category_ids_are_uuidv7.sql');
+
+    expect((await query(`SELECT id FROM product_categories ORDER BY id`)).rows).toEqual(once.rows);
   });
 });
