@@ -313,6 +313,26 @@ export class OrderService {
               productId: product.id,
               panelId,
               title: product.title,
+              /*
+               * Snapshotted HERE, beside the title and the price, and not at
+               * confirmation.
+               *
+               * The rest of the line is fixed at draft creation because a draft is the
+               * quote the customer was shown; the category belongs to that same picture.
+               * Taken at confirmation instead, an order would record a category the
+               * customer never saw whenever an operator renamed one in the minutes
+               * between the two — which is the class of after-the-fact rewriting this
+               * whole snapshot exists to prevent.
+               *
+               * `assertOrderable` has already refused a null category above, so this is
+               * never null on a new order. The FIELD is nullable for the orders that
+               * predate the column, which carry no record and must not be given one.
+               */
+              category: {
+                categoryId: category!.id,
+                name: category!.name,
+                emoji: category!.emoji,
+              },
               specification: product.specification,
               unitPrice: price,
               quantity: MAX_ORDER_QUANTITY,

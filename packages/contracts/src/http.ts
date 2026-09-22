@@ -2117,6 +2117,17 @@ export const orderSummarySchema = z.object({
   productId: z.string(),
   panelId: z.string(),
   lineTitle: z.string(),
+  /*
+   * The category snapshot, and all three are NULLABLE together.
+   *
+   * Null means UNKNOWN — either an order that predates the columns, or a renewal, which
+   * is not bought from a category at all. A client renders the absence as absence; it
+   * must never fill it from `productId`'s current category, which would be the
+   * fabrication the write path refuses, performed at read time instead.
+   */
+  lineCategoryId: z.string().nullable(),
+  lineCategoryName: z.string().nullable(),
+  lineCategoryEmoji: z.string().nullable(),
   lineDurationDays: z.number().int(),
   lineTrafficBytes: z.string(),
   lineDeviceLimit: z.number().int().nullable(),

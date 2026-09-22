@@ -127,6 +127,11 @@ function toSummary(record: OrderRecord): OrderSummaryResponse {
     productId: record.line.productId,
     panelId: record.line.panelId,
     lineTitle: record.line.title,
+    // Null together, and null means unknown — never "uncategorised", and never a cue to
+    // go and look up what category this product is in NOW.
+    lineCategoryId: record.line.category?.categoryId ?? null,
+    lineCategoryName: record.line.category?.name ?? null,
+    lineCategoryEmoji: record.line.category?.emoji ?? null,
     lineDurationDays: record.line.specification.durationDays,
     // Text on the wire, for the reason `productSummarySchema` states: JSON has one
     // number type and these pass 2^53.

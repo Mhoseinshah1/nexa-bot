@@ -6,6 +6,7 @@ import type {
   OrderPurpose,
   OrderState,
   PanelId,
+  ProductCategoryId,
   ProductId,
   TenantContext,
   UserId,
@@ -64,6 +65,18 @@ export class DrizzleOrderRepository implements OrderRepository {
         productId: draft.line.productId,
         panelId: draft.line.panelId,
         lineTitle: draft.line.title,
+        /*
+         * The category, COPIED into three columns rather than referenced.
+         *
+         * Nullable, and a null here is UNKNOWN rather than "uncategorised": the columns
+         * exist from migration 0097 and were deliberately not backfilled, so every order
+         * older than this release carries three nulls and must be RENDERED as unknown.
+         * A read-time join to the product's current category would turn that absence
+         * into a fabricated fact, which is exactly what the owner's instruction forbids.
+         */
+        lineCategoryId: draft.line.category?.categoryId ?? null,
+        lineCategoryName: draft.line.category?.name ?? null,
+        lineCategoryEmoji: draft.line.category?.emoji ?? null,
         lineDurationDays: draft.line.specification.durationDays,
         lineTrafficBytes: draft.line.specification.trafficBytes,
         lineDeviceLimit: draft.line.specification.deviceLimit,
@@ -384,6 +397,20 @@ function toRecord(row: typeof orders.$inferSelect): OrderRecord {
       productId: row.productId as ProductId,
       panelId: row.panelId as PanelId,
       title: row.lineTitle,
+      /*
+       * Rebuilt only when the id is there. A row with an id and no name cannot occur —
+       * all three are written together — so the name is asserted rather than defaulted:
+       * a `?? ''` would turn a schema violation into a category with a blank label that
+       * somebody would later "fix" by joining to the product.
+       */
+      category:
+        row.lineCategoryId === null
+          ? null
+          : {
+              categoryId: row.lineCategoryId as ProductCategoryId,
+              name: row.lineCategoryName as string,
+              emoji: row.lineCategoryEmoji,
+            },
       specification: {
         durationDays: row.lineDurationDays,
         trafficBytes: row.lineTrafficBytes,

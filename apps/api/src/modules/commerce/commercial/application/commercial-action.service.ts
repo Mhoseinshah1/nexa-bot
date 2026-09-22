@@ -680,6 +680,22 @@ export class CommercialActionService {
         productId: product.id,
         panelId: service.panelId,
         title: product.title,
+        /*
+         * NO category, and that is a statement rather than an omission.
+         *
+         * A renewal, an added allowance and an added month are not bought FROM a
+         * category — the customer named a service they already own, and no category
+         * browse happened. Snapshotting the product's category as it reads today would
+         * record a fact about the catalogue now as though it were a fact about this
+         * purchase, which is the same fabrication the owner's instruction forbids for
+         * pre-WP5 orders.
+         *
+         * So the column stays null, and a surface renders it exactly as it renders an
+         * old order's: no category recorded. The two causes are deliberately
+         * indistinguishable, because the honest answer to both is the same one, and a
+         * code that told them apart would be a distinction nobody can act on.
+         */
+        category: null,
         specification: product.specification,
         unitPrice: price,
         quantity: MAX_ORDER_QUANTITY,
@@ -758,6 +774,8 @@ export class CommercialActionService {
         productId: service.productId,
         panelId: service.panelId,
         title: addon.title,
+        /** No category, for the reason the renewal line above states. */
+        category: null,
         specification: { durationDays, trafficBytes, deviceLimit: null },
         unitPrice: addon.price,
         quantity: MAX_ORDER_QUANTITY,
