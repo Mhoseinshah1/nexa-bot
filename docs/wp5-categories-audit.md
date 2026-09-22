@@ -471,3 +471,57 @@ Not applicable, and stated as a finding rather than an omission: **no code path 
 tenant**. The category's foreign key to `tenants` is `ON DELETE NO ACTION`, so if such a
 path is ever written it will be refused by the database until it decides what to do with
 the tenant's categories, which is the correct place for that decision to surface.
+
+## 10. The Telegram Admin section, and the defect it found
+
+### 10.1 What it is
+
+The management panel gained a Categories section (`ka:`…`ke:`) that does, from a phone,
+what the Web Admin's categories screen does: list every category with both flags and its
+product count, open one, activate/deactivate, show/hide, move up/down, create
+(`/category_new <name>`), rename (`/category_rename <id> <name>`), set or clear the emoji
+(`/category_emoji <id> <emoji or ->`), delete with a truthful refusal, and move a product
+into another category. Every write is `ProductCategoryService` — the same instance the
+Web Admin's controller holds — so no rule exists twice.
+
+Three choices worth stating:
+
+- **Reassignment starts from the product list**, not from inside a category, because the
+  product that most needs a category is the uncategorised one, and no category screen
+  would ever list it.
+- **A move renumbers the whole order.** Swapping two neighbours' `sort_order` values does
+  nothing when they are equal, and every category created without a position shares the
+  default. The Web Admin already did this; the Telegram section does the same.
+- **A redelivered update is recognised, not refused.** A move or a create recomputes its
+  input from the state its first delivery left, so the second delivery hashes differently
+  under the same idempotency key. The store's payload-mismatch refusal therefore means
+  "this already ran", and is answered with the current list.
+
+### 10.2 The defect: backfilled categories had v4 ids
+
+0097 and 0099 created each existing tenant's default category with `gen_random_uuid()`,
+a version-4 UUID, and every reader of a category id accepts version 7 only — the service
+and HTTP contract through `productCategoryIdSchema`, the Telegram callback boundary
+through `uuidV7Schema`. So on an installation upgraded into categories, the one category
+each tenant had could not be opened by a customer, edited or deleted by an operator, or
+chosen as a product's destination. Fixture tenants never showed it, because the seed
+writes v7 ids.
+
+Fixed forward by **0100**, which re-keys every category whose version nibble is not 7,
+keeps every other column, carries its products with it in the same statement, and
+restores the foreign key exactly as 0097 declared it. Neither 0097 nor 0099 was edited:
+a database that already ran them would otherwise keep the v4 ids with nothing to repair
+them. Widening the id schema to accept v4 was rejected, because "an id is a UUIDv7" is a
+fact every reader relies on.
+
+Evidence is in `tests/integration/product-categories-schema.test.ts`, which reproduces the
+upgrade — 0099 as shipped, a product filed under the result, then 0100 from disk — and in
+`docs/wp5-falsification.md` rows W5-02 and W5-03.
+
+### 10.3 The falsification record
+
+`docs/wp5-falsification.md` carries every WP5 rule with the test that dies when it is
+reverted: 27 rows across provisioning, the migration, the service, the customer catalogue,
+the Web Admin and the Telegram Admin section, all KILLED. It also records that the WP5
+catalogue change renamed a test Phase 4B's M16 and M17 cite, and that both mutations were
+re-run against the renamed test rather than re-pointed on trust.
