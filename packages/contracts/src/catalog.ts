@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import type { ProductCategoryId } from './ids.js';
+
 /**
  * The catalogue — what a tenant sells.
  *
@@ -23,6 +25,134 @@ import { z } from 'zod';
  * copied onto the order line at confirmation time (`commerce.ts`), and nothing
  * reconstructs a past purchase by reading a product row.
  */
+
+/**
+ * A CATEGORY is how a customer finds a product, and it is not how a product is priced.
+ *
+ * One category holds many products; a sellable product belongs to exactly one. The two
+ * states below are deliberately the same two dimensions a PRODUCT already has, because
+ * a category that needed its own vocabulary would be a second way to say "stop selling
+ * this" and the two would drift.
+ *
+ * ## Why status and visibility are separate here too
+ *
+ * `PRODUCT_AUDIENCES` already learned this the expensive way, and its docblock says it:
+ * an INACTIVE product cannot be bought by anyone, a HIDDEN one is live and merely
+ * unlisted, and collapsing them deletes the distinction. A category inherits exactly
+ * that:
+ *
+ * - **INACTIVE** — unavailable for new purchases. Its products are unorderable, and a
+ *   direct reference does not get around it. The confirming transaction re-checks.
+ * - **HIDDEN** — not listed, not reachable by browsing, and its products are STILL
+ *   orderable if they are otherwise eligible. That is the whole point of the state: it
+ *   is how an operator unlists a group without withdrawing it.
+ *
+ * An EMPTY category is never shown, and that is not a third state — it is what a
+ * category with no customer-visible product IS. Deriving the customer's category list
+ * from the visible products rather than asking each category whether it has any means
+ * there is no code path that could show an empty one by oversight.
+ *
+ * ## The one rule, four callers
+ *
+ * Catalogue browsing, the Telegram customer flow, the application queries and the
+ * authoritative order confirmation all decide this with the same predicates. A
+ * per-surface interpretation is how a product becomes buyable in one place and not in
+ * another; `PanelSalesGate` is the existing worked example of the alternative.
+ */
+export const PRODUCT_CATEGORY_STATUSES = ['ACTIVE', 'INACTIVE'] as const;
+export type ProductCategoryStatus = (typeof PRODUCT_CATEGORY_STATUSES)[number];
+export const productCategoryStatusSchema = z.enum(PRODUCT_CATEGORY_STATUSES);
+
+export const PRODUCT_CATEGORY_VISIBILITIES = ['VISIBLE', 'HIDDEN'] as const;
+export type ProductCategoryVisibility = (typeof PRODUCT_CATEGORY_VISIBILITIES)[number];
+export const productCategoryVisibilitySchema = z.enum(PRODUCT_CATEGORY_VISIBILITIES);
+
+/** May this category be BROWSED? The mirror of `isListed`. */
+export function isCategoryListed(
+  status: ProductCategoryStatus,
+  visibility: ProductCategoryVisibility,
+): boolean {
+  return isCategoryPurchasable(status) && visibility !== 'HIDDEN';
+}
+
+/**
+ * May a product in this category be BOUGHT? The mirror of `isPurchasable`.
+ *
+ * Visibility is deliberately not consulted. A HIDDEN category still sells, exactly as a
+ * HIDDEN product still sells, and a reader who "tidies" this by adding the visibility
+ * term has silently turned unlisting into withdrawal for every product in the group.
+ */
+export function isCategoryPurchasable(status: ProductCategoryStatus): boolean {
+  return status === 'ACTIVE';
+}
+
+export const PRODUCT_CATEGORY_NAME_MAX_LENGTH = 120;
+
+/**
+ * How long a category's emoji may be, in CODE POINTS.
+ *
+ * Not UTF-16 length: one family emoji is eleven code units and four code points joined
+ * by zero-width joiners, and a bound measured in `.length` would refuse a perfectly
+ * ordinary grapheme while admitting a longer one made of simpler characters.
+ *
+ * Eight is above every sequence the standard composes — a ZWJ family is four, a flag is
+ * two, a modifier adds one — and low enough that this cannot become a text field
+ * somebody puts a sentence in.
+ */
+export const PRODUCT_CATEGORY_EMOJI_MAX_CODE_POINTS = 8;
+
+/**
+ * What an emoji may contain — and, more importantly, what this deliberately does NOT
+ * check.
+ *
+ * It refuses control characters, line breaks and a value that is only whitespace, and it
+ * bounds the length. It does NOT verify that the text is an emoji, and that is a
+ * decision rather than an omission: the owner's requirement is "unicode text is
+ * sufficient, do NOT build a separate icon library". Any check strong enough to reject a
+ * non-emoji is an icon system wearing a regex — it would have to encode a snapshot of the
+ * Unicode emoji tables, and every operator whose perfectly valid grapheme post-dates that
+ * snapshot would be told their input is invalid, with no way to override it.
+ *
+ * The control-character refusal is not cosmetic. This value is rendered into a Telegram
+ * inline-keyboard label and into a Web Admin table cell; a newline there is a broken
+ * button, and the bot's labels are built from tenant data.
+ *
+ * Absence is valid everywhere. A category with no emoji is an ordinary category.
+ */
+export function isValidCategoryEmoji(emoji: string): boolean {
+  if (emoji.trim().length === 0) return false;
+  if ([...emoji].length > PRODUCT_CATEGORY_EMOJI_MAX_CODE_POINTS) return false;
+  // eslint-disable-next-line no-control-regex
+  return !/[\u0000-\u001f\u007f\u0085\u2028\u2029]/.test(emoji);
+}
+
+export const productCategoryEmojiSchema = z.string().refine(isValidCategoryEmoji, {
+  message: 'an emoji is short, single-line text with no control characters',
+});
+
+/**
+ * What an order records about the category it was bought from.
+ *
+ * A SNAPSHOT, on the same terms as `OrderLineSnapshot` and for the same reason: the
+ * product may since have been reassigned, and the category renamed, hidden, deactivated
+ * or deleted. `categoryId` is kept for navigation and is explicitly not how the purchase
+ * is reconstructed.
+ *
+ * **It is nullable on an order, and a null means UNKNOWN rather than uncategorised.**
+ * Orders placed before categories existed have no category, and the owner's decision is
+ * that they must not be given one: the product's category today is not evidence of what
+ * a customer browsed months ago, and writing it into an order row makes a guess
+ * indistinguishable from a record. Nothing may fill that null by joining to the
+ * product's current category at read time either — that is the same fabrication moved
+ * from write time to read time.
+ */
+export interface OrderCategorySnapshot {
+  readonly categoryId: ProductCategoryId;
+  /** The category's name as it read at confirmation. */
+  readonly name: string;
+  /** Its emoji as it read at confirmation, or null — absence is ordinary. */
+  readonly emoji: string | null;
+}
 
 export const PRODUCT_STATUSES = ['ACTIVE', 'INACTIVE'] as const;
 export type ProductStatus = (typeof PRODUCT_STATUSES)[number];
