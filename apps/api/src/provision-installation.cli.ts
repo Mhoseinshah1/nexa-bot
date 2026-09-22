@@ -1,8 +1,17 @@
-import { CALENDARS, CURRENCY_CODES, NexaError, PLATFORM_ERROR_CODES } from '@nexa/contracts';
+import {
+  CALENDARS,
+  CURRENCY_CODES,
+  DEFAULT_PRODUCT_CATEGORY_NAME,
+  NexaError,
+  PLATFORM_ERROR_CODES,
+  type ProductCategoryId,
+  type TenantContext,
+} from '@nexa/contracts';
 import { eq, sql } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 import { createDatabase } from './infrastructure/persistence/database.js';
 import { tenants } from './infrastructure/persistence/schema.js';
+import { DrizzleProductCategoryRepository } from './modules/commerce/catalog/infrastructure/drizzle-product.repository.js';
 
 /**
  * `provision-installation` — create the installation's primary tenant.
@@ -162,6 +171,28 @@ export async function provisionInstallation(
         calendar: input.calendar,
         currency: input.currency,
       });
+      /*
+       * The tenant's first category, in the SAME transaction that creates the tenant.
+       *
+       * Without it a freshly provisioned installation differs from a migrated one in a
+       * way its operator only discovers when their first product turns out to be
+       * unsellable — refused by `PRODUCT_NOT_CATEGORISED`, a rule they would have had
+       * no way to satisfy because there would be no category to pick and no reason to
+       * suspect one was needed. Migration 0097 gives existing tenants this row; this is
+       * the same fact for tenants that did not exist when it ran.
+       *
+       * Through the repository, not raw SQL here: the same application path the admin
+       * surfaces use, so the shape of the row is decided in one place.
+       *
+       * Idempotent on "this tenant has any category", which is what makes the rerun
+       * this CLI is built for safe and what preserves an operator's RENAME — the second
+       * run finds a category and writes nothing, whatever it is now called.
+       */
+      await new DrizzleProductCategoryRepository(handle.db).ensureDefault(
+        { tenantId: id } as TenantContext,
+        { id: uuidv7() as ProductCategoryId, name: DEFAULT_PRODUCT_CATEGORY_NAME, now: new Date() },
+        { tx } as unknown,
+      );
       return { tenantId: id, slug: input.slug, created: true };
     });
   } finally {

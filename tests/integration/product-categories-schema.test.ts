@@ -1,4 +1,6 @@
+import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { DEFAULT_PRODUCT_CATEGORY_NAME } from '@nexa/contracts';
 import { createTestContext, tenantA, tenantB, type TestContext } from './harness';
 
 /**
@@ -188,5 +190,93 @@ describe('what the database refuses about a product category', () => {
     await expect(
       query(`DELETE FROM product_categories WHERE id = $1`, [category]),
     ).resolves.toBeDefined();
+  });
+});
+
+/**
+ * Every tenant can sell something — the invariant, across all three populations.
+ *
+ * Stated here rather than assumed, because the three populations are produced by three
+ * different mechanisms that cannot see each other: migration 0097 for tenants that had
+ * products, migration 0099 for the ones its predicate missed, and
+ * `provision-installation` for tenants created afterwards. Nothing in the type system
+ * relates them, so only a test keeps them agreeing.
+ */
+describe('every tenant has a category to sell under', () => {
+  let ctx: TestContext;
+
+  beforeAll(async () => {
+    ctx = await createTestContext();
+  }, 120_000);
+
+  afterAll(async () => {
+    await ctx?.close();
+  });
+
+  beforeEach(async () => {
+    await ctx.reset();
+  });
+
+  const query = async (text: string, params: readonly unknown[] = []) =>
+    ctx.container.database.withClient((client) => client.query(text, [...params]));
+
+  it('gives a tenant with ZERO products one, which 0097 alone did not', async () => {
+    /*
+     * The hole 0097 left, closed by 0099 and proven by RUNNING 0099.
+     *
+     * 0097 backfilled `FROM (SELECT DISTINCT tenant_id FROM products)`, so a tenant that
+     * existed at migration time and had sold nothing got no category at all — and its
+     * operator's first product would then be refused by a rule they could not satisfy.
+     *
+     * The setup reproduces exactly that state: a real tenant, no products, no category.
+     * The migration file is then executed as written, from disk, so this cannot pass
+     * against a version of the SQL that differs from the one that ships.
+     */
+    await query(`DELETE FROM product_categories WHERE tenant_id = $1`, [tenantB.tenantId]);
+    const before = await query(`SELECT count(*)::int AS n FROM products WHERE tenant_id = $1`, [
+      tenantB.tenantId,
+    ]);
+    expect((before.rows[0] as { n: number }).n, 'the fixture tenant has products').toBe(0);
+
+    await query(readFileSync('apps/api/drizzle/0099_every_tenant_has_a_category.sql', 'utf8'));
+
+    const after = await query(
+      `SELECT name, status, visibility FROM product_categories WHERE tenant_id = $1`,
+      [tenantB.tenantId],
+    );
+    expect(after.rows, 'a product-less tenant was left with nothing to file under').toHaveLength(1);
+    expect((after.rows[0] as { name: string }).name).toBe(DEFAULT_PRODUCT_CATEGORY_NAME);
+  });
+
+  it('writes no second category when 0099 is applied twice', async () => {
+    const sqlText = readFileSync('apps/api/drizzle/0099_every_tenant_has_a_category.sql', 'utf8');
+    await query(sqlText);
+    await query(sqlText);
+
+    const rows = await query(
+      `SELECT tenant_id, count(*)::int AS n FROM product_categories GROUP BY tenant_id
+       HAVING count(*) > 1`,
+    );
+    expect(rows.rows, 'a rerun of 0099 duplicated a category').toEqual([]);
+  });
+
+  it('names the default the same thing in the migrations and in the contract', () => {
+    /*
+     * Three places carry this value and two are raw SQL that can import nothing:
+     * 0097's backfill, 0099's, and `DEFAULT_PRODUCT_CATEGORY_NAME`, which the
+     * provisioning path uses. A drift between them would give tenants provisioned
+     * before and after a release differently-named defaults, with no error anywhere.
+     *
+     * Read from the files rather than restated, so editing one without the other fails
+     * here instead of in somebody's shop.
+     */
+    for (const file of [
+      'apps/api/drizzle/0097_product_categories.sql',
+      'apps/api/drizzle/0099_every_tenant_has_a_category.sql',
+    ]) {
+      expect(readFileSync(file, 'utf8'), `${file} names a different default`).toContain(
+        `'${DEFAULT_PRODUCT_CATEGORY_NAME}'`,
+      );
+    }
   });
 });

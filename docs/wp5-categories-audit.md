@@ -343,6 +343,14 @@ constraints on it, both from `CLAUDE.md`:
   the system. The operator must be able to rename it, and the migration must not be the
   thing that decides what it is called.
 
+> **This second constraint was wrong, and §9.3 is the correction.** A category name is
+> operator-owned data that is renamed as a normal operation, not text the system emits
+> from a key; and a migration can import nothing. What was built instead is one constant
+> in `@nexa/contracts` for every application path, the same literal in the two
+> migrations, and a test that fails if the three stop agreeing. §7's first constraint —
+> tenant-scoped, one per tenant — holds, and §9.1 records that 0097 did not in fact
+> satisfy it for every tenant.
+
 ## 8. What this package will NOT do
 
 - **No new permission.** §1.1.
@@ -360,3 +368,106 @@ constraints on it, both from `CLAUDE.md`:
   by joining to the product's current category at read time.
 - **No icon system.** §6.1. An optional unicode text field, and nothing that would make
   an operator's choice of emoji a contract change.
+
+## 9. Every tenant has a category — the production path, not the fixtures
+
+This section exists because a claim made during implementation was wrong, and the way it
+was wrong is the interesting part. The claim was "the seed now creates one per tenant",
+offered as though it answered whether a real installation could sell anything. It did
+not: `seed()` is development and test fixtures, and an audit of its callers found **none
+in application code**. A fixture cannot establish a production invariant, and reporting
+one as though it had is the failure this section is the correction to.
+
+### 9.1 The audit, and what it found
+
+| claim                                               | verdict                                                                                                                              |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| "the seed creates one per tenant" covers production | **FALSE.** `apps/api/src/infrastructure/persistence/seed.ts` has zero callers outside `pnpm db:seed:dev` and the integration harness |
+| where a real tenant is created                      | `apps/api/src/provision-installation.cli.ts` — inside an advisory-locked transaction. It created **no category**                     |
+| how many tenant-insert sites exist                  | two: that CLI, and the development seed. No HTTP route and no service creates a tenant                                               |
+| migration 0097 backfills every tenant               | **FALSE.** Its source is `FROM (SELECT DISTINCT tenant_id FROM products)`, so a tenant with **zero products** got nothing            |
+| tenants are deleted or cleaned up anywhere          | **no.** `grep` for `delete(tenants)` / `DELETE FROM tenants` across `apps`, `packages`, `tests` and `scripts` returns nothing        |
+
+Two real holes, then, not one — and neither was visible from the fixtures, because the
+fixtures happened to cover both by accident.
+
+### 9.2 The resolution: option 1, automatic and transactional
+
+Of the two choices the owner offered, this takes the first: a default category is created
+in the transaction that creates the tenant. The second — refusing product creation until
+an operator makes a category — was rejected because it makes the first thing a new
+operator does an error message about a concept nothing has introduced them to.
+
+Three populations, three mechanisms, and nothing in the type system relates them:
+
+| population                              | given a category by                              | when                                       |
+| --------------------------------------- | ------------------------------------------------ | ------------------------------------------ |
+| migrated tenants **with** products      | migration `0097_product_categories.sql`          | at migration time                          |
+| migrated tenants with **zero** products | migration `0099_every_tenant_has_a_category.sql` | at migration time — the hole 0097 left     |
+| tenants created **after** 0097          | `provisionInstallation`, via `ensureDefault`     | in the transaction that inserts the tenant |
+
+`ProductCategoryRepository.ensureDefault` is the application path all of these converge
+on for the non-migration case: one `INSERT … SELECT … WHERE NOT EXISTS` statement, taken
+inside the caller's transaction, tenant-scoped through `requireTenantId`.
+
+**The idempotency key is "this tenant has ANY category"**, not "has one named
+`DEFAULT_PRODUCT_CATEGORY_NAME`" and not an id match. That choice is what makes the two
+reruns that actually happen safe. An installer rerun after a failure at a later step
+writes nothing the second time. And an operator who has **renamed** the default — which
+§6 promises they can — keeps the rename, where a name-keyed predicate would find no match
+and create a second category nobody asked for, in a list the customer can see.
+
+### 9.3 Where the Persian string lives, and a correction to §7
+
+§7 said the default's name "must come from a template key, not a Persian string literal
+in SQL". The implementation does **not** do that, and the plan was wrong rather than the
+implementation:
+
+- A template key addresses text **the system emits**. A category name is a row the
+  operator **owns and edits** from the moment it exists — renaming it is a normal
+  operation, not a contract change. Rendering it from a key would mean either that the
+  rename has nowhere to go, or that two mechanisms decide what one row says.
+- A migration is raw SQL. It can import nothing, so the literal in 0097 and 0099 is
+  unavoidable if the migration is to write a usable name at all.
+
+So the shape is: `DEFAULT_PRODUCT_CATEGORY_NAME` in `@nexa/contracts` is the single
+source for every **application** path, the two migrations carry the same literal because
+SQL cannot import, and a test reads both `.sql` files and fails if either stops matching
+the constant. That drift pin is the mechanism — not the comment — because a rename in one
+place and not the other would give tenants provisioned before and after a release
+differently-named defaults with no error anywhere.
+
+### 9.4 Evidence
+
+Production-path tests, not fixture assertions:
+
+- `tests/integration/provision-installation.test.ts` — three cases under _the first
+  category a provisioned tenant gets_: it is created in the same transaction as the
+  tenant; a rerun writes no second one; a rerun keeps an operator's rename.
+- `tests/integration/product-categories-schema.test.ts` — three under _every tenant has a
+  category to sell under_: 0099 gives a product-less tenant one (executing the migration
+  **from disk**, so it cannot pass against SQL that differs from what ships); 0099 applied
+  twice duplicates nothing; and the literal-versus-constant drift pin.
+
+**Falsification M-PROV.** Removing the `ensureDefault` call from
+`provision-installation.cli.ts` and rerunning the suite: **3 failed | 8 passed (11)** —
+_creates one, in the same transaction as the tenant_, _writes no second one when the
+installer is rerun_, and _keeps a renamed category through a rerun_ all die, and the eight
+pre-existing provisioning cases stay green. The mutation was reverted. The three tests
+therefore hold the production path specifically, and not something the fixtures would
+have satisfied anyway.
+
+### 9.5 0097 is immutable, and this was checked rather than assumed
+
+`git log --follow apps/api/drizzle/0097_product_categories.sql` returns a **single**
+commit (`700b79e`), and `git diff 700b79e HEAD -- apps/api/drizzle/0097_product_categories.sql
+apps/api/drizzle/meta/0097_snapshot.json` is empty. 0098 touches only indexes — dropping
+the ones 0097 created for an ordering the owner later changed, and creating the matching
+ones — and 0099 inserts rows. Neither edits a byte of 0097.
+
+### 9.6 Tenant deletion
+
+Not applicable, and stated as a finding rather than an omission: **no code path deletes a
+tenant**. The category's foreign key to `tenants` is `ON DELETE NO ACTION`, so if such a
+path is ever written it will be refused by the database until it decides what to do with
+the tenant's categories, which is the correct place for that decision to surface.

@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { eq, sql } from 'drizzle-orm';
-import { tenants } from '../../apps/api/src/infrastructure/persistence/schema';
+import { DEFAULT_PRODUCT_CATEGORY_NAME } from '@nexa/contracts';
+import { productCategories, tenants } from '../../apps/api/src/infrastructure/persistence/schema';
 import { provisionInstallation } from '../../apps/api/src/provision-installation.cli';
 import { createTestContext, resetDatabase, testConfig, type TestContext } from './harness';
 
@@ -40,6 +41,75 @@ describe('provision-installation', () => {
 
   const primaries = async () =>
     ctx.container.database.db.select().from(tenants).where(eq(tenants.kind, 'PRIMARY'));
+
+  const categoriesOf = async (tenantId: string) =>
+    ctx.container.database.db
+      .select()
+      .from(productCategories)
+      .where(eq(productCategories.tenantId, tenantId));
+
+  // -------------------------------------------------------------------------
+  // The tenant's first category — the PRODUCTION path, not the development seed
+  // -------------------------------------------------------------------------
+
+  describe('the first category a provisioned tenant gets', () => {
+    /**
+     * A freshly provisioned installation can sell something.
+     *
+     * The invariant this protects: every sellable product belongs to exactly one
+     * category, so a tenant with NO category is a tenant whose operator's first product
+     * is refused by `PRODUCT_NOT_CATEGORISED` — naming a rule they cannot satisfy,
+     * because there is no category to pick and nothing tells them one is needed.
+     *
+     * Asserted against `provisionInstallation` deliberately. Migration 0097 gives
+     * EXISTING tenants this row and the development seed gives the test fixtures one,
+     * and neither of those is evidence about a real tenant created in production —
+     * `seed()` has no callers in application code at all. This is the only path that
+     * creates a tenant outside a migration, so it is the only place the invariant can
+     * be established for a new one.
+     */
+    it('creates one, in the same transaction as the tenant', async () => {
+      const result = await provisionInstallation(url(), input);
+      expect(result.created).toBe(true);
+
+      const categories = await categoriesOf(result.tenantId);
+      expect(categories, 'a provisioned tenant has no category to sell under').toHaveLength(1);
+      expect(categories[0]?.name).toBe(DEFAULT_PRODUCT_CATEGORY_NAME);
+      expect(categories[0]?.tenantId).toBe(result.tenantId);
+      expect(categories[0]?.status).toBe('ACTIVE');
+      expect(categories[0]?.visibility).toBe('VISIBLE');
+    });
+
+    it('writes no second one when the installer is rerun', async () => {
+      const first = await provisionInstallation(url(), input);
+      const again = await provisionInstallation(url(), input);
+
+      expect(again.created, 'a rerun re-provisioned the installation').toBe(false);
+      expect(await categoriesOf(first.tenantId)).toHaveLength(1);
+    });
+
+    it('keeps a renamed category through a rerun, rather than restoring the default', async () => {
+      /*
+       * The reason the idempotency key is "this tenant has ANY category" and not "has
+       * one named `DEFAULT_PRODUCT_CATEGORY_NAME`".
+       *
+       * An operator renames the default — which the audit promises they can — and the
+       * installer is then rerun after a failure at a later step. Keyed on the name, the
+       * rerun would find no match and create a SECOND category, leaving the tenant with
+       * a duplicate nobody asked for and a customer-facing list that grew by itself.
+       */
+      const first = await provisionInstallation(url(), input);
+      await ctx.container.database.db.execute(
+        sql`UPDATE product_categories SET name = 'فروش ویژه' WHERE tenant_id = ${first.tenantId}`,
+      );
+
+      await provisionInstallation(url(), input);
+
+      const categories = await categoriesOf(first.tenantId);
+      expect(categories).toHaveLength(1);
+      expect(categories[0]?.name, 'a rerun overwrote the operator name').toBe('فروش ویژه');
+    });
+  });
 
   /**
    * Two installers, started at once, against one database.

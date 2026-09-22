@@ -560,4 +560,43 @@ export class DrizzleProductCategoryRepository implements ProductCategoryReposito
       .limit(1);
     return row === undefined ? null : toCategoryRecord(row);
   }
+
+  /**
+   * `INSERT … SELECT … WHERE NOT EXISTS`, in ONE statement.
+   *
+   * One statement rather than a read followed by a write, because the two-statement
+   * form is a race: two installers, or an installer and an operator creating their
+   * first category by hand, both see "none" and both insert. The conditional is
+   * evaluated by the same statement that writes, under the caller's transaction.
+   *
+   * The predicate is "this tenant has ANY category", which is what makes it survive a
+   * rename — see `ProductCategoryRepository.ensureDefault` for why that is the property
+   * worth having rather than a name or id match.
+   */
+  async ensureDefault(
+    scope: TenantContext,
+    input: { readonly id: ProductCategoryId; readonly name: string; readonly now: Date },
+    tx?: unknown,
+  ): Promise<{ readonly created: boolean }> {
+    const tenantId = requireTenantId(scope);
+    /*
+     * Raw SQL rather than the query builder, because `insert().select()` does not chain
+     * a WHERE — and splitting this into a read then a write would reintroduce the race
+     * it exists to avoid.
+     *
+     * `status`, `visibility` and `sort_order` are left to their column defaults
+     * (`ACTIVE`, `VISIBLE`, `0`), which is where those decisions already live.
+     */
+    const result = (await this.exec(tx).execute(
+      sql`
+      INSERT INTO ${productCategories} (id, tenant_id, name, created_at, updated_at)
+      SELECT ${input.id}::uuid, ${tenantId}::uuid, ${input.name}::text,
+             ${input.now}::timestamptz, ${input.now}::timestamptz
+      WHERE NOT EXISTS (
+        SELECT 1 FROM ${productCategories} WHERE tenant_id = ${tenantId}::uuid
+      )
+      RETURNING id` as never,
+    )) as unknown as { rows: readonly unknown[] };
+    return { created: result.rows.length > 0 };
+  }
 }

@@ -319,4 +319,24 @@ export interface ProductCategoryRepository {
     id: ProductCategoryId | null,
     tx?: unknown,
   ): Promise<ProductCategoryRecord | null>;
+
+  /**
+   * Gives a tenant a first category IF it has none, and reports whether it wrote one.
+   *
+   * The idempotency key is "this tenant has at least one category", not the name and
+   * not the id — which is what makes a rerun safe in the two ways that matter. An
+   * installer that reruns after a later failure writes nothing the second time, and a
+   * tenant whose operator has RENAMED the default keeps the rename, because the
+   * predicate asks whether any category exists rather than whether one called
+   * `DEFAULT_PRODUCT_CATEGORY_NAME` does.
+   *
+   * There is no unique index to lean on here — `(tenant_id, name)` is deliberately not
+   * unique, since an operator may legitimately want two categories with similar names
+   * — so the conditional is `WHERE NOT EXISTS`, taken inside the caller's transaction.
+   */
+  ensureDefault(
+    scope: TenantContext,
+    input: { readonly id: ProductCategoryId; readonly name: string; readonly now: Date },
+    tx?: unknown,
+  ): Promise<{ readonly created: boolean }>;
 }

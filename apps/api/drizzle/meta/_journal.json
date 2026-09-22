@@ -694,6 +694,13 @@
       "when": 1790093139229,
       "tag": "0098_category_paging_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 99,
+      "version": "7",
+      "when": 1790093140229,
+      "tag": "0099_every_tenant_has_a_category",
+      "breakpoints": true
     }
   ]
 }
