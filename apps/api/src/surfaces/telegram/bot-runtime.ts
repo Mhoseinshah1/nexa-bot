@@ -5745,6 +5745,9 @@ export class BotRuntime {
       if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID) {
         return CATEGORY_USAGE;
       }
+      // A redelivered create whose category has since been deleted: the service says
+      // what it created is gone, which is the section's one answer for that.
+      if (isCategoryMiss(error)) return CATEGORY_GONE;
       throw error;
     }
     return this.adminCategoryDetail(scope, actor, created.id, mayEdit);

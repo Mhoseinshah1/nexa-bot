@@ -914,6 +914,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
      * named 404 rather than an integrity violation reported as a 500.
      */
     panels: new DrizzlePanelDirectory(database.db),
+    /* The category a product names, checked to exist in the tenant under a SHARE lock. */
+    categories: productCategoryRepository,
     /* `sales.currency`. A product is priced in what the tenant sells in, or refused. */
     settings: settingsResolver,
     guard,

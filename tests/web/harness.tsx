@@ -170,6 +170,29 @@ export function product(overrides: Record<string, unknown> = {}): Record<string,
   };
 }
 
+/**
+ * One category as the operator list returns it, in `productCategoryListingSchema`'s shape.
+ *
+ * Its id is the one `product()` is filed under by default, so a products page given this
+ * listing resolves the default product's category — which the catalogue badge now needs,
+ * because a product is only sellable when its category is ACTIVE and VISIBLE too.
+ */
+export function categoryListing(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: '01a05e35-c9ad-7e93-bef3-1ed9b55292ca',
+    name: 'عمومی',
+    description: null,
+    emoji: null,
+    status: 'ACTIVE',
+    visibility: 'VISIBLE',
+    sortOrder: 0,
+    productCount: 1,
+    createdAt: '2026-02-01T08:00:00.000Z',
+    updatedAt: '2026-09-10T12:30:00.000Z',
+    ...overrides,
+  };
+}
+
 /** One order, in the shape `orderSummarySchema` declares. Every `line*` is a snapshot. */
 export function order(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {

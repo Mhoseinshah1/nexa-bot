@@ -151,8 +151,21 @@ export class ProductCategoryService {
         replay.result.categoryId as ProductCategoryId,
       );
       if (existing !== null) return existing;
-      // The idempotency row outlived its category, which a restore can produce.
-      // Falling through creates a new one rather than reporting a stale success.
+      /*
+       * The key is SPENT and its category is gone — deleted since, or lost to a restore.
+       *
+       * This fell through to creating a replacement, which could never commit: the
+       * idempotency row for this key still exists, so `rememberOnce` refused the new one
+       * as `IDEMPOTENCY_IN_FLIGHT` and rolled the category back, on every retry, with a
+       * message telling the caller to retry. Found by the Codex review of this branch.
+       *
+       * The defined outcome is the truth about the key: what it created no longer
+       * exists. A caller who wants a category makes a new request, under a new key.
+       */
+      throw errors.notFound(
+        COMMERCE_ERROR_CODES.CATEGORY_NOT_FOUND,
+        'The category this request created has since been deleted.',
+      );
     }
 
     const now = this.deps.clock.now();

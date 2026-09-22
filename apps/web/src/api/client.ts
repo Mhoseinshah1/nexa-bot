@@ -771,6 +771,8 @@ export interface ProductWriteInput {
   deviceLimit: number | null;
   priceAmount: string | null;
   priceCurrency: CurrencyCode | null;
+  /** Required by the contract; `null` files the product under no category. */
+  categoryId: string | null;
   idempotencyKey: string;
 }
 

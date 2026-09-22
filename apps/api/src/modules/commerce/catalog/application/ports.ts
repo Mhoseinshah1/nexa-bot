@@ -486,4 +486,22 @@ export interface ProductCategoryRepository {
 
   /** Takes the category's row lock, so a count read after it is the state we commit on. */
   lock(scope: TenantContext, id: ProductCategoryId, tx: unknown): Promise<boolean>;
+
+  /**
+   * Reads the category under a SHARE lock, for the two writes that DEPEND on it.
+   *
+   * Confirming an order checks that its category is still ACTIVE, and writing a product
+   * checks that its category exists in this tenant. A plain read answers both with the
+   * state as it was, and a concurrent deactivation — or delete — could commit before the
+   * dependent write does, which is exactly the window the check exists to close.
+   *
+   * SHARE and not UPDATE, deliberately: every confirmation in a busy category takes this,
+   * and SHARE locks do not wait for each other. A status or visibility change is an
+   * UPDATE, which does wait for them, so the two serialise and nothing else does.
+   */
+  findForShare(
+    scope: TenantContext,
+    id: ProductCategoryId,
+    tx: unknown,
+  ): Promise<ProductCategoryRecord | null>;
 }

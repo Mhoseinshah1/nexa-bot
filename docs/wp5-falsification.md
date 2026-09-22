@@ -87,3 +87,28 @@ not seen, and the runtime acts on every delivery. A move or a create recomputes 
 input from the state the first delivery left, which no longer hashes the same under the
 same idempotency key; the store's refusal therefore means "this already ran", and is
 answered with the current list rather than with a refusal for a write that happened.
+
+## The Codex review of PR #60
+
+Seven findings, all confirmed against the code before any change, all fixed, and each
+fix reverted alone to show the test that holds it.
+
+| #     | rule                                                           | mutation                                               | tests that die                                                                                                                                                                                                                                               | result |
+| ----- | -------------------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------ |
+| W5-28 | the Web Admin product form sends `categoryId`                  | the field dropped from `bodyFrom`                      | `products-and-orders.test.tsx` › keeps the category an edit did not touch, rather than dropping it; › sends the category chosen, and null for none                                                                                                           | KILLED |
+| W5-29 | confirmation reads the category under a SHARE lock             | `findForShare` → the plain `findById`                  | `product-categories.test.ts` › confirms nothing in a category deactivated while the confirmation waited for it                                                                                                                                               | KILLED |
+| W5-30 | a product write naming a foreign or unknown category is a 404  | the category check made to return early                | `product-categories.test.ts` › answers a product naming a foreign or unknown category as not found, not a 500                                                                                                                                                | KILLED |
+| W5-31 | the catalogue badge accounts for the category                  | the category checks made unreachable in `catalogueGap` | `products-and-orders.test.tsx` › names each way a category keeps an otherwise sellable product out; › shows no green badge beside an uncategorised warning on the same row; › says a product in an inactive category is out, even with everything else right | KILLED |
+| W5-32 | `categoryId` is in the product request fingerprint             | the field dropped from `serialisableDraft`             | `product-categories.test.ts` › refuses a reused key whose request changed only the category                                                                                                                                                                  | KILLED |
+| W5-33 | `categoryId` is in the product audit projection                | the field dropped from `auditView`                     | `product-categories.test.ts` › records a move between categories made through a product edit                                                                                                                                                                 | KILLED |
+| W5-34 | a replayed create whose category was deleted answers not-found | the fall-through to a replacement restored             | `product-categories.test.ts` › answers a replayed create whose category was since deleted, every time, and makes none                                                                                                                                        | KILLED |
+
+W5-29 is a controlled interleaving: a deactivation is written and held open, the
+confirmation is shown BLOCKED in `pg_locks`, and only then does the deactivation commit.
+With a plain read the confirmation never blocks, and the case fails on its own timeout
+with the sentence that names why.
+
+W5-28 was the most visible of the seven: the contract required `categoryId` on every
+product write and the form omitted it, so every create and every edit from the Web Admin
+was a 400. The suite missed it because the web tests stub `fetch` and no case sent a
+product write through the real form.

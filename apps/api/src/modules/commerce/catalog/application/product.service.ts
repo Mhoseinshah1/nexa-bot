@@ -12,6 +12,7 @@ import {
   type IdGenerator,
   type IdempotencyStore,
   type PanelId,
+  type ProductCategoryId,
   type PermissionKey,
   type ProductId,
   type ProductStatus,
@@ -42,6 +43,7 @@ import type {
   ProductSearch,
   ProductCursor,
   ProductCategoryRecord,
+  ProductCategoryRepository,
 } from './ports.js';
 
 /**
@@ -84,6 +86,12 @@ export interface ProductServiceDeps {
    * `PanelSalesGate`.
    */
   readonly panelSales: PanelSalesGate;
+  /**
+   * The category a product is filed under, read under a SHARE lock by the two writes
+   * that name one. Only `findForShare`: this service decides whether a category EXISTS
+   * in the tenant, and every other category rule belongs to `ProductCategoryService`.
+   */
+  readonly categories: Pick<ProductCategoryRepository, 'findForShare'>;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly audit: AuditWriter;
@@ -316,6 +324,7 @@ export class ProductService {
       async (tx) => {
         await this.assertScopeActive(scope, tx);
         await this.assertPanelIsOurs(scope, input.draft.panelId, tx);
+        await this.assertCategoryIsOurs(scope, input.draft.categoryId, tx);
         await this.assertPriceCurrency(scope, input.draft.price, tx);
 
         const created = await this.deps.repository.create(
@@ -401,6 +410,7 @@ export class ProductService {
       async (tx) => {
         await this.assertScopeActive(scope, tx);
         await this.assertPanelIsOurs(scope, input.edit.panelId, tx);
+        await this.assertCategoryIsOurs(scope, input.edit.categoryId, tx);
         await this.assertPriceCurrency(scope, input.edit.price, tx);
 
         const before = await this.deps.repository.findById(scope, productId, tx);
@@ -646,6 +656,30 @@ export class ProductService {
   }
 
   /**
+   * The category a product is filed under exists, in THIS tenant.
+   *
+   * `products_tenant_category_fk` refuses anything else — but as a constraint violation,
+   * which `DomainErrorFilter` answers with a 500, where the dedicated reassignment
+   * endpoint answers the same foreign or unknown id with `CATEGORY_NOT_FOUND`. Two
+   * answers to one question depending on which route asked it. Found by the Codex review
+   * of this branch.
+   *
+   * Under a SHARE lock, so a delete of the category cannot commit between this check and
+   * the write: the delete takes the row FOR UPDATE and waits. Null is allowed and means
+   * uncategorised — a real state, refused at confirmation with `PRODUCT_NOT_CATEGORISED`.
+   */
+  private async assertCategoryIsOurs(
+    scope: TenantContext,
+    categoryId: ProductCategoryId | null,
+    tx: TransactionScope,
+  ): Promise<void> {
+    if (categoryId === null) return;
+    if ((await this.deps.categories.findForShare(scope, categoryId, tx)) === null) {
+      throw errors.notFound(COMMERCE_ERROR_CODES.CATEGORY_NOT_FOUND, 'Unknown category.');
+    }
+  }
+
+  /**
    * A product is priced in the currency the tenant SELLS in, and in no other.
    *
    * `sales.currency` was declared, rendered by the admin, and enforced by nothing — the
@@ -731,6 +765,12 @@ function serialisableDraft(draft: ProductDraft): Record<string, unknown> {
     audience: draft.audience,
     sortOrder: draft.sortOrder,
     panelId: draft.panelId,
+    /*
+     * In the fingerprint because it is writable: without it, reusing a key with only the
+     * category changed replayed the earlier product instead of refusing a different
+     * request under the same key. Found by the Codex review of this branch.
+     */
+    categoryId: draft.categoryId,
     durationDays: draft.specification.durationDays,
     trafficBytes: draft.specification.trafficBytes.toString(),
     deviceLimit: draft.specification.deviceLimit,
@@ -756,6 +796,9 @@ function auditView(product: ProductRecord): Record<string, unknown> {
     audience: product.audience,
     sortOrder: product.sortOrder,
     panelId: product.panelId,
+    // A move between categories is an edit like any other, and an audit pair that
+    // omitted the field recorded it as a change of nothing.
+    categoryId: product.categoryId,
     durationDays: product.specification.durationDays,
     trafficBytes: product.specification.trafficBytes.toString(),
     deviceLimit: product.specification.deviceLimit,

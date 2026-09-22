@@ -915,8 +915,18 @@ export class OrderService {
          * operator can deactivate a category between the summary a customer is looking
          * at and the tap that answers it. This is the same discipline `PanelSalesGate`
          * already applies to the panel three lines below.
+         *
+         * Under a SHARE lock, and that is what makes the re-check a guarantee rather than
+         * a narrower window. A plain read returned ACTIVE and a deactivation could commit
+         * before this transaction moved the order on — confirming a sale the operator had
+         * already withdrawn. Deactivation is an UPDATE, which waits for this lock, so the
+         * two now serialise: either the deactivation lands first and is read here, or it
+         * waits for this confirmation to finish. Found by the Codex review of this branch.
          */
-        const category = await this.deps.categories.findById(scope, product.categoryId, tx);
+        const category =
+          product.categoryId === null
+            ? null
+            : await this.deps.categories.findForShare(scope, product.categoryId, tx);
         this.assertOrderable(product, category);
 
         /*

@@ -856,4 +856,20 @@ export class DrizzleProductCategoryRepository implements ProductCategoryReposito
       .limit(1);
     return row !== undefined;
   }
+
+  /** `SELECT … FOR SHARE` on the category. See the port for why SHARE and not UPDATE. */
+  async findForShare(
+    scope: TenantContext,
+    id: ProductCategoryId,
+    tx: unknown,
+  ): Promise<ProductCategoryRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .select(getTableColumns(productCategories))
+      .from(productCategories)
+      .where(and(eq(productCategories.tenantId, tenantId), eq(productCategories.id, id)))
+      .for('share')
+      .limit(1);
+    return row === undefined ? null : toCategoryRecord(row);
+  }
 }

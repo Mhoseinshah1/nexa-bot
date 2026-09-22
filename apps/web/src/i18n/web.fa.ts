@@ -1268,6 +1268,10 @@ export const WEB_FA = {
   'web.category_filter_none': 'بدون دسته',
   'web.product_category': 'دسته',
   'web.product_category_unset': 'بدون دسته',
+  'web.product_category_hint':
+    'دسته‌ای که مشتری این محصول را زیر آن می‌بیند. محصول بدون دسته فروخته نمی‌شود.',
+  'web.product_category_unreadable':
+    'فهرست دسته‌ها خوانده نشد؛ شناسهٔ دسته را وارد کنید یا خالی بگذارید.',
   'web.product_category_assign': 'انتقال به دسته',
   'web.product_category_assign_hint':
     'انتقال، ویرایشِ مشخصات محصول نیست؛ ردیف جداگانه‌ای در گزارش اقدام‌ها ثبت می‌کند.',
@@ -1341,6 +1345,11 @@ export const WEB_FA = {
     'مخاطب آن فقط نمایندگان است؛ تا زمانی که نمایندگی ساخته نشود نه در فهرست می‌آید و نه فروخته می‌شود.',
   'web.product_gap_unpriced': 'قیمت ندارد؛ بدون قیمت قابل فروش نیست.',
   'web.product_gap_no_panel': 'به هیچ پنلی وصل نیست؛ چیزی برای تحویل وجود ندارد.',
+  'web.product_gap_uncategorised': 'در هیچ دسته‌ای نیست؛ تا در دسته‌ای قرار نگیرد فروخته نمی‌شود.',
+  'web.product_gap_category_inactive': 'دستهٔ آن غیرفعال است؛ حتی با پیوند مستقیم فروخته نمی‌شود.',
+  'web.product_gap_category_hidden':
+    'دستهٔ آن پنهان است؛ با پیوند مستقیم فروخته می‌شود ولی در فهرست نمی‌آید.',
+  'web.product_gap_category_unknown': 'وضعیت دستهٔ آن خوانده نشد.',
 
   'web.product_new_title': 'محصول تازه',
   'web.product_edit_title': 'ویرایش محصول',

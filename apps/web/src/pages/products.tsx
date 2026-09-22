@@ -13,6 +13,7 @@ import {
   UNLIMITED_TRAFFIC_BYTES,
   type CurrencyCode,
   type ProductAudience,
+  type ProductCategoryListingResponse,
   type ProductStatus,
   type ProductSummaryResponse,
 } from '@nexa/contracts';
@@ -104,15 +105,68 @@ const AUDIENCE_LABELS: Readonly<Record<ProductAudience, WebKey>> = {
  * argument. Collapsing them would tell an operator their reseller product merely needs a
  * link passed around, and it does not.
  */
-export type CatalogueGap = 'INACTIVE' | 'UNLISTED' | 'RESELLERS' | 'UNPRICED' | 'NO_PANEL';
+export type CatalogueGap =
+  | 'INACTIVE'
+  | 'UNLISTED'
+  | 'RESELLERS'
+  | 'UNPRICED'
+  | 'NO_PANEL'
+  | 'UNCATEGORISED'
+  | 'CATEGORY_INACTIVE'
+  | 'CATEGORY_HIDDEN'
+  | 'CATEGORY_UNKNOWN';
 
-export function catalogueGap(row: ProductSummaryResponse): CatalogueGap | null {
+/**
+ * The two facts about a product's category the badge needs, or `UNKNOWN` when the
+ * category list has not answered — still loading, refused, or the id is not in it.
+ *
+ * A REQUIRED argument, so no caller can forget the category and fall back to a green
+ * "in catalogue" for a product the server will not sell. That is exactly what the first
+ * version did: it read the product's own four predicates, so an uncategorised product
+ * showed an "uncategorised" warning in one column and "in catalogue" in the next. Found
+ * by the Codex review of this branch.
+ */
+export type CategoryFacts =
+  | {
+      readonly status: ProductCategoryListingResponse['status'];
+      readonly visibility: ProductCategoryListingResponse['visibility'];
+    }
+  | 'UNKNOWN';
+
+export function catalogueGap(
+  row: ProductSummaryResponse,
+  category: CategoryFacts,
+): CatalogueGap | null {
   if (row.status !== 'ACTIVE') return 'INACTIVE';
   if (row.audience === 'HIDDEN') return 'UNLISTED';
   if (row.audience === 'RESELLERS_ONLY') return 'RESELLERS';
   if (row.priceAmount === null) return 'UNPRICED';
   if (row.panelId === null) return 'NO_PANEL';
+  /*
+   * The category, in the order the server refuses: none at all is refused at checkout
+   * (`PRODUCT_NOT_CATEGORISED`), an INACTIVE one is refused even by direct reference, and
+   * a HIDDEN one is unlisted but still orderable — the same standing a HIDDEN audience
+   * has, and the same amber. An answer we could not read is said, not guessed.
+   */
+  if (row.categoryId === null) return 'UNCATEGORISED';
+  if (category === 'UNKNOWN') return 'CATEGORY_UNKNOWN';
+  if (category.status !== 'ACTIVE') return 'CATEGORY_INACTIVE';
+  if (category.visibility !== 'VISIBLE') return 'CATEGORY_HIDDEN';
   return null;
+}
+
+/** The facts for one product, from the category list the page already holds. */
+function categoryFactsFor(
+  row: ProductSummaryResponse,
+  categories: readonly ProductCategoryListingResponse[] | undefined,
+): CategoryFacts {
+  const found = categories?.find((category) => category.id === row.categoryId);
+  return found === undefined ? 'UNKNOWN' : { status: found.status, visibility: found.visibility };
+}
+
+/** Orderable by anybody holding the reference, just not listed: amber, not red. */
+function isUnlistedGap(gap: CatalogueGap): boolean {
+  return gap === 'UNLISTED' || gap === 'CATEGORY_HIDDEN';
 }
 
 const GAP_LABELS: Readonly<Record<CatalogueGap, WebKey>> = {
@@ -121,15 +175,26 @@ const GAP_LABELS: Readonly<Record<CatalogueGap, WebKey>> = {
   RESELLERS: 'web.product_gap_resellers',
   UNPRICED: 'web.product_gap_unpriced',
   NO_PANEL: 'web.product_gap_no_panel',
+  UNCATEGORISED: 'web.product_gap_uncategorised',
+  CATEGORY_INACTIVE: 'web.product_gap_category_inactive',
+  CATEGORY_HIDDEN: 'web.product_gap_category_hidden',
+  CATEGORY_UNKNOWN: 'web.product_gap_category_unknown',
 };
 
-function CatalogueBadge({ row }: { row: ProductSummaryResponse }) {
-  const gap = catalogueGap(row);
+function CatalogueBadge({
+  row,
+  category,
+}: {
+  row: ProductSummaryResponse;
+  category: CategoryFacts;
+}) {
+  const gap = catalogueGap(row, category);
   if (gap === null) return <Badge tone="ok">{t('web.product_in_catalogue')}</Badge>;
   // `UNLISTED` is amber and not red: a HIDDEN product is still ORDERABLE by anybody
-  // holding its link, which is what the audience means. The others are configuration —
-  // `RESELLERS` included, because that one is not orderable at all in this phase.
-  return <Badge tone={gap === 'UNLISTED' ? 'warn' : 'neutral'}>{t(GAP_LABELS[gap])}</Badge>;
+  // holding its link, which is what the audience means — and a HIDDEN category means
+  // the same. The others are configuration — `RESELLERS` included, because that one is
+  // not orderable at all in this phase.
+  return <Badge tone={isUnlistedGap(gap) ? 'warn' : 'neutral'}>{t(GAP_LABELS[gap])}</Badge>;
 }
 
 function Dash() {
@@ -295,7 +360,9 @@ export function ProductsPage({
     {
       key: 'catalogue',
       header: t('web.product_catalogue'),
-      render: (row) => <CatalogueBadge row={row} />,
+      render: (row) => (
+        <CatalogueBadge row={row} category={categoryFactsFor(row, categories.data?.categories)} />
+      ),
     },
     {
       key: 'category',
@@ -499,6 +566,8 @@ interface FormState {
   deviceLimit: string;
   priceAmount: string;
   priceCurrency: CurrencyCode;
+  /** The category id, or empty for none. See the field's own comment in `ProductForm`. */
+  categoryId: string;
 }
 
 const BLANK: FormState = {
@@ -512,6 +581,7 @@ const BLANK: FormState = {
   deviceLimit: '',
   priceAmount: '',
   priceCurrency: 'IRT',
+  categoryId: '',
 };
 
 function stateOf(row: ProductSummaryResponse): FormState {
@@ -526,6 +596,7 @@ function stateOf(row: ProductSummaryResponse): FormState {
     deviceLimit: row.deviceLimit === null ? '' : String(row.deviceLimit),
     priceAmount: row.priceAmount ?? '',
     priceCurrency: row.priceCurrency ?? 'IRT',
+    categoryId: row.categoryId ?? '',
   };
 }
 
@@ -595,6 +666,15 @@ export function bodyFrom(
       // The pair moves together. An amount with no currency is the shape the schema,
       // the service and a CHECK constraint each refuse.
       priceCurrency: amount === '' ? null : state.priceCurrency,
+      /*
+       * ALWAYS sent, and `null` when none is chosen. The contract requires the field and
+       * permits the value to be empty; this form omitted it, so every create and every
+       * edit from the Web Admin was refused with a 400 before reaching the service.
+       * Found by the Codex review of this branch. An edit that left it out would also
+       * have been an edit that could never keep a category, since the write replaces the
+       * whole product.
+       */
+      categoryId: state.categoryId.trim() === '' ? null : state.categoryId.trim(),
     },
   };
 }
@@ -642,6 +722,20 @@ function ProductForm({
    */
   const panelsComplete = (panels.data?.nextCursor ?? null) === null;
   const panelsReadable = queryState(panels) === 'ready' && panelsComplete;
+
+  /*
+   * The categories, for a select — the same list and the same cache key the product list
+   * and the detail page read, so a category created a moment ago is here too.
+   *
+   * The whole list: `/product-categories` is not paged, which is what makes a select
+   * complete rather than a first page of one. When it cannot answer, the field falls back
+   * to a typed id and says so, for the reason the panel field does.
+   */
+  const categories = useQuery({
+    queryKey: ['product-categories'],
+    queryFn: () => fetchProductCategories(),
+  });
+  const categoriesReadable = queryState(categories) === 'ready';
 
   const checked = bodyFrom(state);
   const problem = 'problem' in checked ? checked.problem : null;
@@ -742,6 +836,41 @@ function ProductForm({
             dir="ltr"
             value={state.panelId}
             onChange={(event) => set('panelId', event.target.value.trim())}
+          />
+        )}
+      </Field>
+
+      <Field
+        label={t('web.product_category')}
+        hint={
+          categoriesReadable ? t('web.product_category_hint') : t('web.product_category_unreadable')
+        }
+        htmlFor={`product-category-${mode}`}
+      >
+        {categoriesReadable ? (
+          <select
+            id={`product-category-${mode}`}
+            value={state.categoryId}
+            onChange={(event) => set('categoryId', event.target.value)}
+          >
+            {/*
+              "None" is a choice and stays on the list: an operator may stage a product
+              before filing it. It is not a silent default — the catalogue badge on the
+              row names what it costs.
+            */}
+            <option value="">{t('web.product_category_unset')}</option>
+            {(categories.data?.categories ?? []).map((category) => (
+              <option key={category.id} value={category.id}>
+                {category.emoji === null ? category.name : `${category.emoji} ${category.name}`}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input
+            id={`product-category-${mode}`}
+            dir="ltr"
+            value={state.categoryId}
+            onChange={(event) => set('categoryId', event.target.value.trim())}
           />
         )}
       </Field>
@@ -948,7 +1077,8 @@ export function ProductDetailPage({
     onError: (error) => submission.settleOn(error),
   });
 
-  const gap = row === undefined ? null : catalogueGap(row);
+  const facts = row === undefined ? 'UNKNOWN' : categoryFactsFor(row, categories.data?.categories);
+  const gap = row === undefined ? null : catalogueGap(row, facts);
 
   return (
     <>
@@ -971,7 +1101,7 @@ export function ProductDetailPage({
                * hidden on purpose and is still orderable by link.
                */
               <Banner
-                tone={gap === 'UNLISTED' ? 'info' : 'warn'}
+                tone={isUnlistedGap(gap) ? 'info' : 'warn'}
                 title={t('web.product_gap_banner_title')}
               >
                 {t(GAP_LABELS[gap])}
@@ -989,7 +1119,10 @@ export function ProductDetailPage({
                       {t(STATUS_LABELS[row.status])}
                     </Badge>,
                   ],
-                  [t('web.product_catalogue'), <CatalogueBadge key="c" row={row} />],
+                  [
+                    t('web.product_catalogue'),
+                    <CatalogueBadge key="c" row={row} category={facts} />,
+                  ],
                   [
                     t('web.product_category'),
                     // Absence is shown as a warning rather than a dash: an uncategorised

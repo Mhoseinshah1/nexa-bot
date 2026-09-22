@@ -478,7 +478,191 @@ describe('product categories — the admin service', () => {
    * the tuple, then on the holder's transaction id. Polled, not slept — a sleep proves
    * only that the machine was slow enough.
    */
-  async function awaitBlocked(expected: number): Promise<void> {
+  // -------------------------------------------------------------------------
+  // The Codex review of PR #60 — each case is one confirmed finding
+  // -------------------------------------------------------------------------
+
+  describe('the findings of the Codex review', () => {
+    const productDraft = (categoryId: string | null) => ({
+      title: 'پلن',
+      description: null,
+      audience: 'EVERYONE' as const,
+      sortOrder: 1,
+      panelId: panelA as PanelId,
+      categoryId: categoryId as ProductCategoryId | null,
+      specification: { durationDays: 30, trafficBytes: 1n, deviceLimit: null },
+      price: money(100_000n, 'IRT'),
+    });
+
+    it('confirms nothing in a category deactivated while the confirmation waited for it', async () => {
+      /*
+       * P1. The confirmation read the category with a plain SELECT, so a deactivation
+       * committing after that read and before the order moved on was invisible to it —
+       * and the order went to AWAITING_PAYMENT in a category the operator had withdrawn.
+       *
+       * A controlled interleaving: the deactivation is written and HELD, the
+       * confirmation is shown blocked behind it in `pg_locks`, and only then does the
+       * deactivation commit. Under the SHARE lock the confirmation re-reads INACTIVE and
+       * refuses; with a plain read it never blocks at all and this case times out.
+       */
+      const closing = await create('در حال بسته شدن');
+      const product = await productIn(closing.id);
+      const { customer } = await ctx.container.customers.resolveFromUpdate(
+        tenantA,
+        systemActor('race-resolve'),
+        {
+          idempotencyKey: 'race-resolve',
+          telegramUserId: '910002',
+          from: { id: 910_002, first_name: 'زهرا' },
+          botInstanceId: BOT_A,
+        },
+      );
+      const order = await ctx.container.orders.createDraft(tenantA, systemActor('race-draft'), {
+        idempotencyKey: 'race-draft',
+        customerId: customer.id as UserId,
+        productId: product.id,
+      });
+
+      await ctx.container.database.withClient(async (client) => {
+        await client.query('BEGIN');
+        await client.query(`UPDATE product_categories SET status = 'INACTIVE' WHERE id = $1`, [
+          closing.id,
+        ]);
+
+        const racing = codeOf(
+          ctx.container.orders.confirm(tenantA, systemActor('race-confirm'), {
+            idempotencyKey: 'race-confirm',
+            customerId: customer.id as UserId,
+            orderId: order.id,
+          }),
+        );
+        await awaitBlocked(
+          1,
+          'the confirmation never waited for the category. It read the status without a ' +
+            'lock, so a deactivation committing after the read is not seen.',
+        );
+        await client.query('COMMIT');
+
+        expect(await racing, 'a withdrawn category was sold').toBe(
+          'commerce.category_not_purchasable',
+        );
+      });
+      const state = (await ctx.container.database.db.execute(
+        sql`SELECT state FROM orders WHERE id = ${order.id}` as never,
+      )) as unknown as { rows: { state: string }[] };
+      expect(state.rows[0]?.state).toBe('DRAFT');
+    });
+
+    it('answers a product naming a foreign or unknown category as not found, not a 500', async () => {
+      /*
+       * P2. The foreign key refused it, as a constraint violation the error filter turns
+       * into an internal error — while the reassignment endpoint answered the same id
+       * with `CATEGORY_NOT_FOUND`. Both writes, both kinds of bad id.
+       */
+      for (const categoryId of [SEED_IDS.categoryB, ctx.container.ids.uuid()]) {
+        expect(
+          await codeOf(
+            ctx.container.products.create(tenantA, owner, {
+              idempotencyKey: key(),
+              draft: productDraft(categoryId),
+            }),
+          ),
+          `create with ${categoryId}`,
+        ).toBe('commerce.category_not_found');
+      }
+      const mine = await ctx.container.products.create(tenantA, owner, {
+        idempotencyKey: key(),
+        draft: productDraft(SEED_IDS.categoryA),
+      });
+      expect(
+        await codeOf(
+          ctx.container.products.update(tenantA, owner, {
+            idempotencyKey: key(),
+            productId: mine.id,
+            edit: productDraft(SEED_IDS.categoryB),
+          }),
+        ),
+      ).toBe('commerce.category_not_found');
+      expect((await products.findById(tenantA, mine.id))?.categoryId).toBe(SEED_IDS.categoryA);
+    });
+
+    it('refuses a reused key whose request changed only the category', async () => {
+      /*
+       * P2. `categoryId` was missing from the request fingerprint, so this was accepted
+       * as a replay of the first request and answered with the product the first
+       * request made — in the category the second request did not ask for.
+       */
+      const other = await create('دیگر');
+      const reused = key();
+      await ctx.container.products.create(tenantA, owner, {
+        idempotencyKey: reused,
+        draft: productDraft(SEED_IDS.categoryA),
+      });
+      expect(
+        await codeOf(
+          ctx.container.products.create(tenantA, owner, {
+            idempotencyKey: reused,
+            draft: productDraft(other.id),
+          }),
+        ),
+      ).toBe('platform.idempotency_payload_mismatch');
+    });
+
+    it('records a move between categories made through a product edit', async () => {
+      // P2. The audit projection left the field out, so a move wrote a before/after
+      // pair that was identical — an edit of nothing, where a product had moved.
+      const to = await create('مقصد ویرایش');
+      const made = await ctx.container.products.create(tenantA, owner, {
+        idempotencyKey: key(),
+        draft: productDraft(SEED_IDS.categoryA),
+      });
+      await ctx.container.products.update(tenantA, owner, {
+        idempotencyKey: key(),
+        productId: made.id,
+        edit: productDraft(to.id),
+      });
+      const rows = (await ctx.container.database.db.execute(
+        sql`SELECT before, after FROM audit_logs
+             WHERE entity_id = ${made.id} AND action = 'product.update'` as never,
+      )) as unknown as {
+        rows: { before: { categoryId: string }; after: { categoryId: string } }[];
+      };
+      expect([rows.rows[0]?.before.categoryId, rows.rows[0]?.after.categoryId]).toStrictEqual([
+        SEED_IDS.categoryA,
+        to.id,
+      ]);
+    });
+
+    it('answers a replayed create whose category was since deleted, every time, and makes none', async () => {
+      /*
+       * P2. The replay found the spent key, saw its category gone, and fell through to
+       * create a replacement — which `rememberOnce` then refused, because the key's row
+       * still exists, rolling the new category back and answering IN_FLIGHT, "retry to
+       * read its result". Every retry did the same.
+       */
+      const reused = key();
+      const draft = { name: 'موقت', description: null, emoji: null, sortOrder: 1 };
+      const made = await service().create(tenantA, owner, { idempotencyKey: reused, draft });
+      await service().remove(tenantA, owner, { idempotencyKey: key(), categoryId: made.id });
+
+      for (const attempt of [1, 2]) {
+        expect(
+          await codeOf(service().create(tenantA, owner, { idempotencyKey: reused, draft })),
+          `retry ${String(attempt)}`,
+        ).toBe('commerce.category_not_found');
+      }
+      const left = (await ctx.container.database.db.execute(
+        sql`SELECT count(*)::int AS n FROM product_categories WHERE name = 'موقت'` as never,
+      )) as unknown as { rows: { n: number }[] };
+      expect(left.rows[0]?.n).toBe(0);
+    });
+  });
+
+  async function awaitBlocked(
+    expected: number,
+    why = 'the delete never blocked on the category row. Either it no longer locks the ' +
+      'category before counting, or it does so outside this transaction.',
+  ): Promise<void> {
     const deadline = Date.now() + 5_000;
     for (;;) {
       const rows = (await ctx.container.database.db.execute(
@@ -487,10 +671,7 @@ describe('product categories — the admin service', () => {
       )) as unknown as { rows: { n: number }[] };
       if ((rows.rows[0]?.n ?? 0) >= expected) return;
       if (Date.now() > deadline) {
-        throw new Error(
-          'the delete never blocked on the category row. Either it no longer locks the ' +
-            'category before counting, or it does so outside this transaction.',
-        );
+        throw new Error(why);
       }
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
