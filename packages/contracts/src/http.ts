@@ -29,6 +29,9 @@ import {
   MAX_DURATION_DAYS,
   MAX_TRAFFIC_BYTES,
   PRODUCT_AUDIENCES,
+  PRODUCT_CATEGORY_NAME_MAX_LENGTH,
+  PRODUCT_CATEGORY_STATUSES,
+  PRODUCT_CATEGORY_VISIBILITIES,
   PRODUCT_DESCRIPTION_MAX_LENGTH,
   PRODUCT_SORT_MAX,
   PRODUCT_SORT_MIN,
@@ -37,6 +40,7 @@ import {
   SERVICE_ADDON_KINDS,
   SERVICE_ADDON_STATUSES,
   SERVICE_ADDON_TITLE_MAX_LENGTH,
+  productCategoryEmojiSchema,
 } from './catalog.js';
 import { ORDER_STATES } from './commerce.js';
 import {
@@ -1956,6 +1960,101 @@ export const PRODUCT_ROUTES = {
   update: (id: string) => `/products/${encodeURIComponent(id)}`,
   activate: (id: string) => `/products/${encodeURIComponent(id)}/activate`,
   deactivate: (id: string) => `/products/${encodeURIComponent(id)}/deactivate`,
+} as const;
+
+// --- Product categories ------------------------------------------------------
+
+/**
+ * One category, as an operator's list renders it.
+ *
+ * `productCount` counts EVERY product filed under it, active or withdrawn, because the
+ * question it answers is "may I delete this" and an inactive product blocks a delete
+ * exactly as an active one does. It is deliberately NOT the number a customer would
+ * see: customer-facing emptiness is a different predicate, decided in SQL, and a client
+ * that used this count to hide a category would be the second interpretation the audit
+ * forbids.
+ */
+export const productCategorySummarySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string().nullable(),
+  /** Absence is ordinary. A category with no emoji renders as an ordinary category. */
+  emoji: z.string().nullable(),
+  status: z.enum(PRODUCT_CATEGORY_STATUSES),
+  visibility: z.enum(PRODUCT_CATEGORY_VISIBILITIES),
+  sortOrder: z.number().int(),
+  productCount: z.number().int(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+export type ProductCategorySummaryResponse = z.infer<typeof productCategorySummarySchema>;
+
+export const productCategoryListResponseSchema = z.object({
+  categories: z.array(productCategorySummarySchema),
+});
+export type ProductCategoryListResponse = z.infer<typeof productCategoryListResponseSchema>;
+
+export const productCategoryResponseSchema = z.object({
+  category: productCategorySummarySchema,
+});
+export type ProductCategoryResponse = z.infer<typeof productCategoryResponseSchema>;
+
+/**
+ * The body a create or an edit sends.
+ *
+ * `status` and `visibility` are ABSENT, and that is the point: both move through their
+ * own endpoints, so a rename cannot silently withdraw a category from sale because a
+ * client sent a stale copy of a field it was not editing. It is the shape products
+ * already use, where `status` is likewise not part of the write body.
+ */
+export const productCategoryWriteSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  name: z.string().min(1).max(PRODUCT_CATEGORY_NAME_MAX_LENGTH),
+  description: z.string().max(500).nullable(),
+  emoji: productCategoryEmojiSchema.nullable(),
+});
+export type ProductCategoryWriteRequest = z.infer<typeof productCategoryWriteSchema>;
+
+export const productCategoryCreateSchema = productCategoryWriteSchema.extend({
+  sortOrder: z.number().int().min(0).max(100_000),
+});
+export type ProductCategoryCreateRequest = z.infer<typeof productCategoryCreateSchema>;
+
+/**
+ * A whole new order for the categories named.
+ *
+ * The WHOLE order, not a move of one — the server refuses a short match rather than
+ * reordering what it recognises, so a client that sends a subset it believes complete
+ * finds out instead of silently getting half of what it asked for.
+ */
+export const productCategoryReorderSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  positions: z
+    .array(z.object({ id: z.string().uuid(), sortOrder: z.number().int().min(0).max(100_000) }))
+    .min(1)
+    .max(200),
+});
+export type ProductCategoryReorderRequest = z.infer<typeof productCategoryReorderSchema>;
+
+export const productCategoryAssignSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  productId: z.string().uuid(),
+});
+export type ProductCategoryAssignRequest = z.infer<typeof productCategoryAssignSchema>;
+
+export const PRODUCT_CATEGORY_ROUTES = {
+  list: '/product-categories',
+  create: '/product-categories',
+  reorder: '/product-categories/reorder',
+  detail: (id: string) => `/product-categories/${encodeURIComponent(id)}`,
+  update: (id: string) => `/product-categories/${encodeURIComponent(id)}`,
+  remove: (id: string) => `/product-categories/${encodeURIComponent(id)}`,
+  activate: (id: string) => `/product-categories/${encodeURIComponent(id)}/activate`,
+  deactivate: (id: string) => `/product-categories/${encodeURIComponent(id)}/deactivate`,
+  show: (id: string) => `/product-categories/${encodeURIComponent(id)}/show`,
+  hide: (id: string) => `/product-categories/${encodeURIComponent(id)}/hide`,
+  /** Files a product under this category. The CATEGORY owns the move — see the service. */
+  assign: (id: string) => `/product-categories/${encodeURIComponent(id)}/products`,
 } as const;
 
 // --- Service add-ons ---------------------------------------------------------
