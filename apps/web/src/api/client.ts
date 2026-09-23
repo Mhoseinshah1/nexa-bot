@@ -1,4 +1,20 @@
 import {
+  COMMERCE_ERROR_CODES,
+  RESELLER_ROUTES,
+  RESELLER_TIER_ROUTES,
+  resellerListResponseSchema,
+  resellerResponseSchema,
+  resellerTierListResponseSchema,
+  resellerTierResponseSchema,
+  type ResellerListResponse,
+  type ResellerRegisterRequest,
+  type ResellerResponse,
+  type ResellerStatus,
+  type ResellerTierGrantsWriteRequest,
+  type ResellerTierListResponse,
+  type ResellerTierResponse,
+  type ResellerTierWriteRequest,
+  type ResellerUpdateRequest,
   REFERRAL_ROUTES,
   customerReferralResponseSchema,
   referralCommissionListResponseSchema,
@@ -1861,4 +1877,102 @@ export function fetchReferralCommissions(
 /** One customer's referrer, how many they referred, and their commissions per currency. */
 export function fetchCustomerReferral(customerId: string): Promise<CustomerReferralResponse> {
   return authedGet(REFERRAL_ROUTES.customer(customerId), customerReferralResponseSchema);
+}
+
+// --- Resellers (WP9-B) --------------------------------------------------------
+
+/**
+ * Every reseller tier of the tenant, oldest first, each with its grants and how many
+ * resellers it holds. Not paged: the server returns the whole set, because a tier is a
+ * handful of rows an operator names, not a customer list.
+ */
+export function fetchResellerTiers(): Promise<ResellerTierListResponse> {
+  return authedGet(RESELLER_TIER_ROUTES.list, resellerTierListResponseSchema);
+}
+
+export function createResellerTier(input: ResellerTierWriteRequest): Promise<ResellerTierResponse> {
+  return post(RESELLER_TIER_ROUTES.create, input, resellerTierResponseSchema);
+}
+
+export function updateResellerTier(
+  input: ResellerTierWriteRequest & { id: string },
+): Promise<ResellerTierResponse> {
+  const { id, ...body } = input;
+  return post(RESELLER_TIER_ROUTES.update(id), body, resellerTierResponseSchema);
+}
+
+/**
+ * REPLACES a tier's grants as one set. What is not in `grants` is no longer granted —
+ * and a kind with no row grants nothing of that kind (`docs/wp9-reseller-audit.md` R5).
+ */
+export function replaceResellerTierGrants(
+  input: ResellerTierGrantsWriteRequest & { id: string },
+): Promise<ResellerTierResponse> {
+  const { id, ...body } = input;
+  return post(RESELLER_TIER_ROUTES.grants(id), body, resellerTierResponseSchema);
+}
+
+/**
+ * One page of resellers, NEWEST first — the server keysets `(created_at, id)` DESCENDING,
+ * so the next page is OLDER. `search` is a Telegram id (exact) or part of a name; each
+ * filter is sent only when set, so clearing one is the unfiltered list.
+ */
+export function fetchResellers(
+  query: {
+    limit?: number;
+    cursor?: string;
+    status?: ResellerStatus;
+    tierId?: string;
+    search?: string;
+  } = {},
+): Promise<ResellerListResponse> {
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
+  if (query.status !== undefined) params.set('status', query.status);
+  if (query.tierId !== undefined && query.tierId !== '') params.set('tierId', query.tierId);
+  if (query.search !== undefined && query.search.trim() !== '') {
+    params.set('search', query.search.trim());
+  }
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${RESELLER_ROUTES.list}?${suffix}` : RESELLER_ROUTES.list,
+    resellerListResponseSchema,
+  );
+}
+
+/**
+ * One customer's reseller row, or null when the customer is not a reseller.
+ *
+ * Null ONLY for the server's own `RESELLER_NOT_FOUND`, the way `fetchSession` answers
+ * null only for a 401: "this customer has no reseller row" is a fact the customer page
+ * states, not an error it apologises for. Every other failure — a refusal, an unknown
+ * customer, an outage — still rejects and is drawn as what it is.
+ */
+export async function fetchCustomerReseller(customerId: string): Promise<ResellerResponse | null> {
+  const response = await fetch(`${API_PREFIX}${RESELLER_ROUTES.detail(customerId)}`, {
+    credentials: 'same-origin',
+    headers: { accept: 'application/json' },
+  });
+  const payload: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    const error = toApiError(response.status, payload);
+    if (response.status === 404 && error.code === COMMERCE_ERROR_CODES.RESELLER_NOT_FOUND) {
+      return null;
+    }
+    throw error;
+  }
+  return resellerResponseSchema.parse(payload);
+}
+
+export function registerReseller(input: ResellerRegisterRequest): Promise<ResellerResponse> {
+  return post(RESELLER_ROUTES.register, input, resellerResponseSchema);
+}
+
+/** The reseller is addressed by its CUSTOMER id: one row per customer. */
+export function updateReseller(
+  input: ResellerUpdateRequest & { customerId: string },
+): Promise<ResellerResponse> {
+  const { customerId, ...body } = input;
+  return post(RESELLER_ROUTES.update(customerId), body, resellerResponseSchema);
 }

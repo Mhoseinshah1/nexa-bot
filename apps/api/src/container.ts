@@ -187,6 +187,9 @@ import {
   DrizzleReferralCommissionRepository,
   DrizzleReferralRepository,
 } from './modules/commerce/referrals/infrastructure/drizzle-referral.repository.js';
+import { DrizzleResellerRepository } from './modules/commerce/resellers/infrastructure/drizzle-reseller.repository.js';
+import { ResellerService } from './modules/commerce/resellers/application/reseller.service.js';
+import { ResellerAdminService } from './modules/commerce/resellers/application/reseller-admin.service.js';
 import { DrizzleDiscountRepository } from './modules/commerce/pricing/infrastructure/drizzle-discount.repository.js';
 import {
   DrizzleCashbackRuleRepository,
@@ -424,6 +427,10 @@ export interface Container {
   readonly referralCommissions: ReferralCommissionService;
   /** WP9: the operator's read-only view of attributions and commissions. */
   readonly referralsRead: ReferralReadService;
+  /** WP9-B: a reseller's standing, entitlements, pricing layer, credit and purchase record. */
+  readonly resellers: ResellerService;
+  /** WP9-B: reseller tiers, grants and resellers, as an operator manages them. */
+  readonly resellersAdmin: ResellerAdminService;
   readonly commercialActions: CommercialActionService;
   /** A customer's free trial (WP6-A): issued through the purchase path, costs nothing. */
   readonly trials: TrialService;
@@ -883,6 +890,15 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    */
   const customerRepository = new DrizzleCustomerRepository(database.db);
   const productRepository = new DrizzleProductRepository(database.db);
+  /*
+   * A reseller's standing (WP9-B), built here because the catalogue asks it too: whose
+   * catalogue a customer browses is a reseller question, and there is one service for it.
+   */
+  const resellerRepository = new DrizzleResellerRepository(database.db);
+  const resellerService = new ResellerService({
+    resellers: resellerRepository,
+    products: productRepository,
+  });
   const trialGrantRepository = new DrizzleTrialGrantRepository(database.db);
   const trialOverrideRepository = new DrizzleTrialOverrideRepository(database.db);
   const trialResetRepository = new DrizzleTrialResetRepository(database.db);
@@ -995,6 +1011,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const productCategoryRepository = new DrizzleProductCategoryRepository(database.db);
 
   const productService = new ProductService({
+    resellers: resellerService,
     panelSales: panelSalesGate,
     repository: productRepository,
     /*
@@ -1175,11 +1192,34 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * it. `docs/wp8-pricing-audit.md` P1: checkout, a customer's code, the commercial
    * actions and the operator's preview all come through this one object.
    */
+  /*
+   * Resellers (WP9-B, `docs/wp9-reseller-audit.md`): one runtime service every commercial
+   * path asks — standing, entitlements, pricing layer, credit, purchase record — and the
+   * operator's administration beside it.
+   */
+  const resellerAdminService = new ResellerAdminService({
+    resellers: resellerRepository,
+    customers: customerRepository,
+    products: productRepository,
+    categories: productCategoryRepository,
+    panels: panelRepository,
+    bots: botInstances,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    uow,
+    idempotency,
+    clock,
+    ids,
+  });
   const discountRepository = new DrizzleDiscountRepository(database.db);
   const cashbackRuleRepository = new DrizzleCashbackRuleRepository(database.db);
   const orderCashbackRepository = new DrizzleOrderCashbackRepository(database.db);
   const pricingService = new PricingService({
     referrals: referralProgram,
+    resellers: resellerService,
     discounts: discountRepository,
     cashbackRules: cashbackRuleRepository,
     orderCashback: orderCashbackRepository,
@@ -1230,11 +1270,13 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     orders: orderRepository,
     discounts: discountRepository,
     orderCashback: orderCashbackRepository,
+    resellerTerms: resellerRepository,
     guard,
     clock,
   });
   const orderService = new OrderService({
     pricing: pricingService,
+    resellers: resellerService,
     discountCodes: new DrizzleDiscountCodeCaptureRepository(database.db),
     panelSales: panelSalesGate,
     categories: productCategoryRepository,
@@ -1372,6 +1414,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * `AWAITING_PAYMENT` order and wallet settlement works on it without knowing it is one.
    */
   const commercialActionService = new CommercialActionService({
+    resellers: resellerService,
     pricing: pricingService,
     services: serviceRepository,
     products: productRepository,
@@ -1547,6 +1590,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   });
 
   const paymentService = new PaymentService({
+    resellers: resellerService,
     undeliverable: undeliverableOrders,
     repository: paymentRepository,
     /*
@@ -2955,6 +2999,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     referrals: referralProgram,
     referralCommissions: referralCommissionService,
     referralsRead: referralReadService,
+    resellers: resellerService,
+    resellersAdmin: resellerAdminService,
     commercialActions: commercialActionService,
     trials: trialService,
     trialAdmin: trialAdminService,

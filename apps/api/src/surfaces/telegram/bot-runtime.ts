@@ -3165,6 +3165,20 @@ export const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
   // The SAME sentence as the others, deliberately. A customer told "this is for
   // resellers" learns a tenant's pricing structure from a refusal.
   [COMMERCE_ERROR_CODES.PRODUCT_NOT_FOR_AUDIENCE]: 'bot.order.unavailable',
+  /*
+   * A reseller whose tier does not grant this purchase (`docs/wp9-reseller-audit.md` R6):
+   * the SAME sentence as `PRODUCT_NOT_FOR_AUDIENCE`, so the bot does not enumerate a
+   * tier's grants — which operation, product, panel or bot it lacked is in the refusal's
+   * detail and the audit row. It was unmapped, so `refusal` rethrew it and a reseller
+   * following a product button they were not entitled to was answered with silence.
+   */
+  [COMMERCE_ERROR_CODES.RESELLER_NOT_ENTITLED]: 'bot.order.unavailable',
+  /*
+   * At confirmation: the reseller's price changed since the summary (R9). The reseller
+   * counterpart of `DISCOUNT_NO_LONGER_VALID` — nothing was charged, the order was not
+   * re-priced, and they start again. Unmapped until the PR #69 review, which is silence.
+   */
+  [COMMERCE_ERROR_CODES.RESELLER_TERMS_CHANGED]: 'bot.order.terms_changed',
   [COMMERCE_ERROR_CODES.PRODUCT_NOT_PRICED]: 'bot.order.unavailable',
   [COMMERCE_ERROR_CODES.PRODUCT_NOT_FULFILLABLE]: 'bot.order.unavailable',
   /*
@@ -6573,7 +6587,7 @@ export class BotRuntime {
       return this.claimTrial(scope, actor, customer, input.idempotencyKey);
     }
     if (command.intent === 'CATEGORY' && command.targetId !== null) {
-      return this.categoryPage(scope, actor, command.targetId, command.page ?? 0);
+      return this.categoryPage(scope, actor, command.targetId, command.page ?? 0, customer.id);
     }
     if (command.intent === 'ORDER' && command.targetId !== null) {
       return this.draft(
@@ -7516,6 +7530,8 @@ export class BotRuntime {
       actor,
       CATALOG_BROWSE_PAGE_SIZE,
       page * CATALOG_BROWSE_PAGE_SIZE,
+      // Whose catalogue: a reseller's tier decides what they see (WP9-B R6).
+      customer.id,
     );
     /*
      * The trial, first on the first page and only there — and only when this customer
@@ -7621,6 +7637,8 @@ export class BotRuntime {
     actor: ActorContext,
     categoryId: string,
     page: number,
+    /** Whose catalogue: a reseller's tier decides what they see (WP9-B R6). */
+    customerId: string,
   ): Promise<PendingReply> {
     const { items, hasMore } = await this.deps.products.browseCategory(
       scope,
@@ -7628,13 +7646,14 @@ export class BotRuntime {
       categoryId,
       CATALOG_BROWSE_PAGE_SIZE,
       page * CATALOG_BROWSE_PAGE_SIZE,
+      customerId,
     );
     const back: CustomerButton = {
       label: { kind: 'TEMPLATE', key: 'bot.catalog.back_to_categories_button' },
       data: `${CATALOG_PAGE_CALLBACK_PREFIX}0`,
     };
     if (items.length === 0) {
-      if (page > 0) return this.categoryPage(scope, actor, categoryId, 0);
+      if (page > 0) return this.categoryPage(scope, actor, categoryId, 0, customerId);
       return { key: 'bot.catalog.category_empty', values: {}, buttons: [back], orderId: null };
     }
     const buttons: CustomerButton[] = [];

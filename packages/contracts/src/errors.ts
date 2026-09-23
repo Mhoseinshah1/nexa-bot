@@ -1216,6 +1216,24 @@ export const COMMERCE_ERROR_CODES = {
   DISCOUNT_CODE_TAKEN: 'commerce.discount_code_taken',
   /** An operator's cashback rule id that names nothing in this tenant. */
   CASHBACK_RULE_NOT_FOUND: 'commerce.cashback_rule_not_found',
+  /**
+   * An ACTIVE reseller asked for a commercial action their tier does not grant
+   * (`docs/wp9-reseller-audit.md` R5, R6). The failing dimension is in the details, for
+   * the audit row; the customer is told `bot.order.unavailable`, the same sentence as a
+   * product outside their audience, so the bot does not enumerate a tier's grants.
+   */
+  RESELLER_NOT_ENTITLED: 'commerce.reseller_not_entitled',
+  /**
+   * A reseller's pricing changed between the quote and its confirmation (R9). Like
+   * `DISCOUNT_NO_LONGER_VALID`, the order is refused rather than re-priced.
+   */
+  RESELLER_TERMS_CHANGED: 'commerce.reseller_terms_changed',
+  /** An operator's reseller id — a customer id — that names no reseller in this tenant. */
+  RESELLER_NOT_FOUND: 'commerce.reseller_not_found',
+  /** A customer who is already a reseller, registered again. */
+  RESELLER_ALREADY_REGISTERED: 'commerce.reseller_already_registered',
+  /** An operator's reseller tier id that names nothing in this tenant. */
+  RESELLER_TIER_NOT_FOUND: 'commerce.reseller_tier_not_found',
 } as const;
 
 /*

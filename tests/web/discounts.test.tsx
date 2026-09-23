@@ -588,6 +588,9 @@ describe("an order's pricing", () => {
     ],
     redemptions: [{ discountId: CODE_ID, amount: '62500', createdAt: '2026-09-10T12:31:00.000Z' }],
     cashback,
+    // An ordinary customer's order: no reseller snapshot (WP9-B). The key is REQUIRED by
+    // `orderPricingResponseSchema`, nullable but never absent.
+    reseller: null,
   });
 
   const detail = (cashback: Record<string, unknown> | null) => {

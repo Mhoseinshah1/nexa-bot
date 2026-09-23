@@ -48,8 +48,9 @@ describe('planned surfaces', () => {
       // in 4B, and `services` left it in 4H: the surface is real, and a promoted page
       // still listed here renders its placeholder instead of itself.
       // `discounts` left it in WP8 on the same terms; `discounts.test.tsx` pins the
-      // live page at that route.
-      ['bots', 'reports', 'resellers'].sort(),
+      // live page at that route. `resellers` left it in WP9-B, and
+      // `resellers.test.tsx` pins the live page at `/resellers`.
+      ['bots', 'reports'].sort(),
     );
   });
 

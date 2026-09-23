@@ -368,6 +368,9 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       // A referral commission is money the tenant owes, credited and clawed back through
       // the same ledger Finance already reads.
       'referrals.view',
+      // Who holds a credit line, and on what terms, is a question about money owed to the
+      // tenant: Finance reads it. Changing it stays `resellers.edit` (`docs/wp9-reseller-audit.md` R11).
+      'resellers.view',
       'reports.view',
       'reports.export',
       'audit.view',

@@ -44,6 +44,15 @@ import {
   REFERRAL_COMMISSION_SCOPES,
   REFERRAL_COMMISSION_STATES,
   REFERRAL_TRIGGERS,
+  RESELLER_GRANTABLE_OPERATIONS,
+  RESELLER_GRANT_KINDS,
+  RESELLER_MAX_CREDIT_LIMIT_MINOR,
+  RESELLER_OVERRIDE_MODES,
+  RESELLER_PRICE_LAYERS,
+  RESELLER_PRICING_MODES,
+  RESELLER_STATUSES,
+  RESELLER_TIER_GRANTS_MAX,
+  RESELLER_TIER_NAME_MAX,
   TRIAL_LIMIT_MAX,
   TRIAL_LIMIT_MIN,
 } from './promotions.js';
@@ -2618,6 +2627,27 @@ export const orderPricingResponseSchema = z.object({
       unrecoveredAmount: z.string(),
     })
     .nullable(),
+  /**
+   * What a reseller's purchase was, frozen at confirmation (`docs/wp9-reseller-audit.md`
+   * R9). Null for an order by an ordinary customer, and for a reseller order not yet
+   * confirmed. The margin is the list amount less the reseller cost: never a discount.
+   */
+  reseller: z
+    .object({
+      resellerCustomerId: z.string(),
+      tierId: z.string(),
+      tierName: z.string(),
+      layer: z.enum(RESELLER_PRICE_LAYERS),
+      percent: z.number().int().nullable(),
+      listAmount: z.string(),
+      costAmount: z.string(),
+      promotionAmount: z.string(),
+      saleAmount: z.string(),
+      marginAmount: z.string(),
+      botInstanceId: z.string().nullable(),
+      createdAt: z.iso.datetime(),
+    })
+    .nullable(),
 });
 export type OrderPricingResponse = z.infer<typeof orderPricingResponseSchema>;
 
@@ -2737,6 +2767,190 @@ export const REFERRAL_ROUTES = {
   commissions: '/referral-commissions',
   // Under `/users`, as every per-customer route is (`CUSTOMER_ROUTES`).
   customer: (id: string) => `/users/${encodeURIComponent(id)}/referral`,
+} as const;
+
+// --- Resellers (WP9-B) -----------------------------------------------------------
+
+/**
+ * Reseller tiers and resellers, for the operator (`docs/wp9-reseller-audit.md` R11, R12).
+ *
+ * Reads need `resellers.view`; every write needs `resellers.edit`, carries an idempotency
+ * key and is audited. A reseller is addressed by its CUSTOMER id: one row per customer.
+ */
+export const RESELLER_PAGE_DEFAULT = 25;
+export const RESELLER_PAGE_MAX = 100;
+
+const creditLimitSchema = z.object({
+  amount: minorAmountSchema.refine((v) => BigInt(v) <= RESELLER_MAX_CREDIT_LIMIT_MINOR, {
+    message: 'That credit limit is past the largest this system allows.',
+  }),
+  currency: z.enum(CURRENCY_CODES),
+});
+
+/**
+ * A reseller rate, tier or override: a whole percent, 1–99.
+ *
+ * NOT 100, although the database's checks still accept it. A 100% rate prices every order
+ * at zero, and a zero amount is refused by the payment and ledger checks at settlement —
+ * after the customer confirmed. `resellerReductionMinor` keeps one minor unit whatever the
+ * stored rate is; this stops an operator writing a rate whose every price is that floor.
+ * Only the two reseller write schemas use it.
+ */
+const percentSchema = z.number().int().min(1).max(99);
+
+/**
+ * One grant: a kind and a subject. A null subject is "every subject of this kind"; an
+ * `OPERATION` subject is an order purpose, every other subject is an id.
+ */
+export const resellerTierGrantSchema = z
+  .object({
+    kind: z.enum(RESELLER_GRANT_KINDS),
+    subject: z.string().max(64).nullable(),
+  })
+  .refine(
+    (g) =>
+      g.subject === null ||
+      (g.kind === 'OPERATION'
+        ? (RESELLER_GRANTABLE_OPERATIONS as readonly string[]).includes(g.subject)
+        : uuidV7Schema.safeParse(g.subject).success),
+    {
+      message: 'An operation grant names a purchase purpose; every other grant names an id.',
+      path: ['subject'],
+    },
+  );
+export type ResellerTierGrant = z.infer<typeof resellerTierGrantSchema>;
+
+export const resellerTierSummarySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  pricingMode: z.enum(RESELLER_PRICING_MODES),
+  discountPercentage: z.number().int().nullable(),
+  creditLimit: z.object({ amount: z.string(), currency: z.enum(CURRENCY_CODES) }),
+  grants: z.array(resellerTierGrantSchema),
+  resellerCount: z.number().int().nonnegative(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+export type ResellerTierSummaryResponse = z.infer<typeof resellerTierSummarySchema>;
+
+export const resellerTierWriteSchema = z
+  .object({
+    idempotencyKey: z.string().min(8).max(255),
+    name: z.string().trim().min(1).max(RESELLER_TIER_NAME_MAX),
+    pricingMode: z.enum(RESELLER_PRICING_MODES),
+    discountPercentage: percentSchema.nullable(),
+    creditLimit: creditLimitSchema,
+  })
+  .refine((t) => (t.pricingMode === 'PERCENTAGE_DISCOUNT') === (t.discountPercentage !== null), {
+    message: 'A percentage discount carries a percentage; the list price carries none.',
+    path: ['discountPercentage'],
+  });
+export type ResellerTierWriteRequest = z.infer<typeof resellerTierWriteSchema>;
+
+export const resellerTierGrantsWriteSchema = z
+  .object({
+    idempotencyKey: z.string().min(8).max(255),
+    grants: z.array(resellerTierGrantSchema).max(RESELLER_TIER_GRANTS_MAX),
+  })
+  .refine(
+    (w) => new Set(w.grants.map((g) => `${g.kind}:${g.subject ?? '*'}`)).size === w.grants.length,
+    { message: 'Each grant is listed once.', path: ['grants'] },
+  );
+export type ResellerTierGrantsWriteRequest = z.infer<typeof resellerTierGrantsWriteSchema>;
+
+export const resellerTierListResponseSchema = z.object({
+  tiers: z.array(resellerTierSummarySchema),
+});
+export type ResellerTierListResponse = z.infer<typeof resellerTierListResponseSchema>;
+
+export const resellerTierResponseSchema = z.object({ tier: resellerTierSummarySchema });
+export type ResellerTierResponse = z.infer<typeof resellerTierResponseSchema>;
+
+export const resellerSummarySchema = z.object({
+  customerId: z.string(),
+  telegramUserId: z.string(),
+  displayName: z.string().nullable(),
+  tier: z.object({ id: z.string(), name: z.string() }),
+  status: z.enum(RESELLER_STATUSES),
+  pricingMode: z.enum(RESELLER_OVERRIDE_MODES),
+  discountPercentage: z.number().int().nullable(),
+  /** The reseller's own limit, or null when the tier's applies. */
+  creditLimit: z.object({ amount: z.string(), currency: z.enum(CURRENCY_CODES) }).nullable(),
+  /** What actually applies: the reseller's own limit, else the tier's. */
+  effectiveCreditLimit: z.object({ amount: z.string(), currency: z.enum(CURRENCY_CODES) }),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+export type ResellerSummaryResponse = z.infer<typeof resellerSummarySchema>;
+
+export const resellerListQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(RESELLER_PAGE_MAX).optional(),
+  cursor: z.string().max(512).optional(),
+  status: z.enum(RESELLER_STATUSES).optional(),
+  tierId: uuidV7Schema.optional(),
+  /** A Telegram user id (digits) or part of a display name. */
+  search: z.string().trim().min(1).max(64).optional(),
+});
+export type ResellerListQuery = z.infer<typeof resellerListQuerySchema>;
+
+export const resellerListResponseSchema = z.object({
+  resellers: z.array(resellerSummarySchema),
+  nextCursor: z.string().nullable(),
+});
+export type ResellerListResponse = z.infer<typeof resellerListResponseSchema>;
+
+const resellerTermsShape = {
+  tierId: uuidV7Schema,
+  pricingMode: z.enum(RESELLER_OVERRIDE_MODES),
+  discountPercentage: percentSchema.nullable(),
+  creditLimit: creditLimitSchema.nullable(),
+};
+const pricingRefinement = {
+  check: (r: { pricingMode: string; discountPercentage: number | null }) =>
+    (r.pricingMode === 'PERCENTAGE_DISCOUNT') === (r.discountPercentage !== null),
+  message: 'A percentage override carries a percentage; any other mode carries none.',
+};
+
+export const resellerRegisterSchema = z
+  .object({
+    idempotencyKey: z.string().min(8).max(255),
+    customerId: uuidV7Schema,
+    ...resellerTermsShape,
+  })
+  .refine(pricingRefinement.check, {
+    message: pricingRefinement.message,
+    path: ['discountPercentage'],
+  });
+export type ResellerRegisterRequest = z.infer<typeof resellerRegisterSchema>;
+
+export const resellerUpdateSchema = z
+  .object({
+    idempotencyKey: z.string().min(8).max(255),
+    status: z.enum(RESELLER_STATUSES),
+    ...resellerTermsShape,
+  })
+  .refine(pricingRefinement.check, {
+    message: pricingRefinement.message,
+    path: ['discountPercentage'],
+  });
+export type ResellerUpdateRequest = z.infer<typeof resellerUpdateSchema>;
+
+export const resellerResponseSchema = z.object({ reseller: resellerSummarySchema });
+export type ResellerResponse = z.infer<typeof resellerResponseSchema>;
+
+export const RESELLER_TIER_ROUTES = {
+  list: '/reseller-tiers',
+  create: '/reseller-tiers',
+  detail: (id: string) => `/reseller-tiers/${encodeURIComponent(id)}`,
+  update: (id: string) => `/reseller-tiers/${encodeURIComponent(id)}`,
+  grants: (id: string) => `/reseller-tiers/${encodeURIComponent(id)}/grants`,
+} as const;
+
+export const RESELLER_ROUTES = {
+  list: '/resellers',
+  register: '/resellers',
+  detail: (customerId: string) => `/resellers/${encodeURIComponent(customerId)}`,
+  update: (customerId: string) => `/resellers/${encodeURIComponent(customerId)}`,
 } as const;
 
 // --- Orders ------------------------------------------------------------------

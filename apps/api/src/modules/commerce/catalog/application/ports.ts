@@ -171,6 +171,22 @@ export interface PanelDirectory {
   existsInScope(scope: TenantContext, panelId: PanelId, tx?: unknown): Promise<boolean>;
 }
 
+/**
+ * Whose catalogue a customer query builds (`docs/wp9-reseller-audit.md` R5, R6).
+ *
+ * `CUSTOMER` excludes `RESELLERS_ONLY`, as the catalogue always has. `RESELLER` admits it
+ * and narrows to the products the tier grants — by product, or by the product's category —
+ * in SQL, ahead of the LIMIT. `'ALL'` is a grant of every one. Panels are narrowed by the
+ * caller, in the eligible-panel set it passes.
+ */
+export type CatalogueAudience =
+  | { readonly kind: 'CUSTOMER' }
+  | {
+      readonly kind: 'RESELLER';
+      readonly productIds: readonly string[] | 'ALL';
+      readonly categoryIds: readonly string[] | 'ALL';
+    };
+
 export interface ProductRepository {
   create(
     scope: TenantContext,
@@ -189,6 +205,7 @@ export interface ProductRepository {
     limit: number,
     offset: number,
     eligiblePanelIds: readonly string[],
+    audience: CatalogueAudience,
     tx?: unknown,
   ): Promise<CustomerPage<ProductCategoryRecord>>;
 
@@ -199,6 +216,7 @@ export interface ProductRepository {
     limit: number,
     offset: number,
     eligiblePanelIds: readonly string[],
+    audience: CatalogueAudience,
     tx?: unknown,
   ): Promise<CustomerPage<ProductRecord>>;
 
@@ -284,6 +302,7 @@ export interface ProductRepository {
      * that happened.
      */
     eligiblePanelIds: readonly string[],
+    audience: CatalogueAudience,
     tx?: unknown,
   ): Promise<{ readonly items: readonly ProductRecord[]; readonly hasMore: boolean }>;
 }

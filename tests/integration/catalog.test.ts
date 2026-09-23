@@ -29,6 +29,9 @@ import {
   seededCategoryFor,
 } from './harness';
 
+/** The public catalogue: what every ordinary customer sees (WP9-B R6). */
+const CUSTOMER_AUDIENCE = { kind: 'CUSTOMER' } as const;
+
 /**
  * The customer catalogue, and the three-way distinction it turns on.
  *
@@ -159,9 +162,9 @@ describe('the customer catalogue', () => {
   };
 
   const catalogueIds = async (scope: typeof tenantA, limit = 50) =>
-    (await repository.listCatalog(scope, limit, await eligiblePanels(scope))).items.map(
-      (p) => p.id,
-    );
+    (
+      await repository.listCatalog(scope, limit, await eligiblePanels(scope), CUSTOMER_AUDIENCE)
+    ).items.map((p) => p.id);
 
   // -------------------------------------------------------------------------
   // The two predicates, and where they disagree
@@ -339,7 +342,12 @@ describe('the customer catalogue', () => {
     for (let i = 0; i < 4; i += 1) {
       await productIn(tenantA, 'ACTIVE', { sortOrder: i, title: `plan ${String(i)}` });
     }
-    const page = await repository.listCatalog(tenantA, 2, await eligiblePanels(tenantA));
+    const page = await repository.listCatalog(
+      tenantA,
+      2,
+      await eligiblePanels(tenantA),
+      CUSTOMER_AUDIENCE,
+    );
     expect(page.items).toHaveLength(2);
     /*
      * `hasMore`, not a cursor.
@@ -350,7 +358,12 @@ describe('the customer catalogue', () => {
      */
     expect(page.hasMore).toBe(true);
 
-    const whole = await repository.listCatalog(tenantA, 50, await eligiblePanels(tenantA));
+    const whole = await repository.listCatalog(
+      tenantA,
+      50,
+      await eligiblePanels(tenantA),
+      CUSTOMER_AUDIENCE,
+    );
     expect(whole.items).toHaveLength(4);
     expect(whole.hasMore).toBe(false);
   });
@@ -387,7 +400,9 @@ describe('the customer catalogue', () => {
     // A product NAMES a panel. The panel's address and credentials belong to `/panels`
     // behind its own permission, and a catalogue read by a customer must not carry them.
     await productIn(tenantA, 'ACTIVE');
-    const [row] = (await repository.listCatalog(tenantA, 10, await eligiblePanels(tenantA))).items;
+    const [row] = (
+      await repository.listCatalog(tenantA, 10, await eligiblePanels(tenantA), CUSTOMER_AUDIENCE)
+    ).items;
     const serialised = JSON.stringify(row, (_key, value: unknown) =>
       typeof value === 'bigint' ? value.toString() : value,
     );

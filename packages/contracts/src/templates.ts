@@ -791,6 +791,18 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.order.terms_changed',
+    description:
+      "Shown at confirmation when a reseller's price changed between the summary and the " +
+      'tap — a tier re-priced, an override changed, a suspension or a new registration ' +
+      '(`docs/wp9-reseller-audit.md` R9). Modelled on `bot.discount.no_longer_valid`: ' +
+      'nothing was charged, the order was not re-priced, and the customer starts again and ' +
+      'sees the quote as it now stands. It names no tier and no rate, so it tells nobody ' +
+      'how the seller prices its resellers.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.order.expired',
     description:
       'Shown when an order is acted on after its own deadline has passed. TWO ' +

@@ -43,6 +43,8 @@ const NO_COMMERCE = {
   mayViewOrders: false,
   mayViewServices: false,
   mayViewReferrals: false,
+  mayViewReseller: false,
+  mayEditReseller: false,
 } as const;
 
 const walletRoutes = (balance: Record<string, unknown> = {}, entries: readonly unknown[] = []) => [
@@ -1111,6 +1113,8 @@ const ALL_COMMERCE = {
   mayViewOrders: true,
   mayViewServices: true,
   mayViewReferrals: false,
+  mayViewReseller: false,
+  mayEditReseller: false,
 } as const;
 
 /**
@@ -1354,6 +1358,8 @@ describe("a customer's orders and services", () => {
         mayViewOrders={false}
         mayViewServices
         mayViewReferrals={false}
+        mayViewReseller={false}
+        mayEditReseller={false}
         denied={false}
       />,
     );
@@ -1376,6 +1382,8 @@ describe("a customer's orders and services", () => {
         mayViewOrders
         mayViewServices={false}
         mayViewReferrals={false}
+        mayViewReseller={false}
+        mayEditReseller={false}
         denied={false}
       />,
     );

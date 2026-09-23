@@ -28,6 +28,8 @@ import { UsersPage, UserDetailPage } from './pages/users';
 import { TrialsPage } from './pages/trials';
 import { DiscountsPage } from './pages/discounts';
 import { ReferralsPage } from './pages/referrals';
+import { ResellersPage } from './pages/resellers';
+import { ResellerTiersPage } from './pages/reseller-tiers';
 
 /**
  * The Web Admin shell.
@@ -311,6 +313,21 @@ export const NAV: readonly NavEntry[] = [
     path: '/resellers',
     label: 'web.nav_resellers',
     icon: 'resellers',
+    /*
+     * `resellers.view`, and only that — the rule the payment-accounts entry states. The
+     * list, the tier filter and the edit form (which opens from a row) all need it, and
+     * `ResellerAdminService.list` charges it; an actor holding only `resellers.edit`
+     * would reach a register form with no tier to choose.
+     */
+    permission: 'resellers.view',
+    group: 'web.navgroup_sales',
+  },
+  {
+    id: 'reseller-tiers',
+    path: '/reseller-tiers',
+    label: 'web.nav_reseller_tiers',
+    icon: 'layers',
+    // The same key, for the same reason: every tier write opens from the list it charges.
     permission: 'resellers.view',
     group: 'web.navgroup_sales',
   },
@@ -512,6 +529,8 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
           mayViewServices={may('services.view')}
           mayEditTrial={may('users.trial.edit')}
           mayViewReferrals={may('referrals.view')}
+          mayViewReseller={may('resellers.view')}
+          mayEditReseller={may('resellers.edit')}
           denied={!may('users.view')}
         />
       ),
@@ -664,6 +683,41 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
       element: <ReferralsPage route={route} denied={!may('referrals.view')} />,
       crumbs: [{ label: t('web.referrals_title') }],
       title: t('web.referrals_title'),
+    };
+  }
+
+  if (route.path === '/resellers') {
+    return {
+      element: (
+        <ResellersPage
+          route={route}
+          denied={!may('resellers.view')}
+          mayEdit={may('resellers.edit')}
+        />
+      ),
+      crumbs: [{ label: t('web.resellers_title') }],
+      title: t('web.resellers_title'),
+    };
+  }
+
+  if (route.path === '/reseller-tiers') {
+    return {
+      element: (
+        <ResellerTiersPage
+          denied={!may('resellers.view')}
+          mayEdit={may('resellers.edit')}
+          /*
+           * The pickers' own keys, passed separately because the server charges them
+           * separately: the catalogue lists on `catalog.view`, the fleet on
+           * `panels.view`. Without one, that picker takes a typed id instead of asking
+           * for a list it would be refused.
+           */
+          mayViewCatalog={may('catalog.view')}
+          mayViewPanels={may('panels.view')}
+        />
+      ),
+      crumbs: [nav('resellers'), { label: t('web.reseller_tiers_title') }],
+      title: t('web.reseller_tiers_title'),
     };
   }
 

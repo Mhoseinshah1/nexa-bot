@@ -277,6 +277,8 @@ const OFF = {
   mayDebit: false,
   mayViewOrders: false,
   mayViewServices: false,
+  mayViewReseller: false,
+  mayEditReseller: false,
 } as const;
 
 const customerReferral = (overrides: Record<string, unknown> = {}) => ({

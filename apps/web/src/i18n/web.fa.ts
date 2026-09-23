@@ -300,6 +300,7 @@ export const WEB_FA = {
   'web.nav_discounts': 'تخفیف‌ها و کش‌بک',
   'web.nav_referrals': 'معرفی و پورسانت',
   'web.nav_resellers': 'نمایندگان',
+  'web.nav_reseller_tiers': 'سطوح نمایندگی',
   'web.nav_reports': 'گزارش‌ها',
   'web.nav_panels': 'پنل‌ها',
   'web.nav_providers': 'ارائه‌دهندگان',
@@ -415,11 +416,9 @@ export const WEB_FA = {
   'web.planned_status_body':
     'هیچ دکمه‌ای در این صفحه وجود ندارد، چون هیچ کاری از سرور برنمی‌آید. دکمهٔ غیرفعال هم نگذاشته‌ایم: دکمهٔ غیرفعال یعنی «هست ولی دسترسی ندارید»، و این درست نیست.',
 
-  'web.planned_resellers_summary': 'نمایندگان فروش و سقف اختیارات آنها.',
   'web.planned_reports_summary': 'گزارش‌های فروش، مشتری و مالی.',
   'web.planned_bots_summary': 'ربات‌های تلگرام و پیکربندی آنها.',
 
-  'web.planned_missing_wallet': 'دفتر کیف پول (ledger) هنوز مصرف‌کننده‌ای روی HTTP ندارد.',
   'web.planned_missing_order': 'موجودیت سفارش وجود ندارد.',
   /*
    * KEPT, and now rendered on the real Payments page rather than on a placeholder.
@@ -434,7 +433,6 @@ export const WEB_FA = {
    * are recorded in `docs/open-questions.md`, where a deferral belongs.
    */
   'web.planned_missing_gateway': 'هیچ درگاه پرداختی ثبت یا تعریف نشده است.',
-  'web.planned_missing_reseller': 'موجودیت نماینده وجود ندارد.',
   'web.planned_missing_ledger': 'داده‌ای برای گزارش‌گیری وجود ندارد.',
   'web.planned_missing_bot_runtime':
     'اجرای ربات تلگرام بخشی از فاز بعدی است و در این نسخه ساخته نمی‌شود.',
@@ -868,7 +866,7 @@ export const WEB_FA = {
    */
   'web.users_scope_title': 'آنچه در این نسخه نیست',
   'web.users_scope_body':
-    'نمایندگی در این نسخه وجود ندارد؛ بنابراین هیچ عدد یا ستونی برای آن نشان داده نمی‌شود. نمایش صفر برای چیزی که ساخته نشده، گزارشِ نادرست است. تخفیف‌ها و کش‌بک در صفحهٔ «تخفیف‌ها و کش‌بک» مدیریت می‌شوند.',
+    'نمایندگی ستونی در فهرست مشتریان ندارد؛ نماینده بودن یا نبودن هر مشتری در کارت «نمایندگی» صفحهٔ همان مشتری آمده است. نمایش صفر برای چیزی که ثبت نشده، گزارشِ نادرست است. تخفیف‌ها و کش‌بک در صفحهٔ «تخفیف‌ها و کش‌بک» مدیریت می‌شوند.',
 
   // --- A customer's orders and services (WP2) ------------------------------
   /*
@@ -940,6 +938,9 @@ export const WEB_FA = {
   'web.wallet_immutable':
     'تراکنش‌های کیف پول قابل ویرایش یا حذف نیستند. اصلاح یک اشتباه، یک تراکنش جدید در جهت مخالف است.',
   'web.wallet_denied': 'برای دیدن کیف پول دسترسی users.view لازم است.',
+  'web.wallet_balance_negative': 'بدهکار',
+  'web.wallet_balance_negative_hint':
+    'موجودی منفی فقط برای نماینده‌ای ممکن است که سقف اعتبار دارد: خریدی که از اعتبار او برداشته شده است. این عدد همان مجموع تراکنش‌هاست و بدهی او در محدودهٔ سقف اعتبارش را نشان می‌دهد.',
 
   // --- Payments (Phase 4C) -------------------------------------------------
   /*
@@ -1340,7 +1341,7 @@ export const WEB_FA = {
   'web.product_gap_inactive': 'غیرفعال است؛ تا فعال نشود فروخته نمی‌شود.',
   'web.product_gap_unlisted': 'مخاطب آن پنهان است؛ فروخته می‌شود ولی در فهرست نمی‌آید.',
   'web.product_gap_resellers':
-    'مخاطب آن فقط نمایندگان است؛ تا زمانی که نمایندگی ساخته نشود نه در فهرست می‌آید و نه فروخته می‌شود.',
+    'مخاطب آن فقط نمایندگان است؛ مشتری عادی آن را نه در فهرست می‌بیند و نه می‌تواند سفارش دهد. فقط نماینده‌ای که سطحش این محصول یا دستهٔ آن را مجاز کرده باشد آن را می‌بیند و می‌خرد.',
   'web.product_gap_unpriced': 'قیمت ندارد؛ بدون قیمت قابل فروش نیست.',
   'web.product_gap_no_panel': 'به هیچ پنلی وصل نیست؛ چیزی برای تحویل وجود ندارد.',
   'web.product_gap_uncategorised': 'در هیچ دسته‌ای نیست؛ تا در دسته‌ای قرار نگیرد فروخته نمی‌شود.',
@@ -1374,7 +1375,7 @@ export const WEB_FA = {
   'web.product_problem_price': 'قیمت باید عددی صحیح و بزرگ‌تر از صفر باشد یا خالی بماند.',
   'web.products_scope_title': 'آنچه در این نسخه نیست',
   'web.products_scope_body':
-    'قیمت ویژهٔ نمایندگان در این نسخه وجود ندارد. قیمت هر محصول همان عددی است که اینجا وارد می‌کنید؛ تخفیف‌ها و کش‌بک قاعده‌هایی جدا هستند که در صفحهٔ «تخفیف‌ها و کش‌بک» روی همین قیمت اعمال می‌شوند.',
+    'فهرست قیمت جداگانه برای نمایندگان در این نسخه وجود ندارد. قیمت هر محصول همان عددی است که اینجا وارد می‌کنید؛ نماینده با نرخ سطح خود (یا نرخ اختصاصی‌اش) از همین قیمت خرید می‌کند، و تخفیف‌ها و کش‌بک قاعده‌هایی جدا هستند که در صفحهٔ «تخفیف‌ها و کش‌بک» روی قیمت اعمال می‌شوند.',
   /*
    * Owner revision 10, carried onto the LIVE page.
    *
@@ -2128,6 +2129,190 @@ export const WEB_FA = {
   'web.user_referral_code': 'کد معرفی',
   'web.user_referral_no_code': 'این مشتری هنوز لینک دعوت خود را باز نکرده است.',
   'web.user_referral_all': 'معرفی‌ها و پورسانت‌های این معرف',
+
+  // --- Resellers (WP9-B) ---------------------------------------------------
+  'web.resellers_title': 'نمایندگان',
+  'web.resellers_intro':
+    'مشتریانی که با قیمت نمایندگی خرید می‌کنند، سطح هر کدام و سقف اعتبار خریدشان. نماینده همان مشتری است با یک ردیف نمایندگی.',
+  'web.resellers_list_title': 'فهرست نمایندگان',
+  'web.resellers_list_hint':
+    'تازه‌ترین در بالا. سقف اعتباری که نشان داده می‌شود همان است که واقعاً اعمال می‌شود.',
+  'web.resellers_search': 'جست‌وجو',
+  'web.resellers_search_hint': 'شناسهٔ تلگرام (دقیق) یا بخشی از نام یا نام کاربری.',
+  'web.resellers_empty': 'هنوز نماینده‌ای ثبت نشده است.',
+  'web.resellers_empty_hint':
+    'نماینده را از همین صفحه یا از کارت «نمایندگی» در صفحهٔ مشتری ثبت کنید؛ پیش از آن دست‌کم یک سطح نمایندگی بسازید.',
+  'web.resellers_scope_title': 'قاعده‌هایی که این صفحه رعایت می‌کند',
+  'web.resellers_rule_identity':
+    'هر مشتری حداکثر یک ردیف نمایندگی دارد و فقط اپراتور آن را ثبت می‌کند. مشتری بدون ردیف یا با ردیف معلق، از هر نظر مشتری عادی است.',
+  'web.resellers_rule_credit':
+    'سقف اعتبار فقط برای خرید است و فقط در واحد پول همان سقف: موجودی کیف پول نماینده تا همین اندازه می‌تواند منفی شود. برداشت دستی هرگز موجودی را زیر صفر نمی‌برد و ثبت نماینده هیچ تراکنشی در کیف پول نمی‌نویسد.',
+  'web.resellers_rule_suspend':
+    'تعلیق فقط امتیازهای نمایندگی را برمی‌دارد؛ مسدود کردن مشتری اهرم جداگانه‌ای است که در صفحهٔ مشتری است. تغییر سطح یا نرخ فقط بر سفارش‌هایی اثر دارد که پس از آن تأیید شوند.',
+  'web.resellers_tiers_link': 'سطوح نمایندگی و مجوزهای آنها',
+  'web.reseller_customer': 'نماینده',
+  'web.reseller_customer_id': 'شناسهٔ مشتری',
+  'web.reseller_customer_id_hint': 'شناسهٔ کامل مشتری؛ از صفحهٔ همان مشتری کپی کنید.',
+  'web.reseller_tier': 'سطح',
+  'web.reseller_tier_all': 'همهٔ سطوح',
+  'web.reseller_status_all': 'همه',
+  'web.reseller_status_active': 'فعال',
+  'web.reseller_status_suspended': 'معلق',
+  'web.reseller_status_hint':
+    'نمایندهٔ معلق با قیمت فهرست و بدون اعتبار خرید می‌کند، درست مانند مشتری عادی.',
+  'web.reseller_pricing': 'قیمت‌گذاری',
+  'web.reseller_pricing_hint':
+    '«مطابق سطح» یعنی نرخ اختصاصی ندارد. هر گزینهٔ دیگر جایگزین نرخ سطح می‌شود و فقط برای همین نماینده است.',
+  'web.reseller_pricing_list': 'قیمت فهرست',
+  'web.reseller_pricing_percentage': 'کمتر از قیمت فهرست',
+  'web.reseller_override_tier': 'مطابق سطح',
+  'web.reseller_override_list': 'قیمت فهرست (بی‌توجه به نرخ سطح)',
+  'web.reseller_override_percentage': 'درصد اختصاصی کمتر از قیمت فهرست',
+  'web.reseller_tier_pricing_now': 'نرخ کنونی این سطح:',
+  'web.reseller_percent': 'درصد',
+  'web.reseller_percent_hint': 'عددی صحیح از ۱ تا ۱۰۰؛ از قیمت فهرست کم می‌شود.',
+  'web.reseller_credit_limit': 'سقف اعتبار',
+  'web.reseller_credit_limit_effective': 'سقف اعتبار اعمال‌شده',
+  'web.reseller_credit_from_tier': 'از سطح',
+  'web.reseller_credit_own': 'اختصاصی این نماینده',
+  'web.reseller_own_limit': 'سقف اعتبار اختصاصی',
+  'web.reseller_own_limit_hint': 'اگر علامت نخورد، سقف اعتبار سطح اعمال می‌شود.',
+  'web.reseller_uses_tier_limit': 'سقف اعتبار سطح اعمال می‌شود:',
+  'web.reseller_limit_amount': 'سقف اعتبار (واحد خرد)',
+  'web.reseller_limit_amount_hint': 'صفر یعنی بدون اعتبار: موجودی این نماینده زیر صفر نمی‌رود.',
+  'web.reseller_register_title': 'ثبت نماینده',
+  'web.reseller_register_hint':
+    'یک مشتری موجود را نماینده می‌کند. ثبت نماینده هیچ پولی جابه‌جا نمی‌کند.',
+  'web.reseller_register': 'ثبت نماینده',
+  'web.reseller_registered': 'نماینده ثبت شد.',
+  'web.reseller_edit_title': 'ویرایش نماینده',
+  'web.reseller_saved': 'نماینده ذخیره شد.',
+  'web.reseller_edit_denied': 'برای ثبت یا ویرایش نماینده دسترسی resellers.edit لازم است.',
+  'web.reseller_no_tiers':
+    'هنوز سطح نمایندگی‌ای ساخته نشده است؛ هر نماینده باید دقیقاً یک سطح داشته باشد.',
+  'web.reseller_problem_customer': 'شناسهٔ مشتری کامل و معتبر نیست.',
+  'web.reseller_problem_tier': 'یک سطح انتخاب کنید.',
+  'web.reseller_problem_percent': 'درصد باید عددی صحیح از ۱ تا ۱۰۰ باشد.',
+  'web.reseller_problem_limit':
+    'سقف اعتبار باید عددی صحیح و نامنفی به واحد خرد و در بازهٔ مجاز باشد.',
+
+  'web.reseller_tiers_title': 'سطوح نمایندگی',
+  'web.reseller_tiers_intro':
+    'هر سطح یک نرخ قیمت، یک سقف اعتبار و مجموعه‌ای از مجوزهاست. هر نماینده دقیقاً یک سطح دارد.',
+  'web.reseller_tiers_list_title': 'سطوح',
+  'web.reseller_tiers_list_hint':
+    'به ترتیب ساخت. مجوزی که قرمز است یعنی آن سطح از آن نوع هیچ چیزی را اجازه نمی‌دهد.',
+  'web.reseller_tiers_empty': 'هنوز سطحی ساخته نشده است.',
+  'web.reseller_tiers_empty_hint': 'بدون سطح نمی‌توان نماینده ثبت کرد.',
+  'web.reseller_tier_name': 'نام سطح',
+  'web.reseller_tier_count': 'تعداد نمایندگان',
+  'web.reseller_tier_new_title': 'سطح تازه',
+  'web.reseller_tier_new_hint':
+    'نرخ و سقف اعتبار سطح را تعیین کنید؛ مجوزها را پس از ساخت، از فهرست بالا.',
+  'web.reseller_tier_edit_title': 'ویرایش سطح',
+  'web.reseller_tier_edit_hint':
+    'تغییر فقط بر سفارش‌هایی اثر دارد که پس از آن تأیید شوند؛ سفارش تأییدشده قیمت خود را نگه می‌دارد.',
+  'web.reseller_tier_limit_hint':
+    'سقف اعتبار پیش‌فرض نمایندگان این سطح، به واحد خرد. صفر یعنی بدون اعتبار.',
+  'web.reseller_tier_create': 'ساخت سطح',
+  'web.reseller_tier_created': 'سطح ساخته شد.',
+  'web.reseller_tier_saved': 'سطح ذخیره شد.',
+  'web.reseller_tier_created_empty':
+    'سطح تازه هیچ مجوزی ندارد؛ تا مجوزهایش را تعیین نکنید، نماینده‌ای در آن نمی‌تواند چیزی بخرد.',
+  'web.reseller_tier_edit_denied':
+    'برای ساخت یا ویرایش سطح و مجوزهای آن دسترسی resellers.edit لازم است.',
+  'web.reseller_tier_problem_name': 'نام سطح نباید خالی یا بیش از اندازهٔ مجاز باشد.',
+  'web.reseller_tiers_scope_title': 'قاعده‌هایی که این صفحه رعایت می‌کند',
+  'web.reseller_tiers_rule_deny':
+    'مجوزها به‌طور پیش‌فرض بسته‌اند: نوعی که هیچ مجوزی ندارد، هیچ چیزی از آن نوع را اجازه نمی‌دهد — نه «همه» را.',
+  'web.reseller_tiers_rule_four':
+    'نماینده فقط وقتی می‌تواند بخرد که هر چهار شرط برقرار باشد: نوع خرید مجاز باشد، محصول یا دستهٔ آن مجاز باشد، پنل محصول مجاز باشد و رباتی که خرید از آن انجام می‌شود مجاز باشد.',
+  'web.reseller_tiers_rule_no_delete':
+    'سطحی که نماینده دارد حذف نمی‌شود؛ سطح در جای خود ویرایش می‌شود.',
+  'web.reseller_tiers_rule_future':
+    'تغییر نرخ یا مجوزها فقط بر اقدام‌هایی اثر دارد که پس از آن تأیید شوند؛ سفارشی که تأیید شده، شرایط خود را نگه می‌دارد.',
+  'web.reseller_tiers_resellers_link': 'فهرست نمایندگان',
+
+  'web.reseller_grants': 'مجوزها',
+  'web.reseller_grants_title': 'مجوزهای سطح',
+  'web.reseller_grants_hint':
+    'برای هر نوع: هیچ، همه، یا موارد مشخص. ذخیره کل مجموعه را یکجا جایگزین می‌کند.',
+  'web.reseller_grants_open': 'مجوزها',
+  'web.reseller_grants_close': 'بستن',
+  'web.reseller_grants_save': 'ذخیرهٔ مجوزها',
+  'web.reseller_grants_saved': 'مجوزها ذخیره شد.',
+  'web.reseller_grants_replace_note':
+    'هر چه در این فرم مجاز نشده باشد، پس از ذخیره دیگر مجاز نیست.',
+  'web.reseller_grants_blocked_title':
+    'با این مجوزها نماینده‌ای در این سطح هیچ خریدی نمی‌تواند انجام دهد. آنچه بسته است:',
+  'web.reseller_grants_sells_nothing': 'این سطح فعلاً اجازهٔ هیچ خریدی نمی‌دهد.',
+  'web.reseller_grants_problem_empty':
+    'برای نوعی که «موارد مشخص» دارد دست‌کم یک مورد انتخاب کنید، یا «هیچ» را برگزینید.',
+  'web.reseller_grants_problem_id': 'یکی از شناسه‌های واردشده کامل و معتبر نیست.',
+  'web.reseller_grants_problem_too_many': 'تعداد مجوزها بیش از اندازهٔ مجاز است.',
+  'web.reseller_grant_kind_product': 'محصول',
+  'web.reseller_grant_kind_category': 'دسته',
+  'web.reseller_grant_kind_panel': 'پنل',
+  'web.reseller_grant_kind_bot': 'ربات',
+  'web.reseller_grant_kind_operation': 'نوع خرید',
+  'web.reseller_grant_hint_product':
+    'محصولی مجاز است که خودش یا دسته‌اش مجاز باشد؛ اگر نه محصول و نه دسته مجوزی نداشته باشد، هیچ محصولی مجاز نیست.',
+  'web.reseller_grant_hint_category': 'همهٔ محصولات دسته‌های انتخاب‌شده مجاز می‌شوند.',
+  'web.reseller_grant_hint_panel':
+    'محصولی که پنلش مجاز نباشد، حتی اگر خودش مجاز باشد، فروخته نمی‌شود.',
+  'web.reseller_grant_hint_bot':
+    'خرید از طریق ربات انجام می‌شود؛ بدون مجوز ربات هیچ خریدی ممکن نیست.',
+  'web.reseller_grant_hint_operation': 'خرید سرویس تازه، تمدید، افزایش حجم و افزایش زمان.',
+  'web.reseller_grant_mode_none': 'هیچ (مجاز نیست)',
+  'web.reseller_grant_mode_all': 'همه',
+  'web.reseller_grant_mode_some': 'موارد مشخص',
+  'web.reseller_grant_none': 'هیچ',
+  'web.reseller_grant_all': 'همه',
+  'web.reseller_grant_some_unit': 'مورد',
+  'web.reseller_grant_none_hint': 'این سطح هیچ چیزی از این نوع را اجازه نمی‌دهد.',
+  'web.reseller_grant_typed': 'شناسه‌ها',
+  'web.reseller_grant_typed_hint':
+    'فهرست کامل این نوع در دسترس نیست (دسترسی یا تعداد)؛ شناسه‌های کامل را هر کدام در یک سطر وارد کنید.',
+  'web.reseller_grant_typed_bot':
+    'پنل وب فهرستی از ربات‌ها ندارد؛ شناسهٔ کامل هر ربات را در یک سطر وارد کنید.',
+  'web.reseller_grant_no_choices': 'موردی برای انتخاب وجود ندارد.',
+  'web.reseller_dimension_operation': 'نوع خرید',
+  'web.reseller_dimension_catalogue': 'محصول یا دسته',
+  'web.reseller_dimension_panel': 'پنل',
+  'web.reseller_dimension_bot': 'ربات',
+
+  'web.reseller_layer_list': 'قیمت فهرست — سطح تغییری در قیمت نداد',
+  'web.reseller_layer_tier': 'نرخ سطح',
+  'web.reseller_layer_override': 'نرخ اختصاصی نماینده',
+
+  'web.user_reseller_title': 'نمایندگی',
+  'web.user_reseller_denied': 'برای دیدن نمایندگی این مشتری دسترسی resellers.view لازم است.',
+  'web.user_reseller_none': 'این مشتری نماینده نیست.',
+  'web.user_reseller_register': 'ثبت این مشتری به‌عنوان نماینده',
+  'web.user_reseller_suspended':
+    'نمایندگی این مشتری معلق است: با قیمت فهرست و بدون اعتبار خرید می‌کند.',
+  'web.user_reseller_manage': 'مدیریت در صفحهٔ نمایندگان',
+
+  'web.order_reseller_title': 'خرید نماینده',
+  'web.order_reseller_customer': 'نماینده',
+  'web.order_reseller_layer': 'لایهٔ قیمت',
+  'web.order_reseller_list': 'قیمت فهرست',
+  'web.order_reseller_cost': 'قیمت نماینده',
+  'web.order_reseller_promotion': 'تخفیف تبلیغاتی',
+  'web.order_reseller_sale': 'مبلغ فروش',
+  'web.order_reseller_margin': 'حاشیهٔ نماینده',
+  'web.order_reseller_currency': 'واحد پول',
+  'web.order_reseller_bot': 'ربات',
+  'web.order_reseller_recorded_at': 'زمان ثبت',
+  'web.order_reseller_margin_note':
+    'این ارقام هنگام تأیید سفارش ثبت شده‌اند و بعداً تغییر نمی‌کنند. حاشیه، قیمت فهرست منهای قیمت نماینده است و تخفیف مشتری به شمار نمی‌آید؛ تخفیف تبلیغاتی روی قیمت نماینده اعمال شده است.',
+
+  'web.error_reseller_not_entitled': 'سطح این نماینده این خرید را اجازه نمی‌دهد.',
+  'web.error_reseller_terms_changed':
+    'شرایط نمایندگی از زمان نمایش قیمت تغییر کرده است؛ سفارش باید از نو آغاز شود.',
+  'web.error_reseller_not_found': 'این مشتری نماینده نیست.',
+  'web.error_reseller_already_registered': 'این مشتری پیش‌تر به‌عنوان نماینده ثبت شده است.',
+  'web.error_reseller_tier_not_found': 'این سطح نمایندگی وجود ندارد؛ فهرست را تازه کنید.',
 } as const;
 
 export type WebKey = keyof typeof WEB_FA;

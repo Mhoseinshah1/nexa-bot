@@ -62,7 +62,18 @@ export function shortfallMinor(balanceMinor: bigint, requiredMinor: bigint): big
  * The legacy system cannot answer whether its balance goes below zero (`UNK-UM-005`),
  * which is another way of saying nothing stops it.
  */
-export function canCover(balanceMinor: bigint, requiredMinor: bigint): boolean {
+export function canCover(
+  balanceMinor: bigint,
+  requiredMinor: bigint,
+  /**
+   * The customer's allowance below zero: a reseller's credit limit, stored positive, for a
+   * purchase in its own currency (`docs/wp9-reseller-audit.md` R8). Zero for everyone and
+   * everything else — an operator's manual debit included — which is the plain
+   * no-overdraft rule. A negative argument is treated as zero, never as extra credit.
+   */
+  allowanceMinor: bigint = 0n,
+): boolean {
   if (WALLET_ALLOWS_NEGATIVE_BALANCE) return true;
-  return balanceMinor >= requiredMinor;
+  const allowance = allowanceMinor > 0n ? allowanceMinor : 0n;
+  return balanceMinor - requiredMinor >= -allowance;
 }
