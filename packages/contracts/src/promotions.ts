@@ -622,8 +622,19 @@ export function resellerPriceLayer(
  * What a reseller layer takes off a subtotal: the discount engine's own percentage, so a
  * reseller rounds exactly as a customer discount does — up, in the buyer's favour — and
  * the codebase has one rounding rule rather than two.
+ *
+ * **Never down to zero.** A positive subtotal keeps at least one minor unit: the
+ * reduction is `min(computed, subtotal − 1)`. A reseller cost of zero is an order nobody
+ * can pay — `payments_amount_check` and `wallet_entries_amount_check` refuse a zero
+ * amount, so the settlement fails after the customer confirmed — and it is reachable two
+ * ways: a 100% rate, which the write schemas no longer accept but the database still
+ * stores, and the upward rounding on a tiny subtotal (1 minor unit at 1% rounds its
+ * reduction up to 1). The floor is here, in the one function both the pricing layer and
+ * the confirmation's re-derivation call, so the two cannot disagree about it.
  */
 export function resellerReductionMinor(subtotalMinor: bigint, percent: number | null): bigint {
-  if (percent === null) return 0n;
-  return discountAmountMinor('PERCENTAGE', subtotalMinor, BigInt(percent));
+  if (percent === null || subtotalMinor <= 0n) return 0n;
+  const computed = discountAmountMinor('PERCENTAGE', subtotalMinor, BigInt(percent));
+  const ceiling = subtotalMinor - 1n;
+  return computed < ceiling ? computed : ceiling;
 }

@@ -2787,7 +2787,16 @@ const creditLimitSchema = z.object({
   currency: z.enum(CURRENCY_CODES),
 });
 
-const percentSchema = z.number().int().min(1).max(100);
+/**
+ * A reseller rate, tier or override: a whole percent, 1–99.
+ *
+ * NOT 100, although the database's checks still accept it. A 100% rate prices every order
+ * at zero, and a zero amount is refused by the payment and ledger checks at settlement —
+ * after the customer confirmed. `resellerReductionMinor` keeps one minor unit whatever the
+ * stored rate is; this stops an operator writing a rate whose every price is that floor.
+ * Only the two reseller write schemas use it.
+ */
+const percentSchema = z.number().int().min(1).max(99);
 
 /**
  * One grant: a kind and a subject. A null subject is "every subject of this kind"; an
