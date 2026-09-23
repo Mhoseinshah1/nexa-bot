@@ -10,7 +10,7 @@ import type {
  * A late transfer's one decision, as the application layer sees it.
  *
  * `docs/wp10-payments-audit.md` P1. Append-only — `late_transfer_decisions_no_update`
- * and `_no_delete` (0111) refuse both — and keyed by the payment, so there is at most one
+ * and `_no_delete` (0114) refuse both — and keyed by the payment, so there is at most one
  * of these per payment for ever.
  */
 export interface LateTransferDecisionRecord {

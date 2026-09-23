@@ -2163,10 +2163,14 @@ second apply. Nothing is hard-coded either way.
 
 ## OQ-WP8-07 — `PRICING_PRECEDENCE` still awaits sign-off
 
-O-1 is unanswered. Only `BASE_PRICE` and `PROMOTIONAL_DISCOUNT` fire, and their relative
-order is the one every draft already assumed. Cashback is not a price step: it is a
-promise beside the trace, computed on the final total. Tier prices, custom ranges and
-reseller prices are not built and take no place in the table until they are.
+O-1 is unanswered. `BASE_PRICE`, `PROMOTIONAL_DISCOUNT` and, since WP9-B, one of
+`TIER_PRICE` or `USER_OVERRIDE` fire, and their relative order is the one every draft
+already assumed: the reseller layer replaces the list subtotal, and promotions come off
+the reseller price (`docs/wp9-reseller-audit.md` R3). At most one reseller step fires,
+because a reseller's own override replaces the tier's rate rather than compounding with
+it. Cashback is not a price step: it is a promise beside the trace, computed on the final
+total. Panel adjustments and custom ranges are not built and take no place in the table
+until they are.
 
 ## OQ-WP9-01 — may an operator reassign or remove a referral attribution?
 
@@ -2191,3 +2195,25 @@ UBR-007 shows a legacy per-customer override, `🧮 پورسانت اختصاص�
 referrer earns the tenant's `referral.commission_percent`. A per-customer rate is a
 commercial number with no evidence of how it was set or used. Adding one means a
 per-customer row and an owner's decision on which of the two rates wins.
+
+## OQ-WP9-04 — how a reseller's debt is settled
+
+Built as: it is not collected. A reseller's credit line lets a WALLET purchase take the
+balance below zero, down to the limit (`docs/wp9-reseller-audit.md` R8), and the debt is
+simply a negative balance on the append-only ledger. It is repaid by the same top-ups and
+operator credits as any other balance. Nothing sends a reminder, charges a fee, or
+suspends a reseller for being in debt. Periodic settlement (O-4, `RESELLER_SETTLEMENT`)
+and a membership fee (O-3, `RESELLER_MEMBERSHIP_FEE`) stay reserved and unbuilt.
+Suspending a reseller, or lowering the limit below what they owe, stops further credit and
+leaves the debt where it is. A clawback (cashback or referral reversal) never takes a
+balance further below zero; the shortfall is recorded as unrecovered, as before. Whether
+debt should age, block, or be collected is a commercial decision for the owner.
+
+## OQ-WP9-05 — the catalogue list shows the catalogue price to a reseller
+
+The reseller's catalogue shows only what their tier grants, but each product's row still
+shows the catalogue price. The order summary, which is a real quote, shows what the
+reseller pays. Pricing every row would put one quote per product into a list read and
+would show a price no confirmation has promised. If the owner wants reseller prices in the
+list, it is a presentation of a quote the list does not currently make, and it needs
+deciding which surfaces show it.

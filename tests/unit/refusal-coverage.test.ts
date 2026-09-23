@@ -36,6 +36,12 @@ const CUSTOMER_FACING_SOURCES = [
   'apps/api/src/modules/commerce/payments/application/payment-gateway.service.ts',
   'apps/api/src/modules/commerce/payments/application/receipt.service.ts',
   'apps/api/src/modules/commerce/orders/application/order.service.ts',
+  /*
+   * The reseller standing every order and commercial path asks (WP9-B). Its two refusals
+   * reach a customer from `createDraft`, `confirm` and the commercial actions, and both
+   * were unmapped when this list did not name the file — the PR #69 review found them.
+   */
+  'apps/api/src/modules/commerce/resellers/application/reseller.service.ts',
 ] as const;
 
 /**

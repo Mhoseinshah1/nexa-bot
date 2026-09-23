@@ -110,7 +110,7 @@ export interface LateReviewView {
  * ## The lane is bounded by construction
  *
  * It holds only expired transfers somebody vouched for, and every item leaves it
- * through exactly one decision row, which nothing can edit or delete (0111).
+ * through exactly one decision row, which nothing can edit or delete (0114).
  */
 export class LateTransferService {
   constructor(private readonly deps: LateTransferServiceDeps) {}
@@ -165,7 +165,7 @@ export class LateTransferService {
             direction: 'CREDIT',
             reason: 'LATE_TRANSFER',
             // The payment's OWN frozen amount — what the customer was told to send. The
-            // request carries no figure, and 0111 refuses a decision that disagrees.
+            // request carries no figure, and 0114 refuses a decision that disagrees.
             amount: payment.amount,
             reference: lateTransferReference(payment.id),
             orderId: payment.orderId,

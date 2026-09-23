@@ -95,9 +95,16 @@ export type ProductUnorderableReason =
 export function unorderableReason(
   product: ProductRecord,
   category: ProductCategoryRecord | null,
+  /**
+   * Who is buying (`docs/wp9-reseller-audit.md` R5). `RESELLER` means an ACTIVE reseller,
+   * as `ResellerService.standing` decides it; whether their tier grants THIS product is a
+   * separate question the entitlement check answers. Every other buyer is a `CUSTOMER`,
+   * and the default, so a caller that does not know stays closed.
+   */
+  audience: 'CUSTOMER' | 'RESELLER' = 'CUSTOMER',
 ): ProductUnorderableReason | null {
   if (!isPurchasable(product.status)) return 'NOT_PURCHASABLE';
-  if (product.audience === 'RESELLERS_ONLY') return 'NOT_FOR_AUDIENCE';
+  if (product.audience === 'RESELLERS_ONLY' && audience !== 'RESELLER') return 'NOT_FOR_AUDIENCE';
   if (product.price === null) return 'NOT_PRICED';
   if (product.panelId === null) return 'NOT_FULFILLABLE';
   /*

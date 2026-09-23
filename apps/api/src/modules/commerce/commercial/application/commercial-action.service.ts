@@ -50,6 +50,7 @@ import type {
   OrderTotalsRecord,
 } from '../../orders/application/ports.js';
 import { quoteAddon, quoteProduct } from '../../orders/application/order-pricing.js';
+import type { ResellerService } from '../../resellers/application/reseller.service.js';
 import type { PricingService } from '../../pricing/application/pricing.service.js';
 import type { ServiceRecord, ServiceRepository } from '../../provisioning/application/ports.js';
 import { OPERATION_LEGAL_FROM } from '../../provisioning/application/provision-executor.js';
@@ -135,6 +136,8 @@ export interface CommercialActionServiceDeps {
    * reach this service — the commercial evidence row is written with the draft.
    */
   readonly pricing: Pick<PricingService, 'price' | 'redeem'>;
+  /** A buyer's reseller standing and entitlements (`docs/wp9-reseller-audit.md` R5, R6). */
+  readonly resellers: Pick<ResellerService, 'standing' | 'assertEntitled'>;
   readonly clock: Clock;
   readonly ids: IdGenerator;
 }
@@ -357,6 +360,21 @@ export class CommercialActionService {
           input.kind === 'RENEW'
             ? await this.quoteRenewal(scope, service, now, tx)
             : await this.quoteAddon(scope, service, input.kind, addonId, now, tx);
+
+        /*
+         * A reseller's tier must grant the action (`docs/wp9-reseller-audit.md` R5, R6):
+         * refused here, before the order exists. Confirmation decides again through
+         * `pricing.redeem`, from the grants in force then.
+         */
+        const standing = await this.deps.resellers.standing(scope, customerId, tx);
+        if (standing !== null) {
+          await this.deps.resellers.assertEntitled(
+            scope,
+            standing,
+            { operation: input.kind, productId: priced.line.productId, panelId: service.panelId },
+            tx,
+          );
+        }
 
         const expiresAt = new Date(now.getTime() + (await this.expiryMinutes(scope, tx)) * 60_000);
 

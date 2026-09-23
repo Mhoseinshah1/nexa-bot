@@ -11,6 +11,9 @@ import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/ca
 import { SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import { createTestContext, tenantA, tenantB, type TestContext } from './harness';
 
+/** The public catalogue: what every ordinary customer sees (WP9-B R6). */
+const CUSTOMER_AUDIENCE = { kind: 'CUSTOMER' } as const;
+
 /**
  * The two customer browse queries, at the repository, where their predicates live.
  *
@@ -103,7 +106,13 @@ describe('the categorised customer catalogue, at the repository', () => {
       // eligible list — the one input that could make B's row pass every OTHER term.
       await sellable(tenantB, panelB, SEED_IDS.categoryB);
 
-      const page = await repository.listCustomerCategories(tenantA, 8, 0, [panelB]);
+      const page = await repository.listCustomerCategories(
+        tenantA,
+        8,
+        0,
+        [panelB],
+        CUSTOMER_AUDIENCE,
+      );
 
       expect(
         page.items.map((c) => c.id),
@@ -121,6 +130,7 @@ describe('the categorised customer catalogue, at the repository', () => {
         8,
         0,
         [panelB],
+        CUSTOMER_AUDIENCE,
       );
 
       expect(
@@ -173,10 +183,19 @@ describe('the categorised customer catalogue, at the repository', () => {
         const id = await category(fields);
         await sellable(tenantA, panelA, id, product);
 
-        const listed = (await repository.listCustomerCategories(tenantA, 50, 0, [panelA])).items
+        const listed = (
+          await repository.listCustomerCategories(tenantA, 50, 0, [panelA], CUSTOMER_AUDIENCE)
+        ).items
           .map((c) => c.id)
           .includes(id as ProductCategoryId);
-        const page = await repository.listCustomerProductsInCategory(tenantA, id, 8, 0, [panelA]);
+        const page = await repository.listCustomerProductsInCategory(
+          tenantA,
+          id,
+          8,
+          0,
+          [panelA],
+          CUSTOMER_AUDIENCE,
+        );
 
         expect(listed, 'the category list disagrees with the expectation').toBe(expected);
         expect(page.items.length > 0, 'the product page disagrees with the category list').toBe(
@@ -191,8 +210,17 @@ describe('the categorised customer catalogue, at the repository', () => {
       const id = await category();
       await sellable(tenantA, panelA, id);
 
-      const listed = (await repository.listCustomerCategories(tenantA, 50, 0, [])).items;
-      const page = await repository.listCustomerProductsInCategory(tenantA, id, 8, 0, []);
+      const listed = (
+        await repository.listCustomerCategories(tenantA, 50, 0, [], CUSTOMER_AUDIENCE)
+      ).items;
+      const page = await repository.listCustomerProductsInCategory(
+        tenantA,
+        id,
+        8,
+        0,
+        [],
+        CUSTOMER_AUDIENCE,
+      );
 
       expect(listed).toHaveLength(0);
       expect(page.items).toHaveLength(0);
@@ -204,9 +232,30 @@ describe('the categorised customer catalogue, at the repository', () => {
       const id = await category();
       for (let i = 0; i < 3; i += 1) await sellable(tenantA, panelA, id);
 
-      const first = await repository.listCustomerProductsInCategory(tenantA, id, 2, 0, [panelA]);
-      const second = await repository.listCustomerProductsInCategory(tenantA, id, 2, 2, [panelA]);
-      const beyond = await repository.listCustomerProductsInCategory(tenantA, id, 2, 4, [panelA]);
+      const first = await repository.listCustomerProductsInCategory(
+        tenantA,
+        id,
+        2,
+        0,
+        [panelA],
+        CUSTOMER_AUDIENCE,
+      );
+      const second = await repository.listCustomerProductsInCategory(
+        tenantA,
+        id,
+        2,
+        2,
+        [panelA],
+        CUSTOMER_AUDIENCE,
+      );
+      const beyond = await repository.listCustomerProductsInCategory(
+        tenantA,
+        id,
+        2,
+        4,
+        [panelA],
+        CUSTOMER_AUDIENCE,
+      );
 
       expect([first.items.length, first.hasMore]).toStrictEqual([2, true]);
       expect([second.items.length, second.hasMore]).toStrictEqual([1, false]);

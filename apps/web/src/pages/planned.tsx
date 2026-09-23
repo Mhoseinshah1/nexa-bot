@@ -10,11 +10,11 @@ import { Icon } from '../ui/icons';
  * dead path. A planned page still listed for a route that now resolves
  * elsewhere is unreachable prose claiming the capability is unbuilt.
  *
- * Three of the fifteen areas in the owner's route inventory still have no backend
- * at all: there is no reseller or report endpoint, and no bot-management
- * surface. This page is what those three routes render. The count is written out
- * rather than derived because it is a CLAIM — users in 4A, products and orders
- * in 4B, payments in 4C, services in 4H and discounts in WP8 each had to change
+ * Two of the fifteen areas in the owner's route inventory still have no backend
+ * at all: there is no report endpoint, and no bot-management surface. This page
+ * is what those two routes render. The count is written out rather than derived
+ * because it is a CLAIM — users in 4A, products and orders in 4B, payments in
+ * 4C, services in 4H, discounts in WP8 and resellers in WP9-B each had to change
  * this sentence as well as the list below it.
  *
  * It draws NO control. Not a disabled button, not a greyed table with sample
@@ -72,14 +72,13 @@ export const PLANNED_SURFACES: readonly PlannedSurface[] = [
    * the catalogue did not exist and that pricing rules were declared but not enforced;
    * both were false by then and went with it rather than being left in the catalogue.
    */
-  {
-    key: 'resellers',
-    path: '/resellers',
-    label: 'web.nav_resellers',
-    summary: 'web.planned_resellers_summary',
-    missing: ['web.planned_missing_reseller', 'web.planned_missing_wallet'],
-    decisions: [],
-  },
+  /*
+   * `resellers` is no longer here. WP9-B builds the surface — the reseller list and
+   * editor on `/resellers`, the tiers and their grants on `/reseller-tiers` — so the
+   * placeholder went in the same commit, for the reason `payments` gives above. No owner
+   * decision was recorded on it. Its two "missing" sentences — no reseller entity, and a
+   * wallet ledger with no HTTP consumer — were both false by then and went with it.
+   */
   {
     key: 'reports',
     path: '/reports',

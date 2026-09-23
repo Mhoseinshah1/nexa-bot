@@ -24,6 +24,7 @@ import {
   fetchWalletEntries,
   fetchCustomerTrial,
   fetchCustomerReferral,
+  fetchCustomerReseller,
   removeTrialOverride,
   setTrialOverride,
   unblockCustomer,
@@ -49,6 +50,7 @@ import {
   STATE_TONES as SERVICE_STATE_TONES,
 } from './services';
 import { PartyCell, TriggerBadge } from './referrals';
+import { CreditLimitCell, OVERRIDE_LABELS, PricingText, ResellerStatusBadge } from './resellers';
 import {
   Badge,
   Banner,
@@ -74,12 +76,12 @@ import {
  * Customers — the first product surface this codebase genuinely operates.
  *
  * What this page does NOT draw is as deliberate as what it does. There is no
- * discount and no reseller column — because neither entity exists in this
- * release. A `0` in either place would be a measurement of something unbuilt,
- * which is the legacy statistics screen counting configured panels as
- * connected. The scope card says so in words instead, which is what
- * `planned.tsx` argues for: an empty table claims "you have none of these", and
- * that is also false.
+ * discount and no reseller COLUMN on the list. Discounts are rules on their own
+ * page, not a customer attribute; a reseller is a row of its own (WP9-B), drawn
+ * as a card on the customer's detail page — a column on this list would be a
+ * second read per row for a fact most customers do not have. A `0` for either
+ * would be the legacy statistics screen counting configured panels as
+ * connected.
  *
  * The clause above used to name SERVICES too, and had been false since 4D: the
  * detail page now draws this customer's orders and this customer's services,
@@ -490,6 +492,8 @@ export function UserDetailPage({
   mayViewServices,
   mayEditTrial,
   mayViewReferrals,
+  mayViewReseller,
+  mayEditReseller,
   denied,
 }: {
   id: string;
@@ -512,6 +516,10 @@ export function UserDetailPage({
   mayViewServices: boolean;
   /** `referrals.view` (WP9-A): its own grant, never implied by `users.view`. */
   mayViewReferrals: boolean;
+  /** `resellers.view` (WP9-B): whether this customer is a reseller, and on what terms. */
+  mayViewReseller: boolean;
+  /** `resellers.edit`: offer the link that registers this customer as a reseller. */
+  mayEditReseller: boolean;
   denied: boolean;
 }) {
   const notify = useToast();
@@ -674,6 +682,13 @@ export function UserDetailPage({
             </Card>
 
             <TrialCard customerId={id} mayEdit={mayEditTrial} />
+
+            <ResellerCard
+              customerId={id}
+              telegramUserId={row.telegramUserId}
+              mayView={mayViewReseller}
+              mayEdit={mayEditReseller}
+            />
 
             <WalletCard
               customerId={id}
@@ -1182,23 +1197,40 @@ function WalletCard({
   ];
 
   const balance = wallet.data?.wallet;
+  /*
+   * BELOW ZERO is a real state now, and only for one reason: a reseller's purchase drawn
+   * on their credit line (`docs/wp9-reseller-audit.md` R8). The figure is drawn exactly
+   * as derived — `Money` carries the sign — and said in words beside it, because a
+   * negative balance read as a rendering glitch is a debt nobody follows up.
+   */
+  const negative = balance?.balanceAmount.startsWith('-') ?? false;
 
   return (
     <Card title={t('web.wallet_title')}>
       <StateSwitch query={wallet}>
         {balance === undefined ? null : (
-          <KV
-            items={[
-              [
-                t('web.wallet_balance'),
-                <Money
-                  key="b"
-                  value={{ amountMinor: balance.balanceAmount, currency: balance.currency }}
-                />,
-              ],
-              [t('web.wallet_entry_count'), String(balance.entryCount)],
-            ]}
-          />
+          <>
+            <KV
+              items={[
+                [
+                  t('web.wallet_balance'),
+                  <span key="b">
+                    <Money
+                      value={{ amountMinor: balance.balanceAmount, currency: balance.currency }}
+                    />
+                    {negative && (
+                      <>
+                        {' '}
+                        <Badge tone="warn">{t('web.wallet_balance_negative')}</Badge>
+                      </>
+                    )}
+                  </span>,
+                ],
+                [t('web.wallet_entry_count'), String(balance.entryCount)],
+              ]}
+            />
+            {negative && <Banner tone="warn">{t('web.wallet_balance_negative_hint')}</Banner>}
+          </>
         )}
       </StateSwitch>
       <p className="muted">{t('web.wallet_balance_hint')}</p>
@@ -1426,6 +1458,90 @@ function TrialCard({ customerId, mayEdit }: { customerId: string; mayEdit: boole
 // ---------------------------------------------------------------------------
 // This customer's place in the referral graph (WP9-A)
 // ---------------------------------------------------------------------------
+
+/**
+ * Whether this customer is a reseller, and on what terms (WP9-B).
+ *
+ * `resellers.view` is decided at the route and never derived from `users.view`; without
+ * it the card names the key and issues no request. "Not a reseller" is the server's own
+ * `RESELLER_NOT_FOUND`, which `fetchCustomerReseller` turns into a null — a fact about the
+ * customer, drawn as one, never as an error card. Every figure is the server's: the
+ * effective credit limit is the reseller's own or the tier's, decided there.
+ *
+ * Registering and editing happen on `/resellers`, where the tiers are; this card links
+ * there, carrying the customer so the form opens filled in.
+ */
+function ResellerCard({
+  customerId,
+  telegramUserId,
+  mayView,
+  mayEdit,
+}: {
+  customerId: string;
+  telegramUserId: string;
+  mayView: boolean;
+  mayEdit: boolean;
+}) {
+  const onLink = useLinkHandler();
+  const reseller = useQuery({
+    queryKey: ['customer-reseller', customerId],
+    queryFn: () => fetchCustomerReseller(customerId),
+    enabled: mayView,
+  });
+
+  if (!mayView) {
+    return (
+      <Card title={t('web.user_reseller_title')}>
+        <Banner tone="info">{t('web.user_reseller_denied')}</Banner>
+      </Card>
+    );
+  }
+
+  const found = reseller.data?.reseller;
+  return (
+    <Card title={t('web.user_reseller_title')}>
+      <StateSwitch query={reseller}>
+        {reseller.data === undefined ? null : found === undefined ? (
+          <>
+            <p className="muted">{t('web.user_reseller_none')}</p>
+            {mayEdit && (
+              <a href={`/resellers?register=${encodeURIComponent(customerId)}`} onClick={onLink}>
+                {t('web.user_reseller_register')}
+              </a>
+            )}
+          </>
+        ) : (
+          <>
+            <KV
+              items={[
+                [t('web.reseller_tier'), found.tier.name],
+                [t('web.status'), <ResellerStatusBadge key="s" value={found.status} />],
+                [
+                  t('web.reseller_pricing'),
+                  <PricingText
+                    key="p"
+                    label={OVERRIDE_LABELS[found.pricingMode]}
+                    percent={found.discountPercentage}
+                  />,
+                ],
+                [
+                  t('web.reseller_credit_limit_effective'),
+                  <CreditLimitCell key="l" reseller={found} />,
+                ],
+              ]}
+            />
+            {found.status === 'SUSPENDED' && (
+              <Banner tone="warn">{t('web.user_reseller_suspended')}</Banner>
+            )}
+            <a href={`/resellers?search=${encodeURIComponent(telegramUserId)}`} onClick={onLink}>
+              {t('web.user_reseller_manage')}
+            </a>
+          </>
+        )}
+      </StateSwitch>
+    </Card>
+  );
+}
 
 /**
  * Who referred this customer, how many they have referred, and what their commissions

@@ -138,6 +138,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'سفارش شما\nسرویس: {productTitle}\nمدت: {durationDays}\nحجم: {trafficBytes}\nیوزرنیم: {username}\nمبلغ: {subtotal}\nتخفیف: {discount}\nمبلغ قابل پرداخت: {total}\nکش‌بک: {cashback} پس از تحویل سرویس به کیف پول شما افزوده می‌شود.',
   'bot.order.confirm_button': 'تأیید و ثبت سفارش',
   'bot.order.unavailable': 'این سرویس در حال حاضر قابل خرید نیست.',
+  'bot.order.terms_changed':
+    'قیمت این سفارش تغییر کرده است. هیچ مبلغی کسر نشده است. لطفاً سفارش را دوباره شروع کنید.',
   'bot.order.expired': 'مهلت این سفارش به پایان رسیده است. لطفاً دوباره سفارش دهید.',
   'bot.order.not_awaiting_payment': 'این سفارش دیگر در انتظار پرداخت نیست.',
   'bot.order.awaiting_payment':

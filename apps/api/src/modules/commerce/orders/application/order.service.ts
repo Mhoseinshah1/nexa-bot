@@ -48,6 +48,7 @@ import type {
 import type { UsernameReservation } from '../../provisioning/application/username-ports.js';
 import type { ProductRecord, ProductRepository } from '../../catalog/application/ports.js';
 import { unorderableReason } from '../../catalog/application/catalog-visibility.js';
+import type { ResellerService } from '../../resellers/application/reseller.service.js';
 import type {
   ProductCategoryRecord,
   ProductCategoryRepository,
@@ -173,6 +174,8 @@ export interface OrderServiceDeps {
    * differently from the operator's preview.
    */
   readonly pricing: Pick<PricingService, 'price' | 'redeem'>;
+  /** A buyer's reseller standing and entitlements (`docs/wp9-reseller-audit.md` R5, R6). */
+  readonly resellers: Pick<ResellerService, 'standing' | 'assertEntitled'>;
   /** The window in which a plain message is a discount code (WP8 P11). */
   readonly discountCodes: DiscountCodeCaptureRepository;
   readonly clock: Clock;
@@ -311,7 +314,26 @@ export class OrderService {
          * write the order.
          */
         const category = await this.deps.categories.findById(scope, product.categoryId, tx);
-        const { price, panelId } = this.assertOrderable(product, category);
+        /*
+         * A reseller's standing, then their tier's grants (`docs/wp9-reseller-audit.md` R5,
+         * R6): an ACTIVE reseller may order a reseller-only product and may order nothing
+         * their tier does not grant. Refused here, before a draft exists; confirmation
+         * decides again.
+         */
+        const standing = await this.deps.resellers.standing(scope, customerId, tx);
+        const { price, panelId } = this.assertOrderable(
+          product,
+          category,
+          standing === null ? 'CUSTOMER' : 'RESELLER',
+        );
+        if (standing !== null) {
+          await this.deps.resellers.assertEntitled(
+            scope,
+            standing,
+            { operation: 'NEW_SERVICE', productId: product.id, panelId },
+            tx,
+          );
+        }
 
         /*
          * The list price, then every automatic rule that applies (WP8 P6).
@@ -1302,7 +1324,10 @@ export class OrderService {
           product.categoryId === null
             ? null
             : await this.deps.categories.findForShare(scope, product.categoryId, tx);
-        this.assertOrderable(product, category);
+        // The audience, as the draft asked it (R5). The grants themselves are decided
+        // again, authoritatively, by `pricing.redeem` below — for every order path.
+        const standing = await this.deps.resellers.standing(scope, customerId, tx);
+        this.assertOrderable(product, category, standing === null ? 'CUSTOMER' : 'RESELLER');
 
         /*
          * The panel is re-decided here, and the SLOT is taken here.
@@ -1904,11 +1929,12 @@ export class OrderService {
   private assertOrderable(
     product: ProductRecord,
     category: ProductCategoryRecord | null,
+    audience: 'CUSTOMER' | 'RESELLER',
   ): {
     price: NonNullable<ProductRecord['price']>;
     panelId: NonNullable<ProductRecord['panelId']>;
   } {
-    const reason = unorderableReason(product, category);
+    const reason = unorderableReason(product, category, audience);
     if (reason === 'NOT_PURCHASABLE') {
       throw errors.conflict(
         COMMERCE_ERROR_CODES.PRODUCT_NOT_PURCHASABLE,

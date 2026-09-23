@@ -43,9 +43,10 @@ no new mutable scope: the owner's correction, recorded in
 `docs/phase4e-audit.md`.
 
 **Discounts and cashback are built (WP8, `docs/wp8-pricing-audit.md`), and so
-is the referral program (WP9-A, `docs/wp9-referral-audit.md`).** What remains
-unbuilt is affiliate, resellers and any other promotion. Do not add them
-without an explicit instruction.
+are the referral program (WP9-A, `docs/wp9-referral-audit.md`) and resellers
+(WP9-B, `docs/wp9-reseller-audit.md`).** What remains unbuilt is affiliate,
+reseller sub-bots and any other promotion. Do not add them without an explicit
+instruction.
 
 Four pricing rules, each a way to charge a customer a number they did not see
 or give away money twice:
@@ -84,6 +85,28 @@ Three referral rules, each a way to pay a commission that was never owed:
 - The reversal runs **inside the refund's transaction**, after the cashback
   one, by the same cumulative target, never below zero; the shortfall is
   recorded, never collected.
+
+Four reseller rules, each a way to sell below cost or on credit nobody granted:
+
+- A reseller is a customer with an **ACTIVE** reseller row; SUSPENDED is an
+  ordinary customer, with no discount, no reseller-only product and no credit.
+  Margin, discount, commission, cashback and credit are five things: the
+  reseller layer is a `TIER_PRICE` or `USER_OVERRIDE` step that REPLACES the
+  subtotal, so a margin is never recorded as a discount.
+- Entitlement is **one evaluator**, `decideEntitlement`, deny-by-default per
+  dimension (operation, catalogue, panel, bot). The catalogue is a courtesy
+  held to it by a unit test over every grant subset; confirmation decides
+  again, authoritatively, in `ResellerService.recordPurchase`.
+- A quote is **honoured, never re-priced**: confirmation compares the quoted
+  layer with the layer the live terms produce and refuses
+  `RESELLER_TERMS_CHANGED` when the cost, step or rule differs. A change that
+  leaves the price as quoted (a list-priced reseller suspended, a customer
+  registered onto a list-priced tier) confirms under the standing in force at
+  confirmation, audience and entitlement included. `order_reseller_terms` is
+  written once; history reads that row, never live settings.
+- Credit is read **under the customer's wallet lock**, in the limit's own
+  currency, by `settleFromWallet` only. Zero means no debt; an operator's
+  manual debit never overdraws; a clawback never goes below zero.
 
 **The deployment checkpoint after Phase 2 is done too**: an immutable image,
 a production Compose topology behind Caddy, an Ubuntu installer, and `botctl`

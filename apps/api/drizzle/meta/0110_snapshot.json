@@ -1,5 +1,5 @@
 {
-  "id": "4f451a27-7e4e-4fab-95ee-5f13124d0c05",
+  "id": "89eabf92-8eed-49db-8a28-f24c776d1e24",
   "prevId": "361c6376-20e1-43d8-b7d6-cf60cb40c8a2",
   "version": "7",
   "dialect": "postgresql",
@@ -1996,7 +1996,7 @@
       "checkConstraints": {
         "customer_notifications_kind_check": {
           "name": "customer_notifications_kind_check",
-          "value": "kind IN ('PAYMENT_REJECTED', 'PAYMENT_EXPIRED', 'ORDER_EXPIRED', 'SERVICE_ACTION_SUCCEEDED', 'SERVICE_ACTION_FAILED', 'SERVICE_PROVISION_DELAYED', 'PAYMENT_TRANSFER_RECORDED', 'ORDER_CANCELLED', 'WALLET_TOPUP_CREDITED', 'ORDER_REFUNDED_TO_WALLET', 'SERVICE_EXPIRY_FIRST', 'SERVICE_EXPIRY_SECOND', 'SERVICE_EXPIRED', 'SERVICE_USAGE_FIRST', 'SERVICE_USAGE_SECOND', 'SERVICE_USAGE_FINAL', 'TRIAL_NOT_DELIVERED', 'PAYMENT_EXPIRED_UNDER_REVIEW', 'LATE_TRANSFER_CREDITED', 'REFUND_COMPLETED')"
+          "value": "kind IN ('PAYMENT_REJECTED', 'PAYMENT_EXPIRED', 'ORDER_EXPIRED', 'SERVICE_ACTION_SUCCEEDED', 'SERVICE_ACTION_FAILED', 'SERVICE_PROVISION_DELAYED', 'PAYMENT_TRANSFER_RECORDED', 'ORDER_CANCELLED', 'WALLET_TOPUP_CREDITED', 'ORDER_REFUNDED_TO_WALLET', 'SERVICE_EXPIRY_FIRST', 'SERVICE_EXPIRY_SECOND', 'SERVICE_EXPIRED', 'SERVICE_USAGE_FIRST', 'SERVICE_USAGE_SECOND', 'SERVICE_USAGE_FINAL', 'TRIAL_NOT_DELIVERED')"
         },
         "customer_notifications_state_check": {
           "name": "customer_notifications_state_check",
@@ -3078,169 +3078,6 @@
         "feature_flag_states_version_check": {
           "name": "feature_flag_states_version_check",
           "value": "version >= 1"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.late_transfer_decisions": {
-      "name": "late_transfer_decisions",
-      "schema": "",
-      "columns": {
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "payment_id": {
-          "name": "payment_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "decision": {
-          "name": "decision",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "reason": {
-          "name": "reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "note": {
-          "name": "note",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "amount": {
-          "name": "amount",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "currency": {
-          "name": "currency",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "wallet_entry_id": {
-          "name": "wallet_entry_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "decided_by_admin_id": {
-          "name": "decided_by_admin_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "decided_at": {
-          "name": "decided_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "late_transfer_decisions_tenant_id_tenants_id_fk": {
-          "name": "late_transfer_decisions_tenant_id_tenants_id_fk",
-          "tableFrom": "late_transfer_decisions",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "late_transfer_decisions_decided_by_admin_id_admins_id_fk": {
-          "name": "late_transfer_decisions_decided_by_admin_id_admins_id_fk",
-          "tableFrom": "late_transfer_decisions",
-          "tableTo": "admins",
-          "columnsFrom": [
-            "decided_by_admin_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "late_transfer_decisions_payment_fk": {
-          "name": "late_transfer_decisions_payment_fk",
-          "tableFrom": "late_transfer_decisions",
-          "tableTo": "payments",
-          "columnsFrom": [
-            "tenant_id",
-            "payment_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "late_transfer_decisions_entry_fk": {
-          "name": "late_transfer_decisions_entry_fk",
-          "tableFrom": "late_transfer_decisions",
-          "tableTo": "wallet_entries",
-          "columnsFrom": [
-            "tenant_id",
-            "wallet_entry_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "late_transfer_decisions_pkey": {
-          "name": "late_transfer_decisions_pkey",
-          "columns": [
-            "tenant_id",
-            "payment_id"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "late_transfer_decisions_decision_check": {
-          "name": "late_transfer_decisions_decision_check",
-          "value": "decision IN ('CREDITED', 'DISMISSED')"
-        },
-        "late_transfer_decisions_reason_enum_check": {
-          "name": "late_transfer_decisions_reason_enum_check",
-          "value": "reason IS NULL OR reason IN ('NOT_RECEIVED', 'AMOUNT_UNDERPAID', 'AMOUNT_OVERPAID', 'WRONG_BENEFICIARY', 'DUPLICATE_REFERENCE', 'UNREADABLE_EVIDENCE', 'OTHER')"
-        },
-        "late_transfer_decisions_reason_check": {
-          "name": "late_transfer_decisions_reason_check",
-          "value": "(decision = 'DISMISSED') = (reason IS NOT NULL)"
-        },
-        "late_transfer_decisions_note_check": {
-          "name": "late_transfer_decisions_note_check",
-          "value": "note IS NULL OR length(btrim(note)) BETWEEN 1 AND 500"
-        },
-        "late_transfer_decisions_currency_check": {
-          "name": "late_transfer_decisions_currency_check",
-          "value": "currency IS NULL OR currency IN ('IRT', 'IRR', 'USD', 'EUR', 'USDT')"
-        },
-        "late_transfer_decisions_credit_check": {
-          "name": "late_transfer_decisions_credit_check",
-          "value": "(decision = 'CREDITED') = (amount IS NOT NULL) AND (amount IS NULL) = (currency IS NULL) AND (amount IS NULL) = (wallet_entry_id IS NULL) AND (amount IS NULL OR amount > 0)"
         }
       },
       "isRLSEnabled": false
@@ -4501,6 +4338,209 @@
         "order_referral_commissions_void_check": {
           "name": "order_referral_commissions_void_check",
           "value": "(state = 'VOID') = (voided_at IS NOT NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.order_reseller_terms": {
+      "name": "order_reseller_terms",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "order_id": {
+          "name": "order_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "reseller_customer_id": {
+          "name": "reseller_customer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "tier_id": {
+          "name": "tier_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "tier_name": {
+          "name": "tier_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "layer": {
+          "name": "layer",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "percent": {
+          "name": "percent",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "list_amount": {
+          "name": "list_amount",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cost_amount": {
+          "name": "cost_amount",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "promotion_amount": {
+          "name": "promotion_amount",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sale_amount": {
+          "name": "sale_amount",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "margin_amount": {
+          "name": "margin_amount",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "currency": {
+          "name": "currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "bot_instance_id": {
+          "name": "bot_instance_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "order_reseller_terms_tenant_reseller_idx": {
+          "name": "order_reseller_terms_tenant_reseller_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "reseller_customer_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "order_reseller_terms_tenant_id_tenants_id_fk": {
+          "name": "order_reseller_terms_tenant_id_tenants_id_fk",
+          "tableFrom": "order_reseller_terms",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "order_reseller_terms_order_fk": {
+          "name": "order_reseller_terms_order_fk",
+          "tableFrom": "order_reseller_terms",
+          "tableTo": "orders",
+          "columnsFrom": [
+            "tenant_id",
+            "order_id",
+            "reseller_customer_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id",
+            "customer_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "order_reseller_terms_tier_fk": {
+          "name": "order_reseller_terms_tier_fk",
+          "tableFrom": "order_reseller_terms",
+          "tableTo": "reseller_tiers",
+          "columnsFrom": [
+            "tenant_id",
+            "tier_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "order_reseller_terms_pkey": {
+          "name": "order_reseller_terms_pkey",
+          "columns": [
+            "tenant_id",
+            "order_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "order_reseller_terms_layer_check": {
+          "name": "order_reseller_terms_layer_check",
+          "value": "layer IN ('LIST', 'TIER', 'OVERRIDE')"
+        },
+        "order_reseller_terms_currency_check": {
+          "name": "order_reseller_terms_currency_check",
+          "value": "currency IN ('IRT', 'IRR', 'USD', 'EUR', 'USDT')"
+        },
+        "order_reseller_terms_amounts_check": {
+          "name": "order_reseller_terms_amounts_check",
+          "value": "list_amount >= 0 AND cost_amount >= 0 AND promotion_amount >= 0 AND sale_amount >= 0\n          AND cost_amount <= list_amount\n          AND sale_amount = cost_amount - promotion_amount\n          AND margin_amount = list_amount - cost_amount"
+        },
+        "order_reseller_terms_percent_check": {
+          "name": "order_reseller_terms_percent_check",
+          "value": "(percent IS NULL OR (percent >= 1 AND percent <= 100))\n          AND (layer <> 'TIER' OR percent IS NOT NULL)\n          AND (layer <> 'LIST' OR (percent IS NULL AND cost_amount = list_amount))"
         }
       },
       "isRLSEnabled": false
@@ -9665,6 +9705,273 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.reseller_tier_grants": {
+      "name": "reseller_tier_grants",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "tier_id": {
+          "name": "tier_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "subject": {
+          "name": "subject",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "reseller_tier_grants_tenant_id_tenants_id_fk": {
+          "name": "reseller_tier_grants_tenant_id_tenants_id_fk",
+          "tableFrom": "reseller_tier_grants",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "reseller_tier_grants_tier_fk": {
+          "name": "reseller_tier_grants_tier_fk",
+          "tableFrom": "reseller_tier_grants",
+          "tableTo": "reseller_tiers",
+          "columnsFrom": [
+            "tenant_id",
+            "tier_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "reseller_tier_grants_pkey": {
+          "name": "reseller_tier_grants_pkey",
+          "columns": [
+            "tenant_id",
+            "tier_id",
+            "kind",
+            "subject"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "reseller_tier_grants_kind_check": {
+          "name": "reseller_tier_grants_kind_check",
+          "value": "kind IN ('PRODUCT', 'CATEGORY', 'PANEL', 'BOT', 'OPERATION')"
+        },
+        "reseller_tier_grants_subject_check": {
+          "name": "reseller_tier_grants_subject_check",
+          "value": "subject = '*' OR (kind = 'OPERATION' AND subject IN ('NEW_SERVICE', 'RENEW', 'ADD_TRAFFIC', 'ADD_TIME')) OR (kind <> 'OPERATION' AND subject ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.reseller_tiers": {
+      "name": "reseller_tiers",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "pricing_mode": {
+          "name": "pricing_mode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "discount_percentage": {
+          "name": "discount_percentage",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "credit_limit_amount": {
+          "name": "credit_limit_amount",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "0"
+        },
+        "credit_limit_currency": {
+          "name": "credit_limit_currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "reseller_tiers_tenant_id_key": {
+          "name": "reseller_tiers_tenant_id_key",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "reseller_tiers_tenant_name_key": {
+          "name": "reseller_tiers_tenant_name_key",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "lower(\"name\")",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "reseller_tiers_tenant_created_idx": {
+          "name": "reseller_tiers_tenant_created_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "reseller_tiers_tenant_id_tenants_id_fk": {
+          "name": "reseller_tiers_tenant_id_tenants_id_fk",
+          "tableFrom": "reseller_tiers",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "reseller_tiers_pricing_mode_check": {
+          "name": "reseller_tiers_pricing_mode_check",
+          "value": "pricing_mode IN ('LIST_PRICE', 'PERCENTAGE_DISCOUNT')"
+        },
+        "reseller_tiers_credit_currency_check": {
+          "name": "reseller_tiers_credit_currency_check",
+          "value": "credit_limit_currency IN ('IRT', 'IRR', 'USD', 'EUR', 'USDT')"
+        },
+        "reseller_tiers_credit_limit_check": {
+          "name": "reseller_tiers_credit_limit_check",
+          "value": "credit_limit_amount >= 0"
+        },
+        "reseller_tiers_discount_mode_check": {
+          "name": "reseller_tiers_discount_mode_check",
+          "value": "(pricing_mode = 'PERCENTAGE_DISCOUNT') = (discount_percentage IS NOT NULL)"
+        },
+        "reseller_tiers_discount_range_check": {
+          "name": "reseller_tiers_discount_range_check",
+          "value": "discount_percentage IS NULL OR (discount_percentage >= 1 AND discount_percentage <= 100)"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.resellers": {
       "name": "resellers",
       "schema": "",
@@ -9687,6 +9994,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "tier_id": {
+          "name": "tier_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
         "status": {
           "name": "status",
           "type": "text",
@@ -9699,7 +10012,7 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "default": "'LIST_PRICE'"
+          "default": "'TIER'"
         },
         "discount_percentage": {
           "name": "discount_percentage",
@@ -9711,14 +10024,14 @@
           "name": "credit_limit_amount",
           "type": "bigint",
           "primaryKey": false,
-          "notNull": true,
+          "notNull": false,
           "default": "0"
         },
         "credit_limit_currency": {
           "name": "credit_limit_currency",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "created_at": {
           "name": "created_at",
@@ -9783,6 +10096,27 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "resellers_tenant_tier_idx": {
+          "name": "resellers_tenant_tier_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "tier_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -9813,6 +10147,21 @@
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
+        },
+        "resellers_tier_fk": {
+          "name": "resellers_tier_fk",
+          "tableFrom": "resellers",
+          "tableTo": "reseller_tiers",
+          "columnsFrom": [
+            "tenant_id",
+            "tier_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -9825,15 +10174,19 @@
         },
         "resellers_pricing_mode_check": {
           "name": "resellers_pricing_mode_check",
-          "value": "pricing_mode IN ('LIST_PRICE', 'PERCENTAGE_DISCOUNT')"
+          "value": "pricing_mode IN ('TIER', 'LIST_PRICE', 'PERCENTAGE_DISCOUNT')"
         },
         "resellers_credit_currency_check": {
           "name": "resellers_credit_currency_check",
-          "value": "credit_limit_currency IN ('IRT', 'IRR', 'USD', 'EUR', 'USDT')"
+          "value": "credit_limit_currency IS NULL OR credit_limit_currency IN ('IRT', 'IRR', 'USD', 'EUR', 'USDT')"
+        },
+        "resellers_credit_pair_check": {
+          "name": "resellers_credit_pair_check",
+          "value": "(credit_limit_amount IS NULL) = (credit_limit_currency IS NULL)"
         },
         "resellers_credit_limit_check": {
           "name": "resellers_credit_limit_check",
-          "value": "credit_limit_amount >= 0"
+          "value": "credit_limit_amount IS NULL OR credit_limit_amount >= 0"
         },
         "resellers_discount_mode_check": {
           "name": "resellers_discount_mode_check",
@@ -12739,28 +13092,6 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
-        },
-        "wallet_entries_late_transfer_payment_key": {
-          "name": "wallet_entries_late_transfer_payment_key",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "payment_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "reason = 'LATE_TRANSFER'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
         }
       },
       "foreignKeys": {
@@ -12855,7 +13186,7 @@
         },
         "wallet_entries_reason_check": {
           "name": "wallet_entries_reason_check",
-          "value": "reason IN ('TOPUP_GATEWAY', 'TOPUP_RECEIPT', 'TOPUP_STARS', 'TOPUP_CRYPTO', 'LATE_TRANSFER', 'PURCHASE', 'PURCHASE_REVERSAL', 'REFUND', 'CASHBACK_GATEWAY', 'CASHBACK_TOPUP', 'CASHBACK_RENEWAL', 'CASHBACK_PURCHASE', 'CASHBACK_REVERSAL', 'REFERRAL_COMMISSION', 'REFERRAL_COMMISSION_REVERSAL', 'REFERRAL_SIGNUP_GIFT', 'START_GIFT', 'LOTTERY_WIN', 'LUCK_WHEEL_WIN', 'ADMIN_CREDIT', 'ADMIN_DEBIT', 'MASS_CREDIT', 'MASS_DEBIT', 'RESELLER_SETTLEMENT', 'RESELLER_MEMBERSHIP_FEE', 'CHARGEBACK', 'CORRECTION', 'OTHER')"
+          "value": "reason IN ('TOPUP_GATEWAY', 'TOPUP_RECEIPT', 'TOPUP_STARS', 'TOPUP_CRYPTO', 'PURCHASE', 'PURCHASE_REVERSAL', 'REFUND', 'CASHBACK_GATEWAY', 'CASHBACK_TOPUP', 'CASHBACK_RENEWAL', 'CASHBACK_PURCHASE', 'CASHBACK_REVERSAL', 'REFERRAL_COMMISSION', 'REFERRAL_COMMISSION_REVERSAL', 'REFERRAL_SIGNUP_GIFT', 'START_GIFT', 'LOTTERY_WIN', 'LUCK_WHEEL_WIN', 'ADMIN_CREDIT', 'ADMIN_DEBIT', 'MASS_CREDIT', 'MASS_DEBIT', 'RESELLER_SETTLEMENT', 'RESELLER_MEMBERSHIP_FEE', 'CHARGEBACK', 'CORRECTION', 'OTHER')"
         },
         "wallet_entries_currency_check": {
           "name": "wallet_entries_currency_check",
@@ -12868,10 +13199,6 @@
         "wallet_entries_topup_payment_check": {
           "name": "wallet_entries_topup_payment_check",
           "value": "reason <> 'TOPUP_RECEIPT' OR payment_id IS NOT NULL"
-        },
-        "wallet_entries_late_transfer_payment_check": {
-          "name": "wallet_entries_late_transfer_payment_check",
-          "value": "reason <> 'LATE_TRANSFER' OR payment_id IS NOT NULL"
         }
       },
       "isRLSEnabled": false

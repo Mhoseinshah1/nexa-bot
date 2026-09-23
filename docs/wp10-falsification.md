@@ -45,7 +45,7 @@ object re-created from the migration's own text. No mutation in this record touc
 | WP10-26 | a wallet payment takes the transfer's row before the customer's lock          | `lockCustomer` taken again ahead of the P2 block                               | `financial-concurrency.test.ts` › keeps a signal that took the transfer first, and refuses the wallet payment                                                                                                                     | KILLED |
 
 **WP10-07 dies on the database, not on an assertion.** With the ledger entry one unit short,
-the service goes on to record the decision with the payment's amount, and 0111's insert
+the service goes on to record the decision with the payment's amount, and 0114's insert
 guard refuses it because the decision no longer names a LATE_TRANSFER entry of that
 amount. The credit rolls back and the test fails on that error. That is the guard doing
 its job as the backstop; the service rule is still falsified, because with the guard also

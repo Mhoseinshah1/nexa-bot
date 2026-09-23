@@ -20,7 +20,7 @@ import {
   fetchServiceOperations,
   fetchServices,
 } from '../api/client';
-import { formatNumber, formatTimestamp, splitBytes } from '../format';
+import { currencyLabel, formatNumber, formatTimestamp, splitBytes } from '../format';
 import { mayRequest, queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
@@ -40,6 +40,7 @@ import {
   STATE_LABELS as SERVICE_STATE_LABELS,
   STATE_TONES as SERVICE_STATE_TONES,
 } from './services';
+import { PRICE_LAYER_LABELS, PRICE_LAYER_STEPS } from './resellers';
 import {
   Badge,
   Banner,
@@ -1008,6 +1009,10 @@ function OrderPricingBody({ pricing }: { pricing: OrderPricingResponse }) {
 
   return (
     <>
+      {pricing.reseller !== null && (
+        <ResellerTerms terms={pricing.reseller} currency={pricing.currency} />
+      )}
+
       <KV
         items={[
           [
@@ -1091,6 +1096,94 @@ function OrderPricingBody({ pricing }: { pricing: OrderPricingResponse }) {
           )}
         </>
       )}
+    </>
+  );
+}
+
+/**
+ * What a reseller's purchase was, as confirmation froze it (`docs/wp9-reseller-audit.md`
+ * R4, R9): the tier by the name it had then, which layer set the price and by how much,
+ * and the four figures that follow — list, the reseller's cost, the promotion taken off
+ * that cost, and the sale.
+ *
+ * The MARGIN is list less cost and is never a discount: it is drawn here, apart from the
+ * adjustments table below, because folding it into the discounts is the one confusion
+ * the plan's governing line forbids. The order's subtotal above is already the reseller's
+ * cost; the line keeps the catalogue's list price.
+ *
+ * Every figure is the snapshot's. Nothing here is re-derived from the tier as it is now,
+ * which may have changed since.
+ *
+ * The snapshot carries no currency of its own on the wire, so the amounts are drawn in
+ * the ORDER's currency — the one they were computed in, since the reseller layer prices
+ * the order's own subtotal.
+ */
+function ResellerTerms({
+  terms,
+  currency,
+}: {
+  terms: NonNullable<OrderPricingResponse['reseller']>;
+  currency: OrderPricingResponse['currency'];
+}) {
+  const onLink = useLinkHandler();
+  const money = (amountMinor: string) => <Money value={{ amountMinor, currency }} />;
+  const step = PRICE_LAYER_STEPS[terms.layer];
+  return (
+    <>
+      <h3>{t('web.order_reseller_title')}</h3>
+      <KV
+        items={[
+          [
+            t('web.order_reseller_customer'),
+            <a
+              key="r"
+              href={`/users/${encodeURIComponent(terms.resellerCustomerId)}`}
+              onClick={onLink}
+            >
+              <Ltr>{terms.resellerCustomerId.slice(0, 8)}</Ltr>
+            </a>,
+          ],
+          [t('web.reseller_tier'), terms.tierName],
+          [
+            t('web.order_reseller_layer'),
+            <span key="l">
+              {t(PRICE_LAYER_LABELS[terms.layer])}
+              {step !== null && (
+                <>
+                  {' '}
+                  <Ltr>{step}</Ltr>
+                </>
+              )}
+            </span>,
+          ],
+          [
+            t('web.reseller_percent'),
+            terms.percent === null ? (
+              <Dash key="p" />
+            ) : (
+              <span key="p" className="nowrap">
+                <Ltr>{String(terms.percent)}</Ltr> {t('web.discount_percent_unit')}
+              </span>
+            ),
+          ],
+          [t('web.order_reseller_list'), money(terms.listAmount)],
+          [t('web.order_reseller_cost'), money(terms.costAmount)],
+          [t('web.order_reseller_promotion'), money(terms.promotionAmount)],
+          [t('web.order_reseller_sale'), money(terms.saleAmount)],
+          [t('web.order_reseller_margin'), money(terms.marginAmount)],
+          [t('web.order_reseller_currency'), currencyLabel(currency)],
+          [
+            t('web.order_reseller_bot'),
+            terms.botInstanceId === null ? (
+              <Dash key="b" />
+            ) : (
+              <Copyable key="b" value={terms.botInstanceId} />
+            ),
+          ],
+          [t('web.order_reseller_recorded_at'), formatTimestamp(terms.createdAt)],
+        ]}
+      />
+      <p className="muted small">{t('web.order_reseller_margin_note')}</p>
     </>
   );
 }

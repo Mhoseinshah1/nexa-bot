@@ -22,6 +22,7 @@ import {
   products,
 } from '../../../../infrastructure/persistence/schema.js';
 import type {
+  CatalogueAudience,
   CustomerPage,
   PanelDirectory,
   ProductCategoryDraft,
@@ -47,6 +48,25 @@ import type {
  * something it should never have seen. Filtering in the query means the row never
  * leaves the database.
  */
+/**
+ * The audience half of "may a customer see this product", as SQL
+ * (`docs/wp9-reseller-audit.md` R5, R6).
+ *
+ * A `CUSTOMER` never sees `HIDDEN` or `RESELLERS_ONLY`. A `RESELLER` sees `RESELLERS_ONLY`
+ * too, narrowed to the products their tier grants — by product id or by the product's
+ * category — and applied here, ahead of the LIMIT, for the reason every other predicate of
+ * this catalogue is: a filter after a limit can be defeated by enough ineligible rows.
+ */
+function audienceClause(audience: CatalogueAudience): SQL {
+  if (audience.kind === 'CUSTOMER') {
+    return sql`${products.audience} NOT IN ('HIDDEN', 'RESELLERS_ONLY')`;
+  }
+  const listed = sql`${products.audience} <> 'HIDDEN'`;
+  if (audience.productIds === 'ALL' || audience.categoryIds === 'ALL') return listed;
+  return sql`(${listed} AND (${products.id} = ANY(${sql.param([...audience.productIds])}::uuid[])
+    OR ${products.categoryId} = ANY(${sql.param([...audience.categoryIds])}::uuid[])))`;
+}
+
 export class DrizzleProductRepository implements ProductRepository {
   constructor(private readonly db: Database) {}
 
@@ -259,12 +279,16 @@ export class DrizzleProductRepository implements ProductRepository {
    * without a separate `IS NOT NULL`: a product whose category was deleted out from
    * under it simply has no row to match.
    */
-  private customerVisibleProduct(tenantId: string, eligiblePanelIds: readonly string[]): SQL {
+  private customerVisibleProduct(
+    tenantId: string,
+    eligiblePanelIds: readonly string[],
+    audience: CatalogueAudience,
+  ): SQL {
     return and(
       eq(products.tenantId, tenantId),
       eq(products.status, 'ACTIVE'),
       sql`${products.panelId} = ANY(${sql.param([...eligiblePanelIds])}::uuid[])`,
-      sql`${products.audience} NOT IN ('HIDDEN', 'RESELLERS_ONLY')`,
+      audienceClause(audience),
       isNotNull(products.priceAmount),
       isNotNull(products.panelId),
       /* The category's BOTH terms — browsing asks whether it is listed, not only sold. */
@@ -302,6 +326,7 @@ export class DrizzleProductRepository implements ProductRepository {
     limit: number,
     offset: number,
     eligiblePanelIds: readonly string[],
+    audience: CatalogueAudience,
     tx?: unknown,
   ): Promise<CustomerPage<ProductCategoryRecord>> {
     const tenantId = requireTenantId(scope);
@@ -321,7 +346,7 @@ export class DrizzleProductRepository implements ProductRepository {
             WHERE ${products.categoryId} = ${productCategories.id}
               AND ${products.tenantId} = ${productCategories.tenantId}
               AND ${products.status} = 'ACTIVE'
-              AND ${products.audience} NOT IN ('HIDDEN', 'RESELLERS_ONLY')
+              AND ${audienceClause(audience)}
               AND ${products.priceAmount} IS NOT NULL
               AND ${products.panelId} IS NOT NULL
               AND ${products.panelId} = ANY(${sql.param([...eligiblePanelIds])}::uuid[])
@@ -356,6 +381,7 @@ export class DrizzleProductRepository implements ProductRepository {
     limit: number,
     offset: number,
     eligiblePanelIds: readonly string[],
+    audience: CatalogueAudience,
     tx?: unknown,
   ): Promise<CustomerPage<ProductRecord>> {
     const tenantId = requireTenantId(scope);
@@ -373,7 +399,7 @@ export class DrizzleProductRepository implements ProductRepository {
       )
       .where(
         and(
-          this.customerVisibleProduct(tenantId, eligiblePanelIds),
+          this.customerVisibleProduct(tenantId, eligiblePanelIds, audience),
           eq(products.categoryId, categoryId),
         ),
       )
@@ -388,6 +414,7 @@ export class DrizzleProductRepository implements ProductRepository {
     scope: TenantContext,
     limit: number,
     eligiblePanelIds: readonly string[],
+    audience: CatalogueAudience,
     tx?: unknown,
   ): Promise<{ readonly items: readonly ProductRecord[]; readonly hasMore: boolean }> {
     const tenantId = requireTenantId(scope);
@@ -435,7 +462,7 @@ export class DrizzleProductRepository implements ProductRepository {
            * `catalog-visibility.ts` states the same rule and the matrix test asserts
            * these two agree.
            */
-          sql`${products.audience} NOT IN ('HIDDEN', 'RESELLERS_ONLY')`,
+          audienceClause(audience),
           isNotNull(products.priceAmount),
           isNotNull(products.panelId),
         ),

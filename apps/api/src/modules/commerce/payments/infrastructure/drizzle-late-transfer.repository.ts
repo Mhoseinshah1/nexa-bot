@@ -25,7 +25,7 @@ import type {
 /**
  * Late-transfer decisions, in PostgreSQL. One write, `record`, and no second.
  *
- * There is no update and no delete here, and there is no place to add one: 0111 refuses
+ * There is no update and no delete here, and there is no place to add one: 0114 refuses
  * both at the table, and refuses an INSERT about anything but an expired manual
  * transfer, or a credit that is not the payment's exact amount.
  */

@@ -22,6 +22,10 @@ import type {
   DiscountRepository,
   OrderCashbackRepository,
 } from './ports.js';
+import {
+  applyResellerLayer,
+  type ResellerPricingTerms,
+} from '../../resellers/domain/reseller-pricing.js';
 
 export interface PricingServiceDeps {
   readonly discounts: DiscountRepository;
@@ -34,6 +38,24 @@ export interface PricingServiceDeps {
    */
   readonly referrals: {
     promise(
+      scope: TenantContext,
+      order: OrderRecord,
+      now: Date,
+      tx: TransactionScope,
+    ): Promise<void>;
+  };
+  /**
+   * The reseller layer (`docs/wp9-reseller-audit.md` R3, R9): what prices a reseller, and
+   * the purchase record confirmation writes. `ResellerService` decides both; this service
+   * only applies the layer and calls the record, so there is one statement of each.
+   */
+  readonly resellers: {
+    pricingTerms(
+      scope: TenantContext,
+      customerId: string,
+      tx?: unknown,
+    ): Promise<ResellerPricingTerms | null>;
+    recordPurchase(
       scope: TenantContext,
       order: OrderRecord,
       now: Date,
@@ -78,6 +100,17 @@ export class PricingService {
   constructor(private readonly deps: PricingServiceDeps) {}
 
   async price(scope: TenantContext, request: PriceRequest, tx?: unknown): Promise<PricingResult> {
+    /*
+     * The reseller layer first (R3): `TIER_PRICE` or `USER_OVERRIDE` replaces the list
+     * subtotal, and every promotion below is taken off the reseller price. Only for a
+     * customer: the operator's preview without one prices the list.
+     */
+    const terms =
+      request.customerId === null
+        ? null
+        : await this.deps.resellers.pricingTerms(scope, request.customerId, tx);
+    const base = terms === null ? request.base : applyResellerLayer(request.base, terms);
+
     const automatic = await this.deps.discounts.listLiveAutomatic(scope, tx);
     const coded =
       request.code === undefined
@@ -115,7 +148,7 @@ export class PricingService {
     const cashbackRules = await this.deps.cashbackRules.listLive(scope, tx);
 
     return applyAdjustments({
-      base: request.base,
+      base,
       subject: {
         purpose: request.purpose,
         productId: request.productId,
@@ -153,6 +186,13 @@ export class PricingService {
     now: Date,
     tx: TransactionScope,
   ): Promise<void> {
+    /*
+     * The reseller's purchase record, and the authoritative entitlement decision, before
+     * anything is redeemed (R6, R9): a reseller whose terms or grants changed since the
+     * quote is refused here and this transaction takes nothing with it.
+     */
+    await this.deps.resellers.recordPurchase(scope, order, now, tx);
+
     const applied = order.totals.quote.trace.filter(
       (step) => step.step === 'PROMOTIONAL_DISCOUNT' && step.ruleId !== null,
     );

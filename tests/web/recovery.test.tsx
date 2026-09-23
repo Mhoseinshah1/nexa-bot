@@ -184,8 +184,8 @@ describe('the recovery page', () => {
       // LIST rather than from the rule — `planned-and-absent.test.tsx` pins exactly
       // which keys `PLANNED_SURFACES` still holds, so this cannot silently stop
       // checking a surface that is still planned. `/discounts` left in WP8 on the same
-      // terms, and `discounts.test.tsx` asserts the live page at that path.
-      '/resellers',
+      // terms, and `discounts.test.tsx` asserts the live page at that path. `/resellers`
+      // left in WP9-B, and `resellers.test.tsx` asserts the live page there.
       '/reports',
       '/bots',
     ]) {

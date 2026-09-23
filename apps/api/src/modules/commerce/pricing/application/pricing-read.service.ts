@@ -34,6 +34,11 @@ import type {
 } from './ports.js';
 import { DISCOUNT_VIEW_PERMISSION } from './discount-admin.service.js';
 
+import type {
+  OrderResellerTermsRecord,
+  ResellerRepository,
+} from '../../resellers/application/ports.js';
+
 export interface PricingReadServiceDeps {
   readonly pricing: Pick<PricingService, 'price'>;
   readonly products: Pick<ProductRepository, 'findById'>;
@@ -42,6 +47,8 @@ export interface PricingReadServiceDeps {
   readonly orders: Pick<OrderRepository, 'findById'>;
   readonly discounts: Pick<DiscountRepository, 'redemptionsForOrder'>;
   readonly orderCashback: Pick<OrderCashbackRepository, 'findByOrder' | 'reversals'>;
+  /** The terms a reseller order was confirmed on (`docs/wp9-reseller-audit.md` R9). */
+  readonly resellerTerms: Pick<ResellerRepository, 'findTerms'>;
   readonly guard: PermissionGuard;
   readonly clock: Clock;
 }
@@ -66,6 +73,8 @@ export interface OrderPricing {
     readonly promise: OrderCashbackRecord;
     readonly reversals: readonly CashbackReversalRecord[];
   } | null;
+  /** Null for an ordinary customer's order, and for a reseller's not yet confirmed. */
+  readonly reseller: OrderResellerTermsRecord | null;
 }
 
 /**
@@ -168,7 +177,8 @@ export class PricingReadService {
       promise === null
         ? null
         : { promise, reversals: await this.deps.orderCashback.reversals(scope, promise.id) };
-    return { order, redemptions, cashback };
+    const reseller = await this.deps.resellerTerms.findTerms(scope, order.id);
+    return { order, redemptions, cashback, reseller };
   }
 
   private validId(candidate: string, what: string): string {

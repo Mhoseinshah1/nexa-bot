@@ -424,7 +424,25 @@ function toOrderPricing(pricing: OrderPricing): OrderPricingResponse {
   const quoted = order.totals.quote.cashback;
   const promise = pricing.cashback?.promise ?? null;
   const reversals = pricing.cashback?.reversals ?? [];
+  const reseller = pricing.reseller;
   return {
+    reseller:
+      reseller === null
+        ? null
+        : {
+            resellerCustomerId: reseller.resellerCustomerId,
+            tierId: reseller.tierId,
+            tierName: reseller.tierName,
+            layer: reseller.layer,
+            percent: reseller.percent,
+            listAmount: reseller.listAmount.toString(),
+            costAmount: reseller.costAmount.toString(),
+            promotionAmount: reseller.promotionAmount.toString(),
+            saleAmount: reseller.saleAmount.toString(),
+            marginAmount: reseller.marginAmount.toString(),
+            botInstanceId: reseller.botInstanceId,
+            createdAt: reseller.createdAt.toISOString(),
+          },
     orderId: order.id,
     discountCode: order.discountCode,
     subtotalAmount: order.totals.subtotal.amountMinor.toString(),
