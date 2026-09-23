@@ -2260,6 +2260,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
        * prevent, applied to the reading side.
        */
       refundFigures: walletRepository,
+      // The same repository, for the same reason: the three payment-credit sentences
+      // (Payment File 02 §18) read their figure from the entries the payment names.
+      paymentCredits: walletRepository,
       contacts: {
         contactFor: async (scope, customerId, tx) => {
           const customer = await customerRepository.findById(scope, customerId, tx);

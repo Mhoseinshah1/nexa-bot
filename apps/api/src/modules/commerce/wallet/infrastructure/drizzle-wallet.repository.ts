@@ -195,6 +195,50 @@ export class DrizzleWalletRepository implements WalletRepository {
   }
 
   /**
+   * What ONE payment's credit of one reason put on the wallet, read off the ledger
+   * (Payment File 02 §18) — the principal of a top-up (`TOPUP_RECEIPT`), its gift
+   * (`CASHBACK_TOPUP`), or a reviewer's credit of a receipt (`RECEIPT_CREDIT`).
+   *
+   * A READER for the notification lane, in `refundedForOrder`'s shape and for its reason:
+   * the producer passed a kind and a payment id and nothing else (ADR 0030 §1), and the
+   * figure is derived from the append-only entries that id names. Each of the three is
+   * once-per-payment by a partial unique index, so the sum is that one entry; it is
+   * summed anyway, so a figure is never a guess about which row to read.
+   *
+   * Null when the payment has no such credit: the caller must send nothing rather than a
+   * sentence with an empty or zero amount.
+   */
+  async creditedForPayment(
+    scope: TenantContext,
+    paymentId: string,
+    reason: Extract<LedgerReason, 'TOPUP_RECEIPT' | 'CASHBACK_TOPUP' | 'RECEIPT_CREDIT'>,
+    tx?: unknown,
+  ): Promise<Money | null> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({
+        currency: walletEntries.currency,
+        amount: sql<string>`SUM(${walletEntries.amount})::text`,
+      })
+      .from(walletEntries)
+      .where(
+        and(
+          eq(walletEntries.tenantId, tenantId),
+          eq(walletEntries.paymentId, paymentId),
+          eq(walletEntries.reason, reason),
+          eq(walletEntries.direction, 'CREDIT'),
+        ),
+      )
+      .groupBy(walletEntries.currency);
+    // One currency per payment: an entry is in its payment's currency. Two would be a
+    // ledger this sentence cannot describe, and silence is the honest answer to that.
+    const row = rows.length === 1 ? rows[0] : undefined;
+    if (row === undefined) return null;
+    const amount = BigInt(row.amount);
+    return amount > 0n ? money(amount, row.currency as CurrencyCode) : null;
+  }
+
+  /**
    * What an order's automatic refund put back, and what the wallet held once it
    * had.
    *

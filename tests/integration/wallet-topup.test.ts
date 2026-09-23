@@ -22,6 +22,7 @@ import {
   tenantB,
   type TestContext,
 } from './harness';
+import { capturingLane } from './notification-capture';
 
 /**
  * Wallet top-up: a payment that buys nothing, and the one credit it produces.
@@ -986,6 +987,26 @@ describe('a customer topping up their wallet', () => {
         { reason: 'TOPUP_RECEIPT', amount: '500000' },
         { reason: 'CASHBACK_TOPUP', amount: '50000' },
       ]);
+    });
+
+    it('tells the customer the principal and the gift as two sentences, each naming its own amount (§18)', async () => {
+      await giftPercent(10, 'g-say');
+      const { payment } = await topup(500_000n, 'g-say');
+      await confirm(payment.id, 'g-say-confirm');
+
+      const lane = capturingLane(ctx);
+      const report = await lane.sweep(tenantA);
+
+      expect(report.delivered).toBe(2);
+      // The figures come from the payment's OWN two ledger entries — the principal from
+      // TOPUP_RECEIPT and the gift from CASHBACK_TOPUP — never one from the other.
+      expect(lane.sends.map((one) => [one.templateKey, one.values])).toEqual([
+        ['bot.wallet.topup_credited', { amount: money(500_000n, 'IRT') }],
+        ['bot.wallet.topup_gift_credited', { amount: money(50_000n, 'IRT') }],
+      ]);
+      const [principal, gift] = lane.rendered();
+      expect(principal).toContain('✅ مبلغ 500,000 تومان به کیف پول شما اضافه شد.');
+      expect(gift).toContain('🎁 مبلغ 50,000 تومان نیز بابت هدیهٔ شارژ به کیف پول شما واریز شد.');
     });
 
     it('gives nothing, and says nothing, at 0%', async () => {

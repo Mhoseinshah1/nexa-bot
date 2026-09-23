@@ -27,6 +27,7 @@ import {
   tenantB,
   type TestContext,
 } from './harness';
+import { capturingLane } from './notification-capture';
 
 /**
  * A card-to-card receipt under Payment File 02: it never expires (§9, D1), and it leaves
@@ -570,6 +571,22 @@ describe('a submitted receipt and its three dispositions', () => {
                 AND payload->>'reason' = 'RECEIPT_CREDIT'`,
       );
       expect(events).toEqual([{ reason: 'RECEIPT_CREDIT', amount: '240000' }]);
+    });
+
+    it('tells the customer the amount the reviewer credited, from its RECEIPT_CREDIT entry (§18)', async () => {
+      const { paymentId } = await receipted('d2-say');
+      await credit(finance, paymentId, 240_000n, 'd2-say-credit');
+
+      const lane = capturingLane(ctx);
+      await lane.sweep(tenantA);
+
+      // The reviewer's figure, not the payment's 250 000: the sentence names what the
+      // ledger holds for this payment under RECEIPT_CREDIT, and nothing else.
+      const said = lane.sends.filter(
+        (one) => one.templateKey === 'bot.payment.receipt_credited_to_wallet',
+      );
+      expect(said.map((one) => one.values)).toEqual([{ amount: money(240_000n, 'IRT') }]);
+      expect(lane.rendered().join('\n')).toContain('مبلغ 240,000 تومان به کیف پول شما واریز گردید');
     });
 
     it('lets the customer pay the still-open order from the credited wallet', async () => {

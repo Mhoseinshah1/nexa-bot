@@ -102,6 +102,7 @@ describe('the customer notification lane', () => {
       // The ledger reader the refund sentence renders from; the real repository,
       // so a test cannot assert a figure the production query would not produce.
       refundFigures: new DrizzleWalletRepository(ctx.container.database.db),
+      paymentCredits: new DrizzleWalletRepository(ctx.container.database.db),
       notifications: repo,
       /*
        * The REAL reader, over the real table.
@@ -369,25 +370,34 @@ describe('the customer notification lane', () => {
     ).toEqual(['DELIVERED', 'DELIVERED']);
   });
 
-  it('delivers the three payment-package money facts as their own frozen sentences, with no values', async () => {
+  it('delivers the refund-completed fact with no values, and never a money sentence with no ledger entry behind it', async () => {
     /*
-     * `docs/payments-file02-design.md` D2 and D5, and WP10 P3. Each kind renders ONE
-     * template and the lane carries no payload for any of them: the figures are on the
-     * wallet page. A value slipping into one of these would be the parameterised payload
-     * ADR 0030 §1 refuses, and none declares a precondition, so the reader is never asked.
+     * `docs/payments-file02-design.md` D2 and D5, and WP10 P3. `REFUND_COMPLETED` renders
+     * its frozen sentence with no values. The receipt credit and the top-up gift NAME an
+     * amount (Payment File 02 §18), read from the payment's own ledger entry at send time —
+     * and these two name payments with no entry at all, so the lane sends NOTHING for
+     * them rather than a sentence with an empty amount, and spends the row.
      */
     const id = await customer(tenantA, '5020');
     await enqueue(tenantA, id, 'RECEIPT_CREDITED_TO_WALLET', ctx.container.ids.uuid());
     await enqueue(tenantA, id, 'WALLET_TOPUP_GIFT_CREDITED', ctx.container.ids.uuid());
+    await enqueue(tenantA, id, 'WALLET_TOPUP_CREDITED', ctx.container.ids.uuid());
     await enqueue(tenantA, id, 'REFUND_COMPLETED', ctx.container.ids.uuid());
 
     const report = await sweep(lane({ stillHolds: false }));
 
-    expect(report.delivered).toBe(3);
+    expect(report.delivered).toBe(1);
     expect(sends.map((one) => [one.templateKey, one.values])).toEqual([
-      ['bot.payment.receipt_credited_to_wallet', {}],
-      ['bot.wallet.topup_gift_credited', {}],
       ['bot.refund.completed', {}],
+    ]);
+    expect(
+      (await rows(tenantA)).map((row) => [row.kind, row.state]),
+      'a money sentence was sent, or left to be sent, with no ledger entry to name',
+    ).toEqual([
+      ['RECEIPT_CREDITED_TO_WALLET', 'FAILED'],
+      ['WALLET_TOPUP_GIFT_CREDITED', 'FAILED'],
+      ['WALLET_TOPUP_CREDITED', 'FAILED'],
+      ['REFUND_COMPLETED', 'DELIVERED'],
     ]);
   });
 
