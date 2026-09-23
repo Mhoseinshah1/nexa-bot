@@ -1383,9 +1383,15 @@ const MARZBAN: ProviderDescriptor = {
  * `docs/rickpanel-adapter-audit.md` §4. Declaring nothing would leave every
  * RickPanel unsellable and the production incident unfixed;
  * `tests/acceptance/real-panel-rickpanel.test.ts` is what turns the promise into
- * evidence, and it has not been run. `ROTATE_SUBSCRIPTION` is absent even so,
- * because `POST /api/user/{username}/revoke_sub` exists in the contract and no
- * code in this release calls it.
+ * evidence, and it has not been run.
+ *
+ * `ROTATE_SUBSCRIPTION_LINK` is declared on different and stronger ground: the
+ * owner's direct calls to a correctly connected panel showed `revoke_sub` changing
+ * the link and the token and nothing else, and the adapter method that performs it
+ * proves every rotation by reading the new link back
+ * (`docs/rickpanel-rotate-audit.md`). What was NOT shown — that the old link stops
+ * working — is claimed nowhere. `RESET_USAGE` stays undeclared: the route exists,
+ * and what it resets has not been measured.
  */
 const RICKPANEL: ProviderDescriptor = {
   key: 'rickpanel',
@@ -1408,6 +1414,7 @@ const RICKPANEL: ProviderDescriptor = {
     'RENEW_USER',
     'ADD_VOLUME',
     'ADD_TIME',
+    'ROTATE_SUBSCRIPTION_LINK',
   ],
   // A token exchange, then a status read. The create path's read-back is not a
   // probe and is budgeted by the operation, not by this number.
