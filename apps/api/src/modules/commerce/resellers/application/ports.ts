@@ -162,6 +162,17 @@ export interface ResellerRepository {
     tx?: unknown,
   ): Promise<ResellerRecord | null>;
 
+  /**
+   * `SELECT … FOR UPDATE` on the reseller row: what an operator's update reads its
+   * before-image through, so two concurrent updates serialise and the second audits the
+   * first's after-image as its before rather than the row both of them started from.
+   */
+  lockByCustomer(
+    scope: TenantContext,
+    customerId: string,
+    tx: unknown,
+  ): Promise<ResellerRecord | null>;
+
   /** `SELECT … FOR SHARE` on the reseller row; an operator's update waits for it. */
   shareByCustomer(
     scope: TenantContext,

@@ -405,7 +405,16 @@ export class ResellerAdminService {
       denial,
       async (tx) => {
         await this.assertScopeActive(scope, tx);
-        const before = await this.deps.resellers.findByCustomer(scope, customerId, tx);
+        /*
+         * The before-image is read under the row's `FOR UPDATE`, not plainly. Two
+         * concurrent updates both read the old row without it, and the second audit row
+         * then records a "before" that was never the state it replaced — the first
+         * update's after-image is lost from the trail. Locked, the second waits for the
+         * first to commit and reads what it wrote. It also waits for a commercial
+         * transaction holding the row `FOR SHARE` (`ResellerService.standing`), exactly
+         * as the UPDATE below would.
+         */
+        const before = await this.deps.resellers.lockByCustomer(scope, customerId, tx);
         if (before === null) throw resellerNotFound();
         if ((await this.deps.resellers.findTier(scope, input.write.tierId, tx)) === null) {
           throw tierNotFound();

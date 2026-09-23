@@ -342,6 +342,20 @@ export class DrizzleResellerRepository implements ResellerRepository {
     return row === undefined ? null : toReseller(row);
   }
 
+  async lockByCustomer(
+    scope: TenantContext,
+    customerId: string,
+    tx: unknown,
+  ): Promise<ResellerRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await exec(this.db, tx)
+      .select()
+      .from(resellers)
+      .where(and(eq(resellers.tenantId, tenantId), eq(resellers.customerId, customerId)))
+      .for('update');
+    return row === undefined ? null : toReseller(row);
+  }
+
   async shareByCustomer(
     scope: TenantContext,
     customerId: string,

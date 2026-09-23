@@ -1659,6 +1659,31 @@ describe('resellers (WP9-B)', () => {
     });
   });
   // -------------------------------------------------------------------------
+  // Operator writes against the transactions that hold the reseller row
+  // -------------------------------------------------------------------------
+
+  /** The waiting statement, or null once `settled()` is true or two seconds pass. */
+  async function lockWaitOn(statement: RegExp, settled: () => boolean): Promise<string | null> {
+    const deadline = Date.now() + 2_000;
+    while (!settled() && Date.now() < deadline) {
+      const waiting = await rows<{ query: string }>(sql`
+        SELECT query FROM pg_stat_activity
+         WHERE datname = current_database() AND wait_event_type = 'Lock'
+           AND pid <> pg_backend_pid()`);
+      const hit = waiting.find((w) => statement.test(w.query));
+      if (hit !== undefined) return hit.query;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    return null;
+  }
+
+  /**
+   * An operator's reseller update, waiting: at its `FOR UPDATE` read of the before-image
+   * (`lockByCustomer`), or at the UPDATE itself.
+   */
+  const RESELLER_ROW_WRITE = /from\s+"resellers"[\s\S]*for update|update\s+"resellers"/iu;
+
+  // -------------------------------------------------------------------------
   // A suspension against the commercial transactions that read the reseller row
   // -------------------------------------------------------------------------
 
@@ -1673,24 +1698,10 @@ describe('resellers (WP9-B)', () => {
      * this one: reverting `shareByCustomer` alone leaves it green.
      *
      * Both cases hold the commercial transaction open right after it read the reseller,
-     * start the suspension, and require `pg_stat_activity` to show it waiting on a lock in
-     * its UPDATE before the hold is released.
+     * start the suspension, and require `pg_stat_activity` to show it waiting on the
+     * reseller row's lock — at its `FOR UPDATE` read of the before-image, or at the UPDATE —
+     * before the hold is released.
      */
-
-    /** The waiting statement, or null once `settled()` is true or two seconds pass. */
-    async function lockWaitOn(statement: RegExp, settled: () => boolean): Promise<string | null> {
-      const deadline = Date.now() + 2_000;
-      while (!settled() && Date.now() < deadline) {
-        const waiting = await rows<{ query: string }>(sql`
-          SELECT query FROM pg_stat_activity
-           WHERE datname = current_database() AND wait_event_type = 'Lock'
-             AND pid <> pg_backend_pid()`);
-        const hit = waiting.find((w) => statement.test(w.query));
-        if (hit !== undefined) return hit.query;
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-      return null;
-    }
 
     const statusOf = async (customerId: UserId) =>
       (
@@ -1737,9 +1748,7 @@ describe('resellers (WP9-B)', () => {
           finished.push('suspension');
         });
         suspension.catch(() => undefined);
-        waitingIn = await lockWaitOn(/update\s+"resellers"/iu, () =>
-          finished.includes('suspension'),
-        );
+        waitingIn = await lockWaitOn(RESELLER_ROW_WRITE, () => finished.includes('suspension'));
       } finally {
         release();
       }
@@ -1802,9 +1811,7 @@ describe('resellers (WP9-B)', () => {
           finished.push('suspension');
         });
         suspension.catch(() => undefined);
-        waitingIn = await lockWaitOn(/update\s+"resellers"/iu, () =>
-          finished.includes('suspension'),
-        );
+        waitingIn = await lockWaitOn(RESELLER_ROW_WRITE, () => finished.includes('suspension'));
       } finally {
         release();
       }
@@ -1825,6 +1832,110 @@ describe('resellers (WP9-B)', () => {
         refusal(COMMERCE_ERROR_CODES.WALLET_INSUFFICIENT_FUNDS),
       );
       expect(await balance(resellerCustomer)).toBe(-60_000n);
+    });
+  });
+
+  describe('two operator updates of one reseller serialise, and each audits the other’s after-image', () => {
+    /*
+     * PR #69 review, F3. `ResellerAdminService.update` read its before-image with a plain
+     * select, so two concurrent updates both read the row they started from, and the
+     * second's audit row recorded a "before" that was never the state it replaced: the
+     * first update's after-image vanished from the trail. It now reads the row FOR UPDATE
+     * (`lockByCustomer`) before its UPDATE.
+     *
+     * Controlled: update A is held inside its transaction right after its locked read;
+     * update B is started and must be seen waiting on the reseller row in
+     * `pg_stat_activity`; A is released. B's audit before-image must equal A's after-image.
+     */
+    it('makes the second update wait, and audits the first’s after-image as its before', async () => {
+      const tierId = await tier({ percent: 20 });
+      await register(resellerCustomer, tierId);
+      const write = (status: ResellerStatus, percent: number | null) => ({
+        tierId,
+        status,
+        pricingMode: (percent === null ? 'TIER' : 'PERCENTAGE_DISCOUNT') as ResellerOverrideMode,
+        discountPercentage: percent,
+        creditLimit: null,
+      });
+
+      // Held right after update A's locked read of the before-image.
+      const repository = (
+        ctx.container.resellersAdmin as unknown as {
+          deps: { resellers: { lockByCustomer: (...args: never[]) => Promise<unknown> } };
+        }
+      ).deps.resellers;
+      const original = repository.lockByCustomer.bind(repository);
+      let entered!: () => void;
+      const locked = new Promise<void>((resolve) => (entered = resolve));
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      let calls = 0;
+      vi.spyOn(repository, 'lockByCustomer').mockImplementation(async (...args) => {
+        const row = await original(...args);
+        calls += 1;
+        if (calls === 1) {
+          entered();
+          await gate;
+        }
+        return row;
+      });
+
+      const finished: string[] = [];
+      const updateA = ctx.container.resellersAdmin
+        .update(tenantA, owner, {
+          idempotencyKey: key(),
+          customerId: resellerCustomer,
+          write: write('ACTIVE', 35),
+        })
+        .then(() => {
+          finished.push('A');
+        });
+      updateA.catch(() => undefined);
+      let updateB: Promise<void> = Promise.resolve();
+      let waitingIn: string | null = null;
+      try {
+        await locked;
+        updateB = ctx.container.resellersAdmin
+          .update(tenantA, owner, {
+            idempotencyKey: key(),
+            customerId: resellerCustomer,
+            write: write('SUSPENDED', null),
+          })
+          .then(() => {
+            finished.push('B');
+          });
+        updateB.catch(() => undefined);
+        waitingIn = await lockWaitOn(RESELLER_ROW_WRITE, () => finished.includes('B'));
+      } finally {
+        release();
+      }
+      const [a, b] = await Promise.allSettled([updateA, updateB]);
+      expect(a.status).toBe('fulfilled');
+      expect(b.status).toBe('fulfilled');
+      expect(
+        { waited: waitingIn !== null, finished: [...finished] },
+        'update B must wait on the reseller row until update A has committed',
+      ).toEqual({ waited: true, finished: ['A', 'B'] });
+
+      const audit = await rows<{
+        before: Record<string, unknown> | null;
+        after: Record<string, unknown> | null;
+      }>(sql`SELECT before, after FROM audit_logs
+              WHERE action = 'reseller.update' AND result = 'SUCCESS'
+              ORDER BY occurred_at, id`);
+      expect(audit).toHaveLength(2);
+      // Told apart by what each wrote, not by timestamp order: two rows can share a millisecond.
+      const first = audit.find((row) => row.after?.['status'] === 'ACTIVE');
+      const second = audit.find((row) => row.after?.['status'] === 'SUSPENDED');
+      expect(first?.before).toMatchObject({ status: 'ACTIVE', pricingMode: 'TIER' });
+      expect(first?.after).toMatchObject({
+        pricingMode: 'PERCENTAGE_DISCOUNT',
+        discountPercentage: 35,
+      });
+      expect(second?.before, 'B replaced what A wrote, and its audit row says so').toEqual(
+        first?.after,
+      );
+      expect(second?.after).toMatchObject({ status: 'SUSPENDED', pricingMode: 'TIER' });
     });
   });
 });
