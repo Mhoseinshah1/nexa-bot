@@ -335,6 +335,16 @@ describe('an entered code', () => {
     expect(applied(result)).toEqual([id(1)]);
   });
 
+  it('is undecided — refused with no reason — when its answer depends on an absent customer', () => {
+    // A stand-in reason here would tell an operator a live rule is INACTIVE.
+    const result = price(1_000n, [], {
+      coded: rule({ id: id(2), kind: 'CODE', code: 'C', perCustomerLimit: 1 }),
+      subject: { customerId: null, isFirstPurchase: null },
+    });
+    expect(result.code).toEqual({ accepted: false, reason: null });
+    expect(result.outcomes[0]).toMatchObject({ outcome: 'CUSTOMER_DEPENDENT' });
+  });
+
   it('is accepted and applied when it wins', () => {
     const result = price(1_000n, [], {
       coded: rule({ id: id(2), kind: 'CODE', code: 'C', value: 25n }),

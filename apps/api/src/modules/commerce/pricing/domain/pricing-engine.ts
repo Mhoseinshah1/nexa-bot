@@ -326,9 +326,18 @@ export function applyAdjustments(input: PricingInput): PricingResult {
         ? { accepted: false, reason: 'UNKNOWN_CODE' as const }
         : (() => {
             const outcome = outcomes.get(coded.id);
-            return outcome?.outcome === 'APPLIED'
-              ? { accepted: true, reason: null }
-              : { accepted: false, reason: outcome?.reason ?? 'INACTIVE' };
+            if (outcome?.outcome === 'APPLIED') return { accepted: true, reason: null };
+            /*
+             * Not applied, and the reason is the rule's own — never a stand-in. A code
+             * whose answer depends on a customer the preview was not given is not
+             * refused for any reason in the vocabulary: it is undecided, so the reason is
+             * null and the rule's CUSTOMER_DEPENDENT outcome says why. A checkout always
+             * has a customer and never reaches this branch.
+             */
+            if (outcome === undefined || outcome.outcome === 'CUSTOMER_DEPENDENT') {
+              return { accepted: false, reason: null };
+            }
+            return { accepted: false, reason: outcome.reason };
           })();
 
   return {
