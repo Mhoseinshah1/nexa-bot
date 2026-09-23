@@ -41,6 +41,7 @@ import { isFreeTrial } from '../../orders/application/undeliverable-order-refund
 import type { ProvisioningService } from '../../provisioning/application/provisioning.service.js';
 import type { OrderUsernameLane } from '../../provisioning/application/username-lane.js';
 import type { WalletRepository } from '../../wallet/application/ports.js';
+import type { PanelSalesGate } from '../../../platform/panels/application/panel-sales-gate.js';
 import type { TrialGrantRepository } from './ports.js';
 
 /**
@@ -72,6 +73,17 @@ const USERNAME_REFUSALS: readonly string[] = [
 export type TrialAvailability =
   { readonly available: true } | { readonly available: false; readonly reason: TrialRejection };
 
+/**
+ * What a claim's idempotency record holds: the trial it issued, or the refusal it gave.
+ *
+ * A refusal is remembered too (Codex, PR #64). Without it, two deliveries of one
+ * Telegram update could answer "issued" and "unavailable" to the same tap, and a
+ * refusal replayed after the configuration changed could issue a trial for an update
+ * that was already answered.
+ */
+type TrialReplay =
+  { readonly orderId: string; readonly serviceId: string } | { readonly refused: TrialRejection };
+
 export type TrialClaimResult =
   | {
       readonly outcome: 'ISSUED';
@@ -80,7 +92,15 @@ export type TrialClaimResult =
       /** True when this call answered from the idempotency record. */
       readonly replayed: boolean;
     }
-  | { readonly outcome: 'REFUSED'; readonly reason: TrialRejection };
+  | {
+      readonly outcome: 'REFUSED';
+      readonly reason: TrialRejection;
+      /** Present when this call answered from the idempotency record. */
+      readonly replayed?: true;
+    };
+
+/** The configured trial product, with the panel it is issued on known to exist. */
+type TrialProduct = ProductRecord & { readonly panelId: NonNullable<ProductRecord['panelId']> };
 
 /**
  * A refusal discovered AFTER something was written, carried out of the transaction so
@@ -99,7 +119,12 @@ export interface TrialServiceDeps {
   readonly customers: Pick<CustomerRepository, 'findById'>;
   /** The customer row lock — the same lock settlement and the wallet take. */
   readonly wallet: Pick<WalletRepository, 'lockCustomer'>;
-  readonly usernames: Pick<OrderUsernameLane, 'require'>;
+  readonly usernames: Pick<OrderUsernameLane, 'require' | 'modesFor'>;
+  /**
+   * The catalogue's own panel eligibility, read-only. Only `availabilityFor` asks it:
+   * the claim decides the panel again under its lock in `prepareFulfilment`.
+   */
+  readonly panelSales: Pick<PanelSalesGate, 'evaluateMany'>;
   readonly provisioning: Pick<ProvisioningService, 'prepareFulfilment' | 'planForSettledOrder'>;
   readonly settings: SettingsResolver;
   readonly features: FeatureFlagResolver;
@@ -144,8 +169,22 @@ export class TrialService {
     customerId: UserId,
   ): Promise<TrialAvailability> {
     await this.deps.guard.check(scope, actor, TRIAL_CLAIM_PERMISSION);
-    const refusal = await this.refusalBeforeWriting(scope, customerId);
-    return refusal === null ? { available: true } : { available: false, reason: refusal };
+    const decision = await this.decideBeforeWriting(scope, customerId);
+    if ('refusal' in decision) return { available: false, reason: decision.refusal };
+    /*
+     * The two things a claim would find out only after writing: whether the panel can
+     * take a new account now, and whether its username policy lets the installation
+     * choose the name. Asked of the SAME evaluator the catalogue lists by and the same
+     * lane the claim reserves through, read-only. Without them the button was offered
+     * for a trial the tap could only refuse (Codex, PR #64).
+     */
+    const panelId = decision.product.panelId;
+    const verdict = (await this.deps.panelSales.evaluateMany(scope, [panelId])).get(panelId);
+    if (verdict?.eligible !== true) return { available: false, reason: 'PRODUCT_UNAVAILABLE' };
+    if (!(await this.deps.usernames.modesFor(scope, panelId)).includes('AUTOMATIC')) {
+      return { available: false, reason: 'PRODUCT_UNAVAILABLE' };
+    }
+    return { available: true };
   }
 
   /**
@@ -164,25 +203,8 @@ export class TrialService {
     const denial = { action: 'trial.claim', entityType: 'Customer', entityId: customerId };
     await this.authorize(scope, actor, denial);
 
-    const replay = await this.deps.idempotency.find<{ orderId: string; serviceId: string }>(
-      scope,
-      TRIAL_NAMESPACE,
-      input.idempotencyKey,
-      requestHash,
-    );
-    if (replay !== null) {
-      const order = await this.deps.orders.findById(scope, replay.result.orderId as OrderId);
-      if (order !== null) {
-        return {
-          outcome: 'ISSUED',
-          orderId: order.id,
-          serviceId: replay.result.serviceId,
-          replayed: true,
-        };
-      }
-      // The record outlived its order, which only a restore produces. Decide again
-      // rather than report a trial whose rows are gone.
-    }
+    const replayed = await this.replay(scope, input.idempotencyKey, requestHash);
+    if (replayed !== null) return replayed;
 
     const now = this.deps.clock.now();
     const orderId = this.deps.ids.uuid() as OrderId;
@@ -206,13 +228,23 @@ export class TrialService {
           if (!(await this.deps.wallet.lockCustomer(scope, customerId, tx))) {
             throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
           }
-          const refusal = await this.refusalBeforeWriting(scope, customerId, tx);
-          if (refusal !== null) return { outcome: 'REFUSED', reason: refusal } as const;
+          /*
+           * The key again, now that the lock is held. Two deliveries of one update both
+           * miss the lookup above; the second waits here for the first, and the first
+           * has committed its record by the time the lock is released. Answering from
+           * it makes the second an exact replay rather than a fresh decision that finds
+           * the limit spent and says "unavailable" to a tap that was just served.
+           */
+          const already = await this.replay(scope, input.idempotencyKey, requestHash);
+          if (already !== null) return already;
 
-          // Resolved again, under the lock, by the method that just approved it.
-          const product = (await this.configuredProduct(scope, tx)) as ProductRecord & {
-            readonly panelId: NonNullable<ProductRecord['panelId']>;
-          };
+          const decision = await this.decideBeforeWriting(scope, customerId, tx);
+          if ('refusal' in decision) {
+            return { outcome: 'REFUSED', reason: decision.refusal } as const;
+          }
+          // The record the decision approved, carried rather than read again: a second
+          // read could find the product gone and had to be cast past that possibility.
+          const product = decision.product;
           const currency = await this.deps.settings.valueOf<SalesCurrencyCode>(
             scope,
             'sales.currency',
@@ -381,8 +413,12 @@ export class TrialService {
       result = { outcome: 'REFUSED', reason: error.reason };
     }
 
-    if (result.outcome === 'REFUSED')
-      await this.recordRefusal(scope, actor, customerId, result.reason);
+    if (result.outcome === 'REFUSED' && !('replayed' in result)) {
+      await this.recordRefusal(scope, actor, customerId, result.reason, {
+        key: input.idempotencyKey,
+        requestHash,
+      });
+    }
     return result;
   }
 
@@ -394,32 +430,35 @@ export class TrialService {
    * about what makes a trial available — the second only adds the checks that need a
    * row to exist first.
    */
-  private async refusalBeforeWriting(
+  private async decideBeforeWriting(
     scope: TenantContext,
     customerId: UserId,
     tx?: TransactionScope,
-  ): Promise<TrialRejection | null> {
-    if (!(await this.deps.features.isEnabled(scope, 'trials', tx))) return 'UNCONFIGURED';
+  ): Promise<{ readonly refusal: TrialRejection } | { readonly product: TrialProduct }> {
+    if (!(await this.deps.features.isEnabled(scope, 'trials', tx))) {
+      return { refusal: 'UNCONFIGURED' };
+    }
     const productId = await this.deps.settings.valueOf<string | null>(
       scope,
       'trial.product_id',
       tx,
     );
-    if (productId === null) return 'UNCONFIGURED';
+    if (productId === null) return { refusal: 'UNCONFIGURED' };
 
     const customer = await this.deps.customers.findById(scope, customerId, tx);
     if (customer === null) {
       throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
     }
-    if (customer.status === 'BLOCKED') return 'CUSTOMER_BLOCKED';
+    if (customer.status === 'BLOCKED') return { refusal: 'CUSTOMER_BLOCKED' };
 
     const limit = await this.deps.settings.valueOf<number>(scope, 'trial.limit_per_customer', tx);
     const used = await this.deps.grants.countCounting(scope, customerId, tx);
     // Zero is zero trials, never unlimited (ADR-0015): `used >= 0` refuses everyone.
-    if (used >= limit) return 'LIMIT_REACHED';
+    if (used >= limit) return { refusal: 'LIMIT_REACHED' };
 
-    if ((await this.configuredProduct(scope, tx)) === null) return 'PRODUCT_UNAVAILABLE';
-    return null;
+    const product = await this.configuredProduct(scope, tx);
+    if (product === null) return { refusal: 'PRODUCT_UNAVAILABLE' };
+    return { product };
   }
 
   /**
@@ -430,7 +469,7 @@ export class TrialService {
   private async configuredProduct(
     scope: TenantContext,
     tx?: TransactionScope,
-  ): Promise<ProductRecord | null> {
+  ): Promise<TrialProduct | null> {
     const productId = await this.deps.settings.valueOf<string | null>(
       scope,
       'trial.product_id',
@@ -439,17 +478,64 @@ export class TrialService {
     if (productId === null) return null;
     const product = await this.deps.products.findById(scope, productId as ProductRecord['id'], tx);
     if (product === null || product.status !== 'ACTIVE' || product.panelId === null) return null;
-    return product;
+    return { ...product, panelId: product.panelId };
   }
 
-  /** The reason a trial was refused, where an operator can find it. */
+  /**
+   * The claim's idempotency record, as an answer — or null to decide afresh.
+   *
+   * An issued record whose order is gone (only a restore produces that) is decided
+   * again rather than reported as a trial whose rows no longer exist.
+   */
+  private async replay(
+    scope: TenantContext,
+    key: string,
+    requestHash: string,
+  ): Promise<TrialClaimResult | null> {
+    const found = await this.deps.idempotency.find<TrialReplay>(
+      scope,
+      TRIAL_NAMESPACE,
+      key,
+      requestHash,
+    );
+    if (found === null) return null;
+    if ('refused' in found.result) {
+      return { outcome: 'REFUSED', reason: found.result.refused, replayed: true };
+    }
+    const order = await this.deps.orders.findById(scope, found.result.orderId as OrderId);
+    if (order === null) return null;
+    return {
+      outcome: 'ISSUED',
+      orderId: order.id,
+      serviceId: found.result.serviceId,
+      replayed: true,
+    };
+  }
+
+  /**
+   * The reason a trial was refused, where an operator can find it — and under the
+   * claim's key, so a redelivered update is answered with the same refusal.
+   *
+   * `remember`, not `rememberOnce`: a concurrent delivery of the same update that
+   * reached the same refusal has already stored the same answer, and losing that race
+   * is not a conflict worth an error.
+   */
   private async recordRefusal(
     scope: TenantContext,
     actor: ActorContext,
     customerId: UserId,
     reason: TrialRejection,
+    key: { readonly key: string; readonly requestHash: string },
   ): Promise<void> {
     await this.deps.uow.run(scope, async (tx) => {
+      await this.deps.idempotency.remember<TrialReplay>(
+        scope,
+        TRIAL_NAMESPACE,
+        key.key,
+        key.requestHash,
+        { refused: reason },
+        tx,
+      );
       await this.deps.audit.record(
         scope,
         actor,

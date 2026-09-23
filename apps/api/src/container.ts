@@ -1695,6 +1695,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     customers: customerRepository,
     wallet: walletRepository,
     usernames: usernameLane,
+    panelSales: panelSalesGate,
     provisioning: provisioningService,
     settings: settingsResolver,
     features: featureFlagResolver,
