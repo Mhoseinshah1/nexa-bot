@@ -10,6 +10,7 @@ import { ADMIN_MENU_BUTTON, MAIN_MENU_ROWS, templateDefinition } from '@nexa/con
 import { CATALOGUE_FA, formatMoney } from '@nexa/i18n';
 import {
   callbackAnswerBody,
+  fileMessageBody,
   telegramSend,
   textMessageBody,
   type TelegramButton,
@@ -273,22 +274,37 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
    * `PAYMENT_RECEIPT_KINDS` admits. The method is NAMED rather than hard-coded in
    * `telegramSend`, exactly as its own docblock anticipated.
    *
-   * No caption. The facts are in the message beside it — that one carries the decision
-   * buttons — and a caption would be a second place the amount is written.
+   * A CAPTION and BUTTONS when the caller supplies them (Payment File 02 §10): the first
+   * receipt of a review carries the facts and the decisions, so the reviewer reads one
+   * message rather than an image and a separate text that can scroll apart. The caption is
+   * rendered from its template here, with the key's own format — exactly as `send` does —
+   * and the labels through the same `labelButtons`.
    */
   async sendFile(scope: TenantContext, message: CustomerFileMessage): Promise<CustomerSendResult> {
     const token = await this.bots.tokenForBotInstance(scope, message.botInstanceId);
     if (token === null) return { outcome: 'REFUSED' };
+
+    const caption =
+      message.caption === undefined
+        ? undefined
+        : await this.templates.render(scope, message.caption.templateKey, message.caption.values);
+    const html =
+      message.caption !== undefined &&
+      templateDefinition(message.caption.templateKey).format === 'TELEGRAM_HTML';
+    const buttons = await this.labelButtons(scope, message.buttons ?? []);
 
     const result = await telegramSend({
       token,
       apiBaseUrl: this.apiBaseUrl,
       timeoutMs: this.timeoutMs,
       method: message.kind === 'PHOTO' ? 'sendPhoto' : 'sendDocument',
-      body: {
-        chat_id: message.chatId,
-        ...(message.kind === 'PHOTO' ? { photo: message.fileId } : { document: message.fileId }),
-      },
+      body: fileMessageBody({
+        chatId: message.chatId,
+        kind: message.kind,
+        fileId: message.fileId,
+        ...(caption === undefined ? {} : { caption, html }),
+        buttons,
+      }),
     });
 
     /*

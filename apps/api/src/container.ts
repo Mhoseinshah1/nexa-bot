@@ -166,6 +166,8 @@ import { TelegramReceiptFiles } from './modules/commerce/payments/infrastructure
 import { PaymentService } from './modules/commerce/payments/application/payment.service.js';
 import { RefundService } from './modules/commerce/payments/application/refund.service.js';
 import { ReceiptDispositionService } from './modules/commerce/payments/application/receipt-disposition.service.js';
+import { ReceiptCreditCaptureService } from './modules/commerce/payments/application/receipt-credit-capture.service.js';
+import { DrizzleAdminAmountCaptureRepository } from './modules/commerce/payments/infrastructure/drizzle-admin-amount-capture.repository.js';
 import { DrizzleReceiptCreditRepository } from './modules/commerce/payments/infrastructure/drizzle-receipt-credit.repository.js';
 import { DrizzleRefundRepository } from './modules/commerce/payments/infrastructure/drizzle-refund.repository.js';
 import { SalesCurrencyChangeGuard } from './modules/commerce/payments/application/sales-currency-change.guard.js';
@@ -465,6 +467,8 @@ export interface Container {
    * surface; the Web Admin only READS what it recorded.
    */
   readonly receiptDispositions: ReceiptDispositionService;
+  /** The Telegram half of the credit-to-wallet disposition: the reviewer's amount capture (D3). */
+  readonly receiptCreditCaptures: ReceiptCreditCaptureService;
   /**
    * The route repository, exposed for ONE caller: the boot-time reconcile.
    *
@@ -1693,6 +1697,27 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     settings: settingsResolver,
     notifier: customerNotifier,
     outbox,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
+
+  /*
+   * The reviewer's amount capture (D3). It holds the payment READ, the receipt COUNT and
+   * the customer READ, and reaches money only through `creditToWallet` above.
+   */
+  const receiptCreditCaptureService = new ReceiptCreditCaptureService({
+    captures: new DrizzleAdminAmountCaptureRepository(database.db),
+    payments: paymentRepository,
+    receipts: paymentReceiptRepository,
+    customers: customerRepository,
+    dispositions: receiptDispositionService,
     guard,
     uow,
     audit,
@@ -3066,6 +3091,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     paymentGateways: paymentGatewayService,
     refunds: refundService,
     receiptDispositions: receiptDispositionService,
+    receiptCreditCaptures: receiptCreditCaptureService,
     paymentGatewayProvisioning: paymentGatewayRepository,
     receipts: receiptService,
     receiptFiles,
@@ -3104,6 +3130,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       ]),
       destinations: paymentDestinationRenderer,
       receipts: receiptService,
+      receiptCredits: receiptCreditCaptureService,
       telegramAdmins,
       /*
        * The reviewers' poke, Phase 5T.
