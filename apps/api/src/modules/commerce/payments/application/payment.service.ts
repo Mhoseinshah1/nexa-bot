@@ -540,7 +540,49 @@ export class PaymentService {
         await this.assertScopeActive(scope, tx);
 
         /*
-         * The customer row FIRST, and everything authoritative is read AFTER it.
+         * A wallet payment and an open transfer cannot both settle this order (P2, D2).
+         *
+         * FIRST the transfers nobody vouched for are withdrawn, with the conditional
+         * UPDATE the customer's own cancellation uses: `cancelPendingForOrder` refuses a
+         * signalled row IN the statement, so a signal committing between any read and
+         * this write keeps its payment. Left alone, such a transfer lapsed an hour later
+         * and told the customer `PAYMENT_EXPIRED` about an order they had already paid.
+         *
+         * THEN the claim is asked, after the write — the order `cancelByCustomer` asks it
+         * in, for the reason it gives. A transfer the customer SAID they sent may be
+         * money in flight, and only a reviewer may decide it; debiting the wallet as well
+         * would be two payments for one order and the customer's own money stranded on
+         * the second. So the whole command is refused, and throwing rolls the
+         * withdrawals back with it: nothing is debited and nothing is cancelled.
+         *
+         * BEFORE the customer's lock, and that placement is a deadlock avoided rather
+         * than a preference. `signalTransferSent` updates the transfer's row and then
+         * opens a receipt window, whose foreign key takes `FOR KEY SHARE` on the
+         * customer's row — so a settlement holding the customer and waiting for the
+         * transfer's row, beside a signal holding the row and waiting for the customer,
+         * is a cycle PostgreSQL aborts with `40P01`. Taking the transfer's row first puts
+         * both commands in the same order: row, then customer. `confirmManualTransfer`
+         * already takes them that way round.
+         *
+         * Behind an OWNERSHIP read, so another customer's order is refused as unknown
+         * before anything about its transfers — a signalled one included — can shape the
+         * answer. Unlocked, and it does not need to be: `orders.customer_id` is frozen,
+         * and every other fact is re-read under the customer's lock below.
+         */
+        const owned = await this.deps.orders.findById(scope, orderId, tx);
+        if (owned === null || owned.customerId !== customerId) {
+          throw errors.notFound(COMMERCE_ERROR_CODES.ORDER_NOT_FOUND, 'Unknown order.');
+        }
+        const withdrawn = await this.deps.repository.cancelPendingForOrder(scope, orderId, now, tx);
+        if (await this.deps.repository.hasClaimedPendingForOrder(scope, orderId, tx)) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.ORDER_TRANSFER_UNDER_REVIEW,
+            'A transfer for this order is waiting to be reviewed.',
+          );
+        }
+
+        /*
+         * The customer row next, and everything authoritative is read AFTER it.
          *
          * Two reasons, and the second was found by review rather than by design.
          *
@@ -576,29 +618,6 @@ export class PaymentService {
           'REFUSE_AFTER_DEADLINE',
         );
 
-        /*
-         * A wallet payment and an open transfer cannot both settle this order (P2, D2).
-         *
-         * FIRST the transfers nobody vouched for are withdrawn, with the conditional
-         * UPDATE the customer's own cancellation uses: `cancelPendingForOrder` refuses a
-         * signalled row IN the statement, so a signal committing between any read and
-         * this write keeps its payment. Left alone, such a transfer lapsed an hour later
-         * and told the customer `PAYMENT_EXPIRED` about an order they had already paid.
-         *
-         * THEN the claim is asked, after the write — the order `cancelByCustomer` asks it
-         * in, for the reason it gives. A transfer the customer SAID they sent may be
-         * money in flight, and only a reviewer may decide it; debiting the wallet as well
-         * would be two payments for one order and the customer's own money stranded on
-         * the second. So the whole command is refused, and throwing rolls the
-         * withdrawals above back with it: nothing is debited and nothing is cancelled.
-         */
-        const withdrawn = await this.deps.repository.cancelPendingForOrder(scope, orderId, now, tx);
-        if (await this.deps.repository.hasClaimedPendingForOrder(scope, orderId, tx)) {
-          throw errors.conflict(
-            COMMERCE_ERROR_CODES.ORDER_TRANSFER_UNDER_REVIEW,
-            'A transfer for this order is waiting to be reviewed.',
-          );
-        }
         for (const cancelledId of withdrawn) {
           await this.deps.audit.record(
             scope,
