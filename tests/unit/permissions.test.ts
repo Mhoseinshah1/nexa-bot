@@ -58,7 +58,9 @@ describe('permission catalog', () => {
     // docs/wp6-audit.md B2, B3: one customer's allowance is HIGH and an operator's;
     // every customer's at once is CRITICAL and the owner's alone.
     expect(permissionDefinition('users.trial.edit' as PermissionKey).riskLevel).toBe('HIGH');
-    expect(permissionDefinition('settings.destructive' as PermissionKey).riskLevel).toBe('CRITICAL');
+    expect(permissionDefinition('settings.destructive' as PermissionKey).riskLevel).toBe(
+      'CRITICAL',
+    );
     const holders = (key: string) =>
       ROLE_SEEDS.filter((role) => (role.permissions as readonly string[]).includes(key))
         .map((role) => role.key)

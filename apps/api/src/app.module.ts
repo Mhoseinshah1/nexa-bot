@@ -7,6 +7,7 @@ import { AuthController } from './surfaces/web/auth.controller.js';
 import { AdminsController } from './surfaces/web/admins.controller.js';
 import { ControlController } from './surfaces/web/control.controller.js';
 import { CustomersController } from './surfaces/web/customers.controller.js';
+import { TrialsController } from './surfaces/web/trials.controller.js';
 import { ProductsController } from './surfaces/web/products.controller.js';
 import { ProductCategoriesController } from './surfaces/web/product-categories.controller.js';
 import { ServiceAddonsController } from './surfaces/web/service-addons.controller.js';
@@ -59,6 +60,7 @@ export class AppModule implements NestModule {
         AdminsController as never,
         ControlController as never,
         CustomersController as never,
+        TrialsController as never,
         ProductsController as never,
         ProductCategoriesController as never,
         ServiceAddonsController as never,

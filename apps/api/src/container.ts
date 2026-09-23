@@ -131,6 +131,9 @@ import { CommercialActionService } from './modules/commerce/commercial/applicati
 import { TrialService } from './modules/commerce/trials/application/trial.service.js';
 import { TrialProductGuard } from './modules/commerce/trials/application/trial-product.guard.js';
 import { DrizzleTrialGrantRepository } from './modules/commerce/trials/infrastructure/drizzle-trial-grant.repository.js';
+import { DrizzleTrialOverrideRepository } from './modules/commerce/trials/infrastructure/drizzle-trial-override.repository.js';
+import { DrizzleTrialResetRepository } from './modules/commerce/trials/infrastructure/drizzle-trial-reset.repository.js';
+import { TrialAdminService } from './modules/commerce/trials/application/trial-admin.service.js';
 import { DrizzleCommercialActionRepository } from './modules/commerce/commercial/infrastructure/drizzle-commercial-action.repository.js';
 import { DrizzleServiceAddonRepository } from './modules/commerce/catalog/infrastructure/drizzle-addon.repository.js';
 import {
@@ -391,6 +394,8 @@ export interface Container {
   readonly commercialActions: CommercialActionService;
   /** A customer's free trial (WP6-A): issued through the purchase path, costs nothing. */
   readonly trials: TrialService;
+  /** The operator's trial overrides, global reset and view (WP6-B). */
+  readonly trialAdmin: TrialAdminService;
   readonly wallet: WalletService;
   readonly payments: PaymentService;
   readonly paymentAccounts: PaymentAccountService;
@@ -846,6 +851,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const customerRepository = new DrizzleCustomerRepository(database.db);
   const productRepository = new DrizzleProductRepository(database.db);
   const trialGrantRepository = new DrizzleTrialGrantRepository(database.db);
+  const trialOverrideRepository = new DrizzleTrialOverrideRepository(database.db);
+  const trialResetRepository = new DrizzleTrialResetRepository(database.db);
 
   const customerService = new CustomerService({
     repository: customerRepository,
@@ -1690,6 +1697,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    */
   const trialService = new TrialService({
     grants: trialGrantRepository,
+    overrides: trialOverrideRepository,
     orders: orderRepository,
     products: productRepository,
     customers: customerRepository,
@@ -1706,6 +1714,29 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     idempotency,
     scopeActivity: tenants,
     outbox,
+    clock,
+    ids,
+  });
+  /**
+   * The operator's side of trials (WP6-B): ADR-0015's override, its global reset and
+   * the view of both. It reads the same allowance evaluator `trialService` decides with,
+   * and takes the same customer lock. `docs/wp6-audit.md` §7.
+   */
+  const trialAdminService = new TrialAdminService({
+    grants: trialGrantRepository,
+    overrides: trialOverrideRepository,
+    resets: trialResetRepository,
+    customers: customerRepository,
+    wallet: walletRepository,
+    settings: settingsResolver,
+    features: featureFlagResolver,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
     clock,
     ids,
   });
@@ -2737,6 +2768,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     serviceAddons: serviceAddonService,
     commercialActions: commercialActionService,
     trials: trialService,
+    trialAdmin: trialAdminService,
     wallet: walletService,
     payments: paymentService,
     paymentAccounts: paymentAccountService,

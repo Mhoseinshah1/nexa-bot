@@ -25,6 +25,7 @@ import { ProductCategoriesPage } from './pages/product-categories';
 import { OrderDetailPage, OrdersPage } from './pages/orders';
 import { ServiceDetailPage, ServicesPage } from './pages/services';
 import { UsersPage, UserDetailPage } from './pages/users';
+import { TrialsPage } from './pages/trials';
 
 /**
  * The Web Admin shell.
@@ -169,6 +170,17 @@ export const NAV: readonly NavEntry[] = [
     label: 'web.nav_users',
     icon: 'users',
     permission: 'users.view',
+    group: 'web.navgroup_sales',
+  },
+  {
+    id: 'trials',
+    path: '/trials',
+    label: 'web.nav_trials',
+    icon: 'users',
+    // ANY of the three, for the reason `/products` gives: the page serves three
+    // capabilities — the override list, the global reset and its history — each
+    // charged by the server on its own key.
+    permission: ['users.view', 'settings.destructive', 'settings.view'],
     group: 'web.navgroup_sales',
   },
   {
@@ -472,11 +484,26 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
           mayDebit={may('users.wallet.debit')}
           mayViewOrders={may('orders.view')}
           mayViewServices={may('services.view')}
+          mayEditTrial={may('users.trial.edit')}
           denied={!may('users.view')}
         />
       ),
       crumbs: [nav('users'), { label: t('web.user_detail') }],
       title: t('web.user_detail'),
+    };
+  }
+
+  if (route.path === '/trials') {
+    return {
+      element: (
+        <TrialsPage
+          mayViewOverrides={may('users.view')}
+          mayReset={may('settings.destructive')}
+          mayViewHistory={may('settings.view')}
+        />
+      ),
+      crumbs: [{ label: t('web.trials_title') }],
+      title: t('web.trials_title'),
     };
   }
 

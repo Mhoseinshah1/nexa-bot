@@ -1,4 +1,15 @@
 import {
+  TRIAL_ROUTES,
+  trialAllowanceResponseSchema,
+  trialOverrideListResponseSchema,
+  trialResetListResponseSchema,
+  trialResetPreviewResponseSchema,
+  trialResetResponseSchema,
+  type CustomerTrialResponse,
+  type TrialOverrideListResponse,
+  type TrialResetListResponse,
+  type TrialResetPreviewResponse,
+  type TrialResetResponse,
   IDENTITY_ERROR_CODES,
   PAYMENT_ROUTES,
   SERVICE_ROUTES,
@@ -1581,4 +1592,67 @@ export function failRefund(input: {
 }): Promise<RefundResponse> {
   const { refundId, ...body } = input;
   return post(REFUND_ROUTES.fail(refundId), body, refundResponseSchema);
+}
+
+// --- Trials: the override, the reset and the operator's view (WP6-B) --------
+
+export function fetchCustomerTrial(customerId: string): Promise<CustomerTrialResponse> {
+  return authedGet(TRIAL_ROUTES.allowance(customerId), trialAllowanceResponseSchema);
+}
+
+export function setTrialOverride(input: {
+  customerId: string;
+  idempotencyKey: string;
+  limit: number;
+  reason?: string;
+}): Promise<CustomerTrialResponse> {
+  const { customerId, ...body } = input;
+  return post(TRIAL_ROUTES.setOverride(customerId), body, trialAllowanceResponseSchema);
+}
+
+export function removeTrialOverride(input: {
+  customerId: string;
+  idempotencyKey: string;
+  reason?: string;
+}): Promise<CustomerTrialResponse> {
+  const { customerId, ...body } = input;
+  return post(TRIAL_ROUTES.removeOverride(customerId), body, trialAllowanceResponseSchema);
+}
+
+export function fetchTrialOverrides(
+  query: { limit?: number; cursor?: string } = {},
+): Promise<TrialOverrideListResponse> {
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${TRIAL_ROUTES.overrides}?${suffix}` : TRIAL_ROUTES.overrides,
+    trialOverrideListResponseSchema,
+  );
+}
+
+export function fetchTrialResetPreview(): Promise<TrialResetPreviewResponse> {
+  return authedGet(TRIAL_ROUTES.resetPreview, trialResetPreviewResponseSchema);
+}
+
+export function executeTrialReset(input: {
+  idempotencyKey: string;
+  expectedGrants: number;
+  reason: string;
+}): Promise<TrialResetResponse> {
+  return post(TRIAL_ROUTES.resets, input, trialResetResponseSchema);
+}
+
+export function fetchTrialResets(
+  query: { limit?: number; cursor?: string } = {},
+): Promise<TrialResetListResponse> {
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${TRIAL_ROUTES.resets}?${suffix}` : TRIAL_ROUTES.resets,
+    trialResetListResponseSchema,
+  );
 }
