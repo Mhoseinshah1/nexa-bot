@@ -674,6 +674,12 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.order.summary_discounted',
       'bot.order.summary_discounted_cashback',
       /*
+       * A reseller's price changed between the summary and the tap (WP9-B R9). Like
+       * `bot.discount.no_longer_valid` it says nothing was charged and asks them to start
+       * the order again — the catalogue they already have — and names no command.
+       */
+      'bot.order.terms_changed',
+      /*
        * The refusal when the customer has already said they paid.
        *
        * Its Persian tells them to WAIT for a review they asked for, which is the one

@@ -3165,6 +3165,20 @@ export const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
   // The SAME sentence as the others, deliberately. A customer told "this is for
   // resellers" learns a tenant's pricing structure from a refusal.
   [COMMERCE_ERROR_CODES.PRODUCT_NOT_FOR_AUDIENCE]: 'bot.order.unavailable',
+  /*
+   * A reseller whose tier does not grant this purchase (`docs/wp9-reseller-audit.md` R6):
+   * the SAME sentence as `PRODUCT_NOT_FOR_AUDIENCE`, so the bot does not enumerate a
+   * tier's grants — which operation, product, panel or bot it lacked is in the refusal's
+   * detail and the audit row. It was unmapped, so `refusal` rethrew it and a reseller
+   * following a product button they were not entitled to was answered with silence.
+   */
+  [COMMERCE_ERROR_CODES.RESELLER_NOT_ENTITLED]: 'bot.order.unavailable',
+  /*
+   * At confirmation: the reseller's price changed since the summary (R9). The reseller
+   * counterpart of `DISCOUNT_NO_LONGER_VALID` — nothing was charged, the order was not
+   * re-priced, and they start again. Unmapped until the PR #69 review, which is silence.
+   */
+  [COMMERCE_ERROR_CODES.RESELLER_TERMS_CHANGED]: 'bot.order.terms_changed',
   [COMMERCE_ERROR_CODES.PRODUCT_NOT_PRICED]: 'bot.order.unavailable',
   [COMMERCE_ERROR_CODES.PRODUCT_NOT_FULFILLABLE]: 'bot.order.unavailable',
   /*

@@ -873,6 +873,110 @@ describe('the customer purchase flow over Telegram', () => {
     expect(await orders()).toHaveLength(0);
   });
 
+  /**
+   * The customer as a reseller on a tier with these grants and this rate, registered by
+   * an operator — which needs the customer row, so the bot has seen them first.
+   */
+  async function asReseller(
+    grants: readonly { kind: 'OPERATION' | 'PRODUCT' | 'PANEL' | 'BOT'; subject: string | null }[],
+    percent: number,
+  ): Promise<{ owner: ReturnType<typeof adminActorFor>; tierId: string }> {
+    await command('/start');
+    const [row] = (
+      await api.container.database.db.execute(
+        sql`SELECT id FROM customers WHERE telegram_user_id = ${CUSTOMER_TELEGRAM_ID}`,
+      )
+    ).rows as { id: string }[];
+    if (row === undefined) throw new Error('the bot did not create the customer');
+    const owner = adminActorFor(
+      await createAdmin(api.container, tenantA, {
+        username: 'owner-tg-reseller',
+        roleKeys: ['owner'],
+      }),
+    );
+    const tier = await api.container.resellersAdmin.createTier(tenantA, owner, {
+      idempotencyKey: 'tg-reseller-tier',
+      write: {
+        name: 'Gold',
+        pricingMode: 'PERCENTAGE_DISCOUNT',
+        discountPercentage: percent,
+        creditLimit: money(0n, 'IRT'),
+      },
+    });
+    await api.container.resellersAdmin.replaceGrants(tenantA, owner, {
+      idempotencyKey: 'tg-reseller-grants',
+      tierId: tier.id,
+      grants,
+    });
+    await api.container.resellersAdmin.register(tenantA, owner, {
+      idempotencyKey: 'tg-reseller-register',
+      customerId: row.id,
+      write: { tierId: tier.id, pricingMode: 'TIER', discountPercentage: null, creditLimit: null },
+    });
+    return { owner, tierId: tier.id };
+  }
+
+  it('answers a reseller following a product button their tier does not grant', async () => {
+    /*
+     * RESELLER_NOT_ENTITLED used to be unmapped, so `refusal` rethrew it and the webhook
+     * swallowed it: the reseller tapped and was answered with silence (PR #69 review, F2).
+     * The answer is the SAME sentence as every other refusal, so the bot does not tell a
+     * reseller which of their tier's grants they lack.
+     */
+    await asReseller([{ kind: 'OPERATION', subject: 'NEW_SERVICE' }], 20);
+    const sellable = await product(tenantA, 'ACTIVE');
+    const before = messages().length;
+
+    const response = await tap(`p:${sellable.id}`);
+    expect(response.statusCode).toBe(201);
+    expect(messages()).toHaveLength(before + 1);
+    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.order.unavailable']);
+    expect(await orders()).toHaveLength(0);
+  });
+
+  it('tells a reseller whose price changed between the summary and the tap to start again', async () => {
+    const { owner, tierId } = await asReseller(
+      [
+        { kind: 'OPERATION', subject: null },
+        { kind: 'PRODUCT', subject: null },
+        { kind: 'PANEL', subject: null },
+        { kind: 'BOT', subject: null },
+      ],
+      20,
+    );
+    const sellable = await product(tenantA, 'ACTIVE');
+    await tap(`p:${sellable.id}`);
+    const orderId = String((await orders())[0]?.['id']);
+    await tap(`Z:${orderId}`);
+    // The summary quoted the reseller price: 250 000 less 20%.
+    expect((await orders())[0]?.['total_amount']).toBe(200_000n);
+
+    await api.container.resellersAdmin.updateTier(tenantA, owner, {
+      idempotencyKey: 'tg-reseller-reprice',
+      tierId,
+      write: {
+        name: 'Gold',
+        pricingMode: 'PERCENTAGE_DISCOUNT',
+        discountPercentage: 30,
+        creditLimit: money(0n, 'IRT'),
+      },
+    });
+    const before = messages().length;
+    await tap(`c:${orderId}`);
+
+    // Answered, never silent; and nothing moved — the order is a DRAFT at the old quote.
+    expect(messages()).toHaveLength(before + 1);
+    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.order.terms_changed']);
+    expect((await orders())[0]).toMatchObject({ state: 'DRAFT', total_amount: 200_000n });
+    expect(
+      (
+        await api.container.database.db.execute(
+          sql`SELECT 1 FROM order_reseller_terms WHERE order_id = ${orderId}`,
+        )
+      ).rows,
+    ).toHaveLength(0);
+  });
+
   it('tells the customer when the draft outlived its own hold', async () => {
     const sellable = await product(tenantA, 'ACTIVE');
     await tap(`p:${sellable.id}`);
