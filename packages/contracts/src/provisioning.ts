@@ -374,6 +374,22 @@ export function isMutatingOperation(type: OperationType): boolean {
  * whatever the panel currently holds. Such a target would differ between the first
  * attempt and the replay, and the arithmetic would compound. The target is therefore
  * computed ONCE, in the settling transaction, and stored on the operation row.
+ *
+ * ## `ROTATE_SUBSCRIPTION`: convergent, and the evidence is a READ inside the attempt
+ *
+ * A rotation is NOT idempotent in the literal sense — every call mints a new token — and
+ * it is here anyway, for a reason stated rather than assumed. The state an operator asks
+ * for is "the customer holds a link the panel minted after this request". A replay moves
+ * towards that state, never away from it: a second rotation mints another new link, and
+ * the one stored is whichever the panel holds when the attempt ends.
+ *
+ * What makes the retry safe is `ProviderAdapter.rotateSubscription` reading the account
+ * back and comparing its link with the one this installation stored: a different link
+ * is a rotation that happened, whatever the call answered, and the same link after an
+ * ambiguous answer is one that provably did not. `UNKNOWN` would be the dead end
+ * described above — `RECONCILE` asks whether an account exists, not which link it holds
+ * — so the ambiguity is settled inside the attempt instead. Measured on a real panel for
+ * RickPanel only: `docs/rickpanel-rotate-audit.md`.
  */
 export const IDEMPOTENT_MUTATIONS = [
   'SUSPEND',
@@ -382,6 +398,7 @@ export const IDEMPOTENT_MUTATIONS = [
   'RENEW',
   'ADD_TRAFFIC',
   'ADD_TIME',
+  'ROTATE_SUBSCRIPTION',
 ] as const satisfies readonly OperationType[];
 
 export function isIdempotentMutation(type: OperationType): boolean {

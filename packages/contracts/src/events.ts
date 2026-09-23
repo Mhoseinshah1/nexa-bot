@@ -105,6 +105,9 @@ export const EVENT_TYPES = [
   'WalletEntryRecorded',
   'ServiceProvisioned',
   'ServiceStateChanged',
+  // A service's subscription link was replaced by one its panel minted. The payload
+  // names the customer and nothing else: both links are bearer capabilities.
+  'ServiceSubscriptionRotated',
   'ProvisioningOutcomeUnknown',
   'DiscountRedeemed',
   'ReferralRewarded',
@@ -274,6 +277,9 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     customerId: z.string(),
     from: z.string(),
     to: z.string(),
+  }),
+  ServiceSubscriptionRotated: z.object({
+    customerId: z.string(),
   }),
   ProvisioningOutcomeUnknown: z.object({
     serviceId: z.string(),

@@ -3154,6 +3154,12 @@ export type ServiceSummaryResponse = z.infer<typeof serviceSummarySchema>;
 export const SERVICE_OPERATOR_ACTIONS = [
   'SYNC_USAGE',
   'RESEND_CONFIG',
+  /*
+   * A new subscription link, minted by the panel and sent to the customer through the
+   * delivery lane. Plans `ROTATE_SUBSCRIPTION`. Operator-only in this release: a
+   * customer self-service rotation needs its own entitlement rule, which is WP6's.
+   */
+  'ROTATE_LINK',
   'RETRY_PROVISION',
   'RECONCILE',
   'SUSPEND',

@@ -228,6 +228,10 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.service_reconcile_button': '🧭 تطبیق با پنل',
   'bot.admin.service_suspend_button': '⏸ غیرفعال کردن',
   'bot.admin.service_resume_button': '▶️ فعال کردن',
+  'bot.admin.service_rotate_link_button': '🔄 لینک اشتراک جدید',
+  'bot.admin.service_rotate_link_ask':
+    'پنل برای این سرویس یک لینک اشتراک تازه می‌سازد و لینک تازه برای مشتری فرستاده می‌شود.\n\nاگر مطمئن هستید، دکمهٔ زیر را بزنید.',
+  'bot.admin.service_rotate_link_confirm_button': '🔄 بله، لینک جدید بساز',
   'bot.admin.service_terminate_button': '🗑 پایان دادن به سرویس',
   'bot.admin.service_terminate_ask':
     'با این کار حساب مشتری روی پنل حذف می‌شود و برگشت‌پذیر نیست. سفارشی که مشتری پرداخت کرده سر جایش می‌ماند.\n\nاگر مطمئن هستید، دکمهٔ زیر را بزنید.',

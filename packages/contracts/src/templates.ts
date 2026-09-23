@@ -1161,6 +1161,31 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.admin.service_rotate_link_button',
+    description:
+      'ASKS to give the customer a new subscription link. Carries the asking callback, ' +
+      'never the rotating one: a rotation can cut the customer off from the link they ' +
+      'are using, so it is two taps, like ending a service.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.service_rotate_link_ask',
+    description:
+      'The confirmation screen for a new subscription link. It says what will happen — ' +
+      'the panel mints a new link and the customer is sent it — and deliberately does ' +
+      'NOT say the old link stops working, because that has not been proven on any ' +
+      'panel (docs/rickpanel-rotate-audit.md).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.service_rotate_link_confirm_button',
+    description: 'The second tap, and the only button that asks a panel for a new link.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.admin.service_terminate_button',
     description:
       'ASKS to end the service. It carries the asking callback and never the destructive ' +

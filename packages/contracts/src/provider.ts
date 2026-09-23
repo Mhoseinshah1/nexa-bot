@@ -1120,7 +1120,44 @@ export interface ProviderAdapter extends ProviderConnectionAdapter {
     ref: ProviderUserRef,
     plan: ProviderAllowancePlan,
   ): Promise<ProviderStateChangeOutcome>;
+
+  /**
+   * Replace the account's subscription link with a new one the panel mints.
+   *
+   * `previousUrl` is the link this installation last stored, and it is what lets the
+   * method settle its own ambiguity: after the rotation call it reads the account back,
+   * and a link DIFFERENT from `previousUrl` is the proof the rotation happened, however
+   * the rotation call itself was answered. The same link after an ambiguous answer is
+   * the proof it did not, which makes a retry a first attempt rather than a second.
+   * `docs/rickpanel-rotate-audit.md` D4 is the full table.
+   *
+   * The new link is taken from the READ, never from the rotation response, and a
+   * rotation that answered 2xx while the link stayed the same is refused rather than
+   * reported: a customer told they have a new link must actually have one.
+   *
+   * Optional, and gated by `canRotateSubscription`, which requires the method AND the
+   * `ROTATE_SUBSCRIPTION_LINK` capability — the same pairing as every other optional
+   * operation here.
+   */
+  rotateSubscription?(
+    target: ProviderServiceTarget,
+    http: ProviderHttpClient,
+    ref: ProviderUserRef,
+    previousUrl: string | null,
+  ): Promise<ProviderRotationOutcome>;
 }
+
+/**
+ * What a rotation produced.
+ *
+ * `found: false` is the panel saying it does not hold the account, as for the other
+ * management calls. The link on success is a bearer capability: it goes to the
+ * service row and the delivery lane, and never into a log, an audit row or an event.
+ */
+export type ProviderRotationOutcome =
+  | { readonly ok: true; readonly found: true; readonly subscriptionUrl: string }
+  | { readonly ok: true; readonly found: false }
+  | { readonly ok: false; readonly failure: ProviderFailureKind; readonly status: number | null };
 
 /**
  * The absolute state a commercial operation asks a provider to make true.
@@ -1172,6 +1209,16 @@ export function canEnableUser(adapter: ProviderAdapter): adapter is CanEnableUse
 
 export function canDeleteUser(adapter: ProviderAdapter): adapter is CanDeleteUser {
   return typeof adapter.terminateUser === 'function' && adapter.supports('DELETE_USER');
+}
+
+/** An adapter narrowed to one it is safe to call `rotateSubscription` on. */
+export type CanRotateSubscription = ProviderAdapter &
+  Pick<Required<ProviderAdapter>, 'rotateSubscription'>;
+
+export function canRotateSubscription(adapter: ProviderAdapter): adapter is CanRotateSubscription {
+  return (
+    typeof adapter.rotateSubscription === 'function' && adapter.supports('ROTATE_SUBSCRIPTION_LINK')
+  );
 }
 
 /** An adapter narrowed to one it is safe to call `applyAllowance` on. */
