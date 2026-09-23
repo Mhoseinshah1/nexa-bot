@@ -3,6 +3,8 @@ import {
   canonicalizeCustomUsername,
   isValidCustomUsername,
   USERNAME_CAPTURE_TTL_MS,
+  DISCOUNT_CODE_CAPTURE_TTL_MS,
+  normaliseDiscountCode,
   COMMERCE_ERROR_CODES,
   MAX_ORDER_QUANTITY,
   ORDER_MACHINE,
@@ -50,7 +52,9 @@ import type {
   ProductCategoryRecord,
   ProductCategoryRepository,
 } from '../../catalog/application/ports.js';
-import { quoteProduct } from './order-pricing.js';
+import { quoteLine, quoteProduct } from './order-pricing.js';
+import type { PricingService } from '../../pricing/application/pricing.service.js';
+import type { DiscountCodeCaptureRepository } from '../../pricing/application/ports.js';
 import type { OrderCursor, OrderPage, OrderRecord, OrderRepository, OrderSearch } from './ports.js';
 
 /** What an operator needs to read the order list and an order's detail. */
@@ -163,6 +167,14 @@ export interface OrderServiceDeps {
    * are facts about the fleet and the provider, not about orders.
    */
   readonly usernames: OrderUsernameLane;
+  /**
+   * The pricing engine's door (WP8). A draft is priced through it, a code re-quotes a
+   * draft through it, and confirmation redeems through it — so checkout cannot price
+   * differently from the operator's preview.
+   */
+  readonly pricing: Pick<PricingService, 'price' | 'redeem'>;
+  /** The window in which a plain message is a discount code (WP8 P11). */
+  readonly discountCodes: DiscountCodeCaptureRepository;
   readonly clock: Clock;
   readonly ids: IdGenerator;
 }
@@ -301,7 +313,24 @@ export class OrderService {
         const category = await this.deps.categories.findById(scope, product.categoryId, tx);
         const { price, panelId } = this.assertOrderable(product, category);
 
-        const totals = quoteProduct(product, price, MAX_ORDER_QUANTITY, now);
+        /*
+         * The list price, then every automatic rule that applies (WP8 P6).
+         *
+         * No code: a customer enters one on the summary, and `applyDiscountCode` re-quotes
+         * this draft from its own snapshot when they do.
+         */
+        const { totals } = await this.deps.pricing.price(
+          scope,
+          {
+            base: quoteProduct(product, price, MAX_ORDER_QUANTITY, now),
+            purpose: 'NEW_SERVICE',
+            productId: product.id,
+            categoryId: product.categoryId,
+            customerId,
+            now,
+          },
+          tx,
+        );
         const expiresAt = new Date(now.getTime() + (await this.expiryMinutes(scope, tx)) * 60_000);
 
         const created = await this.deps.repository.create(
@@ -610,6 +639,9 @@ export class OrderService {
           throw errors.notFound(COMMERCE_ERROR_CODES.ORDER_NOT_FOUND, 'Unknown order.');
         }
         this.assertNameable(order);
+        // One window per customer and bot across BOTH kinds (WP8 P11): a plain message is
+        // offered to one question, never to two.
+        await this.supersedeDiscountCodeWindow(scope, input.botInstanceId, customerId, tx);
         /*
          * The PANEL's modes, not the ones the button was drawn from.
          *
@@ -754,6 +786,330 @@ export class OrderService {
         return { outcome: 'RESERVED', reservation } as const;
       },
     );
+  }
+
+  /**
+   * Enter or remove a discount code on a DRAFT (WP8 P6).
+   *
+   * `code: null` removes it. Either way the draft is RE-QUOTED FROM ITS OWN SNAPSHOT —
+   * the unit price and quantity the customer was shown — with every automatic rule as it
+   * stands now and the code, if any. Never from today's product: a price change between
+   * the draft and the code must not reach the customer through the back door.
+   *
+   * A code that will not apply is refused with `DISCOUNT_CODE_REJECTED` and the draft
+   * keeps the quote it had. One code for every reason; the reason is in the details.
+   * New purchases only (P7): a commercial order's evidence row is written with its draft
+   * and cannot follow a code entered afterwards.
+   */
+  async applyDiscountCode(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly idempotencyKey: string;
+      readonly customerId: string;
+      readonly orderId: string;
+      readonly code: string | null;
+    },
+  ): Promise<OrderRecord> {
+    const customerId = this.customerId(input.customerId);
+    const orderId = this.orderId(input.orderId);
+    const code = input.code === null ? null : normaliseDiscountCode(input.code);
+    const requestHash = hashRequest({ customerId, orderId, code });
+    const denial = { action: 'order.discount_code', entityType: 'Order', entityId: orderId };
+
+    await this.authorize(scope, actor, denial);
+    const replay = await this.replay(scope, input.idempotencyKey, requestHash);
+    if (replay !== null) return replay;
+
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      ORDER_PLACE_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        await this.assertCustomerMayOrder(scope, customerId, tx);
+        const after = await this.repriceWithCode(scope, actor, customerId, orderId, code, tx);
+        await rememberOnce(
+          this.deps.idempotency,
+          scope,
+          ORDER_NAMESPACE,
+          input.idempotencyKey,
+          requestHash,
+          { orderId: after.id },
+          tx,
+        );
+        return after;
+      },
+    );
+  }
+
+  /**
+   * Open the window in which this customer's next plain message is a discount code
+   * (WP8 P11). `beginUsernameEntry`'s shape, under the SAME window lock, and closing any
+   * open username window for this customer and bot: a plain message answers one
+   * question, never two.
+   */
+  async beginDiscountCodeEntry(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly idempotencyKey: string;
+      readonly botInstanceId: string;
+      readonly customerId: string;
+      readonly orderId: string;
+    },
+  ): Promise<{ readonly expiresAt: Date }> {
+    const customerId = this.customerId(input.customerId);
+    const orderId = this.orderId(input.orderId);
+    const requestHash = hashRequest({ customerId, orderId, bot: input.botInstanceId, code: true });
+    const denial = { action: 'order.discount_code.entry', entityType: 'Order', entityId: orderId };
+
+    await this.authorize(scope, actor, denial);
+
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      ORDER_PLACE_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        await this.assertCustomerMayOrder(scope, customerId, tx);
+        await this.deps.usernames.lockWindow(scope, input.botInstanceId, customerId, tx);
+
+        const order = await this.deps.repository.findById(scope, orderId, tx);
+        if (order === null || order.customerId !== customerId) {
+          throw errors.notFound(COMMERCE_ERROR_CODES.ORDER_NOT_FOUND, 'Unknown order.');
+        }
+        this.assertCodeable(order);
+
+        const now = this.deps.clock.now();
+        const usernameWindow = await this.deps.usernames.openWindowFor(
+          scope,
+          input.botInstanceId,
+          customerId,
+          tx,
+        );
+        if (usernameWindow !== null) {
+          await this.deps.usernames.closeWindow(scope, usernameWindow.id, 'SUPERSEDED', now, tx);
+        }
+        const window = await this.deps.discountCodes.open(
+          scope,
+          {
+            id: this.deps.ids.uuid(),
+            botInstanceId: input.botInstanceId,
+            customerId,
+            orderId,
+            openedAt: now,
+            expiresAt: new Date(now.getTime() + DISCOUNT_CODE_CAPTURE_TTL_MS),
+          },
+          tx,
+        );
+        await rememberOnce(
+          this.deps.idempotency,
+          scope,
+          ORDER_NAMESPACE,
+          input.idempotencyKey,
+          requestHash,
+          { orderId },
+          tx,
+        );
+        return { expiresAt: window.expiresAt };
+      },
+    );
+  }
+
+  /**
+   * Take a plain message as a discount code, IF a window says it is one (WP8 P11).
+   *
+   * `submitTypedUsername`'s contract: `NO_WINDOW` is an outcome, not an error, and the
+   * window closes only for an ACCEPTED code — a refusal rolls this transaction back and
+   * leaves it open, so the customer can type another.
+   */
+  async submitTypedDiscountCode(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly idempotencyKey: string;
+      readonly botInstanceId: string;
+      readonly customerId: string;
+      readonly text: string;
+    },
+  ): Promise<
+    { readonly outcome: 'NO_WINDOW' } | { readonly outcome: 'APPLIED'; readonly order: OrderRecord }
+  > {
+    const customerId = this.customerId(input.customerId);
+    const denial = { action: 'order.discount_code.submit', entityType: 'Order', entityId: null };
+
+    await this.authorize(scope, actor, denial);
+
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      ORDER_PLACE_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        await this.assertCustomerMayOrder(scope, customerId, tx);
+        await this.deps.usernames.lockWindow(scope, input.botInstanceId, customerId, tx);
+
+        const window = await this.deps.discountCodes.findOpen(
+          scope,
+          input.botInstanceId,
+          customerId,
+          tx,
+        );
+        if (window === null) return { outcome: 'NO_WINDOW' } as const;
+
+        const now = this.deps.clock.now();
+        if (now.getTime() >= window.expiresAt.getTime()) {
+          // Closed as it is found and reported as NO WINDOW, for the reason
+          // `submitTypedUsername` gives: by now they may be typing something else.
+          await this.deps.discountCodes.close(scope, window.id, 'EXPIRED', now, tx);
+          return { outcome: 'NO_WINDOW' } as const;
+        }
+
+        const orderId = this.orderId(window.orderId);
+        const code = normaliseDiscountCode(input.text);
+        const order = await this.repriceWithCode(scope, actor, customerId, orderId, code, tx);
+        await this.deps.discountCodes.close(scope, window.id, 'RECEIVED', now, tx);
+        await rememberOnce(
+          this.deps.idempotency,
+          scope,
+          ORDER_NAMESPACE,
+          input.idempotencyKey,
+          hashRequest({ customerId, orderId, code }),
+          { orderId },
+          tx,
+        );
+        return { outcome: 'APPLIED', order } as const;
+      },
+    );
+  }
+
+  /** Closes this customer's open discount-code window on this bot, if one is open. */
+  private async supersedeDiscountCodeWindow(
+    scope: TenantContext,
+    botInstanceId: string,
+    customerId: UserId,
+    tx: TransactionScope,
+  ): Promise<void> {
+    const open = await this.deps.discountCodes.findOpen(scope, botInstanceId, customerId, tx);
+    if (open !== null) {
+      await this.deps.discountCodes.close(scope, open.id, 'SUPERSEDED', this.deps.clock.now(), tx);
+    }
+  }
+
+  /**
+   * The re-quote both code commands share, under the order's lock.
+   *
+   * Refuses a code that will not apply with ONE error whatever the reason, and records
+   * the change it did make with before and after totals.
+   */
+  private async repriceWithCode(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: UserId,
+    orderId: OrderId,
+    code: string | null,
+    tx: TransactionScope,
+  ): Promise<OrderRecord> {
+    await this.deps.repository.lock(scope, orderId, tx);
+    const before = await this.deps.repository.findById(scope, orderId, tx);
+    if (before === null || before.customerId !== customerId) {
+      throw errors.notFound(COMMERCE_ERROR_CODES.ORDER_NOT_FOUND, 'Unknown order.');
+    }
+    this.assertCodeable(before);
+    const now = this.deps.clock.now();
+    if (before.expiresAt !== null && now.getTime() >= before.expiresAt.getTime()) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.ORDER_EXPIRED,
+        'This order was held for too long and must be started again.',
+      );
+    }
+
+    const priced = await this.deps.pricing.price(
+      scope,
+      {
+        base: quoteLine(before.line.productId, before.line.unitPrice, before.line.quantity, now),
+        purpose: 'NEW_SERVICE',
+        productId: before.line.productId,
+        categoryId: before.line.category?.categoryId ?? null,
+        customerId,
+        ...(code === null ? {} : { code }),
+        now,
+        orderId,
+      },
+      tx,
+    );
+    if (priced.code !== null && !priced.code.accepted) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.DISCOUNT_CODE_REJECTED,
+        'That discount code cannot be used.',
+        { reason: priced.code.reason },
+      );
+    }
+
+    const changed = await this.deps.repository.reprice(
+      scope,
+      orderId,
+      { totals: priced.totals, discountCode: code },
+      now,
+      tx,
+    );
+    if (!changed) {
+      // The order moved on while this waited for its lock.
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.ORDER_STATE_INVALID,
+        'This order can no longer be changed.',
+      );
+    }
+    const after = await this.deps.repository.findById(scope, orderId, tx);
+    if (after === null) {
+      throw errors.notFound(COMMERCE_ERROR_CODES.ORDER_NOT_FOUND, 'Unknown order.');
+    }
+    await this.deps.audit.record(
+      scope,
+      actor,
+      {
+        action: 'order.discount_code',
+        entityType: 'Order',
+        entityId: orderId,
+        before: {
+          discountCode: before.discountCode,
+          discountMinor: before.totals.discount.amountMinor.toString(),
+          totalMinor: before.totals.total.amountMinor.toString(),
+        },
+        after: {
+          discountCode: after.discountCode,
+          discountMinor: after.totals.discount.amountMinor.toString(),
+          totalMinor: after.totals.total.amountMinor.toString(),
+        },
+        result: 'SUCCESS',
+      },
+      tx,
+    );
+    return after;
+  }
+
+  /** A code is entered on a DRAFT new purchase and nowhere else (P7). */
+  private assertCodeable(order: OrderRecord): void {
+    if (order.state !== 'DRAFT') {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.ORDER_STATE_INVALID,
+        'The discount on this order can no longer be changed.',
+      );
+    }
+    if (order.purpose !== 'NEW_SERVICE') {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.DISCOUNT_CODE_REJECTED,
+        'That discount code cannot be used.',
+        { reason: 'PURPOSE' },
+      );
+    }
   }
 
   /**
@@ -1048,6 +1404,16 @@ export class OrderService {
          * service disagree silently, and the machine is the thing the state-machine
          * validation test walks.
          */
+        /*
+         * What the quote spent, redeemed under the rules' own locks (WP8 P6).
+         *
+         * After the slot and the name and before the transition, so a discount that no
+         * longer holds refuses the confirmation and this transaction takes neither with
+         * it. The quote is never re-priced here: a customer is refused and starts again
+         * rather than being charged a number they did not see.
+         */
+        await this.deps.pricing.redeem(scope, actor, before, now, tx);
+
         const to = nextState(ORDER_MACHINE, 'DRAFT', 'CONFIRM');
         if (to === null) throw new Error('ORDER_MACHINE no longer allows CONFIRM from DRAFT.');
 

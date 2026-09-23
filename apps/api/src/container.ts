@@ -174,6 +174,13 @@ import {
 } from './modules/commerce/payments/application/payment-expiry-loop.js';
 import { OrderService } from './modules/commerce/orders/application/order.service.js';
 import { DrizzleOrderRepository } from './modules/commerce/orders/infrastructure/drizzle-order.repository.js';
+import { PricingService } from './modules/commerce/pricing/application/pricing.service.js';
+import { DrizzleDiscountRepository } from './modules/commerce/pricing/infrastructure/drizzle-discount.repository.js';
+import {
+  DrizzleCashbackRuleRepository,
+  DrizzleOrderCashbackRepository,
+} from './modules/commerce/pricing/infrastructure/drizzle-cashback.repository.js';
+import { DrizzleDiscountCodeCaptureRepository } from './modules/commerce/pricing/infrastructure/drizzle-discount-code-capture.repository.js';
 import { DrizzleServiceRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service.repository.js';
 import {
   DrizzleServiceReminderRepository,
@@ -1096,7 +1103,24 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     panels: panelRepository,
     customers: customerRepository,
   });
+  /*
+   * The pricing engine's door (WP8), built before the two services that price through
+   * it. `docs/wp8-pricing-audit.md` P1: checkout, a customer's code, the commercial
+   * actions and the operator's preview all come through this one object.
+   */
+  const discountRepository = new DrizzleDiscountRepository(database.db);
+  const cashbackRuleRepository = new DrizzleCashbackRuleRepository(database.db);
+  const orderCashbackRepository = new DrizzleOrderCashbackRepository(database.db);
+  const pricingService = new PricingService({
+    discounts: discountRepository,
+    cashbackRules: cashbackRuleRepository,
+    orderCashback: orderCashbackRepository,
+    outbox,
+    ids,
+  });
   const orderService = new OrderService({
+    pricing: pricingService,
+    discountCodes: new DrizzleDiscountCodeCaptureRepository(database.db),
     panelSales: panelSalesGate,
     categories: productCategoryRepository,
     usernames: usernameLane,
@@ -1233,6 +1257,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * `AWAITING_PAYMENT` order and wallet settlement works on it without knowing it is one.
    */
   const commercialActionService = new CommercialActionService({
+    pricing: pricingService,
     services: serviceRepository,
     products: productRepository,
     addons: serviceAddonRepository,

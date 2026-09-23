@@ -1,4 +1,4 @@
-import { and, asc, eq, getTableColumns, isNotNull, lte, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, getTableColumns, isNotNull, isNull, lte, sql, type SQL } from 'drizzle-orm';
 import { money, priceQuoteWireSchema, type PriceQuote, type PriceQuoteWire } from '@nexa/contracts';
 import type {
   CurrencyCode,
@@ -24,6 +24,7 @@ import type {
   OrderRecord,
   OrderRepository,
   OrderSearch,
+  OrderTotalsRecord,
 } from '../application/ports.js';
 
 /**
@@ -327,6 +328,36 @@ export class DrizzleOrderRepository implements OrderRepository {
 
     return rows.map(toRecord);
   }
+
+  async reprice(
+    scope: TenantContext,
+    id: OrderId,
+    input: { readonly totals: OrderTotalsRecord; readonly discountCode: string | null },
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(orders)
+      .set({
+        subtotalAmount: input.totals.subtotal.amountMinor,
+        discountAmount: input.totals.discount.amountMinor,
+        totalAmount: input.totals.total.amountMinor,
+        quote: quoteToJson(input.totals.quote),
+        discountCode: input.discountCode,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(orders.tenantId, tenantId),
+          eq(orders.id, id),
+          eq(orders.state, 'DRAFT'),
+          isNull(orders.confirmedAt),
+        ),
+      )
+      .returning({ id: orders.id });
+    return rows.length === 1;
+  }
 }
 
 /** The quote, with every amount as a decimal string. See `priceQuoteWireSchema`. */
@@ -353,6 +384,21 @@ function quoteToJson(quote: PriceQuote): PriceQuoteWire {
         currency: step.amountAfter.currency,
       },
     })),
+    // Written only when present, so a quote without cashback stores exactly the document
+    // every quote stored before WP8.
+    ...(quote.cashback === undefined
+      ? {}
+      : {
+          cashback: {
+            ruleId: quote.cashback.ruleId,
+            ruleLabel: quote.cashback.ruleLabel,
+            percent: quote.cashback.percent,
+            amount: {
+              amountMinor: quote.cashback.amount.amountMinor.toString(),
+              currency: quote.cashback.amount.currency,
+            },
+          },
+        }),
   };
 }
 
@@ -383,6 +429,16 @@ function quoteFromJson(raw: unknown, orderId: string): PriceQuote {
       amountBefore: money(BigInt(step.amountBefore.amountMinor), step.amountBefore.currency),
       amountAfter: money(BigInt(step.amountAfter.amountMinor), step.amountAfter.currency),
     })),
+    ...(wire.cashback === undefined
+      ? {}
+      : {
+          cashback: {
+            ruleId: wire.cashback.ruleId,
+            ruleLabel: wire.cashback.ruleLabel,
+            percent: wire.cashback.percent,
+            amount: money(BigInt(wire.cashback.amount.amountMinor), wire.cashback.amount.currency),
+          },
+        }),
   };
 }
 
@@ -426,6 +482,7 @@ function toRecord(row: typeof orders.$inferSelect): OrderRecord {
       currency,
       quote: quoteFromJson(row.quote, row.id),
     },
+    discountCode: row.discountCode,
     expiresAt: row.expiresAt,
     confirmedAt: row.confirmedAt,
     settledAt: row.settledAt,
