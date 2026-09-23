@@ -61,9 +61,26 @@ export class ResellerService {
     customerId: string,
     tx: unknown,
   ): Promise<ResellerStanding | null> {
-    const reseller = await this.deps.resellers.findByCustomer(scope, customerId, tx);
+    /*
+     * Inside a transaction the reseller row and then the tier row are read FOR SHARE.
+     *
+     * An operator's suspension UPDATEs the reseller row and a grants or rate change takes
+     * the tier's `FOR UPDATE`, so each waits for a commercial transaction that has already
+     * decided under the old terms, and that transaction commits what they allowed — or it
+     * waits for them and decides under the new. Plain reads let a withdrawal commit, be
+     * reported done, and a sale still commit under the grant it withdrew. Reseller then
+     * tier, in that order, is the order the admin paths take too.
+     * Outside a transaction (the catalogue courtesy) there is nothing to hold.
+     */
+    const reseller =
+      tx === undefined
+        ? await this.deps.resellers.findByCustomer(scope, customerId)
+        : await this.deps.resellers.shareByCustomer(scope, customerId, tx);
     if (reseller === null || reseller.status !== 'ACTIVE') return null;
-    const tier = await this.deps.resellers.findTier(scope, reseller.tierId, tx);
+    const tier =
+      tx === undefined
+        ? await this.deps.resellers.findTier(scope, reseller.tierId)
+        : await this.deps.resellers.shareTier(scope, reseller.tierId, tx);
     if (tier === null) {
       // The foreign key makes this unreachable; a reseller whose tier cannot be read is
       // refused everything rather than treated as an ordinary customer.

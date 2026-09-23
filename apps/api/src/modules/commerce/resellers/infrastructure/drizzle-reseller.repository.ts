@@ -178,6 +178,20 @@ export class DrizzleResellerRepository implements ResellerRepository {
     return row === undefined ? null : toTier(row);
   }
 
+  async shareTier(
+    scope: TenantContext,
+    id: string,
+    tx: unknown,
+  ): Promise<ResellerTierRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await exec(this.db, tx)
+      .select()
+      .from(resellerTiers)
+      .where(and(eq(resellerTiers.tenantId, tenantId), eq(resellerTiers.id, id)))
+      .for('share');
+    return row === undefined ? null : toTier(row);
+  }
+
   async lockTier(
     scope: TenantContext,
     id: string,
@@ -235,9 +249,15 @@ export class DrizzleResellerRepository implements ResellerRepository {
     const rows = await this.db
       .select({
         tier: resellerTiers,
+        /*
+         * The outer columns are written QUALIFIED, by hand. In a single-table select
+         * Drizzle renders `${resellerTiers.id}` as a bare `"id"`, which inside this
+         * subquery binds to `r` — so the count compared `r.tier_id = r.id` and was always
+         * zero. `resellers-http.test.ts` › counts the resellers on each tier holds it.
+         */
         resellerCount: sql<number>`(
           SELECT count(*)::int FROM ${resellers} r
-          WHERE r.tenant_id = ${resellerTiers.tenantId} AND r.tier_id = ${resellerTiers.id})`,
+          WHERE r.tenant_id = "reseller_tiers"."tenant_id" AND r.tier_id = "reseller_tiers"."id")`,
       })
       .from(resellerTiers)
       .where(eq(resellerTiers.tenantId, tenantId))
@@ -322,10 +342,28 @@ export class DrizzleResellerRepository implements ResellerRepository {
     return row === undefined ? null : toReseller(row);
   }
 
+  async shareByCustomer(
+    scope: TenantContext,
+    customerId: string,
+    tx: unknown,
+  ): Promise<ResellerRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await exec(this.db, tx)
+      .select()
+      .from(resellers)
+      .where(and(eq(resellers.tenantId, tenantId), eq(resellers.customerId, customerId)))
+      .for('share');
+    return row === undefined ? null : toReseller(row);
+  }
+
   private listingQuery() {
     return this.db
       .select({
         reseller: resellers,
+        // The cursor's position at the column's own precision (microseconds), in the
+        // rendering `decodeKeysetCursor` accepts. `Date.toISOString()` is milliseconds:
+        // the server refused its own cursor, and a truncated instant is a different row.
+        createdAtText: sql<string>`to_char(${resellers.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
         tier: resellerTiers,
         telegramUserId: customers.telegramUserId,
         firstName: customers.firstName,
@@ -365,6 +403,10 @@ export class DrizzleResellerRepository implements ResellerRepository {
     const [row] = await this.db
       .select({
         reseller: resellers,
+        // The cursor's position at the column's own precision (microseconds), in the
+        // rendering `decodeKeysetCursor` accepts. `Date.toISOString()` is milliseconds:
+        // the server refused its own cursor, and a truncated instant is a different row.
+        createdAtText: sql<string>`to_char(${resellers.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
         tier: resellerTiers,
         telegramUserId: customers.telegramUserId,
         firstName: customers.firstName,
@@ -425,7 +467,7 @@ export class DrizzleResellerRepository implements ResellerRepository {
       items: page.map((row) => this.toListing(row)),
       next:
         rows.length > limit && last !== undefined
-          ? { createdAt: last.reseller.createdAt.toISOString(), id: last.reseller.id }
+          ? { createdAt: last.createdAtText, id: last.reseller.id }
           : null,
     };
   }

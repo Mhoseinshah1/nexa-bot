@@ -114,6 +114,12 @@ export interface ResellerRepository {
 
   findTier(scope: TenantContext, id: string, tx?: unknown): Promise<ResellerTierRecord | null>;
 
+  /**
+   * `SELECT … FOR SHARE` on the tier row: what a commercial transaction reads the tier
+   * under, so a writer holding `lockTier` waits for it to commit, and it waits for one.
+   */
+  shareTier(scope: TenantContext, id: string, tx: unknown): Promise<ResellerTierRecord | null>;
+
   /** `SELECT … FOR UPDATE` on the tier row, so a grants write and a reader agree. */
   lockTier(scope: TenantContext, id: string, tx: unknown): Promise<ResellerTierRecord | null>;
 
@@ -154,6 +160,13 @@ export interface ResellerRepository {
     scope: TenantContext,
     customerId: string,
     tx?: unknown,
+  ): Promise<ResellerRecord | null>;
+
+  /** `SELECT … FOR SHARE` on the reseller row; an operator's update waits for it. */
+  shareByCustomer(
+    scope: TenantContext,
+    customerId: string,
+    tx: unknown,
   ): Promise<ResellerRecord | null>;
 
   findListing(scope: TenantContext, customerId: string): Promise<ResellerListing | null>;
