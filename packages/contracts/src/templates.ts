@@ -3220,6 +3220,58 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.service.rotate_button',
+    description:
+      "The button on a customer's service that asks for a new subscription link (WP6-C). " +
+      'Drawn only while customer_link_rotation is on, the service is ACTIVE and its panel ' +
+      'can rotate a link.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.rotate_ask',
+    description:
+      'The confirmation screen before a customer rotates their link. Says a new link will ' +
+      'be issued and has to be put into their apps, and how long until they may ask again. ' +
+      'Deliberately says NOTHING about the old link: that it stops working is not proven ' +
+      '(OQ-RP-07), and a customer told so would stop worrying about a link that may still ' +
+      'work.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'cooldownHours',
+        type: 'NUMBER',
+        description:
+          'services.link_rotation_cooldown_hours, as it stands when the screen is drawn.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.rotate_confirm_button',
+    description: 'The button on the rotation confirmation screen that asks for the new link.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.rotate_cooldown',
+    description:
+      "The refusal a customer sees when they rotated this service's link too recently. " +
+      'Names the instant another rotation will be accepted, from the refusal itself, so it ' +
+      "is the server's answer and not a figure the surface computed.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'availableAt',
+        type: 'DATETIME',
+        description: 'The first instant another rotation of this service will be accepted.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
     key: 'bot.service.detail',
     description:
       'One service, as its owner sees it. Usage and expiry come from the last ' +
