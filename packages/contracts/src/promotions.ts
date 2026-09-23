@@ -537,3 +537,93 @@ export function debitIsWithinMeans(
   const limit = creditLimitMinor < 0n ? 0n : creditLimitMinor;
   return balanceMinor - debitMinor >= -limit;
 }
+
+// ---------------------------------------------------------------------------
+// Reseller tiers, overrides and entitlements (WP9-B, `docs/wp9-reseller-audit.md`)
+// ---------------------------------------------------------------------------
+
+/**
+ * How a reseller's OWN row prices, over its tier (R3).
+ *
+ * `TIER` is "no override": the tier's policy applies. `LIST_PRICE` and
+ * `PERCENTAGE_DISCOUNT` REPLACE the tier's policy for this one reseller. A tier itself is
+ * priced by `RESELLER_PRICING_MODES`, which has no `TIER`: a tier has nothing above it.
+ */
+export const RESELLER_OVERRIDE_MODES = ['TIER', 'LIST_PRICE', 'PERCENTAGE_DISCOUNT'] as const;
+export type ResellerOverrideMode = (typeof RESELLER_OVERRIDE_MODES)[number];
+export const resellerOverrideModeSchema = z.enum(RESELLER_OVERRIDE_MODES);
+
+/**
+ * What a tier may grant (R5). Deny by default, per kind: a kind with no grant row grants
+ * nothing, and a grant row with no subject grants every subject of its kind.
+ *
+ * `PRODUCT` and `CATEGORY` together are one dimension — a product is granted when it or its
+ * category is. The others are each their own.
+ */
+export const RESELLER_GRANT_KINDS = ['PRODUCT', 'CATEGORY', 'PANEL', 'BOT', 'OPERATION'] as const;
+export type ResellerGrantKind = (typeof RESELLER_GRANT_KINDS)[number];
+export const resellerGrantKindSchema = z.enum(RESELLER_GRANT_KINDS);
+
+/**
+ * The operations a tier can grant: every purpose a customer pays for. A trial is not a
+ * commercial action and is never a reseller's to be granted or refused.
+ */
+export const RESELLER_GRANTABLE_OPERATIONS = DISCOUNTABLE_PURPOSES;
+
+/** The dimension an entitlement refusal names, for the audit row and the operator. */
+export const RESELLER_ENTITLEMENT_DIMENSIONS = ['OPERATION', 'CATALOGUE', 'PANEL', 'BOT'] as const;
+export type ResellerEntitlementDimension = (typeof RESELLER_ENTITLEMENT_DIMENSIONS)[number];
+
+/**
+ * Which pricing layer set a reseller's price (R3, R9).
+ *
+ * `LIST` — neither the tier nor an override changed the list price. `TIER` — the tier's
+ * percentage. `OVERRIDE` — the reseller's own policy, which may itself be the list price.
+ */
+export const RESELLER_PRICE_LAYERS = ['LIST', 'TIER', 'OVERRIDE'] as const;
+export type ResellerPriceLayer = (typeof RESELLER_PRICE_LAYERS)[number];
+export const resellerPriceLayerSchema = z.enum(RESELLER_PRICE_LAYERS);
+
+export const RESELLER_TIER_NAME_MAX = 64;
+/** A tier's grants, bounded: a grant list is a policy, not a catalogue export. */
+export const RESELLER_TIER_GRANTS_MAX = 500;
+
+/** A pricing policy: a mode and, for `PERCENTAGE_DISCOUNT` only, a whole percent 1–100. */
+export interface ResellerPricingPolicy {
+  readonly mode: ResellerPricingMode;
+  readonly percent: number | null;
+}
+
+/**
+ * The layer that prices a reseller, and its percent (R3). ONE statement of inheritance.
+ *
+ * The override REPLACES the tier, so at most one of the two ever applies. `percent` is null
+ * when the layer charges the list price.
+ */
+export function resellerPriceLayer(
+  tier: ResellerPricingPolicy,
+  override: { readonly mode: ResellerOverrideMode; readonly percent: number | null },
+): { readonly layer: ResellerPriceLayer; readonly percent: number | null } {
+  if (override.mode === 'TIER') {
+    return tier.mode === 'PERCENTAGE_DISCOUNT' && tier.percent !== null
+      ? { layer: 'TIER', percent: tier.percent }
+      : { layer: 'LIST', percent: null };
+  }
+  return {
+    layer: 'OVERRIDE',
+    percent:
+      override.mode === 'PERCENTAGE_DISCOUNT' && override.percent !== null
+        ? override.percent
+        : null,
+  };
+}
+
+/**
+ * What a reseller layer takes off a subtotal: the discount engine's own percentage, so a
+ * reseller rounds exactly as a customer discount does — up, in the buyer's favour — and
+ * the codebase has one rounding rule rather than two.
+ */
+export function resellerReductionMinor(subtotalMinor: bigint, percent: number | null): bigint {
+  if (percent === null) return 0n;
+  return discountAmountMinor('PERCENTAGE', subtotalMinor, BigInt(percent));
+}
