@@ -59,7 +59,6 @@ ALTER TABLE "resellers" DROP CONSTRAINT "resellers_pricing_mode_check";--> state
 ALTER TABLE "resellers" DROP CONSTRAINT "resellers_credit_currency_check";--> statement-breakpoint
 ALTER TABLE "resellers" DROP CONSTRAINT "resellers_credit_limit_check";--> statement-breakpoint
 ALTER TABLE "resellers" ALTER COLUMN "pricing_mode" SET DEFAULT 'TIER';--> statement-breakpoint
-ALTER TABLE "resellers" ALTER COLUMN "credit_limit_amount" DROP DEFAULT;--> statement-breakpoint
 ALTER TABLE "resellers" ALTER COLUMN "credit_limit_amount" DROP NOT NULL;--> statement-breakpoint
 ALTER TABLE "resellers" ALTER COLUMN "credit_limit_currency" DROP NOT NULL;--> statement-breakpoint
 ALTER TABLE "resellers" ADD COLUMN "tier_id" uuid NOT NULL;--> statement-breakpoint

@@ -5904,8 +5904,15 @@ export const resellers = pgTable(
     pricingMode: text('pricing_mode').notNull().default('TIER'),
     /** Whole percent off list. Null unless the mode is PERCENTAGE_DISCOUNT. */
     discountPercentage: integer('discount_percentage'),
-    /** The reseller's own limit, or null for the tier's. Positive when set. */
-    creditLimitAmount: bigint('credit_limit_amount', { mode: 'bigint' }),
+    /**
+     * The reseller's own limit, or null for the tier's. Positive when set.
+     *
+     * The `DEFAULT 0` is the column's pre-WP9-B default, KEPT: dropping it is a
+     * narrowing the rollback window forbids (`migration-compatibility.test.ts`). It
+     * decides nothing — every write here states the amount, and an insert that omitted
+     * both columns would take 0 with a NULL currency, which the pair CHECK refuses.
+     */
+    creditLimitAmount: bigint('credit_limit_amount', { mode: 'bigint' }).default(sql`0`),
     creditLimitCurrency: text('credit_limit_currency'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),

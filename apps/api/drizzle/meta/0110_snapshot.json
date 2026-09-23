@@ -10024,7 +10024,8 @@
           "name": "credit_limit_amount",
           "type": "bigint",
           "primaryKey": false,
-          "notNull": false
+          "notNull": false,
+          "default": "0"
         },
         "credit_limit_currency": {
           "name": "credit_limit_currency",
