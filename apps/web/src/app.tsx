@@ -27,6 +27,7 @@ import { ServiceDetailPage, ServicesPage } from './pages/services';
 import { UsersPage, UserDetailPage } from './pages/users';
 import { TrialsPage } from './pages/trials';
 import { DiscountsPage } from './pages/discounts';
+import { ReferralsPage } from './pages/referrals';
 
 /**
  * The Web Admin shell.
@@ -293,6 +294,19 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_sales',
   },
   {
+    id: 'referrals',
+    path: '/referrals',
+    label: 'web.nav_referrals',
+    icon: 'link',
+    /*
+     * `referrals.view`, and only that. The page is READ-ONLY — there is no referral
+     * write for any other key to unlock (`docs/wp9-referral-audit.md` F10) — and both
+     * of its lists are charged this key by `ReferralReadService`.
+     */
+    permission: 'referrals.view',
+    group: 'web.navgroup_sales',
+  },
+  {
     id: 'resellers',
     path: '/resellers',
     label: 'web.nav_resellers',
@@ -497,6 +511,7 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
           mayViewOrders={may('orders.view')}
           mayViewServices={may('services.view')}
           mayEditTrial={may('users.trial.edit')}
+          mayViewReferrals={may('referrals.view')}
           denied={!may('users.view')}
         />
       ),
@@ -641,6 +656,14 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
       ),
       crumbs: [{ label: t('web.discounts_title') }],
       title: t('web.discounts_title'),
+    };
+  }
+
+  if (route.path === '/referrals') {
+    return {
+      element: <ReferralsPage route={route} denied={!may('referrals.view')} />,
+      crumbs: [{ label: t('web.referrals_title') }],
+      title: t('web.referrals_title'),
     };
   }
 

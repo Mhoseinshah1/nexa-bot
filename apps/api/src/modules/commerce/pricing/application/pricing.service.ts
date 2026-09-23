@@ -27,6 +27,19 @@ export interface PricingServiceDeps {
   readonly discounts: DiscountRepository;
   readonly cashbackRules: CashbackRuleRepository;
   readonly orderCashback: OrderCashbackRepository;
+  /**
+   * The referral commission a confirmation promises (`docs/wp9-referral-audit.md` F6).
+   * Here because this is the one confirmation hook both order paths share; the program
+   * decides everything about it, inside this transaction.
+   */
+  readonly referrals: {
+    promise(
+      scope: TenantContext,
+      order: OrderRecord,
+      now: Date,
+      tx: TransactionScope,
+    ): Promise<void>;
+  };
   readonly outbox: OutboxWriter;
   readonly ids: IdGenerator;
 }
@@ -234,5 +247,9 @@ export class PricingService {
         tx,
       );
     }
+
+    // 4. The referrer's commission, if the buyer was referred. Not a price: nothing the
+    //    customer pays depends on it (WP9 F1).
+    await this.deps.referrals.promise(scope, order, now, tx);
   }
 }

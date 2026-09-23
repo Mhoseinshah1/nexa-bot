@@ -250,6 +250,9 @@ describe('the feature flag registry', () => {
       // WP6-C. Off by default; the customer rotation path it switches on is reachable.
       'customer_link_rotation',
       'ops_notifications',
+      // WP9. Off by default; attribution at /start and the commission lane it switches on
+      // are reachable, and it does nothing until referral.commission_percent is chosen.
+      'referrals',
       // The three reminder switches. `service_expired_notice` is a flag rather than a
       // sixth threshold because it is not a number: it fires at zero days and what an
       // operator decides about it is whether it is sent at all.

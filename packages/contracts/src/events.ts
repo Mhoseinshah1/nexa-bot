@@ -114,7 +114,12 @@ export const EVENT_TYPES = [
   // says so; these say WHY, for a module that reacts to cashback rather than to money.
   'CashbackEarned',
   'CashbackReversed',
+  // WP9. A referral made at registration, and a commission's reversal by a refund. The
+  // commission itself being credited is `ReferralRewarded`, declared in Phase 0 for
+  // exactly that and first emitted now. `docs/wp9-referral-audit.md`.
+  'ReferralAttributed',
   'ReferralRewarded',
+  'ReferralCommissionReversed',
   'TrialIssued',
 ] as const;
 
@@ -326,11 +331,30 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     unrecoveredMinor: z.string(),
     currency: z.string(),
   }),
+  ReferralAttributed: z.object({
+    referralId: z.string(),
+    referrerId: z.string(),
+    refereeId: z.string(),
+    trigger: z.string(),
+  }),
   ReferralRewarded: z.object({
     referrerId: z.string(),
     refereeId: z.string(),
     trigger: z.string(),
     amountMinor: z.string(),
+    currency: z.string(),
+    // WP9: the order whose delivery earned it. Optional because the event predates any
+    // producer and its schema is a contract; every WP9 emission carries it.
+    orderId: z.string().optional(),
+  }),
+  ReferralCommissionReversed: z.object({
+    referrerId: z.string(),
+    refereeId: z.string(),
+    orderId: z.string(),
+    refundId: z.string(),
+    dueMinor: z.string(),
+    recoveredMinor: z.string(),
+    unrecoveredMinor: z.string(),
     currency: z.string(),
   }),
   TrialIssued: z.object({

@@ -86,6 +86,20 @@ export interface RefundServiceDeps {
    * the SAME transaction. Narrowed to that one method.
    */
   readonly cashback: Pick<CashbackService, 'reverseForRefund'>;
+  /**
+   * A referral commission the refunded order earned is taken back in proportion, in the
+   * refund's own transaction and AFTER the cashback reversal (`docs/wp9-referral-audit.md`
+   * F8, F9): the referee's lock first, then the older referrer's.
+   */
+  readonly referrals: {
+    reverseForRefund(
+      scope: TenantContext,
+      actor: ActorContext,
+      refund: RefundRecord,
+      now: Date,
+      tx: TransactionScope,
+    ): Promise<void>;
+  };
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly audit: AuditWriter;
@@ -338,6 +352,7 @@ export class RefundService {
           // After the credit, so the balance the reversal reads already holds it: on a
           // wallet refund the credit is always at least the reversal (P9).
           await this.deps.cashback.reverseForRefund(scope, actor, created, now, tx);
+          await this.deps.referrals.reverseForRefund(scope, actor, created, now, tx);
         }
 
         await this.deps.audit.record(
@@ -445,6 +460,7 @@ export class RefundService {
 
         // The money has now actually gone back, so the cashback it bought goes back too.
         await this.deps.cashback.reverseForRefund(scope, actor, after, now, tx);
+        await this.deps.referrals.reverseForRefund(scope, actor, after, now, tx);
 
         await this.deps.audit.record(
           scope,

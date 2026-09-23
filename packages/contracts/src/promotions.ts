@@ -244,7 +244,7 @@ export function cashbackAmountMinor(basisMinor: bigint, percent: number): bigint
  * full refund gives: at `refunded = paid` it is exactly zero, and the reversals recorded
  * along the way add up to exactly what was earned. P5 and P9.
  */
-export function cashbackTargetMinor(
+export function proportionalTargetMinor(
   promisedMinor: bigint,
   paidMinor: bigint,
   refundedMinor: bigint,
@@ -255,6 +255,15 @@ export function cashbackTargetMinor(
   if (kept >= paidMinor) return promisedMinor;
   return (promisedMinor * kept) / paidMinor;
 }
+
+/**
+ * The name WP8 gave `proportionalTargetMinor`, kept so nothing that imports it moves.
+ *
+ * The arithmetic is not cashback's: a referral commission is reversed by exactly the same
+ * cumulative formula (`docs/wp9-referral-audit.md` F1), and a second copy of it would be
+ * a second answer to "how much of this is still owed".
+ */
+export const cashbackTargetMinor = proportionalTargetMinor;
 
 /**
  * Redemption limits.
@@ -275,15 +284,20 @@ export interface DiscountLimits {
 // ---------------------------------------------------------------------------
 
 /**
- * When a referral pays out.
+ * When a referral pays out, as snapshotted onto the attribution.
  *
- * Two policies, because the research describes both shapes and they have different
- * abuse profiles. `ON_SIGNUP` pays for an account, which is cheap to manufacture;
- * `ON_FIRST_PAID_ORDER` pays for a customer, which is not. Both are available and
- * neither is a default — the tenant chooses, and an unconfigured referral engine pays
- * nothing.
+ * `ON_SIGNUP` pays for an account, which is cheap to manufacture, and is DECLARED ONLY:
+ * nothing produces it, because a signup reward is a credit for a button click and the
+ * owner's plan forbids exactly that (`docs/wp9-referral-audit.md` F5).
+ * `ON_FIRST_PAID_ORDER` and `ON_EVERY_PAID_ORDER` are the two commission scopes
+ * (`REFERRAL_COMMISSION_SCOPES`), recorded on the referral at attribution so a later
+ * change to the setting governs only people referred afterwards.
  */
-export const REFERRAL_TRIGGERS = ['ON_SIGNUP', 'ON_FIRST_PAID_ORDER'] as const;
+export const REFERRAL_TRIGGERS = [
+  'ON_SIGNUP',
+  'ON_FIRST_PAID_ORDER',
+  'ON_EVERY_PAID_ORDER',
+] as const;
 export type ReferralTrigger = (typeof REFERRAL_TRIGGERS)[number];
 export const referralTriggerSchema = z.enum(REFERRAL_TRIGGERS);
 
@@ -335,8 +349,94 @@ export const REFERRAL_REJECTIONS = [
   'CODE_UNKNOWN',
   'REFERRER_BLOCKED',
   'CIRCULAR',
+  // WP9. Attribution happens on the update that CREATES the referee and nowhere else
+  // (`docs/wp9-referral-audit.md` F2): a customer who already exists is never claimed by
+  // whoever sends them a link first.
+  'ALREADY_REGISTERED',
+  // The tenant is not running a referral program (F4). A link followed then is recorded
+  // as refused, not remembered for later: the program's terms did not exist yet.
+  'PROGRAM_INACTIVE',
 ] as const;
 export type ReferralRejection = (typeof REFERRAL_REJECTIONS)[number];
+export const referralRejectionSchema = z.enum(REFERRAL_REJECTIONS);
+
+/**
+ * How a referral link carries its code: `/start ref-<CODE>`.
+ *
+ * A prefix, because `/start` carries other payloads and will carry more, and a bare
+ * eight-character payload would be a referral code by accident. Hyphen, not underscore:
+ * both are legal in a Telegram start parameter, and the hyphen is the one a customer
+ * copying the code by eye does not mistake for a space.
+ */
+export const REFERRAL_START_PREFIX = 'ref-';
+
+export function referralStartPayload(code: string): string {
+  return `${REFERRAL_START_PREFIX}${code}`;
+}
+
+const REFERRAL_CODE_PATTERN = new RegExp(`^[${REFERRAL_CODE_ALPHABET}]{${REFERRAL_CODE_LENGTH}}$`);
+
+/**
+ * The code in a `/start` payload, or null when the payload is not a referral.
+ *
+ * Case-insensitive, because a code retyped from a screenshot is retyped in whatever case
+ * the keyboard was in, and the alphabet has no letter whose lower case means something
+ * else. Null for anything else — the caller treats a payload it does not recognise as no
+ * payload, which is what a `/start` with no referral is.
+ */
+export function referralCodeFromStartPayload(payload: string): string | null {
+  if (!payload.toLowerCase().startsWith(REFERRAL_START_PREFIX)) return null;
+  const code = payload.slice(REFERRAL_START_PREFIX.length).toUpperCase();
+  return REFERRAL_CODE_PATTERN.test(code) ? code : null;
+}
+
+/**
+ * How many of a referee's paid orders pay their referrer (WP9 F5).
+ *
+ * `FIRST_PAID_ORDER` is the default and the bounded one: one referral, one commission,
+ * whatever the referee does afterwards. `EVERY_PAID_ORDER` is a standing share of a
+ * customer's spend and has to be chosen.
+ */
+export const REFERRAL_COMMISSION_SCOPES = ['FIRST_PAID_ORDER', 'EVERY_PAID_ORDER'] as const;
+export type ReferralCommissionScope = (typeof REFERRAL_COMMISSION_SCOPES)[number];
+export const referralCommissionScopeSchema = z.enum(REFERRAL_COMMISSION_SCOPES);
+
+/** The trigger a scope is snapshotted as on the attribution. */
+export function referralTriggerFor(scope: ReferralCommissionScope): ReferralTrigger {
+  return scope === 'FIRST_PAID_ORDER' ? 'ON_FIRST_PAID_ORDER' : 'ON_EVERY_PAID_ORDER';
+}
+
+/** The scope an attribution's trigger means. `ON_SIGNUP` is never produced (F5). */
+export function referralScopeOf(trigger: ReferralTrigger): ReferralCommissionScope | null {
+  if (trigger === 'ON_FIRST_PAID_ORDER') return 'FIRST_PAID_ORDER';
+  if (trigger === 'ON_EVERY_PAID_ORDER') return 'EVERY_PAID_ORDER';
+  return null;
+}
+
+export const REFERRAL_COMMISSION_PERCENT_MIN = 1;
+export const REFERRAL_COMMISSION_PERCENT_MAX = 100;
+
+/**
+ * An order's referral commission, once confirmed.
+ *
+ * The same three states as cashback and for the same reasons: `EARNED` and `VOID` are
+ * terminal, and a refund that reverses an earned commission is its own row, never an
+ * erasure of the credit.
+ */
+export const REFERRAL_COMMISSION_STATES = ['PENDING', 'EARNED', 'VOID'] as const;
+export type ReferralCommissionState = (typeof REFERRAL_COMMISSION_STATES)[number];
+export const referralCommissionStateSchema = z.enum(REFERRAL_COMMISSION_STATES);
+
+/**
+ * The commission on a basis, rounded DOWN, for the reason cashback rounds down: a stated
+ * percentage is a ceiling on what is credited, and rounding up would pay a unit the
+ * program never promised on every order.
+ */
+export function referralCommissionMinor(basisMinor: bigint, percent: number): bigint {
+  if (basisMinor <= 0n || percent <= 0) return 0n;
+  if (percent >= REFERRAL_COMMISSION_PERCENT_MAX) return basisMinor;
+  return (basisMinor * BigInt(percent)) / 100n;
+}
 
 // ---------------------------------------------------------------------------
 // Trial

@@ -90,6 +90,26 @@ export interface CustomerServiceDeps {
    * codebase actually has beats renaming a method to match a port nothing implements.
    */
   readonly outbox: OutboxWriter;
+  /**
+   * The referral program's one hook into registration (`docs/wp9-referral-audit.md` F2).
+   *
+   * Called inside the transaction that resolved the customer, with that transaction's own
+   * `created` answer, so a referral commits with its referee or not at all. It refuses
+   * rather than throws: a registration never fails because of the link it came through.
+   */
+  readonly referrals: {
+    attributeOnArrival(
+      scope: TenantContext,
+      actor: ActorContext,
+      input: {
+        readonly refereeId: UserId;
+        readonly created: boolean;
+        readonly startPayload: string | null;
+        readonly now: Date;
+      },
+      tx: TransactionScope,
+    ): Promise<void>;
+  };
   readonly clock: Clock;
   readonly ids: IdGenerator;
 }
@@ -140,6 +160,11 @@ export class CustomerService {
       /** Telegram's raw `from`. Normalised here; never stored as given. */
       readonly from: unknown;
       readonly botInstanceId: BotInstanceId;
+      /**
+       * The payload of a `/start`, when this update is one and carries one. Read only by
+       * the referral program, and only when this call CREATES the customer (WP9 F2).
+       */
+      readonly startPayload?: string | null;
     },
   ): Promise<{ readonly customer: CustomerRecord; readonly arrival: CustomerArrival }> {
     // 4. Validate at the boundary. A `from` of the wrong shape yields nulls; a
@@ -147,6 +172,14 @@ export class CustomerService {
     //    normalised guess at an identity is a wrong row.
     const telegramUserId = telegramUserIdSchema.parse(input.telegramUserId);
     const profile = profileFactsFrom(input.from);
+    const startPayload = input.startPayload ?? null;
+    /*
+     * The payload is deliberately NOT part of the hash. The key is Telegram's update id,
+     * and an update's text cannot change under it, so the payload adds no protection — and
+     * including it made every `/start <payload>` update a previous release remembered hash
+     * differently here. Redelivered across an upgrade, that update was refused as a payload
+     * mismatch on every retry instead of replaying the customer it had already created.
+     */
     const requestHash = hashRequest({ telegramUserId, profile, bot: input.botInstanceId });
 
     /*
@@ -281,6 +314,15 @@ export class CustomerService {
             },
           });
         }
+
+        // After the customer and its registration event, in the same transaction: the
+        // referral names a customer row that must already exist.
+        await this.deps.referrals.attributeOnArrival(
+          scope,
+          actor,
+          { refereeId: customer.id, created, startPayload, now },
+          tx,
+        );
 
         await rememberOnce(
           this.deps.idempotency,

@@ -87,6 +87,7 @@ import type {
 } from '../../modules/commerce/provisioning/application/service-admin.service.js';
 import { decodeKeysetToken, encodeKeysetToken, type KeysetToken } from './keyset-token.js';
 import type { PanelService } from '../../modules/platform/panels/application/panel.service.js';
+import type { ReferralProgram } from '../../modules/commerce/referrals/application/referral-program.js';
 
 import { readHealth } from '../../modules/platform/panels/application/panel-health-view.js';
 
@@ -131,6 +132,11 @@ export const BOT_INTENTS = [
   'PAY_SENT',
   'TOPUP_MENU',
   'TOPUP_PICK',
+  /*
+   * The customer's own referral link (WP9 F12). Carries nothing: whose link, and whether
+   * the program is running at all, are decided on the server when the tap arrives.
+   */
+  'REFERRAL_INVITE',
   'ORDER_CANCEL_ASK',
   'ORDER_CANCEL',
   'SERVICES',
@@ -587,6 +593,8 @@ export const CANCEL_ORDER_CALLBACK_PREFIX = 'f:';
  */
 export const TOPUP_MENU_CALLBACK_PREFIX = 'o:';
 export const TOPUP_PICK_CALLBACK_PREFIX = 'y:';
+/** The wallet screen's invite button (WP9). Matched on the whole string, like the top-up menu. */
+export const REFERRAL_INVITE_CALLBACK_PREFIX = 'rf:';
 
 export const SERVICE_CALLBACK_PREFIX = 's:';
 /**
@@ -1845,6 +1853,22 @@ export type MainMenuRoutes = ReadonlyMap<string, string>;
 /** No menu configured. The slash commands still answer; nothing else changes. */
 const NO_MENU: MainMenuRoutes = new Map();
 
+/**
+ * The payload of a `/start`, or null when this update is not one or carries none.
+ *
+ * Read ONLY for the referral program, which reads it only on the update that creates the
+ * customer (WP9 F2); `intentOf` still drops it, so nothing else can grow a dependency on
+ * it. Bounded to Telegram's own limit — a start parameter is at most 64 characters of
+ * `[A-Za-z0-9_-]` — so a hand-crafted message cannot carry anything larger or stranger
+ * into a service.
+ */
+export function startPayloadOf(update: unknown): string | null {
+  const text = (update as { message?: { text?: unknown } } | null)?.message?.text;
+  if (typeof text !== 'string') return null;
+  const match = /^\/start(?:@[A-Za-z0-9_]+)?\s+([A-Za-z0-9_-]{1,64})\s*$/.exec(text);
+  return match?.[1] ?? null;
+}
+
 export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCommand {
   const callback = (update as { callback_query?: { id?: unknown; data?: unknown } } | null)
     ?.callback_query;
@@ -1925,6 +1949,9 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
      */
     if (data === TOPUP_MENU_CALLBACK_PREFIX) {
       return { intent: 'TOPUP_MENU', targetId: null, callbackQueryId: id };
+    }
+    if (data === REFERRAL_INVITE_CALLBACK_PREFIX) {
+      return { intent: 'REFERRAL_INVITE', targetId: null, callbackQueryId: id };
     }
     if (data.startsWith(TOPUP_PICK_CALLBACK_PREFIX)) {
       /*
@@ -2730,6 +2757,8 @@ export interface BotRuntimeDeps {
    * simply offers no trial — which is also what a tenant with the flag off sees.
    */
   readonly trials?: Pick<TrialService, 'availabilityFor' | 'claim'>;
+  /** The referral program (WP9): its terms, for the wallet button, and the invite. */
+  readonly referrals?: Pick<ReferralProgram, 'terms' | 'invite'>;
   readonly orders: OrderService;
   readonly payments: PaymentService;
   /**
@@ -3449,6 +3478,8 @@ export class BotRuntime {
       telegramUserId: input.telegramUserId,
       from: input.from,
       botInstanceId: input.botInstanceId,
+      // A referral link's code, on the `/start` it opened (WP9 F2). Null on anything else.
+      startPayload: intent === 'START' ? startPayloadOf(input.update) : null,
     });
 
     /*
@@ -6613,6 +6644,9 @@ export class BotRuntime {
     }
     if (command.intent === 'WALLET') return this.walletBalance(scope, actor, customer);
     if (command.intent === 'TOPUP_MENU') return this.topupMenu(scope);
+    if (command.intent === 'REFERRAL_INVITE') {
+      return this.referralInvite(scope, actor, customer, input.botInstanceId, input.idempotencyKey);
+    }
     if (command.intent === 'TOPUP_PICK' && command.targetId !== null) {
       return this.topupPick(scope, actor, command.targetId, customer, input.idempotencyKey);
     }
@@ -8060,17 +8094,73 @@ export class BotRuntime {
      */
     const offered = await this.deps.payments.topupPresets(scope);
     const fundable = offered.length > 0 && (await this.deps.payments.manualTransferOffered(scope));
+    /*
+     * The invite button, drawn only while the referral program is running (WP9 F12) — the
+     * wallet is where the legacy bot showed a referral count. Drawn from the same terms the
+     * tap is answered from, so a button can lead to `unconfigured` only when the program
+     * stopped in between.
+     */
+    const referring = (await this.deps.referrals?.terms(scope))?.active === true;
     return {
       key: 'bot.wallet.balance',
       values: { balance: money(balance.amountMinor, balance.currency) },
-      buttons: fundable
-        ? [
-            {
-              label: { kind: 'TEMPLATE', key: 'bot.wallet.topup_button' },
-              data: TOPUP_MENU_CALLBACK_PREFIX,
-            },
-          ]
-        : [],
+      buttons: [
+        ...(fundable
+          ? [
+              {
+                label: { kind: 'TEMPLATE' as const, key: 'bot.wallet.topup_button' as const },
+                data: TOPUP_MENU_CALLBACK_PREFIX,
+              },
+            ]
+          : []),
+        ...(referring
+          ? [
+              {
+                label: { kind: 'TEMPLATE' as const, key: 'bot.referral.button' as const },
+                data: REFERRAL_INVITE_CALLBACK_PREFIX,
+              },
+            ]
+          : []),
+      ],
+      orderId: null,
+    };
+  }
+
+  /**
+   * The customer's own referral link, and how many people have joined through it
+   * (WP9 F12). Asking records the customer's code the first time, which is why it carries
+   * the turn's idempotency key; every other answer is the one unconfigured sentence.
+   */
+  private async referralInvite(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    botInstanceId: BotInstanceId,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    const unconfigured: PendingReply = {
+      key: 'bot.referral.unconfigured',
+      values: {},
+      buttons: [],
+      orderId: null,
+    };
+    if (this.deps.referrals === undefined) return unconfigured;
+    const invite = await this.deps.referrals.invite(scope, actor, {
+      // Suffixed, as every other write that shares a turn with `resolveFromUpdate` is:
+      // the bare key was consumed there.
+      idempotencyKey: `${idempotencyKey}:referral`,
+      customerId: customer.id,
+      botInstanceId,
+    });
+    if (invite.outcome !== 'READY') return unconfigured;
+    return {
+      key: 'bot.referral.invite',
+      values: {
+        referralCode: invite.code,
+        referralLink: invite.link,
+        referredCount: invite.referredCount,
+      },
+      buttons: [],
       orderId: null,
     };
   }

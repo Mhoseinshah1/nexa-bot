@@ -31,7 +31,7 @@ const ROW_ID = '019210ab-cdef-7012-8345-6789abcdef01';
  */
 const NO_WALLET = { mayViewWallet: false, mayCredit: false, mayDebit: false } as const;
 /*
- * `orders.view` and `services.view` withheld.
+ * `orders.view`, `services.view` and `referrals.view` withheld.
  *
  * Separate from `NO_WALLET` because they are separate permissions on separate
  * modules: an operator may read wallets and not orders. The detail tests below
@@ -39,7 +39,11 @@ const NO_WALLET = { mayViewWallet: false, mayCredit: false, mayDebit: false } as
  * against the two denial sentences where it matters; the commerce cards have
  * their own describe block.
  */
-const NO_COMMERCE = { mayViewOrders: false, mayViewServices: false } as const;
+const NO_COMMERCE = {
+  mayViewOrders: false,
+  mayViewServices: false,
+  mayViewReferrals: false,
+} as const;
 
 const walletRoutes = (balance: Record<string, unknown> = {}, entries: readonly unknown[] = []) => [
   {
@@ -1103,7 +1107,11 @@ function service(overrides: Record<string, unknown> = {}): Record<string, unknow
   };
 }
 
-const ALL_COMMERCE = { mayViewOrders: true, mayViewServices: true } as const;
+const ALL_COMMERCE = {
+  mayViewOrders: true,
+  mayViewServices: true,
+  mayViewReferrals: false,
+} as const;
 
 /**
  * The two cards the stale docblock said could not exist.
@@ -1345,6 +1353,7 @@ describe("a customer's orders and services", () => {
         {...NO_WALLET}
         mayViewOrders={false}
         mayViewServices
+        mayViewReferrals={false}
         denied={false}
       />,
     );
@@ -1366,6 +1375,7 @@ describe("a customer's orders and services", () => {
         {...NO_WALLET}
         mayViewOrders
         mayViewServices={false}
+        mayViewReferrals={false}
         denied={false}
       />,
     );

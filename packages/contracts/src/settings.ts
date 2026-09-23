@@ -15,7 +15,13 @@ import {
 } from './service-reminders.js';
 import { moneySchema, salesCurrencyCodeSchema } from './money.js';
 import { uuidV7Schema } from './ids.js';
-import { TRIAL_LIMIT_MAX, TRIAL_LIMIT_MIN } from './promotions.js';
+import {
+  REFERRAL_COMMISSION_PERCENT_MAX,
+  REFERRAL_COMMISSION_PERCENT_MIN,
+  TRIAL_LIMIT_MAX,
+  TRIAL_LIMIT_MIN,
+  referralCommissionScopeSchema,
+} from './promotions.js';
 import {
   PAYMENT_AMOUNT_MAX_MINOR,
   PAYMENT_WINDOW_MINUTES_MAX,
@@ -674,6 +680,73 @@ export const SETTINGS = [
     // Zero is refused by the schema: "no cooldown" is the abuse rule nobody decided
     // (docs/rickpanel-rotate-audit.md D1), not a value this key can hold.
     zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  /*
+   * The referral program's terms (`docs/wp9-referral-audit.md` F4, F5). All three are
+   * inert while the `referrals` flag is off, which is the default, and the program is not
+   * running until a rate is chosen as well: there is no default rate, because the only
+   * number the research shows is a competitor's.
+   */
+  {
+    key: 'referral.commission_percent',
+    description:
+      'The share of a referred customer\u2019s paid order credited to whoever referred them, ' +
+      'in whole percent, rounded down. Empty means no rate has been chosen, and the program ' +
+      'is not running: nobody is attributed and nothing is paid. A change applies to orders ' +
+      'confirmed afterwards; a commission already promised keeps the rate it was promised at. ' +
+      'Inert while the referrals flag is off.',
+    schema: z
+      .number()
+      .int()
+      .min(REFERRAL_COMMISSION_PERCENT_MIN)
+      .max(REFERRAL_COMMISSION_PERCENT_MAX)
+      .nullable(),
+    defaultValue: null,
+    configures: 'referrals',
+    zeroMeaning: 'DISABLES',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'referral.commission_scope',
+    description:
+      'Which of a referred customer\u2019s paid orders earn their referrer a commission: only ' +
+      'the first one, or every one. Recorded on each referral when it is made, so changing it ' +
+      'governs people referred afterwards and never re-terms an existing referral. Inert ' +
+      'while the referrals flag is off.',
+    schema: referralCommissionScopeSchema,
+    // The bounded one: a single commission per referral, whatever the customer does next.
+    // A standing share of every order is a larger commitment and has to be chosen.
+    defaultValue: 'FIRST_PAID_ORDER',
+    configures: 'referrals',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'referral.minimum_order_amount',
+    description:
+      'The smallest order total that earns a referral commission, as an explicit amount and ' +
+      'currency. An order below it earns nothing. Zero means no minimum. A minimum in a ' +
+      'currency the order is not in earns nothing rather than being converted. Inert while ' +
+      'the referrals flag is off.',
+    // Non-negative for the reason `wallet.topup.minimum` is: zero is the only no-minimum
+    // sentinel, and a negative floor would validate, store and read as a real one.
+    schema: moneySchema.refine(
+      (money) => BigInt(money.amountMinor) >= 0n,
+      'A minimum order amount cannot be negative; zero means no minimum.',
+    ),
+    // Zero. `open-questions.md` O-9 wants a floor "on by default", and no evidence gives
+    // an amount to put in it: the legacy installation's own floor is zero (CBR-016).
+    // OQ-WP9-02.
+    defaultValue: { amountMinor: '0', currency: 'IRT' },
+    configures: 'referrals',
+    zeroMeaning: 'DISABLES',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
     consumer: 'ACTIVE',
