@@ -54,6 +54,20 @@ describe('permission catalog', () => {
     }
   });
 
+  it('charges the trial override and the global reset at the blast radius each has', () => {
+    // docs/wp6-audit.md B2, B3: one customer's allowance is HIGH and an operator's;
+    // every customer's at once is CRITICAL and the owner's alone.
+    expect(permissionDefinition('users.trial.edit' as PermissionKey).riskLevel).toBe('HIGH');
+    expect(permissionDefinition('settings.destructive' as PermissionKey).riskLevel).toBe('CRITICAL');
+    const holders = (key: string) =>
+      ROLE_SEEDS.filter((role) => (role.permissions as readonly string[]).includes(key))
+        .map((role) => role.key)
+        .sort();
+    expect(holders('users.trial.edit')).toEqual(['operator', 'owner']);
+    expect(holders('settings.destructive')).toEqual(['owner']);
+    expect(PERMISSION_REQUIRES['users.trial.edit']).toBe('users.view');
+  });
+
   it('gives the observer role read-only permissions only', () => {
     const observer = ROLE_SEEDS.find((r) => r.key === 'observer');
     expect(observer).toBeDefined();

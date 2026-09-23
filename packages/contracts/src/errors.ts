@@ -1169,6 +1169,19 @@ export const COMMERCE_ERROR_CODES = {
    * retrievable — not shown an empty frame, and not told the receipt does not exist.
    */
   RECEIPT_UNAVAILABLE: 'commerce.receipt_unavailable',
+  /**
+   * A global trial reset whose preview no longer describes it (ADR-0010 step 3).
+   *
+   * The operator confirmed a count, and when the reset ran it would have stamped a
+   * different number of grants — a trial was taken or given back in between, or another
+   * reset ran first. Nothing was written. `docs/wp6-audit.md` B3.
+   */
+  TRIAL_RESET_STALE: 'commerce.trial_reset_stale',
+  /**
+   * A global trial reset with nothing to reset. Refused rather than recorded: a history
+   * row that changed nothing is an entry an operator has to read past.
+   */
+  TRIAL_RESET_NOTHING: 'commerce.trial_reset_nothing',
 } as const;
 
 /*
