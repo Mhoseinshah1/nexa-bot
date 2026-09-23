@@ -1751,6 +1751,7 @@ describe('resellers (WP9-B)', () => {
       ).toEqual({ withdrawnFirst: false, waited: true });
     });
   });
+
   // -------------------------------------------------------------------------
   // Operator writes against the transactions that hold the reseller row
   // -------------------------------------------------------------------------
@@ -1928,7 +1929,7 @@ describe('resellers (WP9-B)', () => {
     });
   });
 
-  describe('two operator updates of one reseller serialise, and each audits the other’s after-image', () => {
+  describe('two operator updates of one reseller serialise, and the second audits the first’s after-image', () => {
     /*
      * PR #69 review, F3. `ResellerAdminService.update` read its before-image with a plain
      * select, so two concurrent updates both read the row they started from, and the
