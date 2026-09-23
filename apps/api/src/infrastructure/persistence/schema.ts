@@ -3050,6 +3050,15 @@ export const orders = pgTable(
      * and `RENEW` are unconstrained here — both carry a product specification, where
      * zero keeps its usual meaning.
      */
+    /**
+     * A trial is free, in the database too.
+     *
+     * The order machine's `GRANT` edge admits only a zero-total `TRIAL`
+     * (`orderIsFreeTrial`), and that guard lives in the application. This is the half
+     * that survives a direct write: no `TRIAL` order can carry a price, so no code path
+     * — present or future — can turn the free edge into a way to charge somebody.
+     */
+    check('orders_trial_is_free_check', sql`purpose <> 'TRIAL' OR total_amount = 0`),
     check(
       'orders_quantity_line_check',
       sql`purpose NOT IN ('ADD_TRAFFIC', 'ADD_TIME')
@@ -5043,16 +5052,24 @@ export const referrals = pgTable(
 );
 
 /**
- * A trial grant.
+ * A trial grant: one row per trial ORDER, and the record that a customer used one.
  *
- * One row per customer per tenant, enforced by a unique index — `TRIALS_PER_CUSTOMER`.
- * `CLAUDE.md` records the same reasoning for the backup lease: one at a time is an
- * index, not a process, because a count is a read followed by a write.
+ * ADR-0015 makes a trial allowance a LIMIT and a USED count, stored separately. This
+ * table is the used count: a customer's used is the number of their rows with
+ * `released_at` NULL, and the limit is `trial.limit_per_customer`. The count is taken
+ * under the customer's row lock (`TrialService.claim`), because a count is a read
+ * followed by a write and two concurrent claims would otherwise both read zero.
  *
- * `service_id` is set once provisioning has a service to point at, so a grant is the
- * record of the decision and the service is the record of the thing — and a failed
- * provisioning does not let the customer take a second trial, which is the abuse a
- * nullable service would otherwise open.
+ * Until WP6-A this table was one row per customer, ever — `trial_grants_customer_key`
+ * — with a docblock saying a failed provisioning must still consume the grant. Both
+ * were overridden: ADR-0015 is accepted policy and allows a limit above one, and plan
+ * §7.1 requires that a provider create which definitively FAILED does not consume
+ * eligibility. `released_at` is that: stamped in the same transaction that gives the
+ * trial order back (`UndeliverableOrderRefunder`), and never for an UNKNOWN outcome,
+ * which keeps the grant — the account may exist. `docs/wp6-audit.md` A3, A4.
+ *
+ * Nothing wrote this table before this migration, so the NOT NULL `order_id` it adds
+ * met no rows.
  */
 export const trialGrants = pgTable(
   'trial_grants',
@@ -5062,10 +5079,18 @@ export const trialGrants = pgTable(
       .notNull()
       .references(() => tenants.id),
     customerId: uuid('customer_id').notNull(),
-    /** The product configured as the trial when the grant was made, snapshotted. */
+    /** The trial order. Its line is the snapshot of what the trial was. */
+    orderId: uuid('order_id').notNull(),
+    /** The product configured as the trial when the grant was made. Navigation only. */
     productId: uuid('product_id').notNull(),
+    /** The service the grant produced. Set in the granting transaction. */
     serviceId: uuid('service_id'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
+    /**
+     * When the grant was given back because its service definitively could not be
+     * created. NULL means it counts against the customer's limit.
+     */
+    releasedAt: timestamptz('released_at'),
   },
   (table) => [
     foreignKey({
@@ -5073,8 +5098,21 @@ export const trialGrants = pgTable(
       foreignColumns: [customers.tenantId, customers.id],
       name: 'trial_grants_customer_fk',
     }),
-    /** One trial per customer. The index IS the rule. */
-    uniqueIndex('trial_grants_customer_key').on(table.tenantId, table.customerId),
+    /**
+     * CUSTOMER-bearing, like every other child of `orders`: a grant cannot name one
+     * customer's order while counting against another customer.
+     */
+    foreignKey({
+      columns: [table.tenantId, table.orderId, table.customerId],
+      foreignColumns: [orders.tenantId, orders.id, orders.customerId],
+      name: 'trial_grants_order_fk',
+    }),
+    /** One grant per trial order: a replayed claim cannot count twice. */
+    uniqueIndex('trial_grants_order_key').on(table.tenantId, table.orderId),
+    /** The limit check's only query: this customer's grants that still count. */
+    index('trial_grants_customer_counting_idx')
+      .on(table.tenantId, table.customerId)
+      .where(sql`released_at IS NULL`),
     index('trial_grants_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
   ],
 );

@@ -86,7 +86,7 @@ export const ORDER_TERMINAL_STATES = ['CANCELLED', 'EXPIRED', 'REFUNDED'] as con
 export const ORDER_SETTLED_STATES = ['PAID', 'REFUNDED'] as const;
 export type OrderSettledState = (typeof ORDER_SETTLED_STATES)[number];
 
-export const ORDER_EVENTS = ['CONFIRM', 'SETTLE', 'CANCEL', 'EXPIRE', 'REFUND'] as const;
+export const ORDER_EVENTS = ['CONFIRM', 'SETTLE', 'CANCEL', 'EXPIRE', 'REFUND', 'GRANT'] as const;
 export type OrderEvent = (typeof ORDER_EVENTS)[number];
 
 /**
@@ -138,6 +138,21 @@ export const ORDER_MACHINE: StateMachineDefinition<OrderState, OrderEvent> = {
     { from: 'AWAITING_PAYMENT', to: 'CANCELLED', on: 'CANCEL' },
     { from: 'AWAITING_PAYMENT', to: 'EXPIRED', on: 'EXPIRE' },
     { from: 'PAID', to: 'REFUNDED', on: 'REFUND' },
+    /*
+     * A trial: `PAID` without money, because nothing was asked for.
+     *
+     * `PAID` is the state provisioning acts on, and a trial has to be provisioned by
+     * the same path a purchase is — the same capacity slot, the same eligibility
+     * evaluator, the same `PROVISION` operation. The guard is what keeps this edge
+     * from being a way round `settlementIsFunded`: it admits an order whose purpose is
+     * `TRIAL` AND whose total is zero, and nothing else. A priced order has no edge to
+     * `PAID` except through money. `docs/wp6-audit.md` A2.
+     *
+     * Its way out is the existing `PAID → REFUNDED`: a trial that could not be
+     * delivered is given back in full, and in full is nothing. There is no third
+     * outcome for it either.
+     */
+    { from: 'DRAFT', to: 'PAID', on: 'GRANT', guard: 'orderIsFreeTrial' },
   ],
 };
 
@@ -197,21 +212,28 @@ export interface OrderLineSnapshot {
  * release running during a rolling update writes orders without the field and gets the
  * behaviour it already had.
  */
-export const ORDER_PURPOSES = ['NEW_SERVICE', 'RENEW', 'ADD_TRAFFIC', 'ADD_TIME'] as const;
+/**
+ * `TRIAL` is a new service nobody paid for: it provisions exactly as `NEW_SERVICE` does
+ * and its total is zero. It is a purpose and not a flag on `NEW_SERVICE` so that no
+ * reader can confuse a free order with a pricing bug, and so the one edge that lets it
+ * reach `PAID` can say which orders it admits. `docs/wp6-audit.md` A1.
+ */
+export const ORDER_PURPOSES = ['NEW_SERVICE', 'RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'TRIAL'] as const;
 export type OrderPurpose = (typeof ORDER_PURPOSES)[number];
 export const orderPurposeSchema = z.enum(ORDER_PURPOSES);
 
 /**
  * The purposes that act on a service that already exists.
  *
- * Derived from `ORDER_PURPOSES` by exclusion rather than listed again, because the one
- * thing that must never drift is which purposes provision. A new purpose added without
- * a thought lands here — as one that does NOT create a service — which is the safe side
- * of the mistake: an operation that refuses is a bug report, and a second provider
- * account is a customer paying twice.
+ * Derived from `ORDER_PURPOSES` through `orderPurposeTargetsExistingService`, the
+ * exhaustive classifier below, rather than listed again or derived by exclusion. It was
+ * `purpose !== 'NEW_SERVICE'`, which read as safe until a second purpose that CREATES a
+ * service arrived: `TRIAL` would have landed here, in the commercial dispatch and in
+ * `service_commercial_actions_kind_check`, as a purchase acting on a service that does
+ * not exist. A classifier that must name every member cannot make that mistake quietly.
  */
-export const COMMERCIAL_ORDER_PURPOSES = ORDER_PURPOSES.filter(
-  (purpose) => purpose !== 'NEW_SERVICE',
+export const COMMERCIAL_ORDER_PURPOSES = ORDER_PURPOSES.filter((purpose) =>
+  orderPurposeTargetsExistingService(purpose),
 ) as readonly OrderPurpose[];
 
 /**
@@ -238,6 +260,7 @@ export const COMMERCIAL_ORDER_PURPOSES = ORDER_PURPOSES.filter(
 export function orderPurposeCreatesNewService(purpose: OrderPurpose): boolean {
   switch (purpose) {
     case 'NEW_SERVICE':
+    case 'TRIAL':
       return true;
     case 'RENEW':
     case 'ADD_TRAFFIC':
@@ -266,6 +289,7 @@ export function orderPurposeTargetsExistingService(purpose: OrderPurpose): boole
     case 'ADD_TIME':
       return true;
     case 'NEW_SERVICE':
+    case 'TRIAL':
       return false;
     default: {
       const unclassified: never = purpose;
@@ -277,7 +301,8 @@ export function orderPurposeTargetsExistingService(purpose: OrderPurpose): boole
 /**
  * The operation type a commercial purpose is executed as.
  *
- * Total over the three, and it returns `null` for `NEW_SERVICE` rather than throwing:
+ * Total over the three, and it returns `null` for `NEW_SERVICE` and `TRIAL` — the two
+ * that create a service rather than act on one — rather than throwing:
  * the caller that asks this question is the settlement dispatch, and a dispatch whose
  * safe branch is reached by catching an exception is a dispatch one refactor away from
  * catching the wrong one.
@@ -285,7 +310,9 @@ export function orderPurposeTargetsExistingService(purpose: OrderPurpose): boole
 export function operationTypeForOrderPurpose(
   purpose: OrderPurpose,
 ): 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME' | null {
-  return purpose === 'NEW_SERVICE' ? null : purpose;
+  return orderPurposeTargetsExistingService(purpose)
+    ? (purpose as 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME')
+    : null;
 }
 
 /**

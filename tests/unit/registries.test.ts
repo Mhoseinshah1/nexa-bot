@@ -221,6 +221,12 @@ describe('the feature flag registry', () => {
     }
   });
 
+  it('asks for a typed confirmation before offering every customer a free trial', () => {
+    // Codex, PR #64: the trials flag reaches every customer of the tenant at once, the
+    // reach the reminder flags have, and LOCAL let it flip with one press and no reason.
+    expect(featureFlagDefinition('trials').blastRadius).toBe('TENANT_WIDE');
+  });
+
   it('registers no flag for a feature that does not exist', () => {
     // Every registered key must be one this phase actually implements. A switch
     // that turns nothing on is worse than an absent feature.
@@ -233,6 +239,8 @@ describe('the feature flag registry', () => {
       'service_expiry_reminders',
       'service_usage_reminders',
       'template_overrides',
+      // WP6-A. Off by default; the trial path it switches on is reachable.
+      'trials',
     ]);
   });
 });

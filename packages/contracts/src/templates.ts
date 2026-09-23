@@ -3898,7 +3898,7 @@ export const TEMPLATES = [
   {
     key: 'bot.trial.unavailable',
     description:
-      'Shown when a trial cannot be issued — unconfigured, already taken, or the ' +
+      'Shown when a trial cannot be issued — unconfigured, the customer\u2019s limit reached, or the ' +
       'configured product is unavailable. One message, for the reason the discount ' +
       'rejection gives.',
     format: 'PLAIN_TEXT',
@@ -3906,7 +3906,28 @@ export const TEMPLATES = [
   },
   {
     key: 'bot.trial.issued',
-    description: 'Confirms that a trial service is being created.',
+    description:
+      'Confirms that a trial service is being created. Says nothing about the link: it ' +
+      'arrives on its own, through the same delivery a purchase uses, once the panel has ' +
+      'answered.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.trial.button',
+    description:
+      'The button on the catalogue that takes a trial. Drawn only when this customer can ' +
+      'take one right now — the flag is on, a product is configured and available, and ' +
+      'they are under their limit — and decided again on the server when tapped.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.trial.not_delivered',
+    description:
+      'A trial could not be created on its panel. Says the trial was given back, so it ' +
+      'does not count against the customer. Deliberately says nothing about money, ' +
+      'because none moved.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },

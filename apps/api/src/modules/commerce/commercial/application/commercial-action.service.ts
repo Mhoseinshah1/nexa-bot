@@ -87,7 +87,7 @@ function isOfferRefusal(error: unknown): boolean {
   return isNexaError(error) && OFFER_REFUSALS.includes(error.code);
 }
 
-export type CommercialKind = Exclude<OrderPurpose, 'NEW_SERVICE'>;
+export type CommercialKind = Exclude<OrderPurpose, 'NEW_SERVICE' | 'TRIAL'>;
 
 /**
  * What a customer may buy for one service, right now, server-derived.

@@ -20,16 +20,22 @@ finding rather than a gap.
 
 ## The contract — what a purchase means arithmetically
 
-| #      | Rule                                                                  | Mutation                                                   | Named test                                                                                            | Result |
-| ------ | --------------------------------------------------------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ------ |
-| F4F-02 | A bought period extends what REMAINS, so renewing early is not a loss | `max(currentExpiry, now)` → `now`                          | `commercial-contracts.test.ts` › adds to what remains when the service has not expired                | KILLED |
-| F4F-03 | A bought period starts from NOW when the window already closed        | `max(currentExpiry, now)` → `currentExpiry`                | `commercial-contracts.test.ts` › starts from now when the service has already expired                 | KILLED |
-| F4F-04 | An allowance is strictly ADDITIVE, and consumption is never touched   | `currentLimitBytes + purchasedBytes` → `currentLimitBytes` | `commercial-contracts.test.ts` › adds the purchased amount to the allowance in force                  | KILLED |
-| F4F-05 | Zero — unlimited — is absorbing in BOTH directions                    | the zero guard → `if (false as boolean)`                   | `commercial-contracts.test.ts` › leaves an already-unlimited allowance unlimited                      | KILLED |
-| F4F-06 | The three commercial types are `IDEMPOTENT_MUTATIONS`                 | `'RENEW'` removed from the constant                        | `commercial-contracts.test.ts` › replays safely, for every type that carries one                      | KILLED |
-| F4F-07 | A target is legal on exactly the three types that buy an allowance    | `'SUSPEND'` appended to `TARGETED_OPERATION_TYPES`         | `commercial-contracts.test.ts` › is legal on exactly the three types that buy an allowance            | KILLED |
-| F4F-08 | An add-on carries exactly the amount its kind can read                | `serviceAddonAmountMatchesKind` → "either field is set"    | `commercial-contracts.test.ts` › refuses an amount in the field its kind does not read                | KILLED |
-| F4F-09 | `COMMERCIAL_ORDER_PURPOSES` is derived by exclusion, never listed     | derived filter → a literal list missing `ADD_TIME`         | `commercial-contracts.test.ts` › treats every purpose that is not the original purchase as commercial | KILLED |
+| #      | Rule                                                                  | Mutation                                                   | Named test                                                                                                 | Result |
+| ------ | --------------------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------ |
+| F4F-02 | A bought period extends what REMAINS, so renewing early is not a loss | `max(currentExpiry, now)` → `now`                          | `commercial-contracts.test.ts` › adds to what remains when the service has not expired                     | KILLED |
+| F4F-03 | A bought period starts from NOW when the window already closed        | `max(currentExpiry, now)` → `currentExpiry`                | `commercial-contracts.test.ts` › starts from now when the service has already expired                      | KILLED |
+| F4F-04 | An allowance is strictly ADDITIVE, and consumption is never touched   | `currentLimitBytes + purchasedBytes` → `currentLimitBytes` | `commercial-contracts.test.ts` › adds the purchased amount to the allowance in force                       | KILLED |
+| F4F-05 | Zero — unlimited — is absorbing in BOTH directions                    | the zero guard → `if (false as boolean)`                   | `commercial-contracts.test.ts` › leaves an already-unlimited allowance unlimited                           | KILLED |
+| F4F-06 | The three commercial types are `IDEMPOTENT_MUTATIONS`                 | `'RENEW'` removed from the constant                        | `commercial-contracts.test.ts` › replays safely, for every type that carries one                           | KILLED |
+| F4F-07 | A target is legal on exactly the three types that buy an allowance    | `'SUSPEND'` appended to `TARGETED_OPERATION_TYPES`         | `commercial-contracts.test.ts` › is legal on exactly the three types that buy an allowance                 | KILLED |
+| F4F-08 | An add-on carries exactly the amount its kind can read                | `serviceAddonAmountMatchesKind` → "either field is set"    | `commercial-contracts.test.ts` › refuses an amount in the field its kind does not read                     | KILLED |
+| F4F-09 | `COMMERCIAL_ORDER_PURPOSES` is derived, never listed                  | derived filter → a literal list missing `ADD_TIME`         | `commercial-contracts.test.ts` › treats exactly the purposes that act on an existing service as commercial | KILLED |
+
+F4F-09 was amended by WP6-A. `TRIAL` is a second purpose that CREATES a service, so
+"derived by exclusion of `NEW_SERVICE`" would have made a trial a commercial purchase
+on a service that does not exist. The list is now derived through the exhaustive
+`orderPurposeTargetsExistingService`, and the test was renamed to say so. The mutation
+in the row still kills it.
 
 ## The adapter — what Marzban is actually asked for
 

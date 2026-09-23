@@ -9,6 +9,8 @@ import {
   USAGE_REMINDER_PERCENT_MIN,
 } from './service-reminders.js';
 import { moneySchema, salesCurrencyCodeSchema } from './money.js';
+import { uuidV7Schema } from './ids.js';
+import { TRIAL_LIMIT_MAX, TRIAL_LIMIT_MIN } from './promotions.js';
 import {
   PAYMENT_AMOUNT_MAX_MINOR,
   PAYMENT_WINDOW_MINUTES_MAX,
@@ -606,6 +608,45 @@ export const SETTINGS = [
     defaultValue: 100,
     configures: 'service_usage_reminders',
     zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  /*
+   * The trial's configuration. Both are inert while the `trials` flag is off, which is
+   * the default: a tenant has to turn the flag on AND choose a product before a customer
+   * is offered anything. `docs/wp6-audit.md` A6.
+   */
+  {
+    key: 'trial.product_id',
+    description:
+      'The product a trial is issued as. Its panel, duration and traffic are copied onto ' +
+      'the trial order when a customer takes one, so editing the product later changes no ' +
+      'trial already issued. Empty means no trial is configured, and a customer is told the ' +
+      'installation offers none. The product needs no price; one without a price is never ' +
+      'sold from the catalogue, which is the usual way to keep a trial product out of it. ' +
+      'Inert while the trials flag is off.',
+    schema: uuidV7Schema.nullable(),
+    defaultValue: null,
+    configures: 'trials',
+    zeroMeaning: 'DISABLES',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'trial.limit_per_customer',
+    description:
+      'How many trials each customer may take. A trial whose service could not be created ' +
+      'is given back and does not count. Zero means no trials — never unlimited (ADR-0015). ' +
+      'Inert while the trials flag is off.',
+    schema: z.number().int().min(TRIAL_LIMIT_MIN).max(TRIAL_LIMIT_MAX),
+    // One. The number the research and the Phase 4 contract both assumed, and the only
+    // default under which turning the flag on cannot hand a customer more than a tenant
+    // expected. The flag being off is what makes this default safe to have at all.
+    defaultValue: 1,
+    configures: 'trials',
+    zeroMeaning: 'LITERAL',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
     consumer: 'ACTIVE',

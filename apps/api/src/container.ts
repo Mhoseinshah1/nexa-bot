@@ -128,6 +128,9 @@ import { ProductService } from './modules/commerce/catalog/application/product.s
 import { ProductCategoryService } from './modules/commerce/catalog/application/product-category.service.js';
 import { ServiceAddonService } from './modules/commerce/catalog/application/addon.service.js';
 import { CommercialActionService } from './modules/commerce/commercial/application/commercial-action.service.js';
+import { TrialService } from './modules/commerce/trials/application/trial.service.js';
+import { TrialProductGuard } from './modules/commerce/trials/application/trial-product.guard.js';
+import { DrizzleTrialGrantRepository } from './modules/commerce/trials/infrastructure/drizzle-trial-grant.repository.js';
 import { DrizzleCommercialActionRepository } from './modules/commerce/commercial/infrastructure/drizzle-commercial-action.repository.js';
 import { DrizzleServiceAddonRepository } from './modules/commerce/catalog/infrastructure/drizzle-addon.repository.js';
 import {
@@ -386,6 +389,8 @@ export interface Container {
   readonly productCategories: ProductCategoryService;
   readonly serviceAddons: ServiceAddonService;
   readonly commercialActions: CommercialActionService;
+  /** A customer's free trial (WP6-A): issued through the purchase path, costs nothing. */
+  readonly trials: TrialService;
   readonly wallet: WalletService;
   readonly payments: PaymentService;
   readonly paymentAccounts: PaymentAccountService;
@@ -840,6 +845,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    */
   const customerRepository = new DrizzleCustomerRepository(database.db);
   const productRepository = new DrizzleProductRepository(database.db);
+  const trialGrantRepository = new DrizzleTrialGrantRepository(database.db);
 
   const customerService = new CustomerService({
     repository: customerRepository,
@@ -1343,6 +1349,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // `release` alone. A refunded order holds no capacity.
     panelSales: panelSalesGate,
     usernames: usernameLane,
+    // `release` alone: an undelivered trial stops counting against its customer.
+    trials: trialGrantRepository,
     notifier: customerNotifier,
     opsLog,
     outbox,
@@ -1664,6 +1672,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
      */
     [
       new SalesCurrencyChangeGuard(refundRepository),
+      // The trial product must be a product of this tenant (WP6-A).
+      new TrialProductGuard(productRepository),
       // One per reminder threshold. The five have to agree with one another, and no
       // per-key schema can say so — see `ReminderThresholdsGuard`.
       ...ReminderThresholdsGuard.all(settingsResolver),
@@ -1672,6 +1682,34 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
 
   const featureFlagRepository = new DrizzleFeatureFlagRepository(database.db);
   const featureFlagResolver = new FeatureFlagResolver(featureFlagRepository);
+
+  /**
+   * The trial (WP6-A). After the flag resolver, which it reads, and after provisioning,
+   * which it hands the granted order to — a trial is provisioned by the purchase path
+   * and by nothing of its own. `docs/wp6-audit.md` §2.
+   */
+  const trialService = new TrialService({
+    grants: trialGrantRepository,
+    orders: orderRepository,
+    products: productRepository,
+    customers: customerRepository,
+    wallet: walletRepository,
+    usernames: usernameLane,
+    panelSales: panelSalesGate,
+    provisioning: provisioningService,
+    settings: settingsResolver,
+    features: featureFlagResolver,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    outbox,
+    clock,
+    ids,
+  });
   const featureFlags = new FeatureFlagsService(
     guard,
     uow,
@@ -2699,6 +2737,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     productCategories: productCategoryService,
     serviceAddons: serviceAddonService,
     commercialActions: commercialActionService,
+    trials: trialService,
     wallet: walletService,
     payments: paymentService,
     paymentAccounts: paymentAccountService,
@@ -2813,6 +2852,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       // mechanism that stops a redelivery becoming a second order.
       products: productService,
       commercial: commercialActionService,
+      trials: trialService,
       orders: orderService,
       // The SAME messenger the delivery sweep uses, for the reason above it.
       messenger: customerMessenger,

@@ -618,5 +618,9 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.referral.unconfigured': 'برنامه معرفی دوستان در حال حاضر فعال نیست.',
 
   'bot.trial.unavailable': 'سرویس آزمایشی در حال حاضر در دسترس نیست.',
-  'bot.trial.issued': 'سرویس آزمایشی شما در حال ساخته شدن است.',
+  'bot.trial.issued':
+    'سرویس آزمایشی شما در حال ساخته شدن است. لینک اشتراک به‌محض آماده شدن برایتان ارسال می‌شود.',
+  'bot.trial.button': '🎁 دریافت سرویس آزمایشی',
+  'bot.trial.not_delivered':
+    'متأسفیم، سرویس آزمایشی شما ساخته نشد. این مورد جزو سهمیه سرویس آزمایشی شما حساب نمی‌شود.',
 };

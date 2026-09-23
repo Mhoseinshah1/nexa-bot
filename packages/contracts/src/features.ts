@@ -140,6 +140,23 @@ export const FEATURE_FLAGS = [
       'reminders.usage_final_percent',
     ],
   },
+  {
+    key: 'trials',
+    description:
+      'Offer customers a free trial service. Off by default, and turning it on is not ' +
+      'enough on its own: trial.product_id must name the product a trial is issued as. A ' +
+      'trial is provisioned exactly like a purchase \u2014 the same capacity slot, the same ' +
+      'panel eligibility, the same username policy \u2014 and costs the customer nothing: ' +
+      'no wallet entry, no payment. A trial whose service could not be created is given ' +
+      'back and does not count against trial.limit_per_customer.',
+    defaultEnabled: false,
+    // TENANT_WIDE, like the reminder flags: turning it on offers free service to every
+    // customer of the tenant at once, so it takes the typed confirmation and the reason
+    // ADR-0010 asks of a change that size (Codex, PR #64). Turning it off withdraws the
+    // offer and touches no trial already issued.
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: ['trial.product_id', 'trial.limit_per_customer'],
+  },
 ] as const satisfies readonly FeatureFlagDefinition[];
 
 export type FeatureFlagKey = (typeof FEATURE_FLAGS)[number]['key'];

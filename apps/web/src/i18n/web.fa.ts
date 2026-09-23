@@ -1735,6 +1735,12 @@ export const WEB_FA = {
   'web.flag_service_expiry_reminders': 'یادآور پیش از انقضای سرویس',
   'web.flag_service_expired_notice': 'اعلام پایان اعتبار سرویس',
   'web.flag_service_usage_reminders': 'یادآور مصرف حجم سرویس',
+  // WP6-A: the trial's flag, its two settings, and the product picker's two options.
+  'web.flag_trials': 'سرویس آزمایشی',
+  'web.setting_trial_product_id': 'محصول سرویس آزمایشی',
+  'web.setting_trial_limit_per_customer': 'تعداد مجاز سرویس آزمایشی برای هر مشتری',
+  'web.trial_product_none': 'هیچ‌کدام (سرویس آزمایشی ارائه نمی‌شود)',
+  'web.trial_product_unlisted': 'محصول فعلی (در فهرست محصولات فعال نیست)',
 
   /*
    * The three states a panel read has to say separately, and the eight reasons.

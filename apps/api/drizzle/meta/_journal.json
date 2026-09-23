@@ -708,6 +708,20 @@
       "when": 1790093141229,
       "tag": "0100_category_ids_are_uuidv7",
       "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1790138493281,
+      "tag": "0101_trials",
+      "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
+      "when": 1790138494281,
+      "tag": "0102_trial_orders_produce_a_service",
+      "breakpoints": true
     }
   ]
 }

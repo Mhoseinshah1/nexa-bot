@@ -180,31 +180,42 @@ export type ReferralRejection = (typeof REFERRAL_REJECTIONS)[number];
  * Why a trial was refused.
  *
  * `UNCONFIGURED` is listed first because it is the state a tenant is in until they
- * choose a trial product, and the honest answer to a customer in that state is "this
- * installation does not offer a trial" — not a zero-traffic service that looks broken.
+ * turn the `trials` flag on and choose a trial product, and the honest answer to a
+ * customer in that state is "this installation does not offer a trial" — not a
+ * zero-traffic service that looks broken.
  *
- * Trial uniqueness uses the strongest identity Nexa legitimately has, which is
- * `(tenant_id, telegram_user_id)` — the same identity the customer row is keyed on.
- * Deliberately NOT the username, which is reassignable, and deliberately not an IP or a
- * device fingerprint, neither of which this installation collects.
+ * `LIMIT_REACHED` was `ALREADY_TAKEN`, renamed before anything consumed it. ADR-0015
+ * makes a trial allowance a LIMIT with a separate USED count, so a customer can be
+ * allowed more than one and the refusal is about the limit, not about a first trial.
+ *
+ * Trial accounting uses the strongest identity Nexa legitimately has, the customer
+ * row keyed on `(tenant_id, telegram_user_id)`. Deliberately NOT the username, which
+ * is reassignable, and deliberately not an IP or a device fingerprint, neither of which
+ * this installation collects.
+ *
+ * `TRIALS_PER_CUSTOMER = 1` used to sit below this. It said "one, ever", which ADR-0015
+ * — accepted product policy — does not, and nothing read it; it was removed with the
+ * unique index that enforced it. `docs/wp6-audit.md` A3.
  */
 export const TRIAL_REJECTIONS = [
   'UNCONFIGURED',
-  'ALREADY_TAKEN',
+  'LIMIT_REACHED',
   'CUSTOMER_BLOCKED',
   'PRODUCT_UNAVAILABLE',
 ] as const;
 export type TrialRejection = (typeof TRIAL_REJECTIONS)[number];
+export const trialRejectionSchema = z.enum(TRIAL_REJECTIONS);
 
 /**
- * One trial per customer per tenant, enforced by a partial unique index rather than a
- * count.
+ * The bounds on `trial.limit_per_customer`.
  *
- * A count is a read followed by a write, and two concurrent `/trial` commands both read
- * zero. `CLAUDE.md` records the same reasoning for the backup lease: "one at a time is a
- * partial unique index, not a process".
+ * Zero is a legal value and means ZERO trials, never unlimited (ADR-0015). The upper
+ * bound is a sanity ceiling, not a product number: a limit an operator can set to a
+ * million is a limit indistinguishable from none, and "unlimited" would have to be its
+ * own explicit policy state if anyone ever asks for it.
  */
-export const TRIALS_PER_CUSTOMER = 1;
+export const TRIAL_LIMIT_MIN = 0;
+export const TRIAL_LIMIT_MAX = 100;
 
 // ---------------------------------------------------------------------------
 // Reseller

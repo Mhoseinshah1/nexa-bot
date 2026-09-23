@@ -32,8 +32,8 @@ import {
  * one of them decides something a customer pays for.
  */
 describe('order purpose', () => {
-  it('has exactly one purpose that produces a service, and it is the default one', () => {
-    expect(ORDER_PURPOSES.filter(orderPurposeCreatesNewService)).toEqual(['NEW_SERVICE']);
+  it('has exactly two purposes that produce a service: the purchase and the trial', () => {
+    expect(ORDER_PURPOSES.filter(orderPurposeCreatesNewService)).toEqual(['NEW_SERVICE', 'TRIAL']);
   });
 
   /*
@@ -41,7 +41,7 @@ describe('order purpose', () => {
    * has to land on the side that does NOT provision — an operation that refuses is a bug
    * report, a second provider account is a customer paying twice.
    */
-  it('treats every purpose that is not the original purchase as commercial', () => {
+  it('treats exactly the purposes that act on an existing service as commercial', () => {
     expect([...COMMERCIAL_ORDER_PURPOSES].sort()).toEqual(
       ['ADD_TIME', 'ADD_TRAFFIC', 'RENEW'].sort(),
     );
@@ -52,6 +52,7 @@ describe('order purpose', () => {
 
   it('maps every commercial purpose onto a real operation type, and the original onto none', () => {
     expect(operationTypeForOrderPurpose('NEW_SERVICE')).toBeNull();
+    expect(operationTypeForOrderPurpose('TRIAL')).toBeNull();
     for (const purpose of COMMERCIAL_ORDER_PURPOSES) {
       const type = operationTypeForOrderPurpose(purpose);
       expect(type).not.toBeNull();

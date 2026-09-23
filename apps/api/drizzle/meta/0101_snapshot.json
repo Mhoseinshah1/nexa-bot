@@ -1,6 +1,6 @@
 {
-  "id": "acc90caa-6a9e-485f-841c-dcfd9ef248cc",
-  "prevId": "ec50973e-9aaa-453a-8664-e89081a2193f",
+  "id": "2cdaf969-6cbc-442e-a1d7-8303312efab3",
+  "prevId": "acc90caa-6a9e-485f-841c-dcfd9ef248cc",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1563,7 +1563,7 @@
       "checkConstraints": {
         "customer_notifications_kind_check": {
           "name": "customer_notifications_kind_check",
-          "value": "kind IN ('PAYMENT_REJECTED', 'PAYMENT_EXPIRED', 'ORDER_EXPIRED', 'SERVICE_ACTION_SUCCEEDED', 'SERVICE_ACTION_FAILED', 'SERVICE_PROVISION_DELAYED', 'PAYMENT_TRANSFER_RECORDED', 'ORDER_CANCELLED', 'WALLET_TOPUP_CREDITED', 'ORDER_REFUNDED_TO_WALLET', 'SERVICE_EXPIRY_FIRST', 'SERVICE_EXPIRY_SECOND', 'SERVICE_EXPIRED', 'SERVICE_USAGE_FIRST', 'SERVICE_USAGE_SECOND', 'SERVICE_USAGE_FINAL')"
+          "value": "kind IN ('PAYMENT_REJECTED', 'PAYMENT_EXPIRED', 'ORDER_EXPIRED', 'SERVICE_ACTION_SUCCEEDED', 'SERVICE_ACTION_FAILED', 'SERVICE_PROVISION_DELAYED', 'PAYMENT_TRANSFER_RECORDED', 'ORDER_CANCELLED', 'WALLET_TOPUP_CREDITED', 'ORDER_REFUNDED_TO_WALLET', 'SERVICE_EXPIRY_FIRST', 'SERVICE_EXPIRY_SECOND', 'SERVICE_EXPIRED', 'SERVICE_USAGE_FIRST', 'SERVICE_USAGE_SECOND', 'SERVICE_USAGE_FINAL', 'TRIAL_NOT_DELIVERED')"
         },
         "customer_notifications_state_check": {
           "name": "customer_notifications_state_check",
@@ -3289,7 +3289,11 @@
         },
         "orders_purpose_check": {
           "name": "orders_purpose_check",
-          "value": "purpose IN ('NEW_SERVICE', 'RENEW', 'ADD_TRAFFIC', 'ADD_TIME')"
+          "value": "purpose IN ('NEW_SERVICE', 'RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'TRIAL')"
+        },
+        "orders_trial_is_free_check": {
+          "name": "orders_trial_is_free_check",
+          "value": "purpose <> 'TRIAL' OR total_amount = 0"
         },
         "orders_quantity_line_check": {
           "name": "orders_quantity_line_check",
@@ -9961,6 +9965,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "order_id": {
+          "name": "order_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
         "product_id": {
           "name": "product_id",
           "type": "uuid",
@@ -9979,11 +9989,38 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "released_at": {
+          "name": "released_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
-        "trial_grants_customer_key": {
-          "name": "trial_grants_customer_key",
+        "trial_grants_order_key": {
+          "name": "trial_grants_order_key",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "order_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "trial_grants_customer_counting_idx": {
+          "name": "trial_grants_customer_counting_idx",
           "columns": [
             {
               "expression": "tenant_id",
@@ -9998,7 +10035,8 @@
               "nulls": "last"
             }
           ],
-          "isUnique": true,
+          "isUnique": false,
+          "where": "released_at IS NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -10056,6 +10094,23 @@
           "columnsTo": [
             "tenant_id",
             "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "trial_grants_order_fk": {
+          "name": "trial_grants_order_fk",
+          "tableFrom": "trial_grants",
+          "tableTo": "orders",
+          "columnsFrom": [
+            "tenant_id",
+            "order_id",
+            "customer_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id",
+            "customer_id"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"

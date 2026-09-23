@@ -1,8 +1,8 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CURRENCY_CODES } from '@nexa/contracts';
+import { CURRENCY_CODES, PRODUCT_PAGE_MAX } from '@nexa/contracts';
 import type { CurrencyCode, MoneyWire, ResolvedSettingResponse } from '@nexa/contracts';
-import { ApiError, fetchSettings, saveSetting } from '../api/client';
+import { ApiError, fetchProducts, fetchSettings, saveSetting } from '../api/client';
 import { currencyLabel, formatNumber, formatTimestamp } from '../format';
 import { finalAnswer } from '../polling';
 import { useSubmissionKey } from '../submission-key';
@@ -79,6 +79,9 @@ const REGISTRY_LABELS: Readonly<Record<string, WebKey>> = {
   service_expiry_reminders: 'web.flag_service_expiry_reminders',
   service_expired_notice: 'web.flag_service_expired_notice',
   service_usage_reminders: 'web.flag_service_usage_reminders',
+  trials: 'web.flag_trials',
+  'trial.product_id': 'web.setting_trial_product_id',
+  'trial.limit_per_customer': 'web.setting_trial_limit_per_customer',
 };
 
 /**
@@ -327,6 +330,15 @@ function SettingEditor({
   if (setting.key === 'sales.currency') {
     return <CurrencyEditor value={String(value)} onChange={onChange} disabled={disabled} />;
   }
+  if (setting.key === 'trial.product_id') {
+    return (
+      <TrialProductEditor
+        value={typeof value === 'string' ? value : null}
+        onChange={onChange}
+        disabled={disabled}
+      />
+    );
+  }
   return <TextEditor setting={setting} onChange={onChange} disabled={disabled} />;
 }
 
@@ -527,6 +539,73 @@ function CurrencyEditor({
     </Field>
   );
 }
+
+/**
+ * WP6-A: the trial product, chosen from the ACTIVE products rather than typed as an id.
+ *
+ * An id pasted into a text field is how a typo becomes a configured trial nobody can
+ * take; the server's `TrialProductGuard` refuses an id that is not a product, and this
+ * is the half that makes the right one easy to pick. A product without a price is
+ * listed too — that is the usual trial product, kept out of the catalogue by having
+ * none.
+ *
+ * The stored id is always an option, even when it is not in the list (inactive since,
+ * or beyond the first page), so opening the page never silently changes the value.
+ * An operator who may not read the catalogue gets the plain text field instead of an
+ * empty picker.
+ */
+function TrialProductEditor({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string | null;
+  onChange: (next: unknown) => void;
+  disabled: boolean;
+}) {
+  const products = useQuery({
+    queryKey: ['products', 'trial-picker'],
+    queryFn: () => fetchProducts({ status: 'ACTIVE', limit: TRIAL_PICKER_LIMIT }),
+  });
+  if (products.isError) {
+    return (
+      <Field label={t('web.setting_trial_product_id')} htmlFor="trial-product">
+        <input
+          id="trial-product"
+          className="input"
+          dir="ltr"
+          value={value ?? ''}
+          disabled={disabled}
+          onChange={(event) => onChange(event.target.value === '' ? null : event.target.value)}
+        />
+      </Field>
+    );
+  }
+  const items = products.data?.products ?? [];
+  const listed = value === null || items.some((product) => product.id === value);
+  return (
+    <Field label={t('web.setting_trial_product_id')} htmlFor="trial-product">
+      <select
+        id="trial-product"
+        className="input"
+        value={value ?? ''}
+        disabled={disabled || products.isPending}
+        onChange={(event) => onChange(event.target.value === '' ? null : event.target.value)}
+      >
+        <option value="">{t('web.trial_product_none')}</option>
+        {listed ? null : <option value={value}>{t('web.trial_product_unlisted')}</option>}
+        {items.map((product) => (
+          <option key={product.id} value={product.id}>
+            {product.title}
+          </option>
+        ))}
+      </select>
+    </Field>
+  );
+}
+
+/** One page of the picker; the stored value is shown even when it falls beyond it. */
+const TRIAL_PICKER_LIMIT = PRODUCT_PAGE_MAX;
 
 /**
  * The scalar editor.

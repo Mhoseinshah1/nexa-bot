@@ -117,7 +117,7 @@ function toRecord(row: typeof serviceCommercialActions.$inferSelect): Commercial
     customerId: row.customerId as UserId,
     serviceId: row.serviceId,
     orderId: row.orderId as OrderId,
-    kind: row.kind as Exclude<OrderPurpose, 'NEW_SERVICE'>,
+    kind: row.kind as Exclude<OrderPurpose, 'NEW_SERVICE' | 'TRIAL'>,
     productId: row.productId as ProductId | null,
     addonId: row.addonId as ServiceAddonId | null,
     purchasedTrafficBytes: row.purchasedTrafficBytes,

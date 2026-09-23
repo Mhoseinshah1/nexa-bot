@@ -772,6 +772,16 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.service.terminate_confirm_button',
       'bot.start.welcome',
       'bot.start.welcome_back',
+      /*
+       * WP6-A's three, reviewed against this case's rule. `bot.trial.button` is drawn
+       * only when the server has just decided this customer can take a trial;
+       * `bot.trial.issued` says the service is being created and promises only the link
+       * the ordinary delivery lane then sends; `bot.trial.unavailable` is the one
+       * sentence for every refusal. None of them promises a flow this head lacks.
+       */
+      'bot.trial.button',
+      'bot.trial.issued',
+      'bot.trial.unavailable',
       'bot.unknown_command',
       /*
        * Five joined with the username step. Reviewed, one at a time:
@@ -1501,12 +1511,22 @@ describe('what follows a settlement', () => {
     }
   });
 
+  it('says nothing after a trial, which is never settled by a payment', () => {
+    /*
+     * WP6-A. A trial reaches PAID through `GRANT`, not through settlement, so this
+     * follow-up is never reached for one — and its claim already answered
+     * `bot.trial.issued`. Promising provisioning a second time would be two sentences
+     * for one fact.
+     */
+    expect(followUpForSettlement('TRIAL')).toEqual({});
+  });
+
   it('covers every purpose the contract declares', () => {
     /*
-     * The two cases above between them must exhaust `ORDER_PURPOSES`. Without this a
-     * purpose added to the contract would be silently untested by both.
+     * The three cases above between them must exhaust `ORDER_PURPOSES`. Without this a
+     * purpose added to the contract would be silently untested by all of them.
      */
-    expect([...COMMERCIAL_ORDER_PURPOSES, 'NEW_SERVICE'].sort()).toEqual(
+    expect([...COMMERCIAL_ORDER_PURPOSES, 'NEW_SERVICE', 'TRIAL'].sort()).toEqual(
       [...ORDER_PURPOSES].sort(),
     );
   });

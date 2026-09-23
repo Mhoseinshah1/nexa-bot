@@ -65,6 +65,7 @@ import type {
   ProductRecord,
 } from '../../modules/commerce/catalog/application/ports.js';
 import type { CommercialActionService } from '../../modules/commerce/commercial/application/commercial-action.service.js';
+import type { TrialService } from '../../modules/commerce/trials/application/trial.service.js';
 import type { OrderService } from '../../modules/commerce/orders/application/order.service.js';
 import type { OrderRecord } from '../../modules/commerce/orders/application/ports.js';
 import type {
@@ -114,6 +115,11 @@ export const BOT_INTENTS = [
    */
   'CATALOG_PAGE',
   'CATEGORY',
+  /*
+   * Take a free trial (WP6-A). Carries nothing: the product, the limit and the panel
+   * are all decided on the server, under the customer's lock, when the tap arrives.
+   */
+  'TRIAL_CLAIM',
   'ORDER',
   'CONFIRM',
   'WALLET',
@@ -1748,6 +1754,13 @@ export const CATALOG_BROWSE_MAX_PAGE = 999;
  */
 export const CATALOG_PAGE_CALLBACK_PREFIX = 'cg:';
 export const CATEGORY_CALLBACK_PREFIX = 'ck:';
+/**
+ * The catalogue's trial button (WP6-A). The WHOLE data, not a prefix: it carries no
+ * id and no figure, because nothing about a trial is the client's to say. Two letters
+ * because every single-letter prefix is taken; `t:` is terminate's, and `tr:` does not
+ * start with it.
+ */
+export const TRIAL_CALLBACK_DATA = 'tr:';
 
 /**
  * A page number out of callback data, or null.
@@ -1818,6 +1831,9 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
      * `ck:` — and they are placed first anyway, because if one ever were, the failure
      * would be silent: a tap routed to confirm an order instead of turning a page.
      */
+    if (data === TRIAL_CALLBACK_DATA) {
+      return { intent: 'TRIAL_CLAIM', targetId: null, callbackQueryId: id };
+    }
     if (data.startsWith(CATALOG_PAGE_CALLBACK_PREFIX)) {
       const page = parseCatalogPage(data.slice(CATALOG_PAGE_CALLBACK_PREFIX.length));
       if (page === null) return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
@@ -2644,6 +2660,12 @@ export interface BotRuntimeDeps {
   readonly messenger: CustomerMessenger;
   readonly products: ProductService;
   readonly commercial: CommercialActionService;
+  /**
+   * The free trial (WP6-A). Optional only so the customer-side unit fixtures need not
+   * build it; the composition root always supplies it, and without it the catalogue
+   * simply offers no trial — which is also what a tenant with the flag off sees.
+   */
+  readonly trials?: Pick<TrialService, 'availabilityFor' | 'claim'>;
   readonly orders: OrderService;
   readonly payments: PaymentService;
   /**
@@ -6436,9 +6458,12 @@ export class BotRuntime {
       readonly telegramUserId: string;
     },
   ): Promise<PendingReply> {
-    if (command.intent === 'CATALOG') return this.catalogue(scope, actor, 0);
+    if (command.intent === 'CATALOG') return this.catalogue(scope, actor, 0, customer);
     if (command.intent === 'CATALOG_PAGE') {
-      return this.catalogue(scope, actor, command.page ?? 0);
+      return this.catalogue(scope, actor, command.page ?? 0, customer);
+    }
+    if (command.intent === 'TRIAL_CLAIM') {
+      return this.claimTrial(scope, actor, customer, input.idempotencyKey);
     }
     if (command.intent === 'CATEGORY' && command.targetId !== null) {
       return this.categoryPage(scope, actor, command.targetId, command.page ?? 0);
@@ -7239,6 +7264,7 @@ export class BotRuntime {
     scope: TenantContext,
     actor: ActorContext,
     page: number,
+    customer: CustomerRecord,
   ): Promise<PendingReply> {
     const { items, hasMore } = await this.deps.products.browseCategories(
       scope,
@@ -7246,19 +7272,32 @@ export class BotRuntime {
       CATALOG_BROWSE_PAGE_SIZE,
       page * CATALOG_BROWSE_PAGE_SIZE,
     );
+    /*
+     * The trial, first on the first page and only there — and only when this customer
+     * could take one NOW. A button that answers "no trial for you" is a promise the
+     * keyboard broke; `claimTrial` decides again anyway, because this read is a
+     * courtesy made before the tap and without the lock.
+     */
+    const trial: CustomerButton[] =
+      page === 0 && (await this.trialOffered(scope, actor, customer))
+        ? [{ label: { kind: 'TEMPLATE', key: 'bot.trial.button' }, data: TRIAL_CALLBACK_DATA }]
+        : [];
     if (items.length === 0) {
-      if (page > 0) return this.catalogue(scope, actor, 0);
-      return { key: 'bot.catalog.empty', values: {}, buttons: [], orderId: null };
+      if (page > 0) return this.catalogue(scope, actor, 0, customer);
+      return { key: 'bot.catalog.empty', values: {}, buttons: trial, orderId: null };
     }
-    const buttons: CustomerButton[] = items.map((category) => ({
-      // Operator text, exactly as a product title is. The emoji is optional and its
-      // absence renders as an ordinary category — §6.1.
-      label: {
-        kind: 'TEXT' as const,
-        text: category.emoji === null ? category.name : `${category.emoji} ${category.name}`,
-      },
-      data: `${CATEGORY_CALLBACK_PREFIX}${category.id}.0`,
-    }));
+    const buttons: CustomerButton[] = [...trial];
+    buttons.push(
+      ...items.map((category) => ({
+        // Operator text, exactly as a product title is. The emoji is optional and its
+        // absence renders as an ordinary category — §6.1.
+        label: {
+          kind: 'TEXT' as const,
+          text: category.emoji === null ? category.name : `${category.emoji} ${category.name}`,
+        },
+        data: `${CATEGORY_CALLBACK_PREFIX}${category.id}.0`,
+      })),
+    );
     if (page > 0) {
       buttons.push({
         label: { kind: 'TEMPLATE', key: 'bot.catalog.previous_page_button' },
@@ -7272,6 +7311,48 @@ export class BotRuntime {
       });
     }
     return { key: 'bot.catalog.categories_heading', values: {}, buttons, orderId: null };
+  }
+
+  /** Whether to draw the trial button for this customer. Never throws a reply away. */
+  private async trialOffered(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+  ): Promise<boolean> {
+    if (this.deps.trials === undefined) return false;
+    const availability = await this.deps.trials.availabilityFor(scope, actor, customer.id);
+    return availability.available;
+  }
+
+  /**
+   * A customer tapped the trial button.
+   *
+   * One sentence either way. `bot.trial.issued` says the service is being created —
+   * the link then arrives through the ordinary delivery lane, as a purchase's does, once
+   * the panel has answered. Every refusal says `bot.trial.unavailable`: the reason
+   * (unconfigured, limit reached, blocked, product or panel unavailable) is recorded
+   * in the audit row for an operator, and a customer cannot act on it.
+   */
+  private async claimTrial(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    if (this.deps.trials === undefined) {
+      return { key: 'bot.trial.unavailable', values: {}, buttons: [], orderId: null };
+    }
+    // Suffixed, as every other write this update makes: `resolveFromUpdate` has already
+    // spent the bare key in the same namespace.
+    const result = await this.deps.trials.claim(scope, actor, customer.id, {
+      idempotencyKey: `${idempotencyKey}:trial`,
+    });
+    return {
+      key: result.outcome === 'ISSUED' ? 'bot.trial.issued' : 'bot.trial.unavailable',
+      values: {},
+      buttons: [],
+      orderId: null,
+    };
   }
 
   /**

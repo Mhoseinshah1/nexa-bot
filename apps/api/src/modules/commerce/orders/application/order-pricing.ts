@@ -141,3 +141,53 @@ export function quoteAddon(price: Money, quotedAt: Date): OrderTotalsRecord {
     },
   };
 }
+
+/**
+ * The rule label a trial's quote carries. Constant for the reason
+ * `BASE_PRICE_RULE_LABEL` is: it is read back by a support conversation.
+ */
+export const TRIAL_RULE_LABEL = 'A trial: nothing is charged';
+
+/**
+ * A trial's quote: zero, with a real trace.
+ *
+ * `pricing.ts` calls a quote without a trace not a quote, so the one step that applied
+ * is recorded — `BASE_PRICE`, replacing nothing with nothing, under a label that says
+ * why. Not a discount of the product's price: a trial product usually HAS no price, and
+ * a 100% `PROMOTIONAL_DISCOUNT` would put a discount on the books that no rule granted.
+ *
+ * `orderIsFreeTrial` (the `GRANT` guard) and `orders_trial_is_free_check` both require
+ * the total this returns to be zero; this is the one place that produces it.
+ */
+export function quoteTrial(
+  product: ProductRecord,
+  currency: Money['currency'],
+  quotedAt: Date,
+): OrderTotalsRecord {
+  const basePrecedence = PRICING_PRECEDENCE[0];
+  if (basePrecedence === undefined || basePrecedence.step !== 'BASE_PRICE') {
+    throw new Error('PRICING_PRECEDENCE no longer begins with BASE_PRICE.');
+  }
+  const nothing = zero(currency);
+  const step: PriceQuoteStep = {
+    step: 'BASE_PRICE',
+    effect: basePrecedence.effect,
+    ruleId: null,
+    ruleLabel: TRIAL_RULE_LABEL,
+    amountBefore: nothing,
+    amountAfter: nothing,
+  };
+  return {
+    subtotal: nothing,
+    discount: nothing,
+    total: nothing,
+    currency,
+    quote: {
+      productId: product.id,
+      quotedAt: quotedAt.toISOString(),
+      currency,
+      finalAmount: nothing,
+      trace: [step],
+    },
+  };
+}
