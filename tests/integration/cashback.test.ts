@@ -372,11 +372,12 @@ describe('cashback is earned once, at delivery, and a refund takes its share bac
     expect(order.totals.quote.cashback?.amount.amountMinor).toBe(12_000n);
   });
 
-  it('promises nothing on an order a discount made free', async () => {
+  it('promises nothing on an order a 100% discount brought down to its one-unit floor', async () => {
     await discountRule({ value: 100n });
     await cashbackRule();
     const order = await confirmed(100_000n);
-    expect(order.totals.total.amountMinor).toBe(0n);
+    // Not free since Payment File 02 D4: one payable unit, and 10% of it rounds to nothing.
+    expect(order.totals.total.amountMinor).toBe(1n);
     expect(order.totals.quote.cashback).toBeUndefined();
     expect(await promise(order.id)).toBeUndefined();
   });

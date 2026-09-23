@@ -1300,10 +1300,17 @@ describe('the financial rules, as integer arithmetic', () => {
     expect(discountAmountMinor('PERCENTAGE', 1000n, 0n)).toBe(0n);
   });
 
-  it('clamps a discount to the subtotal, so a promo code cannot mint a credit', () => {
-    expect(clampDiscount(1000n, 1500n)).toBe(1000n);
+  it('clamps a discount one unit below the subtotal, so no commercial total reaches zero', () => {
+    // Payment File 02 §14 (D4): a total of 0 confirmed and could not be settled, so the
+    // clamp leaves one payable minor unit — and a promo code still cannot mint a credit.
+    expect(clampDiscount(1000n, 1500n)).toBe(999n);
+    expect(clampDiscount(1000n, 1000n)).toBe(999n);
+    expect(clampDiscount(1000n, 999n)).toBe(999n);
     expect(clampDiscount(1000n, 400n)).toBe(400n);
     expect(clampDiscount(1000n, -5n)).toBe(0n);
+    // Nothing to take off a subtotal of one, or of nothing.
+    expect(clampDiscount(1n, 1n)).toBe(0n);
+    expect(clampDiscount(0n, 5n)).toBe(0n);
   });
 
   it('refuses an overdraft unless a credit limit was configured, and zero is the default', () => {

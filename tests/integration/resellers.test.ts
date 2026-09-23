@@ -1103,6 +1103,31 @@ describe('resellers (WP9-B)', () => {
       expect(single.totals.total.amountMinor).toBe(1n);
     });
 
+    it('keeps a 99% reseller price under a 50% promotion payable: confirmed AND settled (D4)', async () => {
+      /*
+       * The first reproduction of `docs/wp10-payments-audit.md` D5, now a regression
+       * (Payment File 02 §14, `docs/payments-file02-design.md` D4). The reseller layer
+       * leaves one unit; a 50% promotion then rounded its discount UP to that unit and
+       * priced the order at ZERO — which confirmed, and then could not be settled. The
+       * engine's clamp now stops one unit short of the running amount, so the promotion
+       * finds nothing it may take and the order stays payable.
+       */
+      await automaticDiscount(50n);
+      const tierId = await tier({ percent: 99 });
+      await register(resellerCustomer, tierId);
+      const order = await confirmed(resellerCustomer, await product(101n));
+
+      expect(order.state).toBe('AWAITING_PAYMENT');
+      expect(order.totals.subtotal.amountMinor).toBe(1n);
+      expect(order.totals.total.amountMinor, 'never zero').toBe(1n);
+
+      await adjust(resellerCustomer, 'CREDIT', 1n);
+      const { payment, order: paid } = await settle(resellerCustomer, order.id);
+      expect(paid.state).toBe('PAID');
+      expect(payment.amount.amountMinor).toBe(1n);
+      expect(await balance(resellerCustomer)).toBe(0n);
+    });
+
     it('grants no debt on a zero limit: a zero balance cannot pay', async () => {
       await register(resellerCustomer, await tier({ credit: 0n }));
       const order = await confirmed(resellerCustomer, await product(1_000n));
