@@ -34,6 +34,8 @@ export class DrizzleTrialGrantRepository implements TrialGrantRepository {
           eq(trialGrants.tenantId, tenantId),
           eq(trialGrants.customerId, customerId),
           isNull(trialGrants.releasedAt),
+          // A reset grant stops counting exactly as a released one does (ADR-0015).
+          isNull(trialGrants.resetAt),
         ),
       );
     return rows[0]?.value ?? 0;

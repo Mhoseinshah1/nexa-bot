@@ -257,3 +257,101 @@ to a paid order.
 | OQ-WP6-02 | Should a trial require anything first: a channel join, a phone number, an account age? | No precondition. None is documented, and none of those identities is collected.                                                                                                                |
 | OQ-WP6-03 | May a trial service be renewed or topped up like a bought one?                         | It is a service like any other once delivered: add-ons are offered to it, and a renewal is offered only when its product has a price — a trial product usually has none, so it usually is not. |
 | OQ-WP6-04 | How often may a customer rotate their own link? (was OQ-RP-08)                         | WP6-C makes it a tenant setting behind a flag that is off by default.                                                                                                                          |
+
+## 7. WP6-B design — the override, the reset and the operator's view
+
+Written before the code, as §2 was for WP6-A. ADR-0015 is the policy. This section says
+where each of its sentences lives.
+
+### B1 — One evaluator for the allowance
+
+`TrialAllowance` = `{ globalLimit, override, effectiveLimit, used, remaining }`, computed
+in one place: `trialAllowanceFor`. `TrialService` decides a claim with it, under the
+customer's row lock. The operator's view renders the same function outside the lock. A
+second copy would be the button and the decision disagreeing, which is the Phase 6B
+eligibility rule applied to a smaller table.
+
+- `effectiveLimit` = `override ?? trial.limit_per_customer`.
+- `used` = grants with `released_at IS NULL AND reset_at IS NULL`.
+- `remaining` = `max(0, effectiveLimit − used)`. It is derived and never stored.
+- When an override is set, even to `0`, the global value is not consulted. Zero is zero
+  (ADR-0015).
+
+### B2 — An override is a row per customer
+
+- It lives in `trial_limit_overrides(tenant_id, customer_id)`, with the primary key on
+  that pair and the limit bounded by the same `TRIAL_LIMIT_MIN..MAX` as the setting.
+- Setting it upserts the row. Removing it deletes the row. Nothing ever copies the global
+  value into it, so after a removal a later change to the default applies to that
+  customer again.
+- Both writes take the customer's row lock (`wallet.lockCustomer`), the lock a claim
+  decides under. An override therefore never lands in the middle of a claim's decision:
+  the claim sees the old limit or the new one, never a mixture.
+- The permission is a new key, `users.trial.edit` (HIGH). `users.edit` is uncharged on
+  purpose (every customer attribute comes from Telegram), and a trial limit is not a
+  Telegram attribute, so reusing that key would hand it an argument it was never given.
+  It is seeded to `operator`, and a hand-written migration backfills it into the existing system roles.
+- The change is audited with its before and after values. No event is written: nothing
+  reacts to an override, and `events.ts` admits only what another module must react to.
+
+### B3 — The global reset follows ADR-0010
+
+1. **Dry run.** `previewReset` counts the grants that would be stamped and the
+   customers they belong to, states the set's `fingerprint` (MD5 over the grant ids in
+   id order), and returns a sample of at most ten customers. It writes nothing. All of
+   it is ONE statement, so the totals, the fingerprint and the sample describe one
+   snapshot.
+2. **Counted preview.** The operator is shown those two numbers and the sample.
+3. **Confirmation.** The execute request carries `expectedGrants`, the count the
+   operator was shown and typed back, the preview's `fingerprint`, and a mandatory
+   reason. The server does the stamping and compares both its count and the fingerprint
+   of what it stamped, in the same transaction. On either mismatch it refuses with
+   `TRIAL_RESET_STALE` and rolls back, so a preview can never authorise a different
+   reset than the one it described — including a different set of the same size. A reset with nothing to
+   stamp is refused with `TRIAL_RESET_NOTHING`; a no-op would add a history row that
+   records nothing.
+4. **Audited execution.** One audit row carries the actor, the reason and both counts.
+5. **Recorded result.** A `trial_resets` row holds the id, actor, reason, counts and
+   time. Every grant it stamped carries its `reset_id`, so the question "which grants did
+   this reset cover" has an answer in the rows themselves, and a reversal (not built)
+   would have one to work from.
+
+The permission is `settings.destructive` (CRITICAL). It is declared for exactly this
+kind of bulk mutation (`features.ts`), it was charged by nothing until now, and it is
+seeded to `owner` only. The PREVIEW also takes `users.view`, because its sample names
+customers and `settings.destructive` does not require it. Viewing the history takes
+`settings.view`.
+
+**Concurrency.** The stamping is one conditional `UPDATE … WHERE released_at IS NULL AND
+reset_at IS NULL`.
+
+- **Two resets.** The second waits on the first's row locks, then re-evaluates its
+  `WHERE` and stamps nothing it covered. When the first covered every grant, the
+  second is refused as `TRIAL_RESET_NOTHING`; otherwise it is stale. Tested with a
+  row-lock barrier (TB-17).
+- **A reset and a release on the same grant.** Whichever commits second finds the other's
+  stamp. The count excludes a grant that carries either stamp, so a grant never counts
+  twice or goes negative. If the reset is the one that waited, it is refused as stale.
+- **A claim running alongside a reset.** Its new grant is not in the reset's snapshot. It
+  stays counted, as a trial taken after the reset should be.
+- **The same command twice at once.** Both miss the replay read; the second waits, stamps
+  nothing and is refused. It then reads the idempotency record again, outside its
+  rolled-back transaction, and answers with the reset the first recorded.
+
+The four changes above — the fingerprint, the single-statement preview, `users.view` on
+the preview and the same-command re-read — are the Codex review of PR #65.
+
+### B4 — The operator's view
+
+- On a customer's page, a trial card shows the global limit and the override as stored
+  (or «none»), then the effective limit, used and remaining, and whether the `trials`
+  flag is on. It echoes the stored value (ADR-0015's first constraint).
+- A holder of `users.trial.edit` can set or remove the override from that card.
+- A Trials page lists the customers with a custom limit, showing limit, used and
+  remaining.
+- For a holder of `settings.destructive` that page also has the reset (preview, typed
+  count, reason, execute), and for a holder of `settings.view` the reset history.
+
+The Telegram admin surface does not gain these screens in WP6-B. The service is where
+the rules live, so a later Telegram section reaches the same answers. That is recorded,
+not promised.

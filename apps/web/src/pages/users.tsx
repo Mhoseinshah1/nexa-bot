@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   CUSTOMER_BLOCK_REASON_MAX_LENGTH,
+  TRIAL_ADMIN_REASON_MAX_LENGTH,
   WALLET_PAGE_DEFAULT,
   telegramUserIdSchema,
   type CustomerStatus,
@@ -20,6 +21,9 @@ import {
   fetchServices,
   fetchWallet,
   fetchWalletEntries,
+  fetchCustomerTrial,
+  removeTrialOverride,
+  setTrialOverride,
   unblockCustomer,
 } from '../api/client';
 import { formatTimestamp } from '../format';
@@ -480,10 +484,13 @@ export function UserDetailPage({
   mayDebit,
   mayViewOrders,
   mayViewServices,
+  mayEditTrial,
   denied,
 }: {
   id: string;
   mayBlock: boolean;
+  /** `users.trial.edit`: set or remove this customer's custom trial limit (WP6-B). */
+  mayEditTrial: boolean;
   mayViewWallet: boolean;
   mayCredit: boolean;
   mayDebit: boolean;
@@ -658,6 +665,8 @@ export function UserDetailPage({
                 <Banner tone="info">{t('web.user_block_denied')}</Banner>
               )}
             </Card>
+
+            <TrialCard customerId={id} mayEdit={mayEditTrial} />
 
             <WalletCard
               customerId={id}
@@ -1272,6 +1281,135 @@ function WalletCard({
       */}
       {!mayCredit && <Banner tone="info">{t('web.wallet_credit_denied')}</Banner>}
       {!mayDebit && <Banner tone="info">{t('web.wallet_debit_denied')}</Banner>}
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// This customer's trial allowance (WP6-B)
+// ---------------------------------------------------------------------------
+
+/**
+ * ADR-0015's two numbers for one customer, and the override that sets the first.
+ *
+ * Every figure is the SERVER's, from the evaluator a claim decides with; nothing here
+ * computes an allowance. The stored override is echoed as stored, or «none» — a screen
+ * that could not say which is the legacy write-only setting ADR-0015 forbids.
+ */
+function TrialCard({ customerId, mayEdit }: { customerId: string; mayEdit: boolean }) {
+  const notify = useToast();
+  const queries = useQueryClient();
+  const submission = useSubmissionKey();
+  const [limit, setLimit] = useState('');
+  const [reason, setReason] = useState('');
+
+  const trial = useQuery({
+    queryKey: ['customer-trial', customerId],
+    queryFn: () => fetchCustomerTrial(customerId),
+  });
+
+  const write = useMutation({
+    mutationFn: (input: { remove: boolean }) => {
+      // The fingerprint is the normalised body, as `WalletCard` explains in full.
+      const note = reason.trim();
+      if (input.remove) {
+        const body = { customerId, remove: true, reason: note };
+        return removeTrialOverride({
+          customerId,
+          idempotencyKey: submission.current(body),
+          ...(note === '' ? {} : { reason: note }),
+        });
+      }
+      const parsed = Number(limit.trim());
+      const body = { customerId, limit: parsed, reason: note };
+      return setTrialOverride({
+        customerId,
+        idempotencyKey: submission.current(body),
+        limit: parsed,
+        ...(note === '' ? {} : { reason: note }),
+      });
+    },
+    onSuccess: (response, variables) => {
+      submission.settle();
+      notify({
+        tone: 'ok',
+        message: variables.remove ? t('web.trial_override_removed') : t('web.trial_override_done'),
+      });
+      setLimit('');
+      setReason('');
+      queries.setQueryData(['customer-trial', customerId], response);
+      void queries.invalidateQueries({ queryKey: ['trial-overrides'] });
+    },
+    // A 5xx may have committed; a fresh key on the retry would be a second command.
+    onError: (error) => submission.settleOn(error),
+  });
+
+  const row = trial.data?.trial;
+  return (
+    <Card title={t('web.trial_card_title')}>
+      <StateSwitch query={trial}>
+        {row === undefined ? null : (
+          <>
+            {!row.featureEnabled && <Banner tone="info">{t('web.trial_feature_off')}</Banner>}
+            <KV
+              items={[
+                [t('web.trial_global_limit'), String(row.globalLimit)],
+                [
+                  t('web.trial_override'),
+                  row.override === null ? t('web.trial_override_none') : String(row.override.limit),
+                ],
+                [t('web.trial_effective_limit'), String(row.effectiveLimit)],
+                [t('web.trial_used'), String(row.used)],
+                [t('web.trial_remaining'), String(row.remaining)],
+              ]}
+            />
+            <p className="muted">{t('web.trial_zero_hint')}</p>
+            {mayEdit ? (
+              <>
+                <Field label={t('web.trial_override_label')} htmlFor="trial-limit">
+                  <input
+                    id="trial-limit"
+                    inputMode="numeric"
+                    value={limit}
+                    onChange={(event) => setLimit(event.target.value)}
+                  />
+                </Field>
+                <Field label={t('web.trial_reason_label')} htmlFor="trial-reason">
+                  <input
+                    id="trial-reason"
+                    value={reason}
+                    maxLength={TRIAL_ADMIN_REASON_MAX_LENGTH}
+                    onChange={(event) => setReason(event.target.value)}
+                  />
+                </Field>
+                <div className="toolbar">
+                  <button
+                    type="button"
+                    className="btn primary sm"
+                    disabled={write.isPending || limit.trim() === ''}
+                    onClick={() => write.mutate({ remove: false })}
+                  >
+                    {t('web.trial_override_set')}
+                  </button>
+                  {row.override !== null && (
+                    <button
+                      type="button"
+                      className="btn sm"
+                      disabled={write.isPending}
+                      onClick={() => write.mutate({ remove: true })}
+                    >
+                      {t('web.trial_override_remove')}
+                    </button>
+                  )}
+                </div>
+                {write.error !== null && <Banner tone="danger">{messageFor(write.error)}</Banner>}
+              </>
+            ) : (
+              <Banner tone="info">{t('web.trial_override_denied')}</Banner>
+            )}
+          </>
+        )}
+      </StateSwitch>
     </Card>
   );
 }

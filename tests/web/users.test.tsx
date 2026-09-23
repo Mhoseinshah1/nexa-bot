@@ -464,7 +464,14 @@ describe('the customer detail', () => {
   it('carries no recent-activity feed and no commercial cards', async () => {
     stubApi(detail());
     const { container } = renderPage(
-      <UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} {...NO_COMMERCE} denied={false} />,
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock
+        {...NO_WALLET}
+        {...NO_COMMERCE}
+        denied={false}
+      />,
     );
     await screen.findByText('ali_tehran', { exact: false });
     const text = container.textContent ?? '';
@@ -496,7 +503,14 @@ describe('the customer detail', () => {
       },
     ]);
     renderPage(
-      <UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} {...NO_COMMERCE} denied={false} />,
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock
+        {...NO_WALLET}
+        {...NO_COMMERCE}
+        denied={false}
+      />,
     );
     await screen.findByLabelText('دلیل (اختیاری)');
 
@@ -521,7 +535,14 @@ describe('the customer detail', () => {
   it('offers unblock instead of block once the customer is blocked', async () => {
     stubApi(detail({ status: 'BLOCKED', blockedAt: '2026-09-11T09:00:00.000Z' }));
     renderPage(
-      <UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} {...NO_COMMERCE} denied={false} />,
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock
+        {...NO_WALLET}
+        {...NO_COMMERCE}
+        denied={false}
+      />,
     );
     await screen.findByRole('button', { name: 'رفع مسدودی' });
     // Never both. Two enabled controls for opposite directions is how a
@@ -535,7 +556,14 @@ describe('the customer detail', () => {
       { url: `/users/${ROW_ID}/block`, body: { customer: customer({ status: 'BLOCKED' }) } },
     ]);
     renderPage(
-      <UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} {...NO_COMMERCE} denied={false} />,
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock
+        {...NO_WALLET}
+        {...NO_COMMERCE}
+        denied={false}
+      />,
     );
     await screen.findByRole('button', { name: 'مسدود کردن' });
     fireEvent.click(screen.getByRole('button', { name: 'مسدود کردن' }));
@@ -554,6 +582,7 @@ describe('the customer detail', () => {
     stubApi(detail());
     renderPage(
       <UserDetailPage
+        mayEditTrial={false}
         id={ROW_ID}
         mayBlock={false}
         {...NO_WALLET}
@@ -586,7 +615,14 @@ describe('the customer detail', () => {
       },
     ]);
     renderPage(
-      <UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} {...NO_COMMERCE} denied={false} />,
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock
+        {...NO_WALLET}
+        {...NO_COMMERCE}
+        denied={false}
+      />,
     );
     await screen.findByRole('button', { name: 'مسدود کردن' });
     fireEvent.click(screen.getByRole('button', { name: 'مسدود کردن' }));
@@ -719,7 +755,14 @@ describe('the wallet card', () => {
       ...walletRoutes({ balanceAmount: '750000', entryCount: 3 }, [walletEntry()]),
     ]);
     renderPage(
-      <UserDetailPage id={ROW_ID} mayBlock {...ALL_WALLET} {...NO_COMMERCE} denied={false} />,
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock
+        {...ALL_WALLET}
+        {...NO_COMMERCE}
+        denied={false}
+      />,
     );
 
     await screen.findByText('کیف پول');
@@ -739,7 +782,14 @@ describe('the wallet card', () => {
       ]),
     ]);
     renderPage(
-      <UserDetailPage id={ROW_ID} mayBlock {...ALL_WALLET} {...NO_COMMERCE} denied={false} />,
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock
+        {...ALL_WALLET}
+        {...NO_COMMERCE}
+        denied={false}
+      />,
     );
 
     await screen.findByText('تاریخچه تراکنش‌ها');
@@ -757,7 +807,14 @@ describe('the wallet card', () => {
       ...walletRoutes({ balanceAmount: '250000', entryCount: 1 }, [walletEntry()]),
     ]);
     const { container } = renderPage(
-      <UserDetailPage id={ROW_ID} mayBlock {...ALL_WALLET} {...NO_COMMERCE} denied={false} />,
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock
+        {...ALL_WALLET}
+        {...NO_COMMERCE}
+        denied={false}
+      />,
     );
     await screen.findByText('کیف پول');
 
@@ -799,7 +856,14 @@ describe('the wallet card', () => {
       },
     ]);
     renderPage(
-      <UserDetailPage id={ROW_ID} mayBlock {...ALL_WALLET} {...NO_COMMERCE} denied={false} />,
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock
+        {...ALL_WALLET}
+        {...NO_COMMERCE}
+        denied={false}
+      />,
     );
     await screen.findByText('ثبت تراکنش دستی');
 
@@ -831,7 +895,14 @@ describe('the wallet card', () => {
       { url: `/users/${ROW_ID}/wallet/adjust`, body: { entry: walletEntry() } },
     ]);
     renderPage(
-      <UserDetailPage id={ROW_ID} mayBlock {...ALL_WALLET} {...NO_COMMERCE} denied={false} />,
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock
+        {...ALL_WALLET}
+        {...NO_COMMERCE}
+        denied={false}
+      />,
     );
     await screen.findByText('ثبت تراکنش دستی');
 
@@ -881,7 +952,14 @@ describe('the wallet card', () => {
       { url: `/users/${ROW_ID}/wallet/adjust`, status: 503, body: { error: { code: 'x' } } },
     ]);
     renderPage(
-      <UserDetailPage id={ROW_ID} mayBlock {...ALL_WALLET} {...NO_COMMERCE} denied={false} />,
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock
+        {...ALL_WALLET}
+        {...NO_COMMERCE}
+        denied={false}
+      />,
     );
     await screen.findByText('ثبت تراکنش دستی');
 
@@ -921,6 +999,7 @@ describe('the wallet card', () => {
     stubApi([{ url: `/users/${ROW_ID}`, body: { customer: customer() } }, ...walletRoutes()]);
     renderPage(
       <UserDetailPage
+        mayEditTrial={false}
         id={ROW_ID}
         mayBlock
         mayViewWallet
@@ -942,6 +1021,7 @@ describe('the wallet card', () => {
     const api = stubApi([{ url: `/users/${ROW_ID}`, body: { customer: customer() } }]);
     renderPage(
       <UserDetailPage
+        mayEditTrial={false}
         id={ROW_ID}
         mayBlock
         mayViewWallet={false}
@@ -969,7 +1049,14 @@ describe('the wallet card', () => {
       ...walletRoutes({ balanceAmount: '250000', entryCount: 2 }),
     ]);
     renderPage(
-      <UserDetailPage id={ROW_ID} mayBlock {...ALL_WALLET} {...NO_COMMERCE} denied={false} />,
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock
+        {...ALL_WALLET}
+        {...NO_COMMERCE}
+        denied={false}
+      />,
     );
     await screen.findByText('تاریخچه تراکنش‌ها');
 
@@ -1037,7 +1124,14 @@ describe("a customer's orders and services", () => {
       { url: '/services', body: { services: [service()], nextCursor: null } },
     ]);
     renderPage(
-      <UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} {...ALL_COMMERCE} denied={false} />,
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock
+        {...NO_WALLET}
+        {...ALL_COMMERCE}
+        denied={false}
+      />,
     );
     await screen.findByText('پلن یک‌ماهه');
     await screen.findByText('nx-7f3a91');
@@ -1078,7 +1172,14 @@ describe("a customer's orders and services", () => {
       },
     ]);
     renderPage(
-      <UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} {...ALL_COMMERCE} denied={false} />,
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock
+        {...NO_WALLET}
+        {...ALL_COMMERCE}
+        denied={false}
+      />,
     );
     await screen.findByText('nx-7f3a91');
 
@@ -1102,7 +1203,14 @@ describe("a customer's orders and services", () => {
       { url: '/services', body: { services: [], nextCursor: null } },
     ]);
     renderPage(
-      <UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} {...ALL_COMMERCE} denied={false} />,
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock
+        {...NO_WALLET}
+        {...ALL_COMMERCE}
+        denied={false}
+      />,
     );
     // The ROW first, so the card below is the loaded one and not its skeleton.
     await screen.findByText('پلن یک‌ماهه');
@@ -1128,7 +1236,14 @@ describe("a customer's orders and services", () => {
       { url: '/services', body: { services: [service()], nextCursor: 'services-next' } },
     ]);
     renderPage(
-      <UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} {...ALL_COMMERCE} denied={false} />,
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock
+        {...NO_WALLET}
+        {...ALL_COMMERCE}
+        denied={false}
+      />,
     );
     await screen.findByText('nx-7f3a91');
     const card = screen.getByText('همهٔ سرویس‌های این مشتری').closest('section');
@@ -1174,7 +1289,14 @@ describe("a customer's orders and services", () => {
       { url: '/services', body: { services: [], nextCursor: null } },
     ]);
     renderPage(
-      <UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} {...ALL_COMMERCE} denied={false} />,
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock
+        {...NO_WALLET}
+        {...ALL_COMMERCE}
+        denied={false}
+      />,
     );
     await screen.findByText('plan-page-1');
     const card = screen.getByText('همهٔ سفارش‌های این مشتری').closest('section') as HTMLElement;
@@ -1217,6 +1339,7 @@ describe("a customer's orders and services", () => {
     const api = withCards([{ url: '/services', body: { services: [], nextCursor: null } }]);
     renderPage(
       <UserDetailPage
+        mayEditTrial={false}
         id={ROW_ID}
         mayBlock
         {...NO_WALLET}
@@ -1237,6 +1360,7 @@ describe("a customer's orders and services", () => {
     const api = withCards([{ url: '/orders', body: { orders: [], nextCursor: null } }]);
     renderPage(
       <UserDetailPage
+        mayEditTrial={false}
         id={ROW_ID}
         mayBlock
         {...NO_WALLET}
@@ -1264,7 +1388,14 @@ describe("a customer's orders and services", () => {
       { url: '/services', body: { services: [], nextCursor: null } },
     ]);
     const { container } = renderPage(
-      <UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} {...ALL_COMMERCE} denied={false} />,
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock
+        {...NO_WALLET}
+        {...ALL_COMMERCE}
+        denied={false}
+      />,
     );
     await screen.findByText('این مشتری هنوز سفارشی ثبت نکرده است.');
     await screen.findByText('این مشتری هنوز سرویسی ندارد.');
@@ -1292,7 +1423,14 @@ describe("a customer's orders and services", () => {
       },
     ]);
     const { container } = renderPage(
-      <UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} {...ALL_COMMERCE} denied={false} />,
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock
+        {...NO_WALLET}
+        {...ALL_COMMERCE}
+        denied={false}
+      />,
     );
     await screen.findByText('nx-7f3a91');
 

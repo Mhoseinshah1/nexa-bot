@@ -24,6 +24,7 @@ import {
 } from './payment-gateways.js';
 import { PAYMENT_RECEIPT_KINDS } from './payment-receipts.js';
 import { CUSTOMER_STATUSES, telegramUserIdSchema } from './customer.js';
+import { TRIAL_LIMIT_MAX, TRIAL_LIMIT_MIN } from './promotions.js';
 import {
   MAX_DEVICE_LIMIT,
   MAX_DURATION_DAYS,
@@ -3594,4 +3595,169 @@ export const RECOVERY_ROUTES = {
   fromRun: '/recoveries/from-run',
   detail: (id: string) => `/recoveries/${encodeURIComponent(id)}`,
   confirm: (id: string) => `/recoveries/${encodeURIComponent(id)}/confirm`,
+} as const;
+
+// --- Trials: the override, the reset and the operator's view (WP6-B) --------
+//
+// ADR-0015 is the policy and `docs/wp6-audit.md` §7 the design. The limit and the used
+// count are separate numbers, `remaining` is derived, and `0` means zero, never
+// unlimited.
+
+export const TRIAL_OVERRIDE_PAGE_DEFAULT = 25;
+export const TRIAL_OVERRIDE_PAGE_MAX = 100;
+export const TRIAL_RESET_PAGE_DEFAULT = 25;
+export const TRIAL_RESET_PAGE_MAX = 100;
+/** How many customers a reset preview names. A sample, not the list. */
+export const TRIAL_RESET_PREVIEW_SAMPLE = 10;
+export const TRIAL_ADMIN_REASON_MAX_LENGTH = 500;
+
+const trialLimitSchema = z.number().int().min(TRIAL_LIMIT_MIN).max(TRIAL_LIMIT_MAX);
+
+/**
+ * One customer's trial allowance, as the ONE evaluator computes it.
+ *
+ * `override` is the stored value, echoed, or null when the customer inherits the
+ * global default — a screen that could not say which is ADR-0015's "write-only
+ * setting". `featureEnabled` is here because an allowance on an installation whose
+ * `trials` flag is off is a number nobody can use, and saying so is cheaper than an
+ * operator discovering it from a customer.
+ */
+export const trialAllowanceSchema = z.object({
+  customerId: z.string(),
+  featureEnabled: z.boolean(),
+  globalLimit: trialLimitSchema,
+  override: z.object({ limit: trialLimitSchema, setAt: z.iso.datetime() }).nullable(),
+  effectiveLimit: trialLimitSchema,
+  used: z.number().int().nonnegative(),
+  remaining: z.number().int().nonnegative(),
+});
+export type TrialAllowanceResponse = z.infer<typeof trialAllowanceSchema>;
+
+export const trialAllowanceResponseSchema = z.object({ trial: trialAllowanceSchema });
+export type CustomerTrialResponse = z.infer<typeof trialAllowanceResponseSchema>;
+
+/** Set, or replace, a customer's custom limit. The reason lands in the audit row. */
+export const setTrialOverrideRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  limit: trialLimitSchema,
+  reason: z.string().trim().max(TRIAL_ADMIN_REASON_MAX_LENGTH).optional(),
+});
+export type SetTrialOverrideRequest = z.infer<typeof setTrialOverrideRequestSchema>;
+
+/**
+ * Remove a customer's custom limit. It is REMOVED, never set to the default's value, so
+ * a later change to the default applies to them again (ADR-0015).
+ */
+export const removeTrialOverrideRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  reason: z.string().trim().max(TRIAL_ADMIN_REASON_MAX_LENGTH).optional(),
+});
+export type RemoveTrialOverrideRequest = z.infer<typeof removeTrialOverrideRequestSchema>;
+
+/** The customer as a trial list names them: identity, not a profile. */
+const trialCustomerSchema = z.object({
+  id: z.string(),
+  telegramUserId: telegramUserIdSchema,
+  username: z.string().nullable(),
+  firstName: z.string().nullable(),
+  status: z.enum(CUSTOMER_STATUSES),
+});
+
+/** "Customers with custom trial limits" — ADR-0015's administrative view. */
+export const trialOverrideRowSchema = z.object({
+  customer: trialCustomerSchema,
+  limit: trialLimitSchema,
+  used: z.number().int().nonnegative(),
+  remaining: z.number().int().nonnegative(),
+  setAt: z.iso.datetime(),
+});
+export type TrialOverrideRowResponse = z.infer<typeof trialOverrideRowSchema>;
+
+export const trialOverrideListQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(TRIAL_OVERRIDE_PAGE_MAX).optional(),
+  cursor: z.string().min(1).max(255).optional(),
+});
+export type TrialOverrideListQuery = z.infer<typeof trialOverrideListQuerySchema>;
+
+export const trialOverrideListResponseSchema = z.object({
+  overrides: z.array(trialOverrideRowSchema),
+  nextCursor: z.string().nullable(),
+});
+export type TrialOverrideListResponse = z.infer<typeof trialOverrideListResponseSchema>;
+
+/**
+ * A global reset's dry run (ADR-0010 steps 1 and 2).
+ *
+ * `affectedGrants` is the number the operator types back to confirm; the execute
+ * request carries it and is refused if the reset would stamp any other number.
+ */
+/**
+ * The identity of the SET of grants a preview described (Codex, PR #65).
+ *
+ * An MD5 over the counted grant ids in id order — not a secret, a set identity. A count
+ * alone lets a preview authorise a different reset: one previewed grant released and
+ * another customer's claimed leaves the number unchanged. The confirmation carries this
+ * back, and the server refuses a reset whose stamped set hashes to anything else.
+ */
+export const trialResetFingerprintSchema = z.string().regex(/^[0-9a-f]{32}$/);
+
+export const trialResetPreviewResponseSchema = z.object({
+  preview: z.object({
+    affectedGrants: z.number().int().nonnegative(),
+    affectedCustomers: z.number().int().nonnegative(),
+    fingerprint: trialResetFingerprintSchema,
+    sample: z.array(
+      z.object({ customer: trialCustomerSchema, grants: z.number().int().positive() }),
+    ),
+  }),
+});
+export type TrialResetPreviewResponse = z.infer<typeof trialResetPreviewResponseSchema>;
+
+/**
+ * The confirmed reset. The reason is REQUIRED: this changes every customer's allowance
+ * at once, and ADR-0010 asks a destructive action for a reason, not a checkbox.
+ */
+export const executeTrialResetRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  expectedGrants: z.number().int().positive(),
+  /** The preview's `fingerprint`, so the confirmation binds to the set, not the count. */
+  expectedFingerprint: trialResetFingerprintSchema,
+  reason: z.string().trim().min(1).max(TRIAL_ADMIN_REASON_MAX_LENGTH),
+});
+export type ExecuteTrialResetRequest = z.infer<typeof executeTrialResetRequestSchema>;
+
+/** ADR-0010 step 5: the recorded result. */
+export const trialResetSchema = z.object({
+  id: z.string(),
+  actorAdminId: z.string(),
+  reason: z.string(),
+  affectedGrants: z.number().int().positive(),
+  affectedCustomers: z.number().int().positive(),
+  createdAt: z.iso.datetime(),
+});
+export type TrialResetSummaryResponse = z.infer<typeof trialResetSchema>;
+
+export const trialResetResponseSchema = z.object({ reset: trialResetSchema });
+export type TrialResetResponse = z.infer<typeof trialResetResponseSchema>;
+
+export const trialResetListQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(TRIAL_RESET_PAGE_MAX).optional(),
+  cursor: z.string().min(1).max(255).optional(),
+});
+export type TrialResetListQuery = z.infer<typeof trialResetListQuerySchema>;
+
+export const trialResetListResponseSchema = z.object({
+  resets: z.array(trialResetSchema),
+  nextCursor: z.string().nullable(),
+});
+export type TrialResetListResponse = z.infer<typeof trialResetListResponseSchema>;
+
+export const TRIAL_ROUTES = {
+  allowance: (customerId: string) => `/users/${encodeURIComponent(customerId)}/trial`,
+  setOverride: (customerId: string) => `/users/${encodeURIComponent(customerId)}/trial/override`,
+  removeOverride: (customerId: string) =>
+    `/users/${encodeURIComponent(customerId)}/trial/override/remove`,
+  overrides: '/trials/overrides',
+  resetPreview: '/trials/reset/preview',
+  resets: '/trials/resets',
 } as const;

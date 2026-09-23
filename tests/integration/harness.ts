@@ -102,7 +102,8 @@ export async function resetDatabase(db: Database): Promise<void> {
        --
        -- No backticks in here: this statement is a plain template literal, so a
        -- backtick in a comment ends it and the parse error lands twenty lines away.
-       wallet_entries, discount_redemptions, referrals, trial_grants, resellers,
+       wallet_entries, discount_redemptions, referrals, trial_grants, trial_resets,
+       trial_limit_overrides, resellers,
        provisioning_operations, services, payments, orders, discounts, products,
        -- AFTER products, which reference it. Named for the same reason as the rest:
        -- the tenants table above does CASCADE to it today, and a table whose clearing

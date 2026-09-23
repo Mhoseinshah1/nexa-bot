@@ -63,6 +63,18 @@ export const PERMISSIONS = [
   p('users.edit', 'Edit customer attributes'),
   p('users.block', 'Block or unblock a customer', 'HIGH'),
   /*
+   * A customer's trial limit override (ADR-0015, `docs/wp6-audit.md` B2).
+   *
+   * Its own key rather than `users.edit`, because that one is uncharged with a reason
+   * that does not apply here: a customer's name comes from Telegram and is overwritten
+   * on the next update, while a trial limit is a decision the installation makes and
+   * nothing overwrites. Reusing the key would hand it an argument it was never given.
+   *
+   * HIGH, not CRITICAL: an override grants free service, bounded by `TRIAL_LIMIT_MAX`
+   * per customer, and moves no money. The TENANT-WIDE reset is `settings.destructive`.
+   */
+  p('users.trial.edit', "Set or remove a customer's trial limit override", 'HIGH'),
+  /*
    * Phase 7, both of them, and neither is charged by anything here. There is no
    * tier column, no tier type and no tier surface; there is no mass tool at all.
    * `CLAUDE.md` forbids building either without an explicit instruction, and the
@@ -179,6 +191,11 @@ export const PERMISSIONS = [
   // Settings
   p('settings.view', 'View settings and their resolved values', 'LOW'),
   p('settings.edit', 'Change settings'),
+  /*
+   * Bulk mutations that follow ADR-0010: dry run, counted preview, confirmation, audited
+   * execution, recorded result. Charged by nothing until WP6-B; the first is the global
+   * trial reset (`docs/wp6-audit.md` B3). Seeded to `owner` alone.
+   */
   p('settings.destructive', 'Run destructive maintenance settings', 'CRITICAL'),
 
   // Customer-facing text
@@ -286,6 +303,8 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       'users.search',
       'users.edit',
       'users.block',
+      // A customer's trial allowance is a support question an operator answers daily.
+      'users.trial.edit',
       'orders.view',
       'services.view',
       'services.edit',
@@ -500,6 +519,12 @@ export const PERMISSION_REQUIRES: Readonly<Record<string, PermissionKey>> = {
    * concept is the failure this codebase measures.
    */
   'receipts.review': 'payments.view' as PermissionKey,
+  /*
+   * An override is set FROM a customer's page and answers with that customer's
+   * allowance — limit, used, remaining — which is customer data `users.view` reads.
+   * Holding the write without the read would be a second way to read it.
+   */
+  'users.trial.edit': 'users.view' as PermissionKey,
 };
 
 /**

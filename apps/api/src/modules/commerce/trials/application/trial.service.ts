@@ -42,7 +42,8 @@ import type { ProvisioningService } from '../../provisioning/application/provisi
 import type { OrderUsernameLane } from '../../provisioning/application/username-lane.js';
 import type { WalletRepository } from '../../wallet/application/ports.js';
 import type { PanelSalesGate } from '../../../platform/panels/application/panel-sales-gate.js';
-import type { TrialGrantRepository } from './ports.js';
+import type { TrialGrantRepository, TrialOverrideRepository } from './ports.js';
+import { trialAllowanceFor } from './trial-allowance.js';
 
 /**
  * The permission a customer's own trial claim is charged against.
@@ -114,6 +115,8 @@ class TrialRefused extends Error {
 
 export interface TrialServiceDeps {
   readonly grants: TrialGrantRepository;
+  /** The customer's custom limit, read by the one allowance evaluator. */
+  readonly overrides: Pick<TrialOverrideRepository, 'find'>;
   readonly orders: OrderRepository;
   readonly products: ProductRepository;
   readonly customers: Pick<CustomerRepository, 'findById'>;
@@ -151,8 +154,9 @@ export interface TrialServiceDeps {
  * discount, no referral, no reseller margin (plan §7.1).
  *
  * Eligibility is ADR-0015's limit minus used, decided under the customer's row lock so
- * two concurrent claims serialise and the second counts the first. The limit is
- * `trial.limit_per_customer`; used is the customer's unreleased grants. A trial whose
+ * two concurrent claims serialise and the second counts the first. The limit is the
+ * customer's override or `trial.limit_per_customer`; used is the customer's grants that
+ * are neither released nor reset (`trialAllowanceFor`). A trial whose
  * service definitively could not be created is released by
  * `UndeliverableOrderRefunder`, and stops counting.
  */
@@ -451,10 +455,14 @@ export class TrialService {
     }
     if (customer.status === 'BLOCKED') return { refusal: 'CUSTOMER_BLOCKED' };
 
-    const limit = await this.deps.settings.valueOf<number>(scope, 'trial.limit_per_customer', tx);
-    const used = await this.deps.grants.countCounting(scope, customerId, tx);
-    // Zero is zero trials, never unlimited (ADR-0015): `used >= 0` refuses everyone.
-    if (used >= limit) return { refusal: 'LIMIT_REACHED' };
+    /*
+     * The ONE allowance evaluator, the same function the operator's view renders
+     * (`docs/wp6-audit.md` B1): the customer's override when there is one, the global
+     * limit otherwise, minus the grants that are neither released nor reset. Zero is
+     * zero trials, never unlimited (ADR-0015): `used >= 0` refuses everyone.
+     */
+    const allowance = await trialAllowanceFor(this.deps, scope, customerId, tx);
+    if (allowance.used >= allowance.effectiveLimit) return { refusal: 'LIMIT_REACHED' };
 
     const product = await this.configuredProduct(scope, tx);
     if (product === null) return { refusal: 'PRODUCT_UNAVAILABLE' };
