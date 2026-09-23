@@ -1001,11 +1001,28 @@ export const TEMPLATES = [
   {
     key: 'bot.wallet.topup_credited',
     description:
-      'Sent when an operator confirms a wallet top-up. Carries NO amount: the customer ' +
-      'notification lane has no payload (ADR 0030 §1), so the sentence states that the ' +
-      'balance changed and points at /wallet, where the figure is derived from the ledger.',
+      'Sent when an operator confirms a wallet top-up. Names the PRINCIPAL credited ' +
+      '(Payment File 02 \u00a718), read at send time from the `TOPUP_RECEIPT` ledger entry ' +
+      'of the payment the notification names \u2014 a READER, not a producer payload (ADR ' +
+      '0030 \u00a71). A gift, when there is one, is its own sentence ' +
+      '(`bot.wallet.topup_gift_credited`) and is never folded into this figure.',
     format: 'PLAIN_TEXT',
-    placeholders: [],
+    placeholders: [
+      /*
+       * OPTIONAL, for the WP3 lesson `bot.order.refunded_to_wallet` states: this key has
+       * shipped with no placeholder since 4C, so an installation may hold an override
+       * without the token, and declaring it required would make that override unsavable.
+       * The runtime supplies it unconditionally, and sends NOTHING when the ledger holds
+       * no principal for the payment \u2014 never a sentence with an empty amount.
+       */
+      {
+        token: 'amount',
+        type: 'MONEY',
+        description: 'The principal credited, from the payment\u2019s TOPUP_RECEIPT entry.',
+        required: false,
+        repeatable: false,
+      },
+    ],
   },
   {
     key: 'bot.wallet.topup_gift_credited',
@@ -1013,11 +1030,22 @@ export const TEMPLATES = [
       'Sent when a confirmed top-up earned its route\u2019s gift (Payment File 02 \u00a718): a ' +
       'second, separate credit beside the top-up itself, which `bot.wallet.topup_credited` ' +
       'announces on its own. Never sent for a route at 0%, and never for a manual receipt ' +
-      'credit. Carries NO amount: the customer notification lane has no payload (ADR 0030 ' +
-      '\u00a71), so the sentence says a gift was added and points at /wallet, where both ' +
-      'entries are listed from the ledger.',
+      'credit. Names the gift, read at send time from the payment\u2019s `CASHBACK_TOPUP` ' +
+      'ledger entry \u2014 a reader, not a payload (ADR 0030 \u00a71).',
     format: 'PLAIN_TEXT',
-    placeholders: [],
+    placeholders: [
+      /*
+       * REQUIRED, unlike the principal's: this key is new in this package and no
+       * installation can hold an override of it, so there is no body to strand.
+       */
+      {
+        token: 'amount',
+        type: 'MONEY',
+        description: 'The gift credited, from the payment\u2019s CASHBACK_TOPUP entry.',
+        required: true,
+        repeatable: false,
+      },
+    ],
   },
   {
     key: 'bot.payment.receipt_credited_to_wallet',
@@ -1025,11 +1053,19 @@ export const TEMPLATES = [
       'Sent when a reviewer decided a card-to-card receipt by crediting the amount they ' +
       'judged arrived to the customer\u2019s wallet (Payment File 02 \u00a712). Says the ' +
       'transfer was NOT taken as payment of an order, that the order, when there is one, is ' +
-      'still unpaid and may be paid from the wallet while it is open, and that the credit ' +
-      'is in the wallet. Carries no amount (ADR 0030 \u00a71): /wallet shows the figure, ' +
-      'derived from the ledger.',
+      'still unpaid and may be paid from the wallet while it is open, and names the amount ' +
+      'credited \u2014 read at send time from the payment\u2019s `RECEIPT_CREDIT` ledger entry, a ' +
+      'reader rather than a payload (ADR 0030 \u00a71).',
     format: 'PLAIN_TEXT',
-    placeholders: [],
+    placeholders: [
+      {
+        token: 'amount',
+        type: 'MONEY',
+        description: 'The amount the reviewer credited, from the RECEIPT_CREDIT entry.',
+        required: true,
+        repeatable: false,
+      },
+    ],
   },
   /* ---------------------------------------------------------------------------
    * Phase 5T — the Telegram admin surface.
@@ -1094,10 +1130,14 @@ export const TEMPLATES = [
   {
     key: 'bot.admin.receipt',
     description:
-      'One payment awaiting a decision, with the facts a reviewer reconciles against a ' +
-      'bank statement: the reference the customer was told to quote, the payable amount, ' +
-      'and who owes it. The receipt files are sent as media beside this message by ' +
-      'file_id, so no token and no URL is ever rendered.',
+      'One payment awaiting a decision, as the CAPTION of the first receipt (Payment File ' +
+      '02 \u00a710: one message \u2014 the image, the context, the customer\u2019s own note, and ' +
+      'the decisions as its inline buttons). The facts a reviewer reconciles against a bank ' +
+      'statement: the reference the customer was told to quote, the payable amount, who ' +
+      'owes it, what it pays for, and what the customer wrote beside the receipt. The file ' +
+      'is sent by file_id, so no token and no URL is ever rendered. Telegram bounds a ' +
+      'caption at 1,024 characters; the customer\u2019s note is shortened to fit, and a caption ' +
+      'still over the bound is cut by the transport rather than refused.',
     format: 'PLAIN_TEXT',
     placeholders: [
       {
@@ -1117,8 +1157,39 @@ export const TEMPLATES = [
       {
         token: 'customer',
         type: 'STRING',
-        description: 'Who owes it, by the identity this installation holds.',
+        description: 'Who owes it: the customer\u2019s numeric Telegram id.',
         required: true,
+        repeatable: false,
+      },
+      /*
+       * The three below are OPTIONAL for the WP3 lesson `bot.order.refunded_to_wallet`
+       * states: this key shipped in Phase 5T without them, an installation may hold an
+       * override that omits them, and a required token would make it unsavable. The
+       * runtime supplies all three on every render, with a dash where there is nothing.
+       */
+      {
+        token: 'username',
+        type: 'STRING',
+        description:
+          'The customer\u2019s Telegram username with its @, or a dash when they have none.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'order',
+        type: 'STRING',
+        description:
+          'What the payment is for: the order\u2019s frozen plan title, or a dash for a wallet top-up.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'note',
+        type: 'STRING',
+        description:
+          'The caption the customer attached to the receipt, shortened to fit Telegram\u2019s ' +
+          'caption bound, or a dash. Customer text: rendered here and nowhere else, never logged.',
+        required: false,
         repeatable: false,
       },
     ],
@@ -1157,6 +1228,173 @@ export const TEMPLATES = [
     description:
       'The decision landed: the payment is FAILED, and the customer is told by the ' +
       'notification lane rather than from here.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.credit_button',
+    description:
+      'The third decision on a receipt (Payment File 02 \u00a712): credit an amount the reviewer ' +
+      'enters to the customer\u2019s wallet instead of approving or rejecting. Drawn only for an ' +
+      'administrator holding BOTH `receipts.review` and `users.wallet.credit`; the service ' +
+      'charges both again, so the button advertises and never authorises.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.credit_amount_prompt',
+    description:
+      'Asks the reviewer for the exact amount to credit, after the credit button opened an ' +
+      'amount capture for THIS administrator and THIS payment. Only their next plain message ' +
+      'is read, and only while the capture is open (INCIDENT-FIN-001); a command still routes ' +
+      'as a command. States the payment, what it asked for (so the unit is plain), and how ' +
+      'long the capture stays open.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description: 'The payment reference.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'total',
+        type: 'MONEY',
+        description: 'What the payment asked for, in the unit the reviewer must type.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'minutes',
+        type: 'NUMBER',
+        description: 'How long the capture stays open, in whole minutes.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.credit_amount_invalid',
+    description:
+      'The reviewer\u2019s message was not an amount this installation can credit: not digits ' +
+      '(Latin, Persian or Arabic, thousands separators allowed), zero, a fraction the ' +
+      'currency cannot hold, or out of bounds. The capture stays open and they are asked ' +
+      'again \u2014 an unreadable message is answered, never silently swallowed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'total',
+        type: 'MONEY',
+        description: 'What the payment asked for, as a reminder of the unit.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.credit_confirm',
+    description:
+      'States the EXACT amount about to be credited, to whom and against which payment, ' +
+      'before anything moves. The confirm button beside it names the capture, so a second tap ' +
+      'is the same credit and not another.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'amount',
+        type: 'MONEY',
+        description: 'The amount the reviewer entered, as it will be credited.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'reference',
+        type: 'STRING',
+        description: 'The payment reference.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'customer',
+        type: 'STRING',
+        description: 'The customer\u2019s numeric Telegram id.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'total',
+        type: 'MONEY',
+        description: 'What the payment asked for, for comparison.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.credit_confirm_button',
+    description: 'Confirms the stated credit. Carries the capture id and nothing else.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.credit_cancel_button',
+    description: 'Abandons the credit. Nothing has moved, and the receipt stays in the queue.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.credited',
+    description:
+      'The credit landed: the stated amount is on the customer\u2019s wallet, the payment is ' +
+      'closed as credited, and the customer is told by the notification lane. Says that the ' +
+      'order, when there is one, was NOT settled by it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'amount',
+        type: 'MONEY',
+        description: 'The amount credited, as recorded.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'reference',
+        type: 'STRING',
+        description: 'The payment reference.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.credit_cancelled',
+    description:
+      'The reviewer abandoned the credit. Nothing moved; the receipt is still waiting in the queue.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.credit_expired',
+    description:
+      'The amount capture closed before it was used \u2014 the reviewer took longer than its ' +
+      'window, or opened another one since. Nothing moved; they start again from the receipt.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.credit_no_receipt',
+    description:
+      'A credit was asked of a transfer that carries no receipt. Only a receipt can be ' +
+      'credited to a wallet; nothing moved.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.credit_currency',
+    description:
+      'The transfer is in a currency this installation no longer sells in, so crediting it ' +
+      'would leave a balance no order can be paid from. Nothing moved; the reviewer may still ' +
+      'approve or reject.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -3368,6 +3606,17 @@ export const TEMPLATES = [
       'customer notification lane. Distinct from `bot.payment.rejected` because no ' +
       'person judged anything \u2014 a deadline passed \u2014 and a customer told ' +
       '"rejected" for a lapsed window would reasonably think somebody looked at it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.withdraw_under_review',
+    description:
+      'Answers a customer who asked to withdraw a transfer they have ALREADY SENT A RECEIPT ' +
+      'for (Payment File 02 \u00a79: a submitted receipt leaves review only through an ' +
+      'administrator\u2019s decision). About the PAYMENT, so it is true of a wallet top-up as well ' +
+      'as of an order \u2014 `bot.order.transfer_under_review` speaks of cancelling an order, ' +
+      'which a top-up does not have.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },

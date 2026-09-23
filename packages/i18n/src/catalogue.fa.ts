@@ -212,12 +212,35 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.receipts_list': 'پرداخت‌های در انتظار بررسی:',
   'bot.admin.receipts_none': 'در حال حاضر هیچ پرداختی در انتظار بررسی نیست.',
   'bot.admin.receipt':
-    'کد پیگیری: {reference}\nمبلغ: {total}\nمشتری: {customer}\n\nرسید ارسال‌شده در پیام‌های بعدی است. پس از بررسی، یکی از دو گزینه را انتخاب کنید.',
+    'کد پیگیری: {reference}\nمبلغ: {total}\nمشتری: {customer} {username}\nبابت: {order}\n\nتوضیح مشتری: {note}',
   'bot.admin.receipt_gone': 'این پرداخت دیگر در انتظار بررسی نیست و نتیجهٔ آن قبلاً ثبت شده است.',
   'bot.admin.approve_button': '✅ تأیید پرداخت',
   'bot.admin.reject_button': '❌ رد پرداخت',
   'bot.admin.approved': 'پرداخت تأیید شد و نتیجه برای مشتری ثبت گردید.',
   'bot.admin.rejected': 'پرداخت رد شد و نتیجه برای مشتری ثبت گردید.',
+  /*
+   * Payment File 02 §12 — the third disposition, in Telegram. The capture reads ONE
+   * message from ONE administrator about ONE payment, for five minutes, and nothing moves
+   * until the stated amount is confirmed.
+   */
+  'bot.admin.credit_button': '💳 واریز به کیف پول',
+  'bot.admin.credit_amount_prompt':
+    'واریز به کیف پول برای پرداخت {reference} (مبلغ پرداخت: {total}).\nمبلغی را که باید به کیف پول مشتری واریز شود، به همان واحد و فقط با رقم بفرستید؛ مثلاً 250000. تا {minutes} دقیقه منتظر پیام شما هستم.',
+  'bot.admin.credit_amount_invalid':
+    'این پیام مبلغ معتبری نیست. فقط رقم بفرستید (به همان واحد {total})؛ مبلغ باید بیشتر از صفر باشد.',
+  'bot.admin.credit_confirm':
+    'مبلغ {amount} به کیف پول مشتری {customer} واریز شود؟\nپرداخت: {reference} (مبلغ پرداخت: {total})\nپس از تأیید، این رسید بسته می‌شود و دیگر قابل تأیید یا رد نیست.',
+  'bot.admin.credit_confirm_button': '✅ تأیید واریز',
+  'bot.admin.credit_cancel_button': '✖️ انصراف',
+  'bot.admin.credited':
+    'مبلغ {amount} به کیف پول مشتری واریز شد و پرداخت {reference} بسته شد. این واریز پرداخت سفارش حساب نمی‌شود و به مشتری اطلاع داده می‌شود.',
+  'bot.admin.credit_cancelled': 'واریز لغو شد و مبلغی جابه‌جا نشد. رسید همچنان در صف بررسی است.',
+  'bot.admin.credit_expired':
+    'مهلت وارد کردن مبلغ تمام شده است و مبلغی جابه‌جا نشد. برای واریز، دوباره از صف رسیدها اقدام کنید.',
+  'bot.admin.credit_no_receipt':
+    'این پرداخت رسیدی ندارد و نمی‌توان آن را به کیف پول واریز کرد. مبلغی جابه‌جا نشد.',
+  'bot.admin.credit_currency':
+    'واحد پول این پرداخت دیگر واحد فروش این مجموعه نیست و واریز آن به کیف پول ممکن نیست. مبلغی جابه‌جا نشد؛ همچنان می‌توانید پرداخت را تأیید یا رد کنید.',
   /*
    * The services section, Phase 6A. Every action goes through the canonical path the
    * Web Admin uses; these strings are what an administrator reads while it does.
@@ -438,23 +461,20 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.wallet.topup_unavailable':
     'شارژ کیف پول در حال حاضر فعال نیست. لطفاً با پشتیبانی تماس بگیرید.',
   /*
-   * No amount, because the notification lane carries no payload. The sentence says the
-   * balance changed and where to read it; `/wallet` derives the figure from the ledger.
+   * Payment File 02 §18: the principal, then — as its own message — the gift. The figures
+   * are read at send time from the payment's own ledger entries (a reader, not a payload:
+   * ADR 0030 §1), and a missing entry sends nothing rather than a sentence with no amount.
    */
-  'bot.wallet.topup_credited': 'شارژ کیف پول شما تأیید شد. موجودی جدید را با /wallet ببینید.',
-  /*
-   * Payment File 02 §18: the gift is its own message, after the top-up's own. No figure —
-   * the lane has no payload — and both entries are on /wallet.
-   */
-  'bot.wallet.topup_gift_credited':
-    '🎁 هدیهٔ شارژ نیز جداگانه به کیف پول شما واریز شد. جزئیات و موجودی جدید را با /wallet ببینید.',
+  'bot.wallet.topup_credited':
+    '✅ مبلغ {amount} به کیف پول شما اضافه شد. موجودی را با /wallet ببینید.',
+  'bot.wallet.topup_gift_credited': '🎁 مبلغ {amount} نیز بابت هدیهٔ شارژ به کیف پول شما واریز شد.',
   /*
    * Payment File 02 §12: a reviewer credited the receipt to the wallet instead of taking
    * it as payment. The order, if any, is still unpaid — the sentence says so, because a
    * customer who sent money for an order will otherwise assume the order went through.
    */
   'bot.payment.receipt_credited_to_wallet':
-    'رسید پرداخت شما بررسی شد و مبلغی که تأیید شد به کیف پول شما واریز گردید. این واریز به‌عنوان پرداخت سفارش ثبت نشد؛ اگر سفارشی در انتظار پرداخت دارید، تا پایان مهلت آن می‌توانید آن را از کیف پول پرداخت کنید. موجودی را با /wallet ببینید.',
+    'رسید پرداخت شما بررسی شد و مبلغ {amount} به کیف پول شما واریز گردید. این واریز به‌عنوان پرداخت سفارش ثبت نشد؛ اگر سفارشی در انتظار پرداخت دارید، تا پایان مهلت آن می‌توانید آن را از کیف پول پرداخت کنید. موجودی را با /wallet ببینید.',
 
   /*
    * It used to end «سپس رسید را ارسال نمایید» — "then send the receipt" — and no
@@ -556,6 +576,12 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * P2. Paying from the wallet while a transfer the customer vouched for is waiting: the
    * review decides this order, and nothing was taken from the wallet.
    */
+  /*
+   * Payment File 02 §9: a transfer with a receipt leaves review only through an
+   * administrator. About the PAYMENT, so it reads true for a wallet top-up too.
+   */
+  'bot.payment.withdraw_under_review':
+    'رسید این پرداخت را فرستاده‌اید و در انتظار بررسی است، بنابراین تا اعلام نتیجه نمی‌توان آن را لغو کرد. نتیجهٔ بررسی به شما اطلاع داده می‌شود.',
   'bot.payment.transfer_under_review':
     'شما اعلام کرده‌اید که مبلغ این سفارش را واریز کرده‌اید. تا پایان بررسی آن واریز، پرداخت از کیف پول برای این سفارش ممکن نیست و مبلغی از کیف پول شما کسر نشد. نتیجهٔ بررسی به شما اطلاع داده می‌شود.',
   'bot.payment.not_pending': 'این پرداخت دیگر در انتظار نیست.',
