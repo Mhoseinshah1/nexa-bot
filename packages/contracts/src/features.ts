@@ -140,6 +140,21 @@ export const FEATURE_FLAGS = [
       'reminders.usage_final_percent',
     ],
   },
+  {
+    key: 'trials',
+    description:
+      'Offer customers a free trial service. Off by default, and turning it on is not ' +
+      'enough on its own: trial.product_id must name the product a trial is issued as. A ' +
+      'trial is provisioned exactly like a purchase \u2014 the same capacity slot, the same ' +
+      'panel eligibility, the same username policy \u2014 and costs the customer nothing: ' +
+      'no wallet entry, no payment. A trial whose service could not be created is given ' +
+      'back and does not count against trial.limit_per_customer.',
+    defaultEnabled: false,
+    // It changes what one screen offers; turning it off withdraws an offer and touches
+    // no trial already issued.
+    blastRadius: 'LOCAL',
+    configuredBy: ['trial.product_id', 'trial.limit_per_customer'],
+  },
 ] as const satisfies readonly FeatureFlagDefinition[];
 
 export type FeatureFlagKey = (typeof FEATURE_FLAGS)[number]['key'];

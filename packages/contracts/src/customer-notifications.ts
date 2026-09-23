@@ -140,6 +140,15 @@ export const CUSTOMER_NOTIFICATION_KINDS = [
   'SERVICE_USAGE_SECOND',
   /** Its final one. `service_reminders.id` is the subject. */
   'SERVICE_USAGE_FINAL',
+  /**
+   * A trial could not be created on its panel, and the trial was given back: it does
+   * not count against the customer's limit. `orders.id` is the subject.
+   *
+   * The trial's counterpart of `ORDER_REFUNDED_TO_WALLET`, and deliberately not that
+   * kind: that sentence tells the customer money is in their wallet, and a trial moved
+   * none. `docs/wp6-audit.md` A4.
+   */
+  'TRIAL_NOT_DELIVERED',
 ] as const;
 export type CustomerNotificationKind = (typeof CUSTOMER_NOTIFICATION_KINDS)[number];
 export const customerNotificationKindSchema = z.enum(CUSTOMER_NOTIFICATION_KINDS);
@@ -218,6 +227,12 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
   SERVICE_USAGE_FIRST: false,
   SERVICE_USAGE_SECOND: false,
   SERVICE_USAGE_FINAL: false,
+  /*
+   * `false`: the order is terminal and the grant is released in the same transaction
+   * that enqueues this. Nothing makes an undelivered trial delivered after the fact —
+   * a new trial is a new order.
+   */
+  TRIAL_NOT_DELIVERED: false,
 };
 
 /**
@@ -263,6 +278,7 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
   SERVICE_USAGE_FIRST: 'bot.service.usage_first',
   SERVICE_USAGE_SECOND: 'bot.service.usage_second',
   SERVICE_USAGE_FINAL: 'bot.service.usage_final',
+  TRIAL_NOT_DELIVERED: 'bot.trial.not_delivered',
 };
 
 /**

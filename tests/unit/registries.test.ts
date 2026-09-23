@@ -233,6 +233,8 @@ describe('the feature flag registry', () => {
       'service_expiry_reminders',
       'service_usage_reminders',
       'template_overrides',
+      // WP6-A. Off by default; the trial path it switches on is reachable.
+      'trials',
     ]);
   });
 });
