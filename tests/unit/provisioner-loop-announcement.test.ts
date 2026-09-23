@@ -34,6 +34,7 @@ describe('which results the provisioner loop announces', () => {
     const loop = new ProvisionerLoop(executor, delivery, outcomes, {
       scope: () => scope,
       cashback: { settleDue: async () => 0 },
+      referrals: { settleDue: async () => 0 },
       tickMs: 60_000,
       now: () => 0,
       logger: { info: () => undefined, error: () => undefined },

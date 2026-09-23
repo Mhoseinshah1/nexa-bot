@@ -750,6 +750,16 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.wallet_button',
       'bot.payment.window_too_short',
       /*
+       * WP9's three referral keys, reviewed against this case's rule. `button` is drawn on
+       * the wallet only while the program is running (a flag AND a rate), and opens
+       * `invite`, which names a /start link this head attributes on registration.
+       * `unconfigured` is the one answer when the program is not running, which leads
+       * nowhere because there is nowhere to lead.
+       */
+      'bot.referral.button',
+      'bot.referral.invite',
+      'bot.referral.unconfigured',
+      /*
        * 5F's generic refusal. It is in this inventory because it IS customer-facing,
        * and it promises nothing: it says the request cannot be completed now and that
        * nothing was charged. Both are true of every cause that reaches it — a stopped

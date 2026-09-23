@@ -68,6 +68,8 @@ export class ProvisionerLoop {
        * `PENDING` row until this decides it.
        */
       readonly cashback: { settleDue(scope: TenantContext, limit: number): Promise<number> };
+      /** The referral commissions the same deliveries earned (WP9 F7). Same shape, same tick. */
+      readonly referrals: { settleDue(scope: TenantContext, limit: number): Promise<number> };
       readonly tickMs: number;
       readonly now: () => number;
       /**
@@ -199,6 +201,9 @@ export class ProvisionerLoop {
        * its own short transaction, and a backlog takes more ticks rather than one long one.
        */
       await this.options.cashback.settleDue(scope, DRAIN_LIMIT);
+      // And the referral commissions those same deliveries earned, or those same ended
+      // orders voided — the same answer, decided for the referrer's wallet (WP9 F7).
+      await this.options.referrals.settleDue(scope, DRAIN_LIMIT);
       this.lastProgressAt = this.options.now();
     } catch (error: unknown) {
       /*

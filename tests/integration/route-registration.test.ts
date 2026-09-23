@@ -159,6 +159,10 @@ describe('dynamic route registration', () => {
       ['POST', `cashback-rules/${id}/activate`],
       ['POST', `cashback-rules/${id}/deactivate`],
       ['GET', `orders/${id}/pricing`],
+      // WP9: the referral reads.
+      ['GET', 'referrals'],
+      ['GET', 'referral-commissions'],
+      ['GET', `customers/${id}/referral`],
       ['GET', `services/${id}`],
       ['GET', `services/${id}/operations`],
       ['POST', `services/${id}/sync-usage`],

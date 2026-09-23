@@ -179,6 +179,13 @@ import { CashbackRuleAdminService } from './modules/commerce/pricing/application
 import { PricingReadService } from './modules/commerce/pricing/application/pricing-read.service.js';
 import { PricingService } from './modules/commerce/pricing/application/pricing.service.js';
 import { CashbackService } from './modules/commerce/pricing/application/cashback.service.js';
+import { ReferralProgram } from './modules/commerce/referrals/application/referral-program.js';
+import { ReferralCommissionService } from './modules/commerce/referrals/application/referral-commission.service.js';
+import { ReferralReadService } from './modules/commerce/referrals/application/referral-read.service.js';
+import {
+  DrizzleReferralCommissionRepository,
+  DrizzleReferralRepository,
+} from './modules/commerce/referrals/infrastructure/drizzle-referral.repository.js';
 import { DrizzleDiscountRepository } from './modules/commerce/pricing/infrastructure/drizzle-discount.repository.js';
 import {
   DrizzleCashbackRuleRepository,
@@ -410,6 +417,12 @@ export interface Container {
   readonly pricingRead: PricingReadService;
   /** Cashback from promise to credit to reversal (WP8 P9); driven by the provisioner loop. */
   readonly cashback: CashbackService;
+  /** WP9: attribution, the customer's invite and the commission promise. */
+  readonly referrals: ReferralProgram;
+  /** WP9: the commission lane, earned on delivery and reversed by refunds. */
+  readonly referralCommissions: ReferralCommissionService;
+  /** WP9: the operator's read-only view of attributions and commissions. */
+  readonly referralsRead: ReferralReadService;
   readonly commercialActions: CommercialActionService;
   /** A customer's free trial (WP6-A): issued through the purchase path, costs nothing. */
   readonly trials: TrialService;
@@ -873,7 +886,47 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const trialOverrideRepository = new DrizzleTrialOverrideRepository(database.db);
   const trialResetRepository = new DrizzleTrialResetRepository(database.db);
 
+  const settingRepository = new DrizzleSettingRepository(database.db);
+  const settingsResolver = new SettingsResolver(settingRepository, opsLog);
+  // Read by provisioning (WP6-C) as well as by the trial, so it is built with the
+  // settings resolver rather than beside the service that first needed it.
+  const featureFlagRepository = new DrizzleFeatureFlagRepository(database.db);
+  const featureFlagResolver = new FeatureFlagResolver(featureFlagRepository);
+
+  /*
+   * The referral program (WP9, `docs/wp9-referral-audit.md`). Built before the customer
+   * service because attribution happens INSIDE the transaction that registers a
+   * customer, and before pricing because a confirmation promises the commission.
+   */
+  const referralRepository = new DrizzleReferralRepository(database.db);
+  const referralCommissionRepository = new DrizzleReferralCommissionRepository(database.db);
+  const referralProgram = new ReferralProgram({
+    referrals: referralRepository,
+    commissions: referralCommissionRepository,
+    customers: customerRepository,
+    settings: settingsResolver,
+    features: featureFlagResolver,
+    bots: botInstances,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    uow,
+    idempotency,
+    outbox,
+    clock,
+    ids,
+  });
+  const referralReadService = new ReferralReadService({
+    referrals: referralRepository,
+    commissions: referralCommissionRepository,
+    customers: customerRepository,
+    guard,
+  });
+
   const customerService = new CustomerService({
+    referrals: referralProgram,
     repository: customerRepository,
     guard,
     audit,
@@ -888,13 +941,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
   });
-
-  const settingRepository = new DrizzleSettingRepository(database.db);
-  const settingsResolver = new SettingsResolver(settingRepository, opsLog);
-  // Read by provisioning (WP6-C) as well as by the trial, so it is built with the
-  // settings resolver rather than beside the service that first needed it.
-  const featureFlagRepository = new DrizzleFeatureFlagRepository(database.db);
-  const featureFlagResolver = new FeatureFlagResolver(featureFlagRepository);
 
   /**
    * Products, under the FROZEN `catalog.*` permissions.
@@ -1124,6 +1170,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const cashbackRuleRepository = new DrizzleCashbackRuleRepository(database.db);
   const orderCashbackRepository = new DrizzleOrderCashbackRepository(database.db);
   const pricingService = new PricingService({
+    referrals: referralProgram,
     discounts: discountRepository,
     cashbackRules: cashbackRuleRepository,
     orderCashback: orderCashbackRepository,
@@ -1418,8 +1465,25 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
   });
+  /*
+   * The referral commission lane (WP9 F7, F8): the cashback lane's twin, decided for the
+   * REFERRER's wallet — earned by the provisioner loop on delivery, reversed by a refund
+   * in the refund's own transaction.
+   */
+  const referralCommissionService = new ReferralCommissionService({
+    commissions: referralCommissionRepository,
+    wallet: walletRepository,
+    payments: paymentRepository,
+    refunds: refundRepository,
+    outbox,
+    uow,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
   const refundService = new RefundService({
     cashback: cashbackService,
+    referrals: referralCommissionService,
     repository: refundRepository,
     /*
      * The payment READ only, narrowed by `RefundServiceDeps`.
@@ -2271,6 +2335,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
 
   const provisionerLoop = new ProvisionerLoop(provisioner, deliveryService, outcomeAnnouncer, {
     cashback: cashbackService,
+    referrals: referralCommissionService,
     /*
      * The installation's own tenant.
      *
@@ -2878,6 +2943,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     cashbackRules: cashbackRuleAdminService,
     pricingRead: pricingReadService,
     cashback: cashbackService,
+    referrals: referralProgram,
+    referralCommissions: referralCommissionService,
+    referralsRead: referralReadService,
     commercialActions: commercialActionService,
     trials: trialService,
     trialAdmin: trialAdminService,
@@ -2989,6 +3057,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       customers: customerService,
       payments: paymentService,
       wallet: walletService,
+      referrals: referralProgram,
       // The SAME instances the container exposes, not new ones. Two order services
       // would each hold their own idempotency view, and a redelivered Telegram update
       // handled by one would not be seen as a replay by the other — which is the whole
