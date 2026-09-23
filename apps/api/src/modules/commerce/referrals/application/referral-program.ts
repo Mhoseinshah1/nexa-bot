@@ -58,6 +58,16 @@ export interface ReferralProgramDeps {
   readonly settings: SettingsResolver;
   readonly features: FeatureFlagResolver;
   readonly bots: Pick<BotInstanceRepository, 'findById'>;
+  /**
+   * The bot's username as Telegram states it NOW, asked outside any transaction.
+   *
+   * `bot_instances.username` is what the bootstrap recorded, and a rename in BotFather
+   * leaves it stale; a link built from it sends the referee to a name that may no longer
+   * exist or may belong to another bot. Null when Telegram could not be asked.
+   */
+  readonly botUsernames: {
+    liveUsername(scope: TenantContext, botInstanceId: BotInstanceId): Promise<string | null>;
+  };
   readonly guard: PermissionGuard;
   readonly audit: AuditWriter;
   readonly opsLog: OperationalEventRecorder;
@@ -248,6 +258,25 @@ export class ReferralProgram {
     const denial = { action: 'referral.invite', entityType: 'Customer', entityId: customerId };
     await this.deps.guard.check(scope, actor, REFERRAL_WEBHOOK_PERMISSION);
 
+    /*
+     * A redelivered turn — Telegram retrying an update whose reply was lost — carries the
+     * key this call already remembered. It is answered again rather than refused: the code
+     * is derived and already recorded, so recomputing the invite changes nothing, and
+     * remembering the key a second time would throw `IDEMPOTENCY_IN_FLIGHT` on every retry
+     * and the customer would never see the link. A key remembered for a different request
+     * still refuses, inside `find`.
+     */
+    const replay = await this.deps.idempotency.find<{ customerId: string; code: string }>(
+      scope,
+      REFERRAL_NAMESPACE,
+      input.idempotencyKey,
+      requestHash,
+    );
+
+    // Outside the transaction: a network call inside one would hold its locks for as long
+    // as Telegram takes to answer.
+    const username = await this.deps.botUsernames.liveUsername(scope, input.botInstanceId);
+
     return runAuthorizedMutation(
       {
         uow: this.deps.uow,
@@ -279,6 +308,8 @@ export class ReferralProgram {
         // The bot the customer is talking to is the only name a link can carry. A bot of
         // another tenant, or none, is a link that would take the referee somewhere else.
         if (bot === null || bot.tenantId !== scope.tenantId) return { outcome: 'UNAVAILABLE' };
+        // A link Telegram could not vouch for is not offered: a stale name is worse than none.
+        if (username === null) return { outcome: 'UNAVAILABLE' };
 
         const code = referralCodeFor(customerId);
         const recorded = await this.deps.referrals.ensureCode(
@@ -289,19 +320,21 @@ export class ReferralProgram {
         if (recorded === 'TAKEN') return { outcome: 'UNAVAILABLE' };
 
         const referredCount = await this.deps.referrals.countReferredBy(scope, customerId, tx);
-        await rememberOnce(
-          this.deps.idempotency,
-          scope,
-          REFERRAL_NAMESPACE,
-          input.idempotencyKey,
-          requestHash,
-          { customerId, code },
-          tx,
-        );
+        if (replay === null) {
+          await rememberOnce(
+            this.deps.idempotency,
+            scope,
+            REFERRAL_NAMESPACE,
+            input.idempotencyKey,
+            requestHash,
+            { customerId, code },
+            tx,
+          );
+        }
         return {
           outcome: 'READY',
           code,
-          link: `https://t.me/${bot.username}?start=${referralStartPayload(code)}`,
+          link: `https://t.me/${username}?start=${referralStartPayload(code)}`,
           referredCount,
         };
       },

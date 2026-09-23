@@ -173,14 +173,14 @@ export class CustomerService {
     const telegramUserId = telegramUserIdSchema.parse(input.telegramUserId);
     const profile = profileFactsFrom(input.from);
     const startPayload = input.startPayload ?? null;
-    // The payload joins the hash ONLY when present, so every key a previous release
-    // remembered for a payload-less update still hashes the same and replays as before.
-    const requestHash = hashRequest({
-      telegramUserId,
-      profile,
-      bot: input.botInstanceId,
-      ...(startPayload === null ? {} : { startPayload }),
-    });
+    /*
+     * The payload is deliberately NOT part of the hash. The key is Telegram's update id,
+     * and an update's text cannot change under it, so the payload adds no protection — and
+     * including it made every `/start <payload>` update a previous release remembered hash
+     * differently here. Redelivered across an upgrade, that update was refused as a payload
+     * mismatch on every retry instead of replaying the customer it had already created.
+     */
+    const requestHash = hashRequest({ telegramUserId, profile, bot: input.botInstanceId });
 
     /*
      * 3. Authorize BEFORE the replay lookup, not only inside the transaction.
