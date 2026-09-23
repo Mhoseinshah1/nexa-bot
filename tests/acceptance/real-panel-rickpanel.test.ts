@@ -203,9 +203,24 @@ describe('RickPanel acceptance', () => {
     });
     expect(two.ok, two.ok ? 'ok' : two.failure).toBe(true);
     const twoRecord = await observeUser(panel, observer, unlimited);
-    // The panel's own "unlimited" for both, per the create's description.
-    expect(twoRecord?.['data_limit'] ?? 0).toBe(0);
-    expect(twoRecord?.['expire'] ?? 0).toBe(0);
+    expect(twoRecord, 'the panel does not hold the unlimited account').not.toBeNull();
+    /*
+     * The panel's own "unlimited" for both, and the field must be THERE.
+     *
+     * No fallback: a record that omitted `data_limit` or `expire` would otherwise
+     * pass with the expected value supplied by the test, proving nothing about what
+     * the panel persisted. Found by the Codex review of PR #61.
+     *
+     * `0` or `null`, and only those. The create's description says 0 means
+     * unlimited; the Marzban lineage this panel descends from stores that 0 as SQL
+     * NULL and reads it back as `null`. Both are the panel's unlimited, so demanding
+     * exactly `0` would fail a correct panel — while an ABSENT key, `undefined`, is
+     * refused, and so is any number but 0.
+     */
+    for (const field of ['data_limit', 'expire'] as const) {
+      expect(twoRecord ?? {}, `the read-back record carries no ${field}`).toHaveProperty(field);
+      expect([0, null], `${field} is not the panel's unlimited`).toContain(twoRecord?.[field]);
+    }
     expect(twoRecord?.['status']).toBe('active');
   }, 180_000);
 
