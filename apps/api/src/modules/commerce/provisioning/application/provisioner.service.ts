@@ -49,7 +49,10 @@ import { toProviderCredentials } from '../../../platform/panels/application/prob
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import { decideOperability } from './panel-operability.js';
 import type { OrderRecord, OrderRepository } from '../../orders/application/ports.js';
-import type { UndeliverableOrderRefunder } from '../../orders/application/undeliverable-order-refunder.js';
+import {
+  isFreeTrial,
+  type UndeliverableOrderRefunder,
+} from '../../orders/application/undeliverable-order-refunder.js';
 import type { PaymentRepository } from '../../payments/application/ports.js';
 import {
   backoffMs,
@@ -2213,6 +2216,9 @@ export class ProvisionerService {
     RENEW: 'RENEW',
     ADD_TRAFFIC: 'ADD_TRAFFIC',
     ADD_TIME: 'ADD_TIME',
+    // A trial is a create nobody paid for, and it is given back on the same lane: it
+    // stops counting against the customer's limit. `docs/wp6-audit.md` A4.
+    TRIAL: 'PROVISION',
   };
 
   /**
@@ -2245,7 +2251,8 @@ export class ProvisionerService {
    * ## Why a missing payment declines rather than throws
    *
    * `settlementIsFunded` makes a settled order imply a confirmed payment, so null
-   * here is a broken database. Throwing would roll back the operation's own terminal
+   * here is a broken database — for every order except a trial, which reached `PAID`
+   * through `GRANT` with nothing to pay and is handed on with no payment. Throwing would roll back the operation's own terminal
    * transition, leaving the row claimable and the same impossible state to be met
    * again on the next tick, for ever. Declining leaves the `provisioning.stalled`
    * ERROR the caller already recorded, which is the right place for an operator to
@@ -2282,8 +2289,15 @@ export class ProvisionerService {
     if (order === null || order.state !== 'PAID') return;
     if (ProvisionerService.PURCHASED_AS[order.purpose] !== purchasedAs) return;
 
-    const payment = await this.deps.payments.findConfirmedForOrder(scope, orderId, tx);
-    if (payment === null) return;
+    /*
+     * A trial has no payment and must not be asked for one: `isFreeTrial` is the
+     * refunder's own test, and the refunder declines a null payment for anything else.
+     * Every other order keeps the rule below.
+     */
+    const payment = isFreeTrial(order)
+      ? null
+      : await this.deps.payments.findConfirmedForOrder(scope, orderId, tx);
+    if (payment === null && !isFreeTrial(order)) return;
 
     if (purchasedAs === 'PROVISION') {
       /*

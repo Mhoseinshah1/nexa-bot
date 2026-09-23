@@ -82,6 +82,22 @@ export interface UndeliverableOrderRefunderDeps {
    * error.
    */
   readonly usernames: Pick<OrderUsernameLane, 'release'>;
+  /**
+   * Gives a TRIAL back, on the same terms as the slot and the name.
+   *
+   * A trial order that could not be delivered must not count against the customer's
+   * limit — plan §7.1, `docs/wp6-audit.md` A4 — and this is the transaction that has
+   * just established it never will be. Idempotent: `release` stamps only a grant not
+   * already released and reports whether it did.
+   */
+  readonly trials: {
+    release(
+      scope: TenantContext,
+      orderId: string,
+      at: Date,
+      tx: TransactionScope,
+    ): Promise<boolean>;
+  };
   /** Tells the customer, in the transaction that made it true. */
   readonly notifier: CustomerNotifier;
   readonly opsLog: OperationalEventRecorder;
@@ -137,7 +153,16 @@ export class UndeliverableOrderRefunder {
     input: {
       readonly order: OrderRecord;
       readonly from: Extract<OrderState, 'AWAITING_PAYMENT' | 'PAID'>;
-      readonly payment: PaymentRecord;
+      /**
+       * The money to give back — and `null` ONLY for a trial, which moved none.
+       *
+       * A null is accepted for an order whose purpose is `TRIAL` and whose total is
+       * zero (`orderIsFreeTrial`, and `orders_trial_is_free_check` beneath it), and
+       * declined for anything else: a priced order with no confirmed payment is the
+       * broken database `refundPurchase` describes, and "refund" it by closing the
+       * order would be telling a customer they were paid back with nothing credited.
+       */
+      readonly payment: PaymentRecord | null;
       /** WHY it could not be delivered — a closed vocabulary, never a provider's text. */
       readonly reason: string;
       readonly now: Date;
@@ -164,6 +189,8 @@ export class UndeliverableOrderRefunder {
   ): Promise<boolean> {
     const { order, from, payment, reason, now, recovers } = input;
     const orderId = order.id as OrderId;
+    const trial = isFreeTrial(order);
+    if (payment === null && !trial) return false;
 
     const to = nextState(ORDER_MACHINE, from, 'REFUND');
     if (to === null) {
@@ -199,8 +226,20 @@ export class UndeliverableOrderRefunder {
     // And the name, for the same reason and in the same breath. A refunded order
     // holds nothing — not a slot, and not a name somebody else could be using.
     await this.deps.usernames.release(scope, orderId, tx);
+    // And the trial allowance, so an undelivered trial does not count. A no-op for
+    // every order that is not a trial: only a trial order has a grant.
+    if (trial) await this.deps.trials.release(scope, orderId, now, tx);
 
-    const refund = await this.deps.refunds.refundUndeliverable(scope, actor, { payment, now }, tx);
+    /*
+     * The one credit path, skipped only when there is nothing to credit. A trial's
+     * total is zero and `RefundService` would refuse a zero refund anyway
+     * (`refunds_amount_check`), so the absence of a payment is not a shortcut
+     * around the ledger — it is the ledger having nothing to say.
+     */
+    const refund =
+      payment === null
+        ? null
+        : await this.deps.refunds.refundUndeliverable(scope, actor, { payment, now }, tx);
     const credited = refund?.amount ?? order.totals.total;
 
     await this.deps.opsLog.record(
@@ -208,7 +247,9 @@ export class UndeliverableOrderRefunder {
       {
         code: ORDER_REFUNDED_CODE,
         severity: 'INFO',
-        message: `order ${orderId} could not be delivered (${reason}) and was refunded to the customer's wallet`,
+        message: trial
+          ? `trial order ${orderId} could not be delivered (${reason}); the trial was given back and does not count`
+          : `order ${orderId} could not be delivered (${reason}) and was refunded to the customer's wallet`,
         dedupeKey: undeliverableConditionKey(orderId),
         context: {
           orderId,
@@ -248,7 +289,8 @@ export class UndeliverableOrderRefunder {
     await this.deps.notifier.notify(
       scope,
       order.customerId,
-      'ORDER_REFUNDED_TO_WALLET',
+      // A trial moved no money, so "refunded to your wallet" would be false.
+      trial ? 'TRIAL_NOT_DELIVERED' : 'ORDER_REFUNDED_TO_WALLET',
       orderId,
       now,
       tx,
@@ -256,4 +298,14 @@ export class UndeliverableOrderRefunder {
 
     return true;
   }
+}
+
+/**
+ * `orderIsFreeTrial`, the guard on the order machine's `GRANT` edge, read back off a
+ * stored order: purpose `TRIAL` AND a zero total. Both, because either alone is a
+ * different thing — a zero-total purchase would be a pricing bug, and a priced trial is
+ * what `orders_trial_is_free_check` exists to make impossible.
+ */
+export function isFreeTrial(order: Pick<OrderRecord, 'purpose' | 'totals'>): boolean {
+  return order.purpose === 'TRIAL' && order.totals.total.amountMinor === 0n;
 }
