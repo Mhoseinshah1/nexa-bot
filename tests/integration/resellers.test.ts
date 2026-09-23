@@ -1281,6 +1281,14 @@ describe('resellers (WP9-B)', () => {
       );
       const termsBefore = await termsRow(order.id);
 
+      // An operator refunds a DELIVERED order only (WP10 P3): while the purchase operation
+      // is undecided the refund is refused as DELIVERY_IN_PROGRESS. Delivered here the way
+      // `refunds.test.ts` does it, since this suite is about the ledger, not the panel.
+      await ctx.container.database.db.execute(sql`
+        UPDATE provisioning_operations
+           SET state = 'SUCCEEDED', completed_at = now(), claimed_by = NULL, lease_until = NULL
+         WHERE tenant_id = ${tenantA.tenantId} AND order_id = ${order.id}`);
+
       await ctx.container.refunds.request(tenantA, owner, {
         idempotencyKey: key(),
         paymentId: payment.id,
