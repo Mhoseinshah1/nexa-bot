@@ -3336,6 +3336,42 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.payment.expired_under_review',
+    description:
+      'Tells a customer the payment window closed on a transfer they VOUCHED FOR \u2014 ' +
+      'they said they sent it, or sent a receipt. Sent by the customer notification lane ' +
+      'INSTEAD of `bot.payment.expired`. The payment and its order are closed and nothing ' +
+      'reopens them, and the sentence must not pretend otherwise; what it adds is that the ' +
+      'transfer is still being checked and that anything that arrived will reach the ' +
+      'wallet. Without it a customer who has already sent money reads "the window closed" ' +
+      'as "the money is lost" (docs/wp10-payments-audit.md P1).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.late_transfer_credited',
+    description:
+      'Tells a customer a reviewer found the transfer that arrived after its payment ' +
+      'expired, and credited its amount to their wallet. Says the order itself did not go ' +
+      'through, and that the wallet balance can pay for it again or for something else. ' +
+      'Carries no amount: the lane has no payload (ADR 0030 \u00a71) and /wallet shows the ' +
+      'figure, derived from the ledger (P1).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.transfer_under_review',
+    description:
+      'Shown when a customer tries to pay an order from their wallet after saying they ' +
+      'had already sent a transfer for it. Nothing was debited. Says the transfer is ' +
+      'waiting for review and that the review decides the order, so the customer does not ' +
+      'pay twice. Distinct from `bot.order.transfer_under_review`, which answers a ' +
+      'CANCELLATION and says the order cannot be cancelled: here the customer asked to ' +
+      'pay, and a sentence about cancelling would describe something they did not do (P2).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.payment.not_pending',
     description:
       'Shown when a customer acts on a payment that has already ended \u2014 confirmed, ' +
@@ -4223,6 +4259,19 @@ export const TEMPLATES = [
       'A trial could not be created on its panel. Says the trial was given back, so it ' +
       'does not count against the customer. Deliberately says nothing about money, ' +
       'because none moved.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.refund.completed',
+    description:
+      'Tells a customer an operator\u2019s refund is complete: the money is back on their ' +
+      'wallet, or has been sent back to them out of band. Sent once per COMPLETED refund, ' +
+      'including each part of a partial refund, and never for a refund still awaiting an ' +
+      'external transfer, which is a promise rather than a fact. Carries no amount and no ' +
+      'channel: the lane has no payload (ADR 0030 \u00a71), so the sentence is true of both ' +
+      'channels and points at /wallet. The automatic refund of an undeliverable order is ' +
+      'told by `bot.order.refunded_to_wallet` instead (docs/wp10-payments-audit.md P3).',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },

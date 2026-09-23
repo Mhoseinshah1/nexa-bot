@@ -22,6 +22,14 @@ export const LEDGER_REASONS = [
   'TOPUP_RECEIPT',
   'TOPUP_STARS',
   'TOPUP_CRYPTO',
+  // WP10 P1: a manual transfer that arrived after its payment expired, credited to the
+  // wallet by a reviewer because the payment and its order stay closed. A CREDIT and never
+  // a reversal: it reverses nothing, it is money that arrived by the only door still open.
+  // Its own reason rather than `TOPUP_RECEIPT`, which is a top-up the customer asked for,
+  // and rather than `ADMIN_CREDIT`, which has no payment behind it and nothing to bound
+  // it. One per payment, by `wallet_entries_late_transfer_payment_key`.
+  // `docs/wp10-payments-audit.md` P1.
+  'LATE_TRANSFER',
   // Commerce
   'PURCHASE',
   'PURCHASE_REVERSAL',

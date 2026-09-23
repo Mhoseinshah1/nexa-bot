@@ -75,9 +75,12 @@ import {
 } from './provisioning.js';
 import { LEDGER_DIRECTIONS, LEDGER_REASONS } from './ledger.js';
 import {
+  LATE_TRANSFER_DECISIONS,
+  LATE_TRANSFER_NOTE_MAX_LENGTH,
   PAYMENT_AMOUNT_MAX_MINOR,
   PAYMENT_EVIDENCE_KINDS,
   PAYMENT_METHODS,
+  PAYMENT_REJECTION_REASONS,
   PAYMENT_STATES,
 } from './payment.js';
 import { CURRENCY_CODES, MAX_MONEY_AMOUNT_MINOR, salesCurrencyCodeSchema } from './money.js';
@@ -2999,6 +3002,22 @@ export const walletAdjustRequestSchema = z.object({
 export type WalletAdjustRequest = z.infer<typeof walletAdjustRequestSchema>;
 
 /**
+ * A late transfer's one decision, as the Web Admin renders it (P1).
+ *
+ * `reason` is null for a credit and a `PAYMENT_REJECTION_REASONS` member for a
+ * dismissal — the same equality `late_transfer_decisions_reason_check` pins. The note is
+ * NOT here: it is one reviewer's text about somebody's bank transfer, and it travels only
+ * on the audit row, the way a rejection's note is kept to the payment detail.
+ */
+export const lateTransferDecisionViewSchema = z.object({
+  decision: z.enum(LATE_TRANSFER_DECISIONS),
+  reason: z.enum(PAYMENT_REJECTION_REASONS).nullable(),
+  decidedAt: z.iso.datetime(),
+  decidedByAdminId: z.string(),
+});
+export type LateTransferDecisionView = z.infer<typeof lateTransferDecisionViewSchema>;
+
+/**
  * One payment, as the Web Admin renders it.
  *
  * `orderId` nullable is the whole model on the wire: a payment that names an
@@ -3060,6 +3079,25 @@ export const paymentSummarySchema = z.object({
   expiresAt: z.iso.datetime().nullable(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
+  /**
+   * The late-review decision, when there is one (`docs/wp10-payments-audit.md` P1).
+   *
+   * Null for every payment that never entered the lane and for one still waiting in it.
+   * On the SUMMARY, beside `customerSignalledAt`, because the lane is a list and the
+   * decision is what makes a row in it finished.
+   *
+   * Defaulted on PARSE rather than required, so a reader holding a response from the
+   * previous release — which never sent the field — reads "no decision" rather than
+   * failing. The server always sends it.
+   */
+  lateDecision: lateTransferDecisionViewSchema.nullable().default(null),
+  /**
+   * Whether this payment is in the late-review lane NOW: an EXPIRED manual transfer the
+   * customer vouched for (a signal or a receipt) with no decision yet. The server's own
+   * answer, so a surface draws the credit and dismiss actions from the same predicate
+   * that refuses them. Defaulted for the reason `lateDecision` is.
+   */
+  lateReviewEligible: z.boolean().default(false),
 });
 export type PaymentSummaryResponse = z.infer<typeof paymentSummarySchema>;
 
@@ -3120,6 +3158,17 @@ export const paymentListQuerySchema = z.object({
   orderId: uuidV7Schema.optional(),
   /** The quotable code, matched exactly. What an operator has in front of them. */
   reference: z.string().trim().min(1).max(64).optional(),
+  /**
+   * The late-review lane (P1): `true` narrows to EXPIRED manual transfers the customer
+   * vouched for that carry no decision yet, `false` to everything else.
+   *
+   * The literal strings rather than `z.coerce.boolean()`, which reads the query string
+   * `false` as a non-empty string and therefore as `true` — a filter that inverts itself.
+   */
+  lateReview: z
+    .enum(['true', 'false'])
+    .transform((value) => value === 'true')
+    .optional(),
 });
 export type PaymentListQuery = z.infer<typeof paymentListQuerySchema>;
 
@@ -3175,6 +3224,44 @@ export const rejectPaymentRequestSchema = z.object({
 });
 export type RejectPaymentRequest = z.infer<typeof rejectPaymentRequestSchema>;
 
+/**
+ * A reviewer crediting a late transfer to the customer's wallet (P1).
+ *
+ * An idempotency key and NOTHING else. The amount is the payment's own, frozen when the
+ * customer was told what to send, and an amount on this request would be an operator able
+ * to credit a figure the customer never transferred — `confirmPaymentRequestSchema`
+ * refuses a figure for the same reason. The customer, the order and the currency are all
+ * read from the payment.
+ */
+export const lateTransferCreditRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+});
+export type LateTransferCreditRequest = z.infer<typeof lateTransferCreditRequestSchema>;
+
+/**
+ * A reviewer deciding that a late transfer did not arrive, or not as it should (P1).
+ *
+ * The REASON is required and closed (`PAYMENT_REJECTION_REASONS`, P6), and the note is
+ * optional beside it — the list is what a report counts, the note is what the list cannot
+ * say. Nothing moves on a dismissal; the customer is told `PAYMENT_REJECTED`.
+ */
+export const lateTransferDismissRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  reason: z.enum(PAYMENT_REJECTION_REASONS),
+  note: z
+    .union([z.string(), z.null()])
+    .optional()
+    .transform((value) => {
+      if (value === undefined || value === null) return null;
+      const trimmed = value.trim();
+      return trimmed === '' ? null : trimmed;
+    })
+    .refine((value) => value === null || value.length <= LATE_TRANSFER_NOTE_MAX_LENGTH, {
+      message: `must be at most ${LATE_TRANSFER_NOTE_MAX_LENGTH} characters`,
+    }),
+});
+export type LateTransferDismissRequest = z.infer<typeof lateTransferDismissRequestSchema>;
+
 export const WALLET_ROUTES = {
   balance: (customerId: string) => `/users/${encodeURIComponent(customerId)}/wallet`,
   entries: (customerId: string) => `/users/${encodeURIComponent(customerId)}/wallet/entries`,
@@ -3186,6 +3273,12 @@ export const PAYMENT_ROUTES = {
   detail: (id: string) => `/payments/${encodeURIComponent(id)}`,
   confirm: (id: string) => `/payments/${encodeURIComponent(id)}/confirm`,
   reject: (id: string) => `/payments/${encodeURIComponent(id)}/reject`,
+  /**
+   * The late-review lane's two decisions (P1), under `receipts.review` — the authority
+   * that could have confirmed the transfer inside its window.
+   */
+  lateCredit: (id: string) => `/payments/${encodeURIComponent(id)}/late-credit`,
+  lateDismiss: (id: string) => `/payments/${encodeURIComponent(id)}/late-dismiss`,
   /** What a customer sent against one payment, under `receipts.view`. */
   receipts: (id: string) => `/payments/${encodeURIComponent(id)}/receipts`,
   /**

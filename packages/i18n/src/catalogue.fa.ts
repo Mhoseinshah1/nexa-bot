@@ -537,6 +537,21 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.rejected':
     'پرداخت شما بررسی شد و تأیید نشد. اگر سفارشی در انتظار پرداخت دارید، تا پایان مهلت آن می‌توانید دوباره پرداخت کنید.',
   'bot.payment.expired': 'مهلت پرداخت شما به پایان رسید و این پرداخت بسته شد.',
+  /*
+   * WP10 P1. The window closed on a transfer the customer vouched for: the payment and
+   * the order are closed, and the money is still being looked for. The sentence says both,
+   * and promises only what the lane will actually do — credit what arrived to the wallet.
+   */
+  'bot.payment.expired_under_review':
+    'مهلت پرداخت شما به پایان رسید و این پرداخت و سفارش آن بسته شد. واریز اعلام‌شدهٔ شما همچنان بررسی می‌شود و اگر مبلغ به دست ما رسیده باشد، به کیف پول شما افزوده می‌شود.',
+  'bot.payment.late_transfer_credited':
+    'واریز شما پس از پایان مهلت پرداخت تأیید شد. سفارش مربوط انجام نشد، اما مبلغ آن به کیف پول شما افزوده شد و می‌توانید با آن دوباره خرید کنید. موجودی را با /wallet ببینید.',
+  /*
+   * P2. Paying from the wallet while a transfer the customer vouched for is waiting: the
+   * review decides this order, and nothing was taken from the wallet.
+   */
+  'bot.payment.transfer_under_review':
+    'شما اعلام کرده‌اید که مبلغ این سفارش را واریز کرده‌اید. تا پایان بررسی آن واریز، پرداخت از کیف پول برای این سفارش ممکن نیست و مبلغی از کیف پول شما کسر نشد. نتیجهٔ بررسی به شما اطلاع داده می‌شود.',
   'bot.payment.not_pending': 'این پرداخت دیگر در انتظار نیست.',
 
   'bot.service.list_empty': 'هنوز سرویسی ندارید.',
@@ -644,4 +659,10 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.trial.button': '🎁 دریافت سرویس آزمایشی',
   'bot.trial.not_delivered':
     'متأسفیم، سرویس آزمایشی شما ساخته نشد. این مورد جزو سهمیه سرویس آزمایشی شما حساب نمی‌شود.',
+  /*
+   * WP10 P3. True of both refund channels — the wallet and a transfer out of band — so it
+   * names neither, and points at the one place a figure is shown.
+   */
+  'bot.refund.completed':
+    'بازپرداخت شما انجام شد. اگر مبلغ به کیف پول بازگشته باشد، موجودی جدید را با /wallet ببینید.',
 };

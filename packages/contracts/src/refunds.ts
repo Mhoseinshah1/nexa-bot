@@ -196,6 +196,35 @@ export function refundMayTransition(from: RefundState, to: RefundState): boolean
 }
 
 /**
+ * Why a payment cannot be refunded AT ALL, carried as the `reason` detail of
+ * `REFUND_NOT_PERMITTED`.
+ *
+ * Named here rather than left as strings at the throw site, because an operator's
+ * surface branches on them and a string nobody declared is a string two places spell
+ * differently. None of them is something a different AMOUNT would fix — that is
+ * `REFUND_EXCEEDS_REFUNDABLE` — and one of them is transient:
+ *
+ * - `PAYMENT_NOT_SETTLED` — only a CONFIRMED payment took money.
+ * - `CHANNEL_UNSUPPORTED` — the payment's method has no refund channel this release can
+ *   perform (`REFUND_METHOD_SUPPORT`).
+ * - `TOPUP_CREDITED_TO_WALLET` — a top-up's money is already on the wallet (`OQ-5H-04`).
+ * - `CURRENCY_MISMATCH` — the payment carries refunds in another currency; fail closed.
+ * - `DELIVERY_IN_PROGRESS` — WP10 P3. The order's purchase operation has not reached a
+ *   terminal state: it is planned, in flight, or its outcome is UNKNOWN. Refunding money
+ *   for an account the customer may be holding is the ambiguity the money rules forbid,
+ *   and a create that FAILED is the automatic refund's to answer, not an operator's. The
+ *   one refusal here that goes away on its own.
+ */
+export const REFUND_REFUSAL_REASONS = [
+  'PAYMENT_NOT_SETTLED',
+  'CHANNEL_UNSUPPORTED',
+  'TOPUP_CREDITED_TO_WALLET',
+  'CURRENCY_MISMATCH',
+  'DELIVERY_IN_PROGRESS',
+] as const;
+export type RefundRefusalReason = (typeof REFUND_REFUSAL_REASONS)[number];
+
+/**
  * The operator's own words, required on a request and on a completion.
  *
  * Required rather than optional, because the legacy `/admin/logs` is a free-text Persian

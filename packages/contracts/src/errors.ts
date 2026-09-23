@@ -1012,6 +1012,12 @@ export const COMMERCE_ERROR_CODES = {
    *
    * It is deliberately NOT a permission failure and not a not-found. Both would hide a
    * live order from the person who placed it.
+   *
+   * WP10 P2 gives it a second producer, for the same fact: `settleFromWallet` refuses to
+   * debit a wallet for an order whose transfer the customer has said they sent. A wallet
+   * payment and an open transfer cannot both settle one order, and only a reviewer may
+   * decide the transfer — so nothing is debited, and the customer is told to wait for
+   * the review rather than to top up.
    */
   ORDER_TRANSFER_UNDER_REVIEW: 'commerce.order_transfer_under_review',
 
@@ -1082,6 +1088,10 @@ export const COMMERCE_ERROR_CODES = {
    * refund channel this release can perform (`GATEWAY`, per `REFUND_METHOD_SUPPORT`), or
    * it is already refunded in full. None of the three is something a different amount
    * would fix, which is what distinguishes this from `REFUND_EXCEEDS_REFUNDABLE`.
+   *
+   * The `reason` detail is a `REFUND_REFUSAL_REASONS` member. WP10 P3 adds
+   * `DELIVERY_IN_PROGRESS`: the order's purchase operation is not terminal, and the
+   * refund waits until what the customer holds is known.
    */
   REFUND_NOT_PERMITTED: 'commerce.refund_not_permitted',
   /**
@@ -1216,6 +1226,26 @@ export const COMMERCE_ERROR_CODES = {
   DISCOUNT_CODE_TAKEN: 'commerce.discount_code_taken',
   /** An operator's cashback rule id that names nothing in this tenant. */
   CASHBACK_RULE_NOT_FOUND: 'commerce.cashback_rule_not_found',
+  /**
+   * The payment is not in the late-review lane, so it cannot be credited or dismissed.
+   *
+   * `docs/wp10-payments-audit.md` P1. The lane holds one kind of payment: an EXPIRED
+   * `MANUAL_TRANSFER` the customer vouched for — a signal, or at least one receipt. A
+   * payment still PENDING is decided by the ordinary confirm and reject; a confirmed one
+   * is reversed by a refund; one nobody vouched for has no evidence a reviewer could
+   * credit against. The `reason` detail says which.
+   */
+  LATE_TRANSFER_NOT_ELIGIBLE: 'commerce.late_transfer_not_eligible',
+  /**
+   * The late transfer already carries its one decision.
+   *
+   * Its own code rather than `LATE_TRANSFER_NOT_ELIGIBLE`, because it is the answer to a
+   * race rather than to a mistake: a second reviewer, or a credit racing a dismissal,
+   * lost to a decision that is now on record. The detail carries the standing decision
+   * so the loser can read what happened without a second screen. A REPLAY of the same
+   * command is not this — it is answered with the result it already had.
+   */
+  LATE_TRANSFER_ALREADY_DECIDED: 'commerce.late_transfer_already_decided',
 } as const;
 
 /*
