@@ -255,6 +255,29 @@ export class DrizzleOrderCashbackRepository implements OrderCashbackRepository {
    * accounts the customer holds. Everything else is still in flight and waits.
    */
   async due(scope: TenantContext, limit: number, tx?: unknown): Promise<readonly DueCashback[]> {
+    return this.answered(scope, null, limit, tx);
+  }
+
+  async dueFor(scope: TenantContext, orderId: string, tx?: unknown): Promise<DueCashback | null> {
+    const [row] = await this.answered(scope, orderId, 1, tx);
+    return row ?? null;
+  }
+
+  /**
+   * `PENDING` promises whose order has an answer — one order's, or the oldest `limit`.
+   *
+   * Delivered is `PURCHASED_AS[purpose]` — the provisioner's own table, imported rather
+   * than copied — having an operation for this order in `SUCCEEDED`. That includes a
+   * create whose answer was lost and a read later proved took effect: a reconcile moves
+   * the original operation to `SUCCEEDED`, so the promise is kept for exactly the
+   * accounts the customer holds. Everything else is still in flight and waits.
+   */
+  private async answered(
+    scope: TenantContext,
+    orderId: string | null,
+    limit: number,
+    tx?: unknown,
+  ): Promise<readonly DueCashback[]> {
     const tenantId = requireTenantId(scope);
     const purchasedAs = sql.join(
       Object.entries(PURCHASED_AS).map(([purpose, type]) => sql`WHEN ${purpose} THEN ${type}`),
@@ -271,6 +294,12 @@ export class DrizzleOrderCashbackRepository implements OrderCashbackRepository {
       ENDED_ORDER_STATES.map((s) => sql`${s}`),
       sql`, `,
     )})`;
+    const conditions: SQL[] = [
+      eq(orderCashback.tenantId, tenantId),
+      eq(orderCashback.state, 'PENDING'),
+      sql`(${delivered} OR ${ended})`,
+    ];
+    if (orderId !== null) conditions.push(eq(orderCashback.orderId, orderId));
     const rows = await this.exec(tx)
       .select({ orderId: orderCashback.orderId, delivered, ended })
       .from(orderCashback)
@@ -278,13 +307,7 @@ export class DrizzleOrderCashbackRepository implements OrderCashbackRepository {
         orders,
         and(eq(orders.tenantId, orderCashback.tenantId), eq(orders.id, orderCashback.orderId)),
       )
-      .where(
-        and(
-          eq(orderCashback.tenantId, tenantId),
-          eq(orderCashback.state, 'PENDING'),
-          sql`(${delivered} OR ${ended})`,
-        ),
-      )
+      .where(and(...conditions))
       .orderBy(asc(orderCashback.createdAt), asc(orderCashback.id))
       .limit(limit);
     return rows.map((r) => ({ orderId: r.orderId, delivered: r.delivered, ended: r.ended }));

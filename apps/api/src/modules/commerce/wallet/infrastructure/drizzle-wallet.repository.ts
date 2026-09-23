@@ -87,6 +87,7 @@ export class DrizzleWalletRepository implements WalletRepository {
         paymentId: draft.paymentId ?? null,
         actorAdminId: draft.actorAdminId ?? null,
         note: draft.note ?? null,
+        reversesEntryId: draft.reversesEntryId ?? null,
         createdAt: draft.now,
       })
       .onConflictDoNothing({ target: [walletEntries.tenantId, walletEntries.reference] })

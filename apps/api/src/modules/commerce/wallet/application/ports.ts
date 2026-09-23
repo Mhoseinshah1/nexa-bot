@@ -59,6 +59,14 @@ export interface WalletEntryDraft {
   readonly paymentId?: PaymentId | null;
   readonly actorAdminId?: string | null;
   readonly note?: string | null;
+  /**
+   * The entry this one reverses, for a `REVERSAL_REASONS` entry.
+   *
+   * WP8 is the first writer: a `CASHBACK_REVERSAL` names the `CASHBACK_PURCHASE` credit
+   * it takes back. `REVERSAL_REASONS`' own docblock says such an entry "requires a
+   * reference to it", and the column has existed since 4C with nothing writing it.
+   */
+  readonly reversesEntryId?: string | null;
   readonly now: Date;
 }
 

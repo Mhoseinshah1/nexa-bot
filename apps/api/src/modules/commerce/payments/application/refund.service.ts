@@ -24,6 +24,7 @@ import {
   type TenantContext,
   type UnitOfWork,
 } from '@nexa/contracts';
+import type { CashbackService } from '../../pricing/application/cashback.service.js';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import {
   recordMutationDenial,
@@ -79,6 +80,12 @@ export interface RefundServiceDeps {
    * anything: a refund is bounded by the PAYMENT, never by what the wallet holds.
    */
   readonly wallet: Pick<WalletRepository, 'append' | 'lockCustomer'>;
+  /**
+   * The cashback lane's one entry into a refund (WP8 P9): when a refund reaches
+   * `COMPLETED`, the share of the order's earned cashback it made owed is taken back in
+   * the SAME transaction. Narrowed to that one method.
+   */
+  readonly cashback: Pick<CashbackService, 'reverseForRefund'>;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly audit: AuditWriter;
@@ -328,6 +335,9 @@ export class RefundService {
 
         if (immediate) {
           await this.creditWallet(scope, created, actor, now, tx);
+          // After the credit, so the balance the reversal reads already holds it: on a
+          // wallet refund the credit is always at least the reversal (P9).
+          await this.deps.cashback.reverseForRefund(scope, actor, created, now, tx);
         }
 
         await this.deps.audit.record(
@@ -432,6 +442,9 @@ export class RefundService {
             { reason: 'STATE_RACE' },
           );
         }
+
+        // The money has now actually gone back, so the cashback it bought goes back too.
+        await this.deps.cashback.reverseForRefund(scope, actor, after, now, tx);
 
         await this.deps.audit.record(
           scope,

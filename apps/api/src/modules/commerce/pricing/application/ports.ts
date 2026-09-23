@@ -301,6 +301,9 @@ export interface OrderCashbackRepository {
   /** `PENDING` promises whose order was delivered or has ended, oldest first, bounded. */
   due(scope: TenantContext, limit: number, tx?: unknown): Promise<readonly DueCashback[]>;
 
+  /** The same answer for one order, or null while its order is still in flight. */
+  dueFor(scope: TenantContext, orderId: string, tx?: unknown): Promise<DueCashback | null>;
+
   /** `PENDING -> EARNED`, conditional. False when the row had already moved. */
   earn(
     scope: TenantContext,

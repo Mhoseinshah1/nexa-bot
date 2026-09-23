@@ -61,6 +61,13 @@ export class ProvisionerLoop {
     private readonly outcomes: OperationOutcomeAnnouncer,
     private readonly options: {
       readonly scope: () => TenantContext;
+      /**
+       * The cashback earner (WP8 P9), driven by the SAME tick, after the drain that
+       * delivers. A promise whose order was just delivered is credited one tick later at
+       * most, and a crash in between costs a tick, never the credit: the promise is a
+       * `PENDING` row until this decides it.
+       */
+      readonly cashback: { settleDue(scope: TenantContext, limit: number): Promise<number> };
       readonly tickMs: number;
       readonly now: () => number;
       /**
@@ -186,6 +193,12 @@ export class ProvisionerLoop {
        * limits are somebody else's.
        */
       await this.outcomes.announceDue(scope, DRAIN_LIMIT);
+      /*
+       * And the cashback the drain above just earned, or the orders that ended without
+       * delivery just voided. ONE batch per tick, like the two above it: each decision is
+       * its own short transaction, and a backlog takes more ticks rather than one long one.
+       */
+      await this.options.cashback.settleDue(scope, DRAIN_LIMIT);
       this.lastProgressAt = this.options.now();
     } catch (error: unknown) {
       /*

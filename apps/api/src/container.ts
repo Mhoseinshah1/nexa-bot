@@ -175,6 +175,7 @@ import {
 import { OrderService } from './modules/commerce/orders/application/order.service.js';
 import { DrizzleOrderRepository } from './modules/commerce/orders/infrastructure/drizzle-order.repository.js';
 import { PricingService } from './modules/commerce/pricing/application/pricing.service.js';
+import { CashbackService } from './modules/commerce/pricing/application/cashback.service.js';
 import { DrizzleDiscountRepository } from './modules/commerce/pricing/infrastructure/drizzle-discount.repository.js';
 import {
   DrizzleCashbackRuleRepository,
@@ -1343,7 +1344,24 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    */
   const refundRepository = new DrizzleRefundRepository(database.db);
 
+  /*
+   * The cashback lane (WP8 P9): earned by the provisioner loop on delivery, reversed by
+   * a refund in the refund's own transaction. Built here, before the refund service that
+   * takes it.
+   */
+  const cashbackService = new CashbackService({
+    orderCashback: orderCashbackRepository,
+    wallet: walletRepository,
+    payments: paymentRepository,
+    refunds: refundRepository,
+    outbox,
+    uow,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
   const refundService = new RefundService({
+    cashback: cashbackService,
     repository: refundRepository,
     /*
      * The payment READ only, narrowed by `RefundServiceDeps`.
@@ -2194,6 +2212,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   });
 
   const provisionerLoop = new ProvisionerLoop(provisioner, deliveryService, outcomeAnnouncer, {
+    cashback: cashbackService,
     /*
      * The installation's own tenant.
      *
