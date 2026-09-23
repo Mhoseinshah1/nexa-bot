@@ -107,6 +107,10 @@ import {
   REFERRAL_TRIGGERS,
   RESELLER_STATUSES,
   RESELLER_PRICING_MODES,
+  RESELLER_OVERRIDE_MODES,
+  RESELLER_GRANT_KINDS,
+  RESELLER_GRANTABLE_OPERATIONS,
+  RESELLER_PRICE_LAYERS,
   TRIAL_LIMIT_MAX,
   TRIAL_LIMIT_MIN,
 } from '@nexa/contracts';
@@ -5792,16 +5796,100 @@ export const trialGrants = pgTable(
 );
 
 /**
- * A reseller — a customer with a pricing policy and, possibly, a credit line.
+ * A reseller tier: the pricing policy, the credit policy and — in `reseller_tier_grants` —
+ * the entitlements every reseller on it shares (`docs/wp9-reseller-audit.md` R2, R3, R5).
  *
- * `credit_limit_amount` defaults to ZERO, which is `RESELLER_DEFAULT_CREDIT_LIMIT_MINOR`
- * and the owner's instruction: a credit feature defaults to no credit, because the other
- * default means a tenant discovers it has extended unsecured credit to everyone it ever
- * marked a reseller. The limit is stored POSITIVE and means "the balance may reach minus
- * this", so no comparison is a double negative.
+ * Its own table and never a customer attribute: the legacy tier was one enum read by four
+ * subsystems, and that is the failure this keeps out. Edited in place, never deleted while
+ * a reseller points at it (the foreign key refuses).
+ */
+export const resellerTiers = pgTable(
+  'reseller_tiers',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    name: text('name').notNull(),
+    pricingMode: text('pricing_mode').notNull(),
+    /** Whole percent off list. Null unless the mode is PERCENTAGE_DISCOUNT. */
+    discountPercentage: integer('discount_percentage'),
+    /** The credit allowance below zero, stored positive. Zero means no debt (R8). */
+    creditLimitAmount: bigint('credit_limit_amount', { mode: 'bigint' })
+      .notNull()
+      .default(sql`0`),
+    creditLimitCurrency: text('credit_limit_currency').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    /** The composite key the tenant-scoped foreign keys below point at. */
+    uniqueIndex('reseller_tiers_tenant_id_key').on(table.tenantId, table.id),
+    uniqueIndex('reseller_tiers_tenant_name_key').on(table.tenantId, sql`lower(${table.name})`),
+    index('reseller_tiers_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
+    check('reseller_tiers_pricing_mode_check', enumCheck('pricing_mode', RESELLER_PRICING_MODES)),
+    check(
+      'reseller_tiers_credit_currency_check',
+      enumCheck('credit_limit_currency', CURRENCY_CODES),
+    ),
+    check('reseller_tiers_credit_limit_check', sql`credit_limit_amount >= 0`),
+    check(
+      'reseller_tiers_discount_mode_check',
+      sql`(pricing_mode = 'PERCENTAGE_DISCOUNT') = (discount_percentage IS NOT NULL)`,
+    ),
+    check(
+      'reseller_tiers_discount_range_check',
+      sql`discount_percentage IS NULL OR (discount_percentage >= 1 AND discount_percentage <= 100)`,
+    ),
+  ],
+);
+
+/**
+ * One entitlement a tier grants (R5). Deny by default, per kind: a kind with no row grants
+ * nothing. `subject = '*'` grants every subject of its kind — the wire's null; an
+ * `OPERATION` subject is an order purpose, every other subject an id of that kind.
  *
- * `discount_percentage` is required for `PERCENTAGE_DISCOUNT` and forbidden for
- * `LIST_PRICE`, checked by the database. There is no default margin.
+ * Replaced as a set, in one transaction, by the operator's grants write.
+ */
+export const resellerTierGrants = pgTable(
+  'reseller_tier_grants',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    tierId: uuid('tier_id').notNull(),
+    kind: text('kind').notNull(),
+    subject: text('subject').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.tenantId, table.tierId, table.kind, table.subject],
+      name: 'reseller_tier_grants_pkey',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.tierId],
+      foreignColumns: [resellerTiers.tenantId, resellerTiers.id],
+      name: 'reseller_tier_grants_tier_fk',
+    }).onDelete('cascade'),
+    check('reseller_tier_grants_kind_check', enumCheck('kind', RESELLER_GRANT_KINDS)),
+    check(
+      'reseller_tier_grants_subject_check',
+      sql`subject = '*' OR (kind = 'OPERATION' AND subject IN (${sql.raw(
+        RESELLER_GRANTABLE_OPERATIONS.map((o) => `'${o}'`).join(', '),
+      )})) OR (kind <> 'OPERATION' AND subject ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')`,
+    ),
+  ],
+);
+
+/**
+ * A reseller — a customer with a tier and, possibly, their own pricing override and credit
+ * limit (`docs/wp9-reseller-audit.md` R1–R3, R8).
+ *
+ * `pricing_mode = 'TIER'` is "no override": the tier prices. A null credit limit is "the
+ * tier's". The limit, wherever it comes from, is stored POSITIVE and means "the balance may
+ * reach minus this", so no comparison is a double negative, and it defaults to ZERO on the
+ * tier — a credit feature defaults to no credit.
  */
 export const resellers = pgTable(
   'resellers',
@@ -5811,15 +5899,14 @@ export const resellers = pgTable(
       .notNull()
       .references(() => tenants.id),
     customerId: uuid('customer_id').notNull(),
+    tierId: uuid('tier_id').notNull(),
     status: text('status').notNull().default('ACTIVE'),
-    pricingMode: text('pricing_mode').notNull().default('LIST_PRICE'),
+    pricingMode: text('pricing_mode').notNull().default('TIER'),
     /** Whole percent off list. Null unless the mode is PERCENTAGE_DISCOUNT. */
     discountPercentage: integer('discount_percentage'),
-    /** Positive, and zero by default. See the docblock. */
-    creditLimitAmount: bigint('credit_limit_amount', { mode: 'bigint' })
-      .notNull()
-      .default(sql`0`),
-    creditLimitCurrency: text('credit_limit_currency').notNull(),
+    /** The reseller's own limit, or null for the tier's. Positive when set. */
+    creditLimitAmount: bigint('credit_limit_amount', { mode: 'bigint' }),
+    creditLimitCurrency: text('credit_limit_currency'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -5829,14 +5916,31 @@ export const resellers = pgTable(
       foreignColumns: [customers.tenantId, customers.id],
       name: 'resellers_customer_fk',
     }),
+    foreignKey({
+      columns: [table.tenantId, table.tierId],
+      foreignColumns: [resellerTiers.tenantId, resellerTiers.id],
+      name: 'resellers_tier_fk',
+    }),
     /** A customer is a reseller once, or not at all. */
     uniqueIndex('resellers_customer_key').on(table.tenantId, table.customerId),
     index('resellers_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
+    index('resellers_tenant_tier_idx').on(table.tenantId, table.tierId),
     check('resellers_status_check', enumCheck('status', RESELLER_STATUSES)),
-    check('resellers_pricing_mode_check', enumCheck('pricing_mode', RESELLER_PRICING_MODES)),
-    check('resellers_credit_currency_check', enumCheck('credit_limit_currency', CURRENCY_CODES)),
+    check('resellers_pricing_mode_check', enumCheck('pricing_mode', RESELLER_OVERRIDE_MODES)),
+    check(
+      'resellers_credit_currency_check',
+      sql`credit_limit_currency IS NULL OR ${enumCheck('credit_limit_currency', CURRENCY_CODES)}`,
+    ),
+    /** Both halves of the override, or neither. */
+    check(
+      'resellers_credit_pair_check',
+      sql`(credit_limit_amount IS NULL) = (credit_limit_currency IS NULL)`,
+    ),
     /** Stored positive, so every comparison against it reads forwards. */
-    check('resellers_credit_limit_check', sql`credit_limit_amount >= 0`),
+    check(
+      'resellers_credit_limit_check',
+      sql`credit_limit_amount IS NULL OR credit_limit_amount >= 0`,
+    ),
     check(
       'resellers_discount_mode_check',
       sql`(pricing_mode = 'PERCENTAGE_DISCOUNT') = (discount_percentage IS NOT NULL)`,
@@ -5844,6 +5948,69 @@ export const resellers = pgTable(
     check(
       'resellers_discount_range_check',
       sql`discount_percentage IS NULL OR (discount_percentage >= 1 AND discount_percentage <= 100)`,
+    ),
+  ],
+);
+
+/**
+ * What a reseller's purchase was, frozen at confirmation (R9). One row per order,
+ * append-only (migration guard), written in the transaction that confirms the order.
+ *
+ * The margin is `list − cost` and is never a discount; the promotion discount is WP8's,
+ * taken off the cost. `sale = cost − promotion` is the order's total.
+ */
+export const orderResellerTerms = pgTable(
+  'order_reseller_terms',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    orderId: uuid('order_id').notNull(),
+    resellerCustomerId: uuid('reseller_customer_id').notNull(),
+    tierId: uuid('tier_id').notNull(),
+    tierName: text('tier_name').notNull(),
+    layer: text('layer').notNull(),
+    percent: integer('percent'),
+    listAmount: bigint('list_amount', { mode: 'bigint' }).notNull(),
+    costAmount: bigint('cost_amount', { mode: 'bigint' }).notNull(),
+    promotionAmount: bigint('promotion_amount', { mode: 'bigint' }).notNull(),
+    saleAmount: bigint('sale_amount', { mode: 'bigint' }).notNull(),
+    marginAmount: bigint('margin_amount', { mode: 'bigint' }).notNull(),
+    currency: text('currency').notNull(),
+    botInstanceId: uuid('bot_instance_id'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.tenantId, table.orderId], name: 'order_reseller_terms_pkey' }),
+    foreignKey({
+      columns: [table.tenantId, table.orderId, table.resellerCustomerId],
+      foreignColumns: [orders.tenantId, orders.id, orders.customerId],
+      name: 'order_reseller_terms_order_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.tierId],
+      foreignColumns: [resellerTiers.tenantId, resellerTiers.id],
+      name: 'order_reseller_terms_tier_fk',
+    }),
+    index('order_reseller_terms_tenant_reseller_idx').on(
+      table.tenantId,
+      table.resellerCustomerId,
+      table.createdAt,
+    ),
+    check('order_reseller_terms_layer_check', enumCheck('layer', RESELLER_PRICE_LAYERS)),
+    check('order_reseller_terms_currency_check', enumCheck('currency', CURRENCY_CODES)),
+    check(
+      'order_reseller_terms_amounts_check',
+      sql`list_amount >= 0 AND cost_amount >= 0 AND promotion_amount >= 0 AND sale_amount >= 0
+          AND cost_amount <= list_amount
+          AND sale_amount = cost_amount - promotion_amount
+          AND margin_amount = list_amount - cost_amount`,
+    ),
+    check(
+      'order_reseller_terms_percent_check',
+      sql`(percent IS NULL OR (percent >= 1 AND percent <= 100))
+          AND (layer <> 'TIER' OR percent IS NOT NULL)
+          AND (layer <> 'LIST' OR (percent IS NULL AND cost_amount = list_amount))`,
     ),
   ],
 );
