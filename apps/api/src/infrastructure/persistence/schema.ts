@@ -70,6 +70,7 @@ import {
   PAYMENT_GATEWAY_STATUSES,
   PAYMENT_RECEIPT_KINDS,
   RECEIPT_CAPTURE_CLOSE_REASONS,
+  ADMIN_AMOUNT_CAPTURE_CLOSE_REASONS,
   PAYMENT_STATES,
   PAYMENT_METHODS,
   PAYMENT_EVIDENCE_KINDS,
@@ -3921,6 +3922,81 @@ export const receiptCaptures = pgTable(
     check('receipt_captures_closed_check', sql`(closed_at IS NULL) = (close_reason IS NULL)`),
     check('receipt_captures_expiry_check', sql`expires_at > opened_at`),
     unique('receipt_captures_tenant_id_key').on(table.tenantId, table.id),
+  ],
+);
+
+/**
+ * The window in which ONE administrator's next plain message is read as an amount to credit
+ * from ONE receipt (Payment File 02 §12, `docs/payments-file02-design.md` D3).
+ *
+ * `receipt_captures`, turned round to face the reviewer. `INCIDENT-FIN-001` is an ADMIN
+ * prompt that swallowed a typed navigation string and overwrote a production setting, and
+ * credit-to-wallet genuinely needs a typed amount, so the prompt is a ROW with the four
+ * properties that one lacked, all of them here rather than in a docstring:
+ *
+ * 1. it names ONE administrator, ONE bot and ONE payment, so there is no "current prompt"
+ *    another person's message, or a message about another payment, can land in;
+ * 2. it reads ONE amount: once `amount_minor` is set it no longer reads messages, so a
+ *    second number typed after the confirmation was drawn cannot change what the button
+ *    confirms — to change the figure, the reviewer cancels and starts again;
+ * 3. the amount moves nothing by itself: a separate confirm, carrying this row's id,
+ *    calls `ReceiptDispositionService.creditToWallet` under a key derived from the id;
+ * 4. it EXPIRES, and the CHECK refuses a window that outlives its own opening.
+ *
+ * One open capture per administrator per bot is a partial unique index. Opening another
+ * closes the first as SUPERSEDED in the same transaction.
+ */
+export const adminAmountCaptures = pgTable(
+  'admin_amount_captures',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    /** WHICH bot the administrator is talking to, for `receipt_captures`' reason. */
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    adminId: uuid('admin_id').notNull(),
+    paymentId: uuid('payment_id').notNull(),
+    /**
+     * The amount the administrator typed, in minor units of the PAYMENT's currency. Null
+     * until they have typed one; set once. Not money on its own — nothing is credited
+     * until the confirm, and the credit's own row carries its currency.
+     */
+    amountMinor: bigint('amount_minor', { mode: 'bigint' }),
+    openedAt: timestamptz('opened_at').notNull().defaultNow(),
+    expiresAt: timestamptz('expires_at').notNull(),
+    closedAt: timestamptz('closed_at'),
+    closeReason: text('close_reason'),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.adminId],
+      foreignColumns: [admins.tenantId, admins.id],
+      name: 'admin_amount_captures_admin_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.paymentId],
+      foreignColumns: [payments.tenantId, payments.id],
+      name: 'admin_amount_captures_payment_fk',
+    }),
+    /** ONE open capture per administrator per bot, decided by the database. */
+    uniqueIndex('admin_amount_captures_open_key')
+      .on(table.tenantId, table.botInstanceId, table.adminId)
+      .where(sql`closed_at IS NULL`),
+    check(
+      'admin_amount_captures_close_reason_check',
+      nullableEnumCheck('close_reason', ADMIN_AMOUNT_CAPTURE_CLOSE_REASONS),
+    ),
+    check('admin_amount_captures_closed_check', sql`(closed_at IS NULL) = (close_reason IS NULL)`),
+    check('admin_amount_captures_expiry_check', sql`expires_at > opened_at`),
+    check('admin_amount_captures_amount_check', sql`amount_minor IS NULL OR amount_minor > 0`),
+    /** A confirmation confirms an amount: there is no CONFIRMED row without one. */
+    check(
+      'admin_amount_captures_confirmed_check',
+      sql`close_reason IS DISTINCT FROM 'CONFIRMED' OR amount_minor IS NOT NULL`,
+    ),
   ],
 );
 
