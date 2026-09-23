@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react';
 import { describe, expect, it } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { ResellersPage } from '../../apps/web/src/pages/resellers';
+import { ResellersPage, percentOf } from '../../apps/web/src/pages/resellers';
 import {
   ResellerTiersPage,
   blockedDimensions,
@@ -813,5 +813,16 @@ describe("an order's reseller terms", () => {
     detail(pricing(null));
     await screen.findByText('قیمت این سفارش کش‌بکی در بر ندارد.');
     expect(screen.queryByText('خرید نماینده')).toBeNull();
+  });
+});
+
+describe('the percentage field', () => {
+  it('accepts 1 to 99 and refuses 100, as the contract does', () => {
+    // A 100% reseller price is a zero-total order nothing can pay for (PR #69 review);
+    // the form says so here rather than leaving it to a 400 from the server.
+    expect(percentOf('1')).toBe(1);
+    expect(percentOf('99')).toBe(99);
+    expect(percentOf('100')).toBeNull();
+    expect(percentOf('0')).toBeNull();
   });
 });

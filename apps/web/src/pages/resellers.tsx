@@ -223,12 +223,12 @@ export function creditAmountOf(raw: string): string | null {
   return text.replace(/^0+(?=\d)/u, '');
 }
 
-/** A whole percentage in `[1, 100]`, the range the contract's `percentSchema` allows. */
+/** A whole percentage in `[1, 99]`, the range the contract's `percentSchema` allows. */
 export function percentOf(raw: string): number | null {
   const text = raw.trim();
   if (!/^\d{1,3}$/u.test(text)) return null;
   const value = Number(text);
-  return value >= 1 && value <= 100 ? value : null;
+  return value >= 1 && value <= 99 ? value : null;
 }
 
 // ---------------------------------------------------------------------------
