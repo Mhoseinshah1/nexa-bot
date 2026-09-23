@@ -86,3 +86,18 @@ Two constraints on that screen, both from documented legacy failures:
 
 Nothing in the schema. The semantics are recorded here and the corresponding
 rows in `docs/open-questions.md` are closed against this ADR.
+
+## Implementation (WP6)
+
+WP6-A implements the limit and the used count; `docs/wp6-audit.md` §2 is the design.
+
+- **The global default limit** is the `trial.limit_per_customer` setting, behind the
+  `trials` flag, which is off by default.
+- **Used** is the customer's `trial_grants` rows with `released_at` NULL. It is counted
+  under the customer's row lock.
+- **A trial whose service definitively could not be created is released** and does not
+  count (plan §7.1).
+- **The Phase 4 constant `TRIALS_PER_CUSTOMER = 1` and its unique index are removed.**
+  They said "one, ever", which this ADR does not.
+
+The per-customer override, the global reset and the operator's view are WP6-B.

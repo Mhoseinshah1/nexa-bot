@@ -206,7 +206,26 @@ reseller margin. Tests assert the ledger, payments and refunds are empty afterwa
   will, and nothing documents it as intended. Detail shows the stored usage and when it
   was read, which is truthful.
 
-## 4. Observed and left alone
+## 4. What the implementation added to the design
+
+- **The Telegram claim's idempotency key is suffixed** (`<update key>:trial`), as every
+  other write in that turn is. `resolveFromUpdate` has already spent the bare key in the
+  same namespace, and reusing it would refuse the claim as a reused key.
+- **A 500 on create is not an unknown outcome here.** The RickPanel adapter reads back
+  after a 500 and proves the account absent, which is DEFINITIVE — so the trial is given
+  back. A trial is kept counted only while its create is still retried or its outcome is
+  unknown; `trials.test.ts` pins the retried case.
+- **`0099_snapshot.json` was a verbatim copy of `0098`'s**, so both claimed the same
+  parent and `drizzle-kit generate` refused to run ("collision"). The drift check passes
+  on a clean tree because it generates nothing, which is why this went unnoticed. Its
+  `id` is now its own and its `prevId` is `0098`'s — generator metadata only; no applied
+  SQL changed.
+- **A rollback to the release before this one** meets `TRIAL` orders it cannot parse.
+  The older binary writes none and its provisioner declines them in `refundPurchase`
+  (`PURCHASED_AS` lacks `TRIAL`), so the failure is a read error on a trial order's own
+  screens, not a wrong write; `0102` keeps refusing every purpose `0050` refused.
+
+## 5. Observed and left alone
 
 `retireExhausted` retires a `PLANNED` operation at its attempt ceiling without a refund.
 It reaches that state only when a worker died holding the last attempt, which is an
@@ -214,11 +233,11 @@ unknown outcome. So not refunding is the rule and not a gap: the `provisioning.s
 ERROR it writes is where an operator meets it. It applies to a trial exactly as it does
 to a paid order.
 
-## 5. UNKNOWN — product decisions nobody has made
+## 6. UNKNOWN — product decisions nobody has made
 
-| id        | question                                                                               | what WP6 does meanwhile                                                         |
-| --------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| OQ-WP6-01 | May a customer who has already bought a service take a trial?                          | Yes. Nothing documents a restriction, and inventing one would be a policy.      |
-| OQ-WP6-02 | Should a trial require anything first: a channel join, a phone number, an account age? | No precondition. None is documented, and none of those identities is collected. |
-| OQ-WP6-03 | May a trial service be renewed or topped up like a bought one?                         | Yes. It is a service like any other once delivered, and renewal is a purchase.  |
-| OQ-WP6-04 | How often may a customer rotate their own link? (was OQ-RP-08)                         | WP6-C makes it a tenant setting behind a flag that is off by default.           |
+| id        | question                                                                               | what WP6 does meanwhile                                                                                                                                                                        |
+| --------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| OQ-WP6-01 | May a customer who has already bought a service take a trial?                          | Yes. Nothing documents a restriction, and inventing one would be a policy.                                                                                                                     |
+| OQ-WP6-02 | Should a trial require anything first: a channel join, a phone number, an account age? | No precondition. None is documented, and none of those identities is collected.                                                                                                                |
+| OQ-WP6-03 | May a trial service be renewed or topped up like a bought one?                         | It is a service like any other once delivered: add-ons are offered to it, and a renewal is offered only when its product has a price — a trial product usually has none, so it usually is not. |
+| OQ-WP6-04 | How often may a customer rotate their own link? (was OQ-RP-08)                         | WP6-C makes it a tenant setting behind a flag that is off by default.                                                                                                                          |
