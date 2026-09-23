@@ -515,11 +515,14 @@ describe('the customer purchase flow over Telegram', () => {
     expect(text).toContain('پلن پایه');
     expect(text).toContain(formatMoney(money(250_000n, 'IRT')));
 
-    // And exactly one button, naming the ORDER rather than the product.
+    // Two buttons, both naming the ORDER rather than the product: confirm, and — on a
+    // new-purchase draft, the one order a code can reach (WP8 P7) — enter a code.
     const buttons = buttonsOf(lastMessage());
-    expect(buttons).toHaveLength(1);
+    expect(buttons).toHaveLength(2);
     expect(buttons[0]?.text).toBe(CATALOGUE_FA['bot.order.confirm_button']);
     expect(buttons[0]?.callback_data).toBe(`c:${String(rows[0]?.['id'])}`);
+    expect(buttons[1]?.text).toBe(CATALOGUE_FA['bot.discount.enter_button']);
+    expect(buttons[1]?.callback_data).toBe(`dc:${String(rows[0]?.['id'])}`);
 
     // Nothing about payment, because nothing can take one.
     expect(text).not.toContain(CATALOGUE_FA['bot.order.awaiting_payment']);

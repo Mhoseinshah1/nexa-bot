@@ -621,6 +621,19 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.catalog.next_page_button',
       'bot.catalog.previous_page_button',
       /*
+       * WP8's five discount keys, reviewed against this case's rule. `enter_button` is
+       * drawn only on a new-purchase DRAFT, the one order a code can reach (P7), and
+       * opens a window `ask` names; `remove_button` only when a code is on it.
+       * `rejected` answers a typed code with one sentence for every reason, and
+       * `no_longer_valid` answers a confirmation whose discount stopped holding — it
+       * sends the customer back to start again, a flow this head has.
+       */
+      'bot.discount.ask',
+      'bot.discount.enter_button',
+      'bot.discount.no_longer_valid',
+      'bot.discount.rejected',
+      'bot.discount.remove_button',
+      /*
        * `bot.help` is 4H's, and it is the one key here that exists to make the OTHERS
        * findable. `docs/phase4h-audit.md` §9: four commands answered, none registered
        * with Telegram, and the greeting named only `/catalog` — so `/wallet` and
@@ -652,6 +665,14 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.order.not_awaiting_payment',
       'bot.order.settled',
       'bot.order.summary',
+      /*
+       * WP8's three summary variants: the same summary with the figures the quote
+       * carries — the subtotal and discount taken off, the cashback promised after
+       * delivery. Chosen from the quote, so each is sent only when its figures exist.
+       */
+      'bot.order.summary_cashback',
+      'bot.order.summary_discounted',
+      'bot.order.summary_discounted_cashback',
       /*
        * The refusal when the customer has already said they paid.
        *
