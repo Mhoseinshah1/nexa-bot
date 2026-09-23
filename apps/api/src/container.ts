@@ -3101,6 +3101,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       ]),
       destinations: paymentDestinationRenderer,
       receipts: receiptService,
+      // WP10 P1: the late-review lane in the receipts section, the same service the Web
+      // Admin's two routes call.
+      lateTransfers: lateTransferService,
       telegramAdmins,
       /*
        * The reviewers' poke, Phase 5T.
