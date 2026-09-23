@@ -6573,7 +6573,7 @@ export class BotRuntime {
       return this.claimTrial(scope, actor, customer, input.idempotencyKey);
     }
     if (command.intent === 'CATEGORY' && command.targetId !== null) {
-      return this.categoryPage(scope, actor, command.targetId, command.page ?? 0);
+      return this.categoryPage(scope, actor, command.targetId, command.page ?? 0, customer.id);
     }
     if (command.intent === 'ORDER' && command.targetId !== null) {
       return this.draft(
@@ -7516,6 +7516,8 @@ export class BotRuntime {
       actor,
       CATALOG_BROWSE_PAGE_SIZE,
       page * CATALOG_BROWSE_PAGE_SIZE,
+      // Whose catalogue: a reseller's tier decides what they see (WP9-B R6).
+      customer.id,
     );
     /*
      * The trial, first on the first page and only there — and only when this customer
@@ -7621,6 +7623,8 @@ export class BotRuntime {
     actor: ActorContext,
     categoryId: string,
     page: number,
+    /** Whose catalogue: a reseller's tier decides what they see (WP9-B R6). */
+    customerId: string,
   ): Promise<PendingReply> {
     const { items, hasMore } = await this.deps.products.browseCategory(
       scope,
@@ -7628,13 +7632,14 @@ export class BotRuntime {
       categoryId,
       CATALOG_BROWSE_PAGE_SIZE,
       page * CATALOG_BROWSE_PAGE_SIZE,
+      customerId,
     );
     const back: CustomerButton = {
       label: { kind: 'TEMPLATE', key: 'bot.catalog.back_to_categories_button' },
       data: `${CATALOG_PAGE_CALLBACK_PREFIX}0`,
     };
     if (items.length === 0) {
-      if (page > 0) return this.categoryPage(scope, actor, categoryId, 0);
+      if (page > 0) return this.categoryPage(scope, actor, categoryId, 0, customerId);
       return { key: 'bot.catalog.category_empty', values: {}, buttons: [back], orderId: null };
     }
     const buttons: CustomerButton[] = [];

@@ -19,6 +19,8 @@ import {
   type TenantContext,
   type UnitOfWork,
 } from '@nexa/contracts';
+import type { ResellerService } from '../../resellers/application/reseller.service.js';
+import { catalogueScope } from '../../resellers/domain/entitlement.js';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import {
   recordMutationDenial,
@@ -33,6 +35,7 @@ import type { SettingsResolver } from '../../../control/settings/application/set
 import type { OperationalEventRecorder } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type {
+  CatalogueAudience,
   CustomerPage,
   PanelDirectory,
   ProductDraft,
@@ -74,6 +77,11 @@ export const CATALOG_BROWSE_PERMISSION: PermissionKey = 'maintenance.run';
 
 export interface ProductServiceDeps {
   readonly repository: ProductRepository;
+  /**
+   * The browsing customer's reseller standing (`docs/wp9-reseller-audit.md` R5, R6): whose
+   * catalogue to build. The catalogue is a courtesy; the order paths decide for themselves.
+   */
+  readonly resellers: Pick<ResellerService, 'standing'>;
   /** Membership only — see `PanelDirectory`. Never a panel projection. */
   readonly panels: PanelDirectory;
   /**
@@ -159,6 +167,8 @@ export class ProductService {
     scope: TenantContext,
     actor: ActorContext,
     limit: number,
+    /** The browsing customer, whose reseller standing picks the catalogue. */
+    customerId?: string,
   ): Promise<{ readonly items: readonly ProductRecord[]; readonly hasMore: boolean }> {
     await this.deps.guard.check(scope, actor, CATALOG_BROWSE_PERMISSION);
     const bounded = Math.min(Math.max(limit, 1), PRODUCT_PAGE_MAX);
@@ -196,8 +206,9 @@ export class ProductService {
      * settlement re-decides again; this is the courtesy filter, unchanged in status
      * by becoming correct.
      */
-    const eligiblePanelIds = await this.deps.panelSales.eligiblePanelIds(scope);
-    return this.deps.repository.listCatalog(scope, bounded, eligiblePanelIds);
+    const view = await this.catalogueView(scope, customerId);
+    if (view === null) return { items: [], hasMore: false };
+    return this.deps.repository.listCatalog(scope, bounded, view.panelIds, view.audience);
   }
 
   /**
@@ -223,17 +234,21 @@ export class ProductService {
     actor: ActorContext,
     limit: number,
     offset: number,
+    /** The browsing customer, whose reseller standing picks the catalogue. */
+    customerId?: string,
   ): Promise<CustomerPage<ProductCategoryRecord>> {
     await this.deps.guard.check(scope, actor, CATALOG_BROWSE_PERMISSION);
     const bounded = Math.min(Math.max(limit, 1), PRODUCT_PAGE_MAX);
     // The same eligible-panel set the flat browse uses, and for the same reason:
     // every predicate goes into the query, ahead of LIMIT/OFFSET.
-    const eligiblePanelIds = await this.deps.panelSales.eligiblePanelIds(scope);
+    const view = await this.catalogueView(scope, customerId);
+    if (view === null) return { items: [], hasMore: false };
     return this.deps.repository.listCustomerCategories(
       scope,
       bounded,
       Math.max(offset, 0),
-      eligiblePanelIds,
+      view.panelIds,
+      view.audience,
     );
   }
 
@@ -256,17 +271,52 @@ export class ProductService {
     categoryId: string,
     limit: number,
     offset: number,
+    /** The browsing customer, whose reseller standing picks the catalogue. */
+    customerId?: string,
   ): Promise<CustomerPage<ProductRecord>> {
     await this.deps.guard.check(scope, actor, CATALOG_BROWSE_PERMISSION);
     const bounded = Math.min(Math.max(limit, 1), PRODUCT_PAGE_MAX);
-    const eligiblePanelIds = await this.deps.panelSales.eligiblePanelIds(scope);
+    const view = await this.catalogueView(scope, customerId);
+    if (view === null) return { items: [], hasMore: false };
     return this.deps.repository.listCustomerProductsInCategory(
       scope,
       categoryId,
       bounded,
       Math.max(offset, 0),
-      eligiblePanelIds,
+      view.panelIds,
+      view.audience,
     );
+  }
+
+  /**
+   * Whose catalogue this is, and on which panels (`docs/wp9-reseller-audit.md` R5, R6).
+   *
+   * An ordinary customer — and a SUSPENDED reseller — sees the public catalogue on every
+   * eligible panel. An ACTIVE reseller sees what their tier grants, translated by
+   * `catalogueScope` from the same grants `decideEntitlement` reads: nothing at all when the
+   * tier grants no new purchase through this bot (null), the granted panels only, and
+   * reseller-only products among the granted ones. Unknown customer: the public view.
+   */
+  private async catalogueView(
+    scope: TenantContext,
+    customerId: string | undefined,
+  ): Promise<{
+    readonly panelIds: readonly string[];
+    readonly audience: CatalogueAudience;
+  } | null> {
+    const eligible = await this.deps.panelSales.eligiblePanelIds(scope);
+    const standing =
+      customerId === undefined
+        ? null
+        : await this.deps.resellers.standing(scope, customerId, undefined);
+    if (standing === null) return { panelIds: eligible, audience: { kind: 'CUSTOMER' } };
+    const view = catalogueScope(standing.grants, scope.botInstanceId);
+    if (!view.shows) return null;
+    const granted = view.panelIds;
+    return {
+      panelIds: granted === 'ALL' ? eligible : eligible.filter((id) => granted.includes(id)),
+      audience: { kind: 'RESELLER', productIds: view.productIds, categoryIds: view.categoryIds },
+    };
   }
 
   /** Creates an INACTIVE product. Idempotent, audited. */

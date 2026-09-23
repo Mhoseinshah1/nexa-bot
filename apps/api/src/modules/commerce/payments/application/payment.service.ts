@@ -35,6 +35,7 @@ import {
   type UnitOfWork,
   type UserId,
 } from '@nexa/contracts';
+import type { ResellerService } from '../../resellers/application/reseller.service.js';
 import type { CustomerNotifier } from '../../messaging/application/customer-notifier.js';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
@@ -103,6 +104,8 @@ export interface PaymentServiceDeps {
   readonly repository: PaymentRepository;
   readonly orders: OrderRepository;
   readonly wallet: WalletRepository;
+  /** A reseller's credit allowance below zero, read under the wallet lock (R8). */
+  readonly resellers: Pick<ResellerService, 'creditAllowance'>;
   /**
    * Where an out-of-band transfer is to be sent, chosen inside the issuing transaction.
    *
@@ -578,12 +581,26 @@ export class PaymentService {
         const total = order.totals.total;
 
         const balance = await this.deps.wallet.balanceOf(scope, customerId, total.currency, tx);
-        if (!canCover(balance.amountMinor, total.amountMinor)) {
+        /*
+         * A reseller's credit line, read HERE, under the customer's lock taken above
+         * (`docs/wp9-reseller-audit.md` R8). Two concurrent purchases serialise on that lock,
+         * so the second sees the first's debit and the limit cannot be crossed.
+         */
+        const allowance = await this.deps.resellers.creditAllowance(
+          scope,
+          customerId,
+          total.currency,
+          tx,
+        );
+        if (!canCover(balance.amountMinor, total.amountMinor, allowance)) {
           throw errors.conflict(
             COMMERCE_ERROR_CODES.WALLET_INSUFFICIENT_FUNDS,
             'This wallet does not hold enough to pay for that order.',
             {
-              shortfallMinor: shortfallMinor(balance.amountMinor, total.amountMinor).toString(),
+              shortfallMinor: shortfallMinor(
+                balance.amountMinor + allowance,
+                total.amountMinor,
+              ).toString(),
               // The CURRENCY travels with the figure, always. A shortfall without one is
               // a bare number, and `bot.wallet.insufficient` declares a MONEY
               // placeholder precisely so a customer is never shown one.
