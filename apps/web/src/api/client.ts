@@ -57,6 +57,9 @@ import {
   type TrialResetResponse,
   IDENTITY_ERROR_CODES,
   PAYMENT_ROUTES,
+  COMPENSATION_ROUTES,
+  compensationListResponseSchema,
+  type CompensationListResponse,
   SERVICE_ROUTES,
   serviceListResponseSchema,
   serviceActionResponseSchema,
@@ -1040,12 +1043,6 @@ export function fetchPayments(
     customerId?: string;
     orderId?: string;
     reference?: string;
-    /**
-     * The late-review lane (WP10 P1): EXPIRED manual transfers the customer vouched for,
-     * with no decision yet. Sent as the literal `true` the contract reads; `false` is a
-     * filter too (everything else), and absent is no filter at all.
-     */
-    lateReview?: boolean;
   } = {},
 ): Promise<PaymentListResponse> {
   const params = new URLSearchParams();
@@ -1060,7 +1057,6 @@ export function fetchPayments(
   if (query.reference !== undefined && query.reference !== '') {
     params.set('reference', query.reference);
   }
-  if (query.lateReview !== undefined) params.set('lateReview', String(query.lateReview));
   const suffix = params.toString();
   return authedGet(
     suffix ? `${PAYMENT_ROUTES.list}?${suffix}` : PAYMENT_ROUTES.list,
@@ -1170,6 +1166,24 @@ export function actOnService(input: {
       ? { idempotencyKey: input.idempotencyKey, confirm: input.confirm ?? '' }
       : { idempotencyKey: input.idempotencyKey };
   return post(SERVICE_ACTION_PATHS[input.action](input.id), body, serviceActionResponseSchema);
+}
+
+/**
+ * The compensation list (Payment File 02 §21, D7): every automatic wallet refund of an
+ * order that could not be delivered. Read-only — a compensation is automatic, and there
+ * is no route that makes or changes one. Keyset-paged by the server's opaque cursor.
+ */
+export function fetchCompensations(
+  query: { limit?: number; cursor?: string } = {},
+): Promise<CompensationListResponse> {
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${COMPENSATION_ROUTES.list}?${suffix}` : COMPENSATION_ROUTES.list,
+    compensationListResponseSchema,
+  );
 }
 
 export function fetchPayment(id: string): Promise<PaymentResponse> {

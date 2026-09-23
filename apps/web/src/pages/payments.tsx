@@ -164,6 +164,44 @@ function Dash() {
   return <span className="faint">—</span>;
 }
 
+/**
+ * Who paid, as Telegram knows them: the numeric id, and the username when they have one
+ * (Payment File 02 §21). The id is the identity; a username is chosen by the person it
+ * names, so it is shown beside the id and never instead of it.
+ */
+export function TelegramIdentity({
+  telegramUserId,
+  username,
+}: {
+  telegramUserId: string | null;
+  username: string | null;
+}) {
+  if (telegramUserId === null) return <Dash />;
+  return (
+    <span className="nowrap">
+      <Ltr>{telegramUserId}</Ltr>
+      {username !== null && (
+        <>
+          {' '}
+          <span className="muted small">
+            <Ltr>{`@${username}`}</Ltr>
+          </span>
+        </>
+      )}
+    </span>
+  );
+}
+
+/** The route a payment was offered through, by name, or a dash for a wallet settlement. */
+function GatewayName({ provider }: { provider: string | null }) {
+  if (provider === null) return <Dash />;
+  return provider === 'MANUAL_TRANSFER' ? (
+    <>{t('web.payment_gateway_provider_manual_transfer')}</>
+  ) : (
+    <Ltr>{provider}</Ltr>
+  );
+}
+
 /** A full id, or the field's own error. The same guard `/orders` uses on its filters. */
 function idProblem(value: string): string | undefined {
   if (value === '') return undefined;
@@ -240,6 +278,15 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
 
   const columns: readonly Column<PaymentSummaryResponse>[] = [
     {
+      /*
+       * The payment's own id (§21), shortened on the list and copyable whole, because it
+       * is what the audit log, the ledger and a support conversation name.
+       */
+      key: 'id',
+      header: t('web.payment_id'),
+      render: (row) => <Copyable value={row.id} display={row.id.slice(0, 8)} />,
+    },
+    {
       key: 'reference',
       header: t('web.payment_reference'),
       render: (row) => (
@@ -259,6 +306,11 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
       render: (row) => t(METHOD_LABELS[row.method]),
     },
     {
+      key: 'gateway',
+      header: t('web.payment_gateway'),
+      render: (row) => <GatewayName provider={row.gatewayProvider} />,
+    },
+    {
       key: 'amount',
       header: t('web.payment_amount'),
       render: (row) => <Money value={{ amountMinor: row.amount, currency: row.currency }} />,
@@ -270,6 +322,16 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
         <a href={`/users/${encodeURIComponent(row.customerId)}`} onClick={onLink}>
           <Ltr>{row.customerId.slice(0, 8)}</Ltr>
         </a>
+      ),
+    },
+    {
+      key: 'telegram',
+      header: t('web.payment_telegram'),
+      render: (row) => (
+        <TelegramIdentity
+          telegramUserId={row.customerTelegramUserId}
+          username={row.customerUsername}
+        />
       ),
     },
     {
@@ -310,9 +372,20 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
         ),
     },
     {
+      key: 'external',
+      header: t('web.payment_external_reference'),
+      render: (row) =>
+        row.externalReference === null ? <Dash /> : <Ltr>{row.externalReference}</Ltr>,
+    },
+    {
       key: 'created',
       header: t('web.payment_created_at'),
       render: (row) => <span className="nowrap">{formatTimestamp(row.createdAt)}</span>,
+    },
+    {
+      key: 'updated',
+      header: t('web.payment_updated_at'),
+      render: (row) => <span className="nowrap">{formatTimestamp(row.updatedAt)}</span>,
     },
   ];
 
@@ -1059,8 +1132,13 @@ export function PaymentDetailPage({
             <Card title={t('web.payment_detail')}>
               <KV
                 items={[
+                  [t('web.payment_id'), <Copyable key="id" value={row.id} />],
                   [t('web.payment_state'), <StateBadge key="s" value={row.state} />],
                   [t('web.payment_method'), t(METHOD_LABELS[row.method])],
+                  [
+                    t('web.payment_gateway'),
+                    <GatewayName key="g" provider={row.gatewayProvider} />,
+                  ],
                   [
                     t('web.payment_amount'),
                     <Money key="a" value={{ amountMinor: row.amount, currency: row.currency }} />,
@@ -1075,6 +1153,14 @@ export function PaymentDetailPage({
                     >
                       <Ltr>{row.customerId}</Ltr>
                     </a>,
+                  ],
+                  [
+                    t('web.payment_telegram'),
+                    <TelegramIdentity
+                      key="tg"
+                      telegramUserId={row.customerTelegramUserId}
+                      username={row.customerUsername}
+                    />,
                   ],
                   [
                     t('web.payment_order'),
@@ -1093,7 +1179,16 @@ export function PaymentDetailPage({
                       </a>
                     ),
                   ],
+                  [
+                    t('web.payment_external_reference'),
+                    row.externalReference === null ? (
+                      <Dash key="x" />
+                    ) : (
+                      <Copyable key="x" value={row.externalReference} />
+                    ),
+                  ],
                   [t('web.payment_created_at'), formatTimestamp(row.createdAt)],
+                  [t('web.payment_updated_at'), formatTimestamp(row.updatedAt)],
                   [
                     t('web.payment_expires_at'),
                     row.expiresAt === null ? <Dash key="e" /> : formatTimestamp(row.expiresAt),
@@ -1117,6 +1212,59 @@ export function PaymentDetailPage({
                 <p className="muted small">{t('web.payment_customer_signalled_hint')}</p>
               )}
             </Card>
+
+            {/*
+              The top-up gift this payment promised (Payment File 02 §17, D5): the
+              percentage SNAPSHOTTED from its route when it was created. Null for anything
+              that is not a top-up, which is why the card is absent rather than dashed.
+            */}
+            {row.topupCashbackPercent !== null && (
+              <Card title={t('web.payment_topup_gift')}>
+                <p className="strong">
+                  <Ltr>{`${String(row.topupCashbackPercent)}%`}</Ltr>
+                </p>
+                <p className="muted small">{t('web.payment_topup_gift_hint')}</p>
+              </Card>
+            )}
+
+            {/*
+              The receipt's credit-to-wallet disposition, when that is how it was decided
+              (Payment File 02 §12, D2). READ-ONLY: it was decided in Telegram, and this
+              page shows what, by whom and when — never a control to make or undo one.
+              The amount is the reviewer's, which may differ from the payment's own; that
+              difference is the reason the disposition exists.
+            */}
+            {row.receiptCredit !== null && (
+              <Card title={t('web.payment_receipt_credit')}>
+                <KV
+                  items={[
+                    [
+                      t('web.payment_receipt_credit_amount'),
+                      <Money
+                        key="ca"
+                        value={{
+                          amountMinor: row.receiptCredit.amountMinor,
+                          currency: row.receiptCredit.currency,
+                        }}
+                      />,
+                    ],
+                    [
+                      t('web.payment_receipt_credit_admin'),
+                      <Copyable key="cw" value={row.receiptCredit.decidedByAdminId} />,
+                    ],
+                    [
+                      t('web.payment_receipt_credit_at'),
+                      formatTimestamp(row.receiptCredit.decidedAt),
+                    ],
+                    [
+                      t('web.payment_receipt_credit_note'),
+                      row.receiptCredit.note === null ? <Dash key="cn" /> : row.receiptCredit.note,
+                    ],
+                  ]}
+                />
+                <p className="muted small">{t('web.payment_receipt_credit_hint')}</p>
+              </Card>
+            )}
 
             {/*
               What a confirmation RESTS on, and who made it.

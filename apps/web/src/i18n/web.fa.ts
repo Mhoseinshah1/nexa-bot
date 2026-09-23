@@ -297,6 +297,7 @@ export const WEB_FA = {
   'web.nav_orders': 'سفارش‌ها',
   'web.nav_products': 'محصولات',
   'web.nav_payments': 'پرداخت‌ها و کیف پول',
+  'web.nav_compensations': 'جبران‌های خودکار',
   'web.nav_discounts': 'تخفیف‌ها و کش‌بک',
   'web.nav_referrals': 'معرفی و پورسانت',
   'web.nav_resellers': 'نمایندگان',
@@ -980,6 +981,42 @@ export const WEB_FA = {
   'web.payment_reviewer': 'تأییدکننده',
   'web.payment_confirmed_at': 'زمان تأیید',
   'web.payment_created_at': 'زمان ثبت',
+  /*
+   * Payment File 02 §21 (D7): the diagnostics an operator reconciles against, on the list
+   * and the detail. Read-only — card-to-card is decided in Telegram (§10).
+   */
+  'web.payment_id': 'شناسهٔ پرداخت',
+  'web.payment_telegram': 'تلگرام مشتری',
+  'web.payment_gateway': 'درگاه',
+  'web.payment_external_reference': 'شناسهٔ پیگیری بیرونی',
+  'web.payment_updated_at': 'آخرین تغییر',
+  'web.payment_topup_gift': 'هدیهٔ شارژ این پرداخت',
+  'web.payment_topup_gift_hint':
+    'درصدی که هنگام ایجاد این شارژ از درگاه آن ثبت شد. تغییر بعدی تنظیمات درگاه آن را عوض نمی‌کند.',
+  'web.payment_receipt_credit': 'واریز رسید به کیف پول',
+  'web.payment_receipt_credit_hint':
+    'این رسید در تلگرام به‌جای تأیید یا رد، با مبلغی که مدیر وارد کرد به کیف پول مشتری واریز شد. این واریز پرداخت سفارش حساب نمی‌شود.',
+  'web.payment_receipt_credit_amount': 'مبلغ واریزشده',
+  'web.payment_receipt_credit_admin': 'مدیر تصمیم‌گیرنده',
+  'web.payment_receipt_credit_at': 'زمان واریز',
+  'web.payment_receipt_credit_note': 'یادداشت مدیر',
+  /*
+   * The compensation list (§21, D7): automatic wallet refunds of undeliverable orders.
+   * No timeline and no action — a compensation is automatic.
+   */
+  'web.compensations_title': 'جبران‌های خودکار',
+  'web.compensations_intro':
+    'سفارش‌هایی که پول آن‌ها رسید ولی تحویلشان ممکن نشد، و مبلغی که به‌طور خودکار به کیف پول مشتری بازگشت.',
+  'web.compensations_empty': 'هنوز جبرانی ثبت نشده است.',
+  'web.compensation_payment': 'پرداخت',
+  'web.compensation_order': 'سفارش',
+  'web.compensation_customer': 'مشتری',
+  'web.compensation_principal': 'مبلغ اصلی',
+  'web.compensation_credited': 'واریز به کیف پول',
+  'web.compensation_reason': 'دلیل',
+  'web.compensation_reason_undeliverable': 'تحویل‌نشدنی',
+  'web.compensation_state': 'وضعیت',
+  'web.compensation_time': 'زمان',
   'web.payment_expires_at': 'اعتبار تا',
   /*
    * The customer's CLAIM, and the copy never lets it read as evidence.
@@ -1068,6 +1105,10 @@ export const WEB_FA = {
   'web.payment_gateway_max': 'حداکثر مبلغ',
   'web.payment_gateway_amount_hint': 'مبلغ‌ها به ریال. عدد صفر یعنی بدون محدودیت.',
   'web.payment_gateway_sort': 'ترتیب نمایش',
+  'web.payment_gateway_topup_gift': 'هدیهٔ شارژ (درصد)',
+  'web.payment_gateway_topup_gift_hint':
+    'درصدی از مبلغ هر شارژ کیف پول از این درگاه که جداگانه به‌عنوان هدیه به کیف پول مشتری واریز می‌شود؛ ۰ یعنی بدون هدیه. هر شارژ درصد زمان ایجاد خود را نگه می‌دارد، پس تغییر آن فقط بر شارژهای بعدی اثر دارد.',
+  'web.payment_gateway_topup_invalid': 'درصد هدیهٔ شارژ باید عددی صحیح از ۰ تا ۱۰۰ باشد.',
   'web.payment_gateway_unbounded': 'بدون محدودیت',
   'web.payment_gateway_instructions': 'راهنمای مشتری',
   'web.payment_gateway_instructions_hint':

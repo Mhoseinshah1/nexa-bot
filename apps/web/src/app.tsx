@@ -18,6 +18,7 @@ import { SystemPage } from './pages/system';
 import { RecoveryPage } from './pages/recovery';
 import { PlannedPage, PLANNED_SURFACES, type PlannedKey } from './pages/planned';
 import { PaymentsPage, PaymentDetailPage } from './pages/payments';
+import { CompensationsPage } from './pages/compensations';
 import { PaymentAccountsPage } from './pages/payment-accounts';
 import { PaymentGatewaysPage } from './pages/payment-gateways';
 import { ProductDetailPage, ProductsPage } from './pages/products';
@@ -232,6 +233,19 @@ export const NAV: readonly NavEntry[] = [
     id: 'payments',
     path: '/payments',
     label: 'web.nav_payments',
+    icon: 'payments',
+    permission: 'payments.view',
+    group: 'web.navgroup_sales',
+  },
+  {
+    /*
+     * The compensation list (Payment File 02 §21, D7), directly under payments because it
+     * is a view OF payments: the automatic wallet refunds of paid orders that could not be
+     * delivered. `payments.view`, the key `GET /compensations` charges.
+     */
+    id: 'compensations',
+    path: '/compensations',
+    label: 'web.nav_compensations',
     icon: 'payments',
     permission: 'payments.view',
     group: 'web.navgroup_sales',
@@ -726,6 +740,14 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
       element: <PaymentsPage route={route} denied={!may('payments.view')} />,
       crumbs: [{ label: t('web.payments_title') }],
       title: t('web.payments_title'),
+    };
+  }
+
+  if (route.path === '/compensations') {
+    return {
+      element: <CompensationsPage route={route} denied={!may('payments.view')} />,
+      crumbs: [nav('payments'), { label: t('web.compensations_title') }],
+      title: t('web.compensations_title'),
     };
   }
 

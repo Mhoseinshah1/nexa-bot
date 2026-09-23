@@ -5,6 +5,8 @@ import { PaymentDetailPage, PaymentsPage } from '../../apps/web/src/pages/paymen
 import { resolve } from '../../apps/web/src/app';
 import { formatTimestamp } from '../../apps/web/src/format';
 import { renderPage, stubApi } from './harness';
+import { PAYMENT_ROUTES } from '@nexa/contracts';
+import * as client from '../../apps/web/src/api/client';
 
 /**
  * Payments, rendered against the shapes the server actually returns.
@@ -909,5 +911,139 @@ describe('the refund card', () => {
     expect(view.container.textContent).toContain('بازگشت انجام شد');
     // Nothing left to answer, so the form that records an external transfer is absent.
     expect(view.container.textContent).not.toContain('پاسخ به بازگشت‌های در انتظار واریز');
+  });
+});
+
+/**
+ * Payment File 02 §21 (D7): the diagnostics an operator reconciles against, on the list
+ * and the detail — and §10 again: none of it is a control.
+ */
+describe('the payment diagnostics (§21)', () => {
+  const diagnosed = payment({
+    gatewayProvider: 'MANUAL_TRANSFER',
+    externalReference: 'BANK-778899',
+    customerTelegramUserId: '5550001234',
+    customerUsername: 'zahra_pay',
+    updatedAt: '2026-09-11T08:15:00.000Z',
+  });
+
+  it('lists the payment id, the Telegram id and username, the gateway, the external reference and updated-at', async () => {
+    stubApi(list([diagnosed]));
+    renderPage(<PaymentsPage route={LIST_ROUTE} denied={false} />);
+    await screen.findByText('a1b2c3d4e5f60718:manual');
+
+    const table = screen.getByRole('table');
+    const headers = within(table)
+      .getAllByRole('columnheader')
+      .map((cell) => cell.textContent);
+    for (const header of [
+      'شناسهٔ پرداخت',
+      'تلگرام مشتری',
+      'درگاه',
+      'شناسهٔ پیگیری بیرونی',
+      'آخرین تغییر',
+    ]) {
+      expect(headers, header).toContain(header);
+    }
+    expect(within(table).getByText(ROW_ID.slice(0, 8))).toBeInTheDocument();
+    expect(within(table).getByText('5550001234')).toBeInTheDocument();
+    expect(within(table).getByText('@zahra_pay')).toBeInTheDocument();
+    expect(within(table).getByText('BANK-778899')).toBeInTheDocument();
+    expect(within(table).getAllByText('کارت به کارت').length).toBeGreaterThan(0);
+    expect(table.textContent).toContain(formatTimestamp('2026-09-11T08:15:00.000Z'));
+  });
+
+  it('shows a dash, never a guess, for a payment with no gateway, reference or username', async () => {
+    stubApi(
+      list([
+        payment({
+          method: 'WALLET',
+          gatewayProvider: null,
+          externalReference: null,
+          customerTelegramUserId: '5550001234',
+          customerUsername: null,
+        }),
+      ]),
+    );
+    renderPage(<PaymentsPage route={LIST_ROUTE} denied={false} />);
+    await screen.findByText('a1b2c3d4e5f60718:manual');
+    const table = screen.getByRole('table');
+    expect(within(table).getByText('5550001234')).toBeInTheDocument();
+    expect(table.textContent).not.toContain('@');
+  });
+
+  const renderDetail = (overrides: Record<string, unknown>) => {
+    stubApi(detail({ ...diagnosed, ...overrides }));
+    return renderPage(
+      <PaymentDetailPage
+        id={ROW_ID}
+        mayViewReceipts={false}
+        mayViewRefunds={false}
+        mayIssueRefunds={false}
+        denied={false}
+      />,
+    );
+  };
+
+  it('shows a receipt’s credit-to-wallet disposition read-only: amount, admin, time and note', async () => {
+    const view = renderDetail({
+      state: 'FAILED',
+      resolvedAt: '2026-09-11T08:15:00.000Z',
+      resolvedByAdminId: '019200ab-cdef-7012-8345-6789abcdef01',
+      receiptCredit: {
+        amountMinor: '240000',
+        currency: 'IRT',
+        walletEntryId: '019260ab-cdef-7012-8345-6789abcdef01',
+        decidedByAdminId: '019200ab-cdef-7012-8345-6789abcdef01',
+        decidedAt: '2026-09-11T08:15:00.000Z',
+        note: 'ده هزار تومان کمتر رسید',
+      },
+    });
+    await screen.findByText('واریز رسید به کیف پول');
+    const card = screen.getByText('واریز رسید به کیف پول').closest('section') ?? view.container;
+    expect(card.textContent).toMatch(/۲۴۰٬۰۰۰|240,000/u);
+    expect(card.textContent).toContain('ده هزار تومان کمتر رسید');
+    expect(card.textContent).toContain(formatTimestamp('2026-09-11T08:15:00.000Z'));
+    expect(card.textContent).toContain('پرداخت سفارش حساب نمی‌شود');
+    // Read-only: the only buttons on the page are copy controls with no label.
+    const labels = [...view.container.querySelectorAll('button')]
+      .map((b) => b.textContent?.trim())
+      .filter((label) => label !== '');
+    expect(labels, 'the disposition card draws a control').toEqual([]);
+  });
+
+  it('shows the gift a top-up promised, and no gift card for an order payment', async () => {
+    const topup = renderDetail({ orderId: null, topupCashbackPercent: 10 });
+    await screen.findByText('هدیهٔ شارژ این پرداخت');
+    expect(topup.container.textContent).toContain('10%');
+    topup.unmount();
+
+    const order = renderDetail({ topupCashbackPercent: null });
+    await screen.findAllByText('a1b2c3d4e5f60718:manual');
+    expect(order.container.textContent).not.toContain('هدیهٔ شارژ این پرداخت');
+  });
+});
+
+/**
+ * §10 at the wire: the Web Admin has NO way to confirm, reject or credit a card-to-card
+ * payment. Not a hidden button — no contract route and no client function exists, so a
+ * page cannot grow one by accident without this failing.
+ */
+describe('no card-to-card mutation in the Web Admin (§10)', () => {
+  it('names no confirm, reject or credit route in the payment contract', () => {
+    expect(
+      Object.keys(PAYMENT_ROUTES).filter((key) =>
+        /confirm|reject|credit|approve|dismiss/iu.test(key),
+      ),
+    ).toEqual([]);
+  });
+
+  it('exports no client function that decides a payment', () => {
+    const deciding = Object.keys(client).filter((name) =>
+      /^(confirm|reject|approve|dismiss|credit).*payment|payment.*(confirm|reject|credit)|receipt.*credit|credit.*receipt/iu.test(
+        name,
+      ),
+    );
+    expect(deciding).toEqual([]);
   });
 });
