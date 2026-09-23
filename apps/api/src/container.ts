@@ -408,6 +408,8 @@ export interface Container {
   readonly cashbackRules: CashbackRuleAdminService;
   /** The operator's price preview and an order's pricing detail (WP8). */
   readonly pricingRead: PricingReadService;
+  /** Cashback from promise to credit to reversal (WP8 P9); driven by the provisioner loop. */
+  readonly cashback: CashbackService;
   readonly commercialActions: CommercialActionService;
   /** A customer's free trial (WP6-A): issued through the purchase path, costs nothing. */
   readonly trials: TrialService;
@@ -2875,6 +2877,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     discounts: discountAdminService,
     cashbackRules: cashbackRuleAdminService,
     pricingRead: pricingReadService,
+    cashback: cashbackService,
     commercialActions: commercialActionService,
     trials: trialService,
     trialAdmin: trialAdminService,
