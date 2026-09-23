@@ -1082,6 +1082,7 @@ const SERVICE_ACTION_PATHS: Readonly<Record<ServiceOperatorAction, (id: string) 
   SUSPEND: SERVICE_ROUTES.suspend,
   RESUME: SERVICE_ROUTES.resume,
   TERMINATE: SERVICE_ROUTES.terminate,
+  ROTATE_LINK: SERVICE_ROUTES.rotateLink,
 };
 
 /**

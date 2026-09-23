@@ -504,6 +504,7 @@ const ACTION_LABELS: Readonly<Record<ServiceOperatorAction, WebKey>> = {
   SUSPEND: 'web.service_action_suspend',
   RESUME: 'web.service_action_resume',
   TERMINATE: 'web.service_action_terminate',
+  ROTATE_LINK: 'web.service_action_rotate_link',
 };
 
 /**
@@ -539,14 +540,15 @@ const ACTION_NEEDS_TERMINATE: Readonly<Record<ServiceOperatorAction, boolean>> =
   SUSPEND: false,
   RESUME: false,
   TERMINATE: true,
+  ROTATE_LINK: false,
 };
 
 /**
- * The seven actions, drawn from the server's own verdicts.
+ * The eight actions, drawn from the server's own verdicts.
  *
- * Terminate is separated out below the other six because it is the only one that
+ * Terminate is separated out below the other seven because it is the only one that
  * deletes an account on somebody's panel and the only one that costs a typed phrase.
- * The other six are one press each: the request is idempotent under a key held by
+ * The other seven are one press each: the request is idempotent under a key held by
  * `useSubmissionKey`, so pressing twice asks the same question rather than planning a
  * second operation.
  *

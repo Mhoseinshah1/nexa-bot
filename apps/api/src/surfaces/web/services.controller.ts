@@ -158,7 +158,7 @@ export class ServicesController {
   }
 
   /**
-   * The five actions that plan an operation, and nothing else.
+   * The six actions that plan an operation, and nothing else.
    *
    * Each one is a thin route over `ProvisioningService.requestFromOperator`, which
    * charges the permission — `services.terminate` for a terminate, `services.edit` for
@@ -206,6 +206,20 @@ export class ServicesController {
     @Body() body: unknown,
   ): Promise<ServiceActionResponse> {
     return this.planned(request, id, body, 'RESUME');
+  }
+
+  /**
+   * A new subscription link. No typed phrase: the account, its traffic and its expiry
+   * are untouched, and the customer is sent the new link by the delivery lane — the
+   * same weight as a suspend, and the same permission (`docs/rickpanel-rotate-audit.md`).
+   */
+  @Post('services/:id/rotate-link')
+  async rotateLink(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<ServiceActionResponse> {
+    return this.planned(request, id, body, 'ROTATE_SUBSCRIPTION');
   }
 
   @Post('services/:id/terminate')

@@ -293,6 +293,7 @@ describe('service action availability', () => {
     ).toEqual([
       { action: 'SYNC_USAGE', available: false, blocker: 'STATE' },
       { action: 'RESEND_CONFIG', available: false, blocker: 'STATE' },
+      { action: 'ROTATE_LINK', available: false, blocker: 'STATE' },
       { action: 'RETRY_PROVISION', available: true, blocker: null },
       { action: 'RECONCILE', available: false, blocker: 'STATE' },
       { action: 'SUSPEND', available: false, blocker: 'STATE' },
@@ -302,7 +303,7 @@ describe('service action availability', () => {
   });
 
   it('offers a TERMINATED service nothing at all', () => {
-    /* Terminal means terminal. Seven refusals, every one of them `STATE`. */
+    /* Terminal means terminal. Eight refusals, every one of them `STATE`. */
     const answers = evaluateServiceActions(factsFor('TERMINATED'));
     expect(answers.filter((entry) => entry.available)).toEqual([]);
     expect(new Set(answers.map((entry) => entry.blocker))).toEqual(new Set(['STATE']));

@@ -237,13 +237,24 @@ export interface ServiceRepository {
    * Separate from `transition` because delivery is a separate axis: a delivery that
    * failed must not be able to move a service out of `ACTIVE`, and giving the two
    * axes one setter is how it eventually would.
+   *
+   * `sentUrl` is the link the attempt was about, and the row must STILL hold it. A
+   * rotation can replace the link while a send of the old one is in flight; without
+   * this, that send's completion would record `DELIVERED` against the new link and the
+   * new link would never be sent — a customer holding a dead link beside a service that
+   * says it was delivered. Required rather than optional so no caller can forget it;
+   * `null` only where no link was involved at all.
    */
   recordDelivery(
     scope: TenantContext,
     id: string,
     from: ServiceDeliveryState,
     to: ServiceDeliveryState,
-    stamps: { readonly deliveredAt: Date | null; readonly nextAttemptAt: Date | null },
+    stamps: {
+      readonly deliveredAt: Date | null;
+      readonly nextAttemptAt: Date | null;
+      readonly sentUrl: string | null;
+    },
     now: Date,
     tx: TransactionScope,
   ): Promise<boolean>;
@@ -270,11 +281,16 @@ export interface ServiceRepository {
    * caller: its own transaction, committed before the send, so a crash cannot roll back
    * the one fact that says a message may already be out. A `false` means somebody else
    * moved the row first and this caller must send nothing.
+   *
+   * `sentUrl` is the link about to be sent, and the row must still hold it — the same
+   * compare-and-set `recordDelivery` makes, for the window before the send rather than
+   * after it.
    */
   markSendStarted(
     scope: TenantContext,
     id: string,
     from: ServiceDeliveryState,
+    sentUrl: string,
     now: Date,
     tx: TransactionScope,
   ): Promise<boolean>;
@@ -296,6 +312,29 @@ export interface ServiceRepository {
     id: string,
     from: ServiceDeliveryState,
     retryAt: Date,
+    /** The link that was declined. The row must still hold it — see `recordDelivery`. */
+    sentUrl: string,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean>;
+
+  /**
+   * Stores a subscription link a rotation produced, and re-arms delivery so the customer
+   * is sent it.
+   *
+   * Conditional on the service still being in one of `legalFrom`: a service ended while
+   * the rotation was in flight keeps its terminal state and is not re-armed. Delivery is
+   * reset whole — `PENDING`, no attempts, no backoff, no send in progress, not delivered
+   * — because the link being delivered is a different one, and every one of those
+   * columns described the old link. Clearing `delivery_send_started_at` is what lets an
+   * overtaken send of the old link fail its own compare-and-set (`recordDelivery`)
+   * without stranding the row for `reapStrandedSends`.
+   */
+  recordRotation(
+    scope: TenantContext,
+    id: string,
+    subscriptionUrl: string,
+    legalFrom: readonly ServiceState[],
     now: Date,
     tx: TransactionScope,
   ): Promise<boolean>;

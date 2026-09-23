@@ -12,6 +12,7 @@ import {
   type ProviderLookupOutcome,
   type ProviderProbeOutcome,
   type ProviderRemovalOutcome,
+  type ProviderRotationOutcome,
   type ProviderServiceTarget,
   type ProviderStateChangeOutcome,
   type ProviderTarget,
@@ -66,6 +67,8 @@ export const TOKEN_PATH = 'api/admin/token';
 export const SYSTEM_PATH = 'api/system';
 /** Create is a POST to the collection; read, modify and delete address `/{username}`. */
 export const USER_PATH = 'api/user';
+/** `POST /api/user/{username}/revoke_sub`: the panel mints a new subscription token. */
+export const REVOKE_SUBSCRIPTION_SUFFIX = 'revoke_sub';
 
 /**
  * The `proxies` value every create carries: one protocol key with an empty object.
@@ -865,6 +868,102 @@ export class RickpanelAdapter implements ProviderAdapter {
      * The 2xx is the statement; the sentence is decoration.
      */
     return { ok: true, wasPresent: true };
+  }
+
+  /**
+   * A new subscription link, minted by the panel and PROVEN by reading it back.
+   *
+   * `docs/rickpanel-rotate-audit.md` D4 is the table this implements. In short: the
+   * rotation call's answer decides whether a read is needed, and the READ decides
+   * whether a rotation happened — never the call's status alone.
+   *
+   *   - an authentication failure, a 400/403 rule, and a 429 are returned as they
+   *     are: the panel answered, and did nothing;
+   *   - 404 is the panel saying it has no such account;
+   *   - anything else — a 2xx, a 5xx, any transport failure, an unreadable answer —
+   *     is followed by a read-back, and the link the panel holds NOW is compared with `previousUrl`.
+   *     Different: rotated, whatever the call said. The same after a 2xx: the panel
+   *     claimed a rotation it did not make, `MALFORMED_RESPONSE`. The same after an
+   *     ambiguous answer: provably not rotated, and the original failure is returned
+   *     so the retry machinery can try again.
+   *
+   * The link comes from the READ and is never assembled from the rotation response,
+   * for the reason the create does not trust its response either. It is returned to
+   * the executor and to nothing else: this method logs nothing, and the outcome shape
+   * has nowhere to put a link except the one field that goes to the service row.
+   */
+  async rotateSubscription(
+    target: ProviderServiceTarget,
+    http: ProviderHttpClient,
+    ref: ProviderUserRef,
+    previousUrl: string | null,
+  ): Promise<ProviderRotationOutcome> {
+    const auth = await this.authenticate(target, http);
+    if (!auth.ok) return auth;
+
+    const rotated = await http.send({
+      method: 'POST',
+      path: `${USER_PATH}/${encodeURIComponent(ref.username)}/${REVOKE_SUBSCRIPTION_SUFFIX}`,
+      headers: { authorization: `Bearer ${auth.token}` },
+    });
+
+    /*
+     * What the rotation call alone can decide. Everything it cannot decide falls
+     * through to the read, carrying the failure to return if the read proves nothing
+     * changed.
+     */
+    let unresolved: ProviderFailureResult | null = null;
+    if (!rotated.ok) {
+      /*
+       * EVERY transport failure is read back, including the kinds the contract calls
+       * safe to replay. The client reports a socket that died after the request was
+       * written as UNREACHABLE, so "never read" is not something this answer can
+       * promise about a rotation. The read costs nothing when the panel really is
+       * unreachable — it fails the same way, and that failure is what is returned.
+       */
+      unresolved = outcomeFromTransport(rotated);
+    } else if (rotated.status === 404) {
+      return { ok: true, found: false };
+    } else if (rotated.status === 429) {
+      return { ok: false, failure: 'RATE_LIMITED', status: 429 };
+    } else if (rotated.status === 400 || rotated.status === 403) {
+      // A rule the panel applied, and one it will apply again: terminal.
+      return { ok: false, failure: 'PROVIDER_REFUSED', status: rotated.status };
+    } else if (rotated.status < 200 || rotated.status >= 300) {
+      unresolved = { ok: false, failure: 'PROVIDER_ERROR', status: rotated.status };
+    }
+
+    /*
+     * The read that decides. Bounded like the create's, and stopping at the first read
+     * whose link differs: the panel wrote a new token and may be a moment from serving
+     * it, and a courtesy poll is cheaper than a retry that mints ANOTHER one.
+     */
+    for (let attempt = 0; attempt < this.readBackAttempts; attempt += 1) {
+      if (attempt > 0) await this.sleep(this.readBackDelayMs);
+      const read = await this.readBack(target, http, auth.token, ref.username, 1);
+      if (!read.ok) return unresolved ?? read;
+      if (!read.found) return { ok: true, found: false };
+      const current = subscriptionFrom(target.baseUrl, read.record);
+      if (current === null) {
+        return unresolved ?? { ok: false, failure: 'MALFORMED_RESPONSE', status: null };
+      }
+      if (current !== previousUrl) return { ok: true, found: true, subscriptionUrl: current };
+    }
+    /*
+     * The panel still serves the link we already had.
+     *
+     * After an ambiguous answer that is the proof no rotation happened, and the
+     * original failure goes back so a retry can make the first one. After a 2xx it is
+     * a panel claiming a rotation it did not make — reported, never stored as a new
+     * link, and never retried into a loop against a panel that will say yes again.
+     */
+    return (
+      unresolved ?? {
+        ok: false,
+        failure: 'MALFORMED_RESPONSE',
+        status: rotated.ok ? rotated.status : null,
+      }
+    );
   }
 
   /** One user's traffic. A read, so a failure is never `UNKNOWN`. */

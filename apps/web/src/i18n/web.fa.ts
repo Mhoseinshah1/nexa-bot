@@ -1682,6 +1682,7 @@ export const WEB_FA = {
   'web.service_action_suspend': 'موقتاً غیرفعال کن',
   'web.service_action_resume': 'دوباره فعال کن',
   'web.service_action_terminate': 'پایان دادن به سرویس',
+  'web.service_action_rotate_link': 'ساخت لینک اشتراک جدید',
   /*
    * WHY an action is not offered. One sentence per blocker code, and each one names
    * the screen or the wait that resolves it — a greyed-out control with no reason is

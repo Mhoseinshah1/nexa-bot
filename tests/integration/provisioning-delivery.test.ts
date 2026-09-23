@@ -1603,39 +1603,41 @@ describe('a provisioned service announces itself', () => {
     );
   }
 
-  it('refuses an operation type this release cannot perform, before contacting a panel', async () => {
+  it('refuses a rotation on a panel that cannot rotate, before contacting a panel', async () => {
     /*
-     * The audit calls the dispatch the most dangerous edit in this phase, and this is
-     * the property it names: an operation whose type has no implementation is refused
-     * before any provider is contacted, not defaulted to the one call the executor used
-     * to make. `provisionCall` calls `createUser` unconditionally.
+     * This case used to be "an operation type this release cannot perform", made with
+     * `ROTATE_SUBSCRIPTION`, and ABANDONED. RickPanel's `rotateSubscription` made that
+     * type performable, and with it every member of `OPERATION_TYPES` is: there is no
+     * contract type left that reaches `isPerformableOperation`'s refusal, so that branch
+     * waits for the next type the contract gains, and `tests/unit/registries.test.ts`
+     * pins the performable list so such a type cannot slip in without its branch.
      *
-     * `ROTATE_SUBSCRIPTION`, and it used to be `TERMINATE`. That swap is the test
-     * following the code rather than being weakened by it: TERMINATE became performable
-     * in this phase, so the row it simulates is no longer an unperformable one. The
-     * case it used to make is now made by the one below, against a panel that cannot do
-     * it — and the property here needs a type that genuinely has no branch.
+     * What remains true for this panel is the other refusal. A 3X-UI declares no
+     * `ROTATE_SUBSCRIPTION_LINK`, so `decideOperability` refuses before a socket is
+     * opened, and the row stops as FAILED with `CAPABILITY_UNSUPPORTED` — terminal,
+     * because no retry gives a panel a capability.
      *
-     * Planned by hand because no code plans a ROTATE_SUBSCRIPTION, which is the point:
-     * the row this simulates is one a later release plans and a rolled-back one claims.
+     * Planned by hand because no surface offers a rotation on this panel: the Web Admin
+     * and Telegram Admin both ask the same evaluator, which answers CAPABILITY.
      */
     const orderId = await paidOrder('usage-unperformable');
     await ctx.container.provisionerLoop.tick();
     const service = await services.findByOrderId(tenantA, orderId);
-    const before = addClientCalls();
+    const before = panel.requests.length;
+    const linkBefore = service?.subscriptionUrl;
 
     await planByHand(service?.id ?? '', orderId, 'ROTATE_SUBSCRIPTION', 'unperformable-rotate');
     await ctx.container.provisionerLoop.tick();
 
-    expect(addClientCalls(), 'no panel was contacted').toBe(before);
+    expect(panel.requests.length, 'the panel was not contacted at all').toBe(before);
     const rotate = (await operations.listForService(tenantA, service?.id ?? '', 20)).find(
       (operation) => operation.type === 'ROTATE_SUBSCRIPTION',
     );
-    // ABANDONED, not FAILED: no number of retries teaches this release an operation
-    // type, and a FAILED row would be claimed again on every tick.
-    expect(rotate?.state).toBe('ABANDONED');
-    const stillActive = await services.findByOrderId(tenantA, orderId);
-    expect(stillActive?.state, 'and the service is untouched').toBe('ACTIVE');
+    expect(rotate?.state).toBe('FAILED');
+    expect(rotate?.failureMessage).toBe('CAPABILITY_UNSUPPORTED');
+    const after = await services.findByOrderId(tenantA, orderId);
+    expect(after?.state, 'and the service is untouched').toBe('ACTIVE');
+    expect(after?.subscriptionUrl, 'and so is its link').toBe(linkBefore);
   });
 
   it('refuses a performable operation on a panel that cannot do it, before contacting it', async () => {

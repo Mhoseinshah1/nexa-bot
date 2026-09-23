@@ -4,6 +4,7 @@ import {
   desc,
   eq,
   getTableColumns,
+  inArray,
   isNotNull,
   isNull,
   lte,
@@ -344,7 +345,11 @@ export class DrizzleServiceRepository implements ServiceRepository {
     id: string,
     from: ServiceDeliveryState,
     to: ServiceDeliveryState,
-    stamps: { readonly deliveredAt: Date | null; readonly nextAttemptAt: Date | null },
+    stamps: {
+      readonly deliveredAt: Date | null;
+      readonly nextAttemptAt: Date | null;
+      readonly sentUrl: string | null;
+    },
     now: Date,
     tx: TransactionScope,
   ): Promise<boolean> {
@@ -367,7 +372,14 @@ export class DrizzleServiceRepository implements ServiceRepository {
         updatedAt: now,
       })
       .where(
-        and(eq(services.tenantId, tenantId), eq(services.id, id), eq(services.deliveryState, from)),
+        and(
+          eq(services.tenantId, tenantId),
+          eq(services.id, id),
+          eq(services.deliveryState, from),
+          // The row still holds the link this attempt was about. A rotation that
+          // replaced it in the meantime wins, and this record is dropped.
+          stamps.sentUrl === null ? undefined : eq(services.subscriptionUrl, stamps.sentUrl),
+        ),
       )
       .returning({ id: services.id });
     return rows.length > 0;
@@ -388,6 +400,7 @@ export class DrizzleServiceRepository implements ServiceRepository {
     scope: TenantContext,
     id: string,
     from: ServiceDeliveryState,
+    sentUrl: string,
     now: Date,
     tx: TransactionScope,
   ): Promise<boolean> {
@@ -401,6 +414,7 @@ export class DrizzleServiceRepository implements ServiceRepository {
           eq(services.id, id),
           eq(services.deliveryState, from),
           isNull(services.deliverySendStartedAt),
+          eq(services.subscriptionUrl, sentUrl),
         ),
       )
       .returning({ id: services.id });
@@ -419,6 +433,7 @@ export class DrizzleServiceRepository implements ServiceRepository {
     id: string,
     from: ServiceDeliveryState,
     retryAt: Date,
+    sentUrl: string,
     now: Date,
     tx: TransactionScope,
   ): Promise<boolean> {
@@ -427,10 +442,46 @@ export class DrizzleServiceRepository implements ServiceRepository {
       .update(services)
       .set({ deliveryNextAttemptAt: retryAt, deliverySendStartedAt: null, updatedAt: now })
       .where(
-        and(eq(services.tenantId, tenantId), eq(services.id, id), eq(services.deliveryState, from)),
+        and(
+          eq(services.tenantId, tenantId),
+          eq(services.id, id),
+          eq(services.deliveryState, from),
+          eq(services.subscriptionUrl, sentUrl),
+        ),
       )
       .returning({ id: services.id });
     return rows.length > 0;
+  }
+
+  async recordRotation(
+    scope: TenantContext,
+    id: string,
+    subscriptionUrl: string,
+    legalFrom: readonly ServiceState[],
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(services)
+      .set({
+        subscriptionUrl,
+        deliveryState: 'PENDING',
+        deliveryAttempts: 0,
+        deliveredAt: null,
+        deliveryNextAttemptAt: null,
+        deliverySendStartedAt: null,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(services.tenantId, tenantId),
+          eq(services.id, id),
+          inArray(services.state, [...legalFrom]),
+        ),
+      )
+      .returning({ id: services.id });
+    return rows.length === 1;
   }
 
   /**

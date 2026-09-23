@@ -354,7 +354,7 @@ describe('the provider registry', () => {
        * nothing would leave `canProvision` false for every RickPanel, no
        * RickPanel sellable, and the production incident this release exists to
        * fix unfixed. `tests/acceptance/real-panel-rickpanel.test.ts` is what
-       * turns these ten into evidence, and until it has run against a panel they
+       * turns these into evidence, and until it has run against a panel they
        * rest on a document and a fake.
        *
        * `LIMIT_DEVICES` is absent even so, and for the ordinary reason:
@@ -372,6 +372,9 @@ describe('the provider registry', () => {
         'RENEW_USER',
         'ADD_VOLUME',
         'ADD_TIME',
+        // Measured on the owner's panel and proven per call by a read-back:
+        // `docs/rickpanel-rotate-audit.md`. Marzban and 3X-UI stay without it.
+        'ROTATE_SUBSCRIPTION_LINK',
       ],
       // `LIMIT_DEVICES` for Sanaei only, and the asymmetry is the whole point of this
       // map being per provider. `SanaeiAdapter.createUser` writes `limitIp` from the
@@ -494,10 +497,13 @@ describe('the operation dispatch cannot fail open', () => {
     }
   });
 
-  it('names exactly the nine types this release performs, and no more', () => {
-    // Pinned as a literal on purpose. `ROTATE_SUBSCRIPTION` has neither an adapter
-    // method nor a product decision behind it and stays out. Adding a type to the
-    // constant without writing its branch fails here rather than on somebody's panel.
+  it('names exactly the ten types this release performs, and no more', () => {
+    // Pinned as a literal on purpose. Adding a type to the constant without writing its
+    // branch fails here rather than on somebody's panel. `ROTATE_SUBSCRIPTION` joined
+    // with RickPanel's `rotateSubscription`, in the commit that wrote its dispatch
+    // branch (`docs/rickpanel-rotate-audit.md`). With it every member of
+    // `OPERATION_TYPES` is performable; the refusal of an unperformable type stays for
+    // the next member the contract gains.
     //
     // The three commercial types joined in 4F, in the commit that wrote their dispatch
     // branches — not in the one that wrote `applyAllowance`, and not in the one that
@@ -509,6 +515,7 @@ describe('the operation dispatch cannot fail open', () => {
       'RECONCILE',
       'RENEW',
       'RESUME',
+      'ROTATE_SUBSCRIPTION',
       'SUSPEND',
       'SYNC_USAGE',
       'TERMINATE',

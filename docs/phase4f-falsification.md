@@ -57,7 +57,7 @@ the customer's cap on the panel was gone and the assertion could not see it.
 | F4F-14 | `canRenewUser` requires the CAPABILITY, not just the method   | `&& adapter.supports('RENEW_USER')` removed        | `provisioning-delivery.test.ts` › refuses each commercial operation on a 3X-UI panel, before contacting it | SURVIVED |
 | F4F-15 | A capability is declared only after the acceptance proves it  | `'RENEW_USER'` removed from the Marzban descriptor | `registries.test.ts` › lets no provider advertise an operation this release cannot execute                 | KILLED   |
 | F4F-16 | `OPERATION_REQUIRED_CAPABILITIES` refuses before operability  | `RENEW: ['RENEW_USER']` → `RENEW: []`              | `provisioning-delivery.test.ts` › refuses each commercial operation on a 3X-UI panel, before contacting it | SURVIVED |
-| F4F-30 | `PERFORMABLE_OPERATION_TYPES` names exactly what has a branch | the three commercial types removed                 | `registries.test.ts` › names exactly the nine types this release performs, and no more                     | KILLED   |
+| F4F-30 | `PERFORMABLE_OPERATION_TYPES` names exactly what has a branch | the three commercial types removed                 | `registries.test.ts` › names exactly the ten types this release performs, and no more                      | KILLED   |
 
 ### Why F4F-14 and F4F-16 survive, measured rather than asserted
 
