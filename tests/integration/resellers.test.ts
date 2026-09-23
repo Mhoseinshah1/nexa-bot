@@ -1936,7 +1936,7 @@ describe('resellers (WP9-B)', () => {
      * first update's after-image vanished from the trail. It now reads the row FOR UPDATE
      * (`lockByCustomer`) before its UPDATE.
      *
-     * Controlled: update A is held inside its transaction right after its locked read;
+     * Controlled: update A is held inside its transaction right after its before-image read;
      * update B is started and must be seen waiting on the reseller row in
      * `pg_stat_activity`; A is released. B's audit before-image must equal A's after-image.
      */
@@ -1951,22 +1951,28 @@ describe('resellers (WP9-B)', () => {
         creditLimit: null,
       });
 
-      // Held right after update A's locked read of the before-image.
+      /*
+       * Held right after update A has read its before-image, at the next read in the same
+       * transaction (`findTier`, with a transaction). Held THERE, not on `lockByCustomer`
+       * itself, so the hold does not depend on how the before-image is read: with a plain
+       * read the test still runs to its assertions and fails on them, rather than waiting
+       * for a call that never comes.
+       */
       const repository = (
         ctx.container.resellersAdmin as unknown as {
-          deps: { resellers: { lockByCustomer: (...args: never[]) => Promise<unknown> } };
+          deps: { resellers: { findTier: (...args: unknown[]) => Promise<unknown> } };
         }
       ).deps.resellers;
-      const original = repository.lockByCustomer.bind(repository);
+      const original = repository.findTier.bind(repository);
       let entered!: () => void;
       const locked = new Promise<void>((resolve) => (entered = resolve));
       let release!: () => void;
       const gate = new Promise<void>((resolve) => (release = resolve));
-      let calls = 0;
-      vi.spyOn(repository, 'lockByCustomer').mockImplementation(async (...args) => {
+      let held = false;
+      vi.spyOn(repository, 'findTier').mockImplementation(async (...args) => {
         const row = await original(...args);
-        calls += 1;
-        if (calls === 1) {
+        if (!held && args[2] !== undefined) {
+          held = true;
           entered();
           await gate;
         }
