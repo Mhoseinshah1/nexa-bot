@@ -415,6 +415,20 @@ describe('cashback is earned once, at delivery, and a refund takes its share bac
     expect(await balance()).toBe(10_000n);
   });
 
+  it('counts only an operation of the type the order BOUGHT as delivery', async () => {
+    await cashbackRule();
+    const order = await confirmed(100_000n);
+    await paidFromWallet(order);
+    // The order's operation, succeeded — but as something other than the purchase.
+    await ctx.container.database.db.execute(sql`
+      UPDATE provisioning_operations
+         SET type = 'SYNC_USAGE', state = 'SUCCEEDED', completed_at = now(),
+             claimed_by = NULL, lease_until = NULL
+       WHERE order_id = ${order.id}`);
+    expect(await ctx.container.cashback.settleDue(tenantA, 50)).toBe(0);
+    expect((await promise(order.id))?.state).toBe('PENDING');
+  });
+
   it('serialises two earners on the customer’s wallet lock, so one credit is written', async () => {
     await cashbackRule();
     const order = await confirmed(100_000n);
