@@ -973,6 +973,25 @@ export class OrderService {
         }
 
         const orderId = this.orderId(window.orderId);
+        // A window outlives its draft when the draft moves on without it — confirmed from
+        // the summary still on screen, cancelled, or held too long. Closed here and
+        // COMMITTED as NO WINDOW: the refusal `repriceWithCode` would throw rolls back, so
+        // the window would stay open and catch every plain message until its own expiry.
+        await this.deps.repository.lock(scope, orderId, tx);
+        const draft = await this.deps.repository.findById(scope, orderId, tx);
+        const heldTooLong =
+          draft !== null && draft.expiresAt !== null && now.getTime() >= draft.expiresAt.getTime();
+        if (draft === null || draft.state !== 'DRAFT' || heldTooLong) {
+          await this.deps.discountCodes.close(
+            scope,
+            window.id,
+            heldTooLong ? 'EXPIRED' : 'SUPERSEDED',
+            now,
+            tx,
+          );
+          return { outcome: 'NO_WINDOW' } as const;
+        }
+
         const code = normaliseDiscountCode(input.text);
         const order = await this.repriceWithCode(scope, actor, customerId, orderId, code, tx);
         await this.deps.discountCodes.close(scope, window.id, 'RECEIVED', now, tx);

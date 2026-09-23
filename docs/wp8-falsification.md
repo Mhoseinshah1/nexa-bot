@@ -29,6 +29,7 @@ every row read as killed. That pass was discarded and is not recorded here.
 | WP8-16 | the reversal judges the promise only under the customer's lock             | the unlocked `PENDING` early return restored                           | `cashback.test.ts` › never misses a reversal when a refund completes while the earner is mid-credit                      | KILLED |
 | WP8-17 | the Telegram summary variant is chosen from the quote                      | the key fixed to `bot.order.summary`                                   | `telegram-order-flow.test.ts` › takes a typed discount code into the window it opened, prices it, and takes it off again | KILLED |
 | WP8-18 | a plain message the username window declines is offered to the code window | the message answered with the fallback instead                         | `telegram-order-flow.test.ts` › takes a typed discount code into the window it opened, prices it, and takes it off again | KILLED |
+| WP8-19 | a typed code whose draft has moved on closes its window, committed         | the not-`DRAFT` check in `submitTypedDiscountCode` removed             | `telegram-order-flow.test.ts` › closes a code window whose draft was confirmed from the summary still on screen          | KILLED |
 
 **WP8-01 survived its first run, and that was a test defect.** Both contenders were on
 one panel, so the panel's row lock queued them before either reached the rule. Taking
@@ -42,6 +43,12 @@ insert by an outside transaction that inserted the same unique reference and has
 committed. A refund completes meanwhile. Under the old order the reversal read the
 promise unlocked, saw `PENDING` and returned. The earner then credited the full amount,
 and nothing took the refunded half back.
+
+**WP8-19 came from the PR's Codex review.** A customer could open the code prompt and
+then confirm from the summary still above it. Every plain message after that reached the
+window, was refused because the order was no longer a draft, and rolled back the close
+along with the refusal. So the window caught messages until its own ten-minute expiry.
+The mutation was run by reverting the fix; the test then failed on the refusal text.
 
 **What these rows do not cover:**
 

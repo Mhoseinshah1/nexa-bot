@@ -617,6 +617,31 @@ describe('the customer purchase flow over Telegram', () => {
     expect((await orders())[0]?.['total_amount']).toBe(250_000n);
   });
 
+  it('closes a code window whose draft was confirmed from the summary still on screen', async () => {
+    await discount({ kind: 'CODE', code: 'SPRING', value: 20n });
+    const sellable = await product(tenantA, 'ACTIVE');
+    await tap(`p:${sellable.id}`);
+    const orderId = String((await orders())[0]?.['id']);
+    await tap(`Z:${orderId}`);
+    await tap(`dc:${orderId}`);
+    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.discount.ask']);
+
+    // The confirm button on the summary above the prompt is still live.
+    await tap(`c:${orderId}`);
+    expect((await orders())[0]?.['state']).not.toBe('DRAFT');
+
+    // The first message after it is ordinary, and it closed the window for good: a
+    // refusal would have rolled the close back and caught this message and every next one.
+    await command('SPRING');
+    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
+    const windows = await api.container.database.db.execute(
+      sql`SELECT close_reason FROM discount_code_captures WHERE order_id = ${orderId}`,
+    );
+    expect(windows.rows).toEqual([{ close_reason: 'SUPERSEDED' }]);
+    await command('hello');
+    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
+  });
+
   it('explains an automatic discount on the summary, and refuses to confirm it once withdrawn', async () => {
     const id = await discount({ kind: 'AUTOMATIC', code: null, value: 20n });
     const sellable = await product(tenantA, 'ACTIVE');
