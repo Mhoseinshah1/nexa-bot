@@ -1746,6 +1746,17 @@ describe('the Telegram Admin late-review lane, at the boundary', () => {
     }
   });
 
+  it('refuses a dismissal as OTHER, the reason whose note this surface cannot take', () => {
+    /*
+     * `OTHER` says its reason in the note, and a Telegram dismissal carries none — there
+     * is no prompt that captures the next message (INCIDENT-FIN-001). So the tap has no
+     * code for it: a client that invents one is UNSUPPORTED, and the reason stays with
+     * the Web Admin, which has the field.
+     */
+    expect(tap(`lc:x:${payment}`).intent).toBe('UNSUPPORTED');
+    expect(tap(`lc:OTHER:${payment}`).intent).toBe('UNSUPPORTED');
+  });
+
   it.each([
     ['the lane with a payload', `la:${payment}`],
     ['an unknown item code', `lb:x:${payment}`],
@@ -1753,7 +1764,6 @@ describe('the Telegram Admin late-review lane, at the boundary', () => {
     ['a v4 id', 'lb:c:0191f4a0-2d3c-4c2b-9a41-6f2b0c7e51aa'],
     ['a trailing segment on a credit', `lb:c:${payment}:extra`],
     ['a reason spelled out', `lc:NOT_RECEIVED:${payment}`],
-    ['OTHER, which needs a note this surface cannot take', `lc:x:${payment}`],
     ['a reason with no id', 'lc:n:'],
     ['a trailing segment on a dismissal', `lc:n:${payment}:extra`],
   ])('refuses %s as UNSUPPORTED', (_label, data) => {
