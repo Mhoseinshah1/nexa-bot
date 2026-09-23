@@ -1990,8 +1990,8 @@ describe('resellers (WP9-B)', () => {
           finished.push('A');
         });
       updateA.catch(() => undefined);
-      let updateB: Promise<void> = Promise.resolve();
-      let waitingIn: string | null = null;
+      let updateB: Promise<void>;
+      let waitingIn: string | null;
       try {
         await locked;
         updateB = ctx.container.resellersAdmin
