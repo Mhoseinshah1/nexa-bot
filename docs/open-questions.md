@@ -2167,3 +2167,27 @@ O-1 is unanswered. Only `BASE_PRICE` and `PROMOTIONAL_DISCOUNT` fire, and their 
 order is the one every draft already assumed. Cashback is not a price step: it is a
 promise beside the trace, computed on the final total. Tier prices, custom ranges and
 reseller prices are not built and take no place in the table until they are.
+
+## OQ-WP9-01 — may an operator reassign or remove a referral attribution?
+
+Built as no. An attribution is written once, at registration, from the customer's own
+`/start ref-…` link, and the `referrals` table refuses UPDATE and DELETE (migration 0108).
+UNK-UM-006's fallback is an audited operator override. That is a write that changes who
+is owed money, and nothing in the evidence asks for it. If the owner wants one, it is its
+own decision, with its own permission. It must also say what happens to commissions
+already promised or earned under the old referrer (`docs/wp9-referral-audit.md` F10).
+
+## OQ-WP9-02 — the referral minimum order amount has no evidenced value
+
+`open-questions.md` O-9 wants a commission floor "on by default". No evidence gives an
+amount, and the legacy installation's own floor is zero (CBR-016). So
+`referral.minimum_order_amount` defaults to zero IRT, which means no floor. An operator
+sets it on the settings page. A floor in a currency the order is not in earns nothing; it
+is never converted.
+
+## OQ-WP9-03 — a per-referrer commission rate
+
+UBR-007 shows a legacy per-customer override, `🧮 پورسانت اختصاصی`. It is not built. Every
+referrer earns the tenant's `referral.commission_percent`. A per-customer rate is a
+commercial number with no evidence of how it was set or used. Adding one means a
+per-customer row and an owner's decision on which of the two rates wins.

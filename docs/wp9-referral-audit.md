@@ -108,7 +108,7 @@ Why registration only:
 | ------------------------------- | ---------------------------------------- | ------------------ | ----------------------------------------------------------------------------------------------- |
 | `referral.commission_percent`   | 1–100 or null                            | null               | Null is unconfigured. There is no default rate, because the research's 10% is not ours to copy. |
 | `referral.commission_scope`     | `FIRST_PAID_ORDER` or `EVERY_PAID_ORDER` | `FIRST_PAID_ORDER` | The bounded payout is the conservative default.                                                 |
-| `referral.minimum_order_amount` | a minor-unit amount or null              | null               | Null means no floor. See the note below.                                                        |
+| `referral.minimum_order_amount` | an amount and currency, zero or more     | 0 IRT              | Zero means no floor. See the note below.                                                        |
 
 - **The scope is snapshotted onto the attribution**, in the existing `trigger` column, as
   `ON_FIRST_PAID_ORDER` or the new `ON_EVERY_PAID_ORDER`. It governs that referee for life.
@@ -116,7 +116,9 @@ Why registration only:
 - **The percent and the floor are read at each commercial action.** They affect only orders
   confirmed afterwards.
 - **The floor.** `open-questions.md` O-9 says the floor should be "on by default", but no
-  evidence gives an amount, so there is no default number (OQ-WP9-02).
+  evidence gives an amount, so the default is zero, the legacy installation's own floor
+  (CBR-016). A floor in a currency the order is not in earns nothing rather than being
+  converted (OQ-WP9-02).
 - **`ON_SIGNUP` stays declared and is never produced.** A signup reward is a credit for a
   button click, which §9.7 forbids ("Do not credit commission on draft/button click").
   `REFERRAL_SIGNUP_GIFT` stays reserved.
@@ -205,7 +207,7 @@ exists.
 **F12 — The surfaces.**
 
 - **Telegram.** `/wallet` gains an invite button when the program is active.
-  - The button (`rf:`) answers `bot.referral.share` with three values: the deep link
+  - The button (`rf:`) answers `bot.referral.invite` with three values: the deep link
     `https://t.me/<bot>?start=ref-<CODE>`, the code, and the number of people the customer
     has referred. That count is the one figure the legacy bot showed.
   - It answers `bot.referral.unconfigured` when the program is not active.

@@ -42,9 +42,10 @@ capabilities it has — of which only `CREATE_USER` mutates anything — and gai
 no new mutable scope: the owner's correction, recorded in
 `docs/phase4e-audit.md`.
 
-**Discounts and cashback are built (WP8, `docs/wp8-pricing-audit.md`).** What
-remains unbuilt is referral, affiliate, resellers and any other promotion. Do
-not add them without an explicit instruction.
+**Discounts and cashback are built (WP8, `docs/wp8-pricing-audit.md`), and so
+is the referral program (WP9-A, `docs/wp9-referral-audit.md`).** What remains
+unbuilt is affiliate, resellers and any other promotion. Do not add them
+without an explicit instruction.
 
 Four pricing rules, each a way to charge a customer a number they did not see
 or give away money twice:
@@ -67,6 +68,22 @@ or give away money twice:
   refunds sum to one full one; what the balance cannot cover is recorded as
   unrecovered and never collected. The reversal judges the promise's state
   only under the customer's wallet lock.
+
+Three referral rules, each a way to pay a commission that was never owed:
+
+- An attribution is made **only at registration**, from the new customer's own
+  `/start ref-…`, and is never changed afterwards. A refused one is audited as
+  DENIED and the customer is told nothing different — the greeting is not an
+  oracle for which codes exist. Because a referrer always registered first, the
+  lock order referee-then-referrer has no cycle.
+- A commission is **promised at confirmation** by `PricingService.redeem` and
+  **earned at delivery** by the provisioner sweep, into the REFERRER's wallet
+  under the referrer's lock. First-order scope is decided under that lock, at
+  earn time, and the partial unique index is the same rule for a writer that
+  forgets it. A trial is never promised.
+- The reversal runs **inside the refund's transaction**, after the cashback
+  one, by the same cumulative target, never below zero; the shortfall is
+  recorded, never collected.
 
 **The deployment checkpoint after Phase 2 is done too**: an immutable image,
 a production Compose topology behind Caddy, an Ubuntu installer, and `botctl`
