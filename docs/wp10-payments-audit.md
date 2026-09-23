@@ -51,13 +51,14 @@ Two more defects the audit found:
 
 - **D2.** `settleFromWallet` ignores a PENDING manual transfer on the same order. The transfer is left to expire. If the customer had signalled it, their money is stranded. Even if not, they are told `PAYMENT_EXPIRED` about an order they have already paid for.
 - **D4.** A `TOPUP_RECEIPT` credit and a `REFUND` credit emit no `WalletEntryRecorded`. Every other ledger write does.
+- **D5.** An order whose discounts bring it to zero confirms, and then cannot be paid. The pricing engine clamps each discount to the running amount (`clampDiscount`), so a 100% automatic discount, or a 99% reseller tier followed by a 50% promotion, prices the order at `0`. Confirmation accepts that total. Settlement then writes a payment of `0` and `payments_amount_check` (`amount > 0`) aborts it, so the customer holds an order nothing can settle and is told only that something failed. Reproduced both ways against `0ff0448` plus WP9-B.
 
 ## 3. Decisions
 
 The package ships as two pull requests, and each passes the gates on its own.
 
 - **§10-A: money that is stranded or silently kept.** P1–P4.
-- **§10-B: the quality of the evidence behind a decision.** P5–P11.
+- **§10-B: the quality of the evidence behind a decision.** P5–P11, and P13 (D5).
 
 **P1 — A transfer the customer vouched for survives its window (D1, §10.5).**
 
@@ -123,6 +124,15 @@ payments page, with the decision actions and the mismatch and duplicate flags.
 **P11 — Receipt claims (§10.8).** Not built: the customer-claimed amount, reference and
 date. Asking for them adds turns to the Telegram flow, and the reviewer already reads
 them from the image. Recorded as `OQ-WP10-02`.
+
+**P13 — An order total never falls below one minor unit (D5).** The engine's discount
+clamp becomes `running − 1`, the floor the reseller reduction already uses
+(`resellerReductionMinor` is capped at `subtotal − 1`). One rule in one place, so every
+caller — catalogue quote, confirmation, commercial actions — prices the same way. A
+zero-total order would need a settlement with no payment row, which is a second
+settlement path for the rarest case; the floor keeps the one path and costs the customer
+one minor unit. The alternative, refusing a zero total at confirmation, leaves a 100%
+discount an operator can create and no customer can use.
 
 **P12 — Not built: gateway, callback, reconciliation worker, auto-verifier (§10.6, §10.7, §10.9).**
 No provider is named, and CLAUDE.md requires a provider rule to be proven against the
