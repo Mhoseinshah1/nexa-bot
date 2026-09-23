@@ -74,6 +74,9 @@ import {
   PAYMENT_METHODS,
   PAYMENT_EVIDENCE_KINDS,
   PAYMENT_RESOLVED_STATES,
+  LATE_TRANSFER_DECISIONS,
+  LATE_TRANSFER_NOTE_MAX_LENGTH,
+  PAYMENT_REJECTION_REASONS,
   LEDGER_DIRECTIONS,
   LEDGER_REASONS,
   SERVICE_DELIVERY_STATES,
@@ -4112,7 +4115,110 @@ export const walletEntries = pgTable(
     uniqueIndex('wallet_entries_topup_payment_key')
       .on(table.tenantId, table.paymentId)
       .where(sql`reason = 'TOPUP_RECEIPT'`),
+    /**
+     * A late-transfer credit names the payment it was for. The top-up rule above, for
+     * the second reason whose whole meaning is a payment (WP10 P1).
+     */
+    check(
+      'wallet_entries_late_transfer_payment_check',
+      sql`reason <> 'LATE_TRANSFER' OR payment_id IS NOT NULL`,
+    ),
+    /**
+     * ONE late-transfer credit per payment, decided by the database.
+     *
+     * The second of the two constraints P1 names, and it holds on its own: two reviewers
+     * crediting together, a retry, and a writer that forgot the decision row all name the
+     * same payment. `<paymentId>:late` gives the same guarantee through the reference
+     * key; this is the one a change to the reference cannot remove.
+     */
+    uniqueIndex('wallet_entries_late_transfer_payment_key')
+      .on(table.tenantId, table.paymentId)
+      .where(sql`reason = 'LATE_TRANSFER'`),
     unique('wallet_entries_tenant_id_key').on(table.tenantId, table.id),
+  ],
+);
+
+/**
+ * A late transfer's one decision (`docs/wp10-payments-audit.md` P1).
+ *
+ * An EXPIRED manual transfer the customer vouched for — a signal or a receipt — sits in
+ * the late-review lane until a reviewer decides it, once: `CREDITED` puts the payment's
+ * exact amount on the wallet under `LATE_TRANSFER`, `DISMISSED` moves nothing and names
+ * a reason. The payment stays EXPIRED and its order closed either way; this row is what
+ * takes the payment out of the lane.
+ *
+ * Keyed by `(tenant_id, payment_id)`, which is the concurrency story: two reviewers, or a
+ * credit racing a dismissal, produce one row, and the loser meets this key. The ledger's
+ * `wallet_entries_late_transfer_payment_key` enforces the same thing on the money, on its
+ * own.
+ *
+ * Append-only (0111): no UPDATE and no DELETE. A wrong decision is not edited; the money
+ * it moved is corrected by a new ledger entry, the way every other correction here is.
+ * The same migration refuses a decision on a payment that is not an expired transfer and
+ * a credit whose amount is not the payment's — facts about another table a CHECK cannot
+ * read.
+ */
+export const lateTransferDecisions = pgTable(
+  'late_transfer_decisions',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    paymentId: uuid('payment_id').notNull(),
+    decision: text('decision').notNull(),
+    /** Required on a dismissal, absent on a credit. */
+    reason: text('reason'),
+    /** The reviewer's own words, bounded. Never customer text. */
+    note: text('note'),
+    /**
+     * What was credited, for a credit: the payment's own amount and currency, checked
+     * against the payment by 0111. Stored rather than joined, for the rule `refunds`
+     * states — never an amount without its currency, readable on its own.
+     */
+    amount: bigint('amount', { mode: 'bigint' }),
+    currency: text('currency'),
+    /** The `LATE_TRANSFER` ledger entry a credit wrote. */
+    walletEntryId: uuid('wallet_entry_id'),
+    decidedByAdminId: uuid('decided_by_admin_id')
+      .notNull()
+      .references(() => admins.id),
+    decidedAt: timestamptz('decided_at').notNull(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.tenantId, table.paymentId],
+      name: 'late_transfer_decisions_pkey',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.paymentId],
+      foreignColumns: [payments.tenantId, payments.id],
+      name: 'late_transfer_decisions_payment_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.walletEntryId],
+      foreignColumns: [walletEntries.tenantId, walletEntries.id],
+      name: 'late_transfer_decisions_entry_fk',
+    }),
+    check('late_transfer_decisions_decision_check', enumCheck('decision', LATE_TRANSFER_DECISIONS)),
+    check(
+      'late_transfer_decisions_reason_enum_check',
+      nullableEnumCheck('reason', PAYMENT_REJECTION_REASONS),
+    ),
+    /** A dismissal names why; a credit has nothing to explain. */
+    check(
+      'late_transfer_decisions_reason_check',
+      sql`(decision = 'DISMISSED') = (reason IS NOT NULL)`,
+    ),
+    check(
+      'late_transfer_decisions_note_check',
+      sql`note IS NULL OR length(btrim(note)) BETWEEN 1 AND ${sql.raw(String(LATE_TRANSFER_NOTE_MAX_LENGTH))}`,
+    ),
+    check('late_transfer_decisions_currency_check', nullableEnumCheck('currency', CURRENCY_CODES)),
+    /** A credit carries its amount, its currency and its entry; a dismissal none of them. */
+    check(
+      'late_transfer_decisions_credit_check',
+      sql`(decision = 'CREDITED') = (amount IS NOT NULL) AND (amount IS NULL) = (currency IS NULL) AND (amount IS NULL) = (wallet_entry_id IS NULL) AND (amount IS NULL OR amount > 0)`,
+    ),
   ],
 );
 
