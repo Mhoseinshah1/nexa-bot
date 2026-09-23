@@ -93,6 +93,8 @@ import {
   REFERRAL_TRIGGERS,
   RESELLER_STATUSES,
   RESELLER_PRICING_MODES,
+  TRIAL_LIMIT_MAX,
+  TRIAL_LIMIT_MIN,
 } from '@nexa/contracts';
 
 /**
@@ -5052,6 +5054,79 @@ export const referrals = pgTable(
 );
 
 /**
+ * A global trial reset, as it ran (ADR-0010 step 5, `docs/wp6-audit.md` B3).
+ *
+ * The recorded result of the one bulk operation trials have: who, why, when, and how
+ * many grants and customers it covered. Every grant it stamped carries its id in
+ * `trial_grants.reset_id`, so "which trials did this reset" is answered by the rows
+ * themselves rather than by a timestamp comparison that a clock skew could disagree
+ * with. Nothing updates or deletes a row here; a reset is history.
+ */
+export const trialResets = pgTable(
+  'trial_resets',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    actorAdminId: uuid('actor_admin_id').notNull(),
+    reason: text('reason').notNull(),
+    affectedGrants: integer('affected_grants').notNull(),
+    affectedCustomers: integer('affected_customers').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    /** The target of `trial_grants.reset_id`'s tenant-bearing foreign key. */
+    uniqueIndex('trial_resets_tenant_id_key').on(table.tenantId, table.id),
+    index('trial_resets_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
+    foreignKey({
+      name: 'trial_resets_actor_fk',
+      columns: [table.tenantId, table.actorAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
+    /** A reset that covered nothing is refused (`TRIAL_RESET_NOTHING`), never recorded. */
+    check(
+      'trial_resets_counts_check',
+      sql`affected_grants > 0 AND affected_customers > 0 AND affected_customers <= affected_grants`,
+    ),
+    check('trial_resets_reason_check', sql`length(btrim(reason)) > 0`),
+  ],
+);
+
+/**
+ * A customer's persistent custom trial limit (ADR-0015, `docs/wp6-audit.md` B2).
+ *
+ * A row per customer, or no row. No row means the customer inherits
+ * `trial.limit_per_customer`; removing an override DELETES the row rather than copying
+ * the default into it, so a later change to the default applies to them again. `0` is a
+ * legal limit and means no trials, never unlimited.
+ */
+export const trialLimitOverrides = pgTable(
+  'trial_limit_overrides',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    customerId: uuid('customer_id').notNull(),
+    trialLimit: integer('trial_limit').notNull(),
+    setAt: timestamptz('set_at').notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ name: 'trial_limit_overrides_pkey', columns: [table.tenantId, table.customerId] }),
+    foreignKey({
+      name: 'trial_limit_overrides_customer_fk',
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+    }),
+    index('trial_limit_overrides_tenant_set_idx').on(table.tenantId, table.setAt, table.customerId),
+    check(
+      'trial_limit_overrides_limit_check',
+      sql`trial_limit >= ${sql.raw(String(TRIAL_LIMIT_MIN))} AND trial_limit <= ${sql.raw(String(TRIAL_LIMIT_MAX))}`,
+    ),
+  ],
+);
+
+/**
  * A trial grant: one row per trial ORDER, and the record that a customer used one.
  *
  * ADR-0015 makes a trial allowance a LIMIT and a USED count, stored separately. This
@@ -5091,6 +5166,14 @@ export const trialGrants = pgTable(
      * created. NULL means it counts against the customer's limit.
      */
     releasedAt: timestamptz('released_at'),
+    /**
+     * When a global reset stopped this grant counting, and which one. Both or neither
+     * (`trial_grants_reset_pair_check`). Independent of `released_at`: a grant carrying
+     * either stamp does not count, so a reset and a release of the same grant can land
+     * in either order and it counts zero times, never minus one.
+     */
+    resetAt: timestamptz('reset_at'),
+    resetId: uuid('reset_id'),
   },
   (table) => [
     foreignKey({
@@ -5109,10 +5192,19 @@ export const trialGrants = pgTable(
     }),
     /** One grant per trial order: a replayed claim cannot count twice. */
     uniqueIndex('trial_grants_order_key').on(table.tenantId, table.orderId),
-    /** The limit check's only query: this customer's grants that still count. */
-    index('trial_grants_customer_counting_idx')
+    /**
+     * The limit check's only query, and the reset's: grants that still count. Replaces
+     * `trial_grants_customer_counting_idx`, whose predicate did not know about resets.
+     */
+    index('trial_grants_counting_idx')
       .on(table.tenantId, table.customerId)
-      .where(sql`released_at IS NULL`),
+      .where(sql`released_at IS NULL AND reset_at IS NULL`),
+    foreignKey({
+      columns: [table.tenantId, table.resetId],
+      foreignColumns: [trialResets.tenantId, trialResets.id],
+      name: 'trial_grants_reset_fk',
+    }),
+    check('trial_grants_reset_pair_check', sql`(reset_at IS NULL) = (reset_id IS NULL)`),
     index('trial_grants_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
   ],
 );

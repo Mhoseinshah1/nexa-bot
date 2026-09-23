@@ -722,6 +722,20 @@
       "when": 1790138494281,
       "tag": "0102_trial_orders_produce_a_service",
       "breakpoints": true
+    },
+    {
+      "idx": 103,
+      "version": "7",
+      "when": 1790144016788,
+      "tag": "0103_trial_overrides_and_resets",
+      "breakpoints": true
+    },
+    {
+      "idx": 104,
+      "version": "7",
+      "when": 1790144017788,
+      "tag": "0104_trial_override_permission",
+      "breakpoints": true
     }
   ]
 }
