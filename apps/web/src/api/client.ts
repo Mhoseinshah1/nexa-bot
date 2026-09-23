@@ -1,4 +1,25 @@
 import {
+  CASHBACK_RULE_ROUTES,
+  DISCOUNT_ROUTES,
+  PRICE_PREVIEW_ROUTE,
+  cashbackRuleListResponseSchema,
+  cashbackRuleResponseSchema,
+  discountListResponseSchema,
+  discountResponseSchema,
+  orderPricingResponseSchema,
+  pricePreviewResponseSchema,
+  type CashbackRuleListResponse,
+  type CashbackRuleResponse,
+  type CashbackRuleStatus,
+  type CashbackRuleWriteRequest,
+  type DiscountKind,
+  type DiscountListResponse,
+  type DiscountResponse,
+  type DiscountStatus,
+  type DiscountWriteRequest,
+  type DiscountablePurpose,
+  type OrderPricingResponse,
+  type PricePreviewResponse,
   TRIAL_ROUTES,
   trialAllowanceResponseSchema,
   trialOverrideListResponseSchema,
@@ -1655,4 +1676,127 @@ export function fetchTrialResets(
     suffix ? `${TRIAL_ROUTES.resets}?${suffix}` : TRIAL_ROUTES.resets,
     trialResetListResponseSchema,
   );
+}
+
+// --- Discounts, cashback rules and pricing (WP8) ------------------------------
+
+/**
+ * One page of discount rules, oldest first — the server keysets `(created_at, id)`
+ * ASCENDING, so the next page is NEWER.
+ *
+ * There is no `deleteDiscount` and there never will be one here: the server has no
+ * delete, because a redemption row names its rule and an order's quote names it too. A
+ * rule is retired by deactivating it.
+ */
+export function fetchDiscounts(
+  query: { limit?: number; cursor?: string; kind?: DiscountKind; status?: DiscountStatus } = {},
+): Promise<DiscountListResponse> {
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
+  if (query.kind !== undefined) params.set('kind', query.kind);
+  if (query.status !== undefined) params.set('status', query.status);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${DISCOUNT_ROUTES.list}?${suffix}` : DISCOUNT_ROUTES.list,
+    discountListResponseSchema,
+  );
+}
+
+/**
+ * The write body, on create and on edit, exactly as `discountWriteSchema` declares it.
+ *
+ * `kind` and `code` travel on an edit too, and they are the STORED values: the server
+ * accepts them only when they match, so a code customers were given keeps meaning the
+ * rule it named. `status` is absent — a rule is created INACTIVE and goes live through
+ * its own command.
+ */
+export type DiscountWriteInput = DiscountWriteRequest;
+
+export function createDiscount(input: DiscountWriteInput): Promise<DiscountResponse> {
+  return post(DISCOUNT_ROUTES.create, input, discountResponseSchema);
+}
+
+export function updateDiscount(
+  input: DiscountWriteInput & { id: string },
+): Promise<DiscountResponse> {
+  const { id, ...body } = input;
+  return post(DISCOUNT_ROUTES.update(id), body, discountResponseSchema);
+}
+
+/** `which` names the ROUTE, the shape `transitionProductCategory` uses. */
+export function transitionDiscount(input: {
+  id: string;
+  which: 'activate' | 'deactivate';
+  idempotencyKey: string;
+}): Promise<DiscountResponse> {
+  const { id, which, ...body } = input;
+  return post(DISCOUNT_ROUTES[which](id), body, discountResponseSchema);
+}
+
+/** One page of cashback rules. The same ascending keyset the discount list uses. */
+export function fetchCashbackRules(
+  query: { limit?: number; cursor?: string; status?: CashbackRuleStatus } = {},
+): Promise<CashbackRuleListResponse> {
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
+  if (query.status !== undefined) params.set('status', query.status);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${CASHBACK_RULE_ROUTES.list}?${suffix}` : CASHBACK_RULE_ROUTES.list,
+    cashbackRuleListResponseSchema,
+  );
+}
+
+export type CashbackRuleWriteInput = CashbackRuleWriteRequest;
+
+export function createCashbackRule(input: CashbackRuleWriteInput): Promise<CashbackRuleResponse> {
+  return post(CASHBACK_RULE_ROUTES.create, input, cashbackRuleResponseSchema);
+}
+
+export function updateCashbackRule(
+  input: CashbackRuleWriteInput & { id: string },
+): Promise<CashbackRuleResponse> {
+  const { id, ...body } = input;
+  return post(CASHBACK_RULE_ROUTES.update(id), body, cashbackRuleResponseSchema);
+}
+
+export function transitionCashbackRule(input: {
+  id: string;
+  which: 'activate' | 'deactivate';
+  idempotencyKey: string;
+}): Promise<CashbackRuleResponse> {
+  const { id, which, ...body } = input;
+  return post(CASHBACK_RULE_ROUTES[which](id), body, cashbackRuleResponseSchema);
+}
+
+/**
+ * The operator's price preview: a GET that writes nothing, records no redemption and
+ * holds no lock. A product for a purchase or a renewal, an add-on for the other two —
+ * the server refuses any other pairing, so this sends exactly what it is given.
+ */
+export function fetchPricePreview(query: {
+  purpose: DiscountablePurpose;
+  productId?: string;
+  addonId?: string;
+  customerId?: string;
+  code?: string;
+}): Promise<PricePreviewResponse> {
+  const params = new URLSearchParams();
+  params.set('purpose', query.purpose);
+  if (query.productId !== undefined && query.productId !== '') {
+    params.set('productId', query.productId);
+  }
+  if (query.addonId !== undefined && query.addonId !== '') params.set('addonId', query.addonId);
+  if (query.customerId !== undefined && query.customerId !== '') {
+    params.set('customerId', query.customerId);
+  }
+  if (query.code !== undefined && query.code !== '') params.set('code', query.code);
+  return authedGet(`${PRICE_PREVIEW_ROUTE}?${params.toString()}`, pricePreviewResponseSchema);
+}
+
+/** One order's adjustments, redemptions and cashback. Its own read, behind `orders.view`. */
+export function fetchOrderPricing(id: string): Promise<OrderPricingResponse> {
+  return authedGet(ORDER_ROUTES.pricing(id), orderPricingResponseSchema);
 }

@@ -297,7 +297,7 @@ export const WEB_FA = {
   'web.nav_orders': 'سفارش‌ها',
   'web.nav_products': 'محصولات',
   'web.nav_payments': 'پرداخت‌ها و کیف پول',
-  'web.nav_discounts': 'تخفیف‌ها و کمپین‌ها',
+  'web.nav_discounts': 'تخفیف‌ها و کش‌بک',
   'web.nav_resellers': 'نمایندگان',
   'web.nav_reports': 'گزارش‌ها',
   'web.nav_panels': 'پنل‌ها',
@@ -414,15 +414,12 @@ export const WEB_FA = {
   'web.planned_status_body':
     'هیچ دکمه‌ای در این صفحه وجود ندارد، چون هیچ کاری از سرور برنمی‌آید. دکمهٔ غیرفعال هم نگذاشته‌ایم: دکمهٔ غیرفعال یعنی «هست ولی دسترسی ندارید»، و این درست نیست.',
 
-  'web.planned_discounts_summary': 'کدهای تخفیف و کمپین‌های فروش.',
   'web.planned_resellers_summary': 'نمایندگان فروش و سقف اختیارات آنها.',
   'web.planned_reports_summary': 'گزارش‌های فروش، مشتری و مالی.',
   'web.planned_bots_summary': 'ربات‌های تلگرام و پیکربندی آنها.',
 
   'web.planned_missing_wallet': 'دفتر کیف پول (ledger) هنوز مصرف‌کننده‌ای روی HTTP ندارد.',
   'web.planned_missing_order': 'موجودیت سفارش وجود ندارد.',
-  'web.planned_missing_catalog': 'کاتالوگ محصول و دسته‌بندی وجود ندارد.',
-  'web.planned_missing_pricing': 'قواعد قیمت‌گذاری فقط به صورت قرارداد تعریف شده و اجرا نمی‌شود.',
   /*
    * KEPT, and now rendered on the real Payments page rather than on a placeholder.
    *
@@ -870,7 +867,7 @@ export const WEB_FA = {
    */
   'web.users_scope_title': 'آنچه در این نسخه نیست',
   'web.users_scope_body':
-    'تخفیف و نمایندگی در این نسخه وجود ندارند؛ بنابراین هیچ عدد یا ستونی برای آنها نشان داده نمی‌شود. نمایش صفر برای چیزی که ساخته نشده، گزارشِ نادرست است.',
+    'نمایندگی در این نسخه وجود ندارد؛ بنابراین هیچ عدد یا ستونی برای آن نشان داده نمی‌شود. نمایش صفر برای چیزی که ساخته نشده، گزارشِ نادرست است. تخفیف‌ها و کش‌بک در صفحهٔ «تخفیف‌ها و کش‌بک» مدیریت می‌شوند.',
 
   // --- A customer's orders and services (WP2) ------------------------------
   /*
@@ -1376,7 +1373,7 @@ export const WEB_FA = {
   'web.product_problem_price': 'قیمت باید عددی صحیح و بزرگ‌تر از صفر باشد یا خالی بماند.',
   'web.products_scope_title': 'آنچه در این نسخه نیست',
   'web.products_scope_body':
-    'قاعدهٔ قیمت‌گذاری، تخفیف، دسته‌بندی و قیمت ویژهٔ نمایندگان در این نسخه وجود ندارند. قیمت هر محصول همان عددی است که اینجا وارد می‌کنید.',
+    'قیمت ویژهٔ نمایندگان در این نسخه وجود ندارد. قیمت هر محصول همان عددی است که اینجا وارد می‌کنید؛ تخفیف‌ها و کش‌بک قاعده‌هایی جدا هستند که در صفحهٔ «تخفیف‌ها و کش‌بک» روی همین قیمت اعمال می‌شوند.',
   /*
    * Owner revision 10, carried onto the LIVE page.
    *
@@ -1852,6 +1849,222 @@ export const WEB_FA = {
   'web.panel_reason_unvalidated': 'تست اتصال انجام نشده',
   'web.panel_reason_unvalidated_help':
     'برای پیکربندی فعلی هیچ تست اتصال موفقی ثبت نشده است. دکمهٔ «تست اتصال» در همین صفحه کافی است.',
+  // --- Discounts, cashback rules and the price preview (WP8) ----------------
+  /*
+   * The page that replaced the `/discounts` placeholder. Every figure on it is the
+   * server's; the copy says what the server does with it — a rule is created inactive,
+   * nothing is deleted, the limits are decided against LIVE redemptions, and cashback
+   * is a later wallet credit rather than a lower price.
+   */
+  'web.discounts_title': 'تخفیف‌ها و کش‌بک',
+  'web.discounts_intro':
+    'قاعده‌های تخفیف، قاعده‌های کش‌بک، و پیش‌نمایش قیمت با همان موتوری که ربات هنگام خرید به کار می‌برد.',
+  'web.discounts_rules_title': 'قاعده‌های تخفیف',
+  'web.discounts_rules_hint':
+    'قاعده‌ها به ترتیب اولویت بررسی می‌شوند، بزرگ‌تر اول. هر قاعده غیرفعال ساخته می‌شود و با دکمهٔ جداگانه فعال می‌شود.',
+  'web.discounts_empty': 'هنوز قاعدهٔ تخفیفی ثبت نشده است.',
+  'web.discounts_empty_hint':
+    'قاعده‌ای که بسازید اینجا دیده می‌شود؛ تا فعالش نکنید روی هیچ سفارشی اثر ندارد.',
+  'web.discounts_filter_empty': 'قاعده‌ای با این صافی پیدا نشد.',
+  'web.discounts_scope_title': 'قاعده‌هایی که این صفحه رعایت می‌کند',
+  'web.discounts_rule_no_delete':
+    'هیچ قاعده‌ای حذف نمی‌شود: سفارش‌ها و استفاده‌های ثبت‌شده به آن اشاره می‌کنند. برای کنار گذاشتن یک قاعده، غیرفعالش کنید.',
+  'web.discounts_rule_usage':
+    '«استفادهٔ فعال» شمار استفاده‌هایی است که سفارششان در انتظار پرداخت یا پرداخت‌شده است، و سقف‌ها با همین عدد سنجیده می‌شوند. سفارشی که لغو، منقضی یا بازپرداخت شود، استفاده‌اش را آزاد می‌کند.',
+  'web.discounts_rule_cashback':
+    'کش‌بک از مبلغ پرداختی کم نمی‌کند. پس از تحویل سفارش به کیف پول مشتری واریز می‌شود، اگر سفارش بدون تحویل پایان یابد باطل می‌شود، و بازپرداخت بخشی از پول همان نسبت از آن را برمی‌گرداند. برگشتی که موجودی کیف پول پوشش ندهد «وصول‌نشده» ثبت می‌شود و هرگز از مشتری مطالبه نمی‌شود.',
+
+  'web.discount_kind': 'نوع',
+  'web.discount_kind_all': 'همهٔ انواع',
+  'web.discount_kind_code': 'کد تخفیف',
+  'web.discount_kind_automatic': 'خودکار',
+  'web.discount_kind_hint':
+    'کد فقط وقتی اعمال می‌شود که مشتری آن را وارد کند. قاعدهٔ خودکار بدون کد روی هر سفارشی که شرایطش را دارد اعمال می‌شود.',
+  'web.discount_kind_locked':
+    'نوع و کد پس از ساخت تغییر نمی‌کنند: کدی که به مشتری داده شده باید همچنان همین قاعده را معنی دهد.',
+  'web.discount_code': 'کد',
+  'web.discount_code_hint':
+    'حروف لاتین، رقم، خط تیره یا زیرخط؛ ۳ تا ۴۰ نویسه. بزرگی و کوچکی حروف فرقی نمی‌کند.',
+  'web.discount_type': 'شیوهٔ محاسبه',
+  'web.discount_type_percentage': 'درصدی',
+  'web.discount_type_fixed': 'مبلغ ثابت',
+  'web.discount_value': 'مقدار',
+  'web.discount_value_hint_percentage': 'درصد صحیح از ۱ تا ۱۰۰.',
+  'web.discount_value_hint_fixed': 'مبلغ صحیح به کوچک‌ترین واحد پولِ انتخاب‌شده.',
+  'web.discount_percent_unit': 'درصد',
+  'web.discount_currency': 'واحد پول',
+  'web.discount_customer': 'مشتری',
+  'web.discount_customer_hint':
+    'اختیاری. شناسهٔ داخلی مشتری، نه شناسهٔ تلگرام. خالی یعنی همهٔ مشتریان.',
+  'web.discount_first_purchase': 'فقط خرید نخست',
+  'web.discount_first_purchase_hint':
+    'فقط وقتی مجاز است که کاربرد قاعده تنها «خرید سرویس جدید» باشد.',
+  'web.discount_minimum': 'حداقل مبلغ سفارش',
+  'web.discount_minimum_hint': 'اختیاری. به کوچک‌ترین واحد پول سفارش؛ خالی یعنی بدون حداقل.',
+  'web.discount_usage': 'استفادهٔ فعال',
+  'web.discount_usage_of': 'از',
+  'web.discount_unlimited': 'بی‌سقف',
+  'web.discount_per_customer': 'هر مشتری',
+  'web.discount_total_limit': 'سقف کل استفاده',
+  'web.discount_per_customer_limit': 'سقف استفادهٔ هر مشتری',
+  'web.discount_limit_hint': 'اختیاری. عدد صحیح بزرگ‌تر از صفر؛ خالی یعنی بی‌سقف.',
+  'web.discount_priority': 'اولویت',
+  'web.discount_priority_hint': 'عدد صحیح از ۰ تا ۱۰۰۰؛ بزرگ‌تر زودتر بررسی می‌شود.',
+  'web.discount_stackable': 'قابل ترکیب',
+  'web.discount_exclusive': 'غیرقابل ترکیب',
+  'web.discount_stackable_hint': 'قاعدهٔ غیرقابل ترکیب با قاعدهٔ دیگری روی یک سفارش جمع نمی‌شود.',
+  'web.discount_new_title': 'قاعدهٔ تخفیف جدید',
+  'web.discount_edit_title': 'ویرایش قاعدهٔ تخفیف',
+  'web.discount_create': 'ساخت قاعده',
+  'web.discount_created': 'قاعدهٔ تخفیف ساخته شد. تا فعالش نکنید اثری ندارد.',
+  'web.discount_saved': 'قاعدهٔ تخفیف ذخیره شد.',
+  'web.discount_activated': 'قاعدهٔ تخفیف فعال شد.',
+  'web.discount_deactivated': 'قاعدهٔ تخفیف غیرفعال شد.',
+  'web.discount_edit_denied':
+    'ساخت، ویرایش و فعال‌سازی قاعدهٔ تخفیف به دسترسی catalog.discounts.edit نیاز دارد.',
+  'web.discount_problem_code': 'کد باید ۳ تا ۴۰ نویسه از حروف لاتین، رقم، خط تیره یا زیرخط باشد.',
+  'web.discount_problem_value_percentage': 'درصد باید عددی صحیح از ۱ تا ۱۰۰ باشد.',
+  'web.discount_problem_value_fixed': 'مبلغ باید عددی صحیح و بزرگ‌تر از صفر باشد.',
+  'web.discount_problem_customer': 'شناسهٔ مشتری معتبر نیست.',
+  'web.discount_problem_first_purchase':
+    'قاعدهٔ خرید نخست فقط برای «خرید سرویس جدید» است و کاربرد دیگری نمی‌پذیرد.',
+  'web.discount_problem_minimum': 'حداقل مبلغ باید عددی صحیح باشد یا خالی بماند.',
+  'web.discount_problem_limit': 'سقف استفاده باید عددی صحیح و بزرگ‌تر از صفر باشد یا خالی بماند.',
+  'web.discount_problem_priority': 'اولویت باید عددی صحیح از ۰ تا ۱۰۰۰ باشد.',
+
+  'web.cashback_rules_title': 'قاعده‌های کش‌بک',
+  'web.cashback_rules_hint':
+    'کش‌بک از مبلغ پرداختی کم نمی‌کند؛ درصدی از مبلغ نهایی است که پس از تحویل سفارش به کیف پول مشتری واریز می‌شود.',
+  'web.cashback_empty': 'هنوز قاعدهٔ کش‌بکی ثبت نشده است.',
+  'web.cashback_percent': 'درصد کش‌بک',
+  'web.cashback_percent_hint': 'درصد صحیح از ۱ تا ۱۰۰ از مبلغ نهایی سفارش؛ رو به پایین گرد می‌شود.',
+  'web.cashback_new_title': 'قاعدهٔ کش‌بک جدید',
+  'web.cashback_edit_title': 'ویرایش قاعدهٔ کش‌بک',
+  'web.cashback_create': 'ساخت قاعدهٔ کش‌بک',
+  'web.cashback_created': 'قاعدهٔ کش‌بک ساخته شد. تا فعالش نکنید اثری ندارد.',
+  'web.cashback_saved': 'قاعدهٔ کش‌بک ذخیره شد.',
+  'web.cashback_activated': 'قاعدهٔ کش‌بک فعال شد.',
+  'web.cashback_deactivated': 'قاعدهٔ کش‌بک غیرفعال شد.',
+  'web.cashback_edit_denied':
+    'ساخت، ویرایش و فعال‌سازی قاعدهٔ کش‌بک به دسترسی catalog.pricing.edit نیاز دارد.',
+  'web.cashback_problem_percent': 'درصد کش‌بک باید عددی صحیح از ۱ تا ۱۰۰ باشد.',
+
+  /* Shared by the two rule tables and the two forms. */
+  'web.rule_label': 'عنوان',
+  'web.rule_label_hint': 'نامی که اپراتور می‌بیند و در ردِ قیمت هر سفارش ثبت می‌شود.',
+  'web.rule_status_all': 'همهٔ وضعیت‌ها',
+  'web.rule_status_active': 'فعال',
+  'web.rule_status_inactive': 'غیرفعال',
+  'web.rule_applies_to': 'کاربرد برای',
+  'web.rule_scope': 'دامنه',
+  'web.rule_scope_kind': 'محدود به',
+  'web.rule_scope_all': 'همهٔ محصولات',
+  'web.rule_scope_product': 'محصول',
+  'web.rule_scope_category': 'دسته',
+  'web.rule_scope_hint': 'یک قاعده به یک محصول یا به یک دسته محدود می‌شود، نه هر دو.',
+  'web.rule_product_unreadable': 'فهرست کامل محصولات در دسترس نیست؛ شناسهٔ محصول را وارد کنید.',
+  'web.rule_category_unreadable': 'فهرست دسته‌ها در دسترس نیست؛ شناسهٔ دسته را وارد کنید.',
+  'web.rule_window': 'بازهٔ زمانی',
+  'web.rule_window_always': 'همیشه',
+  'web.rule_window_from': 'از',
+  'web.rule_window_until': 'تا',
+  'web.rule_starts_at': 'شروع',
+  'web.rule_ends_at': 'پایان',
+  'web.rule_window_hint': 'اختیاری، به وقت مرورگر شما. خالی یعنی بدون مرز.',
+  'web.rule_actions': 'عملیات',
+  'web.rule_edit': 'ویرایش',
+  'web.rule_activate': 'فعال کردن',
+  'web.rule_deactivate': 'غیرفعال کردن',
+  'web.rule_save': 'ذخیره',
+  'web.rule_cancel_edit': 'انصراف',
+  'web.rule_created_inactive':
+    'قاعدهٔ تازه غیرفعال ساخته می‌شود و تا فعالش نکنید روی هیچ سفارشی اثر ندارد.',
+  'web.rule_problem_label': 'عنوان نمی‌تواند خالی یا بلندتر از ۸۰ نویسه باشد.',
+  'web.rule_problem_applies_to': 'دست‌کم یک کاربرد را انتخاب کنید.',
+  'web.rule_problem_product': 'یک محصول انتخاب کنید یا شناسهٔ معتبرش را وارد کنید.',
+  'web.rule_problem_category': 'یک دسته انتخاب کنید یا شناسهٔ معتبرش را وارد کنید.',
+  'web.rule_problem_window': 'زمان شروع یا پایان معتبر نیست.',
+  'web.rule_problem_window_order': 'پایان بازه باید پس از شروع آن باشد.',
+
+  'web.purpose_new_service': 'خرید سرویس جدید',
+  'web.purpose_renew': 'تمدید',
+  'web.purpose_add_traffic': 'افزایش حجم',
+  'web.purpose_add_time': 'افزایش زمان',
+
+  'web.preview_title': 'پیش‌نمایش قیمت',
+  'web.preview_hint':
+    'با همان موتوری که ربات هنگام خرید به کار می‌برد. چیزی ثبت نمی‌شود، استفاده‌ای شمرده نمی‌شود و قفلی گرفته نمی‌شود.',
+  'web.preview_purpose': 'نوع سفارش',
+  'web.preview_product': 'محصول',
+  'web.preview_addon': 'شناسهٔ افزودنی',
+  'web.preview_addon_hint': 'شناسهٔ افزودنیِ حجم یا زمانی که قیمتش را می‌خواهید.',
+  'web.preview_customer': 'شناسهٔ مشتری',
+  'web.preview_customer_hint':
+    'اختیاری. بدون آن، قاعده‌ای که به مشتری بستگی دارد «وابسته به مشتری» گزارش می‌شود و نه پذیرفته و نه رد.',
+  'web.preview_code': 'کد تخفیف',
+  'web.preview_code_hint': 'اختیاری. همان کدی که مشتری در ربات وارد می‌کند.',
+  'web.preview_run': 'محاسبه',
+  'web.preview_problem_addon': 'شناسهٔ معتبر افزودنی را وارد کنید.',
+  'web.preview_cashback': 'کش‌بک',
+  'web.preview_no_cashback': 'هیچ قاعدهٔ کش‌بکی بر این سفارش اعمال نمی‌شود.',
+  'web.preview_code_verdict': 'کد واردشده',
+  'web.preview_code_accepted': 'پذیرفته شد',
+  'web.preview_code_refused': 'پذیرفته نشد',
+  'web.preview_rules_title': 'قاعده‌های بررسی‌شده',
+  'web.preview_rules_empty': 'هیچ قاعدهٔ تخفیفی نامزد این سفارش نبود.',
+  'web.preview_outcome': 'نتیجه',
+  'web.preview_reason': 'دلیل',
+  'web.preview_reason_note':
+    'این دلیل‌ها فقط برای اپراتور است. مشتری برای هر کدِ ردشده یک پیام یکسان می‌بیند، تا وجود یا پر شدن یک کد لو نرود.',
+  'web.preview_outcome_applied': 'اعمال شد',
+  'web.preview_outcome_skipped': 'کنار گذاشته شد',
+  'web.preview_outcome_ineligible': 'شامل نمی‌شود',
+  'web.preview_outcome_customer_dependent': 'وابسته به مشتری',
+
+  'web.discount_reason_unknown_code': 'کدی با این نام وجود ندارد',
+  'web.discount_reason_inactive': 'قاعده غیرفعال است',
+  'web.discount_reason_not_started': 'هنوز شروع نشده است',
+  'web.discount_reason_ended': 'به پایان رسیده است',
+  'web.discount_reason_purpose': 'برای این نوع سفارش نیست',
+  'web.discount_reason_product': 'برای این محصول نیست',
+  'web.discount_reason_category': 'برای این دسته نیست',
+  'web.discount_reason_customer': 'برای این مشتری نیست',
+  'web.discount_reason_first_purchase': 'فقط برای خرید نخست است',
+  'web.discount_reason_minimum_subtotal': 'مبلغ سفارش کمتر از حداقل قاعده است',
+  'web.discount_reason_currency': 'واحد پول سفارش با قاعده یکی نیست',
+  'web.discount_reason_total_limit': 'سقف کل استفاده پر شده است',
+  'web.discount_reason_customer_limit': 'سقف استفادهٔ این مشتری پر شده است',
+  'web.discount_reason_not_combinable': 'با قاعدهٔ اعمال‌شدهٔ دیگری ترکیب نمی‌شود',
+
+  'web.order_pricing_title': 'قیمت‌گذاری این سفارش',
+  'web.order_pricing_hint':
+    'از قیمتی خوانده می‌شود که در همین سفارش ثبت شده است، نه از قاعده‌های امروز.',
+  'web.order_pricing_code': 'کد تخفیف واردشده',
+  'web.order_pricing_no_code': 'بدون کد',
+  'web.order_pricing_adjustments': 'تعدیل‌های تخفیف',
+  'web.order_pricing_no_adjustments': 'هیچ تخفیفی بر این سفارش اعمال نشده است.',
+  'web.order_pricing_rule': 'قاعده',
+  'web.order_pricing_before': 'پیش از تعدیل',
+  'web.order_pricing_after': 'پس از تعدیل',
+  'web.order_pricing_redemptions': 'استفاده‌های ثبت‌شده',
+  'web.order_pricing_no_redemptions':
+    'استفاده‌ای ثبت نشده است. استفاده از تخفیف هنگام تأیید سفارش ثبت می‌شود.',
+  'web.order_pricing_amount': 'مبلغ تخفیف',
+  'web.order_pricing_redeemed_at': 'زمان ثبت',
+  'web.order_cashback_title': 'کش‌بک این سفارش',
+  'web.order_cashback_none': 'قیمت این سفارش کش‌بکی در بر ندارد.',
+  'web.order_cashback_percent': 'درصد',
+  'web.order_cashback_promised': 'مبلغ وعده‌داده‌شده',
+  'web.order_cashback_state': 'وضعیت کش‌بک',
+  'web.order_cashback_earned': 'واریزشده',
+  'web.order_cashback_reversed': 'برگشت‌داده‌شده',
+  'web.order_cashback_unrecovered': 'وصول‌نشده',
+  'web.order_cashback_unrecovered_note':
+    'بخشی از برگشت کش‌بک را موجودی کیف پول پوشش نداد. این کسری فقط ثبت می‌شود و هرگز از مشتری مطالبه نمی‌شود.',
+  'web.cashback_state_draft': 'هنوز ثبت نشده — هنگام تأیید سفارش ثبت می‌شود',
+  'web.cashback_state_pending': 'در انتظار تحویل',
+  'web.cashback_state_earned': 'واریز شده',
+  'web.cashback_state_void': 'باطل شده',
 } as const;
 
 export type WebKey = keyof typeof WEB_FA;

@@ -70,8 +70,9 @@ import {
  * fields this needs are exactly the ones `productSummarySchema` declares. A test asserts
  * this page's answer against the same table the server's two copies are checked with.
  *
- * There is no pricing-rule editor, no discount and no category. Each belongs to a phase
- * that has not shipped, and a disabled control for one would claim the feature exists.
+ * There is no pricing-rule or discount control on this page. Categories have their own
+ * page and discounts and cashback have `/discounts` (WP8); a price here is the LIST price
+ * those rules are applied on top of, and nothing on this form edits them.
  */
 
 export const STATUS_LABELS: Readonly<Record<ProductStatus, WebKey>> = {

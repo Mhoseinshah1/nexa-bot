@@ -8,7 +8,7 @@ import { NAV, isCurrent, resolve } from '../../apps/web/src/app';
 import { renderPage, stubApi } from './harness';
 
 /**
- * The four surfaces with no backend, and the concepts the owner removed.
+ * The three surfaces with no backend, and the concepts the owner removed.
  *
  * Half of these revisions are satisfied by ABSENCE — no receipts, no protocol,
  * no least-loaded routing, no logs. An absence with no test is an absence that
@@ -47,7 +47,9 @@ describe('planned surfaces', () => {
       // `payments` left this list in 4C, exactly as `products` and `orders` left it
       // in 4B, and `services` left it in 4H: the surface is real, and a promoted page
       // still listed here renders its placeholder instead of itself.
-      ['bots', 'discounts', 'reports', 'resellers'].sort(),
+      // `discounts` left it in WP8 on the same terms; `discounts.test.tsx` pins the
+      // live page at that route.
+      ['bots', 'reports', 'resellers'].sort(),
     );
   });
 

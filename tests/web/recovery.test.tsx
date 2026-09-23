@@ -183,8 +183,8 @@ describe('the recovery page', () => {
       // `/products` and `/orders` left it in 4B: the surface is real. Removed from the
       // LIST rather than from the rule — `planned-and-absent.test.tsx` pins exactly
       // which keys `PLANNED_SURFACES` still holds, so this cannot silently stop
-      // checking a surface that is still planned.
-      '/discounts',
+      // checking a surface that is still planned. `/discounts` left in WP8 on the same
+      // terms, and `discounts.test.tsx` asserts the live page at that path.
       '/resellers',
       '/reports',
       '/bots',
