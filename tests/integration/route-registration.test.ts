@@ -162,7 +162,7 @@ describe('dynamic route registration', () => {
       // WP9: the referral reads.
       ['GET', 'referrals'],
       ['GET', 'referral-commissions'],
-      ['GET', `customers/${id}/referral`],
+      ['GET', `users/${id}/referral`],
       ['GET', `services/${id}`],
       ['GET', `services/${id}/operations`],
       ['POST', `services/${id}/sync-usage`],

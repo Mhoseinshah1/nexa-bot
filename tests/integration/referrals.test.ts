@@ -1170,6 +1170,11 @@ describe('the referral program: attribution, the promise, the credit and its rev
         { refund_id: manual.id, due: '10000', recovered: '4000', unrecovered: '6000' },
       ]);
       expect(await f.balance(referrer)).toBe(0n);
+      // The referrer's own totals carry the shortfall, beside what was reversed.
+      const summary = await ctx.container.referralsRead.customer(tenantA, owner, referrer);
+      expect(summary.totals).toEqual([
+        { currency: 'IRT', pending: 0n, earned: 10_000n, reversed: 10_000n, unrecovered: 6_000n },
+      ]);
     });
 
     it('reverses nothing twice for a replayed refund completion', async () => {
@@ -1537,6 +1542,7 @@ describe('the referral surfaces: HTTP for the operator, Telegram for the custome
       expect(commissions.commissions[0]).toMatchObject({
         orderId,
         state: 'EARNED',
+        scope: 'FIRST_PAID_ORDER',
         percent: 10,
         basisAmount: '100000',
         promisedAmount: '10000',
@@ -1551,11 +1557,19 @@ describe('the referral surfaces: HTTP for the operator, Telegram for the custome
       );
       expect(ofReferrer).toMatchObject({
         customerId: referrer,
+        // The referrer's link was opened, so their code is on record.
+        code: referralCodeFor(referrer),
         referredBy: null,
         referredCount: 1,
       });
       expect(ofReferrer.totals).toEqual([
-        { currency: 'IRT', pendingAmount: '0', earnedAmount: '10000', reversedAmount: '5000' },
+        {
+          currency: 'IRT',
+          pendingAmount: '0',
+          earnedAmount: '10000',
+          reversedAmount: '5000',
+          unrecoveredAmount: '0',
+        },
       ]);
 
       const ofReferee = customerReferralResponseSchema.parse(
@@ -1563,6 +1577,8 @@ describe('the referral surfaces: HTTP for the operator, Telegram for the custome
       );
       expect(ofReferee.referredBy?.referrer.customerId).toBe(referrer);
       expect(ofReferee.referredCount).toBe(0);
+      // The referee never opened their own invite, so no code is recorded for them.
+      expect(ofReferee.code).toBeNull();
       expect(ofReferee.totals).toEqual([]);
     });
 

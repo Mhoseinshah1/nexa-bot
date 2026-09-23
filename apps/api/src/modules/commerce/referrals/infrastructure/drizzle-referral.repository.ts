@@ -208,6 +208,15 @@ export class DrizzleReferralRepository implements ReferralRepository {
     return row?.n ?? 0;
   }
 
+  async codeOf(scope: TenantContext, customerId: string): Promise<string | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.db
+      .select({ code: referralCodes.code })
+      .from(referralCodes)
+      .where(and(eq(referralCodes.tenantId, tenantId), eq(referralCodes.customerId, customerId)));
+    return row?.code ?? null;
+  }
+
   async list(
     scope: TenantContext,
     filter: { readonly referrerId?: string },
@@ -621,6 +630,10 @@ export class DrizzleReferralCommissionRepository implements ReferralCommissionRe
           SELECT sum(r.due_amount) FROM ${referralCommissionReversals} r
           WHERE r.tenant_id = ${tenantId}::uuid AND r.referrer_id = ${referrerId}::uuid
             AND r.currency = ${orderReferralCommissions.currency}), 0)::text`,
+        unrecovered: sql<string>`COALESCE((
+          SELECT sum(r.unrecovered_amount) FROM ${referralCommissionReversals} r
+          WHERE r.tenant_id = ${tenantId}::uuid AND r.referrer_id = ${referrerId}::uuid
+            AND r.currency = ${orderReferralCommissions.currency}), 0)::text`,
       })
       .from(orderReferralCommissions)
       .where(
@@ -636,6 +649,7 @@ export class DrizzleReferralCommissionRepository implements ReferralCommissionRe
       pending: BigInt(row.pending),
       earned: BigInt(row.earned),
       reversed: BigInt(row.reversed),
+      unrecovered: BigInt(row.unrecovered),
     }));
   }
 }

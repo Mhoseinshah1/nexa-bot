@@ -1481,6 +1481,16 @@ function CustomerReferralCard({ customerId, mayView }: { customerId: string; may
                   ),
                 ],
                 [t('web.user_referral_referred_count'), <Num key="n" value={row.referredCount} />],
+                [
+                  t('web.user_referral_code'),
+                  row.code === null ? (
+                    <span key="code" className="muted">
+                      {t('web.user_referral_no_code')}
+                    </span>
+                  ) : (
+                    <Ltr key="code">{row.code}</Ltr>
+                  ),
+                ],
               ]}
             />
             {row.totals.length === 0 ? (
@@ -1525,6 +1535,13 @@ const REFERRAL_TOTAL_COLUMNS: readonly Column<ReferralTotal>[] = [
     header: t('web.user_referral_reversed'),
     render: (total) => (
       <Money value={{ amountMinor: total.reversedAmount, currency: total.currency }} />
+    ),
+  },
+  {
+    key: 'unrecovered',
+    header: t('web.user_referral_unrecovered'),
+    render: (total) => (
+      <Money value={{ amountMinor: total.unrecoveredAmount, currency: total.currency }} />
     ),
   },
 ];

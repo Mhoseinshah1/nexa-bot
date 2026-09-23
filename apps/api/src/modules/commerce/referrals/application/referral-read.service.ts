@@ -33,6 +33,7 @@ export interface ReferralReadServiceDeps {
 
 export interface CustomerReferral {
   readonly customerId: string;
+  readonly code: string | null;
   readonly referredBy: ReferralListing | null;
   readonly referredCount: number;
   readonly totals: readonly ReferralTotals[];
@@ -109,12 +110,13 @@ export class ReferralReadService {
     if (customer === null) {
       throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
     }
-    const [referredBy, referredCount, totals] = await Promise.all([
+    const [code, referredBy, referredCount, totals] = await Promise.all([
+      this.deps.referrals.codeOf(scope, customer.id),
       this.deps.referrals.findListingByReferee(scope, customer.id),
       this.deps.referrals.countReferredBy(scope, customer.id),
       this.deps.commissions.totalsForReferrer(scope, customer.id),
     ]);
-    return { customerId: customer.id, referredBy, referredCount, totals };
+    return { customerId: customer.id, code, referredBy, referredCount, totals };
   }
 
   private limit(requested: number | undefined): number {

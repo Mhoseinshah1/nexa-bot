@@ -2124,6 +2124,9 @@ export const WEB_FA = {
   'web.user_referral_pending': 'در انتظار تحویل',
   'web.user_referral_earned': 'واریزشده',
   'web.user_referral_reversed': 'برگشت‌داده‌شده',
+  'web.user_referral_unrecovered': 'وصول‌نشده',
+  'web.user_referral_code': 'کد معرفی',
+  'web.user_referral_no_code': 'این مشتری هنوز لینک دعوت خود را باز نکرده است.',
   'web.user_referral_all': 'معرفی‌ها و پورسانت‌های این معرف',
 } as const;
 

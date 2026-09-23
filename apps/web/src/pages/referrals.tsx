@@ -4,6 +4,7 @@ import {
   REFERRAL_COMMISSION_STATES,
   uuidV7Schema,
   type CurrencyCode,
+  type ReferralCommissionScope,
   type ReferralCommissionState,
   type ReferralCommissionSummaryResponse,
   type ReferralPartyResponse,
@@ -66,6 +67,12 @@ export const TRIGGER_TONES: Readonly<Record<ReferralTrigger, Tone>> = {
   ON_SIGNUP: 'neutral',
   ON_FIRST_PAID_ORDER: 'info',
   ON_EVERY_PAID_ORDER: 'violet',
+};
+
+/** A commission's scope names the same two rules as the trigger it was snapshotted from. */
+export const COMMISSION_SCOPE_LABELS: Readonly<Record<ReferralCommissionScope, WebKey>> = {
+  FIRST_PAID_ORDER: 'web.referral_trigger_first_paid_order',
+  EVERY_PAID_ORDER: 'web.referral_trigger_every_paid_order',
 };
 
 export const COMMISSION_STATE_LABELS: Readonly<Record<ReferralCommissionState, WebKey>> = {
@@ -334,6 +341,11 @@ function Commissions({ denied, referrerId }: { denied: boolean; referrerId: stri
       key: 'referee',
       header: t('web.referral_referee'),
       render: (row) => <PartyCell party={row.referee} />,
+    },
+    {
+      key: 'scope',
+      header: t('web.referral_trigger'),
+      render: (row) => <span className="nowrap">{t(COMMISSION_SCOPE_LABELS[row.scope])}</span>,
     },
     {
       key: 'percent',

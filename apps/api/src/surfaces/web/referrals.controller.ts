@@ -84,7 +84,7 @@ export class ReferralsController {
     };
   }
 
-  @Get('customers/:id/referral')
+  @Get('users/:id/referral')
   async customer(
     @Req() request: FastifyRequest,
     @Param('id') id: string,
@@ -93,6 +93,7 @@ export class ReferralsController {
     const summary = await this.container.referralsRead.customer(scope, actor, id);
     return {
       customerId: summary.customerId,
+      code: summary.code,
       referredBy: summary.referredBy === null ? null : toReferralSummary(summary.referredBy),
       referredCount: summary.referredCount,
       totals: summary.totals.map((t) => ({
@@ -100,6 +101,7 @@ export class ReferralsController {
         pendingAmount: t.pending.toString(),
         earnedAmount: t.earned.toString(),
         reversedAmount: t.reversed.toString(),
+        unrecoveredAmount: t.unrecovered.toString(),
       })),
     };
   }
@@ -144,6 +146,7 @@ function toCommissionSummary(item: ReferralCommissionListing): ReferralCommissio
     orderId: item.orderId,
     referrer: item.referrer,
     referee: item.referee,
+    scope: item.scope,
     percent: item.percent,
     basisAmount: item.basis.amountMinor.toString(),
     promisedAmount: item.amount.amountMinor.toString(),

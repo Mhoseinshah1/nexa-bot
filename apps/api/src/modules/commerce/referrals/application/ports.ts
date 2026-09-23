@@ -90,6 +90,8 @@ export interface ReferralTotals {
   readonly pending: bigint;
   readonly earned: bigint;
   readonly reversed: bigint;
+  /** The part of `reversed` the referrer's balance could not cover. */
+  readonly unrecovered: bigint;
 }
 
 export interface ReferralRepository {
@@ -133,6 +135,9 @@ export interface ReferralRepository {
   ): Promise<ReferralRecord | null>;
 
   countReferredBy(scope: TenantContext, referrerId: string, tx?: unknown): Promise<number>;
+
+  /** The code recorded for this customer, or null until they first asked for it. */
+  codeOf(scope: TenantContext, customerId: string): Promise<string | null>;
 
   list(
     scope: TenantContext,

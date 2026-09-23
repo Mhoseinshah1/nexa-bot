@@ -160,6 +160,10 @@ never a basis.
 - **First-order scope** is decided HERE, under the referrer's lock. If the referral already
   has an `EARNED` commission, the new one is `VOID`. One referral therefore pays at most once
   under that scope, however many orders are in flight at the same moment.
+- **A reversed first commission still counts as the first.** It stays `EARNED` with its
+  reversal beside it, so a later order is not promised again. "First paid order" is the
+  first one that earned, not the first one that stayed paid. Otherwise every refund would
+  hand the referrer another chance at the commission.
 - **A referrer blocked after confirmation still earns.** The block governs what the referrer
   may do, not what the ledger owes them. The fail-closed check is at confirmation, when the
   promise is made.
@@ -201,6 +205,10 @@ exists.
   audit row, `result: 'DENIED'`, with the reason.
 - The possible reasons are `CODE_UNKNOWN`, `REFERRER_BLOCKED`, `ALREADY_REGISTERED` (new) and
   `PROGRAM_INACTIVE` (new).
+- `SELF_REFERRAL` and `ALREADY_ATTRIBUTED` are named in the code as well but cannot occur.
+  Only a customer created in the same transaction is attributed, and nobody holds a code for
+  an id that did not exist yet. They are kept so that a refusal is named, never a constraint
+  violation.
 - The customer is never told. The greeting is the same either way, so the bot is not an
   oracle for which codes exist.
 
@@ -215,8 +223,12 @@ exists.
     `/wallet` is where the legacy bot put this.
 - **HTTP.** These routes need the new `referrals.view` permission:
   - `GET /referrals` for attributions;
-  - `GET /referral-commissions` for commissions, with their reversals;
-  - `GET /customers/:id/referral` for one customer's referrer, referees and totals.
+  - `GET /referral-commissions` for commissions, each with its frozen scope and the totals
+    its reversals took back and could not recover;
+  - `GET /users/:id/referral` for one customer's referrer, their own code (null until they
+    first open their invite), how many they referred, and totals per currency. It sits under
+    `/users` like every other per-customer route. The referees themselves are paged on
+    `/referrals?referrerId=`.
 - **Web Admin.** A Referrals page with attributions and the commission ledger, and a
   referral card on the customer detail page. The program itself is configured on the
   existing features and settings pages.

@@ -49,6 +49,7 @@ function commission(overrides: Record<string, unknown> = {}): Record<string, unk
     orderId: ORDER_ID,
     referrer,
     referee,
+    scope: 'FIRST_PAID_ORDER',
     percent: 10,
     basisAmount: '1250000',
     promisedAmount: '125000',
@@ -156,6 +157,8 @@ describe('the commission ledger', () => {
     expect(row.textContent).toContain('10');
     expect(row.textContent).toContain('درصد');
     expect(within(row).getByText('واریز شده')).toBeInTheDocument();
+    // The scope the commission was promised under, frozen on the row.
+    expect(within(row).getByText('فقط نخستین سفارش پرداخت‌شده')).toBeInTheDocument();
     expect(within(row).getByText(ORDER_ID.slice(0, 8)).closest('a')?.getAttribute('href')).toBe(
       `/orders/${ORDER_ID}`,
     );
@@ -278,17 +281,24 @@ const OFF = {
 
 const customerReferral = (overrides: Record<string, unknown> = {}) => ({
   customerId: REFEREE_ID,
+  code: 'K7QX2M9PDA',
   referredBy: referral(),
   referredCount: 3,
   totals: [
-    { currency: 'IRT', pendingAmount: '50000', earnedAmount: '125000', reversedAmount: '25000' },
+    {
+      currency: 'IRT',
+      pendingAmount: '50000',
+      earnedAmount: '125000',
+      reversedAmount: '25000',
+      unrecoveredAmount: '7000',
+    },
   ],
   ...overrides,
 });
 
 const detailRoutes = (body: Record<string, unknown>) => [
   { url: `/users/${REFEREE_ID}`, body: { customer: customer({ id: REFEREE_ID }) } },
-  { url: `/customers/${REFEREE_ID}/referral`, body },
+  { url: `/users/${REFEREE_ID}/referral`, body },
 ];
 
 describe("the customer's referral card", () => {
@@ -305,20 +315,28 @@ describe("the customer's referral card", () => {
     expect(totals.textContent).toContain('50,000');
     expect(totals.textContent).toContain('125,000');
     expect(totals.textContent).toContain('25,000');
+    expect(totals.textContent).toContain('وصول‌نشده');
+    expect(totals.textContent).toContain('7,000');
+    expect(within(card).getByText('K7QX2M9PDA')).toBeInTheDocument();
     // The referees are one click away, on the page that can page them.
     expect(
       within(card).getByText('معرفی‌ها و پورسانت‌های این معرف').closest('a')?.getAttribute('href'),
     ).toBe(`/referrals?referrerId=${REFEREE_ID}`);
-    expect(gets(api, `/customers/${REFEREE_ID}/referral`)).toHaveLength(1);
+    expect(gets(api, `/users/${REFEREE_ID}/referral`)).toHaveLength(1);
   });
 
   it('says a customer nobody referred was not referred, and that none is owed', async () => {
-    stubApi(detailRoutes(customerReferral({ referredBy: null, referredCount: 0, totals: [] })));
+    stubApi(
+      detailRoutes(
+        customerReferral({ code: null, referredBy: null, referredCount: 0, totals: [] }),
+      ),
+    );
     renderPage(<UserDetailPage id={REFEREE_ID} {...OFF} mayViewReferrals denied={false} />);
     expect(
       await screen.findByText('این مشتری با معرفی کسی ثبت‌نام نکرده است.'),
     ).toBeInTheDocument();
     expect(screen.getByText('هنوز پورسانتی به این مشتری تعلق نگرفته است.')).toBeInTheDocument();
+    expect(screen.getByText('این مشتری هنوز لینک دعوت خود را باز نکرده است.')).toBeInTheDocument();
   });
 
   it('names the key and issues no request without referrals.view', async () => {
