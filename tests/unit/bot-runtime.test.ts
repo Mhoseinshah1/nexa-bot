@@ -1215,10 +1215,15 @@ describe('the derivations Phase 4 depends on being stable', () => {
 
 describe('the financial rules, as integer arithmetic', () => {
   it('never uses a float, and rounds a percentage in the customer’s favour', () => {
-    // 33% of 1000 is 330; of 1001 it is 330.33, truncated to 330. Rounding up would add a
-    // unit of a tenant's revenue on every order.
+    // 33% of 1000 is 330; of 1001 it is 330.33, rounded UP to 331, so the customer pays
+    // 670 — at most the 67% they were promised. This line used to pin 330, and its comment
+    // called truncation the customer's favour; it is the tenant's: a smaller discount is a
+    // larger bill. `docs/wp8-pricing-audit.md` P5 records the correction.
     expect(discountAmountMinor('PERCENTAGE', 1000n, 33n)).toBe(330n);
-    expect(discountAmountMinor('PERCENTAGE', 1001n, 33n)).toBe(330n);
+    expect(discountAmountMinor('PERCENTAGE', 1001n, 33n)).toBe(331n);
+    expect(1001n - discountAmountMinor('PERCENTAGE', 1001n, 33n)).toBeLessThanOrEqual(
+      (1001n * 67n) / 100n,
+    );
     expect(discountAmountMinor('PERCENTAGE', 1000n, 100n)).toBe(1000n);
     expect(discountAmountMinor('FIXED_AMOUNT', 1000n, 250n)).toBe(250n);
     expect(discountAmountMinor('PERCENTAGE', 0n, 50n)).toBe(0n);

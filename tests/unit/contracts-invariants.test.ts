@@ -13,6 +13,7 @@ import {
   isEventType,
   isServiceAdapter,
   isLedgerReason,
+  REVERSAL_REASONS,
   isRegisteredMetric,
   LEDGER_REASONS,
   marzbanActivationSchema,
@@ -45,8 +46,9 @@ describe('ledger reason catalog', () => {
   it('carries every enumerated reason exactly once', () => {
     // The architecture review calls this "the 24-value ledger reason enum" but
     // its own verbatim list enumerates 25. The list is authoritative over the
-    // label; see docs/open-questions.md (C-LEDGER-COUNT).
-    expect(LEDGER_REASONS.length).toBe(25);
+    // label; see docs/open-questions.md (C-LEDGER-COUNT). WP8 added two:
+    // CASHBACK_PURCHASE and CASHBACK_REVERSAL (docs/wp8-pricing-audit.md P9).
+    expect(LEDGER_REASONS.length).toBe(27);
     expect(new Set(LEDGER_REASONS).size).toBe(LEDGER_REASONS.length);
   });
 
@@ -56,6 +58,14 @@ describe('ledger reason catalog', () => {
     expect(isLedgerReason('CASHBACK_GATEWAY')).toBe(true);
     expect(isLedgerReason('CASHBACK_TOPUP')).toBe(true);
     expect(isLedgerReason('CASHBACK_RENEWAL')).toBe(true);
+  });
+
+  it('names a delivered order’s cashback and its reversal, and counts the reversal as one', () => {
+    expect(isLedgerReason('CASHBACK_PURCHASE')).toBe(true);
+    expect(isLedgerReason('CASHBACK_REVERSAL')).toBe(true);
+    // A reversal must reference what it reverses, and the ledger says which reasons are.
+    expect(REVERSAL_REASONS).toContain('CASHBACK_REVERSAL');
+    expect(REVERSAL_REASONS).not.toContain('CASHBACK_PURCHASE');
   });
 
   it('keeps refund separate from purchase reversal and chargeback', () => {

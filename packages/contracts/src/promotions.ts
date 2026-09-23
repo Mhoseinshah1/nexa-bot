@@ -69,10 +69,16 @@ export const DISCOUNT_PERCENTAGE_MAX = 100;
 /**
  * Applies a discount, in minor units, with no floating point anywhere.
  *
- * Integer arithmetic and truncation toward zero, which rounds in the CUSTOMER's favour
- * for a percentage off — the alternative rounds a tenant's revenue up by a unit and does
- * it on every order. `Math.round` on a float would be the obvious way to write this and
- * is exactly what `CLAUDE.md` forbids: `0.1 + 0.2` has no place near a price.
+ * Integer arithmetic, rounded UP to the minor unit, which is the CUSTOMER's favour for a
+ * percentage off: a customer promised 10% off 1005 pays at most 90% of it, so the
+ * discount is 101 and not 100. The alternative rounds a tenant's revenue up by a unit and
+ * does it on every order. `Math.round` on a float would be the obvious way to write this
+ * and is exactly what `CLAUDE.md` forbids: `0.1 + 0.2` has no place near a price.
+ *
+ * This docblock always said "the customer's favour" and the body used to truncate toward
+ * zero — the opposite, a smaller discount. Nothing called it until WP8, so the fix
+ * changed no observable behaviour; `docs/wp8-pricing-audit.md` P5 records it and
+ * `promotions-rounding.test.ts` pins the boundary.
  *
  * The caller clamps the result against the subtotal (`clampDiscount`); this function
  * only computes the nominal amount, so the clamp is visible at the call site rather than
@@ -87,7 +93,167 @@ export function discountAmountMinor(
   if (subtotalMinor <= 0n || value <= 0n) return 0n;
   if (type === 'FIXED_AMOUNT') return value;
   if (value >= BigInt(DISCOUNT_PERCENTAGE_MAX)) return subtotalMinor;
-  return (subtotalMinor * value) / 100n;
+  return (subtotalMinor * value + 99n) / 100n;
+}
+
+/**
+ * How a discount rule reaches an order (WP8, `docs/wp8-pricing-audit.md` P3).
+ *
+ * - `CODE` applies only when the customer enters its code. `code` is required.
+ * - `AUTOMATIC` applies to every order it is eligible for, with no code. `code` is
+ *   forbidden: a code nobody has to type is a label, and a label that looks like a code
+ *   is an invitation to type it.
+ *
+ * The legacy per-user discount percent (UBR-004) is an `AUTOMATIC` rule scoped to one
+ * customer, not a column on the customer: it then has a window, a priority and a place
+ * in the trace like every other adjustment.
+ */
+export const DISCOUNT_KINDS = ['CODE', 'AUTOMATIC'] as const;
+export type DiscountKind = (typeof DISCOUNT_KINDS)[number];
+export const discountKindSchema = z.enum(DISCOUNT_KINDS);
+
+/**
+ * The order purposes a discount or a cashback rule may name.
+ *
+ * `ORDER_PURPOSES` minus `TRIAL`, spelled out rather than filtered so that a purpose
+ * added to the order later is NOT discountable until somebody decides it is. A trial is
+ * free; a discount on it is a discount of nothing, and cashback on it would be money
+ * minted from a free order.
+ */
+export const DISCOUNTABLE_PURPOSES = ['NEW_SERVICE', 'RENEW', 'ADD_TRAFFIC', 'ADD_TIME'] as const;
+export type DiscountablePurpose = (typeof DISCOUNTABLE_PURPOSES)[number];
+export const discountablePurposeSchema = z.enum(DISCOUNTABLE_PURPOSES);
+
+export function isDiscountablePurpose(value: string): value is DiscountablePurpose {
+  return (DISCOUNTABLE_PURPOSES as readonly string[]).includes(value);
+}
+
+/** The operator's name for a rule, and the trace's `ruleLabel`. */
+export const DISCOUNT_LABEL_MAX_LENGTH = 80;
+
+/**
+ * Priority orders the candidates, higher first (P4). A bounded integer rather than a
+ * free one so that "above everything" is a number an operator can actually type.
+ */
+export const DISCOUNT_PRIORITY_MIN = 0;
+export const DISCOUNT_PRIORITY_MAX = 1000;
+
+/**
+ * Why a rule did not apply, for the operator and the audit trail — NEVER for the
+ * customer.
+ *
+ * `bot.discount.rejected` is one message for every one of these, and its frozen
+ * description says why: telling a customer that a code exists but is exhausted is an
+ * oracle for guessing codes. So the customer-facing error is one code,
+ * `DISCOUNT_CODE_REJECTED`, and this reason travels in its details, into the audit row
+ * and to the operator's preview.
+ *
+ * `UNKNOWN_CODE` is the entered code matching no rule. `NOT_COMBINABLE` is a rule that
+ * is eligible on its own and was skipped by the stacking rule (P4 step 3).
+ */
+export const DISCOUNT_REFUSAL_REASONS = [
+  'UNKNOWN_CODE',
+  'INACTIVE',
+  'NOT_STARTED',
+  'ENDED',
+  'PURPOSE',
+  'PRODUCT',
+  'CATEGORY',
+  'CUSTOMER',
+  'FIRST_PURCHASE',
+  'MINIMUM_SUBTOTAL',
+  'CURRENCY',
+  'TOTAL_LIMIT',
+  'CUSTOMER_LIMIT',
+  'NOT_COMBINABLE',
+] as const;
+export type DiscountRefusalReason = (typeof DISCOUNT_REFUSAL_REASONS)[number];
+export const discountRefusalReasonSchema = z.enum(DISCOUNT_REFUSAL_REASONS);
+
+/**
+ * The window in which a customer's next plain message is read as a discount code.
+ *
+ * The same three ways out as `USERNAME_CAPTURE_CLOSE_REASONS` and
+ * `RECEIPT_CAPTURE_CLOSE_REASONS`, for the same reason: a window is closed by the answer
+ * it was opened for, by a newer window, or by its deadline, and by nothing else.
+ */
+export const DISCOUNT_CODE_CAPTURE_CLOSE_REASONS = ['RECEIVED', 'SUPERSEDED', 'EXPIRED'] as const;
+export type DiscountCodeCaptureCloseReason = (typeof DISCOUNT_CODE_CAPTURE_CLOSE_REASONS)[number];
+
+/**
+ * How long a discount-code window stays open: `USERNAME_CAPTURE_TTL_MS`'s ten minutes,
+ * because it is the same kind of question asked on the same summary.
+ */
+export const DISCOUNT_CODE_CAPTURE_TTL_MS = 10 * 60 * 1000;
+
+// ---------------------------------------------------------------------------
+// Cashback
+// ---------------------------------------------------------------------------
+
+/**
+ * Cashback is NOT a discount (WP8 P8).
+ *
+ * It never changes what the customer pays, so it is not a step in `PRICING_PRECEDENCE`;
+ * it is a promise recorded beside the quote and honoured as a wallet credit once the
+ * order is delivered. Its own rule table, its own states and its own ledger reasons, so
+ * that no reader can confuse "money taken off the price" with "money given back later".
+ */
+export const CASHBACK_RULE_STATUSES = ['ACTIVE', 'INACTIVE'] as const;
+export type CashbackRuleStatus = (typeof CASHBACK_RULE_STATUSES)[number];
+export const cashbackRuleStatusSchema = z.enum(CASHBACK_RULE_STATUSES);
+
+export const CASHBACK_PERCENT_MIN = 1;
+export const CASHBACK_PERCENT_MAX = 100;
+
+/**
+ * An order's cashback, once confirmed.
+ *
+ * - `PENDING` — promised in the quote the customer confirmed; nothing credited.
+ * - `EARNED` — the order was delivered and the credit written. Later refunds reverse it
+ *   proportionally; the row stays `EARNED` and the reversals are their own rows.
+ * - `VOID` — the order ended without delivery (cancelled, expired or refunded), so the
+ *   promise lapsed with nothing ever credited.
+ *
+ * `EARNED` and `VOID` are terminal. There is no `REVERSED`: a reversal is a second
+ * movement, not an erasure of the first, exactly as a refund does not un-settle an order.
+ */
+export const CASHBACK_STATES = ['PENDING', 'EARNED', 'VOID'] as const;
+export type CashbackState = (typeof CASHBACK_STATES)[number];
+export const cashbackStateSchema = z.enum(CASHBACK_STATES);
+
+/**
+ * The cashback on a basis, rounded DOWN.
+ *
+ * A stated percentage is a ceiling on what is credited: rounding up would credit a unit
+ * the rule never promised, on every order. The opposite choice to
+ * `discountAmountMinor`, and deliberately so — both round in the direction that keeps the
+ * stated percentage true from the customer's side and never costs the tenant more than it
+ * said.
+ */
+export function cashbackAmountMinor(basisMinor: bigint, percent: number): bigint {
+  if (basisMinor <= 0n || percent <= 0) return 0n;
+  if (percent >= CASHBACK_PERCENT_MAX) return basisMinor;
+  return (basisMinor * BigInt(percent)) / 100n;
+}
+
+/**
+ * What an order's cashback is WORTH once some of its payment has gone back.
+ *
+ * `floor(promised × (paid − refunded) / paid)`, from the CUMULATIVE refunded amount and
+ * never per refund, so a series of partial refunds cannot drift from the answer a single
+ * full refund gives: at `refunded = paid` it is exactly zero, and the reversals recorded
+ * along the way add up to exactly what was earned. P5 and P9.
+ */
+export function cashbackTargetMinor(
+  promisedMinor: bigint,
+  paidMinor: bigint,
+  refundedMinor: bigint,
+): bigint {
+  if (promisedMinor <= 0n || paidMinor <= 0n) return 0n;
+  const kept = paidMinor - refundedMinor;
+  if (kept <= 0n) return 0n;
+  if (kept >= paidMinor) return promisedMinor;
+  return (promisedMinor * kept) / paidMinor;
 }
 
 /**

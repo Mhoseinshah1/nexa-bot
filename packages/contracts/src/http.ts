@@ -24,7 +24,27 @@ import {
 } from './payment-gateways.js';
 import { PAYMENT_RECEIPT_KINDS } from './payment-receipts.js';
 import { CUSTOMER_STATUSES, telegramUserIdSchema } from './customer.js';
-import { TRIAL_LIMIT_MAX, TRIAL_LIMIT_MIN } from './promotions.js';
+import {
+  CASHBACK_PERCENT_MAX,
+  CASHBACK_PERCENT_MIN,
+  CASHBACK_RULE_STATUSES,
+  CASHBACK_STATES,
+  DISCOUNTABLE_PURPOSES,
+  DISCOUNT_CODE_MAX_LENGTH,
+  DISCOUNT_CODE_MIN_LENGTH,
+  DISCOUNT_KINDS,
+  DISCOUNT_LABEL_MAX_LENGTH,
+  DISCOUNT_PERCENTAGE_MAX,
+  DISCOUNT_PERCENTAGE_MIN,
+  DISCOUNT_PRIORITY_MAX,
+  DISCOUNT_PRIORITY_MIN,
+  DISCOUNT_REFUSAL_REASONS,
+  DISCOUNT_STATUSES,
+  DISCOUNT_TYPES,
+  TRIAL_LIMIT_MAX,
+  TRIAL_LIMIT_MIN,
+} from './promotions.js';
+import { priceQuoteWireSchema } from './pricing.js';
 import {
   MAX_DEVICE_LIMIT,
   MAX_DURATION_DAYS,
@@ -2241,6 +2261,363 @@ export const SERVICE_ADDON_ROUTES = {
   deactivate: (id: string) => `/service-addons/${encodeURIComponent(id)}/deactivate`,
 } as const;
 
+// --- Discounts and cashback (WP8) -------------------------------------------
+
+export const DISCOUNT_PAGE_DEFAULT = 25;
+export const DISCOUNT_PAGE_MAX = 100;
+
+/** A non-negative amount in minor units, as a decimal string, for the reason products use one. */
+const minorAmountSchema = z.string().regex(/^\d{1,19}$/u);
+
+/**
+ * One discount rule, as the Web Admin renders it (`docs/wp8-pricing-audit.md` P3).
+ *
+ * `value` is whole percent for `PERCENTAGE` and minor units for `FIXED_AMOUNT`, a
+ * decimal string either way. `liveRedemptions` is the count the limits are decided
+ * against — redemptions whose order is still `AWAITING_PAYMENT` or `PAID` — read live
+ * rather than from a counter, because the counter this table once had was never the
+ * authority and always read zero.
+ */
+export const discountSummarySchema = z.object({
+  id: z.string(),
+  kind: z.enum(DISCOUNT_KINDS),
+  code: z.string().nullable(),
+  label: z.string(),
+  type: z.enum(DISCOUNT_TYPES),
+  value: z.string(),
+  currency: z.enum(CURRENCY_CODES).nullable(),
+  appliesTo: z.array(z.enum(DISCOUNTABLE_PURPOSES)),
+  productId: z.string().nullable(),
+  categoryId: z.string().nullable(),
+  customerId: z.string().nullable(),
+  firstPurchaseOnly: z.boolean(),
+  minimumSubtotalAmount: z.string().nullable(),
+  startsAt: z.iso.datetime().nullable(),
+  endsAt: z.iso.datetime().nullable(),
+  totalRedemptionsLimit: z.number().int().nullable(),
+  perCustomerLimit: z.number().int().nullable(),
+  priority: z.number().int(),
+  stackable: z.boolean(),
+  status: z.enum(DISCOUNT_STATUSES),
+  liveRedemptions: z.number().int(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+export type DiscountSummaryResponse = z.infer<typeof discountSummarySchema>;
+
+/**
+ * The fields an operator writes, on create and on edit.
+ *
+ * `status` is absent, as on every catalogue write: a rule is created INACTIVE and goes
+ * live through its own command, so one call cannot publish a rule nobody has looked at.
+ * `kind` and `code` are accepted on edit and REFUSED by the service if they differ — a
+ * code customers have already been given must keep meaning the rule it named.
+ *
+ * Every rule the database also enforces is refined here too, so an operator is told
+ * which field is wrong rather than receiving a constraint name.
+ */
+export const discountWriteSchema = z
+  .object({
+    idempotencyKey: z.string().min(8).max(255),
+    kind: z.enum(DISCOUNT_KINDS),
+    code: z
+      .string()
+      .trim()
+      .min(DISCOUNT_CODE_MIN_LENGTH)
+      .max(DISCOUNT_CODE_MAX_LENGTH)
+      .regex(/^[A-Za-z0-9_-]+$/u, 'a discount code is ASCII letters, digits, hyphen or underscore')
+      .nullable(),
+    label: z.string().trim().min(1).max(DISCOUNT_LABEL_MAX_LENGTH),
+    type: z.enum(DISCOUNT_TYPES),
+    value: minorAmountSchema,
+    currency: z.enum(CURRENCY_CODES).nullable(),
+    appliesTo: z.array(z.enum(DISCOUNTABLE_PURPOSES)).min(1),
+    productId: uuidV7Schema.nullable(),
+    categoryId: uuidV7Schema.nullable(),
+    customerId: uuidV7Schema.nullable(),
+    firstPurchaseOnly: z.boolean(),
+    minimumSubtotalAmount: minorAmountSchema.nullable(),
+    startsAt: z.iso.datetime().nullable(),
+    endsAt: z.iso.datetime().nullable(),
+    totalRedemptionsLimit: z.number().int().positive().max(1_000_000_000).nullable(),
+    perCustomerLimit: z.number().int().positive().max(1_000_000_000).nullable(),
+    priority: z.number().int().min(DISCOUNT_PRIORITY_MIN).max(DISCOUNT_PRIORITY_MAX),
+    stackable: z.boolean(),
+  })
+  .refine((d) => (d.kind === 'CODE') === (d.code !== null), {
+    message: 'A code rule carries a code; an automatic rule carries none.',
+    path: ['code'],
+  })
+  .refine(
+    (d) =>
+      d.type !== 'PERCENTAGE' ||
+      (d.currency === null &&
+        BigInt(d.value) >= BigInt(DISCOUNT_PERCENTAGE_MIN) &&
+        BigInt(d.value) <= BigInt(DISCOUNT_PERCENTAGE_MAX)),
+    {
+      message: 'A percentage is a whole number from 1 to 100 and has no currency.',
+      path: ['value'],
+    },
+  )
+  .refine(
+    (d) =>
+      d.type !== 'FIXED_AMOUNT' ||
+      (d.currency !== null && BigInt(d.value) > 0n && BigInt(d.value) <= MAX_MONEY_AMOUNT_MINOR),
+    { message: 'A fixed amount is greater than zero and has a currency.', path: ['value'] },
+  )
+  .refine((d) => d.productId === null || d.categoryId === null, {
+    message: 'A rule is scoped to a product or to a category, not both.',
+    path: ['categoryId'],
+  })
+  .refine((d) => new Set(d.appliesTo).size === d.appliesTo.length, {
+    message: 'Each purpose is listed once.',
+    path: ['appliesTo'],
+  })
+  .refine(
+    (d) => !d.firstPurchaseOnly || (d.appliesTo.length === 1 && d.appliesTo[0] === 'NEW_SERVICE'),
+    {
+      message: 'A first-purchase rule applies to new purchases only.',
+      path: ['firstPurchaseOnly'],
+    },
+  )
+  .refine(
+    (d) =>
+      d.minimumSubtotalAmount === null || BigInt(d.minimumSubtotalAmount) <= MAX_MONEY_AMOUNT_MINOR,
+    {
+      message: 'That minimum is past the largest amount this system stores.',
+      path: ['minimumSubtotalAmount'],
+    },
+  )
+  .refine(
+    (d) =>
+      d.startsAt === null || d.endsAt === null || Date.parse(d.startsAt) < Date.parse(d.endsAt),
+    { message: 'A window ends after it starts.', path: ['endsAt'] },
+  );
+export type DiscountWriteRequest = z.infer<typeof discountWriteSchema>;
+
+export const discountListQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(DISCOUNT_PAGE_MAX).optional(),
+  cursor: z.string().max(512).optional(),
+  kind: z.enum(DISCOUNT_KINDS).optional(),
+  status: z.enum(DISCOUNT_STATUSES).optional(),
+});
+export type DiscountListQuery = z.infer<typeof discountListQuerySchema>;
+
+export const discountListResponseSchema = z.object({
+  discounts: z.array(discountSummarySchema),
+  nextCursor: z.string().nullable(),
+});
+export type DiscountListResponse = z.infer<typeof discountListResponseSchema>;
+
+export const discountResponseSchema = z.object({ discount: discountSummarySchema });
+export type DiscountResponse = z.infer<typeof discountResponseSchema>;
+
+/** Activate and deactivate carry an idempotency key and nothing else. */
+export const discountStatusRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+});
+export type DiscountStatusRequest = z.infer<typeof discountStatusRequestSchema>;
+
+export const DISCOUNT_ROUTES = {
+  list: '/discounts',
+  create: '/discounts',
+  detail: (id: string) => `/discounts/${encodeURIComponent(id)}`,
+  update: (id: string) => `/discounts/${encodeURIComponent(id)}`,
+  activate: (id: string) => `/discounts/${encodeURIComponent(id)}/activate`,
+  deactivate: (id: string) => `/discounts/${encodeURIComponent(id)}/deactivate`,
+} as const;
+
+/**
+ * One cashback rule (P8). Its own shape rather than a discount with a flag: cashback is
+ * not a discount and shares none of its value semantics — a whole percent, always, and
+ * never an amount taken off.
+ */
+export const cashbackRuleSummarySchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  percent: z.number().int(),
+  appliesTo: z.array(z.enum(DISCOUNTABLE_PURPOSES)),
+  productId: z.string().nullable(),
+  categoryId: z.string().nullable(),
+  startsAt: z.iso.datetime().nullable(),
+  endsAt: z.iso.datetime().nullable(),
+  status: z.enum(CASHBACK_RULE_STATUSES),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+export type CashbackRuleSummaryResponse = z.infer<typeof cashbackRuleSummarySchema>;
+
+export const cashbackRuleWriteSchema = z
+  .object({
+    idempotencyKey: z.string().min(8).max(255),
+    label: z.string().trim().min(1).max(DISCOUNT_LABEL_MAX_LENGTH),
+    percent: z.number().int().min(CASHBACK_PERCENT_MIN).max(CASHBACK_PERCENT_MAX),
+    appliesTo: z.array(z.enum(DISCOUNTABLE_PURPOSES)).min(1),
+    productId: uuidV7Schema.nullable(),
+    categoryId: uuidV7Schema.nullable(),
+    startsAt: z.iso.datetime().nullable(),
+    endsAt: z.iso.datetime().nullable(),
+  })
+  .refine((d) => d.productId === null || d.categoryId === null, {
+    message: 'A rule is scoped to a product or to a category, not both.',
+    path: ['categoryId'],
+  })
+  .refine((d) => new Set(d.appliesTo).size === d.appliesTo.length, {
+    message: 'Each purpose is listed once.',
+    path: ['appliesTo'],
+  })
+  .refine(
+    (d) =>
+      d.startsAt === null || d.endsAt === null || Date.parse(d.startsAt) < Date.parse(d.endsAt),
+    { message: 'A window ends after it starts.', path: ['endsAt'] },
+  );
+export type CashbackRuleWriteRequest = z.infer<typeof cashbackRuleWriteSchema>;
+
+export const cashbackRuleListQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(DISCOUNT_PAGE_MAX).optional(),
+  cursor: z.string().max(512).optional(),
+  status: z.enum(CASHBACK_RULE_STATUSES).optional(),
+});
+export type CashbackRuleListQuery = z.infer<typeof cashbackRuleListQuerySchema>;
+
+export const cashbackRuleListResponseSchema = z.object({
+  rules: z.array(cashbackRuleSummarySchema),
+  nextCursor: z.string().nullable(),
+});
+export type CashbackRuleListResponse = z.infer<typeof cashbackRuleListResponseSchema>;
+
+export const cashbackRuleResponseSchema = z.object({ rule: cashbackRuleSummarySchema });
+export type CashbackRuleResponse = z.infer<typeof cashbackRuleResponseSchema>;
+
+export const CASHBACK_RULE_ROUTES = {
+  list: '/cashback-rules',
+  create: '/cashback-rules',
+  detail: (id: string) => `/cashback-rules/${encodeURIComponent(id)}`,
+  update: (id: string) => `/cashback-rules/${encodeURIComponent(id)}`,
+  activate: (id: string) => `/cashback-rules/${encodeURIComponent(id)}/activate`,
+  deactivate: (id: string) => `/cashback-rules/${encodeURIComponent(id)}/deactivate`,
+} as const;
+
+/**
+ * The operator's price preview (P12): a GET, answered by the same engine checkout uses,
+ * that writes nothing, records no redemption and holds no lock.
+ *
+ * A product for `NEW_SERVICE` and `RENEW`, an add-on for `ADD_TRAFFIC` and `ADD_TIME` —
+ * the same pairing the commercial flow prices from. `customerId` is optional; without
+ * it, a rule that depends on who the customer is is reported as such rather than
+ * assumed either way.
+ */
+export const pricePreviewQuerySchema = z
+  .object({
+    purpose: z.enum(DISCOUNTABLE_PURPOSES),
+    productId: uuidV7Schema.optional(),
+    addonId: uuidV7Schema.optional(),
+    customerId: uuidV7Schema.optional(),
+    code: z.string().trim().min(1).max(DISCOUNT_CODE_MAX_LENGTH).optional(),
+  })
+  .refine(
+    (q) =>
+      q.purpose === 'NEW_SERVICE' || q.purpose === 'RENEW'
+        ? q.productId !== undefined && q.addonId === undefined
+        : q.addonId !== undefined && q.productId === undefined,
+    {
+      message: 'A purchase or renewal is priced from a product; an add-on purchase from an add-on.',
+    },
+  );
+export type PricePreviewQuery = z.infer<typeof pricePreviewQuerySchema>;
+
+/**
+ * What happened to each candidate rule.
+ *
+ * - `APPLIED` — in the quote.
+ * - `SKIPPED` — eligible, left out by the stacking rule (`reason` is `NOT_COMBINABLE`).
+ * - `INELIGIBLE` — does not apply; `reason` says why.
+ * - `CUSTOMER_DEPENDENT` — the answer depends on a customer the preview was not given.
+ */
+export const PRICE_PREVIEW_RULE_OUTCOMES = [
+  'APPLIED',
+  'SKIPPED',
+  'INELIGIBLE',
+  'CUSTOMER_DEPENDENT',
+] as const;
+export type PricePreviewRuleOutcome = (typeof PRICE_PREVIEW_RULE_OUTCOMES)[number];
+
+export const pricePreviewResponseSchema = z.object({
+  quote: priceQuoteWireSchema,
+  subtotalAmount: z.string(),
+  discountAmount: z.string(),
+  totalAmount: z.string(),
+  currency: z.enum(CURRENCY_CODES),
+  rules: z.array(
+    z.object({
+      discountId: z.string(),
+      label: z.string(),
+      kind: z.enum(DISCOUNT_KINDS),
+      outcome: z.enum(PRICE_PREVIEW_RULE_OUTCOMES),
+      reason: z.enum(DISCOUNT_REFUSAL_REASONS).nullable(),
+    }),
+  ),
+  /** The entered code's own answer, or null when none was entered. */
+  code: z
+    .object({
+      accepted: z.boolean(),
+      reason: z.enum(DISCOUNT_REFUSAL_REASONS).nullable(),
+    })
+    .nullable(),
+});
+export type PricePreviewResponse = z.infer<typeof pricePreviewResponseSchema>;
+
+export const PRICE_PREVIEW_ROUTE = '/pricing/preview';
+
+/**
+ * An order's pricing, for the operator (P12).
+ *
+ * Its own route rather than fields on `orderSummarySchema`, which every order list and
+ * every order command returns: the adjustments come from the stored quote, the
+ * redemptions and the cashback from their own tables, and a list of fifty orders has no
+ * business joining three more tables to show a figure nobody asked for.
+ *
+ * `adjustments` are the quote's `PROMOTIONAL_DISCOUNT` steps, in the order applied.
+ * `cashback` is null when the quote promised none; its `state` is null while the order
+ * is still a draft, because a promise is only recorded at confirmation.
+ */
+export const orderPricingResponseSchema = z.object({
+  orderId: z.string(),
+  discountCode: z.string().nullable(),
+  subtotalAmount: z.string(),
+  discountAmount: z.string(),
+  totalAmount: z.string(),
+  currency: z.enum(CURRENCY_CODES),
+  adjustments: z.array(
+    z.object({
+      ruleId: z.string().nullable(),
+      label: z.string(),
+      amountBefore: z.string(),
+      amountAfter: z.string(),
+    }),
+  ),
+  redemptions: z.array(
+    z.object({
+      discountId: z.string(),
+      amount: z.string(),
+      createdAt: z.iso.datetime(),
+    }),
+  ),
+  cashback: z
+    .object({
+      ruleId: z.string(),
+      label: z.string(),
+      percent: z.number().int(),
+      promisedAmount: z.string(),
+      state: z.enum(CASHBACK_STATES).nullable(),
+      earnedAmount: z.string(),
+      reversedAmount: z.string(),
+      unrecoveredAmount: z.string(),
+    })
+    .nullable(),
+});
+export type OrderPricingResponse = z.infer<typeof orderPricingResponseSchema>;
+
 // --- Orders ------------------------------------------------------------------
 
 export const ORDER_PAGE_DEFAULT = 25;
@@ -2352,6 +2729,7 @@ export type OrderResponse = z.infer<typeof orderResponseSchema>;
 export const ORDER_ROUTES = {
   list: '/orders',
   detail: (id: string) => `/orders/${encodeURIComponent(id)}`,
+  pricing: (id: string) => `/orders/${encodeURIComponent(id)}/pricing`,
 } as const;
 
 // --- Wallet and payments (Phase 4C) -----------------------------------------

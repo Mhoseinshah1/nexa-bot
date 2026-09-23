@@ -30,6 +30,12 @@ export const LEDGER_REASONS = [
   'CASHBACK_GATEWAY',
   'CASHBACK_TOPUP',
   'CASHBACK_RENEWAL',
+  // WP8: cashback on a DELIVERED order, of any paid purpose, and its reversal when the
+  // order's payment is later refunded. Its own reason rather than `CASHBACK_RENEWAL`,
+  // which names one legacy mechanism for one purpose; and a reversal is a debit with its
+  // own name, never a negative credit. `docs/wp8-pricing-audit.md` P9.
+  'CASHBACK_PURCHASE',
+  'CASHBACK_REVERSAL',
   // Referral
   'REFERRAL_COMMISSION',
   'REFERRAL_COMMISSION_REVERSAL',
@@ -69,6 +75,7 @@ export const ADMINISTRATIVE_REASONS: readonly LedgerReason[] = [
 /** Reasons that reverse an earlier entry and therefore require a reference to it. */
 export const REVERSAL_REASONS: readonly LedgerReason[] = [
   'PURCHASE_REVERSAL',
+  'CASHBACK_REVERSAL',
   'REFERRAL_COMMISSION_REVERSAL',
   'REFUND',
   'CHARGEBACK',
