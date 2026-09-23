@@ -4966,6 +4966,16 @@ export const discounts = pgTable(
     /** Higher applies first; ties go to the older rule (P4). */
     priority: integer('priority').notNull().default(0),
     stackable: boolean('stackable').notNull().default(false),
+    /**
+     * RETAINED FOR ONE RELEASE, and read by nothing in this one.
+     *
+     * The counter the limits never trusted; they count LIVE redemptions instead (P6). It
+     * is not dropped here because the release before this one may still be running during
+     * the rollback window, and a column dropped under it is the narrowing
+     * `migration-compatibility.test.ts` refuses. The next release drops it, once nothing
+     * that could be rolled back to still knows it exists.
+     */
+    redemptionCount: integer('redemption_count').notNull().default(0),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -4994,6 +5004,7 @@ export const discounts = pgTable(
     check('discounts_status_check', enumCheck('status', DISCOUNT_STATUSES)),
     check('discounts_currency_check', nullableEnumCheck('currency', CURRENCY_CODES)),
     check('discounts_value_check', sql`value > 0`),
+    check('discounts_count_check', sql`redemption_count >= 0`),
     /** A code rule carries a code and an automatic one carries none. Both halves. */
     check('discounts_code_kind_check', sql`(kind = 'CODE') = (code IS NOT NULL)`),
     /** A percentage is 1..100 and carries no currency; a fixed amount carries one. */

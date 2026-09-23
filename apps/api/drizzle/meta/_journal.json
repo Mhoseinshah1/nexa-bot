@@ -747,15 +747,8 @@
     {
       "idx": 106,
       "version": "7",
-      "when": 1790160619427,
-      "tag": "0106_drop_discount_redemption_count",
-      "breakpoints": true
-    },
-    {
-      "idx": 107,
-      "version": "7",
       "when": 1790160620427,
-      "tag": "0107_wp8_cashback_guards",
+      "tag": "0106_wp8_cashback_guards",
       "breakpoints": true
     }
   ]

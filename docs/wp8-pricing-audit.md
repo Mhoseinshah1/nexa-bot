@@ -174,10 +174,13 @@ automatic promotion share every other column.
 | `stackable`                                     | Boolean, default false                                                                                                                                                                       |
 | `status`                                        | `ACTIVE` or `INACTIVE` (the existing `DISCOUNT_STATUSES`)                                                                                                                                    |
 
-`redemption_count` is dropped. Nothing ever wrote it, so it has always read zero; a
-counter that the limit does not use is a second answer to "how many", and a list reads
-the live count instead (P6). Nothing writes the column, so dropping it is not the
-expand/contract case the migration skill warns about.
+`redemption_count` is retired: nothing reads or writes it, and a list reads the live
+count instead (P6). A counter the limit does not use is a second answer to "how many".
+It is NOT dropped in this release. An earlier draft of this section argued the drop was
+safe because nothing writes the column. That was the wrong question: the release before
+this one may still be running during the rollback window, and a column dropped under it
+is the narrowing `migration-compatibility.test.ts` refuses. The full integration run
+caught the draft's `DROP COLUMN`. The next release drops it.
 
 ### P4 — Selection and stacking
 

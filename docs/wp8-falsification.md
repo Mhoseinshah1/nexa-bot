@@ -56,7 +56,7 @@ and nothing took the refunded half back.
   under a real race.
 
 - **The database guards** on redemptions, reversals and `order_cashback`. These are
-  triggers in migration `0107`. The tests assert the database refuses each write
+  triggers in migration `0106`. The tests assert the database refuses each write
   directly; they are not mutated here.
 - **Which figure a customer sees on a renewal or add-on quote** (`docs/wp8-pricing-audit.md`
   §7). It shows the discounted total without a breakdown, and no test claims otherwise.
