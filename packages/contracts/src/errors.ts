@@ -763,6 +763,14 @@ export const COMMERCE_ERROR_CODES = {
    * of something FAILED, CANCELLED, EXPIRED or UNKNOWN — states from which the machine
    * has no `CONFIRM` edge, and the last of which is an absence of an outcome rather
    * than one.
+   *
+   * It is also the answer the LOSER of a receipt's three dispositions gets (Payment File
+   * 02 §11, D2): approve, reject and credit-to-wallet each take the payment from PENDING
+   * through one conditional UPDATE, so the second of any two is told the payment was
+   * already resolved, with the standing `state` — and, when a credit won,
+   * `disposition: 'CREDITED_TO_WALLET'` — in the details. Nothing of the loser's commits.
+   * A credit asked of a transfer that carries no receipt is refused here too, with
+   * `reason: 'NO_RECEIPT'`.
    */
   PAYMENT_STATE_INVALID: 'commerce.payment_state_invalid',
   /**
@@ -1018,6 +1026,10 @@ export const COMMERCE_ERROR_CODES = {
    * payment and an open transfer cannot both settle one order, and only a reviewer may
    * decide the transfer — so nothing is debited, and the customer is told to wait for
    * the review rather than to top up.
+   *
+   * Payment File 02 §9 (D1) gives it a third: `withdrawPending` refuses to withdraw a
+   * transfer the customer sent a receipt for. A submitted receipt has no timer and leaves
+   * review only through a reviewer's decision.
    */
   ORDER_TRANSFER_UNDER_REVIEW: 'commerce.order_transfer_under_review',
 
@@ -1226,26 +1238,6 @@ export const COMMERCE_ERROR_CODES = {
   DISCOUNT_CODE_TAKEN: 'commerce.discount_code_taken',
   /** An operator's cashback rule id that names nothing in this tenant. */
   CASHBACK_RULE_NOT_FOUND: 'commerce.cashback_rule_not_found',
-  /**
-   * The payment is not in the late-review lane, so it cannot be credited or dismissed.
-   *
-   * `docs/wp10-payments-audit.md` P1. The lane holds one kind of payment: an EXPIRED
-   * `MANUAL_TRANSFER` the customer vouched for — a signal, or at least one receipt. A
-   * payment still PENDING is decided by the ordinary confirm and reject; a confirmed one
-   * is reversed by a refund; one nobody vouched for has no evidence a reviewer could
-   * credit against. The `reason` detail says which.
-   */
-  LATE_TRANSFER_NOT_ELIGIBLE: 'commerce.late_transfer_not_eligible',
-  /**
-   * The late transfer already carries its one decision.
-   *
-   * Its own code rather than `LATE_TRANSFER_NOT_ELIGIBLE`, because it is the answer to a
-   * race rather than to a mistake: a second reviewer, or a credit racing a dismissal,
-   * lost to a decision that is now on record. The detail carries the standing decision
-   * so the loser can read what happened without a second screen. A REPLAY of the same
-   * command is not this — it is answered with the result it already had.
-   */
-  LATE_TRANSFER_ALREADY_DECIDED: 'commerce.late_transfer_already_decided',
   /**
    * An ACTIVE reseller asked for a commercial action their tier does not grant
    * (`docs/wp9-reseller-audit.md` R5, R6). The failing dimension is in the details, for

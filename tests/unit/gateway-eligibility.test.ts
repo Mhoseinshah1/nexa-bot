@@ -197,7 +197,25 @@ describe('the gateway configuration schema', () => {
     maxAmountMinor: 0n,
     eligibility: OFF,
     sortOrder: 0,
+    topupCashbackPercent: 0,
   };
+
+  it('bounds the top-up gift to a whole percentage from 0 to 100 (D5)', () => {
+    for (const ok of [0, 10, 100]) {
+      expect(
+        paymentGatewayConfigSchema.safeParse({ ...base, topupCashbackPercent: ok }).success,
+      ).toBe(true);
+    }
+    for (const bad of [-1, 101, 2.5]) {
+      expect(
+        paymentGatewayConfigSchema.safeParse({ ...base, topupCashbackPercent: bad }).success,
+      ).toBe(false);
+    }
+    // Required, not defaulted: the form submits what it rendered, the rule for every field.
+    const { topupCashbackPercent: _omitted, ...without } = base;
+    void _omitted;
+    expect(paymentGatewayConfigSchema.safeParse(without).success).toBe(false);
+  });
 
   it('refuses a maximum below the minimum', () => {
     const parsed = paymentGatewayConfigSchema.safeParse({
@@ -267,7 +285,7 @@ describe('the gateway configuration schema', () => {
   });
 });
 
-describe('the parity fields this release does not store', () => {
+describe('the parity field this release does not store', () => {
   const base = {
     displayName: null,
     instructions: null,
@@ -275,21 +293,19 @@ describe('the parity fields this release does not store', () => {
     maxAmountMinor: 0n,
     eligibility: OFF,
     sortOrder: 0,
+    topupCashbackPercent: 0,
   };
 
-  it('names both of them, so nobody has to go looking', () => {
-    expect([...PAYMENT_GATEWAY_PARITY_DEFERRALS]).toEqual(['CASHBACK_PERCENT', 'BUTTON_COLOUR']);
+  it('names it, so nobody has to go looking — the cashback percent is built now (D5)', () => {
+    expect([...PAYMENT_GATEWAY_PARITY_DEFERRALS]).toEqual(['BUTTON_COLOUR']);
   });
 
-  it('keeps a cashback percent and a button colour OUT of the configuration', () => {
+  it('keeps a button colour OUT of the configuration, and the gift under its own name', () => {
     /*
-     * The assertion that makes adding either deliberate rather than incidental.
-     *
-     * `FBR-006` and `FBR-002` both establish the legacy controls, so the pressure to
-     * add them is real — and a cashback percentage stored where nothing honours it is
-     * money promised and never paid, which is the one subject where configuration an
-     * operator would believe does actual harm. A colour is the same defect, one subject
-     * less serious. Both land with the thing that would honour them.
+     * The assertion that makes adding a colour deliberate rather than incidental: a
+     * stored colour nothing renders is configuration an operator would believe and
+     * nothing honours. The legacy `cashbackPercent` spelling is not an alias either —
+     * the gift is `topupCashbackPercent`, snapshotted onto each top-up (D5).
      *
      * `z.object` strips unknown keys rather than refusing them, so this checks the
      * OUTPUT does not carry either field — which is what a repository would go on to
@@ -307,6 +323,8 @@ describe('the parity fields this release does not store', () => {
       'maxAmountMinor',
       'minAmountMinor',
       'sortOrder',
+      'topupCashbackPercent',
     ]);
+    expect(parsed.topupCashbackPercent).toBe(0);
   });
 });

@@ -97,6 +97,34 @@ export type ReceiptCaptureCloseReason = (typeof RECEIPT_CAPTURE_CLOSE_REASONS)[n
 export const PAYMENT_RECEIPT_MAX_BYTES = 20 * 1024 * 1024;
 
 /**
+ * The bound on the customer's own caption stored beside a receipt (Payment File 02 §10,
+ * `docs/payments-file02-design.md` D3).
+ *
+ * Telegram's own limit on a media caption, so a caption Telegram delivered always fits.
+ * Stored trimmed; an empty caption is stored as no caption. It is customer text: it is
+ * rendered into the reviewer's caption and nowhere else, and never logged.
+ */
+export const RECEIPT_CAPTION_MAX_LENGTH = 1024;
+
+/**
+ * A receipt caption as it is stored: trimmed, empty as null, and bounded to
+ * `RECEIPT_CAPTION_MAX_LENGTH` CODE POINTS.
+ *
+ * Code points rather than `String.length`, because `payment_receipts_caption_check`
+ * measures with PostgreSQL's `length`, which counts characters, and slicing UTF-16 units
+ * could split a surrogate pair. Anything that is not a string is no caption.
+ */
+export function normalizeReceiptCaption(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (trimmed === '') return null;
+  const points = Array.from(trimmed);
+  return points.length <= RECEIPT_CAPTION_MAX_LENGTH
+    ? trimmed
+    : points.slice(0, RECEIPT_CAPTION_MAX_LENGTH).join('').trimEnd();
+}
+
+/**
  * One receipt, as a reviewer sees it listed.
  *
  * `fileId` is deliberately ABSENT. It is what `getFile` takes, it is bot-scoped, and

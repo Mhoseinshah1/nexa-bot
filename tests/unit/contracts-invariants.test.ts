@@ -48,8 +48,8 @@ describe('ledger reason catalog', () => {
     // The architecture review calls this "the 24-value ledger reason enum" but
     // its own verbatim list enumerates 25. The list is authoritative over the
     // label; see docs/open-questions.md (C-LEDGER-COUNT). WP8 added two:
-    // CASHBACK_PURCHASE and CASHBACK_REVERSAL (docs/wp8-pricing-audit.md P9). WP10
-    // added LATE_TRANSFER (docs/wp10-payments-audit.md P1).
+    // CASHBACK_PURCHASE and CASHBACK_REVERSAL (docs/wp8-pricing-audit.md P9). The
+    // payment package added RECEIPT_CREDIT (docs/payments-file02-design.md D2).
     expect(LEDGER_REASONS.length).toBe(28);
     expect(new Set(LEDGER_REASONS).size).toBe(LEDGER_REASONS.length);
   });
@@ -70,12 +70,14 @@ describe('ledger reason catalog', () => {
     expect(REVERSAL_REASONS).not.toContain('CASHBACK_PURCHASE');
   });
 
-  it('names a late transfer as a credit of its own, neither a reversal nor administrative', () => {
-    expect(isLedgerReason('LATE_TRANSFER')).toBe(true);
-    // A reversal must name what it reverses; a late transfer reverses nothing.
-    expect(REVERSAL_REASONS).not.toContain('LATE_TRANSFER');
-    // And it is a reviewer's decision about one payment, not an operator's free credit.
-    expect(ADMINISTRATIVE_REASONS).not.toContain('LATE_TRANSFER');
+  it('names a receipt credit as a credit of its own, neither a reversal nor administrative', () => {
+    expect(isLedgerReason('RECEIPT_CREDIT')).toBe(true);
+    // A reversal must name what it reverses; a receipt credit reverses nothing.
+    expect(REVERSAL_REASONS).not.toContain('RECEIPT_CREDIT');
+    // And it is a reviewer's disposition of one payment, not an operator's free credit.
+    expect(ADMINISTRATIVE_REASONS).not.toContain('RECEIPT_CREDIT');
+    // The withdrawn late-review lane's reason is gone, not deprecated: it never merged.
+    expect(isLedgerReason('LATE_TRANSFER')).toBe(false);
   });
 
   it('keeps refund separate from purchase reversal and chargeback', () => {

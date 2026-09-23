@@ -150,33 +150,31 @@ export const CUSTOMER_NOTIFICATION_KINDS = [
    */
   'TRIAL_NOT_DELIVERED',
   /*
-   * ## WP10: money that is stranded or silently kept (`docs/wp10-payments-audit.md`)
+   * ## WP10 and Payment File 02: money facts (`docs/payments-file02-design.md`)
    *
-   * Three facts about money, each about an entity with an id and none carrying a
-   * payload, which is what this list admits.
+   * Each about an entity with an id and none carrying a payload, which is what this
+   * list admits.
    */
   /**
-   * The payment window closed on a transfer the customer VOUCHED FOR — they said they
-   * sent it, or sent a receipt. `payments.id` is the subject.
-   *
-   * Sent by the expiry sweep INSTEAD of `PAYMENT_EXPIRED`, never beside it. The payment
-   * and its order are closed exactly as before (P1: nothing reopens either); what differs
-   * is what the customer can rely on. "The window closed" alone reads as "your money is
-   * lost" to somebody who has already sent it, and it is not: the transfer is still being
-   * checked, and anything that arrived will reach the wallet. The sentence says that.
-   */
-  'PAYMENT_EXPIRED_UNDER_REVIEW',
-  /**
-   * A reviewer found the late transfer and credited its exact amount to the wallet.
+   * A reviewer credited an amount to the wallet as a receipt's final disposition (D2).
    * `payments.id` is the subject.
    *
-   * The counterpart of `WALLET_TOPUP_CREDITED` for a transfer whose payment had already
-   * expired, and deliberately a different sentence: the customer must learn that the
-   * ORDER did not go through and that the money is in their wallet to spend, which a
-   * top-up sentence would not tell them. A dismissal sends `PAYMENT_REJECTED`, whose
-   * sentence already says a reviewer looked and did not accept it.
+   * Its own sentence rather than `WALLET_TOPUP_CREDITED`: the customer must learn that
+   * the transfer was not taken as payment of anything, and that what the reviewer judged
+   * arrived is in the wallet to spend. A top-up sentence would not tell them that the
+   * ORDER, when there is one, is still unpaid.
    */
-  'LATE_TRANSFER_CREDITED',
+  'RECEIPT_CREDITED_TO_WALLET',
+  /**
+   * A top-up earned its gateway's gift, credited as its own ledger entry (D5).
+   * `payments.id` is the subject — the top-up's payment, so one gift per top-up is also
+   * one sentence per top-up, by `customer_notifications_subject_key`.
+   *
+   * Sent beside `WALLET_TOPUP_CREDITED`, never instead of it: the principal and the gift
+   * are two facts and two entries, and Payment File 02 §18 asks for two messages. A top-up
+   * at 0% earns nothing and is sent nothing here.
+   */
+  'WALLET_TOPUP_GIFT_CREDITED',
   /**
    * An operator's refund is COMPLETE: the money is back on the wallet, or has been sent
    * back out of band. `refunds.id` is the subject — the one kind in this list whose
@@ -274,18 +272,13 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
   TRIAL_NOT_DELIVERED: false,
   /*
    * All three `false`, and each for the reason every money fact above is: they are
-   * terminal. An expired payment stays expired, a decision row and a ledger entry are
-   * append-only, and a COMPLETED refund cannot be failed. A late copy of any of these
-   * sentences is still true — and `true` would send the dispatcher to a reader that
-   * reads `services` and nothing else, which would SUPERSEDE the message unsent.
-   *
-   * `PAYMENT_EXPIRED_UNDER_REVIEW` is the one worth a second look: a reviewer may decide
-   * the lane before the message leaves. It is still `false`, because what it says —
-   * the window closed and the transfer is being checked — was true when it was raised,
-   * and the decision that follows is told by its OWN kind, not by withdrawing this one.
+   * terminal. A ledger entry is append-only, a FAILED payment is frozen, and a COMPLETED
+   * refund cannot be failed. A late copy of any of these sentences is still true — and
+   * `true` would send the dispatcher to a reader that reads `services` and nothing else,
+   * which would SUPERSEDE the message unsent.
    */
-  PAYMENT_EXPIRED_UNDER_REVIEW: false,
-  LATE_TRANSFER_CREDITED: false,
+  RECEIPT_CREDITED_TO_WALLET: false,
+  WALLET_TOPUP_GIFT_CREDITED: false,
   REFUND_COMPLETED: false,
 };
 
@@ -334,11 +327,11 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
   SERVICE_USAGE_FINAL: 'bot.service.usage_final',
   TRIAL_NOT_DELIVERED: 'bot.trial.not_delivered',
   /*
-   * Three new sentences, none with a placeholder: the lane carries no payload, and the
-   * figures are on the wallet page, derived from the ledger.
+   * None with a placeholder: the lane carries no payload, and the figures are on the
+   * wallet page, derived from the ledger.
    */
-  PAYMENT_EXPIRED_UNDER_REVIEW: 'bot.payment.expired_under_review',
-  LATE_TRANSFER_CREDITED: 'bot.payment.late_transfer_credited',
+  RECEIPT_CREDITED_TO_WALLET: 'bot.payment.receipt_credited_to_wallet',
+  WALLET_TOPUP_GIFT_CREDITED: 'bot.wallet.topup_gift_credited',
   REFUND_COMPLETED: 'bot.refund.completed',
 };
 

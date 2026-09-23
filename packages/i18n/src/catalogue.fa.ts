@@ -219,34 +219,6 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.approved': 'پرداخت تأیید شد و نتیجه برای مشتری ثبت گردید.',
   'bot.admin.rejected': 'پرداخت رد شد و نتیجه برای مشتری ثبت گردید.',
   /*
-   * WP10 P1 — the late-review lane. Every screen says the payment and its order stay
-   * closed: the decision is about the money alone, and "approve" would promise the order
-   * back, which is what does not happen.
-   */
-  'bot.admin.late_review_button': '⏰ بررسی دیرهنگام',
-  'bot.admin.late_review_list':
-    'کارت‌به‌کارت‌هایی که مهلتشان تمام شده اما مشتری گفته واریز کرده یا رسید فرستاده است. پرداخت و سفارش آن‌ها بسته می‌مانند؛ تصمیم فقط دربارهٔ پول است:',
-  'bot.admin.late_review_none': 'در حال حاضر هیچ پرداختی در انتظار بررسی دیرهنگام نیست.',
-  'bot.admin.late_review_item':
-    'بررسی دیرهنگام\nکد پیگیری: {reference}\nمبلغ: {total}\nمشتری: {customer}\n\nمهلت این پرداخت تمام شده و پرداخت و سفارش آن منقضی می‌مانند. اگر پول رسیده است، دقیقاً همین مبلغ به کیف پول مشتری واریز می‌شود؛ اگر نرسیده است، با انتخاب دلیل رد می‌شود. برای هر پرداخت فقط یک تصمیم ثبت می‌شود. رسیدهای ارسالی، اگر باشد، در پیام‌های بعدی است.',
-  'bot.admin.late_review_gone': 'این پرداخت در صف بررسی دیرهنگام نیست.',
-  'bot.admin.late_credit_button': '✅ پول رسیده — واریز به کیف پول',
-  'bot.admin.late_dismiss_button': '❌ پول نرسیده — رد',
-  'bot.admin.late_dismiss_reasons':
-    'دلیل رد را انتخاب کنید. هیچ مبلغی جابه‌جا نمی‌شود و به مشتری اعلام می‌شود که پرداخت رد شد. اگر دلیل دیگری دارید، آن را همراه با توضیح در پنل وب ثبت کنید.',
-  'bot.admin.late_reason_not_received': 'واریزی متناظر نرسیده است',
-  'bot.admin.late_reason_amount_underpaid': 'مبلغ واریزی کمتر است',
-  'bot.admin.late_reason_amount_overpaid': 'مبلغ واریزی بیشتر است',
-  'bot.admin.late_reason_wrong_beneficiary': 'به حساب دیگری واریز شده است',
-  'bot.admin.late_reason_duplicate_reference': 'شمارهٔ پیگیری بانکی تکراری است',
-  'bot.admin.late_reason_unreadable_evidence': 'رسید قابل تطبیق نیست',
-  'bot.admin.late_credited':
-    'مبلغ {total} به کیف پول مشتری واریز شد. پرداخت و سفارش منقضی ماندند و نتیجه برای مشتری ثبت گردید.',
-  'bot.admin.late_dismissed': 'پرداخت رد شد و مبلغی جابه‌جا نشد. نتیجه برای مشتری ثبت گردید.',
-  'bot.admin.late_not_eligible': 'این پرداخت در صف بررسی دیرهنگام نیست و کاری انجام نشد.',
-  'bot.admin.late_already_decided': 'برای این پرداخت پیش‌تر تصمیمی ثبت شده است و کاری انجام نشد.',
-  'bot.admin.late_review_back_button': '↩️ بازگشت به فهرست',
-  /*
    * The services section, Phase 6A. Every action goes through the canonical path the
    * Web Admin uses; these strings are what an administrator reads while it does.
    */
@@ -470,6 +442,19 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * balance changed and where to read it; `/wallet` derives the figure from the ledger.
    */
   'bot.wallet.topup_credited': 'شارژ کیف پول شما تأیید شد. موجودی جدید را با /wallet ببینید.',
+  /*
+   * Payment File 02 §18: the gift is its own message, after the top-up's own. No figure —
+   * the lane has no payload — and both entries are on /wallet.
+   */
+  'bot.wallet.topup_gift_credited':
+    '🎁 هدیهٔ شارژ نیز جداگانه به کیف پول شما واریز شد. جزئیات و موجودی جدید را با /wallet ببینید.',
+  /*
+   * Payment File 02 §12: a reviewer credited the receipt to the wallet instead of taking
+   * it as payment. The order, if any, is still unpaid — the sentence says so, because a
+   * customer who sent money for an order will otherwise assume the order went through.
+   */
+  'bot.payment.receipt_credited_to_wallet':
+    'رسید پرداخت شما بررسی شد و مبلغی که تأیید شد به کیف پول شما واریز گردید. این واریز به‌عنوان پرداخت سفارش ثبت نشد؛ اگر سفارشی در انتظار پرداخت دارید، تا پایان مهلت آن می‌توانید آن را از کیف پول پرداخت کنید. موجودی را با /wallet ببینید.',
 
   /*
    * It used to end «سپس رسید را ارسال نمایید» — "then send the receipt" — and no
@@ -567,15 +552,6 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.rejected':
     'پرداخت شما بررسی شد و تأیید نشد. اگر سفارشی در انتظار پرداخت دارید، تا پایان مهلت آن می‌توانید دوباره پرداخت کنید.',
   'bot.payment.expired': 'مهلت پرداخت شما به پایان رسید و این پرداخت بسته شد.',
-  /*
-   * WP10 P1. The window closed on a transfer the customer vouched for: the payment and
-   * the order are closed, and the money is still being looked for. The sentence says both,
-   * and promises only what the lane will actually do — credit what arrived to the wallet.
-   */
-  'bot.payment.expired_under_review':
-    'مهلت پرداخت شما به پایان رسید و این پرداخت و سفارش آن بسته شد. واریز اعلام‌شدهٔ شما همچنان بررسی می‌شود و اگر مبلغ به دست ما رسیده باشد، به کیف پول شما افزوده می‌شود.',
-  'bot.payment.late_transfer_credited':
-    'واریز شما پس از پایان مهلت پرداخت تأیید شد. سفارش مربوط انجام نشد، اما مبلغ آن به کیف پول شما افزوده شد و می‌توانید با آن دوباره خرید کنید. موجودی را با /wallet ببینید.',
   /*
    * P2. Paying from the wallet while a transfer the customer vouched for is waiting: the
    * review decides this order, and nothing was taken from the wallet.

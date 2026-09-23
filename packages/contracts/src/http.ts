@@ -21,6 +21,7 @@ import {
   PAYMENT_GATEWAY_THRESHOLD_MAX,
   paymentGatewayProviderSchema,
   paymentGatewayStatusSchema,
+  topupCashbackPercentSchema,
 } from './payment-gateways.js';
 import { PAYMENT_RECEIPT_KINDS } from './payment-receipts.js';
 import { CUSTOMER_STATUSES, telegramUserIdSchema } from './customer.js';
@@ -84,12 +85,9 @@ import {
 } from './provisioning.js';
 import { LEDGER_DIRECTIONS, LEDGER_REASONS } from './ledger.js';
 import {
-  LATE_TRANSFER_DECISIONS,
-  LATE_TRANSFER_NOTE_MAX_LENGTH,
   PAYMENT_AMOUNT_MAX_MINOR,
   PAYMENT_EVIDENCE_KINDS,
   PAYMENT_METHODS,
-  PAYMENT_REJECTION_REASONS,
   PAYMENT_STATES,
 } from './payment.js';
 import { CURRENCY_CODES, MAX_MONEY_AMOUNT_MINOR, salesCurrencyCodeSchema } from './money.js';
@@ -3216,20 +3214,24 @@ export const walletAdjustRequestSchema = z.object({
 export type WalletAdjustRequest = z.infer<typeof walletAdjustRequestSchema>;
 
 /**
- * A late transfer's one decision, as the Web Admin renders it (P1).
+ * A receipt's credit-to-wallet disposition, as the Web Admin's payment detail renders it
+ * (Payment File 02 §12, `docs/payments-file02-design.md` D2). READ-ONLY: the Web Admin
+ * has no card-to-card mutation (§10), and this is what it shows of one taken in Telegram.
  *
- * `reason` is null for a credit and a `PAYMENT_REJECTION_REASONS` member for a
- * dismissal — the same equality `late_transfer_decisions_reason_check` pins. The note is
- * NOT here: it is one reviewer's text about somebody's bank transfer, and it travels only
- * on the audit row, the way a rejection's note is kept to the payment detail.
+ * The amount is what the reviewer entered, which is what the `RECEIPT_CREDIT` entry
+ * holds — it may differ from the payment's own amount, and that difference is the reason
+ * the disposition exists. A decimal STRING of minor units with its currency beside it.
  */
-export const lateTransferDecisionViewSchema = z.object({
-  decision: z.enum(LATE_TRANSFER_DECISIONS),
-  reason: z.enum(PAYMENT_REJECTION_REASONS).nullable(),
-  decidedAt: z.iso.datetime(),
+export const receiptCreditViewSchema = z.object({
+  amountMinor: z.string(),
+  currency: z.enum(CURRENCY_CODES),
+  walletEntryId: z.string(),
   decidedByAdminId: z.string(),
+  decidedAt: z.iso.datetime(),
+  /** The reviewer's own note, detail only, like a rejection's. */
+  note: z.string().nullable(),
 });
-export type LateTransferDecisionView = z.infer<typeof lateTransferDecisionViewSchema>;
+export type ReceiptCreditView = z.infer<typeof receiptCreditViewSchema>;
 
 /**
  * One payment, as the Web Admin renders it.
@@ -3293,25 +3295,23 @@ export const paymentSummarySchema = z.object({
   expiresAt: z.iso.datetime().nullable(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
-  /**
-   * The late-review decision, when there is one (`docs/wp10-payments-audit.md` P1).
-   *
-   * Null for every payment that never entered the lane and for one still waiting in it.
-   * On the SUMMARY, beside `customerSignalledAt`, because the lane is a list and the
-   * decision is what makes a row in it finished.
+  /*
+   * Payment File 02 §21 (D7): the diagnostics an operator reconciles against.
    *
    * Defaulted on PARSE rather than required, so a reader holding a response from the
-   * previous release — which never sent the field — reads "no decision" rather than
-   * failing. The server always sends it.
+   * previous release — which never sent them — reads "not known" rather than failing.
+   * The server always sends all four.
    */
-  lateDecision: lateTransferDecisionViewSchema.nullable().default(null),
   /**
-   * Whether this payment is in the late-review lane NOW: an EXPIRED manual transfer the
-   * customer vouched for (a signal or a receipt) with no decision yet. The server's own
-   * answer, so a surface draws the credit and dismiss actions from the same predicate
-   * that refuses them. Defaulted for the reason `lateDecision` is.
+   * The route the payment was offered through, snapshotted when it was created. Null for
+   * a wallet settlement and for a payment created before the column existed.
    */
-  lateReviewEligible: z.boolean().default(false),
+  gatewayProvider: paymentGatewayProviderSchema.nullable().default(null),
+  /** The gateway's or bank's own reference, when one was recorded. */
+  externalReference: z.string().nullable().default(null),
+  /** Who paid, as Telegram knows them: the id and, when they have one, the username. */
+  customerTelegramUserId: z.string().nullable().default(null),
+  customerUsername: z.string().nullable().default(null),
 });
 export type PaymentSummaryResponse = z.infer<typeof paymentSummarySchema>;
 
@@ -3359,6 +3359,18 @@ export const paymentDetailSchema = paymentSummarySchema.extend({
    * here need no permission beyond `payments.view`, because none of them is the number.
    */
   destination: paymentDestinationViewSchema.nullable(),
+  /**
+   * The receipt's credit-to-wallet disposition, when that is how it was decided (D2).
+   * Null for every other payment. Defaulted for the reason the summary's D7 fields are.
+   */
+  receiptCredit: receiptCreditViewSchema.nullable().default(null),
+  /**
+   * The top-up gift this payment promised, as the whole percentage snapshotted from its
+   * route when it was created (D5). Null for an order payment, a wallet settlement and a
+   * payment created before the column existed; `0` for a top-up through a route that
+   * offered none.
+   */
+  topupCashbackPercent: z.number().int().nullable().default(null),
 });
 export type PaymentDetailResponse = z.infer<typeof paymentDetailSchema>;
 
@@ -3372,17 +3384,6 @@ export const paymentListQuerySchema = z.object({
   orderId: uuidV7Schema.optional(),
   /** The quotable code, matched exactly. What an operator has in front of them. */
   reference: z.string().trim().min(1).max(64).optional(),
-  /**
-   * The late-review lane (P1): `true` narrows to EXPIRED manual transfers the customer
-   * vouched for that carry no decision yet, `false` to everything else.
-   *
-   * The literal strings rather than `z.coerce.boolean()`, which reads the query string
-   * `false` as a non-empty string and therefore as `true` — a filter that inverts itself.
-   */
-  lateReview: z
-    .enum(['true', 'false'])
-    .transform((value) => value === 'true')
-    .optional(),
 });
 export type PaymentListQuery = z.infer<typeof paymentListQuerySchema>;
 
@@ -3395,87 +3396,6 @@ export type PaymentListResponse = z.infer<typeof paymentListResponseSchema>;
 export const paymentResponseSchema = z.object({ payment: paymentDetailSchema });
 export type PaymentResponse = z.infer<typeof paymentResponseSchema>;
 
-/**
- * An operator confirming that money arrived.
- *
- * The note is REQUIRED, and that is the point of the whole endpoint: the legacy
- * receipt review records neither the reviewer nor the time (`UNK-PR-010`), so
- * "was this approved by a human, and on what basis" is unanswerable there. Here
- * the reviewer is taken from the session, the time from the `Clock`, and the
- * basis from this field — and migration 0035 freezes all three the moment the
- * payment is confirmed.
- *
- * The amount is NOT a parameter. A confirmation asserts that the payment's own
- * recorded amount arrived; an editable amount at confirmation time is the legacy
- * unknown `UNK-PR-004` and a way to settle a large order with a small transfer.
- */
-export const confirmPaymentRequestSchema = z.object({
-  idempotencyKey: z.string().min(8).max(255),
-  evidenceNote: z.string().trim().min(1).max(500),
-});
-export type ConfirmPaymentRequest = z.infer<typeof confirmPaymentRequestSchema>;
-
-/**
- * An operator recording that the money did NOT arrive.
- *
- * The other half of `receipts.review`, which has read *"Approve or reject a receipt"*
- * since the permission catalogue was frozen and has had only the approve half behind it
- * until now. The note is REQUIRED for the same reason it is required on a confirmation:
- * a decision about somebody's money with no recorded basis is the legacy receipt review,
- * which records neither reviewer nor reason.
- *
- * There is no `reason` ENUM beside it. A closed list here would be this schema inventing
- * a taxonomy of why transfers fail, and the operator is the one who just looked at the
- * bank statement.
- *
- * It takes no amount and no state, and there is no matching "unreject": a rejection is
- * legal only from PENDING, and a payment that was CONFIRMED is reversed by a refund
- * rather than by an edit (`OQ-4C-02`).
- */
-export const rejectPaymentRequestSchema = z.object({
-  idempotencyKey: z.string().min(8).max(255),
-  resolutionNote: z.string().trim().min(1).max(500),
-});
-export type RejectPaymentRequest = z.infer<typeof rejectPaymentRequestSchema>;
-
-/**
- * A reviewer crediting a late transfer to the customer's wallet (P1).
- *
- * An idempotency key and NOTHING else. The amount is the payment's own, frozen when the
- * customer was told what to send, and an amount on this request would be an operator able
- * to credit a figure the customer never transferred — `confirmPaymentRequestSchema`
- * refuses a figure for the same reason. The customer, the order and the currency are all
- * read from the payment.
- */
-export const lateTransferCreditRequestSchema = z.object({
-  idempotencyKey: z.string().min(8).max(255),
-});
-export type LateTransferCreditRequest = z.infer<typeof lateTransferCreditRequestSchema>;
-
-/**
- * A reviewer deciding that a late transfer did not arrive, or not as it should (P1).
- *
- * The REASON is required and closed (`PAYMENT_REJECTION_REASONS`, P6), and the note is
- * optional beside it — the list is what a report counts, the note is what the list cannot
- * say. Nothing moves on a dismissal; the customer is told `PAYMENT_REJECTED`.
- */
-export const lateTransferDismissRequestSchema = z.object({
-  idempotencyKey: z.string().min(8).max(255),
-  reason: z.enum(PAYMENT_REJECTION_REASONS),
-  note: z
-    .union([z.string(), z.null()])
-    .optional()
-    .transform((value) => {
-      if (value === undefined || value === null) return null;
-      const trimmed = value.trim();
-      return trimmed === '' ? null : trimmed;
-    })
-    .refine((value) => value === null || value.length <= LATE_TRANSFER_NOTE_MAX_LENGTH, {
-      message: `must be at most ${LATE_TRANSFER_NOTE_MAX_LENGTH} characters`,
-    }),
-});
-export type LateTransferDismissRequest = z.infer<typeof lateTransferDismissRequestSchema>;
-
 export const WALLET_ROUTES = {
   balance: (customerId: string) => `/users/${encodeURIComponent(customerId)}/wallet`,
   entries: (customerId: string) => `/users/${encodeURIComponent(customerId)}/wallet/entries`,
@@ -3485,14 +3405,12 @@ export const WALLET_ROUTES = {
 export const PAYMENT_ROUTES = {
   list: '/payments',
   detail: (id: string) => `/payments/${encodeURIComponent(id)}`,
-  confirm: (id: string) => `/payments/${encodeURIComponent(id)}/confirm`,
-  reject: (id: string) => `/payments/${encodeURIComponent(id)}/reject`,
-  /**
-   * The late-review lane's two decisions (P1), under `receipts.review` — the authority
-   * that could have confirmed the transfer inside its window.
+  /*
+   * There is no confirm and no reject here, and that is Payment File 02 §10: card-to-card
+   * review is performed only in Telegram, and the Web Admin is read-only for it. The two
+   * routes this contract used to name are removed rather than hidden, so a client cannot
+   * reach a mutation no surface offers (D3). The Telegram surface calls the same service.
    */
-  lateCredit: (id: string) => `/payments/${encodeURIComponent(id)}/late-credit`,
-  lateDismiss: (id: string) => `/payments/${encodeURIComponent(id)}/late-dismiss`,
   /** What a customer sent against one payment, under `receipts.view`. */
   receipts: (id: string) => `/payments/${encodeURIComponent(id)}/receipts`,
   /**
@@ -3709,6 +3627,55 @@ export type RefundListResponse = z.infer<typeof refundListResponseSchema>;
 export const refundResponseSchema = z.object({ refund: refundSchema });
 export type RefundResponse = z.infer<typeof refundResponseSchema>;
 
+/**
+ * One compensation: a refund this installation made AUTOMATICALLY, to the customer's
+ * wallet, because what they paid for could not be delivered (Payment File 02 §13 and
+ * §21, `docs/payments-file02-design.md` D7).
+ *
+ * A read of `refunds` with reason `UNDELIVERABLE` and channel `WALLET_CREDIT` joined to
+ * the payment and the customer — not a second record. `principalMinor` is the payment's
+ * own amount and `creditedMinor` the refund's; the two are equal for every compensation
+ * `RefundService.refundUndeliverable` writes, and both are shown because §21 asks for
+ * both and a difference would be the thing an operator needs to see.
+ */
+export const compensationSchema = z.object({
+  refundId: z.string(),
+  paymentId: z.string(),
+  orderId: z.string().nullable(),
+  customerId: z.string(),
+  customerTelegramUserId: z.string().nullable(),
+  customerUsername: z.string().nullable(),
+  principalMinor: z.string(),
+  creditedMinor: z.string(),
+  currency: z.enum(CURRENCY_CODES),
+  reason: z.string(),
+  state: refundStateSchema,
+  createdAt: z.iso.datetime(),
+  completedAt: z.iso.datetime().nullable(),
+});
+export type CompensationView = z.infer<typeof compensationSchema>;
+
+export const COMPENSATION_PAGE_DEFAULT = 25;
+export const COMPENSATION_PAGE_MAX = 100;
+
+/** Keyset paging over `(created_at, id)`, newest-last, the shape every list here uses. */
+export const compensationListQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(COMPENSATION_PAGE_MAX).optional(),
+  cursor: z.string().min(1).max(255).optional(),
+});
+export type CompensationListQuery = z.infer<typeof compensationListQuerySchema>;
+
+export const compensationListResponseSchema = z.object({
+  compensations: z.array(compensationSchema),
+  nextCursor: z.string().nullable(),
+});
+export type CompensationListResponse = z.infer<typeof compensationListResponseSchema>;
+
+/** Read-only, under `payments.view`. There is no write: a compensation is automatic. */
+export const COMPENSATION_ROUTES = {
+  list: '/compensations',
+} as const;
+
 export const REFUND_ROUTES = {
   /** Every refund against one payment, plus what is left to refund. */
   list: (paymentId: string) => `/payments/${encodeURIComponent(paymentId)}/refunds`,
@@ -3771,6 +3738,12 @@ export const paymentGatewaySchema = z.object({
     activateAfterAccountDays: z.number().int(),
   }),
   sortOrder: z.number().int(),
+  /**
+   * The top-up gift this route promises, a whole percentage of a top-up's principal
+   * (Payment File 02 §17, D5). `0` is no gift. Each top-up SNAPSHOTS it when created, so
+   * changing it here changes only top-ups created afterwards.
+   */
+  topupCashbackPercent: z.number().int(),
   /*
    * The descriptor's two facts — `settlesVia` and `requiresCredentials` — are NOT here.
    *
@@ -3838,6 +3811,8 @@ export const updatePaymentGatewayRequestSchema = z.object({
     activateAfterAccountDays: z.number().int().min(0).max(PAYMENT_GATEWAY_THRESHOLD_MAX),
   }),
   sortOrder: z.number().int().min(PAYMENT_GATEWAY_SORT_MIN).max(PAYMENT_GATEWAY_SORT_MAX),
+  /** The top-up gift, 0–100 (D5). Required, like every other field this form renders. */
+  topupCashbackPercent: topupCashbackPercentSchema,
 });
 export type UpdatePaymentGatewayRequest = z.infer<typeof updatePaymentGatewayRequestSchema>;
 

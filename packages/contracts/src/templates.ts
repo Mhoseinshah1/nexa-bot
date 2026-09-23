@@ -1007,6 +1007,30 @@ export const TEMPLATES = [
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
+  {
+    key: 'bot.wallet.topup_gift_credited',
+    description:
+      'Sent when a confirmed top-up earned its route\u2019s gift (Payment File 02 \u00a718): a ' +
+      'second, separate credit beside the top-up itself, which `bot.wallet.topup_credited` ' +
+      'announces on its own. Never sent for a route at 0%, and never for a manual receipt ' +
+      'credit. Carries NO amount: the customer notification lane has no payload (ADR 0030 ' +
+      '\u00a71), so the sentence says a gift was added and points at /wallet, where both ' +
+      'entries are listed from the ledger.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.receipt_credited_to_wallet',
+    description:
+      'Sent when a reviewer decided a card-to-card receipt by crediting the amount they ' +
+      'judged arrived to the customer\u2019s wallet (Payment File 02 \u00a712). Says the ' +
+      'transfer was NOT taken as payment of an order, that the order, when there is one, is ' +
+      'still unpaid and may be paid from the wallet while it is open, and that the credit ' +
+      'is in the wallet. Carries no amount (ADR 0030 \u00a71): /wallet shows the figure, ' +
+      'derived from the ledger.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
   /* ---------------------------------------------------------------------------
    * Phase 5T — the Telegram admin surface.
    *
@@ -1133,196 +1157,6 @@ export const TEMPLATES = [
     description:
       'The decision landed: the payment is FAILED, and the customer is told by the ' +
       'notification lane rather than from here.',
-    format: 'PLAIN_TEXT',
-    placeholders: [],
-  },
-  /*
-   * WP10 P1 — the late-review lane in the management panel. An EXPIRED manual transfer
-   * the customer vouched for (a signal or a receipt), with no decision yet, and the two
-   * decisions a reviewer may take on it through `LateTransferService` — the same path
-   * the Web Admin calls. The payment and its order stay closed whichever is chosen; the
-   * copy says so every time, because "approve" here would promise the order back.
-   */
-  {
-    key: 'bot.admin.late_review_button',
-    description:
-      'Opens the late-review lane from the receipts section. Drawn only for an administrator ' +
-      'who holds `payments.view`, which the lane\u2019s list charges; the button decides what ' +
-      'is advertised, never what is allowed.',
-    format: 'PLAIN_TEXT',
-    placeholders: [],
-  },
-  {
-    key: 'bot.admin.late_review_list',
-    description:
-      'Above the lane: expired manual transfers the customer said they sent or sent a receipt ' +
-      'for, with no decision yet. Says the payment and the order stay closed and that the ' +
-      'decision is about the money alone. No count, for the reason `bot.admin.receipts_list` ' +
-      'gives.',
-    format: 'PLAIN_TEXT',
-    placeholders: [],
-  },
-  {
-    key: 'bot.admin.late_review_none',
-    description:
-      'The lane is empty. Says nothing is waiting, never that nothing ever was: decided ' +
-      'payments have left it, and no history is reachable from here.',
-    format: 'PLAIN_TEXT',
-    placeholders: [],
-  },
-  {
-    key: 'bot.admin.late_review_item',
-    description:
-      'One payment in the lane, with the facts a reviewer reconciles against a bank ' +
-      'statement: the reference, the exact amount a credit would move, and who owes it. ' +
-      'States that the payment and its order stay expired whichever decision is taken, ' +
-      'and that there is one decision only. The receipt files, when there are any, are ' +
-      'sent as media beside it by file_id.',
-    format: 'PLAIN_TEXT',
-    placeholders: [
-      {
-        token: 'reference',
-        type: 'STRING',
-        description: 'The payment reference the customer quoted.',
-        required: true,
-        repeatable: false,
-      },
-      {
-        token: 'total',
-        type: 'MONEY',
-        description: 'The payment\u2019s own amount: exactly what a credit moves.',
-        required: true,
-        repeatable: false,
-      },
-      {
-        token: 'customer',
-        type: 'STRING',
-        description: 'Who owes it, by the customer id this installation holds.',
-        required: true,
-        repeatable: false,
-      },
-    ],
-  },
-  {
-    key: 'bot.admin.late_review_gone',
-    description:
-      'The tapped payment is not in the lane: unknown here, or no longer an expired transfer ' +
-      'somebody vouched for. A stale inline button says so rather than doing anything.',
-    format: 'PLAIN_TEXT',
-    placeholders: [],
-  },
-  {
-    key: 'bot.admin.late_credit_button',
-    description:
-      'Credits the payment\u2019s exact amount to the customer\u2019s wallet through ' +
-      '`LateTransferService.credit`. Drawn only for `receipts.review`; the service charges ' +
-      'it again.',
-    format: 'PLAIN_TEXT',
-    placeholders: [],
-  },
-  {
-    key: 'bot.admin.late_dismiss_button',
-    description:
-      'Opens the reasons for a dismissal. Moves nothing by itself: the dismissal is the ' +
-      'reason tapped on the next screen.',
-    format: 'PLAIN_TEXT',
-    placeholders: [],
-  },
-  {
-    key: 'bot.admin.late_dismiss_reasons',
-    description:
-      'Asks for the dismissal\u2019s reason from the closed list. Says nothing moves and that ' +
-      'the customer is told the payment was rejected. `OTHER` is not offered here, because ' +
-      'it is the reason whose note says why and this surface has no prompt for a note ' +
-      '(INCIDENT-FIN-001); the copy points at the Web Admin for it.',
-    format: 'PLAIN_TEXT',
-    placeholders: [],
-  },
-  {
-    key: 'bot.admin.late_reason_not_received',
-    description: 'A dismissal reason button. `NOT_RECEIVED`: nothing matching arrived.',
-    format: 'PLAIN_TEXT',
-    placeholders: [],
-  },
-  {
-    key: 'bot.admin.late_reason_amount_underpaid',
-    description: 'A dismissal reason button. `AMOUNT_UNDERPAID`: something arrived, for less.',
-    format: 'PLAIN_TEXT',
-    placeholders: [],
-  },
-  {
-    key: 'bot.admin.late_reason_amount_overpaid',
-    description:
-      'A dismissal reason button. `AMOUNT_OVERPAID`: something arrived, for more. Refused rather than credited silently.',
-    format: 'PLAIN_TEXT',
-    placeholders: [],
-  },
-  {
-    key: 'bot.admin.late_reason_wrong_beneficiary',
-    description:
-      'A dismissal reason button. `WRONG_BENEFICIARY`: it went to an account this installation does not hold.',
-    format: 'PLAIN_TEXT',
-    placeholders: [],
-  },
-  {
-    key: 'bot.admin.late_reason_duplicate_reference',
-    description:
-      'A dismissal reason button. `DUPLICATE_REFERENCE`: the bank reference already credited another payment.',
-    format: 'PLAIN_TEXT',
-    placeholders: [],
-  },
-  {
-    key: 'bot.admin.late_reason_unreadable_evidence',
-    description:
-      'A dismissal reason button. `UNREADABLE_EVIDENCE`: the receipt shows nothing a reviewer can match.',
-    format: 'PLAIN_TEXT',
-    placeholders: [],
-  },
-  {
-    key: 'bot.admin.late_credited',
-    description:
-      'The credit landed: the amount went to the customer\u2019s wallet, the payment and ' +
-      'its order stayed expired, and the customer is told by the notification lane ' +
-      '(`LATE_TRANSFER_CREDITED`) rather than from here.',
-    format: 'PLAIN_TEXT',
-    placeholders: [
-      {
-        token: 'total',
-        type: 'MONEY',
-        description: 'The amount credited: the payment\u2019s own.',
-        required: true,
-        repeatable: false,
-      },
-    ],
-  },
-  {
-    key: 'bot.admin.late_dismissed',
-    description:
-      'The dismissal landed: nothing moved, and the customer is told by the notification ' +
-      'lane (`PAYMENT_REJECTED`) rather than from here.',
-    format: 'PLAIN_TEXT',
-    placeholders: [],
-  },
-  {
-    key: 'bot.admin.late_not_eligible',
-    description:
-      'Answers `LATE_TRANSFER_NOT_ELIGIBLE`: the payment is not in the lane, so nothing was ' +
-      'done. A fact about the payment, not about the administrator, so it is its own ' +
-      'sentence rather than `bot.admin.refused`.',
-    format: 'PLAIN_TEXT',
-    placeholders: [],
-  },
-  {
-    key: 'bot.admin.late_already_decided',
-    description:
-      'Answers `LATE_TRANSFER_ALREADY_DECIDED`: another reviewer, or an earlier tap, decided ' +
-      'it first, so nothing was done. There is one decision per payment and no second one.',
-    format: 'PLAIN_TEXT',
-    placeholders: [],
-  },
-  {
-    key: 'bot.admin.late_review_back_button',
-    description: 'Returns to the lane\u2019s list from one of its screens.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -3534,30 +3368,6 @@ export const TEMPLATES = [
       'customer notification lane. Distinct from `bot.payment.rejected` because no ' +
       'person judged anything \u2014 a deadline passed \u2014 and a customer told ' +
       '"rejected" for a lapsed window would reasonably think somebody looked at it.',
-    format: 'PLAIN_TEXT',
-    placeholders: [],
-  },
-  {
-    key: 'bot.payment.expired_under_review',
-    description:
-      'Tells a customer the payment window closed on a transfer they VOUCHED FOR \u2014 ' +
-      'they said they sent it, or sent a receipt. Sent by the customer notification lane ' +
-      'INSTEAD of `bot.payment.expired`. The payment and its order are closed and nothing ' +
-      'reopens them, and the sentence must not pretend otherwise; what it adds is that the ' +
-      'transfer is still being checked and that anything that arrived will reach the ' +
-      'wallet. Without it a customer who has already sent money reads "the window closed" ' +
-      'as "the money is lost" (docs/wp10-payments-audit.md P1).',
-    format: 'PLAIN_TEXT',
-    placeholders: [],
-  },
-  {
-    key: 'bot.payment.late_transfer_credited',
-    description:
-      'Tells a customer a reviewer found the transfer that arrived after its payment ' +
-      'expired, and credited its amount to their wallet. Says the order itself did not go ' +
-      'through, and that the wallet balance can pay for it again or for something else. ' +
-      'Carries no amount: the lane has no payload (ADR 0030 \u00a71) and /wallet shows the ' +
-      'figure, derived from the ledger (P1).',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },

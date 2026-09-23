@@ -158,6 +158,28 @@ export const PAYMENT_GATEWAY_THRESHOLD_MAX = 100_000;
 const thresholdSchema = z.number().int().min(0).max(PAYMENT_GATEWAY_THRESHOLD_MAX);
 
 /**
+ * The top-up gift a route promises, as a whole percentage of a top-up's principal
+ * (Payment File 02 §17, `docs/payments-file02-design.md` D5).
+ *
+ * `0` means no gift, and it is the default — the same "0 is off" spelling the thresholds
+ * use. A top-up payment SNAPSHOTS this value when it is created, from the route it was
+ * offered through, and the payments guard trigger freezes the snapshot: an operator
+ * changing the percentage later cannot change a promise already made. The gift is
+ * `floor(principal × percent / 100)`, a separate `CASHBACK_TOPUP` entry, and written only
+ * when above zero.
+ *
+ * Per ROUTE, so it applies to the manual transfer today and to any external gateway that
+ * inherits the column later.
+ */
+export const PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MIN = 0;
+export const PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MAX = 100;
+export const topupCashbackPercentSchema = z
+  .number()
+  .int()
+  .min(PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MIN)
+  .max(PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MAX);
+
+/**
  * Who may see a route, keyed on the customer's own history.
  *
  * `FBR-005` establishes all three controls verbatim, and `FBR-011` establishes the
@@ -284,6 +306,8 @@ export const paymentGatewayConfigSchema = z
       activateAfterAccountDays: thresholdSchema,
     }),
     sortOrder: z.number().int().min(PAYMENT_GATEWAY_SORT_MIN).max(PAYMENT_GATEWAY_SORT_MAX),
+    /** The top-up gift, 0–100. See `topupCashbackPercentSchema`. */
+    topupCashbackPercent: topupCashbackPercentSchema,
   })
   .superRefine((value, ctx) => {
     /*
@@ -321,25 +345,21 @@ export const paymentGatewayConfigSchema = z
 export type PaymentGatewayConfig = z.output<typeof paymentGatewayConfigSchema>;
 
 /**
- * Two parity fields this release deliberately does NOT store, and why.
+ * The parity field this release deliberately does NOT store, and why.
  *
  * Recorded here rather than in a document, because this is the file somebody reads when
- * they wonder where they went.
+ * they wonder where it went.
  *
- * - **Per-gateway cashback** (`FBR-006`, `WEB-BR-021`). It is real, it is per-route, and
- *   it is Phase 7 accounting — `CLAUDE.md` names cashback among the things not to build
- *   without an explicit instruction. A percentage stored where nothing honours it is
- *   worse than its absence: it is configuration an operator would believe, on the one
- *   subject where believing it means money that was promised and never paid.
  * - **Customer-facing button colour** (`FBR-002`, `FBR-003`). The legacy control tints
  *   the route's button the way `🎨 رنگ محصول` tints a product's. Nexa has no
  *   product-colour idiom to reuse and no customer-facing gateway CHOOSER to render one
  *   in — with a single operable route the customer is shown that route, not a list. A
- *   stored colour nothing renders is the same defect as the cashback percent, one
- *   subject less serious.
+ *   stored colour nothing renders is configuration an operator would believe and nothing
+ *   honours.
  *
- * Both land with the thing that would honour them: cashback with Phase 7's ledger
- * reasons, the colour with the second route that makes a chooser exist.
+ * The per-gateway cashback percent (`FBR-006`, `WEB-BR-021`) used to be listed here. It
+ * is built now — Payment File 02 §17 asked for it and D5 honours it — as
+ * `topupCashbackPercent`, which is why it left this list.
  */
-export const PAYMENT_GATEWAY_PARITY_DEFERRALS = ['CASHBACK_PERCENT', 'BUTTON_COLOUR'] as const;
+export const PAYMENT_GATEWAY_PARITY_DEFERRALS = ['BUTTON_COLOUR'] as const;
 export type PaymentGatewayParityDeferral = (typeof PAYMENT_GATEWAY_PARITY_DEFERRALS)[number];

@@ -254,69 +254,62 @@ export function isValidLedgerAmount(amountMinor: bigint): boolean {
 }
 
 /**
- * Why a reviewer decided that money did NOT arrive, or did not arrive as it should.
- *
- * `docs/wp10-payments-audit.md` P6. A closed list, and it is not this module inventing a
- * taxonomy of why bank transfers fail: it is the short list of what a reviewer holding a
- * statement actually finds, and each member is something a report can count. The free
- * note stays beside it, for what the list cannot say — `OTHER` requires that note to be
- * the whole reason.
- *
- * Defined with its first consumer, the late-transfer dismissal (P1). The rejection of a
- * PENDING transfer adopts it in P6.
- *
- * - `NOT_RECEIVED` — nothing matching arrived.
- * - `AMOUNT_UNDERPAID` / `AMOUNT_OVERPAID` — something arrived, for a different amount.
- *   An overpayment is refused rather than credited silently (P5).
- * - `WRONG_BENEFICIARY` — it went to an account this installation does not hold.
- * - `DUPLICATE_REFERENCE` — the bank reference already credited another payment.
- * - `UNREADABLE_EVIDENCE` — the receipt shows nothing a reviewer can match.
- * - `OTHER` — the note says why.
+ * The bound on a reviewer's note on a credit-to-wallet disposition (D2). The same as a
+ * rejection note.
  */
-export const PAYMENT_REJECTION_REASONS = [
-  'NOT_RECEIVED',
-  'AMOUNT_UNDERPAID',
-  'AMOUNT_OVERPAID',
-  'WRONG_BENEFICIARY',
-  'DUPLICATE_REFERENCE',
-  'UNREADABLE_EVIDENCE',
-  'OTHER',
-] as const;
-export type PaymentRejectionReason = (typeof PAYMENT_REJECTION_REASONS)[number];
-export const paymentRejectionReasonSchema = z.enum(PAYMENT_REJECTION_REASONS);
+export const RECEIPT_CREDIT_NOTE_MAX_LENGTH = 500;
 
 /**
- * The two ways an expired transfer the customer vouched for leaves the late-review lane.
+ * What a reviewer's credit-to-wallet disposition of a card-to-card receipt carries
+ * (Payment File 02 §12, `docs/payments-file02-design.md` D2).
  *
- * `docs/wp10-payments-audit.md` P1. The payment stays `EXPIRED` and its order stays
- * closed whichever is chosen — the owner's expiry rule stands and nothing reopens either.
- * What the decision settles is the MONEY:
+ * Unlike a confirmation, it carries an AMOUNT, and that is the point of it: the reviewer
+ * enters exactly what they judged arrived, and exactly that is credited. It is bounded
+ * the way every ledger amount is — positive, and below `PAYMENT_AMOUNT_MAX_MINOR` — and
+ * denominated in the PAYMENT's currency, never one the request names: a currency on this
+ * command would be an FX decision nobody made.
  *
- * - `CREDITED` — it arrived. The payment's exact amount goes to the customer's wallet
- *   under `LATE_TRANSFER`, and the customer may spend it on the same order again or on a
- *   new one.
- * - `DISMISSED` — it did not, or not as it should. Nothing moves, and a
- *   `PAYMENT_REJECTION_REASONS` member is required.
- *
- * Exactly two, recorded once. A decision row is append-only and keyed by the payment, so
- * a second reviewer, or a credit racing a dismissal, produces one decision and the other
- * is refused with `LATE_TRANSFER_ALREADY_DECIDED`.
+ * The service-level command shape. It has no Web route (File 02 §10: the Web Admin is
+ * read-only for card-to-card); the Telegram review surface calls the service with it.
+ * The note is the reviewer's own and optional.
  */
-export const LATE_TRANSFER_DECISIONS = ['CREDITED', 'DISMISSED'] as const;
-export type LateTransferDecision = (typeof LATE_TRANSFER_DECISIONS)[number];
-export const lateTransferDecisionSchema = z.enum(LATE_TRANSFER_DECISIONS);
-
-/** The bound on a reviewer's note on a late decision. The same as a rejection note. */
-export const LATE_TRANSFER_NOTE_MAX_LENGTH = 500;
+export const receiptCreditCommandSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  paymentId: z.string(),
+  amountMinor: z
+    .bigint()
+    .refine(isValidLedgerAmount, { message: 'must be a positive amount within the bound' }),
+  note: z
+    .union([z.string(), z.null()])
+    .optional()
+    .transform((value) => {
+      if (value === undefined || value === null) return null;
+      const trimmed = value.trim();
+      return trimmed === '' ? null : trimmed;
+    })
+    .refine((value) => value === null || value.length <= RECEIPT_CREDIT_NOTE_MAX_LENGTH, {
+      message: `must be at most ${RECEIPT_CREDIT_NOTE_MAX_LENGTH} characters`,
+    }),
+});
+export type ReceiptCreditCommand = z.input<typeof receiptCreditCommandSchema>;
 
 /**
- * The ledger reference of a late-transfer credit: DERIVED from the payment, never
+ * The ledger reference of a receipt's credit-to-wallet: DERIVED from the payment, never
  * from the command.
  *
  * Two reviewers have two idempotency keys, and a reference made of either would mint two
- * credits for one transfer. The payment is what must be credited once, so the payment is
- * what the reference is made of — the rule `<paymentId>:topup` already follows.
+ * credits for one receipt. The payment is what must be credited at most once, so the
+ * payment is what the reference is made of — the rule `<paymentId>:topup` already
+ * follows.
  */
-export function lateTransferReference(paymentId: string): string {
-  return `${paymentId}:late`;
+export function receiptCreditReference(paymentId: string): string {
+  return `${paymentId}:receipt-credit`;
+}
+
+/**
+ * The ledger reference of a top-up's gift (D5), derived from the payment for the same
+ * reason: a replayed confirmation and a racing one both name the same payment.
+ */
+export function topupCashbackReference(paymentId: string): string {
+  return `${paymentId}:topup-cashback`;
 }
