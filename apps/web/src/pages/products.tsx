@@ -101,10 +101,11 @@ const AUDIENCE_LABELS: Readonly<Record<ProductAudience, WebKey>> = {
  * The two audience gaps are NOT the same thing and are deliberately separate badges.
  * `UNLISTED` is a HIDDEN product, which is out of the listing and still ORDERABLE by
  * anybody holding its reference — that is what the audience is for. `RESELLERS` is a
- * RESELLERS_ONLY product, which Phase 4B can neither list nor sell, because no reseller
- * identity exists to check a customer against; `catalog-visibility.ts` carries the whole
- * argument. Collapsing them would tell an operator their reseller product merely needs a
- * link passed around, and it does not.
+ * RESELLERS_ONLY product, which an ordinary customer can neither see nor order by any
+ * reference; since WP9-B it is listed and sold to a reseller whose tier grants it, and to
+ * nobody else (`catalog-visibility.ts`, `docs/wp9-reseller-audit.md` R5). Collapsing them
+ * would tell an operator their reseller product merely needs a link passed around, and it
+ * does not.
  */
 export type CatalogueGap =
   | 'INACTIVE'
@@ -193,8 +194,8 @@ function CatalogueBadge({
   if (gap === null) return <Badge tone="ok">{t('web.product_in_catalogue')}</Badge>;
   // `UNLISTED` is amber and not red: a HIDDEN product is still ORDERABLE by anybody
   // holding its link, which is what the audience means — and a HIDDEN category means
-  // the same. The others are configuration — `RESELLERS` included, because that one is
-  // not orderable at all in this phase.
+  // the same. The others are configuration — `RESELLERS` included, because what makes
+  // that one sellable is a reseller tier's grants, not a link.
   return <Badge tone={isUnlistedGap(gap) ? 'warn' : 'neutral'}>{t(GAP_LABELS[gap])}</Badge>;
 }
 

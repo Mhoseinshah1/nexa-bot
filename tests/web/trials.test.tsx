@@ -20,6 +20,8 @@ const OFF = {
   mayViewOrders: false,
   mayViewServices: false,
   mayViewReferrals: false,
+  mayViewReseller: false,
+  mayEditReseller: false,
 } as const;
 
 const allowance = (overrides: Record<string, unknown> = {}) => ({

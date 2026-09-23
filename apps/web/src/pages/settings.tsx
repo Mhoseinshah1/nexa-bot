@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CURRENCY_CODES, PRODUCT_PAGE_MAX } from '@nexa/contracts';
+import { COMMERCE_ERROR_CODES, CURRENCY_CODES, PRODUCT_PAGE_MAX } from '@nexa/contracts';
 import type { CurrencyCode, MoneyWire, ResolvedSettingResponse } from '@nexa/contracts';
 import { ApiError, fetchProducts, fetchSettings, saveSetting } from '../api/client';
 import { currencyLabel, formatNumber, formatTimestamp } from '../format';
@@ -865,8 +865,28 @@ export function issuesFrom(error: unknown): string[] {
   });
 }
 
+/**
+ * The reseller refusals (WP9-B), said in the operator's language.
+ *
+ * The server's message for these is a sentence about the RULE, written for a log; what an
+ * operator needs is which of their inputs to change — a tier that is gone, a customer
+ * who already has a row. Two of the five (`NOT_ENTITLED`, `TERMS_CHANGED`) are order
+ * refusals no Web Admin command produces today; they are mapped here anyway, because this
+ * is the one place a code becomes a sentence and a refusal that reaches it later should
+ * not arrive in English.
+ */
+const RESELLER_MESSAGES: Readonly<Record<string, WebKey>> = {
+  [COMMERCE_ERROR_CODES.RESELLER_NOT_ENTITLED]: 'web.error_reseller_not_entitled',
+  [COMMERCE_ERROR_CODES.RESELLER_TERMS_CHANGED]: 'web.error_reseller_terms_changed',
+  [COMMERCE_ERROR_CODES.RESELLER_NOT_FOUND]: 'web.error_reseller_not_found',
+  [COMMERCE_ERROR_CODES.RESELLER_ALREADY_REGISTERED]: 'web.error_reseller_already_registered',
+  [COMMERCE_ERROR_CODES.RESELLER_TIER_NOT_FOUND]: 'web.error_reseller_tier_not_found',
+};
+
 export function messageFor(error: unknown): string {
   if (error instanceof ApiError) {
+    const reseller = RESELLER_MESSAGES[error.code];
+    if (reseller !== undefined) return t(reseller);
     if (error.code === 'control.version_conflict') return t('web.conflict');
     if (error.code === 'control.confirmation_required') return t('web.confirm_required');
     if (error.code === 'control.destination_not_configured') return t('web.destination_missing');

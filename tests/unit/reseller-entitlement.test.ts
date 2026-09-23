@@ -121,10 +121,10 @@ describe('decideEntitlement', () => {
 
   it('grants a named operation and nothing else', () => {
     const grants = [
-      { kind: 'OPERATION', subject: 'RENEWAL' },
+      { kind: 'OPERATION', subject: 'RENEW' },
       ...EVERYTHING.filter((g) => g.kind !== 'OPERATION'),
     ] as const;
-    expect(decideEntitlement(grants, subject({ operation: 'RENEWAL' }))).toEqual({
+    expect(decideEntitlement(grants, subject({ operation: 'RENEW' }))).toEqual({
       allowed: true,
     });
     expect(decideEntitlement(grants, subject({ operation: 'NEW_SERVICE' }))).toEqual({
@@ -203,7 +203,7 @@ describe('catalogueScope agrees with decideEntitlement', () => {
   it('shows nothing when the tier grants no new purchase, whatever else it grants', () => {
     const grants = EVERYTHING.filter((g) => g.kind !== 'OPERATION').concat({
       kind: 'OPERATION',
-      subject: 'RENEWAL',
+      subject: 'RENEW',
     });
     expect(catalogueScope(grants, BOT).shows).toBe(false);
   });
