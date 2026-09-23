@@ -368,6 +368,31 @@ export class DrizzleOperationRepository implements OperationRepository {
     return row === undefined ? null : toRecord(row);
   }
 
+  async lastSucceededCustomerRequest(
+    scope: TenantContext,
+    serviceId: string,
+    customerId: string,
+    type: OperationType,
+    tx?: unknown,
+  ): Promise<Date | null> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ createdAt: provisioningOperations.createdAt })
+      .from(provisioningOperations)
+      .where(
+        and(
+          eq(provisioningOperations.tenantId, tenantId),
+          eq(provisioningOperations.serviceId, serviceId),
+          eq(provisioningOperations.type, type),
+          eq(provisioningOperations.requestedByCustomerId, customerId),
+          eq(provisioningOperations.state, 'SUCCEEDED'),
+        ),
+      )
+      .orderBy(desc(provisioningOperations.createdAt))
+      .limit(1);
+    return rows[0]?.createdAt ?? null;
+  }
+
   async findOpenCommercial(
     scope: TenantContext,
     serviceId: string,

@@ -157,6 +157,20 @@ export const FEATURE_FLAGS = [
     blastRadius: 'TENANT_WIDE',
     configuredBy: ['trial.product_id', 'trial.limit_per_customer'],
   },
+  {
+    key: 'customer_link_rotation',
+    description:
+      'Let a customer ask for a new subscription link for their own active service, from ' +
+      'Telegram. Offered only where the panel can rotate a link, and at most once per ' +
+      'services.link_rotation_cooldown_hours. It issues a new link; it makes no promise ' +
+      'about the old one.',
+    defaultEnabled: false,
+    // TENANT_WIDE, like `trials`: turning it on offers a new action to every customer of
+    // the tenant at once. Turning it off withdraws the button and refuses the callback;
+    // a rotation already planned still runs.
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: ['services.link_rotation_cooldown_hours'],
+  },
 ] as const satisfies readonly FeatureFlagDefinition[];
 
 export type FeatureFlagKey = (typeof FEATURE_FLAGS)[number]['key'];

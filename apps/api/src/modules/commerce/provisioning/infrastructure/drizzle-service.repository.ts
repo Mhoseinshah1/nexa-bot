@@ -162,6 +162,22 @@ export class DrizzleServiceRepository implements ServiceRepository {
     return row === undefined ? null : toRecord(row);
   }
 
+  async lockForUpdate(
+    scope: TenantContext,
+    id: string,
+    tx: TransactionScope,
+  ): Promise<ServiceRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select()
+      .from(services)
+      .where(and(eq(services.tenantId, tenantId), eq(services.id, id)))
+      .for('update')
+      .limit(1);
+    const row = rows[0];
+    return row === undefined ? null : toRecord(row);
+  }
+
   async findByOrderId(
     scope: TenantContext,
     orderId: OrderId,

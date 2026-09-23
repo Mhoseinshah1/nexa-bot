@@ -872,6 +872,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
 
   const settingRepository = new DrizzleSettingRepository(database.db);
   const settingsResolver = new SettingsResolver(settingRepository, opsLog);
+  // Read by provisioning (WP6-C) as well as by the trial, so it is built with the
+  // settings resolver rather than beside the service that first needed it.
+  const featureFlagRepository = new DrizzleFeatureFlagRepository(database.db);
+  const featureFlagResolver = new FeatureFlagResolver(featureFlagRepository);
 
   /**
    * Products, under the FROZEN `catalog.*` permissions.
@@ -1210,6 +1214,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // From the system CSPRNG, never from the id generator: see the binding's own note.
     secrets: serviceSecrets,
     usernames: serviceUsernameRepository,
+    // A customer's own rotation (WP6-C): its flag, its cooldown, and the block check.
+    features: featureFlagResolver,
+    settings: settingsResolver,
+    customers: customerRepository,
   });
 
   /**
@@ -1686,9 +1694,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       ...ReminderThresholdsGuard.all(settingsResolver),
     ],
   );
-
-  const featureFlagRepository = new DrizzleFeatureFlagRepository(database.db);
-  const featureFlagResolver = new FeatureFlagResolver(featureFlagRepository);
 
   /**
    * The trial (WP6-A). After the flag resolver, which it reads, and after provisioning,
