@@ -70,6 +70,7 @@ const RECORDS = [
   'docs/rickpanel-management-falsification.md',
   'docs/wp6-falsification.md',
   'docs/wp6c-falsification.md',
+  'docs/wp8-falsification.md',
   /*
    * `docs/wp1-falsification.md` is DELIBERATELY absent, and that is a gap rather
    * than a decision this script is happy with.
@@ -109,7 +110,7 @@ const RECORDS = [
  * have to be a map, and a map is a place for a record to be added with no entry
  * and checked against nothing — which is this script's own failure mode.
  */
-const EXPECTED = 1474;
+const EXPECTED = 1492;
 /**
  * A table whose last column is one of these is making citations.
  *

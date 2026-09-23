@@ -2118,3 +2118,52 @@ adapter this repository wrote can only prove they agree with each other.
 
 Until then the bound is conservative and the refusal happens at configuration time,
 which is the failure that costs least.
+
+## OQ-WP8-01 — may a customer enter a discount code on a renewal or an add-on?
+
+Legacy allowed a code on a renewal (SBR-021). This release does not: an entered code is
+taken on a `NEW_SERVICE` draft only. The reason is structural, not a preference — a
+commercial order writes its `service_commercial_actions` evidence row with the draft, and
+that row is append-only, so a code entered afterwards would change a price the evidence
+row no longer describes. Automatic rules DO apply to renewals and add-ons, because they
+are decided when the draft is written. Deciding otherwise means taking the code before
+the commercial draft exists, which is a different flow (`docs/wp8-pricing-audit.md` P7).
+
+## OQ-WP8-02 — does cashback apply to a purchase paid from the wallet?
+
+Built as yes: the basis is what the order cost after discounts, whatever rail paid it,
+including a wallet funded by earlier cashback. A rail-specific rule would be one more
+eligibility column on `cashback_rules`; nothing in the evidence asks for one.
+
+## OQ-WP8-03 — is cashback a restricted or expiring balance?
+
+Built as no: an earned credit is ordinary wallet balance (`CASHBACK_PURCHASE`), spendable
+and refundable like any other. A restricted or expiring balance would need a second
+ledger dimension, and whether a wallet may go negative (UNK-UM-005) is still open.
+
+## OQ-WP8-04 — the legacy per-gateway and top-up cashback
+
+FBR-006 and WEB-BR-021 describe cashback on a gateway top-up. Not built: cashback here is
+earned on a delivered order only. A top-up is not a purchase and delivers nothing, so the
+"earned at delivery" rule has nothing to attach to.
+
+## OQ-WP8-05 — is an unrecovered cashback reversal ever collected?
+
+When a refund makes earned cashback owed and the customer has already spent it, the
+reversal takes what the balance holds and records the rest as `unrecovered_amount` on
+`cashback_reversals`, shown on the order's pricing card. It is never collected
+automatically and the wallet never goes negative. Whether an operator should chase it,
+net it against a future credit, or write it off is the owner's decision.
+
+## OQ-WP8-06 — does a per-customer discount stack with a code?
+
+UNK-UM-003 asks it of the legacy system. Here both are rules and the configuration
+decides: `priority` orders them and `stackable` on every applied rule is what lets a
+second apply. Nothing is hard-coded either way.
+
+## OQ-WP8-07 — `PRICING_PRECEDENCE` still awaits sign-off
+
+O-1 is unanswered. Only `BASE_PRICE` and `PROMOTIONAL_DISCOUNT` fire, and their relative
+order is the one every draft already assumed. Cashback is not a price step: it is a
+promise beside the trace, computed on the final total. Tier prices, custom ranges and
+reseller prices are not built and take no place in the table until they are.

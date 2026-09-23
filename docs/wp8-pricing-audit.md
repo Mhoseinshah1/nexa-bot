@@ -464,3 +464,24 @@ These are their own commits:
 | OQ-WP8-05 | Is an unrecovered reversal ever collected, and how?                                                  | Recorded on the reversal row and shown to the operator; never collected automatically (P9).                     |
 | OQ-WP8-06 | Does a per-customer discount stack with a code (UNK-UM-003)?                                         | By configuration: both are rules, and `stackable` and `priority` decide (P4).                                   |
 | OQ-WP8-07 | `PRICING_PRECEDENCE` is still pending owner sign-off (O-1).                                          | Only `BASE_PRICE` and `PROMOTIONAL_DISCOUNT` fire; their relative order is the one every draft already assumes. |
+
+## 7. What shipped, and where it stops
+
+Built as decided above, with these boundaries worth knowing before relying on it:
+
+- **The Telegram renewal and add-on quote shows the payable total only.** An automatic
+  rule does reach a `RENEW`, `ADD_TRAFFIC` or `ADD_TIME` order (P7), and the total the
+  customer confirms is the discounted one, but `bot.service.action_quote` has no subtotal
+  or discount line. The figure is true; the breakdown is not shown there. The operator's
+  order page shows it.
+- **Cashback is earned by a sweep, not at the instant of delivery.** The provisioner
+  loop decides due promises after its announcement drain, so the credit lands one tick
+  after the operation succeeds (P9). A crash in between costs a tick, never the credit.
+- **An undecided code in the preview is `accepted: false` with a null reason.** A rule
+  whose answer depends on a customer the preview was not given is reported
+  `CUSTOMER_DEPENDENT` on its own row. An earlier version reported it `INACTIVE`; the
+  HTTP test found it, and the engine unit test pins the fix.
+- **An unrecovered reversal is a recorded figure.** It is shown on the order's pricing
+  card and nowhere collected (OQ-WP8-05).
+
+`docs/wp8-falsification.md` is the record of which test dies for which rule.

@@ -528,9 +528,26 @@ describe('discounts reach the order, and confirmation keeps its word', () => {
 
   it('serialises two confirmations on the rule’s row lock, so a limit of one sells once', async () => {
     const id = await rule({ kind: 'CODE', code: 'ONLYONE', value: 20n, totalLimit: 1 });
-    const productId = await product(100_000n);
-    const first = await applyCode(customerA, await draft(customerA, productId), 'ONLYONE');
-    const second = await applyCode(customerA2, await draft(customerA2, productId), 'ONLYONE');
+    /*
+     * Two PANELS. Two orders on one panel already queue on its row lock before either
+     * reaches the rule, so the case passed with the rule lock removed — the falsification
+     * pass found it (WP8-01). On separate panels only the rule's row lock orders them.
+     */
+    const panelA2 = ctx.container.ids.uuid();
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
+      VALUES (${panelA2}, ${tenantA.tenantId}, 'Panel A2', 'sanaei', 'https://a2.example.test', 'ACTIVE')`);
+    await makePanelSellable(ctx.container, tenantA, panelA2);
+    const first = await applyCode(
+      customerA,
+      await draft(customerA, await product(100_000n)),
+      'ONLYONE',
+    );
+    const second = await applyCode(
+      customerA2,
+      await draft(customerA2, await product(100_000n, tenantA, panelA2)),
+      'ONLYONE',
+    );
 
     const held = await holdRule(id);
     const a = confirm(customerA, first).then(
