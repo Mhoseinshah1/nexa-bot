@@ -31,6 +31,15 @@ every row read as killed. That pass was discarded and is not recorded here.
 | WP8-18 | a plain message the username window declines is offered to the code window | the message answered with the fallback instead                         | `telegram-order-flow.test.ts` › takes a typed discount code into the window it opened, prices it, and takes it off again | KILLED |
 | WP8-19 | a typed code whose draft has moved on closes its window, committed         | the not-`DRAFT` check in `submitTypedDiscountCode` removed             | `telegram-order-flow.test.ts` › closes a code window whose draft was confirmed from the summary still on screen          | KILLED |
 
+**WP8-16 was re-run in WP9, and its first kill had come from the wrong place.** The
+case's blocker had inserted its colliding ledger row for the credited customer, and that
+row's foreign key takes `FOR KEY SHARE` on the customer's row. So the earner waited at
+`lockCustomer`, before reading a refund, and the mutation died on the test's blocking
+witness, not on money. The blocker's row now belongs to a bystander, and the case asserts
+where the earner waits. It releases the blocker only once the completion has queued or
+committed. The same mutation now dies on "half the payment stands, so half the promise:
+expected 10000n to be 5000n". `docs/wp9-falsification.md` has the whole account.
+
 **WP8-01 survived its first run, and that was a test defect.** Both contenders were on
 one panel, so the panel's row lock queued them before either reached the rule. Taking
 the rule lock away changed nothing the test could see. The case now puts them on two

@@ -623,8 +623,23 @@ describe('cashback is earned once, at delivery, and a refund takes its share bac
      * fix, the reversal read the promise unlocked, saw PENDING, and returned: the full
      * credit then committed with nothing to take its share back. Now the reversal waits
      * on the customer's lock behind the earner and sees the promise EARNED.
+     *
+     * The blocking row belongs to a BYSTANDER. A row of the customer's own would take
+     * `FOR KEY SHARE` on their customer row through its foreign key, and the earner would
+     * then wait at `lockCustomer` — before reading a refund — which is a different and
+     * harmless interleaving. That is what this case first built (`docs/wp9-falsification.md`).
      */
     await cashbackRule();
+    const { customer: bystander } = await ctx.container.customers.resolveFromUpdate(
+      tenantA,
+      customerActor(key()),
+      {
+        idempotencyKey: key(),
+        telegramUserId: '920099',
+        from: { id: 920099, first_name: 'رهگذر' },
+        botInstanceId: BOT_A,
+      },
+    );
     const order = await confirmed(100_000n);
     const paymentId = await paidByTransfer(order);
     await deliver(order.id);
@@ -634,20 +649,39 @@ describe('cashback is earned once, at delivery, and a refund takes its share bac
       await tx.execute(sql`
         INSERT INTO wallet_entries (id, tenant_id, customer_id, direction, reason, amount,
                                     currency, reference)
-        VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${customerA}, 'CREDIT',
+        VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${bystander.id}, 'CREDIT',
                 'CASHBACK_PURCHASE', 1, 'IRT', ${`${order.id}:cashback`})`);
     }, 'ROLLBACK');
 
     const earning = ctx.container.cashback.settle(tenantA, order.id);
-    await awaitBlocked(1, 'the earner at its ledger insert');
-    const completing = ctx.container.refunds.complete(tenantA, owner, {
-      idempotencyKey: key(),
-      refundId: manual.id,
-      note: 'واریز شد',
-      externalReference: null,
-    });
-    await awaitBlocked(2, 'the refund completion behind the earner');
-    await blocker.release();
+    let completing: Promise<unknown> | undefined;
+    let reached: 'COMMITTED' | 'QUEUED' | 'NEVER' | undefined;
+    try {
+      await awaitBlocked(1, 'the earner at its ledger insert');
+      // The premise, asserted: the earner waits at its INSERT, after reading the refunds.
+      expect(
+        await count(
+          sql`SELECT count(*)::int AS n FROM pg_stat_activity
+               WHERE wait_event_type = 'Lock' AND query ILIKE 'insert into "wallet_entries"%'`,
+        ),
+        'the earner waits at its ledger insert',
+      ).toBe(1);
+      completing = ctx.container.refunds.complete(tenantA, owner, {
+        idempotencyKey: key(),
+        refundId: manual.id,
+        note: 'واریز شد',
+        externalReference: null,
+      });
+      // Released once the completion is queued behind the earner, or has already
+      // committed having walked away from an unlocked PENDING — never before either.
+      const committed = completing.then(() => 'COMMITTED' as const);
+      const queued = awaitBlocked(2, 'the refund completion behind the earner')
+        .then(() => 'QUEUED' as const)
+        .catch(() => 'NEVER' as const);
+      reached = await Promise.race([committed, queued]);
+    } finally {
+      await blocker.release();
+    }
 
     expect(await earning).toBe(true);
     await completing;
@@ -656,6 +690,7 @@ describe('cashback is earned once, at delivery, and a refund takes its share bac
     const reversed = (await reversals()).reduce((sum, r) => sum + BigInt(r.due), 0n);
     expect(earned, 'the earner read no completed refund').toBe(10_000n);
     expect(earned - reversed, 'half the payment stands, so half the promise').toBe(5_000n);
+    expect(reached, 'the completion queued behind the earner').toBe('QUEUED');
   });
 
   // -------------------------------------------------------------------------

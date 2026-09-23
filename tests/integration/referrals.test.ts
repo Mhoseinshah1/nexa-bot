@@ -1215,8 +1215,16 @@ describe('the referral program: attribution, the promise, the credit and its rev
        * the payment completes: its reversal must wait on the referrer's lock and then see
        * the commission EARNED — reading PENDING unlocked would return and leave the full
        * credit standing.
+       *
+       * The blocking row belongs to a BYSTANDER, never to the referrer. The reference is
+       * unique per tenant, so the earner's insert still waits on it; but a row of the
+       * referrer's would take `FOR KEY SHARE` on the referrer's customer row through its
+       * foreign key, and the earner would then wait at `lockCustomer` — before reading a
+       * single refund — which is a different, harmless interleaving (WP9-19's first
+       * record said so).
        */
       const { referrer, order } = await earned(100_000n);
+      const bystander = await f.registered('930099');
       const paymentId = await f.paidByTransfer(order);
       await f.deliver(order.id);
       const manual = await f.refund(paymentId, 50_000n);
@@ -1225,16 +1233,37 @@ describe('the referral program: attribution, the promise, the credit and its rev
         await tx.execute(sql`
           INSERT INTO wallet_entries (id, tenant_id, customer_id, direction, reason, amount,
                                       currency, reference)
-          VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${referrer}, 'CREDIT',
+          VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${bystander}, 'CREDIT',
                   'REFERRAL_COMMISSION', 1, 'IRT', ${`${order.id}:referral`})`);
       }, 'ROLLBACK');
 
       const earning = ctx.container.referralCommissions.settle(tenantA, order.id);
       let completing: Promise<unknown> | undefined;
+      let reached: 'COMMITTED' | 'QUEUED' | 'NEVER' | undefined;
       try {
         await f.awaitBlocked(1, 'the earner at its ledger insert');
+        // Where it waits is the premise, so it is asserted: at the INSERT, after it read the
+        // refunds, and not at `lockCustomer`, before it read anything.
+        expect(
+          await f.count(
+            sql`SELECT count(*)::int AS n FROM pg_stat_activity
+                 WHERE wait_event_type = 'Lock' AND query ILIKE 'insert into "wallet_entries"%'`,
+          ),
+          'the earner waits at its ledger insert',
+        ).toBe(1);
         completing = f.complete(manual.id);
-        await f.awaitBlocked(2, 'the refund completion behind the earner');
+        /*
+         * Released only once the completion has got as far as it can: queued behind the
+         * earner (the rule), or already committed (a completion that judged the unlocked
+         * PENDING and walked away). Releasing any earlier lets the earner commit first
+         * and the completion then read EARNED, which proves nothing either way.
+         */
+        const committed = completing.then(() => 'COMMITTED' as const);
+        const queued = f
+          .awaitBlocked(2, 'the refund completion behind the earner')
+          .then(() => 'QUEUED' as const)
+          .catch(() => 'NEVER' as const);
+        reached = await Promise.race([committed, queued]);
       } finally {
         // A failed wait must not leave the blocker open under the cases after this one.
         await blocker.release();
@@ -1250,6 +1279,47 @@ describe('the referral program: attribution, the promise, the credit and its rev
         proportionalTargetMinor(10_000n, 100_000n, 50_000n),
       );
       expect(await f.balance(referrer)).toBe(5_000n);
+      expect(reached, 'the completion queued behind the earner').toBe('QUEUED');
+    });
+
+    it('never takes the referrer below zero when they spend while a reversal is being decided', async () => {
+      /*
+       * What the reversal's REFERRER lock is for. The commission row's own lock already
+       * orders a reversal against the earner; it does nothing about the referrer spending
+       * the credit at the same moment. Here a debit of the referrer's whole balance holds
+       * the referrer's row and commits only after the completion has arrived. Under the
+       * lock the reversal reads the balance AFTER that debit and recovers nothing; without
+       * it the reversal reads 10 000 from before it and debits 5 000 into a balance of 0.
+       */
+      const { referrer, order } = await earned(100_000n);
+      const paymentId = await f.paidByTransfer(order);
+      await f.deliver(order.id);
+      await ctx.container.referralCommissions.settleDue(tenantA, 50);
+      expect(await f.balance(referrer)).toBe(10_000n);
+      const manual = await f.refund(paymentId, 50_000n);
+
+      const spend = await f.holding(async (tx) => {
+        await tx.execute(sql`SELECT id FROM customers WHERE id = ${referrer} FOR UPDATE`);
+        await tx.execute(sql`
+          INSERT INTO wallet_entries (id, tenant_id, customer_id, direction, reason, amount,
+                                      currency, reference)
+          VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${referrer}, 'DEBIT',
+                  'ADMIN_DEBIT', 10000, 'IRT', ${`spend-${order.id}`})`);
+      });
+
+      let completing: Promise<unknown> | undefined;
+      try {
+        completing = f.complete(manual.id);
+        await f.awaitBlocked(1, 'the reversal behind the spend');
+      } finally {
+        await spend.release();
+      }
+      await completing;
+
+      expect(await f.balance(referrer), 'the balance never goes below zero').toBe(0n);
+      expect(await f.reversals()).toEqual([
+        { refund_id: manual.id, due: '5000', recovered: '0', unrecovered: '5000' },
+      ]);
     });
   });
 
