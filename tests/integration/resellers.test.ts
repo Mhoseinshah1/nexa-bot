@@ -1728,8 +1728,8 @@ describe('resellers (WP9-B)', () => {
         return order;
       });
       confirmation.catch(() => undefined);
-      let suspension: Promise<void> = Promise.resolve();
-      let waitingIn: string | null = null;
+      let suspension: Promise<void>;
+      let waitingIn: string | null;
       try {
         await read;
         expect(readAs, 'the confirmation read the reseller as ACTIVE').toBe('ACTIVE');
@@ -1793,8 +1793,8 @@ describe('resellers (WP9-B)', () => {
         return result;
       });
       settlement.catch(() => undefined);
-      let suspension: Promise<void> = Promise.resolve();
-      let waitingIn: string | null = null;
+      let suspension: Promise<void>;
+      let waitingIn: string | null;
       try {
         await read;
         expect(allowance, 'the settlement read the credit line').toBe(100_000n);
