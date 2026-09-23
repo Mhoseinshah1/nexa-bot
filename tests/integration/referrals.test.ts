@@ -72,6 +72,42 @@ const BOT_A = SEED_IDS.botA1 as BotInstanceId;
 const BOT_B = SEED_IDS.botB1 as BotInstanceId;
 const BOT_A_USERNAME = 'acme_store_bot';
 
+/**
+ * A stand-in for Telegram's `getMe`, which the invite asks for the bot's CURRENT name.
+ * `username` null makes it refuse, as Telegram does a revoked token.
+ */
+interface FakeGetMe {
+  readonly url: string;
+  username: string | null;
+  close(): Promise<void>;
+}
+
+async function fakeGetMe(): Promise<FakeGetMe> {
+  const fake = { username: BOT_A_USERNAME as string | null };
+  const server = createServer((request: IncomingMessage, response: ServerResponse) => {
+    request.resume();
+    request.on('end', () => {
+      if (fake.username === null) {
+        response.writeHead(401, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ ok: false, error_code: 401, description: 'Unauthorized' }));
+        return;
+      }
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: true, result: { id: 7001, username: fake.username } }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (address === null || typeof address === 'string') throw new Error('no address');
+  return Object.assign(fake, {
+    url: `http://127.0.0.1:${String(address.port)}`,
+    async close() {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  });
+}
+
 const customerActor = (correlationId: string): ActorContext => ({
   type: 'SYSTEM_JOB',
   id: null,
@@ -478,15 +514,20 @@ describe('the referral program: attribution, the promise, the credit and its rev
   let panelA: string;
   let f: Fixtures;
 
+  let getMe: FakeGetMe;
+
   beforeAll(async () => {
-    ctx = await createTestContext();
+    getMe = await fakeGetMe();
+    ctx = await createTestContext({ TELEGRAM_API_BASE_URL: getMe.url });
   }, 120_000);
 
   afterAll(async () => {
     await ctx?.close();
+    await getMe?.close();
   });
 
   beforeEach(async () => {
+    getMe.username = BOT_A_USERNAME;
     await ctx.reset();
     panelA = ctx.container.ids.uuid();
     await ctx.container.database.db.execute(sql`
@@ -541,6 +582,29 @@ describe('the referral program: attribution, the promise, the credit and its rev
         trigger: 'ON_FIRST_PAID_ORDER',
       });
       expect(await f.events('ReferralAttributed')).toBe(1);
+    });
+
+    it('replays a /start update a previous release remembered without its payload, instead of refusing it as a mismatch', async () => {
+      // Codex review of PR #68: the payload had joined the request hash, so an update
+      // committed by the release before this one and redelivered after the upgrade hashed
+      // differently and was refused on every retry.
+      await f.program();
+      const referrer = await f.registered('930090');
+      const code = await f.codeOf(referrer);
+      const update = (startPayload: string | null) =>
+        ctx.container.customers.resolveFromUpdate(tenantA, customerActor('upgrade'), {
+          idempotencyKey: 'telegram-update-930091',
+          telegramUserId: '930091',
+          from: { id: 930091, first_name: 'مهسا' },
+          botInstanceId: BOT_A,
+          ...(startPayload === null ? {} : { startPayload }),
+        });
+
+      // What the previous release did with this update: no payload reached the service.
+      const before = await update(null);
+      const after = await update(`ref-${code}`);
+      expect(after.customer.id).toBe(before.customer.id);
+      expect(after.arrival).toBe('FIRST_SEEN');
     });
 
     it('snapshots EVERY_PAID_ORDER onto the referral, so a later scope change re-terms only people referred afterwards', async () => {
@@ -719,6 +783,42 @@ describe('the referral program: attribution, the promise, the credit and its rev
           sql`SELECT customer_id, code FROM referral_codes`,
         ),
       ).toEqual([{ customer_id: holder, code }]);
+    });
+
+    it('answers a redelivered invite again from the same key, rather than refusing it as in flight', async () => {
+      // Codex review of PR #68: the key was remembered unconditionally, so Telegram
+      // retrying a turn whose reply was lost got IDEMPOTENCY_IN_FLIGHT every time.
+      await f.program();
+      const customer = await f.registered('931040');
+      const again = () =>
+        ctx.container.referrals.invite(tenantA, customerActor('redelivered'), {
+          idempotencyKey: 'telegram-update-931040:referral',
+          customerId: customer,
+          botInstanceId: BOT_A,
+        });
+      const first = await again();
+      expect(first.outcome).toBe('READY');
+      expect(await again()).toEqual(first);
+      expect(await again()).toEqual(first);
+    });
+
+    it('builds the link from the name Telegram reports now, not the one the bootstrap stored', async () => {
+      await f.program();
+      const customer = await f.registered('931050');
+      getMe.username = 'acme_renamed_bot';
+      const invited = await f.invite(customer);
+      expect(invited).toMatchObject({
+        outcome: 'READY',
+        link: `https://t.me/acme_renamed_bot?start=ref-${referralCodeFor(customer)}`,
+      });
+    });
+
+    it('offers no link, and records no code, when Telegram cannot say what the bot is called', async () => {
+      await f.program();
+      const customer = await f.registered('931060');
+      getMe.username = null;
+      expect(await f.invite(customer)).toEqual({ outcome: 'UNAVAILABLE' });
+      expect(await f.count(sql`SELECT count(*)::int AS n FROM referral_codes`)).toBe(0);
     });
 
     it('answers UNAVAILABLE for a bot of another tenant: a link names the bot the customer is talking to', async () => {
@@ -1477,6 +1577,14 @@ describe('the referral surfaces: HTTP for the operator, Telegram for the custome
       request.on('data', (chunk: Buffer) => chunks.push(chunk));
       request.on('end', () => {
         const raw = Buffer.concat(chunks).toString('utf8');
+        if ((request.url ?? '').endsWith('/getMe')) {
+          // The invite asks the bot's current name; that is not a message to anybody.
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end(
+            JSON.stringify({ ok: true, result: { id: 7001, username: BOT_A_USERNAME } }),
+          );
+          return;
+        }
         sent.push({
           url: request.url ?? '',
           body: raw.length === 0 ? {} : (JSON.parse(raw) as Record<string, unknown>),

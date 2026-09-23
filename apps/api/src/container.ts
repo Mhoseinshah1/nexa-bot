@@ -180,6 +180,7 @@ import { PricingReadService } from './modules/commerce/pricing/application/prici
 import { PricingService } from './modules/commerce/pricing/application/pricing.service.js';
 import { CashbackService } from './modules/commerce/pricing/application/cashback.service.js';
 import { ReferralProgram } from './modules/commerce/referrals/application/referral-program.js';
+import { TelegramBotUsernames } from './modules/commerce/referrals/infrastructure/telegram-bot-username.js';
 import { ReferralCommissionService } from './modules/commerce/referrals/application/referral-commission.service.js';
 import { ReferralReadService } from './modules/commerce/referrals/application/referral-read.service.js';
 import {
@@ -923,6 +924,14 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     settings: settingsResolver,
     features: featureFlagResolver,
     bots: botInstances,
+    // The invite link's bot name, from Telegram rather than the row (a rename leaves the
+    // row stale). The send timeout is reused: it is one Telegram call under a customer's
+    // nose, and a second knob for the same bound is a second thing to get wrong.
+    botUsernames: new TelegramBotUsernames({
+      bots: botInstances,
+      apiBaseUrl: config.TELEGRAM_API_BASE_URL,
+      timeoutMs: config.NOTIFICATION_SEND_TIMEOUT_MS,
+    }),
     guard,
     audit,
     opsLog,
