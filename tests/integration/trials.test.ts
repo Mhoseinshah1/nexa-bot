@@ -169,6 +169,9 @@ describe('a free trial', () => {
         key: 'trials',
         enabled: true,
         expectedVersion: null,
+        // TENANT_WIDE: the flag names itself and says why (ADR-0010).
+        confirmKey: 'trials',
+        reason: 'offer a trial',
         idempotencyKey: randomUUID(),
       });
     }
@@ -495,6 +498,143 @@ describe('a free trial', () => {
       outcome: 'REFUSED',
       reason: 'CUSTOMER_BLOCKED',
     });
+  });
+
+  it('does not offer a trial its panel could not deliver', async () => {
+    /*
+     * Codex, PR #64: the offer checked only that the product had a panel, so a panel
+     * that was disabled, full, unhealthy or would not choose a name for the customer
+     * still drew the button — for a tap that could only be refused. The offer now asks
+     * the catalogue's own eligibility evaluator and the username lane, read-only.
+     */
+    await configureTrial({});
+    const offered = () =>
+      ctx.container.trials.availabilityFor(tenantA, systemActor('offer'), customerId);
+    expect(await offered()).toEqual({ available: true });
+
+    await ctx.container.database.db.execute(
+      sql`UPDATE panels SET allow_custom_username = true, allow_automatic_username = false
+           WHERE id = ${panelId}` as never,
+    );
+    expect(await offered()).toEqual({ available: false, reason: 'PRODUCT_UNAVAILABLE' });
+    await ctx.container.database.db.execute(
+      sql`UPDATE panels SET allow_automatic_username = true WHERE id = ${panelId}` as never,
+    );
+    expect(await offered()).toEqual({ available: true });
+
+    await ctx.container.panels.setStatus(tenantA, owner, panelId, {
+      status: 'DISABLED',
+      idempotencyKey: 'trial-offer-panel-off',
+    });
+    expect(await offered()).toEqual({ available: false, reason: 'PRODUCT_UNAVAILABLE' });
+    // A courtesy writes nothing.
+    expect(await count(sql`SELECT count(*)::int AS n FROM orders`)).toBe(0);
+  });
+
+  it('answers a redelivered update with the refusal it already gave', async () => {
+    // Codex, PR #64: a refusal is an answer, and a replay of the same update gets the
+    // same one even after the configuration that produced it changes.
+    await configureTrial({ limit: 0 });
+    expect(await claim(customerId, 'once')).toEqual({
+      outcome: 'REFUSED',
+      reason: 'LIMIT_REACHED',
+    });
+    await configureTrial({ enabled: false, product: false, limit: 1 });
+    expect(await claim(customerId, 'once')).toEqual({
+      outcome: 'REFUSED',
+      reason: 'LIMIT_REACHED',
+      replayed: true,
+    });
+    expect(await count(sql`SELECT count(*)::int AS n FROM trial_grants`)).toBe(0);
+    // A new tap is a new question.
+    expect((await claim(customerId, 'twice')).outcome).toBe('ISSUED');
+  });
+
+  it('answers two concurrent deliveries of one update with one trial', async () => {
+    /*
+     * Codex, PR #64: both deliveries miss the idempotency lookup, the first issues, and
+     * the second — which found the limit spent under the lock — said "unavailable" to
+     * the tap the first had just served. The barrier is the customer row: both claims
+     * are PROVEN to be waiting on it before it is released.
+     */
+    await configureTrial({});
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let locked!: () => void;
+    const holding = new Promise<void>((resolve) => (locked = resolve));
+    const holder = ctx.container.database.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT id FROM customers WHERE id = ${customerId} FOR UPDATE`);
+      locked();
+      await gate;
+    });
+    await holding;
+
+    const first = claim(customerId, 'same-update');
+    const second = claim(customerId, 'same-update');
+    await awaitBlocked(2, 'both deliveries');
+    release();
+    await holder;
+
+    const outcomes = await Promise.all([first, second]);
+    expect(outcomes.map((one) => one.outcome)).toEqual(['ISSUED', 'ISSUED']);
+    const [a, b] = outcomes;
+    if (a?.outcome !== 'ISSUED' || b?.outcome !== 'ISSUED') throw new Error('unreachable');
+    expect(a.orderId).toBe(b.orderId);
+    expect([a.replayed, b.replayed].sort()).toEqual([false, true]);
+    expect(await count(sql`SELECT count(*)::int AS n FROM trial_grants`)).toBe(1);
+    expect(
+      await count(
+        sql`SELECT count(*)::int AS n FROM audit_logs WHERE action = 'trial.claim' AND result = 'FAILED'`,
+      ),
+    ).toBe(0);
+  });
+
+  it('recovers a trial the previous release stranded, through the operator retry', async () => {
+    /*
+     * Codex, PR #64 (P1). A rollback to the release before WP6-A can claim a trial's
+     * PROVISION and, on a definitive failure, cannot settle it: its PURCHASED_AS has no
+     * TRIAL, so it fails the operation and leaves the order PAID, the service pending
+     * and the grant counted. That release cannot be changed, and `FAILED` alone cannot
+     * tell its leftovers apart from `retireExhausted`'s (an unknown outcome, which must
+     * keep the grant) — so nothing sweeps it automatically. What this release owes is
+     * that the shape is RECOVERABLE through the operator's retry, which is the remedy
+     * `retireExhausted`'s stalled trials already rely on. Both outcomes of the retry:
+     */
+    await configureTrial({ limit: 2 });
+    const strand = async (key: string) => {
+      const issued = await claim(customerId, key);
+      if (issued.outcome !== 'ISSUED') throw new Error(`refused: ${issued.reason}`);
+      // The old release's leftovers, written as it leaves them.
+      await ctx.container.database.db.execute(
+        sql`UPDATE provisioning_operations
+               SET state = 'FAILED', completed_at = now(), claimed_by = NULL, lease_until = NULL
+             WHERE order_id = ${issued.orderId}` as never,
+      );
+      return issued;
+    };
+
+    // A retry that succeeds delivers the trial, and the grant keeps counting.
+    const delivered = await strand('stranded-ok');
+    await ctx.container.provisioning.retryProvisioning(tenantA, owner, delivered.serviceId, {
+      idempotencyKey: 'retry-ok',
+    });
+    await ctx.container.provisionerLoop.tick();
+    expect((await services.findById(tenantA, delivered.serviceId as never))?.state).toBe('ACTIVE');
+    expect((await grantRow(delivered.orderId))?.released_at).toBeNull();
+
+    // A retry that is definitively refused gives the trial back, as a fresh claim would.
+    const refused = await strand('stranded-no');
+    panel.behaviour = 'refuses-rule';
+    await ctx.container.provisioning.retryProvisioning(tenantA, owner, refused.serviceId, {
+      idempotencyKey: 'retry-no',
+    });
+    await ctx.container.provisionerLoop.tick();
+    expect((await services.findById(tenantA, refused.serviceId as never))?.state).toBe(
+      'TERMINATED',
+    );
+    expect((await orderRow(refused.orderId))?.state).toBe('REFUNDED');
+    expect((await grantRow(refused.orderId))?.released_at).not.toBeNull();
+    expect(await moneyRows()).toEqual({ wallet: 0, payments: 0, refunds: 0 });
   });
 
   // =========================================================================

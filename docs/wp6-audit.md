@@ -220,10 +220,26 @@ reseller margin. Tests assert the ledger, payments and refunds are empty afterwa
   on a clean tree because it generates nothing, which is why this went unnoticed. Its
   `id` is now its own and its `prevId` is `0098`'s — generator metadata only; no applied
   SQL changed.
-- **A rollback to the release before this one** meets `TRIAL` orders it cannot parse.
-  The older binary writes none and its provisioner declines them in `refundPurchase`
-  (`PURCHASED_AS` lacks `TRIAL`), so the failure is a read error on a trial order's own
-  screens, not a wrong write; `0102` keeps refusing every purpose `0050` refused.
+- **A rollback to the release before this one** meets `TRIAL` orders it cannot settle.
+  Its `claimDue` takes any `PLANNED` operation, so it can create a pending trial's
+  account (harmless). On a DEFINITIVE failure, though, its `refundPurchase` returns
+  early (`PURCHASED_AS` lacks `TRIAL`). The operation is `FAILED`, the order stays
+  `PAID`, the service stays `PENDING_PROVISION` and the grant keeps counting (Codex,
+  PR #64). That release cannot be changed, and a sweep in this one cannot tell those
+  leftovers from `retireExhausted`'s: both are `FAILED`, and the latter is an UNKNOWN
+  outcome that must keep the grant. So the shape is left for the operator's
+  `retryProvisioning`, the remedy the stalled case already uses. `trials.test.ts`
+  proves both of the retry's outcomes on this release: delivered, or given back. No
+  money is at stake either way; a trial moves none.
+
+- **Codex, PR #64, four more.**
+  - A refusal is now remembered under the claim's key. A second delivery of one update
+    re-reads that key under the customer lock, so it answers as a replay rather than
+    deciding again.
+  - The claim carries the product its decision approved instead of reading it twice.
+  - The offer asks the catalogue's eligibility evaluator and the username lane before
+    drawing the button.
+  - The `trials` flag is `TENANT_WIDE`.
 
 ## 5. Observed and left alone
 

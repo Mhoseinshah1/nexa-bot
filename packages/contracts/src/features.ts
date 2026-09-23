@@ -150,9 +150,11 @@ export const FEATURE_FLAGS = [
       'no wallet entry, no payment. A trial whose service could not be created is given ' +
       'back and does not count against trial.limit_per_customer.',
     defaultEnabled: false,
-    // It changes what one screen offers; turning it off withdraws an offer and touches
-    // no trial already issued.
-    blastRadius: 'LOCAL',
+    // TENANT_WIDE, like the reminder flags: turning it on offers free service to every
+    // customer of the tenant at once, so it takes the typed confirmation and the reason
+    // ADR-0010 asks of a change that size (Codex, PR #64). Turning it off withdraws the
+    // offer and touches no trial already issued.
+    blastRadius: 'TENANT_WIDE',
     configuredBy: ['trial.product_id', 'trial.limit_per_customer'],
   },
 ] as const satisfies readonly FeatureFlagDefinition[];

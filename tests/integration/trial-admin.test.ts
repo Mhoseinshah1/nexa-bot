@@ -115,6 +115,9 @@ describe('trial overrides and the global reset', () => {
       key: 'trials',
       enabled: true,
       expectedVersion: null,
+      // TENANT_WIDE: the flag names itself and says why (ADR-0010).
+      confirmKey: 'trials',
+      reason: 'offer a trial',
       idempotencyKey: randomUUID(),
     });
     await setSetting('trial.product_id', product.id);
