@@ -41,6 +41,9 @@ import type {
   PanelOperabilityReader,
 } from './ports.js';
 import type { ServiceUsernameRepository } from './username-ports.js';
+import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
+import type { FeatureFlagResolver } from '../../../control/features/application/feature-flags.service.js';
+import type { CustomerRepository } from '../../customers/application/ports.js';
 
 /** Asking for a provider call to be made again is `services.edit`, not `services.view`. */
 const SERVICE_EDIT_PERMISSION = 'services.edit';
@@ -86,7 +89,38 @@ export interface ProvisioningServiceDeps {
    * this transaction or not at all — see `planForSettledOrder`.
    */
   readonly panelSales: PanelSalesGate;
+  /**
+   * The three reads a customer's own rotation needs and no other request does (WP6-C):
+   * its flag, its cooldown, and whether the customer is still allowed to act. Each is
+   * read INSIDE the planning transaction, because a surface reads on arrival and a
+   * change can commit in between.
+   */
+  readonly features: Pick<FeatureFlagResolver, 'isEnabled'>;
+  readonly settings: Pick<SettingsResolver, 'valueOf'>;
+  readonly customers: Pick<CustomerRepository, 'findById'>;
 }
+
+/**
+ * What a customer's own rotation is charged against (WP6-C).
+ *
+ * The permission every other customer write through the webhook's `SYSTEM_JOB` takes —
+ * trials and commercial actions — so the customer path is authorised through the guard
+ * rather than by the absence of one (`docs/wp6-audit.md` A9).
+ */
+export const CUSTOMER_ROTATION_PERMISSION: PermissionKey = 'maintenance.run';
+
+/**
+ * The states a CUSTOMER may rotate from: `ACTIVE`, and only that.
+ *
+ * Narrower than the operator's `ACTIVE`/`SUSPENDED` (rotation audit D2) because the
+ * delivery sweep sends only to an `ACTIVE` service. A suspended customer would be told
+ * their request succeeded and receive no link. `docs/wp6c-audit.md` C1.
+ */
+export const CUSTOMER_ROTATION_STATES: readonly ServiceState[] = ['ACTIVE'];
+
+/** What the surface needs to draw — or not draw — the rotation button. */
+export type CustomerRotationOffer =
+  { readonly offered: true; readonly cooldownHours: number } | { readonly offered: false };
 
 /**
  * Services and the operations that produce them.
@@ -744,6 +778,131 @@ export class ProvisioningService {
   }
 
   /**
+   * Whether this customer's service offers the rotation button, and the cooldown to show.
+   *
+   * WP6-C. A courtesy for drawing, exactly as `customerActionsFor`: `requestRotation`
+   * re-decides every one of these when the tap arrives. Four conditions — the flag, the
+   * state, the panel's operability for `ROTATE_SUBSCRIPTION` (which includes the
+   * capability), and nothing else: the cooldown is NOT a reason to hide the button,
+   * because a customer who cannot see it cannot be told when it comes back.
+   */
+  async customerRotationFor(
+    scope: TenantContext,
+    service: ServiceRecord,
+  ): Promise<CustomerRotationOffer> {
+    if (!CUSTOMER_ROTATION_STATES.includes(service.state)) return { offered: false };
+    if (!(await this.deps.features.isEnabled(scope, 'customer_link_rotation'))) {
+      return { offered: false };
+    }
+    const operable = await this.deps.panels.operability(
+      scope,
+      service.panelId,
+      'ROTATE_SUBSCRIPTION',
+    );
+    if (!operable.ok) return { offered: false };
+    const cooldownHours = await this.deps.settings.valueOf<number>(
+      scope,
+      'services.link_rotation_cooldown_hours',
+    );
+    return { offered: true, cooldownHours };
+  }
+
+  /**
+   * A customer asks for a new subscription link for their own service (WP6-C).
+   *
+   * `docs/wp6c-audit.md` is the design. It is `requestFromCustomer` with one more
+   * operation and one more rule, and it goes through the SAME planner, so the legal
+   * state, the panel's operability, the scope check, the open-operation return, the
+   * derived operation id and the audit row are the planner's and are not restated here.
+   *
+   * What this adds, in the order it runs:
+   *
+   * 1. The guard (`maintenance.run`), then ownership through `getForCustomer`.
+   * 2. Inside the transaction, the service row lock (`serialize`). Two taps under
+   *    different keys become serial here.
+   * 3. After the planner has returned an open rotation or a replay of this key, the
+   *    `admit` rule, on the LOCKED row: the service is `ACTIVE`, the flag is on, the
+   *    customer is not blocked, and the cooldown has passed.
+   *
+   * The cooldown counts the customer's own rotations that SUCCEEDED, from the instant
+   * each was requested. The refusal carries `availableAt`, so the customer is told when
+   * rather than "later".
+   */
+  async requestRotation(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: UserId,
+    serviceId: string,
+    input: { readonly idempotencyKey: string },
+  ): Promise<OperationRecord> {
+    await this.deps.guard.check(scope, actor, CUSTOMER_ROTATION_PERMISSION);
+    const service = await this.getForCustomer(scope, customerId, serviceId);
+    const stateRefusal = COMMERCE_ERROR_CODES.ORDER_STATE_INVALID;
+    // The row as `serialize` locked it, read again by nothing: `admit` decides on it.
+    let locked: ServiceRecord | null = null;
+    return this.planRequestedOperation(scope, actor, service, 'ROTATE_SUBSCRIPTION', input, {
+      requestedBy: customerId,
+      stateRefusal,
+      admission: {
+        serialize: async (tx) => {
+          locked = await this.deps.services.lockForUpdate(scope, service.id, tx);
+          if (locked === null) {
+            throw errors.notFound(COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND, 'Unknown service.');
+          }
+        },
+        admit: async (tx) => {
+          if (locked === null) {
+            throw errors.notFound(COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND, 'Unknown service.');
+          }
+          if (!CUSTOMER_ROTATION_STATES.includes(locked.state)) {
+            throw errors.conflict(
+              stateRefusal,
+              'That service is not in a state this action can be taken from.',
+              { state: locked.state },
+            );
+          }
+          if (!(await this.deps.features.isEnabled(scope, 'customer_link_rotation', tx))) {
+            throw errors.conflict(
+              COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
+              'A customer cannot rotate a link on this installation.',
+              { reason: 'FEATURE_DISABLED' },
+            );
+          }
+          const customer = await this.deps.customers.findById(scope, customerId, tx);
+          if (customer === null || customer.status === 'BLOCKED') {
+            throw errors.conflict(
+              COMMERCE_ERROR_CODES.CUSTOMER_BLOCKED,
+              'This customer cannot act on their services.',
+            );
+          }
+          const last = await this.deps.operations.lastSucceededCustomerRequest(
+            scope,
+            service.id,
+            customerId,
+            'ROTATE_SUBSCRIPTION',
+            tx,
+          );
+          if (last !== null) {
+            const hours = await this.deps.settings.valueOf<number>(
+              scope,
+              'services.link_rotation_cooldown_hours',
+              tx,
+            );
+            const availableAt = new Date(last.getTime() + hours * 3_600_000);
+            if (this.deps.clock.now().getTime() < availableAt.getTime()) {
+              throw errors.conflict(
+                COMMERCE_ERROR_CODES.SERVICE_ROTATION_COOLDOWN,
+                'This link was rotated too recently to rotate again.',
+                { availableAt: availableAt.toISOString() },
+              );
+            }
+          }
+        },
+      },
+    });
+  }
+
+  /**
    * Plans one management operation an OPERATOR asked for, on any service in their tenant.
    *
    * Phase 6A, and the sibling of `requestFromCustomer` above. Everything about the
@@ -811,6 +970,16 @@ export class ProvisioningService {
       readonly stateRefusal?:
         | typeof COMMERCE_ERROR_CODES.ORDER_STATE_INVALID
         | typeof COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED;
+      /**
+       * A rule the caller decides INSIDE the transaction, from rows it must lock first
+       * (WP6-C). `serialize` runs before anything else is read; `admit` runs after an
+       * open operation and a replay of this very key have both been answered, and
+       * throws its own refusal. Absent for every request path that has no such rule.
+       */
+      readonly admission?: {
+        readonly serialize: (tx: TransactionScope) => Promise<void>;
+        readonly admit: (tx: TransactionScope) => Promise<void>;
+      };
     },
   ): Promise<OperationRecord> {
     const legalFrom = OPERATION_LEGAL_FROM[type];
@@ -838,13 +1007,30 @@ export class ProvisioningService {
           'That tenant has stopped accepting work.',
         );
       }
+      /*
+       * The lock comes FIRST, before the open-operation read below, so that a second
+       * request waiting here sees the first one's committed row rather than the world
+       * both of them started from.
+       */
+      if (origin.admission !== undefined) await origin.admission.serialize(tx);
       const open = await this.deps.operations.findOpen(scope, service.id, type, tx);
       if (open !== null) return open;
+      const operationId = this.deps.operationId(`${service.id}:${type}:${input.idempotencyKey}`);
+      if (origin.admission !== undefined) {
+        /*
+         * A replay of this key is answered with what it planned, BEFORE the admission
+         * rule: the request that started a cooldown must not be refused by its own
+         * success when its webhook is delivered again.
+         */
+        const replay = await this.deps.operations.findByOperationId(scope, operationId, tx);
+        if (replay !== null) return replay;
+        await origin.admission.admit(tx);
+      }
       const operation = await this.deps.operations.plan(
         scope,
         {
           id: this.deps.ids.uuid(),
-          operationId: this.deps.operationId(`${service.id}:${type}:${input.idempotencyKey}`),
+          operationId,
           serviceId: service.id,
           orderId: service.orderId,
           /*
