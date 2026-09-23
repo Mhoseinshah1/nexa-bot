@@ -102,6 +102,10 @@ export interface FakeRickpanel {
    * for a test to change the world while the rotation is on the wire.
    */
   afterRotation: (() => Promise<void>) | null;
+  /** How many of the NEXT `PUT /api/user/{name}` apply their change and then answer 500. */
+  lostPutAnswers: number;
+  /** How many `PUT /api/user/{name}` calls reached the panel, whatever they did. */
+  putCalls(): number;
   readonly requests: readonly FakeRickpanelRequest[];
   /** Everything this panel holds, keyed by username — the observer's view. */
   readonly users: ReadonlyMap<string, FakeRickpanelUser>;
@@ -130,6 +134,7 @@ export async function startFakeRickpanel(
   let unprocessableCreates = 0;
   let revokeMode: RickpanelRevokeMode = 'rotates';
   let afterRotation: (() => Promise<void>) | null = null;
+  let lostPutAnswers = 0;
   let rotationCounter = 0;
 
   const present = (user: FakeRickpanelUser): Record<string, unknown> => ({
@@ -253,6 +258,11 @@ export async function startFakeRickpanel(
           if (typeof payload['status'] === 'string') held.status = payload['status'];
           if (typeof payload['expire'] === 'number') held.expire = payload['expire'];
           if (typeof payload['data_limit'] === 'number') held.dataLimit = payload['data_limit'];
+          if (lostPutAnswers > 0) {
+            // Applied, and the answer lost: what a replay of an idempotent write is for.
+            lostPutAnswers -= 1;
+            return void json(500, { detail: 'boom' });
+          }
           return void json(200, present(held));
         }
         if (method === 'DELETE') {
@@ -286,6 +296,13 @@ export async function startFakeRickpanel(
     set unprocessableCreates(next: number) {
       unprocessableCreates = next;
     },
+    get lostPutAnswers() {
+      return lostPutAnswers;
+    },
+    set lostPutAnswers(next: number) {
+      lostPutAnswers = next;
+    },
+    putCalls: () => requests.filter((one) => one.method === 'PUT').length,
     get afterRotation() {
       return afterRotation;
     },
