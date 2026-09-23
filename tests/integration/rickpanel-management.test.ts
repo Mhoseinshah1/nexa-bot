@@ -319,7 +319,14 @@ describe('RickPanel service management through the application layer', () => {
 
     expect((await operationOf(service.id, 'RENEW'))?.state).toBe('SUCCEEDED');
     const after = await reload(service.id);
-    expect(after.expiresAt?.getTime()).toBeGreaterThan(service.expiresAt?.getTime() ?? 0);
+    /*
+     * EXACTLY what was bought — the plan's 30 days onto the current expiry and its
+     * 50 GiB onto the current allowance — not merely "later" and "agreeing". A target
+     * computed wrongly would be written to both stores alike, and agreement alone would
+     * pass it. Codex on PR #63.
+     */
+    expect(after.expiresAt?.getTime()).toBe((service.expiresAt?.getTime() ?? 0) + 30 * 86_400_000);
+    expect(after.trafficLimitBytes).toBe(service.trafficLimitBytes + 53_687_091_200n);
     expectAgreement(after);
     expect(panel.putCalls() - puts, 'one write to the panel').toBe(1);
     // A renewal is an allowance: the status and the subscription are the panel's own.
@@ -327,7 +334,10 @@ describe('RickPanel service management through the application layer', () => {
     expect(onPanel(after)?.subToken).toBe(token);
     expect(after.subscriptionUrl).toBe(service.subscriptionUrl);
 
-    expect(await debits(), 'the purchase and the renewal, once each').toHaveLength(2);
+    expect(
+      (await debits()).map((one) => one.amount),
+      'the purchase and the renewal, once each, at the plan price',
+    ).toEqual(['250000', '250000']);
     expect(await refunds()).toHaveLength(0);
 
     // A later sweep writes nothing more.
@@ -368,7 +378,12 @@ describe('RickPanel service management through the application layer', () => {
     expect(afterTime.trafficLimitBytes).toBe(afterTraffic.trafficLimitBytes);
     expectAgreement(afterTime);
 
-    expect(await debits(), 'the purchase and the two packages, once each').toHaveLength(3);
+    // Each package at ITS price, not the plan's: cardinality alone would pass a
+    // settlement that charged an add-on at the wrong amount. Codex on PR #63.
+    expect(
+      (await debits()).map((one) => one.amount),
+      'the purchase and the two packages, once each',
+    ).toEqual(['250000', '50000', '50000']);
     expect(await refunds()).toHaveLength(0);
   });
 
@@ -454,10 +469,15 @@ describe('RickPanel service management through the application layer', () => {
       idempotencyKey: 'renew-disabled-panel-off',
     });
     const puts = panel.putCalls();
+    const requests = panel.requests.length;
 
     await ctx.container.provisionerLoop.tick();
 
     expect(panel.putCalls(), 'a disabled panel was written to').toBe(puts);
+    // Not even a login: operability is decided before ANYTHING is sent, so a
+    // regression that authenticated first and checked afterwards fails here. Codex on
+    // PR #63.
+    expect(panel.requests.length, 'a disabled panel was contacted').toBe(requests);
     const after = await reload(service.id);
     expect(after.expiresAt?.getTime()).toBe(service.expiresAt?.getTime());
     expect(after.trafficLimitBytes).toBe(service.trafficLimitBytes);
