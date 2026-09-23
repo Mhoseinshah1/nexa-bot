@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   money,
+  UNLIMITED_TRAFFIC_BYTES,
   type ActorContext,
   type BotInstanceId,
   type CorrelationId,
@@ -131,7 +132,7 @@ describe('a RickPanel NEW_SERVICE', () => {
   });
 
   /** A wallet-settled order for one product. What plans the PROVISION. */
-  async function paidOrder(key: string, trafficBytes: bigint | null): Promise<OrderId> {
+  async function paidOrder(key: string, trafficBytes: bigint): Promise<OrderId> {
     const product = await products.create(tenantA, {
       id: ctx.container.ids.uuid() as ProductId,
       draft: {
@@ -242,7 +243,9 @@ describe('a RickPanel NEW_SERVICE', () => {
 
     expect(await purchases(), 'exactly one debit').toHaveLength(1);
     expect(await refunds(), 'a delivered order is not refunded').toHaveLength(0);
-    expect(await orderState(orderId)).toBe('FULFILLED');
+    // PAID is the delivered order's resting state: it has no later one, and the
+    // service beside it is what says it was delivered.
+    expect(await orderState(orderId)).toBe('PAID');
 
     // Another sweep changes nothing: no second create, no second debit, no refund.
     await makeOperationDue();
@@ -255,7 +258,7 @@ describe('a RickPanel NEW_SERVICE', () => {
 
   it('creates a LIMITED plan with the traffic it was sold, and an unlimited one as 0', async () => {
     const limited = await paidOrder('rick-limited', 1_073_741_824n);
-    const unlimited = await paidOrder('rick-unlimited', null);
+    const unlimited = await paidOrder('rick-unlimited', UNLIMITED_TRAFFIC_BYTES);
 
     await ctx.container.provisionerLoop.tick();
     await ctx.container.provisionerLoop.tick();
@@ -296,46 +299,72 @@ describe('a RickPanel NEW_SERVICE', () => {
     expect(await purchases()).toHaveLength(1);
   });
 
+  /** Every request that reached the panel for one name or the create route, in order. */
+  const trail = (name: string) =>
+    panel.requests
+      .filter(
+        (one) =>
+          (one.method === 'POST' && one.path === '/api/user') ||
+          (one.method === 'GET' && one.path === `/api/user/${name}`),
+      )
+      .map((one) => (one.method === 'POST' ? 'CREATE' : 'READ'));
+
   /**
-   * An ambiguous answer: nothing refunded, and a READ before any second create.
+   * An ambiguous create, then a panel that recovers: delivered, nothing refunded, and a
+   * READ before the second create.
    *
    * A 422 has not been classified on a real panel (`OQ-RP-06`), so it keeps the
-   * UNKNOWN safety model: the service goes UNRECONCILED, the customer's money stays
-   * where it is, and the next thing sent to the panel for that name is a GET. Only a
-   * READ that proves the account absent licenses a fresh create — which then succeeds
-   * here, because the panel has recovered.
+   * UNKNOWN safety model. The loop drains within one tick: the service goes
+   * UNRECONCILED, a RECONCILE reads the name, the panel says it is absent, and only
+   * that READ licenses a fresh create — which succeeds here, because the panel has
+   * recovered. No money moves in either direction beyond the one debit.
    */
-  it('refunds nothing for an ambiguous create, and reads before it creates again', async () => {
-    panel.behaviour = 'unprocessable';
+  it('reads before it creates again after an ambiguous create, and refunds nothing', async () => {
+    panel.unprocessableCreates = 1;
     const orderId = await paidOrder('rick-unknown', 53_687_091_200n);
 
     await ctx.container.provisionerLoop.tick();
-    const lost = await services.findByOrderId(tenantA, orderId);
-    expect(lost?.state).toBe('UNRECONCILED');
-    expect(await refunds(), 'an UNKNOWN outcome was refunded').toHaveLength(0);
-    const firstCreate = panel.requests.length;
-
-    panel.behaviour = 'healthy';
-    for (let round = 0; round < 4; round += 1) {
-      await makeOperationDue();
-      await ctx.container.provisionerLoop.tick();
-    }
 
     const settled = await services.findByOrderId(tenantA, orderId);
     expect(settled?.state).toBe('ACTIVE');
-    const name = lost?.providerUsername ?? '';
-    const after = panel.requests.slice(firstCreate).filter((one) => !one.path.includes('token'));
-    const firstRead = after.findIndex(
-      (one) => one.method === 'GET' && one.path === `/api/user/${name}`,
-    );
-    const secondCreate = after.findIndex(
-      (one) => one.method === 'POST' && one.path === '/api/user',
-    );
-    expect(firstRead, 'no READ settled the unknown create').toBeGreaterThanOrEqual(0);
-    expect(firstRead, 'a second create went out before any READ').toBeLessThan(secondCreate);
+    const name = settled?.providerUsername ?? '';
+    expect(trail(name)).toEqual(['CREATE', 'READ', 'CREATE', 'READ']);
     expect(panel.users.size).toBe(1);
-    expect(await refunds()).toHaveLength(0);
+    expect(await refunds(), 'an UNKNOWN outcome was refunded').toHaveLength(0);
     expect(await purchases()).toHaveLength(1);
-    expect(await orderState(orderId)).toBe('FULFILLED');
+    expect(await orderState(orderId)).toBe('PAID');
+  });
+
+  /**
+   * The owner's incident, reproduced through the shipped container: a create the panel
+   * refuses with a status this adapter does not classify.
+   *
+   * This is what the missing seed cost on every purchase. Each create is UNKNOWN, each
+   * reconcile READ proves the account absent, and the cycle re-plans until
+   * `SERVICE_PROVISION_CYCLE_LIMIT` — then refunds once. It is bounded, it never creates
+   * without a READ in between, and it refunds exactly once; but it is three creates for
+   * a request that could never succeed, which is why the seed, not the classification,
+   * is the fix, and why `OQ-RP-06` is worth settling.
+   */
+  it('bounds a create the panel keeps answering 422: three rounds, READ between, one refund', async () => {
+    panel.behaviour = 'unprocessable';
+    const orderId = await paidOrder('rick-cycle', 53_687_091_200n);
+
+    await ctx.container.provisionerLoop.tick();
+
+    const service = await services.findByOrderId(tenantA, orderId);
+    const name = service?.providerUsername ?? '';
+    expect(trail(name)).toEqual(['CREATE', 'READ', 'CREATE', 'READ', 'CREATE', 'READ']);
+    expect(panel.users.size).toBe(0);
+    expect(await orderState(orderId)).toBe('REFUNDED');
+    expect(await refunds()).toHaveLength(1);
+
+    for (let round = 0; round < 3; round += 1) {
+      await makeOperationDue();
+      await ctx.container.provisionerLoop.tick();
+    }
+    expect(panel.createCalls(), 'the exhausted cycle dialled the panel again').toBe(3);
+    expect(await refunds(), 'the exhausted cycle was refunded twice').toHaveLength(1);
+    expect(await purchases()).toHaveLength(1);
   });
 });

@@ -69,6 +69,12 @@ export interface FakeRickpanel {
   readonly username: string;
   readonly password: string;
   behaviour: RickpanelBehaviour;
+  /**
+   * How many of the NEXT creates answer 422 before the panel behaves as `behaviour`
+   * says. A panel that recovers between two attempts, which is the case a reconcile
+   * exists for.
+   */
+  unprocessableCreates: number;
   readonly requests: readonly FakeRickpanelRequest[];
   /** Everything this panel holds, keyed by username — the observer's view. */
   readonly users: ReadonlyMap<string, FakeRickpanelUser>;
@@ -92,6 +98,7 @@ export async function startFakeRickpanel(
   let tokenCounter = 0;
   let userCounter = 0;
   let behaviour: RickpanelBehaviour = options.behaviour ?? 'healthy';
+  let unprocessableCreates = 0;
 
   const present = (user: FakeRickpanelUser): Record<string, unknown> => ({
     username: user.username,
@@ -149,6 +156,10 @@ export async function startFakeRickpanel(
           return void json(missingSeedStatus, {
             detail: [{ loc: ['body', 'proxies'], msg: 'field required', type: 'value_error' }],
           });
+        }
+        if (unprocessableCreates > 0) {
+          unprocessableCreates -= 1;
+          return void json(422, { detail: 'unprocessable' });
         }
         if (behaviour === 'refuses-rule') {
           return void json(400, { detail: 'user limit reached for this admin' });
@@ -208,6 +219,12 @@ export async function startFakeRickpanel(
     },
     set behaviour(next: RickpanelBehaviour) {
       behaviour = next;
+    },
+    get unprocessableCreates() {
+      return unprocessableCreates;
+    },
+    set unprocessableCreates(next: number) {
+      unprocessableCreates = next;
     },
     requests,
     users,

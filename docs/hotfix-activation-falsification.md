@@ -37,9 +37,14 @@ settlement, release — so each of these is proved once and holds at all four.
 | F7  | ~~a 409 whose user we own is ADOPTED, never created again~~ **SUPERSEDED by C2 below: a 409 is refused, never adopted** | the refusal replaced with the read-and-adopt branch       | `rickpanel-adapter.test.ts` › refuses a name that already exists even when the panel will show it to us | KILLED |
 | F8  | a 409 for a name another admin owns is refused, not retried                                                             | `PROVIDER_REFUSED` → `PROVIDER_ERROR` on the 409+404 path | `rickpanel-adapter.test.ts` › refuses a name held by another admin instead of retrying it               | KILLED |
 | F9  | a 400/403 on create is a rule, answered once                                                                            | `PROVIDER_REFUSED` → `PROVIDER_ERROR`                     | `rickpanel-adapter.test.ts` › treats a 400 rule refusal as terminal and refundable, not as a retry      | KILLED |
-| F10 | RickPanel is sent neither `inbounds` nor `proxies`                                                                      | both added to the create payload                          | `rickpanel-adapter.test.ts` › sends neither inbounds nor proxies, because the panel ignores both        | KILLED |
+| F10 | RickPanel is sent no `inbounds` (see the note below for `proxies`)                                                      | `inbounds` added to the create payload                    | `rickpanel-adapter.test.ts` › sends the fixed proxies seed and no inbounds                              | KILLED |
 | F13 | a rickpanel panel requires no activation                                                                                | `requiredActivationFields` set to `['proxyProtocols']`    | `rickpanel-adapter.test.ts` › requires no activation, where marzban requires two fields                 | KILLED |
 | F14 | a rickpanel activation refuses a pasted Marzban payload                                                                 | `.strict()` dropped from `rickpanelActivationSchema`      | `rickpanel-adapter.test.ts` › requires no activation, where marzban requires two fields                 | KILLED |
+
+**F10 amended by `docs/rickpanel-create-hotfix.md`.** The rule's `proxies` half was wrong
+and is reversed there. A PARTIAL set is ignored, as the document says, but an ABSENT one is
+refused. Every create now carries the fixed seed `{"vless": {}}`, held by RP-01 and RP-02 in `docs/rickpanel-hotfix-falsification.md`.
+The `inbounds` half still holds. Its mutation was re-run against the renamed test and still kills it.
 
 ## The Web Admin
 

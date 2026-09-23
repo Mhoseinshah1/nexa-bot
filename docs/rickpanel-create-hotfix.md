@@ -58,8 +58,21 @@ the refund the owner saw:
   refused again. The cycle repeats until `SERVICE_PROVISION_CYCLE_LIMIT`, then
   `PROVISION_CYCLE_EXHAUSTED` refunds.
 
-"Eventually refunded" matches the second reading better than the first. That is an
-inference, and it is recorded as **OQ-RP-06** below, not as a fact.
+The second reading is **reproduced through the shipped container** by
+`rickpanel-new-service.test.ts` › bounds a create the panel keeps answering 422. The
+provisioner drains everything due in a single tick, so the whole cycle runs inside it.
+The trail on the panel is `CREATE, READ, CREATE, READ, CREATE, READ`, the order ends
+REFUNDED with exactly one refund, and later sweeps create nothing more.
+
+That cycle is bounded and safe:
+
+- no create goes out without a READ between it and the last one;
+- nothing is refunded while the outcome is unknown;
+- the refund happens once.
+
+What it cannot do is succeed. That is why the seed, not a reclassification, is the
+fix. Which status the real panel actually uses is still an inference ("eventually
+refunded" fits the 422 reading better than 400), recorded as **OQ-RP-06**.
 
 ## 4. The fix
 
@@ -113,7 +126,8 @@ adapter over the real `SafeHttpClient`, the ledger and the delivery lane:
 - creates, reads back and delivers the link: one debit, one account, no refund
 - creates a LIMITED plan with the traffic it was sold, and an unlimited one as 0
 - refunds a rule refusal exactly once and never creates again
-- refunds nothing for an ambiguous create, and reads before it creates again
+- reads before it creates again after an ambiguous create, and refunds nothing
+- bounds a create the panel keeps answering 422: three rounds, READ between, one refund
 
 `tests/acceptance/real-panel-rickpanel.test.ts` covers the real-panel side:
 
@@ -124,20 +138,8 @@ adapter over the real `SafeHttpClient`, the ledger and the delivery lane:
 
 ## 6. Falsification
 
-Each rule was reverted alone in `rickpanel.adapter.ts`, the named suite was run, and
-the file was restored byte-for-byte (`cmp`) before the next mutation.
-
-| #     | rule                                                       | mutation                                             | tests that die                                                                                                                                                                                                                                                                                                                                                                             | result |
-| ----- | ---------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------ |
-| RP-01 | every create carries the proxies seed                      | the `proxies` line removed from the payload          | `rickpanel-adapter.test.ts` › sends the fixed proxies seed and no inbounds; › is delivered by a panel that refuses an unseeded create with %i; › creates a limited plan with exactly the traffic and expiry it was sold; › reads the user back before it claims a delivery; `rickpanel-new-service.test.ts` › creates, reads back and delivers the link: one debit, one account, no refund | KILLED |
-| RP-02 | the seed is non-empty                                      | `proxies: {}`                                        | `rickpanel-adapter.test.ts` › sends the fixed proxies seed and no inbounds; › is delivered by a panel that refuses an unseeded create with %i                                                                                                                                                                                                                                              | KILLED |
-| RP-03 | a 422 on create is not generalised into a refusal          | `422` added to the 400/403 `PROVIDER_REFUSED` branch | `rickpanel-adapter.test.ts` › keeps a 422 on create UNKNOWN until real evidence classifies it                                                                                                                                                                                                                                                                                              | KILLED |
-| RP-04 | a limited plan keeps its cap                               | `data_limit: 0`                                      | `rickpanel-adapter.test.ts` › creates a limited plan with exactly the traffic and expiry it was sold; › sends the fixed proxies seed and no inbounds                                                                                                                                                                                                                                       | KILLED |
-| RP-05 | the panel's generated credentials do not leave the adapter | the record's `proxies` written into `providerUserId` | `rickpanel-adapter.test.ts` › delivers the subscription link and none of the credentials the panel generated                                                                                                                                                                                                                                                                               | KILLED |
-| RP-06 | an unlimited plan is not given a cap                       | unlimited defaulted to 50 GiB                        | `rickpanel-adapter.test.ts` › creates an unlimited plan as the panel unlimited, with nothing invented                                                                                                                                                                                                                                                                                      | KILLED |
-
-RP-01 kills 16 of the 34 adapter tests. The table names the ones that assert the seed
-directly. The `%i` in two titles is the `it.each` head, cited literally.
+Every rule above was reverted alone and the tests that die were recorded, in
+`docs/rickpanel-hotfix-falsification.md`. All six rows are KILLED.
 
 ## 7. Open questions this leaves, recorded rather than guessed
 
