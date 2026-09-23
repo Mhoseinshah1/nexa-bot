@@ -9,8 +9,10 @@ import {
   PAYMENT_PAGE_MAX,
   RECEIPT_CAPTURE_MINUTES,
   SELF_CONTAINED_PAYMENT_METHODS,
+  cashbackAmountMinor,
   errors,
   money,
+  topupCashbackReference,
   nextState,
   orderIdSchema,
   paymentIdSchema,
@@ -51,8 +53,9 @@ import type {
   PaymentDestinationRecord,
   PaymentDestinationRepository,
 } from './account-ports.js';
-import type { PaymentGatewayService } from './payment-gateway.service.js';
+import type { OfferedGateway, PaymentGatewayService } from './payment-gateway.service.js';
 import type { PaymentReceiptRepository, ReceiptCaptureRepository } from './receipt-ports.js';
+import type { ReceiptCreditRepository } from './receipt-credit-ports.js';
 import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
@@ -66,6 +69,7 @@ import { canCover, shortfallMinor } from '../../wallet/domain/balance.js';
 import { settlementRefusal } from '../domain/settlement.js';
 import type {
   PaymentCursor,
+  PaymentCustomerIdentity,
   PaymentPage,
   PaymentRecord,
   PaymentRepository,
@@ -157,6 +161,11 @@ export interface PaymentServiceDeps {
    * separation the port above describes.
    */
   readonly receipts: Pick<PaymentReceiptRepository, 'countForPayment'>;
+  /**
+   * Whether a FAILED payment was a receipt's credit-to-wallet (D2) — READ only, so this
+   * module can tell a rejection's loser that a credit won and cannot record one itself.
+   */
+  readonly receiptCredits: Pick<ReceiptCreditRepository, 'findByPayment'>;
   /**
    * Read to refuse a BLOCKED customer INSIDE the transaction that would move their money.
    *
@@ -464,6 +473,23 @@ export class PaymentService {
     return this.deps.repository.list(scope, query.search, limit, query.cursor ?? null);
   }
 
+  /**
+   * Who a page of payments' customers are on Telegram, for the Web Admin's list and
+   * detail (Payment File 02 §21, D7). Reading payments is `payments.view`, and this is
+   * part of reading them.
+   */
+  async customerIdentities(
+    scope: TenantContext,
+    actor: ActorContext,
+    payments: readonly PaymentRecord[],
+  ): Promise<ReadonlyMap<UserId, PaymentCustomerIdentity>> {
+    await this.deps.guard.check(scope, actor, PAYMENT_VIEW_PERMISSION);
+    return this.deps.repository.customerIdentities(
+      scope,
+      payments.map((payment) => payment.customerId),
+    );
+  }
+
   async get(scope: TenantContext, actor: ActorContext, id: string): Promise<PaymentRecord> {
     await this.deps.guard.check(scope, actor, PAYMENT_VIEW_PERMISSION);
     const payment = await this.deps.repository.findById(scope, this.paymentId(id));
@@ -683,6 +709,9 @@ export class PaymentService {
             amount: total,
             reference,
             expiresAt: null,
+            // A wallet settlement goes through no route, and promises no gift.
+            gatewayProvider: null,
+            topupCashbackPercent: null,
             now,
           },
           tx,
@@ -918,10 +947,17 @@ export class PaymentService {
          * audit row carries the CUSTOMER as its actor, which is truthful — their tap is
          * what made this installation notice.
          */
+        /*
+         * Past its deadline AND carrying no receipt. A transfer with a receipt never
+         * expires (Payment File 02 §9, D1) — the sweep skips it — so it is not stale
+         * whatever the clock says, and it is handed back rather than closed: the order
+         * has ONE transfer, and it is under review.
+         */
         const stale =
           found !== undefined &&
           found.expiresAt !== null &&
-          found.expiresAt.getTime() <= now.getTime();
+          found.expiresAt.getTime() <= now.getTime() &&
+          (await this.deps.receipts.countForPayment(scope, found.id, tx)) === 0;
         if (found !== undefined && stale) {
           const closed = await this.deps.repository.resolve(
             scope,
@@ -1064,6 +1100,14 @@ export class PaymentService {
                * that is left of it rather than a fresh hour past the order's own death.
                */
               expiresAt: deadline,
+              /*
+               * The route it was offered through (D7), and NO gift: an order payment buys
+               * something, and File 02 §17's gift is a top-up's alone. Null rather than
+               * 0, so "this payment could never earn one" and "its route offered none"
+               * stay two facts.
+               */
+              gatewayProvider: 'MANUAL_TRANSFER',
+              topupCashbackPercent: null,
               now,
             },
             tx,
@@ -1254,7 +1298,7 @@ export class PaymentService {
          * already applied, not after it — most-restrictive-wins on both sides, which is
          * this product's answer to FBR-008's unresolved precedence.
          */
-        await this.topupGateway(scope, customerId, amount, tx);
+        const route = await this.topupGateway(scope, customerId, amount, tx);
         const windowMinutes = await this.paymentWindowMinutes(scope, tx);
 
         /*
@@ -1265,8 +1309,12 @@ export class PaymentService {
          * to prevent one step earlier.
          */
         const found = await this.deps.repository.findOpenTopup(scope, customerId, tx);
+        // Not stale while a receipt is on file, for the reason the order path gives (D1).
         const stale =
-          found !== null && found.expiresAt !== null && found.expiresAt.getTime() <= now.getTime();
+          found !== null &&
+          found.expiresAt !== null &&
+          found.expiresAt.getTime() <= now.getTime() &&
+          (await this.deps.receipts.countForPayment(scope, found.id, tx)) === 0;
         if (found !== null && stale) {
           const closed = await this.deps.repository.resolve(
             scope,
@@ -1354,6 +1402,15 @@ export class PaymentService {
               amount,
               reference,
               expiresAt: deadline,
+              /*
+               * The route this top-up was OFFERED through, and the gift it promises, both
+               * snapshotted now (Payment File 02 §17, D5). Read under the route's FOR SHARE
+               * lock inside this transaction, so an operator's edit either precedes this
+               * read or waits for it; afterwards 0114 freezes both on the payment, and a
+               * later change to the route changes only top-ups created after it.
+               */
+              gatewayProvider: route.gateway.provider,
+              topupCashbackPercent: route.gateway.topupCashbackPercent,
               now,
             },
             tx,
@@ -1521,9 +1578,10 @@ export class PaymentService {
     customerId: UserId,
     amount: Money,
     tx: TransactionScope,
-  ): Promise<void> {
+  ): Promise<OfferedGateway> {
     const offered = await this.deps.gateways.offer(scope, customerId, amount, tx);
     this.deps.gateways.assertAmountAccepted(offered, amount);
+    return offered;
   }
 
   /**
@@ -1654,6 +1712,8 @@ export class PaymentService {
           throw errors.conflict(
             COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID,
             'This payment can no longer be confirmed.',
+            // The standing state, so the loser of a disposition race can say which won.
+            { state: payment.state },
           );
         }
         /*
@@ -1867,6 +1927,62 @@ export class PaymentService {
       });
     }
 
+    /*
+     * The top-up GIFT (Payment File 02 §17, D5), in the transaction that credited the
+     * principal and only when this transaction WROTE the principal.
+     *
+     * - The percentage is the payment's own SNAPSHOT, taken from its route when it was
+     *   created and frozen by 0114 — never the route's value now, so an operator's later
+     *   edit cannot change a promise already made.
+     * - The basis is the payment's PRINCIPAL, never a ledger entry, so a gift can never
+     *   earn a gift (invariant 13).
+     * - `floor(principal × percent / 100)` through the WP8 engine's own
+     *   `cashbackAmountMinor`, written only when above zero: a 0% route earns nothing and
+     *   says nothing.
+     * - A separate `CASHBACK_TOPUP` entry under `<paymentId>:topup-cashback`, never folded
+     *   into the principal. `wallet_entries_topup_cashback_payment_key` allows one per
+     *   payment, so a replay or a racing confirmation converges on one gift even if a
+     *   writer skipped the `inserted` gate above it (invariant 11).
+     */
+    let gift: { readonly entryId: string; readonly inserted: boolean } | null = null;
+    const giftMinor = inserted
+      ? cashbackAmountMinor(confirmed.amount.amountMinor, confirmed.topupCashbackPercent ?? 0)
+      : 0n;
+    if (giftMinor > 0n) {
+      const credited = await this.deps.wallet.append(
+        scope,
+        {
+          id: this.deps.ids.uuid(),
+          customerId: confirmed.customerId,
+          direction: 'CREDIT',
+          reason: 'CASHBACK_TOPUP',
+          amount: money(giftMinor, confirmed.amount.currency),
+          reference: topupCashbackReference(confirmed.id),
+          orderId: null,
+          paymentId: confirmed.id,
+          note: null,
+          now,
+        },
+        tx,
+      );
+      gift = { entryId: credited.entry.id, inserted: credited.inserted };
+      if (credited.inserted) {
+        await this.deps.outbox.write(tx, actor, {
+          eventType: 'WalletEntryRecorded',
+          aggregateType: 'Wallet',
+          aggregateId: credited.entry.customerId,
+          payload: {
+            customerId: credited.entry.customerId,
+            entryId: credited.entry.id,
+            direction: credited.entry.direction,
+            reason: credited.entry.reason,
+            amountMinor: credited.entry.amount.amountMinor.toString(),
+            currency: credited.entry.amount.currency,
+          },
+        });
+      }
+    }
+
     await this.deps.audit.record(
       scope,
       actor,
@@ -1879,6 +1995,12 @@ export class PaymentService {
           state: confirmed.state,
           evidenceKind: confirmed.evidenceKind,
           orderId: null,
+          /*
+           * The gift, when this confirmation wrote one: its entry, and the snapshot it
+           * was computed from, so the log answers "why this figure" without the route.
+           */
+          topupCashbackPercent: confirmed.topupCashbackPercent,
+          giftEntryId: gift?.entryId ?? null,
           amountMinor: confirmed.amount.amountMinor.toString(),
           currency: confirmed.amount.currency,
           /*
@@ -1934,6 +2056,21 @@ export class PaymentService {
         scope,
         confirmed.customerId,
         'WALLET_TOPUP_CREDITED',
+        confirmed.id,
+        now,
+        tx,
+      );
+    }
+    /*
+     * And the gift, as its OWN fact (File 02 §18), enqueued after the principal's so the
+     * customer reads them in that order. Once-only by `customer_notifications_subject_key`
+     * on (tenant, kind, payment); never for a 0% route, which wrote no gift.
+     */
+    if (gift?.inserted === true) {
+      await this.deps.notifier.notify(
+        scope,
+        confirmed.customerId,
+        'WALLET_TOPUP_GIFT_CREDITED',
         confirmed.id,
         now,
         tx,
@@ -2022,7 +2159,23 @@ export class PaymentService {
          * end state. What they cannot get is a second rejection, and they cannot:
          * `resolve` is a conditional UPDATE on `state = 'PENDING'`.
          */
-        if (payment.state === 'FAILED') return payment;
+        if (payment.state === 'FAILED') {
+          /*
+           * ...unless the FAILED is a credit-to-wallet (Payment File 02 §11, D2). The
+           * three dispositions are mutually exclusive, and a reject that arrives after a
+           * credit is the LOSER of that race, not a repeat of itself: answering it with
+           * the payment would tell the reviewer "rejected" over money that went to the
+           * wallet. Refused, with the disposition that won.
+           */
+          if ((await this.deps.receiptCredits.findByPayment(scope, paymentId, tx)) !== null) {
+            throw errors.conflict(
+              COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID,
+              'This payment was credited to the wallet and cannot be rejected.',
+              { state: payment.state, disposition: 'CREDITED_TO_WALLET' },
+            );
+          }
+          return payment;
+        }
         /*
          * Every other non-PENDING state is a real refusal, and CONFIRMED is the one
          * that matters: a confirmed payment is rejected by a REFUND, not by an edit.
@@ -2221,7 +2374,13 @@ export class PaymentService {
       async (tx) => {
         await this.assertScopeActive(scope, tx);
 
-        const payment = await this.deps.repository.findById(scope, paymentId, tx);
+        /*
+         * FOR UPDATE, the lock `ReceiptService.submit` files a receipt under — so a
+         * receipt and this withdrawal are serialised, and the count below cannot be
+         * stale. An unlocked read let a receipt commit between the count and the
+         * conditional UPDATE, and the UPDATE would then withdraw a transfer under review.
+         */
+        const payment = await this.deps.repository.findByIdForUpdate(scope, paymentId, tx);
         if (payment === null || payment.customerId !== customerId) {
           throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
         }
@@ -2232,6 +2391,19 @@ export class PaymentService {
           throw errors.conflict(
             COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID,
             'This payment is no longer pending.',
+          );
+        }
+
+        /*
+         * A transfer the customer sent a RECEIPT for is not theirs to withdraw (Payment
+         * File 02 §9, D1). The receipt has no timer and leaves review only through a
+         * reviewer's approve, reject or credit — a withdrawal would be a fourth way out
+         * that decides nothing about money the customer says they sent.
+         */
+        if ((await this.deps.receipts.countForPayment(scope, paymentId, tx)) > 0) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.ORDER_TRANSFER_UNDER_REVIEW,
+            'A receipt for this transfer is waiting to be reviewed.',
           );
         }
 

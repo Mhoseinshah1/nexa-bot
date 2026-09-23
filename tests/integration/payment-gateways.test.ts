@@ -65,6 +65,8 @@ const OPEN = {
     activateAfterAccountDays: 0,
   },
   sortOrder: 0,
+  // No top-up gift (D5): 0 is the default, and the case about the gift sets it.
+  topupCashbackPercent: 0,
 } as const;
 
 describe('payment routes', () => {

@@ -4,6 +4,7 @@ import {
   desc,
   eq,
   getTableColumns,
+  inArray,
   isNotNull,
   isNull,
   lte,
@@ -15,6 +16,7 @@ import type {
   CurrencyCode,
   OrderId,
   PaymentEvidenceKind,
+  PaymentGatewayProvider,
   PaymentId,
   PaymentMethod,
   PaymentResolvedState,
@@ -28,12 +30,13 @@ import {
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
-  lateTransferDecisions,
+  customers,
   paymentReceipts,
   payments,
 } from '../../../../infrastructure/persistence/schema.js';
 import type {
   PaymentConfirmation,
+  PaymentCustomerIdentity,
   PaymentCursor,
   PaymentDraft,
   PaymentPage,
@@ -83,6 +86,9 @@ export class DrizzlePaymentRepository implements PaymentRepository {
         currency: draft.amount.currency,
         reference: draft.reference,
         expiresAt: draft.expiresAt,
+        // The route snapshot (D5), written here once and frozen by 0114 afterwards.
+        gatewayProvider: draft.gatewayProvider,
+        topupCashbackPercent: draft.topupCashbackPercent,
         createdAt: draft.now,
         updatedAt: draft.now,
       })
@@ -189,10 +195,6 @@ export class DrizzlePaymentRepository implements PaymentRepository {
       conditions.push(eq(payments.customerId, search.customerId));
     if (search.orderId !== undefined) conditions.push(eq(payments.orderId, search.orderId));
     if (search.reference !== undefined) conditions.push(eq(payments.reference, search.reference));
-    if (search.lateReview !== undefined) {
-      const lane = lateReviewLane();
-      conditions.push(search.lateReview ? lane : sql`NOT (${lane})`);
-    }
     if (cursor !== null) {
       conditions.push(
         sql`(${payments.createdAt}, ${payments.id}) > (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`,
@@ -452,6 +454,7 @@ export class DrizzlePaymentRepository implements PaymentRepository {
           eq(payments.state, 'PENDING'),
           isNotNull(payments.expiresAt),
           lte(payments.expiresAt, now),
+          noReceiptFiled(),
         ),
       )
       .orderBy(asc(payments.expiresAt), asc(payments.id))
@@ -483,6 +486,13 @@ export class DrizzlePaymentRepository implements PaymentRepository {
           eq(payments.state, 'PENDING'),
           isNotNull(payments.expiresAt),
           lte(payments.expiresAt, now),
+          /*
+           * Again HERE, not only in the candidates, for the reason every predicate above
+           * is restated: the UPDATE re-evaluates its own WHERE after the row lock is
+           * granted, and a receipt filed between the candidate scan and this statement
+           * committed under that same lock (`ReceiptService.submit` holds it).
+           */
+          noReceiptFiled(),
           sql`${payments.id} IN ${due}`,
         ),
       )
@@ -517,26 +527,47 @@ export class DrizzlePaymentRepository implements PaymentRepository {
       .limit(1);
     return row === undefined ? null : toRecord(row as Row);
   }
+
+  async customerIdentities(
+    scope: TenantContext,
+    customerIds: readonly UserId[],
+    tx?: unknown,
+  ): Promise<ReadonlyMap<UserId, PaymentCustomerIdentity>> {
+    const tenantId = requireTenantId(scope);
+    const identities = new Map<UserId, PaymentCustomerIdentity>();
+    if (customerIds.length === 0) return identities;
+    const rows = await this.exec(tx)
+      .select({
+        id: customers.id,
+        telegramUserId: customers.telegramUserId,
+        username: customers.username,
+      })
+      .from(customers)
+      .where(
+        and(eq(customers.tenantId, tenantId), inArray(customers.id, [...new Set(customerIds)])),
+      );
+    for (const row of rows) {
+      identities.set(row.id as UserId, {
+        telegramUserId: row.telegramUserId,
+        username: row.username,
+      });
+    }
+    return identities;
+  }
 }
 
 /**
- * The late-review lane as one SQL predicate over `payments` (P1).
+ * No receipt is on file for this payment — the one condition under which a PENDING
+ * transfer may still expire (Payment File 02 §9, D1).
  *
- * `lateReviewRefusal` returning null, plus no decision on record: an EXPIRED
- * `MANUAL_TRANSFER` whose customer signalled it or filed at least one receipt, and that
- * has no `late_transfer_decisions` row. Both sub-selects are tenant-scoped as well as
- * keyed by the payment, because every read here is.
+ * A submitted receipt has no timer: it stays reviewable until a reviewer approves,
+ * rejects or credits it. Tenant-scoped as well as keyed by the payment, because every
+ * read here is; `payment_receipts_payment_idx` leads with both.
  */
-function lateReviewLane(): SQL {
-  return sql`(${payments.state} = 'EXPIRED'
-    AND ${payments.method} = 'MANUAL_TRANSFER'
-    AND (${payments.customerSignalledAt} IS NOT NULL
-         OR EXISTS (SELECT 1 FROM ${paymentReceipts}
-                     WHERE ${paymentReceipts.tenantId} = ${payments.tenantId}
-                       AND ${paymentReceipts.paymentId} = ${payments.id}))
-    AND NOT EXISTS (SELECT 1 FROM ${lateTransferDecisions}
-                     WHERE ${lateTransferDecisions.tenantId} = ${payments.tenantId}
-                       AND ${lateTransferDecisions.paymentId} = ${payments.id}))`;
+function noReceiptFiled(): SQL {
+  return sql`NOT EXISTS (SELECT 1 FROM ${paymentReceipts}
+                  WHERE ${paymentReceipts.tenantId} = ${payments.tenantId}
+                    AND ${paymentReceipts.paymentId} = ${payments.id})`;
 }
 
 type Row = {
@@ -558,6 +589,8 @@ type Row = {
   resolutionNote: string | null;
   customerSignalledAt: Date | null;
   expiresAt: Date | null;
+  gatewayProvider: string | null;
+  topupCashbackPercent: number | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -582,6 +615,9 @@ function toRecord(row: Row): PaymentRecord {
     resolutionNote: row.resolutionNote,
     customerSignalledAt: row.customerSignalledAt,
     expiresAt: row.expiresAt,
+    // `payments_gateway_provider_check` is built from the contract enum.
+    gatewayProvider: row.gatewayProvider as PaymentGatewayProvider | null,
+    topupCashbackPercent: row.topupCashbackPercent,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

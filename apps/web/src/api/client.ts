@@ -80,7 +80,6 @@ import {
   type PaymentListResponse,
   type PaymentMethod,
   type PaymentReceiptListResponse,
-  type PaymentRejectionReason,
   type PaymentResponse,
   type PaymentState,
   type WalletEntryListResponse,
@@ -1322,6 +1321,8 @@ export function updatePaymentGateway(input: {
     activateAfterAccountDays: number;
   };
   sortOrder: number;
+  /** The top-up gift, 0–100 (D5). Required by the route, like every field of this form. */
+  topupCashbackPercent: number;
 }): Promise<PaymentGatewayResponse> {
   const { provider, ...body } = input;
   return post(PAYMENT_GATEWAY_ROUTES.update(provider), body, paymentGatewayResponseSchema);
@@ -1335,60 +1336,6 @@ export function setPaymentGatewayStatus(input: {
 }): Promise<PaymentGatewayResponse> {
   const { provider, ...body } = input;
   return post(PAYMENT_GATEWAY_ROUTES.status(provider), body, paymentGatewayResponseSchema);
-}
-
-export function confirmPayment(input: {
-  id: string;
-  idempotencyKey: string;
-  evidenceNote: string;
-}): Promise<PaymentResponse> {
-  const { id, ...body } = input;
-  return post(PAYMENT_ROUTES.confirm(id), body, paymentResponseSchema);
-}
-
-/**
- * Rejecting a receipt: the other half of `receipts.review`.
- *
- * A NOTE and nothing else, exactly as the confirmation. There is no amount, no state
- * and no un-reject: `PAYMENT_MACHINE` has no edge out of FAILED, migration 0052 freezes
- * the row, and a confirmed payment is reversed by a refund rather than by an edit.
- */
-export function rejectPayment(input: {
-  id: string;
-  idempotencyKey: string;
-  resolutionNote: string;
-}): Promise<PaymentResponse> {
-  const { id, ...body } = input;
-  return post(PAYMENT_ROUTES.reject(id), body, paymentResponseSchema);
-}
-
-/**
- * Crediting a late transfer to the customer's wallet (WP10 P1).
- *
- * A KEY and nothing else. The amount is the payment's own and the contract has no field
- * that could restate it — the same rule `confirmPayment` follows, for the same reason.
- * The payment stays EXPIRED; the response shows the decision standing on it.
- */
-export function creditLateTransfer(input: {
-  id: string;
-  idempotencyKey: string;
-}): Promise<PaymentResponse> {
-  const { id, ...body } = input;
-  return post(PAYMENT_ROUTES.lateCredit(id), body, paymentResponseSchema);
-}
-
-/**
- * Dismissing a late transfer: nothing moves, and a reason from the closed list says why.
- * The note is optional beside it and sent as null when empty.
- */
-export function dismissLateTransfer(input: {
-  id: string;
-  idempotencyKey: string;
-  reason: PaymentRejectionReason;
-  note: string | null;
-}): Promise<PaymentResponse> {
-  const { id, ...body } = input;
-  return post(PAYMENT_ROUTES.lateDismiss(id), body, paymentResponseSchema);
 }
 
 export function fetchPanels(

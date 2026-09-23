@@ -78,6 +78,7 @@ export class PaymentGatewaysController {
       maxAmountMinor: BigInt(input.maxAmountMinor),
       eligibility: input.eligibility,
       sortOrder: input.sortOrder,
+      topupCashbackPercent: input.topupCashbackPercent,
     });
     const gateway = await this.container.paymentGateways.configure(scope, actor, {
       idempotencyKey: input.idempotencyKey,
@@ -151,6 +152,7 @@ function toView(gateway: PaymentGatewayRecord, currency: SalesCurrencyCode): Pay
       activateAfterAccountDays: gateway.activateAfterAccountDays,
     },
     sortOrder: gateway.sortOrder,
+    topupCashbackPercent: gateway.topupCashbackPercent,
     createdAt: gateway.createdAt.toISOString(),
     updatedAt: gateway.updatedAt.toISOString(),
   };

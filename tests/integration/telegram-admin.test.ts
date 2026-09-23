@@ -1005,6 +1005,7 @@ describe('the Telegram management panel', () => {
       fileSize: 102_400n,
       fileName: null,
       telegramMessageId: 42n,
+      caption: null,
     };
     await ctx.container.receipts.submit(tenantA, systemActor(`${key}-f`), customerA, {
       idempotencyKey: `${key}-file`,

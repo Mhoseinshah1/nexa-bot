@@ -1,18 +1,17 @@
-import { Body, Controller, Get, Inject, Param, Post, Query, Req, Res } from '@nestjs/common';
+import { Controller, Get, Inject, Param, Query, Req, Res } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import {
   API_PREFIX,
   COMMERCE_ERROR_CODES,
+  COMPENSATION_ROUTES,
   PAYMENT_ROUTES,
-  confirmPaymentRequestSchema,
+  compensationListQuerySchema,
   errors,
-  lateTransferCreditRequestSchema,
-  lateTransferDismissRequestSchema,
   paymentIdSchema,
   paymentReceiptIdSchema,
-  rejectPaymentRequestSchema,
   paymentListQuerySchema,
-  type LateTransferDecisionView,
+  type CompensationListResponse,
+  type CompensationView,
   type OrderId,
   type PaymentDestinationView,
   type PaymentDetailResponse,
@@ -22,6 +21,8 @@ import {
   type PaymentReceiptView,
   type PaymentResponse,
   type PaymentSummaryResponse,
+  type ReceiptCreditView,
+  type RefundId,
   type TenantContext,
   type UserId,
 } from '@nexa/contracts';
@@ -32,40 +33,35 @@ import { decodeKeysetCursor, encodeKeysetCursor } from './keyset-cursor.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type {
   PaymentCursor,
+  PaymentCustomerIdentity,
   PaymentRecord,
 } from '../../modules/commerce/payments/application/ports.js';
+import type { ReceiptCreditRecord } from '../../modules/commerce/payments/application/receipt-credit-ports.js';
+import type {
+  CompensationCursor,
+  CompensationRecord,
+} from '../../modules/commerce/payments/application/refund-ports.js';
 import type { PaymentDestinationRecord } from '../../modules/commerce/payments/application/account-ports.js';
 import type { PaymentReceiptRecord } from '../../modules/commerce/payments/application/receipt-ports.js';
-import type { LateReviewView } from '../../modules/commerce/payments/application/late-transfer.service.js';
 
 /**
- * Payments over HTTP, at `/payments`. Two reads and FOUR writes: the two halves of a
- * review, and since WP10 the two decisions of the late-review lane (P1), which carry an
- * idempotency key and, for a dismissal, a closed reason — never an amount.
+ * Payments over HTTP, at `/payments`, and the compensation list at `/compensations`.
+ * READS ONLY.
  *
- * The writes are the two halves of one decision — a confirmation and a rejection —
- * which is what `receipts.review` has said since the permission catalogue was frozen
- * and what this controller could do half of until 4G. Each carries a NOTE and nothing
- * else. There is no amount on either route, no currency, no customer and no order: a
- * confirmation records that money the payment already names arrived, and an operator
- * able to restate the figure at approval time is an operator able to approve a
- * different payment from the one the customer made. `confirmPaymentRequestSchema` has
- * no such field, `PaymentRepository.confirm` takes no such parameter, and
- * `nexa_payments_confirmation_guard` would refuse the write.
+ * Payment File 02 §10 is the rule: card-to-card review happens in Telegram, and the Web
+ * Admin is read-only for it. So the two writes this controller used to carry — the
+ * confirmation and the rejection — are removed, with their contract routes, rather than
+ * hidden: a route that exists is a route a client can call (D3). The Telegram panel
+ * calls the same `PaymentService` and `ReceiptDispositionService` the routes did.
  *
- * A rejection is the mirror and moves nothing: no money, and not the ORDER, which stays
- * awaiting payment until its own deadline so the customer may pay another way inside
- * the window they were given.
+ * What stays is every read: the list with File 02 §21's diagnostic columns, the
+ * current-state detail (no timeline), the receipts' metadata and their bytes — which is
+ * not a mutation, and which §10 says only "does not need to be" shown — and the
+ * compensations. Operator refunds are not receipt review and live on their own
+ * controller, unchanged.
  *
- * What is deliberately absent: no `POST /payments` (a payment is created by a customer
- * choosing how to pay, never by an operator typing one), no cancel (a withdrawal is the
- * CUSTOMER's act and arrives through the bot, not through an operator's browser), no
- * un-reject, no refund and no retry. `payments.retry` exists as a permission for a
- * gateway that does not ship; a retry button with nothing behind it is the legacy
- * silent-success pattern.
- *
- * Authentication happens here; AUTHORIZATION does not — `PaymentService` charges
- * `payments.view` and `receipts.review` itself.
+ * Authentication happens here; AUTHORIZATION does not — the services charge
+ * `payments.view` and `receipts.view` themselves.
  */
 @Controller(`${API_PREFIX}`)
 export class PaymentsController {
@@ -87,7 +83,6 @@ export class PaymentsController {
       ...(query.customerId === undefined ? {} : { customerId: query.customerId }),
       ...(query.orderId === undefined ? {} : { orderId: query.orderId }),
       ...(query.reference === undefined ? {} : { reference: query.reference }),
-      ...(query.lateReview === undefined ? {} : { lateReview: query.lateReview }),
     });
     const result = await this.container.payments.list(scope, actor, {
       ...(page.limit === undefined ? {} : { limit: page.limit }),
@@ -98,15 +93,15 @@ export class PaymentsController {
         ...(page.customerId === undefined ? {} : { customerId: page.customerId as UserId }),
         ...(page.orderId === undefined ? {} : { orderId: page.orderId as OrderId }),
         ...(page.reference === undefined ? {} : { reference: page.reference }),
-        ...(page.lateReview === undefined ? {} : { lateReview: page.lateReview }),
       },
     });
-    const views = await this.container.lateTransfers.viewsFor(scope, actor, result.items);
+    // Who paid, as Telegram knows them — one read for the page (D7).
+    const identities = await this.container.payments.customerIdentities(scope, actor, result.items);
     return {
       // The LIST omits `evidenceNote`: it is an operator's own text about somebody's
       // bank transfer, and it is returned only on the detail, behind the same
       // permission. A list is the thing most likely to end up on a shared screen.
-      payments: result.items.map((record) => toSummary(record, views.get(record.id))),
+      payments: result.items.map((record) => toSummary(record, identities.get(record.customerId))),
       nextCursor: result.nextCursor === null ? null : encodeKeysetCursor(result.nextCursor),
     };
   }
@@ -114,101 +109,41 @@ export class PaymentsController {
   @Get('payments/:id')
   async detail(@Req() request: FastifyRequest, @Param('id') id: string): Promise<PaymentResponse> {
     const { scope, actor } = await this.authenticate(request);
-    const [payment, destination] = await Promise.all([
+    const [payment, destination, credit] = await Promise.all([
       this.container.payments.get(scope, actor, id),
       this.container.payments.destinationFor(scope, actor, id),
+      // The receipt's credit-to-wallet disposition, when that is how it was decided (D2).
+      this.container.receiptDispositions.creditFor(scope, actor, id),
     ]);
-    return { payment: toDetail(payment, destination, await this.lateView(scope, actor, payment)) };
-  }
-
-  @Post('payments/:id/confirm')
-  async confirm(
-    @Req() request: FastifyRequest,
-    @Param('id') id: string,
-    @Body() body: unknown,
-  ): Promise<PaymentResponse> {
-    const { scope, actor } = await this.authenticate(request);
-    const input = confirmPaymentRequestSchema.parse(body);
-    const { payment } = await this.container.payments.confirmManualTransfer(scope, actor, id, {
-      idempotencyKey: input.idempotencyKey,
-      note: input.evidenceNote,
-    });
-    return this.answer(scope, actor, payment);
-  }
-
-  @Post('payments/:id/reject')
-  async reject(
-    @Req() request: FastifyRequest,
-    @Param('id') id: string,
-    @Body() body: unknown,
-  ): Promise<PaymentResponse> {
-    const { scope, actor } = await this.authenticate(request);
-    const input = rejectPaymentRequestSchema.parse(body);
-    const payment = await this.container.payments.rejectManualTransfer(scope, actor, id, {
-      idempotencyKey: input.idempotencyKey,
-      note: input.resolutionNote,
-    });
-    return this.answer(scope, actor, payment);
+    const identities = await this.container.payments.customerIdentities(scope, actor, [payment]);
+    return {
+      payment: toDetail(payment, destination, credit, identities.get(payment.customerId)),
+    };
   }
 
   /**
-   * A reviewer crediting a late transfer to the customer's wallet (WP10 P1).
-   *
-   * An idempotency key and nothing else — the amount is the payment's own, and
-   * `lateTransferCreditRequestSchema` has no field that could restate it. The payment
-   * stays EXPIRED; the answer shows the decision standing on it.
+   * The compensation list (Payment File 02 §21, D7): every automatic refund of an order
+   * that could not be delivered, credited to the wallet. Read-only, under `payments.view`.
    */
-  @Post('payments/:id/late-credit')
-  async lateCredit(
+  @Get(COMPENSATION_ROUTES.list)
+  async compensations(
     @Req() request: FastifyRequest,
-    @Param('id') id: string,
-    @Body() body: unknown,
-  ): Promise<PaymentResponse> {
+    @Query() raw: Record<string, unknown>,
+  ): Promise<CompensationListResponse> {
     const { scope, actor } = await this.authenticate(request);
-    const input = lateTransferCreditRequestSchema.parse(body);
-    const { payment } = await this.container.lateTransfers.credit(scope, actor, id, {
-      idempotencyKey: input.idempotencyKey,
+    const query = singleValued(raw);
+    const page = compensationListQuerySchema.parse({
+      ...(query.limit === undefined ? {} : { limit: query.limit }),
+      ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
     });
-    return this.answer(scope, actor, payment);
-  }
-
-  /** A reviewer dismissing a late transfer, with a reason from the closed list (P1). */
-  @Post('payments/:id/late-dismiss')
-  async lateDismiss(
-    @Req() request: FastifyRequest,
-    @Param('id') id: string,
-    @Body() body: unknown,
-  ): Promise<PaymentResponse> {
-    const { scope, actor } = await this.authenticate(request);
-    const input = lateTransferDismissRequestSchema.parse(body);
-    const { payment } = await this.container.lateTransfers.dismiss(scope, actor, id, {
-      idempotencyKey: input.idempotencyKey,
-      reason: input.reason,
-      note: input.note,
+    const result = await this.container.refunds.compensations(scope, actor, {
+      ...(page.limit === undefined ? {} : { limit: page.limit }),
+      ...(page.cursor === undefined ? {} : { cursor: compensationCursorFrom(page.cursor) }),
     });
-    return this.answer(scope, actor, payment);
-  }
-
-  /** The detail a write answers with: the payment, where it pointed, and its lane. */
-  private async answer(
-    scope: TenantContext,
-    actor: ReturnType<typeof adminActor>,
-    payment: PaymentRecord,
-  ): Promise<PaymentResponse> {
-    const [destination, late] = await Promise.all([
-      this.container.payments.destinationFor(scope, actor, payment.id),
-      this.lateView(scope, actor, payment),
-    ]);
-    return { payment: toDetail(payment, destination, late) };
-  }
-
-  private async lateView(
-    scope: TenantContext,
-    actor: ReturnType<typeof adminActor>,
-    payment: PaymentRecord,
-  ): Promise<LateReviewView | undefined> {
-    const views = await this.container.lateTransfers.viewsFor(scope, actor, [payment]);
-    return views.get(payment.id);
+    return {
+      compensations: result.items.map(toCompensationView),
+      nextCursor: result.nextCursor === null ? null : encodeKeysetCursor(result.nextCursor),
+    };
   }
 
   /**
@@ -319,9 +254,14 @@ function paymentCursorFrom(raw: string): PaymentCursor {
   return { createdAt: position.createdAt, id: position.id as PaymentId };
 }
 
+function compensationCursorFrom(raw: string): CompensationCursor {
+  const position = decodeKeysetCursor(raw);
+  return { createdAt: position.createdAt, id: position.id as RefundId };
+}
+
 function toSummary(
   record: PaymentRecord,
-  late: LateReviewView | undefined,
+  identity: PaymentCustomerIdentity | undefined,
 ): PaymentSummaryResponse {
   return {
     id: record.id,
@@ -343,21 +283,11 @@ function toSummary(
     expiresAt: record.expiresAt === null ? null : record.expiresAt.toISOString(),
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
-    lateDecision:
-      late === undefined || late.decision === null ? null : toLateDecisionView(late.decision),
-    lateReviewEligible: late?.eligible ?? false,
-  };
-}
-
-/** The decision, minus the reviewer's note — see `lateTransferDecisionViewSchema`. */
-function toLateDecisionView(
-  decision: NonNullable<LateReviewView['decision']>,
-): LateTransferDecisionView {
-  return {
-    decision: decision.decision,
-    reason: decision.reason,
-    decidedAt: decision.decidedAt.toISOString(),
-    decidedByAdminId: decision.decidedByAdminId,
+    // Payment File 02 §21 (D7): the route, the external reference and who paid.
+    gatewayProvider: record.gatewayProvider,
+    externalReference: record.externalReference,
+    customerTelegramUserId: identity?.telegramUserId ?? null,
+    customerUsername: identity?.username ?? null,
   };
 }
 
@@ -382,13 +312,47 @@ function toReceiptView(record: PaymentReceiptRecord): PaymentReceiptView {
 function toDetail(
   record: PaymentRecord,
   destination: PaymentDestinationRecord | null,
-  late: LateReviewView | undefined,
+  credit: ReceiptCreditRecord | null,
+  identity: PaymentCustomerIdentity | undefined,
 ): PaymentDetailResponse {
   return {
-    ...toSummary(record, late),
+    ...toSummary(record, identity),
     evidenceNote: record.evidenceNote,
     resolutionNote: record.resolutionNote,
     destination: destination === null ? null : toDestinationView(destination),
+    receiptCredit: credit === null ? null : toReceiptCreditView(credit),
+    topupCashbackPercent: record.topupCashbackPercent,
+  };
+}
+
+/** A receipt's credit-to-wallet disposition, read-only (D2). */
+function toReceiptCreditView(credit: ReceiptCreditRecord): ReceiptCreditView {
+  return {
+    amountMinor: credit.amount.amountMinor.toString(),
+    currency: credit.amount.currency,
+    walletEntryId: credit.walletEntryId,
+    decidedByAdminId: credit.decidedByAdminId,
+    decidedAt: credit.decidedAt.toISOString(),
+    note: credit.note,
+  };
+}
+
+/** One compensation, amounts as decimal strings with their currency (D7). */
+function toCompensationView(record: CompensationRecord): CompensationView {
+  return {
+    refundId: record.refundId,
+    paymentId: record.paymentId,
+    orderId: record.orderId,
+    customerId: record.customerId,
+    customerTelegramUserId: record.customerTelegramUserId,
+    customerUsername: record.customerUsername,
+    principalMinor: record.principal.amountMinor.toString(),
+    creditedMinor: record.credited.amountMinor.toString(),
+    currency: record.credited.currency,
+    reason: record.reason,
+    state: record.state,
+    createdAt: record.createdAt.toISOString(),
+    completedAt: record.completedAt === null ? null : record.completedAt.toISOString(),
   };
 }
 

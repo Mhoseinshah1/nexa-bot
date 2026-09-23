@@ -37,6 +37,7 @@ const COLUMNS = {
   deactivateAfterPayments: paymentGateways.deactivateAfterPayments,
   activateAfterAccountDays: paymentGateways.activateAfterAccountDays,
   sortOrder: paymentGateways.sortOrder,
+  topupCashbackPercent: paymentGateways.topupCashbackPercent,
   createdAt: paymentGateways.createdAt,
   updatedAt: paymentGateways.updatedAt,
 } as const;
@@ -54,6 +55,7 @@ interface Row {
   readonly deactivateAfterPayments: number;
   readonly activateAfterAccountDays: number;
   readonly sortOrder: number;
+  readonly topupCashbackPercent: number;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -78,6 +80,7 @@ function toRecord(row: Row): PaymentGatewayRecord {
     deactivateAfterPayments: row.deactivateAfterPayments,
     activateAfterAccountDays: row.activateAfterAccountDays,
     sortOrder: row.sortOrder,
+    topupCashbackPercent: row.topupCashbackPercent,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -202,6 +205,7 @@ export class DrizzlePaymentGatewayRepository implements PaymentGatewayRepository
         deactivateAfterPayments: config.eligibility.deactivateAfterPayments,
         activateAfterAccountDays: config.eligibility.activateAfterAccountDays,
         sortOrder: config.sortOrder,
+        topupCashbackPercent: config.topupCashbackPercent,
         updatedAt: now,
       })
       .where(and(eq(paymentGateways.tenantId, tenantId), eq(paymentGateways.provider, provider)))

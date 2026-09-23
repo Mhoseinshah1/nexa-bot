@@ -2,6 +2,8 @@ import {
   AUTOMATIC_REFUND_CHANNEL,
   AUTOMATIC_REFUND_REASON,
   COMMERCE_ERROR_CODES,
+  COMPENSATION_PAGE_DEFAULT,
+  COMPENSATION_PAGE_MAX,
   ORDER_MACHINE,
   REFUND_METHOD_SUPPORT,
   errors,
@@ -45,7 +47,12 @@ import type { ScopeActivityReader } from '../../../platform/system/application/r
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { WalletRepository } from '../../wallet/application/ports.js';
 import type { PaymentRecord, PaymentRepository } from './ports.js';
-import type { RefundRecord, RefundRepository } from './refund-ports.js';
+import type {
+  CompensationCursor,
+  CompensationPage,
+  RefundRecord,
+  RefundRepository,
+} from './refund-ports.js';
 
 /**
  * A path segment turned into an identifier, or a 404.
@@ -73,6 +80,12 @@ function parseIdentifier<T>(
 
 export const REFUND_VIEW_PERMISSION = 'refunds.view' satisfies PermissionKey;
 export const REFUND_ISSUE_PERMISSION = 'refunds.issue' satisfies PermissionKey;
+/**
+ * Reading the compensation list (D7) is reading PAYMENTS: Payment File 02 §21 lists it
+ * beside the payment list, and the rows are what the payments did — not a refund an
+ * operator issued, which `refunds.view` is for.
+ */
+export const COMPENSATION_VIEW_PERMISSION = 'payments.view' satisfies PermissionKey;
 
 export interface RefundServiceDeps {
   readonly repository: RefundRepository;
@@ -200,6 +213,24 @@ export const SUPERSEDED_BY_AUTOMATIC_REFUND =
 
 export class RefundService {
   constructor(private readonly deps: RefundServiceDeps) {}
+
+  /**
+   * The compensation list (Payment File 02 §21, D7): every automatic refund of an order
+   * that could not be delivered, credited to the wallet. Keyset-paged, read-only, under
+   * `payments.view`.
+   */
+  async compensations(
+    scope: TenantContext,
+    actor: ActorContext,
+    query: { readonly limit?: number; readonly cursor?: CompensationCursor },
+  ): Promise<CompensationPage> {
+    await this.deps.guard.check(scope, actor, COMPENSATION_VIEW_PERMISSION);
+    const limit = Math.min(
+      Math.max(query.limit ?? COMPENSATION_PAGE_DEFAULT, 1),
+      COMPENSATION_PAGE_MAX,
+    );
+    return this.deps.repository.listCompensations(scope, limit, query.cursor ?? null);
+  }
 
   /** A payment's refunds, with what is left to refund. Charges `refunds.view`. */
   async ledgerFor(

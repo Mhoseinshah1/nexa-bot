@@ -37,6 +37,11 @@ export interface PaymentGatewayRecord {
   readonly deactivateAfterPayments: number;
   readonly activateAfterAccountDays: number;
   readonly sortOrder: number;
+  /**
+   * The top-up gift this route promises, 0–100 (D5). A top-up SNAPSHOTS it onto the
+   * payment when created; it is read here, never at confirmation.
+   */
+  readonly topupCashbackPercent: number;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }

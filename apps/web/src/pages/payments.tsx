@@ -3,14 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   COMMERCE_ERROR_CODES,
   PAYMENT_METHODS,
-  PAYMENT_REJECTION_REASONS,
-  LATE_TRANSFER_NOTE_MAX_LENGTH,
   PAYMENT_STATES,
   uuidV7Schema,
-  type LateTransferDecision,
-  type PaymentDetailResponse,
-  type PaymentRejectionReason,
-  type PaymentResponse,
   type RefundChannel,
   type RefundResponse,
   type RefundState,
@@ -23,9 +17,6 @@ import {
 import {
   ApiError,
   completeRefund,
-  confirmPayment,
-  creditLateTransfer,
-  dismissLateTransfer,
   failRefund,
   fetchOrder,
   fetchPayment,
@@ -33,7 +24,6 @@ import {
   fetchPaymentReceiptBytes,
   fetchPayments,
   fetchRefunds,
-  rejectPayment,
   requestRefund,
 } from '../api/client';
 import { formatMoneyText, formatTimestamp, splitBytes } from '../format';
@@ -65,12 +55,12 @@ import {
 /**
  * Payments — the money, and where it came from.
  *
- * The writes here are decisions about money an operator has evidence for: confirming or
- * rejecting an out-of-band transfer inside its window, the late-review lane's credit or
- * dismissal after it (WP10 P1), and refunds. There is no create, no fail, no cancel and
- * no retry, and each absence is deliberate rather than unfinished. A payment is created
- * by a CUSTOMER choosing how to pay; `payments.retry` is a frozen permission for a
- * gateway that does not ship; and a retry button with nothing behind it is the legacy
+ * The one write here is a REFUND. Card-to-card review — approve, reject, or credit to the
+ * wallet — is performed in Telegram only (Payment File 02 §10, D3), and this page shows
+ * what it decided and never offers to decide it. There is no create, no fail, no cancel
+ * and no retry, and each absence is deliberate rather than unfinished. A payment is
+ * created by a CUSTOMER choosing how to pay; `payments.retry` is a frozen permission for
+ * a gateway that does not ship; and a retry button with nothing behind it is the legacy
  * silent-success pattern.
  *
  * **PAID means the money arrived and nothing else.** Nothing on this page says a
@@ -137,53 +127,6 @@ const REFUND_CHANNEL_LABELS: Readonly<Record<RefundChannel, WebKey>> = {
   PROVIDER: 'web.refund_channel_provider',
 };
 
-/*
- * Over the FROZEN vocabularies, so a reason or a decision added to the contract without a
- * label here is a compile error rather than a row that renders its code.
- */
-const REJECTION_REASON_LABELS: Readonly<Record<PaymentRejectionReason, WebKey>> = {
-  NOT_RECEIVED: 'web.payment_rejection_reason_not_received',
-  AMOUNT_UNDERPAID: 'web.payment_rejection_reason_amount_underpaid',
-  AMOUNT_OVERPAID: 'web.payment_rejection_reason_amount_overpaid',
-  WRONG_BENEFICIARY: 'web.payment_rejection_reason_wrong_beneficiary',
-  DUPLICATE_REFERENCE: 'web.payment_rejection_reason_duplicate_reference',
-  UNREADABLE_EVIDENCE: 'web.payment_rejection_reason_unreadable_evidence',
-  OTHER: 'web.payment_rejection_reason_other',
-};
-
-const LATE_DECISION_LABELS: Readonly<Record<LateTransferDecision, WebKey>> = {
-  CREDITED: 'web.payment_late_decision_credited',
-  DISMISSED: 'web.payment_late_decision_dismissed',
-};
-
-const LATE_DECISION_TONES: Readonly<Record<LateTransferDecision, Tone>> = {
-  CREDITED: 'ok',
-  DISMISSED: 'neutral',
-};
-
-function isRejectionReason(value: string): value is PaymentRejectionReason {
-  return (PAYMENT_REJECTION_REASONS as readonly string[]).includes(value);
-}
-
-/**
- * A late decision's refusal, in the operator's language.
- *
- * The two codes the lane itself answers get sentences, because the server's message is
- * written for a log. Everything else — a permission, a stopped installation, a
- * malformed request — is `messageFor`'s, the same as every other form on this page.
- */
-function lateMessageFor(error: unknown): string {
-  if (error instanceof ApiError) {
-    if (error.code === COMMERCE_ERROR_CODES.LATE_TRANSFER_ALREADY_DECIDED) {
-      return t('web.payment_late_already_decided');
-    }
-    if (error.code === COMMERCE_ERROR_CODES.LATE_TRANSFER_NOT_ELIGIBLE) {
-      return t('web.payment_late_not_eligible');
-    }
-  }
-  return messageFor(error);
-}
-
 /**
  * A refund refusal, naming P3's delivery reason when — and only when — the SERVER named
  * it. `REFUND_NOT_PERMITTED` carries its reason as a detail; any other reason keeps the
@@ -198,15 +141,6 @@ function refundMessageFor(error: unknown): string {
     return t('web.refund_delivery_in_progress');
   }
   return messageFor(error);
-}
-
-/** The lane refusals after which the page must re-read what it is showing. */
-function laneMoved(error: unknown): boolean {
-  return (
-    error instanceof ApiError &&
-    (error.code === COMMERCE_ERROR_CODES.LATE_TRANSFER_ALREADY_DECIDED ||
-      error.code === COMMERCE_ERROR_CODES.LATE_TRANSFER_NOT_ELIGIBLE)
-  );
 }
 
 /**
@@ -248,12 +182,6 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
   const appliedCustomer = route.query.get('customerId') ?? '';
   const appliedOrder = route.query.get('orderId') ?? '';
   const appliedReference = route.query.get('reference') ?? '';
-  /*
-   * The late-review lane (WP10 P1), as a QUERY parameter rather than component state, so
-   * a reviewer's link to the lane is a link to the lane and the back button returns to it.
-   * Only the literal `true` selects it — the contract's own reading of the parameter.
-   */
-  const lane: 'ALL' | 'LATE' = route.query.get('lateReview') === 'true' ? 'LATE' : 'ALL';
 
   /*
    * The drafts are keyed to the APPLIED values, so navigation that drops the query
@@ -279,27 +207,12 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
   }
 
   const payments = useQuery({
-    queryKey: [
-      'payments',
-      lane,
-      cursor,
-      state,
-      method,
-      appliedCustomer,
-      appliedOrder,
-      appliedReference,
-    ],
+    queryKey: ['payments', cursor, state, method, appliedCustomer, appliedOrder, appliedReference],
     queryFn: () =>
       fetchPayments({
         ...(cursor === null ? {} : { cursor }),
-        /*
-         * The lane IS a state and a method — EXPIRED manual transfers — so the two pills
-         * are not drawn in it and their values are not sent. A stale `state=PENDING`
-         * carried into the lane would be a filter that empties it.
-         */
-        ...(lane === 'LATE' ? { lateReview: true } : {}),
-        ...(lane === 'ALL' && state !== null ? { state: state as PaymentState } : {}),
-        ...(lane === 'ALL' && method !== null ? { method: method as PaymentMethod } : {}),
+        ...(state === null ? {} : { state: state as PaymentState }),
+        ...(method === null ? {} : { method: method as PaymentMethod }),
         ...(appliedCustomer === '' ? {} : { customerId: appliedCustomer }),
         ...(appliedOrder === '' ? {} : { orderId: appliedOrder }),
         ...(appliedReference === '' ? {} : { reference: appliedReference }),
@@ -397,28 +310,6 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
         ),
     },
     {
-      /*
-       * Where the row stands in the late-review lane, when it has entered it.
-       *
-       * The SERVER's two fields, never a predicate recomputed here: `lateReviewEligible`
-       * is the same decision the credit and the dismissal refuse with, and a surface
-       * that derived it from state, method and signal would miss the receipt-only case
-       * the lane admits.
-       */
-      key: 'late',
-      header: t('web.payment_late_column'),
-      render: (row) =>
-        row.lateDecision !== null ? (
-          <Badge tone={LATE_DECISION_TONES[row.lateDecision.decision]}>
-            {t(LATE_DECISION_LABELS[row.lateDecision.decision])}
-          </Badge>
-        ) : row.lateReviewEligible ? (
-          <Badge tone="warn">{t('web.payment_late_waiting')}</Badge>
-        ) : (
-          <Dash />
-        ),
-    },
-    {
       key: 'created',
       header: t('web.payment_created_at'),
       render: (row) => <span className="nowrap">{formatTimestamp(row.createdAt)}</span>,
@@ -432,54 +323,34 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
       <Card>
         <div hidden={!mayRequest(payments, denied)}>
           <Pills
-            value={lane}
+            value={state ?? 'ALL'}
             onChange={(next) =>
               setQueries(route, [
-                ['lateReview', next === 'LATE' ? 'true' : null],
-                // The lane fixes both, so neither survives the switch in either
-                // direction, and a new list starts at its first page.
-                ['state', null],
-                ['method', null],
+                ['state', next === 'ALL' ? null : next],
                 ['cursor', null],
               ])
             }
             items={[
-              { id: 'ALL', label: t('web.payments_lane_all') },
-              { id: 'LATE', label: t('web.payments_lane_late') },
+              { id: 'ALL', label: t('web.payments_filter_all') },
+              // Over the FROZEN vocabulary, so a state added to the contract without a
+              // filter here is a compile error rather than an option nobody notices is
+              // missing. The same shape `/orders` uses.
+              ...PAYMENT_STATES.map((one) => ({ id: one, label: t(STATE_LABELS[one]) })),
             ]}
           />
-          {lane === 'LATE' && <p className="muted small">{t('web.payments_lane_late_hint')}</p>}
-          <div hidden={lane === 'LATE'}>
-            <Pills
-              value={state ?? 'ALL'}
-              onChange={(next) =>
-                setQueries(route, [
-                  ['state', next === 'ALL' ? null : next],
-                  ['cursor', null],
-                ])
-              }
-              items={[
-                { id: 'ALL', label: t('web.payments_filter_all') },
-                // Over the FROZEN vocabulary, so a state added to the contract without a
-                // filter here is a compile error rather than an option nobody notices is
-                // missing. The same shape `/orders` uses.
-                ...PAYMENT_STATES.map((one) => ({ id: one, label: t(STATE_LABELS[one]) })),
-              ]}
-            />
-            <Pills
-              value={method ?? 'ALL'}
-              onChange={(next) =>
-                setQueries(route, [
-                  ['method', next === 'ALL' ? null : next],
-                  ['cursor', null],
-                ])
-              }
-              items={[
-                { id: 'ALL', label: t('web.payments_filter_all') },
-                ...PAYMENT_METHODS.map((one) => ({ id: one, label: t(METHOD_LABELS[one]) })),
-              ]}
-            />
-          </div>
+          <Pills
+            value={method ?? 'ALL'}
+            onChange={(next) =>
+              setQueries(route, [
+                ['method', next === 'ALL' ? null : next],
+                ['cursor', null],
+              ])
+            }
+            items={[
+              { id: 'ALL', label: t('web.payments_filter_all') },
+              ...PAYMENT_METHODS.map((one) => ({ id: one, label: t(METHOD_LABELS[one]) })),
+            ]}
+          />
           {/*
             Why a third method never appears in the filter above.
             `SELF_CONTAINED_PAYMENT_METHODS` is the pair this installation can
@@ -535,9 +406,7 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
 
         <StateSwitch query={payments} denied={denied}>
           {payments.data === undefined ? null : payments.data.payments.length === 0 ? (
-            <Empty
-              title={t(lane === 'LATE' ? 'web.payments_lane_late_empty' : 'web.payments_empty')}
-            />
+            <Empty title={t('web.payments_empty')} />
           ) : (
             <>
               <DataTable
@@ -1141,267 +1010,8 @@ function RefundsCard({
   );
 }
 
-/**
- * The late-review lane on one payment (WP10 P1): the standing decision, or the two ways
- * to make one.
- *
- * Drawn from the SERVER's two fields. `lateReviewEligible` is `lateReviewRefusal` —
- * the same predicate the credit and the dismissal refuse with — so the actions appear
- * exactly where the decision would be accepted, and `lateDecision` is the row that took
- * the payment out of the lane.
- *
- * The permission decides whether the forms are DRAWN, never whether they work: the
- * service charges `receipts.review` itself, and a reader without it gets the sentence
- * naming the key rather than a disabled button.
- *
- * Both decisions are irreversible — the decision row is append-only and keyed by the
- * payment — so each one in flight disables BOTH, and the credit asks first, naming the
- * exact amount and that the payment and its order stay closed.
- */
-function LateReviewCard({ row, mayReview }: { row: PaymentDetailResponse; mayReview: boolean }) {
-  const notify = useToast();
-  const queries = useQueryClient();
-  /*
-   * TWO keys, for the reason the confirm/reject pair has two: the decisions are
-   * different commands and the service puts the decision in the request hash, so one
-   * key reused across them is a payload mismatch rather than a replay.
-   */
-  const crediting = useSubmissionKey();
-  const dismissing = useSubmissionKey();
-  const [asking, setAsking] = useState(false);
-  const [reason, setReason] = useState<PaymentRejectionReason | ''>('');
-  const [note, setNote] = useState('');
-
-  const land = (response: PaymentResponse) => {
-    queries.setQueryData(['payment', row.id], response);
-    void queries.invalidateQueries({ queryKey: ['payments'] });
-  };
-  /*
-   * After ALREADY_DECIDED or NOT_ELIGIBLE the screen is stale by definition — another
-   * reviewer decided, or the payment left the lane — so it is re-read, and the standing
-   * decision is what the operator sees next instead of a form that can only be refused.
-   */
-  const refuse = (error: unknown) => {
-    if (!laneMoved(error)) return;
-    /*
-     * A TOAST as well as the banner: the re-read can remove this card altogether (a
-     * payment that left the lane without a decision) or replace its forms with the
-     * standing decision, and either takes the banner with it.
-     */
-    notify({ tone: 'warn', message: lateMessageFor(error) });
-    void queries.invalidateQueries({ queryKey: ['payment', row.id] });
-  };
-
-  const credit = useMutation({
-    mutationFn: () =>
-      creditLateTransfer({
-        id: row.id,
-        idempotencyKey: crediting.current({ id: row.id, decision: 'CREDITED' }),
-      }),
-    onSuccess: (response) => {
-      crediting.settle();
-      setAsking(false);
-      notify({ tone: 'ok', message: t('web.payment_late_credit_done') });
-      land(response);
-      // The ledger moved in the same transaction; a cached balance is behind by exactly
-      // this amount.
-      void queries.invalidateQueries({ queryKey: ['wallet'] });
-    },
-    // A 5xx may have committed. A fresh key on the retry would be a second command, and
-    // only the decision row's key would stand between it and a second credit.
-    onError: (error) => {
-      crediting.settleOn(error);
-      refuse(error);
-    },
-  });
-
-  const dismiss = useMutation({
-    mutationFn: () => {
-      if (reason === '') throw new Error('a dismissal needs a reason');
-      const trimmed = note.trim();
-      return dismissLateTransfer({
-        id: row.id,
-        // Bound to the reason AND the note, so an edited dismissal is a new command.
-        idempotencyKey: dismissing.current({ id: row.id, reason, note: trimmed }),
-        reason,
-        note: trimmed === '' ? null : trimmed,
-      });
-    },
-    onSuccess: (response) => {
-      dismissing.settle();
-      notify({ tone: 'ok', message: t('web.payment_late_dismiss_done') });
-      setReason('');
-      setNote('');
-      land(response);
-    },
-    onError: (error) => {
-      dismissing.settleOn(error);
-      refuse(error);
-    },
-  });
-
-  const decision = row.lateDecision;
-  if (decision === null && !row.lateReviewEligible) return null;
-
-  const busy = credit.isPending || dismiss.isPending;
-
-  return (
-    <Card title={t('web.payment_late_title')}>
-      {decision !== null ? (
-        /*
-         * READ-ONLY. There is no edit and no second decision: the row is append-only and
-         * keyed by the payment. The note is not here — the contract keeps a reviewer's
-         * text about somebody's transfer on the audit row.
-         */
-        <KV
-          items={[
-            [
-              t('web.payment_late_decision'),
-              <Badge key="d" tone={LATE_DECISION_TONES[decision.decision]}>
-                {t(LATE_DECISION_LABELS[decision.decision])}
-              </Badge>,
-            ],
-            [
-              t('web.payment_late_decision_reason'),
-              decision.reason === null ? (
-                <Dash key="r" />
-              ) : (
-                t(REJECTION_REASON_LABELS[decision.reason])
-              ),
-            ],
-            [
-              t(
-                decision.decision === 'CREDITED'
-                  ? 'web.payment_late_decision_amount'
-                  : 'web.payment_late_decision_money',
-              ),
-              /*
-               * The PAYMENT's amount for a credit, and that is not an inference: the
-               * decision row's insert guard refuses a credit of any other figure, and the
-               * contract has no field that could name one.
-               */
-              decision.decision === 'CREDITED' ? (
-                <Money key="a" value={{ amountMinor: row.amount, currency: row.currency }} />
-              ) : (
-                <span key="a" className="muted small">
-                  {t('web.payment_late_decision_nothing_moved')}
-                </span>
-              ),
-            ],
-            [
-              t('web.payment_late_decided_by'),
-              <Copyable key="w" value={decision.decidedByAdminId} />,
-            ],
-            [t('web.payment_late_decided_at'), formatTimestamp(decision.decidedAt)],
-          ]}
-        />
-      ) : (
-        <>
-          <p className="muted">{t('web.payment_late_hint')}</p>
-          {!mayReview ? (
-            <Banner tone="info">{t('web.payment_late_denied')}</Banner>
-          ) : (
-            <>
-              <h3 className="card-subtitle">{t('web.payment_late_credit_title')}</h3>
-              {!asking ? (
-                <div className="toolbar">
-                  <button
-                    type="button"
-                    className="btn primary sm"
-                    disabled={busy}
-                    onClick={() => setAsking(true)}
-                  >
-                    {t('web.payment_late_credit')}
-                  </button>
-                </div>
-              ) : (
-                <Banner tone="warn" title={t('web.payment_late_credit_confirm_title')}>
-                  <p>
-                    {t('web.payment_late_credit_confirm_amount')}{' '}
-                    <strong>
-                      <Money value={{ amountMinor: row.amount, currency: row.currency }} />
-                    </strong>
-                  </p>
-                  <p>{t('web.payment_late_credit_confirm_body')}</p>
-                  <div className="toolbar">
-                    <button
-                      type="button"
-                      className="btn primary sm"
-                      disabled={busy}
-                      onClick={() => credit.mutate()}
-                    >
-                      {t('web.payment_late_credit_confirm')}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn sm"
-                      disabled={credit.isPending}
-                      onClick={() => setAsking(false)}
-                    >
-                      {t('web.payment_late_credit_cancel')}
-                    </button>
-                  </div>
-                </Banner>
-              )}
-              {credit.error !== null && (
-                <Banner tone="danger">{lateMessageFor(credit.error)}</Banner>
-              )}
-
-              <h3 className="card-subtitle">{t('web.payment_late_dismiss_title')}</h3>
-              <p className="muted small">{t('web.payment_late_dismiss_hint')}</p>
-              <Field label={t('web.payment_late_dismiss_reason')} htmlFor="late-dismiss-reason">
-                <select
-                  id="late-dismiss-reason"
-                  value={reason}
-                  onChange={(event) =>
-                    setReason(isRejectionReason(event.target.value) ? event.target.value : '')
-                  }
-                >
-                  <option value="">{t('web.payment_late_dismiss_reason_none')}</option>
-                  {PAYMENT_REJECTION_REASONS.map((one) => (
-                    <option key={one} value={one}>
-                      {t(REJECTION_REASON_LABELS[one])}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label={t('web.payment_late_dismiss_note')} htmlFor="late-dismiss-note">
-                <input
-                  id="late-dismiss-note"
-                  value={note}
-                  maxLength={LATE_TRANSFER_NOTE_MAX_LENGTH}
-                  onChange={(event) => setNote(event.target.value)}
-                />
-              </Field>
-              <div className="toolbar">
-                <button
-                  type="button"
-                  className="btn danger sm"
-                  /*
-                   * No reason, no dismissal. The contract requires one from the closed
-                   * list and so does the database; this is the form not offering to send
-                   * what both would refuse.
-                   */
-                  disabled={busy || reason === ''}
-                  onClick={() => dismiss.mutate()}
-                >
-                  {t('web.payment_late_dismiss')}
-                </button>
-              </div>
-              {dismiss.error !== null && (
-                <Banner tone="danger">{lateMessageFor(dismiss.error)}</Banner>
-              )}
-            </>
-          )}
-        </>
-      )}
-    </Card>
-  );
-}
-
 export function PaymentDetailPage({
   id,
-  mayReview,
   mayViewReceipts,
   mayViewRefunds,
   mayIssueRefunds,
@@ -1409,8 +1019,7 @@ export function PaymentDetailPage({
   denied,
 }: {
   id: string;
-  mayReview: boolean;
-  /** `receipts.view`, separate from `mayReview`: reading evidence is not deciding. */
+  /** `receipts.view`: reading evidence. Deciding it is Telegram's (Payment File 02 §10). */
   mayViewReceipts: boolean;
   /** `refunds.view`. Reading a refund history is not the same right as making one. */
   mayViewRefunds: boolean;
@@ -1425,73 +1034,12 @@ export function PaymentDetailPage({
   denied: boolean;
 }) {
   const onLink = useLinkHandler();
-  const notify = useToast();
-  const queries = useQueryClient();
-  const submission = useSubmissionKey();
-  /*
-   * A SECOND submission key, not a shared one.
-   *
-   * The two decisions are different commands with different payloads, and one key
-   * would make a rejection typed after an approval failed look to the idempotency
-   * store like a replay of that approval with a mismatched payload.
-   */
-  const rejection = useSubmissionKey();
-  const [note, setNote] = useState('');
-  const [reason, setReason] = useState('');
-
   const payment = useQuery({
     queryKey: ['payment', id],
     queryFn: () => fetchPayment(id),
     enabled: !denied,
   });
   const row = payment.data?.payment;
-
-  const confirm = useMutation({
-    mutationFn: () =>
-      confirmPayment({
-        id,
-        // Bound to the note, so editing it and pressing again is a new command
-        // rather than a replay the store refuses as a payload mismatch.
-        idempotencyKey: submission.current({ id, note }),
-        evidenceNote: note.trim(),
-      }),
-    onSuccess: (response) => {
-      submission.settle();
-      notify({ tone: 'ok', message: t('web.payment_confirm_done') });
-      setNote('');
-      queries.setQueryData(['payment', id], response);
-      void queries.invalidateQueries({ queryKey: ['payments'] });
-      // The ORDER changed too: a confirmation settles it in the same transaction.
-      void queries.invalidateQueries({ queryKey: ['orders'] });
-      void queries.invalidateQueries({ queryKey: ['order'] });
-    },
-    // A 5xx may have committed, and a fresh key on the retry would be a second
-    // confirmation of somebody's money.
-    onError: (error) => submission.settleOn(error),
-  });
-
-  const reject = useMutation({
-    mutationFn: () =>
-      rejectPayment({
-        id,
-        idempotencyKey: rejection.current({ id, reason }),
-        resolutionNote: reason.trim(),
-      }),
-    onSuccess: (response) => {
-      rejection.settle();
-      notify({ tone: 'ok', message: t('web.payment_reject_done') });
-      setReason('');
-      queries.setQueryData(['payment', id], response);
-      void queries.invalidateQueries({ queryKey: ['payments'] });
-      /*
-       * The payments list only. The ORDER is deliberately NOT invalidated, because a
-       * rejection does not touch it: it stays awaiting payment until its own deadline
-       * so the customer can pay another way. Invalidating it would be this page
-       * implying a change that did not happen.
-       */
-    },
-    onError: (error) => rejection.settleOn(error),
-  });
 
   return (
     <>
@@ -1671,13 +1219,6 @@ export function PaymentDetailPage({
             )}
 
             {/*
-              The late-review lane (WP10 P1): an EXPIRED transfer the customer vouched
-              for. After the evidence and the refunds, in reading order, and only when
-              the server says the payment is in the lane or has left it by a decision.
-            */}
-            <LateReviewCard row={row} mayReview={mayReview} />
-
-            {/*
               How it ended WITHOUT money, when it did.
               Its own card rather than three more rows in the evidence one, because
               the two are mutually exclusive by constraint — `payments_confirmed_check`
@@ -1709,91 +1250,14 @@ export function PaymentDetailPage({
             )}
 
             {/*
-              The ONE write, and only where it can legally apply: a PENDING
-              MANUAL_TRANSFER. A wallet payment is confirmed by its own debit in the
-              same transaction and has nothing for an operator to approve; every other
-              state has no `CONFIRM` edge in `PAYMENT_MACHINE`.
+              Card-to-card review is Telegram's alone (Payment File 02 §10, D3): approve,
+              reject and credit-to-wallet are decided there, and this page shows what was
+              decided and offers none of them. A PENDING transfer says where to go
+              rather than drawing a control the server has no route for.
             */}
             {row.state === 'PENDING' && row.method === 'MANUAL_TRANSFER' && (
               <Card title={t('web.payment_confirm_title')}>
-                <p className="muted">{t('web.payment_confirm_hint')}</p>
-                {mayReview ? (
-                  <>
-                    <Field label={t('web.payment_confirm_note')} htmlFor="payment-note">
-                      <input
-                        id="payment-note"
-                        value={note}
-                        maxLength={500}
-                        onChange={(event) => setNote(event.target.value)}
-                      />
-                    </Field>
-                    <div className="toolbar">
-                      <button
-                        type="button"
-                        className="btn primary sm"
-                        /*
-                         * Either decision in flight disables BOTH controls.
-                         *
-                         * The two commands race the same PENDING row with different
-                         * idempotency keys, so an operator who clicks confirm and then
-                         * reject before the first returns gets whichever request the
-                         * database serves second — and one of the two outcomes cannot be
-                         * undone. The conditional UPDATE keeps the DATA consistent; it
-                         * cannot make the result the one the operator meant.
-                         */
-                        disabled={confirm.isPending || reject.isPending || note.trim() === ''}
-                        onClick={() => confirm.mutate()}
-                      >
-                        {t('web.payment_confirm')}
-                      </button>
-                    </div>
-                    {confirm.error !== null && (
-                      <Banner tone="danger">{messageFor(confirm.error)}</Banner>
-                    )}
-                  </>
-                ) : (
-                  // No disabled button. A disabled control and this sentence make the
-                  // same claim, and only one of them names the permission.
-                  <Banner tone="info">{t('web.payment_confirm_denied')}</Banner>
-                )}
-              </Card>
-            )}
-
-            {/*
-              The other half of the same decision, in its own card.
-              `receipts.review` has read "Approve or reject a receipt" since the
-              permission catalogue was frozen and only the approve half existed until
-              4G. Same permission, same states — a PENDING MANUAL_TRANSFER — and a
-              REASON rather than an evidence note, because the two answer different
-              questions and `payments.resolution_note` is a different column.
-
-              Separate from the confirm card on purpose: one card with two buttons is a
-              card where the wrong one is a mis-click away, and this one is not
-              reversible. `PAYMENT_MACHINE` has no edge out of FAILED.
-            */}
-            {row.state === 'PENDING' && row.method === 'MANUAL_TRANSFER' && mayReview && (
-              <Card title={t('web.payment_reject_title')}>
-                <p className="muted">{t('web.payment_reject_hint')}</p>
-                <Field label={t('web.payment_reject_note')} htmlFor="payment-reason">
-                  <input
-                    id="payment-reason"
-                    value={reason}
-                    maxLength={500}
-                    onChange={(event) => setReason(event.target.value)}
-                  />
-                </Field>
-                <div className="toolbar">
-                  <button
-                    type="button"
-                    className="btn danger sm"
-                    // Both, for the reason the confirm button carries.
-                    disabled={reject.isPending || confirm.isPending || reason.trim() === ''}
-                    onClick={() => reject.mutate()}
-                  >
-                    {t('web.payment_reject')}
-                  </button>
-                </div>
-                {reject.error !== null && <Banner tone="danger">{messageFor(reject.error)}</Banner>}
+                <p className="muted">{t('web.payment_review_in_telegram')}</p>
               </Card>
             )}
 

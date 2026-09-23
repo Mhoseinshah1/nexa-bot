@@ -737,14 +737,9 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
           key={payment['id'] ?? ''}
           id={payment['id'] ?? ''}
           /*
-           * Confirming is `receipts.review`, NOT `payments.view`.
-           *
-           * A reader who may see a payment must not be able to approve one, and the
-           * two are different permissions with different risk labels. The service
-           * charges `receipts.review` itself; this only decides whether the form is
-           * drawn or the permission is named.
+           * No review permission is passed: card-to-card review is Telegram's alone
+           * (Payment File 02 §10), and this page draws no decision for anybody.
            */
-          mayReview={may('receipts.review')}
           mayViewReceipts={may('receipts.view')}
           /*
            * Two refund permissions, not one.

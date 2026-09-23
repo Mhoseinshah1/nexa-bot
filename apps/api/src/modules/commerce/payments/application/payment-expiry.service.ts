@@ -14,9 +14,7 @@ import type { ScopeActivityReader } from '../../../platform/system/application/r
 import type { OrderRepository } from '../../orders/application/ports.js';
 import type { OrderUsernameLane } from '../../provisioning/application/username-lane.js';
 import type { CustomerNotifier } from '../../messaging/application/customer-notifier.js';
-import { customerVouchedFor } from '../domain/late-review.js';
 import type { PaymentRepository } from './ports.js';
-import type { PaymentReceiptRepository } from './receipt-ports.js';
 
 /**
  * How many rows one pass moves, per kind.
@@ -53,11 +51,6 @@ export interface PaymentExpiryServiceDeps {
    * that caused it, nor the expiry without the notification.
    */
   readonly notifier: CustomerNotifier;
-  /**
-   * Counting a payment's receipts, which is half of whether the customer vouched for it
-   * (`docs/wp10-payments-audit.md` P1). A narrowed read: the sweep files nothing.
-   */
-  readonly receipts: Pick<PaymentReceiptRepository, 'countForPayment'>;
   readonly scopeActivity: ScopeActivityReader;
   /** Gives back the panel slot an expired order was holding. */
   readonly panelSales: PanelSalesGate;
@@ -137,20 +130,26 @@ export interface PaymentExpiryServiceDeps {
  * worker's own lane (ADR 0030) sends these later, outside every transaction, and records
  * all three outcomes.
  *
- * ## Why an operator's late confirmation is now refused
+ * ## A submitted receipt has no timer (Payment File 02 §9, D1)
  *
- * `confirmManualTransfer` passes `OPERATOR_MAY_CONFIRM_LATE`, which exempts an operator
- * from the ORDER's deadline so that money already in the bank is not stranded by a
- * receipt that sat in the queue. That exemption still stands and it is now BOUNDED:
- * once this sweep has expired the payment, `confirm` finds it no longer PENDING and
- * refuses. That is the owner's rule applied, not an oversight.
+ * A PENDING manual transfer that carries at least one receipt is NOT expired here, however
+ * long ago its window closed: the customer has sent evidence, and it stays reviewable
+ * until a reviewer approves it, rejects it or credits it to the wallet. The predicate is
+ * in `PaymentRepository.expireDue`'s candidate SELECT and again in its UPDATE, and
+ * `ReceiptService.submit` files a receipt under the payment's row lock — so a receipt and
+ * this sweep are serialised, and whichever commits first decides.
  *
- * The remedy for money that did arrive used to be an unlinked `ADMIN_CREDIT`, under a
- * key `receipt_reviewer` does not hold — so the operator most likely to meet the case
- * could not act on it (D1 in `docs/wp10-payments-audit.md`). Since WP10 P1 a transfer
- * the customer vouched for joins the late-review lane when this sweep expires it, and
- * `LateTransferService` credits or dismisses it under `receipts.review`, once, against
- * the payment. Nothing reopens the payment or the order either way.
+ * Its ORDER stays `AWAITING_PAYMENT` too, with nothing added for it:
+ * `DrizzleOrderRepository.expireDue` already refuses an order with a PENDING payment, and
+ * a late approval passes `OPERATOR_MAY_CONFIRM_LATE`, which exempts it from the order's
+ * deadline. So does the order's username hold: `sweepExpiredHolds` keeps an unfunded
+ * hold whose order is still awaiting payment, so a late approval provisions under the
+ * name the customer chose rather than falling back to a random one.
+ *
+ * A transfer with NO receipt — a signal alone, or nothing — expires at its window as it
+ * always has, and its customer is told `PAYMENT_EXPIRED`. Once expired it is closed:
+ * `confirm` finds it no longer PENDING and refuses. That is the owner's expiry rule for
+ * a transfer nobody sent evidence for, and File 02 does not change it.
  */
 export class PaymentExpiryService {
   constructor(private readonly deps: PaymentExpiryServiceDeps) {}
@@ -223,25 +222,10 @@ export class PaymentExpiryService {
           },
           tx,
         );
-        /*
-         * WHICH sentence, decided by whether the customer vouched for the transfer.
-         *
-         * `PAYMENT_EXPIRED` says the window closed. To somebody who has already sent the
-         * money and said so — or sent a receipt — that reads as "your money is lost",
-         * and it is not: the payment joins the late-review lane, and a reviewer will
-         * credit what arrived (P1). So they are told `PAYMENT_EXPIRED_UNDER_REVIEW`
-         * INSTEAD, never beside it; one closed payment, one sentence. The count is read
-         * in this transaction, after the row moved, so a receipt filed before the expiry
-         * is seen and one filed after it cannot be — `ReceiptService.submit` refuses a
-         * payment that is no longer PENDING.
-         */
-        const receipts = await this.deps.receipts.countForPayment(scope, payment.id, tx);
         await this.deps.notifier.notify(
           scope,
           payment.customerId,
-          customerVouchedFor(payment, receipts)
-            ? 'PAYMENT_EXPIRED_UNDER_REVIEW'
-            : 'PAYMENT_EXPIRED',
+          'PAYMENT_EXPIRED',
           payment.id,
           now,
           tx,

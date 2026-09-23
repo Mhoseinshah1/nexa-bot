@@ -1000,13 +1000,13 @@ export const WEB_FA = {
   'web.payments_filter_all': 'همه',
   'web.payments_filter_invalid_id': 'شناسه معتبر نیست.',
   'web.payments_search_apply': 'جست‌وجو',
-  'web.payment_confirm_title': 'تأیید دریافت وجه',
-  'web.payment_confirm_hint':
-    'با تأیید، سفارش مربوط به این پرداخت پرداخت‌شده می‌شود. مبلغ و ارز قابل تغییر نیستند.',
-  'web.payment_confirm_note': 'یادداشت بررسی',
-  'web.payment_confirm': 'تأیید دریافت',
-  'web.payment_confirm_done': 'پرداخت تأیید شد و سفارش پرداخت‌شده است.',
-  'web.payment_confirm_denied': 'برای تأیید پرداخت دسترسی receipts.review لازم است.',
+  'web.payment_confirm_title': 'بررسی رسید',
+  /*
+   * Payment File 02 §10: card-to-card review is Telegram's alone. The Web Admin says
+   * where the decision is taken rather than drawing a control it has no route for.
+   */
+  'web.payment_review_in_telegram':
+    'این کارت‌به‌کارت در انتظار بررسی است. تأیید، رد یا واریز به کیف پول فقط از پنل مدیریت تلگرام انجام می‌شود و این صفحه تنها نتیجه را نمایش می‌دهد.',
   // Payment accounts — the destination an out-of-band transfer is told to go to.
   // The screen that replaces editing a message template to change a card number.
   'web.nav_payment_accounts': 'حساب‌های دریافت',
@@ -1098,14 +1098,6 @@ export const WEB_FA = {
   'web.payment_gateways_empty': 'هنوز روش پرداختی ثبت نشده است.',
   'web.payment_gateways_empty_hint':
     'در نصب سالم این فهرست خالی نمی‌ماند. اگر خالی است، سرویس را یک بار راه‌اندازی مجدد کنید تا روش‌های این نسخه ساخته شوند.',
-  'web.payment_reject_title': 'رد رسید',
-  // Says the two things an operator has to know before pressing it: the order is NOT
-  // cancelled, and the decision cannot be undone.
-  'web.payment_reject_hint':
-    'با رد این رسید، پرداخت بسته می‌شود و سفارش تا پایان مهلت خود باز می‌ماند تا مشتری بتواند با روش دیگری پرداخت کند. این تصمیم برگشت‌پذیر نیست.',
-  'web.payment_reject_note': 'دلیل رد',
-  'web.payment_reject': 'رد رسید',
-  'web.payment_reject_done': 'رسید رد شد. سفارش همچنان در انتظار پرداخت است.',
   'web.payment_resolution': 'نتیجهٔ بدون دریافت وجه',
   'web.payment_destination': 'مقصد واریز اعلام‌شده',
   'web.payment_destination_label': 'عنوان حساب',
@@ -1146,63 +1138,6 @@ export const WEB_FA = {
   'web.payment_resolved_at': 'زمان بسته شدن',
   'web.payment_resolver': 'بسته‌شده توسط',
   'web.payment_resolution_note': 'دلیل',
-  // --- The late-review lane (WP10 P1) ---------------------------------------
-  /*
-   * Every sentence here keeps two facts apart: the PAYMENT and its order stay closed —
-   * the owner's expiry rule stands and nothing reopens either — and the decision is
-   * about the MONEY alone. A copy that said "approve the payment" would promise the
-   * order back, which is exactly what does not happen.
-   */
-  'web.payments_lane_all': 'همهٔ پرداخت‌ها',
-  'web.payments_lane_late': 'بررسی دیرهنگام',
-  'web.payments_lane_late_hint':
-    'کارت‌به‌کارت‌هایی که مهلتشان تمام شده اما مشتری گفته واریز کرده یا رسید فرستاده است و هنوز دربارهٔ آن‌ها تصمیمی ثبت نشده. پرداخت و سفارش بسته می‌مانند؛ تصمیم فقط دربارهٔ پول است.',
-  'web.payments_lane_late_empty': 'هیچ پرداختی در انتظار بررسی دیرهنگام نیست.',
-  'web.payment_late_column': 'بررسی دیرهنگام',
-  'web.payment_late_waiting': 'در انتظار تصمیم',
-  'web.payment_late_decision_credited': 'به کیف پول واریز شد',
-  'web.payment_late_decision_dismissed': 'رد شد',
-  'web.payment_late_title': 'بررسی دیرهنگام',
-  'web.payment_late_hint':
-    'مهلت این پرداخت تمام شده، اما مشتری گفته واریز کرده یا رسید فرستاده است. پرداخت و سفارش آن منقضی می‌مانند و دوباره باز نمی‌شوند. اگر پول رسیده است، دقیقاً مبلغ همین پرداخت به کیف پول مشتری واریز می‌شود؛ اگر نرسیده است، با ذکر دلیل رد می‌شود. برای هر پرداخت فقط یک تصمیم ثبت می‌شود و آن تصمیم برگشت‌پذیر نیست.',
-  'web.payment_late_denied': 'تصمیم دربارهٔ این پرداخت به دسترسی receipts.review نیاز دارد.',
-  'web.payment_late_credit_title': 'پول رسیده است',
-  'web.payment_late_credit': 'واریز به کیف پول مشتری',
-  'web.payment_late_credit_confirm_title': 'پیش از واریز',
-  'web.payment_late_credit_confirm_amount': 'مبلغی که به کیف پول مشتری واریز می‌شود:',
-  'web.payment_late_credit_confirm_body':
-    'این پرداخت و سفارش آن منقضی می‌مانند و دوباره باز نمی‌شوند. مشتری می‌تواند با این اعتبار همان خرید یا خرید دیگری را انجام دهد. این واریز برگشت‌پذیر نیست.',
-  'web.payment_late_credit_confirm': 'بله، واریز شود',
-  'web.payment_late_credit_cancel': 'انصراف',
-  'web.payment_late_credit_done': 'مبلغ به کیف پول مشتری واریز شد. پرداخت و سفارش منقضی ماندند.',
-  'web.payment_late_dismiss_title': 'پول نرسیده است',
-  'web.payment_late_dismiss_hint':
-    'هیچ مبلغی جابه‌جا نمی‌شود و به مشتری اعلام می‌شود که پرداخت رد شد. انتخاب دلیل الزامی است؛ اگر هیچ‌کدام درست نیست «دلیل دیگر» را انتخاب کنید و آن را در توضیح بنویسید.',
-  'web.payment_late_dismiss_reason': 'دلیل رد',
-  'web.payment_late_dismiss_reason_none': 'انتخاب نشده',
-  'web.payment_late_dismiss_note': 'توضیح (اختیاری)',
-  'web.payment_late_dismiss': 'رد پرداخت',
-  'web.payment_late_dismiss_done': 'پرداخت رد شد. مبلغی جابه‌جا نشد.',
-  'web.payment_late_decision': 'تصمیم',
-  'web.payment_late_decision_reason': 'دلیل',
-  'web.payment_late_decision_amount': 'مبلغ واریزشده به کیف پول',
-  'web.payment_late_decision_money': 'جابه‌جایی پول',
-  'web.payment_late_decision_nothing_moved': 'هیچ مبلغی جابه‌جا نشد.',
-  'web.payment_late_decided_by': 'تصمیم‌گیرنده',
-  'web.payment_late_decided_at': 'زمان تصمیم',
-  'web.payment_late_not_eligible':
-    'این پرداخت دیگر در صف بررسی دیرهنگام نیست؛ صفحه دوباره خوانده شد.',
-  'web.payment_late_already_decided':
-    'برای این پرداخت پیش‌تر تصمیمی ثبت شده است؛ تصمیم ثبت‌شده در همین صفحه نمایش داده می‌شود.',
-  'web.payment_rejection_reason_not_received': 'واریزی متناظر نرسیده است',
-  'web.payment_rejection_reason_amount_underpaid': 'مبلغ واریزی کمتر از مبلغ پرداخت است',
-  'web.payment_rejection_reason_amount_overpaid': 'مبلغ واریزی بیشتر از مبلغ پرداخت است',
-  'web.payment_rejection_reason_wrong_beneficiary':
-    'به حسابی غیر از حساب‌های این مجموعه واریز شده است',
-  'web.payment_rejection_reason_duplicate_reference':
-    'این شمارهٔ پیگیری بانکی پیش‌تر برای پرداخت دیگری ثبت شده است',
-  'web.payment_rejection_reason_unreadable_evidence': 'رسید قابل تطبیق نیست',
-  'web.payment_rejection_reason_other': 'دلیل دیگر (در توضیح)',
   /*
    * `UNKNOWN` is an ABSENCE of an outcome, not an outcome. `payment.ts` makes it
    * non-terminal for that reason, and this copy says what an operator must do

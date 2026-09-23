@@ -165,8 +165,8 @@ import { ReceiptService } from './modules/commerce/payments/application/receipt.
 import { TelegramReceiptFiles } from './modules/commerce/payments/infrastructure/telegram-receipt-files.js';
 import { PaymentService } from './modules/commerce/payments/application/payment.service.js';
 import { RefundService } from './modules/commerce/payments/application/refund.service.js';
-import { LateTransferService } from './modules/commerce/payments/application/late-transfer.service.js';
-import { DrizzleLateTransferRepository } from './modules/commerce/payments/infrastructure/drizzle-late-transfer.repository.js';
+import { ReceiptDispositionService } from './modules/commerce/payments/application/receipt-disposition.service.js';
+import { DrizzleReceiptCreditRepository } from './modules/commerce/payments/infrastructure/drizzle-receipt-credit.repository.js';
 import { DrizzleRefundRepository } from './modules/commerce/payments/infrastructure/drizzle-refund.repository.js';
 import { SalesCurrencyChangeGuard } from './modules/commerce/payments/application/sales-currency-change.guard.js';
 import { PaymentExpiryService } from './modules/commerce/payments/application/payment-expiry.service.js';
@@ -460,10 +460,11 @@ export interface Container {
    */
   readonly refunds: RefundService;
   /**
-   * The late-review lane (WP10 P1): an expired transfer the customer vouched for,
-   * credited to the wallet or dismissed, once, under `receipts.review`.
+   * A card-to-card receipt's credit-to-wallet disposition (Payment File 02 §12, D2),
+   * under `receipts.review` AND `users.wallet.credit`. Called by the Telegram review
+   * surface; the Web Admin only READS what it recorded.
    */
-  readonly lateTransfers: LateTransferService;
+  readonly receiptDispositions: ReceiptDispositionService;
   /**
    * The route repository, exposed for ONE caller: the boot-time reconcile.
    *
@@ -1589,31 +1590,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   });
 
   /**
-   * The late-review lane (WP10 P1).
-   *
-   * The payment READ and its lock, the receipt COUNT, the ledger's `append` and
-   * `lockCustomer`, and its own decision table — narrowed by its dependency type, so the
-   * lane that credits a late transfer cannot move a payment's state or file a receipt.
-   */
-  const lateTransferService = new LateTransferService({
-    payments: paymentRepository,
-    receipts: paymentReceiptRepository,
-    decisions: new DrizzleLateTransferRepository(database.db),
-    wallet: walletRepository,
-    notifier: customerNotifier,
-    outbox,
-    guard,
-    uow,
-    audit,
-    opsLog: opsLogWriter,
-    sessions,
-    idempotency,
-    scopeActivity: tenants,
-    clock,
-    ids,
-  });
-
-  /**
    * The order's second terminal outcome, wired once and used by both lanes.
    *
    * After `refundService`, because it calls the one credit path rather than writing
@@ -1639,6 +1615,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     outbox,
     clock,
   });
+
+  /** The append-only record of a receipt's credit-to-wallet disposition (D2). */
+  const receiptCreditRepository = new DrizzleReceiptCreditRepository(database.db);
 
   const paymentService = new PaymentService({
     resellers: resellerService,
@@ -1673,6 +1652,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     receiptCaptures: receiptCaptureRepository,
     // The COUNT only. `PaymentServiceDeps` narrows it, so this module cannot file one.
     receipts: paymentReceiptRepository,
+    // The READ only: a rejection's loser is told a credit won (D2).
+    receiptCredits: receiptCreditRepository,
     /*
      * The READ alone, narrowed here rather than by the type.
      *
@@ -1700,6 +1681,30 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   });
 
   /*
+   * A receipt's third disposition (D2). The payment's read, lock and `resolve` edge, the
+   * receipt COUNT, the ledger's `append` and `lockCustomer`, and its own table — narrowed
+   * by its dependency type, so it cannot confirm a payment or file a receipt.
+   */
+  const receiptDispositionService = new ReceiptDispositionService({
+    payments: paymentRepository,
+    receipts: paymentReceiptRepository,
+    credits: receiptCreditRepository,
+    wallet: walletRepository,
+    settings: settingsResolver,
+    notifier: customerNotifier,
+    outbox,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
+
+  /*
    * The expiry lane, built in every role and STARTED only by the worker.
    *
    * Built everywhere for the reason the recovery executor is: construction is cheap
@@ -1719,8 +1724,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     usernames: usernameLane,
     payments: paymentRepository,
     notifier: customerNotifier,
-    // The COUNT only: whether the customer vouched for a transfer decides the sentence.
-    receipts: paymentReceiptRepository,
     orders: orderRepository,
     uow,
     audit,
@@ -3062,7 +3065,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     paymentAccounts: paymentAccountService,
     paymentGateways: paymentGatewayService,
     refunds: refundService,
-    lateTransfers: lateTransferService,
+    receiptDispositions: receiptDispositionService,
     paymentGatewayProvisioning: paymentGatewayRepository,
     receipts: receiptService,
     receiptFiles,
@@ -3101,9 +3104,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       ]),
       destinations: paymentDestinationRenderer,
       receipts: receiptService,
-      // WP10 P1: the late-review lane in the receipts section, the same service the Web
-      // Admin's two routes call.
-      lateTransfers: lateTransferService,
       telegramAdmins,
       /*
        * The reviewers' poke, Phase 5T.

@@ -156,6 +156,8 @@ export class PaymentGatewayService {
       maxAmountMinor: input.config.maxAmountMinor.toString(),
       eligibility: input.config.eligibility,
       sortOrder: input.config.sortOrder,
+      // In the hash, so two edits differing only in the gift are two commands (D5).
+      topupCashbackPercent: input.config.topupCashbackPercent,
     });
     const replayed = await this.replay(scope, input.idempotencyKey, requestHash);
     if (replayed !== null) return replayed;
@@ -659,5 +661,6 @@ function auditView(gateway: PaymentGatewayRecord): Record<string, unknown> {
     deactivateAfterPayments: gateway.deactivateAfterPayments,
     activateAfterAccountDays: gateway.activateAfterAccountDays,
     sortOrder: gateway.sortOrder,
+    topupCashbackPercent: gateway.topupCashbackPercent,
   };
 }

@@ -142,6 +142,7 @@ describe('a customer sending a receipt', () => {
         fileSize: 4_096n,
         fileName: 'rasid.pdf',
         telegramMessageId: 55n,
+        caption: null,
       },
       'r2-file',
     );
@@ -555,6 +556,7 @@ describe('a customer sending a receipt', () => {
     fileSize: 102_400n,
     fileName: null,
     telegramMessageId: 42n,
+    caption: null,
   });
 
   const submit = (paymentId: string, file: InboundReceiptFile, key: string) =>

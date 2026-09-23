@@ -206,6 +206,13 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
           activateAfterAccountDays: counted(form.activateAfterAccountDays),
         },
         sortOrder: counted(form.sortOrder),
+        /*
+         * The route's top-up gift (Payment File 02 §17, D5), sent back as it stands: this
+         * form does not edit it yet, and the route requires every field, so omitting it
+         * would refuse the save and sending a default would reset the gift.
+         */
+        topupCashbackPercent:
+          rows.find((row) => row.provider === editing)?.topupCashbackPercent ?? 0,
       };
       /*
        * The key is bound to the whole payload AND to which route is being written, so

@@ -3,6 +3,8 @@ import { sql } from 'drizzle-orm';
 import {
   API_PREFIX,
   AUTH_ROUTES,
+  COMPENSATION_ROUTES,
+  PAYMENT_ROUTES,
   PAYMENT_ACCOUNT_ROUTES,
   PAYMENT_GATEWAY_ROUTES,
   REFUND_ROUTES,
@@ -188,11 +190,6 @@ describe('dynamic route registration', () => {
       ['POST', `panels/${id}/status`],
       ['POST', `panels/${id}/test`],
       ['GET', `payments/${id}`],
-      ['POST', `payments/${id}/confirm`],
-      ['POST', `payments/${id}/reject`],
-      // WP10 P1: the late-review lane's two decisions.
-      ['POST', `payments/${id}/late-credit`],
-      ['POST', `payments/${id}/late-dismiss`],
       ['GET', `payments/${id}/receipts`],
       ['GET', `payments/${id}/receipts/${REFUND_ID}/content`],
       ['POST', `admins/${id}/status`],
@@ -213,6 +210,32 @@ describe('dynamic route registration', () => {
       ['POST', `recoveries/${id}/confirm`],
     ] as const) {
       await reaches(method, `${API_PREFIX}/${path}`);
+    }
+  });
+
+  /*
+   * Payment File 02 §10 (D3): the Web Admin is read-only for card-to-card. The routes
+   * that confirmed and rejected a transfer — and the withdrawn late-review lane's two —
+   * are NOT registered, and this is the check that notices one coming back. The reads
+   * beside them, the compensation list (D7) included, still route.
+   */
+  it('registers no card-to-card mutation, and routes every payment read', async () => {
+    const id = ACCOUNT_ID;
+    for (const suffix of ['confirm', 'reject', 'late-credit', 'late-dismiss', 'receipt-credit']) {
+      const url = `${API_PREFIX}/payments/${id}/${suffix}`;
+      const response = await inject({ method: 'POST', url, payload: {} });
+      expect(response.body, `POST ${url} still reaches a controller`).toContain(
+        `Cannot POST ${url}`,
+      );
+    }
+    for (const path of [
+      PAYMENT_ROUTES.list,
+      PAYMENT_ROUTES.detail(id),
+      PAYMENT_ROUTES.receipts(id),
+      PAYMENT_ROUTES.receiptContent(id, REFUND_ID),
+      COMPENSATION_ROUTES.list,
+    ]) {
+      await reaches('GET', `${API_PREFIX}${path}`);
     }
   });
 
