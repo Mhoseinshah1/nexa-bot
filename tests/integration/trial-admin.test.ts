@@ -422,6 +422,53 @@ describe('trial overrides and the global reset', () => {
     });
   });
 
+  it('records one reset when two operators confirm the same preview at once', async () => {
+    /*
+     * Two confirmations of one preview, under different keys, so idempotency does not
+     * separate them — only the conditional stamp can. The barrier is a grant row held
+     * by an outside transaction; BOTH resets are proven to be waiting before it is
+     * released. Whichever goes first stamps both grants; the other re-evaluates its
+     * `WHERE` against the committed stamps, stamps nothing, and records nothing.
+     */
+    const first = await claim(alice, 'r2-1');
+    await claim(bob, 'r2-2');
+    if (first.outcome !== 'ISSUED') throw new Error('setup');
+    const { release, done } = await hold(
+      sql`SELECT id FROM trial_grants WHERE order_id = ${first.orderId} FOR NO KEY UPDATE`,
+    );
+    const confirm = (key: string) =>
+      ctx.container.trialAdmin
+        .executeReset(tenantA, owner, { idempotencyKey: key, expectedGrants: 2, reason: key })
+        .then(
+          (reset) => ({ reset }),
+          (error: unknown) => ({ error }),
+        );
+    const both = Promise.all([confirm('twice-a'), confirm('twice-b')]);
+    await awaitBlocked(2, 'both resets');
+    release();
+    await done;
+    const outcomes = await both;
+
+    const won = outcomes.flatMap((o) => ('reset' in o ? [o.reset] : []));
+    const lost = outcomes.flatMap((o) => ('error' in o ? [o.error] : []));
+    expect(won).toHaveLength(1);
+    expect(won[0]).toMatchObject({ affectedGrants: 2, affectedCustomers: 2 });
+    expect(lost).toHaveLength(1);
+    expect(await refusal(Promise.reject(lost[0]))).toBe(COMMERCE_ERROR_CODES.TRIAL_RESET_NOTHING);
+    expect(await count(sql`SELECT count(*)::int AS n FROM trial_resets`)).toBe(1);
+    // Every grant names the one reset that covered it.
+    expect(
+      await count(
+        sql`SELECT count(*)::int AS n FROM trial_grants WHERE reset_id = ${won[0]?.id ?? null}`,
+      ),
+    ).toBe(2);
+    expect(
+      await count(
+        sql`SELECT count(*)::int AS n FROM audit_logs WHERE action = 'trial.reset' AND result = 'SUCCESS'`,
+      ),
+    ).toBe(1);
+  });
+
   it('answers a replayed reset with the reset it recorded, once', async () => {
     await claim(alice, 'p-1');
     const input = { idempotencyKey: 'replay-1', expectedGrants: 1, reason: 'once' };

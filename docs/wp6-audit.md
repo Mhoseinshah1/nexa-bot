@@ -321,7 +321,9 @@ seeded to `owner` only. Viewing the history takes `settings.view`.
 reset_at IS NULL`.
 
 - **Two resets.** The second waits on the first's row locks, then re-evaluates its
-  `WHERE`, stamps nothing it covered, and is refused as stale.
+  `WHERE` and stamps nothing it covered. When the first covered every grant, the
+  second is refused as `TRIAL_RESET_NOTHING`; otherwise it is stale. Tested with a
+  row-lock barrier (TB-17).
 - **A reset and a release on the same grant.** Whichever commits second finds the other's
   stamp. The count excludes a grant that carries either stamp, so a grant never counts
   twice or goes negative. If the reset is the one that waited, it is refused as stale.
