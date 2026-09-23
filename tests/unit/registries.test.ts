@@ -227,10 +227,28 @@ describe('the feature flag registry', () => {
     expect(featureFlagDefinition('trials').blastRadius).toBe('TENANT_WIDE');
   });
 
+  it('asks for a typed confirmation before offering every customer a new link', () => {
+    // WP6-C: like `trials`, the rotation flag offers a new action to every customer of
+    // the tenant at once.
+    expect(featureFlagDefinition('customer_link_rotation').blastRadius).toBe('TENANT_WIDE');
+    expect(featureFlagDefinition('customer_link_rotation').defaultEnabled).toBe(false);
+  });
+
+  it('refuses a rotation cooldown of zero, which would be no rate rule at all', () => {
+    const schema = settingDefinition('services.link_rotation_cooldown_hours').schema;
+    expect(schema.safeParse(0).success).toBe(false);
+    expect(schema.safeParse(1).success).toBe(true);
+    expect(schema.safeParse(720).success).toBe(true);
+    expect(schema.safeParse(721).success).toBe(false);
+    expect(settingDefinition('services.link_rotation_cooldown_hours').defaultValue).toBe(24);
+  });
+
   it('registers no flag for a feature that does not exist', () => {
     // Every registered key must be one this phase actually implements. A switch
     // that turns nothing on is worse than an absent feature.
     expect([...FEATURE_FLAGS].map((f) => f.key).sort()).toEqual([
+      // WP6-C. Off by default; the customer rotation path it switches on is reachable.
+      'customer_link_rotation',
       'ops_notifications',
       // The three reminder switches. `service_expired_notice` is a flag rather than a
       // sixth threshold because it is not a number: it fires at zero days and what an

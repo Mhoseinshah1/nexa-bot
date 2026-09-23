@@ -469,6 +469,17 @@ export const USAGE_SYNC_MINUTES_MIN = 15;
 export const USAGE_SYNC_MINUTES_MAX = 1440;
 
 /**
+ * Bounds of `services.link_rotation_cooldown_hours` (WP6-C, `docs/wp6c-audit.md` C2).
+ *
+ * The floor is one hour, not zero: a customer rotation is an outbound call to somebody's
+ * panel, and "no cooldown" is the abuse rule the rotation audit (D1) said nobody had
+ * decided. The ceiling is thirty days: a leaked link should never be unreplaceable by
+ * its owner for longer than a billing period.
+ */
+export const LINK_ROTATION_COOLDOWN_HOURS_MIN = 1;
+export const LINK_ROTATION_COOLDOWN_HOURS_MAX = 720;
+
+/**
  * How many services one tick may plan a usage sync for.
  *
  * Bounded for the same reason the monitor's discovery is: a tenant with ten thousand

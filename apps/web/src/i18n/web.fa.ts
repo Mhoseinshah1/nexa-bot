@@ -1739,6 +1739,8 @@ export const WEB_FA = {
   'web.flag_trials': 'سرویس آزمایشی',
   'web.setting_trial_product_id': 'محصول سرویس آزمایشی',
   'web.setting_trial_limit_per_customer': 'تعداد مجاز سرویس آزمایشی برای هر مشتری',
+  'web.flag_customer_link_rotation': 'دریافت لینک اشتراک جدید توسط مشتری',
+  'web.setting_link_rotation_cooldown_hours': 'فاصلهٔ مجاز بین دو درخواست لینک جدید (ساعت)',
   'web.trial_product_none': 'هیچ‌کدام (سرویس آزمایشی ارائه نمی‌شود)',
   'web.trial_product_unlisted': 'محصول فعلی (در فهرست محصولات فعال نیست)',
 

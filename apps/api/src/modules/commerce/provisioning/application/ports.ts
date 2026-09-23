@@ -200,6 +200,21 @@ export interface ServiceRepository {
 
   findById(scope: TenantContext, id: string, tx?: unknown): Promise<ServiceRecord | null>;
 
+  /**
+   * Reads one service and holds its row lock until the transaction ends (WP6-C).
+   *
+   * `SELECT … FOR UPDATE`. The ONE place a service row is locked on purpose, and the
+   * reason is a rule that is a READ followed by a write: a customer's rotation cooldown
+   * counts the rotations already recorded and then plans another, and without a lock
+   * two taps under different keys both count none and both plan. The second waits here
+   * instead, and then sees the first. `docs/wp6c-audit.md` C2.
+   */
+  lockForUpdate(
+    scope: TenantContext,
+    id: string,
+    tx: TransactionScope,
+  ): Promise<ServiceRecord | null>;
+
   findByOrderId(
     scope: TenantContext,
     orderId: OrderId,
@@ -679,6 +694,29 @@ export interface OperationRepository {
     limit: number,
     tx?: unknown,
   ): Promise<readonly OperationRecord[]>;
+
+  /**
+   * When the newest operation of this type that a CUSTOMER asked for, and that
+   * SUCCEEDED, was requested — or null if there is none (WP6-C).
+   *
+   * The customer rotation cooldown's one input (`docs/wp6c-audit.md` C2). Three
+   * predicates, each of which is the rule:
+   *
+   * - `requested_by_customer_id` is this customer. An operator's rotation is the
+   *   operator's decision and does not spend the customer's allowance, and a previous
+   *   owner's cannot exist, because a service never changes customer.
+   * - `state = 'SUCCEEDED'`. A failed or abandoned rotation changed nothing the customer
+   *   holds — a rotation is settled by a read-back — so charging it would refuse
+   *   somebody whose link never changed.
+   * - newest `created_at`, the request instant, which the service index leads with.
+   */
+  lastSucceededCustomerRequest(
+    scope: TenantContext,
+    serviceId: string,
+    customerId: string,
+    type: OperationType,
+    tx?: unknown,
+  ): Promise<Date | null>;
 
   /**
    * A service's operations, NEWEST first, bounded.

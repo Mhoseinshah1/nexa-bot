@@ -1,7 +1,12 @@
 import { z } from 'zod';
 import { OPERATIONAL_SEVERITIES } from './ports.js';
 import { ORDER_EXPIRY_MINUTES_MAX, ORDER_EXPIRY_MINUTES_MIN } from './commerce.js';
-import { USAGE_SYNC_MINUTES_MAX, USAGE_SYNC_MINUTES_MIN } from './provisioning.js';
+import {
+  LINK_ROTATION_COOLDOWN_HOURS_MAX,
+  LINK_ROTATION_COOLDOWN_HOURS_MIN,
+  USAGE_SYNC_MINUTES_MAX,
+  USAGE_SYNC_MINUTES_MIN,
+} from './provisioning.js';
 import {
   EXPIRY_REMINDER_DAYS_MAX,
   EXPIRY_REMINDER_DAYS_MIN,
@@ -647,6 +652,28 @@ export const SETTINGS = [
     defaultValue: 1,
     configures: 'trials',
     zeroMeaning: 'LITERAL',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'services.link_rotation_cooldown_hours',
+    description:
+      'How long a customer must wait after rotating a service link before rotating it ' +
+      "again, in hours. Counted from the customer's own rotations that succeeded. Inert " +
+      'while the customer_link_rotation flag is off.',
+    schema: z
+      .number()
+      .int()
+      .min(LINK_ROTATION_COOLDOWN_HOURS_MIN)
+      .max(LINK_ROTATION_COOLDOWN_HOURS_MAX),
+    // A day. Long enough that a customer cannot drive panel calls at will, short enough
+    // that a leaked link is replaced the same day it is noticed.
+    defaultValue: 24,
+    configures: 'customer_link_rotation',
+    // Zero is refused by the schema: "no cooldown" is the abuse rule nobody decided
+    // (docs/rickpanel-rotate-audit.md D1), not a value this key can hold.
+    zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
     consumer: 'ACTIVE',

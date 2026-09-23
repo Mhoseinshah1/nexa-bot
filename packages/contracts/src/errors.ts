@@ -888,6 +888,15 @@ export const COMMERCE_ERROR_CODES = {
    */
   SERVICE_ACTION_IN_PROGRESS: 'commerce.service_action_in_progress',
   /**
+   * The customer rotated this service's link too recently to rotate it again (WP6-C).
+   *
+   * Carries `availableAt`, the first instant another rotation would be accepted, so the
+   * customer is told WHEN rather than "later". Counted from the customer's own
+   * rotations that SUCCEEDED; a failed or abandoned one changed nothing they hold and
+   * does not count (`docs/wp6c-audit.md` C2).
+   */
+  SERVICE_ROTATION_COOLDOWN: 'commerce.service_rotation_cooldown',
+  /**
    * The customer asked for a username mode this panel does not offer.
    *
    * Checked server-side even though the surface only draws the buttons the policy

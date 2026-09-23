@@ -12,9 +12,17 @@ import type { CustomerNotifier } from './customer-notifier.js';
  * reconcile is this installation asking a panel a question, which the customer never
  * asked for and would be confused to hear about. `SYNC_USAGE` is a background read.
  *
- * So the list is exactly the six a customer initiates from My Services: the three 4E
- * added and the three 4F did. Three of those six are ones they have PAID for, which is
- * why being told nothing was the sharpest gap `docs/phase4h-audit.md` §6 measured.
+ * So the list is exactly the seven a customer initiates from My Services: the three 4E
+ * added, the three 4F did, and the rotation WP6-C did. Three of them are ones they have
+ * PAID for, which is why being told nothing was the sharpest gap
+ * `docs/phase4h-audit.md` §6 measured.
+ *
+ * `ROTATE_SUBSCRIPTION` is here although its success, like a provision's, also produces
+ * a delivery of the new link. The difference is ABANDONMENT: a provision that never
+ * finishes has `SERVICE_PROVISION_DELAYED`, and a rotation that never finishes would
+ * otherwise say nothing at all to the customer who asked for it. An operator's rotation
+ * is still told nothing — `requested_by_customer_id` is null — which is the rule this
+ * list was never able to express on its own (`docs/wp6c-audit.md` C3).
  */
 export const CUSTOMER_REQUESTABLE_OPERATIONS: readonly OperationType[] = [
   'SUSPEND',
@@ -23,6 +31,7 @@ export const CUSTOMER_REQUESTABLE_OPERATIONS: readonly OperationType[] = [
   'RENEW',
   'ADD_TRAFFIC',
   'ADD_TIME',
+  'ROTATE_SUBSCRIPTION',
 ];
 
 /**

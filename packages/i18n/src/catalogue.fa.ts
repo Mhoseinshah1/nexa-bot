@@ -544,6 +544,14 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'سرویس: {productTitle}\nوضعیت: {state}\nمصرف: {usedTrafficBytes} از {totalTrafficBytes}\nانقضا: {expiresAt}\nآخرین به‌روزرسانی مصرف: {syncedAt}',
   'bot.service.subscription': 'لینک اشتراک شما:\n<code>{subscriptionUrl}</code>',
   'bot.service.resend_button': 'ارسال دوباره لینک اشتراک',
+  'bot.service.rotate_button': 'دریافت لینک اشتراک جدید',
+  // Says nothing about the old link on purpose: that it stops working is not proven
+  // (OQ-RP-07), and templates.ts records why a sentence here must not imply it.
+  'bot.service.rotate_ask':
+    'برای این سرویس یک لینک اشتراک جدید ساخته می‌شود و باید آن را در برنامه‌های خود جایگزین کنید.\nپس از آن، تا {cooldownHours} ساعت نمی‌توانید دوباره لینک جدید بگیرید.\nادامه می‌دهید؟',
+  'bot.service.rotate_confirm_button': 'بله، لینک جدید بساز',
+  'bot.service.rotate_cooldown':
+    'شما به‌تازگی برای این سرویس لینک جدید گرفته‌اید.\nاز {availableAt} می‌توانید دوباره درخواست کنید.',
   'bot.service.provisioning': 'سرویس شما در حال ساخته شدن است. نتیجه به شما اطلاع داده می‌شود.',
   // Deliberately does NOT invite a retry: `templates.ts` records that a retry after an
   // unknown outcome is how a duplicate account is created.

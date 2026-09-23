@@ -149,6 +149,9 @@ export const BOT_INTENTS = [
   'SERVICE_RESUME',
   'SERVICE_TERMINATE_ASK',
   'SERVICE_TERMINATE',
+  /* WP6-C: a customer's own link rotation, ask then confirm. */
+  'SERVICE_ROTATE_ASK',
+  'SERVICE_ROTATE',
   'SERVICE_RENEW',
   'SERVICE_ADD_TRAFFIC',
   'SERVICE_ADD_TIME',
@@ -605,6 +608,19 @@ export const SERVICE_SUSPEND_CALLBACK_PREFIX = 'u:';
 export const SERVICE_RESUME_CALLBACK_PREFIX = 'e:';
 export const SERVICE_TERMINATE_ASK_CALLBACK_PREFIX = 't:';
 export const SERVICE_TERMINATE_CALLBACK_PREFIX = 'k:';
+/**
+ * A customer's own link rotation (WP6-C), ask then confirm.
+ *
+ * Two characters because every single letter is taken. Neither is a prefix of another
+ * prefix here and none is a prefix of them: `r:` differs from both at the second
+ * character, and the operator's `ra:`/`rb:` at the second as well. The confirmation
+ * carries only the service id — no link stamp, unlike the operator's `rb:` — because a
+ * stale confirmation lands on the cooldown, and one tapped after the cooldown has
+ * passed is a real request from the person the service belongs to
+ * (`docs/wp6c-audit.md` C4).
+ */
+export const SERVICE_ROTATE_ASK_CALLBACK_PREFIX = 'rc:';
+export const SERVICE_ROTATE_CALLBACK_PREFIX = 'rd:';
 /*
  * The five commercial prefixes.
  *
@@ -1964,6 +1980,21 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
       return callbackCommand(
         'SERVICE_TERMINATE',
         data.slice(SERVICE_TERMINATE_CALLBACK_PREFIX.length),
+        id,
+      );
+    }
+    /* Ask before act, for the reason the terminate pair above states. */
+    if (data.startsWith(SERVICE_ROTATE_ASK_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'SERVICE_ROTATE_ASK',
+        data.slice(SERVICE_ROTATE_ASK_CALLBACK_PREFIX.length),
+        id,
+      );
+    }
+    if (data.startsWith(SERVICE_ROTATE_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'SERVICE_ROTATE',
+        data.slice(SERVICE_ROTATE_CALLBACK_PREFIX.length),
         id,
       );
     }
@@ -6654,6 +6685,22 @@ export class BotRuntime {
         input.idempotencyKey,
       );
     }
+    if (command.intent === 'SERVICE_ROTATE_ASK' && command.targetId !== null) {
+      return this.serviceRotateAsk(scope, customer, command.targetId);
+    }
+    if (command.intent === 'SERVICE_ROTATE' && command.targetId !== null) {
+      /*
+       * Suffixed, as every other write that shares a turn with `resolveFromUpdate` is
+       * (`docs/wp6-audit.md` §4): the bare update key is already spent in that turn.
+       */
+      return this.serviceRotate(
+        scope,
+        actor,
+        customer,
+        command.targetId,
+        `${input.idempotencyKey}:rotate`,
+      );
+    }
     /*
      * The main menu rides on `/start`, and on nothing else.
      *
@@ -6862,6 +6909,18 @@ export class BotRuntime {
           data: `${SERVICE_TERMINATE_ASK_CALLBACK_PREFIX}${service.id}`,
         });
       }
+    }
+
+    /*
+     * The rotation button (WP6-C), drawn on the same terms: the flag, an ACTIVE service
+     * and a panel that can rotate. It opens a QUESTION and carries the ask prefix; the
+     * confirming prefix is written only by that question's screen.
+     */
+    if ((await this.deps.services.customerRotationFor(scope, service)).offered) {
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.service.rotate_button' },
+        data: `${SERVICE_ROTATE_ASK_CALLBACK_PREFIX}${service.id}`,
+      });
     }
 
     /*
@@ -7211,6 +7270,94 @@ export class BotRuntime {
         COMMERCE_ERROR_CODES.ORDER_STATE_INVALID,
         COMMERCE_ERROR_CODES.PANEL_NOT_OPERABLE,
         COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+      ];
+      if (!refusals.includes(code)) throw error;
+      return { key: 'bot.service.capability_unsupported', values: {}, buttons: [], orderId: null };
+    }
+    return { key: 'bot.service.action_requested', values: {}, buttons: [], orderId: null };
+  }
+
+  /**
+   * The screen between a customer and a new subscription link (WP6-C).
+   *
+   * Plans nothing and writes nothing, like `serviceTerminateAsk`. The offer is re-read
+   * rather than trusted from the message that was tapped, and the cooldown shown is the
+   * setting as it stands now. The sentence says a new link will be issued and has to be
+   * put into the customer's apps; it says nothing about the old one (OQ-RP-07).
+   */
+  private async serviceRotateAsk(
+    scope: TenantContext,
+    customer: CustomerRecord,
+    serviceId: string,
+  ): Promise<PendingReply> {
+    const service = await this.ownedService(scope, customer, serviceId);
+    if (service === null) {
+      return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
+    }
+    const offer = await this.deps.services.customerRotationFor(scope, service);
+    if (!offer.offered) {
+      return { key: 'bot.service.capability_unsupported', values: {}, buttons: [], orderId: null };
+    }
+    return {
+      key: 'bot.service.rotate_ask',
+      values: { cooldownHours: offer.cooldownHours },
+      buttons: [
+        {
+          label: { kind: 'TEMPLATE', key: 'bot.service.rotate_confirm_button' },
+          data: `${SERVICE_ROTATE_CALLBACK_PREFIX}${service.id}`,
+        },
+      ],
+      orderId: null,
+    };
+  }
+
+  /**
+   * A customer confirms a new subscription link for their own service (WP6-C).
+   *
+   * `requestRotation` decides everything, inside its transaction; this answers each of
+   * its refusals BY NAME from a closed list and re-throws anything else, for the reason
+   * `serviceAction` gives. The cooldown is the one refusal with a value in it: the
+   * instant another rotation will be accepted, read from the refusal rather than
+   * computed here, so the sentence is the server's answer.
+   */
+  private async serviceRotate(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    serviceId: string,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    try {
+      await this.deps.services.requestRotation(scope, actor, customer.id, serviceId, {
+        idempotencyKey,
+      });
+    } catch (error) {
+      const code = (error as { code?: unknown } | null)?.code;
+      if (code === COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND) {
+        return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
+      }
+      if (code === COMMERCE_ERROR_CODES.SERVICE_ROTATION_COOLDOWN) {
+        const at = (error as { details?: Readonly<Record<string, unknown>> }).details?.[
+          'availableAt'
+        ];
+        if (typeof at === 'string') {
+          return {
+            key: 'bot.service.rotate_cooldown',
+            values: { availableAt: new Date(at) },
+            buttons: [],
+            orderId: null,
+          };
+        }
+        throw error;
+      }
+      if (code === COMMERCE_ERROR_CODES.CUSTOMER_BLOCKED) {
+        return { key: 'bot.blocked', values: {}, buttons: [], orderId: null };
+      }
+      const refusals: readonly unknown[] = [
+        COMMERCE_ERROR_CODES.ORDER_STATE_INVALID,
+        COMMERCE_ERROR_CODES.PANEL_NOT_OPERABLE,
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
       ];
       if (!refusals.includes(code)) throw error;
       return { key: 'bot.service.capability_unsupported', values: {}, buttons: [], orderId: null };

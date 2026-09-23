@@ -82,6 +82,8 @@ const REGISTRY_LABELS: Readonly<Record<string, WebKey>> = {
   trials: 'web.flag_trials',
   'trial.product_id': 'web.setting_trial_product_id',
   'trial.limit_per_customer': 'web.setting_trial_limit_per_customer',
+  customer_link_rotation: 'web.flag_customer_link_rotation',
+  'services.link_rotation_cooldown_hours': 'web.setting_link_rotation_cooldown_hours',
 };
 
 /**
