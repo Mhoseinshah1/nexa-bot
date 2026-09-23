@@ -855,6 +855,98 @@ describe('refunds', () => {
   });
 
   // -------------------------------------------------------------------------
+  // WP10 P3: an operator's refund has an explicit consequence. P4: it announces itself.
+  // -------------------------------------------------------------------------
+
+  describe('an operator refund’s consequences (WP10 P3, P4)', () => {
+    it('refuses a refund while the purchase operation is planned or UNKNOWN, and allows it once delivered', async () => {
+      const payment = await walletPaymentUndelivered('p3a');
+
+      await expect(refund(owner, payment.id, 50_000n, 'p3a-refund-0001')).rejects.toMatchObject({
+        code: 'commerce.refund_not_permitted',
+        details: { reason: 'DELIVERY_IN_PROGRESS' },
+      });
+      expect((await ctx.container.refunds.ledgerFor(tenantA, owner, payment.id)).refundable).toBe(
+        false,
+      );
+
+      // A create whose answer was lost may have made the account: still no refund.
+      await operationState(payment.orderId ?? '', 'UNKNOWN');
+      await expect(refund(owner, payment.id, 50_000n, 'p3a-refund-0002')).rejects.toMatchObject({
+        code: 'commerce.refund_not_permitted',
+        details: { reason: 'DELIVERY_IN_PROGRESS' },
+      });
+      expect(await count('refunds')).toBe(0);
+
+      await deliver(payment.orderId ?? '');
+      expect((await ctx.container.refunds.ledgerFor(tenantA, owner, payment.id)).refundable).toBe(
+        true,
+      );
+      await expect(refund(owner, payment.id, 50_000n, 'p3a-refund-0003')).resolves.toMatchObject({
+        state: 'COMPLETED',
+      });
+    });
+
+    it('keeps the order PAID after a partial refund and tells the customer REFUND_COMPLETED', async () => {
+      const payment = await walletPayment('p3b');
+
+      const partial = await refund(owner, payment.id, 100_000n, 'p3b-refund-0001');
+
+      expect(await orderState(payment.orderId ?? '')).toBe('PAID');
+      expect(await notifications('REFUND_COMPLETED', partial.id)).toBe(1);
+      expect(await orderRefundedEvents(payment.orderId ?? '')).toBe(0);
+    });
+
+    it('moves the order REFUNDED at once when a wallet refund returns the whole payment', async () => {
+      const payment = await walletPayment('p3c');
+
+      const whole = await refund(owner, payment.id, 250_000n, 'p3c-refund-0001');
+
+      expect(await orderState(payment.orderId ?? '')).toBe('REFUNDED');
+      expect(await orderRefundedEvents(payment.orderId ?? '')).toBe(1);
+      expect(await notifications('REFUND_COMPLETED', whole.id)).toBe(1);
+    });
+
+    it('moves the order REFUNDED with one OrderRefunded when the last external refund completes', async () => {
+      const payment = await manualConfirmed('p3d');
+      const orderId = await orderOfPayment(payment.id);
+      const first = await refund(owner, payment.id, 100_000n, 'p3d-refund-0001');
+      const second = await refund(owner, payment.id, 150_000n, 'p3d-refund-0002');
+
+      // Promises, not facts: nothing is told and nothing moves while money is in flight.
+      expect(await notifications('REFUND_COMPLETED', first.id)).toBe(0);
+      expect(await notifications('REFUND_COMPLETED', second.id)).toBe(0);
+
+      await complete(first.id, 'p3d-complete-0001');
+      expect(await orderState(orderId)).toBe('PAID');
+      expect(await orderRefundedEvents(orderId)).toBe(0);
+      expect(await notifications('REFUND_COMPLETED', first.id)).toBe(1);
+
+      await complete(second.id, 'p3d-complete-0002');
+      // A replayed completion under a new key finds it already COMPLETED and does nothing.
+      await complete(second.id, 'p3d-complete-0003');
+      expect(await orderState(orderId)).toBe('REFUNDED');
+      expect(await orderRefundedEvents(orderId)).toBe(1);
+      expect(await notifications('REFUND_COMPLETED', second.id)).toBe(1);
+    });
+
+    it('emits WalletEntryRecorded for a REFUND credit, once', async () => {
+      const payment = await walletPayment('p4a');
+      const credited = await refund(owner, payment.id, 50_000n, 'p4a-refund-0001');
+      await refund(owner, payment.id, 50_000n, 'p4a-refund-0001');
+
+      const events = (await ctx.container.database.db.execute(
+        sql`SELECT payload->>'reason' AS reason, payload->>'amountMinor' AS amount,
+                   payload->>'direction' AS direction
+              FROM outbox_messages
+             WHERE event_type = 'WalletEntryRecorded' AND payload->>'reason' = 'REFUND'` as never,
+      )) as unknown as { rows: { reason: string; amount: string; direction: string }[] };
+      expect(credited.state).toBe('COMPLETED');
+      expect(events.rows).toEqual([{ reason: 'REFUND', amount: '50000', direction: 'CREDIT' }]);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Fixtures
   // -------------------------------------------------------------------------
 
@@ -932,6 +1024,66 @@ describe('refunds', () => {
     await deliver(order.id);
     return { id: payment.id, orderId: payment.orderId };
   }
+
+  /** A CONFIRMED wallet payment whose purchase operation has not run yet (P3). */
+  async function walletPaymentUndelivered(
+    key: string,
+  ): Promise<{ id: PaymentId; orderId: string | null }> {
+    const order = await awaitingPayment(key);
+    await ctx.container.wallet.adjust(tenantA, owner, customerA, {
+      idempotencyKey: `${key}-credit`,
+      direction: 'CREDIT',
+      amountMinor: 1_000_000n,
+      currency: 'IRT',
+      note: 'fixture',
+    });
+    const { payment } = await ctx.container.payments.settleFromWallet(
+      tenantA,
+      systemActor(`${key}-settle`),
+      customerA,
+      { idempotencyKey: `${key}-settle-0001`, orderId: order.id },
+    );
+    return { id: payment.id, orderId: payment.orderId };
+  }
+
+  async function operationState(orderId: string, state: 'UNKNOWN'): Promise<void> {
+    await ctx.container.database.db.execute(sql`
+      UPDATE provisioning_operations SET state = ${state}
+       WHERE tenant_id = ${tenantA.tenantId} AND order_id = ${orderId}`);
+  }
+
+  const complete = (refundId: string, key: string) =>
+    ctx.container.refunds.complete(tenantA, owner, {
+      idempotencyKey: key,
+      refundId,
+      note: 'واریز شد',
+      externalReference: null,
+    });
+
+  async function scalar<T>(query: ReturnType<typeof sql>): Promise<T | undefined> {
+    const result = (await ctx.container.database.db.execute(query as never)) as unknown as {
+      rows: { v: T }[];
+    };
+    return result.rows[0]?.v;
+  }
+
+  const orderState = async (orderId: string): Promise<string | undefined> =>
+    scalar<string>(sql`SELECT state AS v FROM orders WHERE id = ${orderId}`);
+
+  const orderOfPayment = async (paymentId: string): Promise<string> =>
+    (await scalar<string>(sql`SELECT order_id AS v FROM payments WHERE id = ${paymentId}`)) ?? '';
+
+  const notifications = async (kind: string, subjectId: string): Promise<number> =>
+    (await scalar<number>(
+      sql`SELECT count(*)::int AS v FROM customer_notifications
+           WHERE kind = ${kind} AND subject_id = ${subjectId}`,
+    )) ?? 0;
+
+  const orderRefundedEvents = async (orderId: string): Promise<number> =>
+    (await scalar<number>(
+      sql`SELECT count(*)::int AS v FROM outbox_messages
+           WHERE event_type = 'OrderRefunded' AND aggregate_id = ${orderId}`,
+    )) ?? 0;
 
   /**
    * The order's purchase operation, SUCCEEDED — the account exists on the panel.

@@ -180,6 +180,9 @@ describe('dynamic route registration', () => {
       ['GET', `payments/${id}`],
       ['POST', `payments/${id}/confirm`],
       ['POST', `payments/${id}/reject`],
+      // WP10 P1: the late-review lane's two decisions.
+      ['POST', `payments/${id}/late-credit`],
+      ['POST', `payments/${id}/late-dismiss`],
       ['GET', `payments/${id}/receipts`],
       ['GET', `payments/${id}/receipts/${REFUND_ID}/content`],
       ['POST', `admins/${id}/status`],

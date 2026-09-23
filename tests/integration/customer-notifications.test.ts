@@ -369,6 +369,28 @@ describe('the customer notification lane', () => {
     ).toEqual(['DELIVERED', 'DELIVERED']);
   });
 
+  it('delivers the three WP10 money facts as their own frozen sentences, with no values', async () => {
+    /*
+     * `docs/wp10-payments-audit.md` P1 and P3. Each kind renders ONE template and the
+     * lane carries no payload for any of them: the figures are on the wallet page. A
+     * value slipping into one of these would be the parameterised payload ADR 0030 §1
+     * refuses, and none declares a precondition, so the reader is never asked.
+     */
+    const id = await customer(tenantA, '5020');
+    await enqueue(tenantA, id, 'PAYMENT_EXPIRED_UNDER_REVIEW', ctx.container.ids.uuid());
+    await enqueue(tenantA, id, 'LATE_TRANSFER_CREDITED', ctx.container.ids.uuid());
+    await enqueue(tenantA, id, 'REFUND_COMPLETED', ctx.container.ids.uuid());
+
+    const report = await sweep(lane({ stillHolds: false }));
+
+    expect(report.delivered).toBe(3);
+    expect(sends.map((one) => [one.templateKey, one.values])).toEqual([
+      ['bot.payment.expired_under_review', {}],
+      ['bot.payment.late_transfer_credited', {}],
+      ['bot.refund.completed', {}],
+    ]);
+  });
+
   it('defers a kind this build cannot render instead of spending it', async () => {
     /*
      * A row a NEWER release produced, seen by THIS dispatcher. Found by the Codex

@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  COMMERCE_ERROR_CODES,
   money,
   type ActorContext,
   type BotInstanceId,
@@ -1427,6 +1428,51 @@ describe('payments and settlement', () => {
         }),
       ).rejects.toMatchObject({ code: 'commerce.payment_not_found' });
       expect((await paymentRow(payment.id)).state).toBe('PENDING');
+    });
+  });
+
+  describe('a wallet payment for an order with an open transfer (WP10 P2)', () => {
+    it('withdraws an unsignalled pending transfer and settles from the wallet', async () => {
+      const { order, payment } = await pendingTransfer('p2-1');
+      await credit(tenantA, customerA, 1_000_000n, 'p2-1-credit');
+
+      const { order: settled } = await settleFromWallet(
+        tenantA,
+        customerA,
+        order.id,
+        'p2-1-settle-0001',
+      );
+
+      expect(settled.state).toBe('PAID');
+      // No orphan left to lapse into a PAYMENT_EXPIRED about an order already paid.
+      expect((await paymentRow(payment.id)).state).toBe('CANCELLED');
+      expect(await balanceOf(tenantA, customerA)).toMatchObject({ amountMinor: 750_000n });
+      const withdrawals = (await ctx.container.database.db.execute(
+        sql`SELECT after->>'withdrawnBy' AS by FROM audit_logs
+             WHERE action = 'payment.withdraw' AND entity_id = ${payment.id}` as never,
+      )) as unknown as { rows: { by: string }[] };
+      expect(withdrawals.rows).toEqual([{ by: 'WALLET_SETTLEMENT' }]);
+    });
+
+    it('refuses with ORDER_TRANSFER_UNDER_REVIEW while a signalled transfer waits, and debits nothing', async () => {
+      const { order, payment } = await pendingTransfer('p2-2');
+      await ctx.container.payments.signalTransferSent(tenantA, systemActor('p2-2-s'), customerA, {
+        idempotencyKey: 'p2-2-signal-0001',
+        paymentId: payment.id,
+        botInstanceId: BOT_A,
+      });
+      await credit(tenantA, customerA, 1_000_000n, 'p2-2-credit');
+      const entriesBefore = await countOf('wallet_entries');
+
+      await expect(
+        settleFromWallet(tenantA, customerA, order.id, 'p2-2-settle-0001'),
+      ).rejects.toMatchObject({ code: COMMERCE_ERROR_CODES.ORDER_TRANSFER_UNDER_REVIEW });
+
+      expect(await countOf('wallet_entries'), 'no debit').toBe(entriesBefore);
+      expect(await balanceOf(tenantA, customerA)).toMatchObject({ amountMinor: 1_000_000n });
+      expect((await paymentRow(payment.id)).state, 'the claim keeps its payment').toBe('PENDING');
+      expect((await stateOf(order.id)).state).toBe('AWAITING_PAYMENT');
+      expect(await countOf('payments'), 'no wallet payment row').toBe(1);
     });
   });
 

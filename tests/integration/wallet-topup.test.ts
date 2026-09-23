@@ -208,6 +208,41 @@ describe('a customer topping up their wallet', () => {
     expect(await count('provisioning_operations')).toBe(0);
   });
 
+  it('announces the TOPUP_RECEIPT credit with one WalletEntryRecorded, and not again for a second operator', async () => {
+    /*
+     * WP10 P4 (D4). Every other ledger writer emits `WalletEntryRecorded` in its
+     * transaction; the top-up credit did not. It does now, and only for the movement it
+     * WROTE — a second operator's confirmation re-reads the entry and is not a second one.
+     */
+    const { payment } = await topup(500_000n, 'c1e');
+    await confirm(payment.id, 'c1e-confirm');
+    await ctx.container.payments.confirmManualTransfer(
+      tenantA,
+      adminActorFor(
+        await createAdmin(ctx.container, tenantA, {
+          username: 'finance-topup-event',
+          roleKeys: ['finance'],
+        }),
+      ),
+      payment.id,
+      { idempotencyKey: 'c1e-second', note: 'seen twice' },
+    );
+
+    const entries = (await ctx.container.database.db.execute(
+      sql`SELECT id FROM wallet_entries WHERE reason = 'TOPUP_RECEIPT'` as never,
+    )) as unknown as { rows: { id: string }[] };
+    expect(entries.rows).toHaveLength(1);
+    const entry = entries.rows[0];
+    const events = (await ctx.container.database.db.execute(
+      sql`SELECT payload->>'entryId' AS entry, payload->>'reason' AS reason,
+                 payload->>'amountMinor' AS amount, payload->>'currency' AS currency
+            FROM outbox_messages WHERE event_type = 'WalletEntryRecorded'` as never,
+    )) as unknown as { rows: Record<string, string>[] };
+    expect(events.rows).toEqual([
+      { entry: entry?.id, reason: 'TOPUP_RECEIPT', amount: '500000', currency: 'IRT' },
+    ]);
+  });
+
   it('credits once for a redelivered confirmation', async () => {
     const { payment } = await topup(500_000n, 'c2');
     await confirm(payment.id, 'c2-confirm');

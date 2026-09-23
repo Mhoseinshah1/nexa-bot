@@ -1,7 +1,8 @@
 import { sql } from 'drizzle-orm';
 import type { ProductCategoryId } from '@nexa/contracts';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  COMMERCE_ERROR_CODES,
   money,
   type ActorContext,
   type BotInstanceId,
@@ -15,6 +16,7 @@ import { DrizzleOrderRepository } from '../../apps/api/src/modules/commerce/orde
 import { DrizzlePaymentRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-payment.repository';
 import { DrizzleWalletRepository } from '../../apps/api/src/modules/commerce/wallet/infrastructure/drizzle-wallet.repository';
 import type { OrderRecord } from '../../apps/api/src/modules/commerce/orders/application/ports';
+import type { PaymentServiceDeps } from '../../apps/api/src/modules/commerce/payments/application/payment.service';
 import {
   adminActorFor,
   createAdmin,
@@ -70,6 +72,7 @@ describe('financial concurrency', () => {
   });
 
   beforeEach(async () => {
+    vi.restoreAllMocks();
     await ctx.reset();
     products = new DrizzleProductRepository(ctx.container.database.db);
     wallet = new DrizzleWalletRepository(ctx.container.database.db);
@@ -582,5 +585,135 @@ describe('financial concurrency', () => {
     expect(after.evidenceKind).toBeNull();
     // And no wallet movement was ever involved in a manual transfer.
     expect(await countOf('wallet_entries')).toBe(0);
+  }, 30_000);
+  // -------------------------------------------------------------------------
+  // WP10 P2: a customer's signal racing their own wallet payment for one order
+  // -------------------------------------------------------------------------
+
+  /**
+   * One of the two commands is held inside its transaction just after its write to the
+   * transfer's row; the other is started and must be seen WAITING on that row in
+   * `pg_stat_activity` before the first is released. Whichever holds the row first
+   * wins, and the database's answer is the same both ways: never a PENDING transfer left
+   * behind a paid order, and never a wallet payment beside a transfer under review.
+   */
+  function holdAfter<K extends 'signalSent' | 'cancelPendingForOrder'>(method: K) {
+    const repository = (ctx.container.payments as unknown as { deps: PaymentServiceDeps }).deps
+      .repository;
+    const original = repository[method].bind(repository) as (...args: unknown[]) => unknown;
+    let entered!: () => void;
+    const inside = new Promise<void>((resolve) => (entered = resolve));
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => (open = resolve));
+    let calls = 0;
+    vi.spyOn(repository, method).mockImplementation((async (...args: unknown[]) => {
+      const result = await original(...args);
+      calls += 1;
+      if (calls === 1) {
+        entered();
+        await gate;
+      }
+      return result;
+    }) as never);
+    return { inside, release: open };
+  }
+
+  async function awaitWaitingOn(fragment: string): Promise<void> {
+    const deadline = Date.now() + 5_000;
+    for (;;) {
+      const waiting = (await ctx.container.database.db.execute(
+        sql`SELECT query FROM pg_stat_activity
+             WHERE datname = current_database() AND wait_event_type = 'Lock'
+               AND pid <> pg_backend_pid()` as never,
+      )) as unknown as { rows: { query: string }[] };
+      if (waiting.rows.length >= 1) {
+        expect(waiting.rows[0]?.query.toLowerCase()).toContain(fragment);
+        return;
+      }
+      if (Date.now() > deadline) throw new Error(`nothing ever waited on ${fragment}`);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
+  async function transferFor(key: string) {
+    const order = await awaitingPayment(key);
+    const { payment } = await ctx.container.payments.requestManualTransfer(
+      tenantA,
+      systemActor(key),
+      customerA,
+      { idempotencyKey: `${key}-manual-0001`, orderId: order.id },
+    );
+    await credit(1_000_000n, `${key}-credit`);
+    return { order, payment };
+  }
+
+  const signal = (paymentId: string, key: string) =>
+    ctx.container.payments.signalTransferSent(tenantA, systemActor(key), customerA, {
+      idempotencyKey: key,
+      paymentId,
+      botInstanceId: BOT_A,
+    });
+
+  const settle = (orderId: string, key: string) =>
+    ctx.container.payments.settleFromWallet(tenantA, systemActor(key), customerA, {
+      idempotencyKey: key,
+      orderId,
+    });
+
+  async function paymentsOf(orderId: string) {
+    const rows = (await ctx.container.database.db.execute(
+      sql`SELECT method, state, customer_signalled_at IS NOT NULL AS signalled
+            FROM payments WHERE order_id = ${orderId} ORDER BY method` as never,
+    )) as unknown as { rows: { method: string; state: string; signalled: boolean }[] };
+    return rows.rows;
+  }
+
+  it('keeps a signal that took the transfer first, and refuses the wallet payment', async () => {
+    const { order, payment } = await transferFor('race-sig-first');
+    const held = holdAfter('signalSent');
+
+    const signalling = signal(payment.id, 'race-sig-first-signal');
+    signalling.catch(() => undefined);
+    await held.inside;
+    const paying = settle(order.id, 'race-sig-first-settle');
+    paying.catch(() => undefined);
+    await awaitWaitingOn('update "payments"');
+
+    held.release();
+    const [signalled, paid] = await Promise.allSettled([signalling, paying]);
+    expect(signalled.status).toBe('fulfilled');
+    expect(paid).toMatchObject({
+      status: 'rejected',
+      reason: { code: COMMERCE_ERROR_CODES.ORDER_TRANSFER_UNDER_REVIEW },
+    });
+    expect(await paymentsOf(order.id), 'never both').toEqual([
+      { method: 'MANUAL_TRANSFER', state: 'PENDING', signalled: true },
+    ]);
+    expect(await balance()).toMatchObject({ amountMinor: 1_000_000n });
+  }, 30_000);
+
+  it('withdraws the transfer when the wallet payment took it first, and refuses the late signal', async () => {
+    const { order, payment } = await transferFor('race-pay-first');
+    const held = holdAfter('cancelPendingForOrder');
+
+    const paying = settle(order.id, 'race-pay-first-settle');
+    paying.catch(() => undefined);
+    await held.inside;
+    const signalling = signal(payment.id, 'race-pay-first-signal');
+    signalling.catch(() => undefined);
+    await awaitWaitingOn('update "payments"');
+
+    held.release();
+    const [paid, signalled] = await Promise.allSettled([paying, signalling]);
+    expect(paid.status).toBe('fulfilled');
+    expect(signalled).toMatchObject({
+      status: 'rejected',
+      reason: { code: COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID },
+    });
+    expect(await paymentsOf(order.id), 'no PENDING orphan behind a paid order').toEqual([
+      { method: 'MANUAL_TRANSFER', state: 'CANCELLED', signalled: false },
+      { method: 'WALLET', state: 'CONFIRMED', signalled: false },
+    ]);
+    expect(await balance()).toMatchObject({ amountMinor: 750_000n });
   }, 30_000);
 });

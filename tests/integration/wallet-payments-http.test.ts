@@ -675,6 +675,119 @@ describe('wallet and payment HTTP surfaces', () => {
     }
   });
   // -------------------------------------------------------------------------
+  // The late-review lane, over HTTP (WP10 P1)
+  // -------------------------------------------------------------------------
+
+  describe('the late-review routes', () => {
+    /** An expired transfer the customer signalled, expired by the real sweep. */
+    async function lateTransfer(key: string): Promise<string> {
+      const order = await awaitingPayment(tenantA, customerA, panelA, key);
+      const { payment } = await api.container.payments.requestManualTransfer(
+        tenantA,
+        systemActor(key),
+        customerA,
+        { idempotencyKey: `${key}-manual-0001`, orderId: order.id },
+      );
+      await api.container.payments.signalTransferSent(tenantA, systemActor(key), customerA, {
+        idempotencyKey: `${key}-signal-0001`,
+        paymentId: payment.id,
+        botInstanceId: SEED_IDS.botA1 as BotInstanceId,
+      });
+      await api.container.database.db.execute(
+        sql`UPDATE payments SET expires_at = now() - interval '1 hour' WHERE id = ${payment.id}`,
+      );
+      await api.container.database.db.execute(
+        sql`UPDATE orders SET expires_at = now() - interval '1 hour' WHERE id = ${order.id}`,
+      );
+      await api.container.paymentExpirySweep.runOnce(tenantA);
+      return payment.id;
+    }
+
+    it('refuses both decisions without a session (401) and without receipts.review (403)', async () => {
+      const paymentId = await lateTransfer('http-late-1');
+      for (const url of [
+        PAYMENT_ROUTES.lateCredit(paymentId),
+        PAYMENT_ROUTES.lateDismiss(paymentId),
+      ]) {
+        const anonymous = await inject({
+          method: 'POST',
+          url: `${API_PREFIX}${url}`,
+          headers: { origin: ORIGIN },
+          payload: { idempotencyKey: 'late-http-anon-1', reason: 'NOT_RECEIVED' },
+        });
+        expect(anonymous.statusCode, `POST ${url} anonymously`).toBe(401);
+
+        const refused = await post(url, technicalCookie, {
+          idempotencyKey: 'late-http-tech-1',
+          reason: 'NOT_RECEIVED',
+        });
+        expect(refused.statusCode, `POST ${url} without receipts.review`).toBe(403);
+        expect(errorOf(refused.body).code).toBe(PLATFORM_ERROR_CODES.PERMISSION_DENIED);
+      }
+      const ledger = await api.container.database.db.execute(
+        sql`SELECT count(*)::int AS n FROM wallet_entries WHERE reason = 'LATE_TRANSFER'`,
+      );
+      expect((ledger.rows[0] as { n: number }).n).toBe(0);
+    });
+
+    it('lists the lane, credits under receipts.review, and shows the decision on the payment', async () => {
+      const paymentId = await lateTransfer('http-late-2');
+
+      const lane = await get(`${PAYMENT_ROUTES.list}?lateReview=true`, financeCookie);
+      expect(lane.statusCode).toBe(200);
+      const listed = paymentListResponseSchema.parse(JSON.parse(lane.body));
+      expect(listed.payments.map((p) => [p.id, p.lateReviewEligible, p.lateDecision])).toEqual([
+        [paymentId, true, null],
+      ]);
+
+      const credited = await post(PAYMENT_ROUTES.lateCredit(paymentId), financeCookie, {
+        idempotencyKey: 'late-http-credit-1',
+        // Not a field the route takes: a figure here would be a reviewer restating the
+        // amount, and the schema strips it rather than honouring it.
+        amountMinor: '1',
+      });
+      expect(credited.statusCode).toBe(201);
+      const body = paymentResponseSchema.parse(JSON.parse(credited.body));
+      expect(body.payment.state).toBe('EXPIRED');
+      expect(body.payment.lateReviewEligible).toBe(false);
+      expect(body.payment.lateDecision).toMatchObject({ decision: 'CREDITED', reason: null });
+      const ledger = await api.container.database.db.execute(
+        sql`SELECT amount::text AS amount FROM wallet_entries WHERE reason = 'LATE_TRANSFER'`,
+      );
+      expect(ledger.rows).toEqual([{ amount: '250000' }]);
+
+      const empty = await get(`${PAYMENT_ROUTES.list}?lateReview=true`, financeCookie);
+      expect(paymentListResponseSchema.parse(JSON.parse(empty.body)).payments).toEqual([]);
+    });
+
+    it('dismisses with a reason from the closed list, and refuses one outside it', async () => {
+      const paymentId = await lateTransfer('http-late-3');
+
+      const invalid = await post(PAYMENT_ROUTES.lateDismiss(paymentId), financeCookie, {
+        idempotencyKey: 'late-http-dismiss-0',
+        reason: 'CUSTOMER_IS_LYING',
+      });
+      expect(invalid.statusCode).toBe(400);
+
+      const dismissed = await post(PAYMENT_ROUTES.lateDismiss(paymentId), financeCookie, {
+        idempotencyKey: 'late-http-dismiss-1',
+        reason: 'WRONG_BENEFICIARY',
+        note: 'به حساب دیگری واریز شده',
+      });
+      expect(dismissed.statusCode).toBe(201);
+      expect(
+        paymentResponseSchema.parse(JSON.parse(dismissed.body)).payment.lateDecision,
+      ).toMatchObject({ decision: 'DISMISSED', reason: 'WRONG_BENEFICIARY' });
+
+      const again = await post(PAYMENT_ROUTES.lateCredit(paymentId), financeCookie, {
+        idempotencyKey: 'late-http-credit-3',
+      });
+      expect(again.statusCode).toBe(409);
+      expect(errorOf(again.body).code).toBe(COMMERCE_ERROR_CODES.LATE_TRANSFER_ALREADY_DECIDED);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Receipts, over HTTP
   // -------------------------------------------------------------------------
 
