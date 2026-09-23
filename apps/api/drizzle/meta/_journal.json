@@ -750,6 +750,27 @@
       "when": 1790160620427,
       "tag": "0106_wp8_cashback_guards",
       "breakpoints": true
+    },
+    {
+      "idx": 107,
+      "version": "7",
+      "when": 1790172128253,
+      "tag": "0107_wp9_referral",
+      "breakpoints": true
+    },
+    {
+      "idx": 108,
+      "version": "7",
+      "when": 1790172138253,
+      "tag": "0108_wp9_referral_guards",
+      "breakpoints": true
+    },
+    {
+      "idx": 109,
+      "version": "7",
+      "when": 1790172148253,
+      "tag": "0109_referrals_view_permission",
+      "breakpoints": true
     }
   ]
 }
