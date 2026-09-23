@@ -231,7 +231,17 @@ export class DrizzleRefundRepository implements RefundRepository {
       .from(payments)
       .where(and(eq(payments.tenantId, tenantId), eq(payments.id, paymentId)))
       .limit(1)
-      .for('update');
+      /*
+       * `NO KEY UPDATE`, not `UPDATE` — it serialises every refund writer of this
+       * payment exactly as before (the two modes conflict with themselves and with each
+       * other), and it does NOT conflict with the `FOR KEY SHARE` a foreign-key check
+       * takes. That difference is a deadlock: the cashback and referral earners hold the
+       * CUSTOMER's lock and then insert a ledger entry naming this payment, whose FK
+       * check waited on a `FOR UPDATE` here while this transaction waited on the
+       * customer. WP10 P3 made `complete` take this lock, and the mid-credit races in
+       * `cashback.test.ts` and `referrals.test.ts` aborted with `40P01` until it changed.
+       */
+      .for('no key update');
     return rows.length === 1;
   }
 

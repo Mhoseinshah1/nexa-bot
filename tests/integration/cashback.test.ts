@@ -604,8 +604,14 @@ describe('cashback is earned once, at delivery, and a refund takes its share bac
     await cashbackRule();
     const order = await confirmed(100_000n);
     const paymentId = await paidFromWallet(order);
-    await refund(paymentId, 40_000n);
+    /*
+     * Delivered FIRST, then refunded, then noticed. The refund used to come before the
+     * delivery here; WP10 P3 refuses an operator's refund while the purchase operation is
+     * undecided, so "before delivery was noticed" now means what the title says — the
+     * account exists, and the earner has not yet swept it.
+     */
     await deliver(order.id);
+    await refund(paymentId, 40_000n);
     await ctx.container.cashback.settleDue(tenantA, 50);
     // 60% of the payment stands, so 60% of the promise is earned and nothing is reversed.
     expect((await promise(order.id))?.earned_amount).toBe('6000');

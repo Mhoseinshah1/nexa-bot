@@ -165,6 +165,8 @@ import { ReceiptService } from './modules/commerce/payments/application/receipt.
 import { TelegramReceiptFiles } from './modules/commerce/payments/infrastructure/telegram-receipt-files.js';
 import { PaymentService } from './modules/commerce/payments/application/payment.service.js';
 import { RefundService } from './modules/commerce/payments/application/refund.service.js';
+import { LateTransferService } from './modules/commerce/payments/application/late-transfer.service.js';
+import { DrizzleLateTransferRepository } from './modules/commerce/payments/infrastructure/drizzle-late-transfer.repository.js';
 import { DrizzleRefundRepository } from './modules/commerce/payments/infrastructure/drizzle-refund.repository.js';
 import { SalesCurrencyChangeGuard } from './modules/commerce/payments/application/sales-currency-change.guard.js';
 import { PaymentExpiryService } from './modules/commerce/payments/application/payment-expiry.service.js';
@@ -213,7 +215,10 @@ import { DrizzleOperationRepository } from './modules/commerce/provisioning/infr
 import { ProvisioningService } from './modules/commerce/provisioning/application/provisioning.service.js';
 import { ServiceAdminService } from './modules/commerce/provisioning/application/service-admin.service.js';
 import { decideOperability } from './modules/commerce/provisioning/application/panel-operability.js';
-import { ProvisionerService } from './modules/commerce/provisioning/application/provisioner.service.js';
+import {
+  PURCHASED_AS,
+  ProvisionerService,
+} from './modules/commerce/provisioning/application/provisioner.service.js';
 import { ProvisionerLoop } from './modules/commerce/provisioning/application/provisioner-loop.js';
 import { DeliveryService } from './modules/commerce/provisioning/application/delivery.service.js';
 import { CustomerNotificationService } from './modules/commerce/messaging/application/customer-notification.service.js';
@@ -447,6 +452,11 @@ export interface Container {
    * reversing one is a finance permission an operator can be granted on its own.
    */
   readonly refunds: RefundService;
+  /**
+   * The late-review lane (WP10 P1): an expired transfer the customer vouched for,
+   * credited to the wallet or dismissed, once, under `receipts.review`.
+   */
+  readonly lateTransfers: LateTransferService;
   /**
    * The route repository, exposed for ONE caller: the boot-time reconcile.
    *
@@ -1508,6 +1518,47 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
      * consult what the wallet currently holds.
      */
     wallet: walletRepository,
+    /*
+     * The order's lock, read and one edge (P3): an operator's refund that completes the
+     * payment moves the order `PAID -> REFUNDED`.
+     */
+    orders: orderRepository,
+    /*
+     * Whether the operation that DELIVERS what the order bought is still undecided. The
+     * type comes from `PURCHASED_AS`, the table the cashback earner and the provisioner
+     * already share, so "the purchase operation" means one thing everywhere.
+     */
+    deliveries: {
+      purchaseInProgress: (scope, order, tx) =>
+        operationRepository.hasUnresolvedForOrder(scope, order.id, PURCHASED_AS[order.purpose], tx),
+    },
+    outbox,
+    notifier: customerNotifier,
+    guard,
+    uow,
+    audit,
+    opsLog: opsLogWriter,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
+
+  /**
+   * The late-review lane (WP10 P1).
+   *
+   * The payment READ and its lock, the receipt COUNT, the ledger's `append` and
+   * `lockCustomer`, and its own decision table — narrowed by its dependency type, so the
+   * lane that credits a late transfer cannot move a payment's state or file a receipt.
+   */
+  const lateTransferService = new LateTransferService({
+    payments: paymentRepository,
+    receipts: paymentReceiptRepository,
+    decisions: new DrizzleLateTransferRepository(database.db),
+    wallet: walletRepository,
+    notifier: customerNotifier,
+    outbox,
     guard,
     uow,
     audit,
@@ -1624,6 +1675,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     usernames: usernameLane,
     payments: paymentRepository,
     notifier: customerNotifier,
+    // The COUNT only: whether the customer vouched for a transfer decides the sentence.
+    receipts: paymentReceiptRepository,
     orders: orderRepository,
     uow,
     audit,
@@ -2963,6 +3016,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     paymentAccounts: paymentAccountService,
     paymentGateways: paymentGatewayService,
     refunds: refundService,
+    lateTransfers: lateTransferService,
     paymentGatewayProvisioning: paymentGatewayRepository,
     receipts: receiptService,
     receiptFiles,

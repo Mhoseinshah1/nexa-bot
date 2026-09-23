@@ -746,6 +746,11 @@ describe('profile metadata, normalised before it is ever stored', () => {
        */
       'bot.payment.sent_button',
       'bot.payment.transfer_instructions',
+      /*
+       * WP10 P2: paying from the wallet while a transfer the customer vouched for waits.
+       * Says the review decides the order and nothing was debited; promises no flow.
+       */
+      'bot.payment.transfer_under_review',
       'bot.payment.unconfigured',
       'bot.payment.wallet_button',
       'bot.payment.window_too_short',

@@ -1296,8 +1296,14 @@ describe('the referral program: attribution, the promise, the credit and its rev
     it('earns only the refunded-down share when a refund completed before delivery was noticed, and reverses nothing', async () => {
       const { referrer, order } = await earned(100_000n);
       const paymentId = await f.paidFromWallet(order);
-      await f.refund(paymentId, 40_000n);
+      /*
+       * Delivered FIRST, then refunded, then noticed. The refund used to come before the
+       * delivery here; WP10 P3 refuses an operator's refund while the purchase operation
+       * is undecided, so "before delivery was noticed" now means what the title says —
+       * the account exists, and the earner has not yet swept it.
+       */
       await f.deliver(order.id);
+      await f.refund(paymentId, 40_000n);
       await ctx.container.referralCommissions.settleDue(tenantA, 50);
 
       expect((await f.commission(order.id))?.earned_amount).toBe('6000');

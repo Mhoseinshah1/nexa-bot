@@ -27,7 +27,11 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
-import { payments } from '../../../../infrastructure/persistence/schema.js';
+import {
+  lateTransferDecisions,
+  paymentReceipts,
+  payments,
+} from '../../../../infrastructure/persistence/schema.js';
 import type {
   PaymentConfirmation,
   PaymentCursor,
@@ -185,6 +189,10 @@ export class DrizzlePaymentRepository implements PaymentRepository {
       conditions.push(eq(payments.customerId, search.customerId));
     if (search.orderId !== undefined) conditions.push(eq(payments.orderId, search.orderId));
     if (search.reference !== undefined) conditions.push(eq(payments.reference, search.reference));
+    if (search.lateReview !== undefined) {
+      const lane = lateReviewLane();
+      conditions.push(search.lateReview ? lane : sql`NOT (${lane})`);
+    }
     if (cursor !== null) {
       conditions.push(
         sql`(${payments.createdAt}, ${payments.id}) > (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`,
@@ -509,6 +517,26 @@ export class DrizzlePaymentRepository implements PaymentRepository {
       .limit(1);
     return row === undefined ? null : toRecord(row as Row);
   }
+}
+
+/**
+ * The late-review lane as one SQL predicate over `payments` (P1).
+ *
+ * `lateReviewRefusal` returning null, plus no decision on record: an EXPIRED
+ * `MANUAL_TRANSFER` whose customer signalled it or filed at least one receipt, and that
+ * has no `late_transfer_decisions` row. Both sub-selects are tenant-scoped as well as
+ * keyed by the payment, because every read here is.
+ */
+function lateReviewLane(): SQL {
+  return sql`(${payments.state} = 'EXPIRED'
+    AND ${payments.method} = 'MANUAL_TRANSFER'
+    AND (${payments.customerSignalledAt} IS NOT NULL
+         OR EXISTS (SELECT 1 FROM ${paymentReceipts}
+                     WHERE ${paymentReceipts.tenantId} = ${payments.tenantId}
+                       AND ${paymentReceipts.paymentId} = ${payments.id}))
+    AND NOT EXISTS (SELECT 1 FROM ${lateTransferDecisions}
+                     WHERE ${lateTransferDecisions.tenantId} = ${payments.tenantId}
+                       AND ${lateTransferDecisions.paymentId} = ${payments.id}))`;
 }
 
 type Row = {

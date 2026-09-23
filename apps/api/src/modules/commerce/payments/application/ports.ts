@@ -138,6 +138,14 @@ export interface PaymentSearch {
    * exact match a unique lookup within the tenant.
    */
   readonly reference?: string;
+  /**
+   * The late-review lane (`docs/wp10-payments-audit.md` P1): `true` for an EXPIRED
+   * manual transfer the customer vouched for — a signal or a receipt — with no decision
+   * yet; `false` for every other payment. The SQL statement of `lateReviewRefusal` plus
+   * "undecided", and `LateTransferService.viewsFor` is the TS statement the same rows
+   * are marked with; `tests/integration/late-transfers.test.ts` pins that they agree.
+   */
+  readonly lateReview?: boolean;
 }
 
 export interface PaymentRepository {

@@ -6,10 +6,13 @@ import {
   PAYMENT_ROUTES,
   confirmPaymentRequestSchema,
   errors,
+  lateTransferCreditRequestSchema,
+  lateTransferDismissRequestSchema,
   paymentIdSchema,
   paymentReceiptIdSchema,
   rejectPaymentRequestSchema,
   paymentListQuerySchema,
+  type LateTransferDecisionView,
   type OrderId,
   type PaymentDestinationView,
   type PaymentDetailResponse,
@@ -33,9 +36,12 @@ import type {
 } from '../../modules/commerce/payments/application/ports.js';
 import type { PaymentDestinationRecord } from '../../modules/commerce/payments/application/account-ports.js';
 import type { PaymentReceiptRecord } from '../../modules/commerce/payments/application/receipt-ports.js';
+import type { LateReviewView } from '../../modules/commerce/payments/application/late-transfer.service.js';
 
 /**
- * Payments over HTTP, at `/payments`. Two reads and TWO writes.
+ * Payments over HTTP, at `/payments`. Two reads and FOUR writes: the two halves of a
+ * review, and since WP10 the two decisions of the late-review lane (P1), which carry an
+ * idempotency key and, for a dismissal, a closed reason — never an amount.
  *
  * The writes are the two halves of one decision — a confirmation and a rejection —
  * which is what `receipts.review` has said since the permission catalogue was frozen
@@ -81,6 +87,7 @@ export class PaymentsController {
       ...(query.customerId === undefined ? {} : { customerId: query.customerId }),
       ...(query.orderId === undefined ? {} : { orderId: query.orderId }),
       ...(query.reference === undefined ? {} : { reference: query.reference }),
+      ...(query.lateReview === undefined ? {} : { lateReview: query.lateReview }),
     });
     const result = await this.container.payments.list(scope, actor, {
       ...(page.limit === undefined ? {} : { limit: page.limit }),
@@ -91,13 +98,15 @@ export class PaymentsController {
         ...(page.customerId === undefined ? {} : { customerId: page.customerId as UserId }),
         ...(page.orderId === undefined ? {} : { orderId: page.orderId as OrderId }),
         ...(page.reference === undefined ? {} : { reference: page.reference }),
+        ...(page.lateReview === undefined ? {} : { lateReview: page.lateReview }),
       },
     });
+    const views = await this.container.lateTransfers.viewsFor(scope, actor, result.items);
     return {
       // The LIST omits `evidenceNote`: it is an operator's own text about somebody's
       // bank transfer, and it is returned only on the detail, behind the same
       // permission. A list is the thing most likely to end up on a shared screen.
-      payments: result.items.map(toSummary),
+      payments: result.items.map((record) => toSummary(record, views.get(record.id))),
       nextCursor: result.nextCursor === null ? null : encodeKeysetCursor(result.nextCursor),
     };
   }
@@ -109,7 +118,7 @@ export class PaymentsController {
       this.container.payments.get(scope, actor, id),
       this.container.payments.destinationFor(scope, actor, id),
     ]);
-    return { payment: toDetail(payment, destination) };
+    return { payment: toDetail(payment, destination, await this.lateView(scope, actor, payment)) };
   }
 
   @Post('payments/:id/confirm')
@@ -124,9 +133,7 @@ export class PaymentsController {
       idempotencyKey: input.idempotencyKey,
       note: input.evidenceNote,
     });
-    return {
-      payment: toDetail(payment, await this.container.payments.destinationFor(scope, actor, id)),
-    };
+    return this.answer(scope, actor, payment);
   }
 
   @Post('payments/:id/reject')
@@ -141,9 +148,67 @@ export class PaymentsController {
       idempotencyKey: input.idempotencyKey,
       note: input.resolutionNote,
     });
-    return {
-      payment: toDetail(payment, await this.container.payments.destinationFor(scope, actor, id)),
-    };
+    return this.answer(scope, actor, payment);
+  }
+
+  /**
+   * A reviewer crediting a late transfer to the customer's wallet (WP10 P1).
+   *
+   * An idempotency key and nothing else — the amount is the payment's own, and
+   * `lateTransferCreditRequestSchema` has no field that could restate it. The payment
+   * stays EXPIRED; the answer shows the decision standing on it.
+   */
+  @Post('payments/:id/late-credit')
+  async lateCredit(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<PaymentResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const input = lateTransferCreditRequestSchema.parse(body);
+    const { payment } = await this.container.lateTransfers.credit(scope, actor, id, {
+      idempotencyKey: input.idempotencyKey,
+    });
+    return this.answer(scope, actor, payment);
+  }
+
+  /** A reviewer dismissing a late transfer, with a reason from the closed list (P1). */
+  @Post('payments/:id/late-dismiss')
+  async lateDismiss(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<PaymentResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const input = lateTransferDismissRequestSchema.parse(body);
+    const { payment } = await this.container.lateTransfers.dismiss(scope, actor, id, {
+      idempotencyKey: input.idempotencyKey,
+      reason: input.reason,
+      note: input.note,
+    });
+    return this.answer(scope, actor, payment);
+  }
+
+  /** The detail a write answers with: the payment, where it pointed, and its lane. */
+  private async answer(
+    scope: TenantContext,
+    actor: ReturnType<typeof adminActor>,
+    payment: PaymentRecord,
+  ): Promise<PaymentResponse> {
+    const [destination, late] = await Promise.all([
+      this.container.payments.destinationFor(scope, actor, payment.id),
+      this.lateView(scope, actor, payment),
+    ]);
+    return { payment: toDetail(payment, destination, late) };
+  }
+
+  private async lateView(
+    scope: TenantContext,
+    actor: ReturnType<typeof adminActor>,
+    payment: PaymentRecord,
+  ): Promise<LateReviewView | undefined> {
+    const views = await this.container.lateTransfers.viewsFor(scope, actor, [payment]);
+    return views.get(payment.id);
   }
 
   /**
@@ -254,7 +319,10 @@ function paymentCursorFrom(raw: string): PaymentCursor {
   return { createdAt: position.createdAt, id: position.id as PaymentId };
 }
 
-function toSummary(record: PaymentRecord): PaymentSummaryResponse {
+function toSummary(
+  record: PaymentRecord,
+  late: LateReviewView | undefined,
+): PaymentSummaryResponse {
   return {
     id: record.id,
     customerId: record.customerId,
@@ -275,6 +343,21 @@ function toSummary(record: PaymentRecord): PaymentSummaryResponse {
     expiresAt: record.expiresAt === null ? null : record.expiresAt.toISOString(),
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
+    lateDecision:
+      late === undefined || late.decision === null ? null : toLateDecisionView(late.decision),
+    lateReviewEligible: late?.eligible ?? false,
+  };
+}
+
+/** The decision, minus the reviewer's note — see `lateTransferDecisionViewSchema`. */
+function toLateDecisionView(
+  decision: NonNullable<LateReviewView['decision']>,
+): LateTransferDecisionView {
+  return {
+    decision: decision.decision,
+    reason: decision.reason,
+    decidedAt: decision.decidedAt.toISOString(),
+    decidedByAdminId: decision.decidedByAdminId,
   };
 }
 
@@ -299,9 +382,10 @@ function toReceiptView(record: PaymentReceiptRecord): PaymentReceiptView {
 function toDetail(
   record: PaymentRecord,
   destination: PaymentDestinationRecord | null,
+  late: LateReviewView | undefined,
 ): PaymentDetailResponse {
   return {
-    ...toSummary(record),
+    ...toSummary(record, late),
     evidenceNote: record.evidenceNote,
     resolutionNote: record.resolutionNote,
     destination: destination === null ? null : toDestinationView(destination),

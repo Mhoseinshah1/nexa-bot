@@ -929,7 +929,23 @@ describe('refunds', () => {
       customerA,
       { idempotencyKey: `${key}-settle-0001`, orderId: order.id },
     );
+    await deliver(order.id);
     return { id: payment.id, orderId: payment.orderId };
+  }
+
+  /**
+   * The order's purchase operation, SUCCEEDED — the account exists on the panel.
+   *
+   * WP10 P3: an operator's refund waits while the purchase operation is undecided, so a
+   * fixture that means "a paid, delivered order" has to say the delivery happened. The
+   * same statement `cashback.test.ts` and `referrals.test.ts` use; the provisioner is
+   * not what these cases are about.
+   */
+  async function deliver(orderId: string): Promise<void> {
+    await ctx.container.database.db.execute(sql`
+      UPDATE provisioning_operations
+         SET state = 'SUCCEEDED', completed_at = now(), claimed_by = NULL, lease_until = NULL
+       WHERE tenant_id = ${tenantA.tenantId} AND order_id = ${orderId}`);
   }
 
   /** A PENDING MANUAL_TRANSFER payment of 250,000 IRT. */
@@ -953,6 +969,7 @@ describe('refunds', () => {
       pending.id,
       { idempotencyKey: `${key}-confirm-0001`, note: 'کارت به کارت، ۴ رقم آخر ۱۲۳۴' },
     );
+    if (payment.orderId !== null) await deliver(payment.orderId);
     return { id: payment.id };
   }
 

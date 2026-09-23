@@ -575,6 +575,51 @@ export class PaymentService {
           now,
           'REFUSE_AFTER_DEADLINE',
         );
+
+        /*
+         * A wallet payment and an open transfer cannot both settle this order (P2, D2).
+         *
+         * FIRST the transfers nobody vouched for are withdrawn, with the conditional
+         * UPDATE the customer's own cancellation uses: `cancelPendingForOrder` refuses a
+         * signalled row IN the statement, so a signal committing between any read and
+         * this write keeps its payment. Left alone, such a transfer lapsed an hour later
+         * and told the customer `PAYMENT_EXPIRED` about an order they had already paid.
+         *
+         * THEN the claim is asked, after the write — the order `cancelByCustomer` asks it
+         * in, for the reason it gives. A transfer the customer SAID they sent may be
+         * money in flight, and only a reviewer may decide it; debiting the wallet as well
+         * would be two payments for one order and the customer's own money stranded on
+         * the second. So the whole command is refused, and throwing rolls the
+         * withdrawals above back with it: nothing is debited and nothing is cancelled.
+         */
+        const withdrawn = await this.deps.repository.cancelPendingForOrder(scope, orderId, now, tx);
+        if (await this.deps.repository.hasClaimedPendingForOrder(scope, orderId, tx)) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.ORDER_TRANSFER_UNDER_REVIEW,
+            'A transfer for this order is waiting to be reviewed.',
+          );
+        }
+        for (const cancelledId of withdrawn) {
+          await this.deps.audit.record(
+            scope,
+            actor,
+            {
+              action: 'payment.withdraw',
+              entityType: 'Payment',
+              entityId: cancelledId,
+              before: { state: 'PENDING' },
+              after: {
+                state: 'CANCELLED',
+                orderId,
+                // Why this installation closed it: the customer paid the order another way.
+                withdrawnBy: 'WALLET_SETTLEMENT',
+              },
+              result: 'SUCCESS',
+            },
+            tx,
+          );
+        }
+
         const total = order.totals.total;
 
         const balance = await this.deps.wallet.balanceOf(scope, customerId, total.currency, tx);
@@ -1763,6 +1808,28 @@ export class PaymentService {
       },
       tx,
     );
+
+    /*
+     * The ledger write announces itself (P4, D4), like every other writer of this ledger:
+     * `WalletEntryRecorded`, in this transaction, and only when this transaction WROTE
+     * the entry — the loser of two racing confirmations re-read it, and one movement is
+     * one event.
+     */
+    if (inserted) {
+      await this.deps.outbox.write(tx, actor, {
+        eventType: 'WalletEntryRecorded',
+        aggregateType: 'Wallet',
+        aggregateId: entry.customerId,
+        payload: {
+          customerId: entry.customerId,
+          entryId: entry.id,
+          direction: entry.direction,
+          reason: entry.reason,
+          amountMinor: entry.amount.amountMinor.toString(),
+          currency: entry.amount.currency,
+        },
+      });
+    }
 
     await this.deps.audit.record(
       scope,

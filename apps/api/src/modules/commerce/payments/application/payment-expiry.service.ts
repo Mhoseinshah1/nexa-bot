@@ -14,7 +14,9 @@ import type { ScopeActivityReader } from '../../../platform/system/application/r
 import type { OrderRepository } from '../../orders/application/ports.js';
 import type { OrderUsernameLane } from '../../provisioning/application/username-lane.js';
 import type { CustomerNotifier } from '../../messaging/application/customer-notifier.js';
+import { customerVouchedFor } from '../domain/late-review.js';
 import type { PaymentRepository } from './ports.js';
+import type { PaymentReceiptRepository } from './receipt-ports.js';
 
 /**
  * How many rows one pass moves, per kind.
@@ -51,6 +53,11 @@ export interface PaymentExpiryServiceDeps {
    * that caused it, nor the expiry without the notification.
    */
   readonly notifier: CustomerNotifier;
+  /**
+   * Counting a payment's receipts, which is half of whether the customer vouched for it
+   * (`docs/wp10-payments-audit.md` P1). A narrowed read: the sweep files nothing.
+   */
+  readonly receipts: Pick<PaymentReceiptRepository, 'countForPayment'>;
   readonly scopeActivity: ScopeActivityReader;
   /** Gives back the panel slot an expired order was holding. */
   readonly panelSales: PanelSalesGate;
@@ -136,15 +143,14 @@ export interface PaymentExpiryServiceDeps {
  * from the ORDER's deadline so that money already in the bank is not stranded by a
  * receipt that sat in the queue. That exemption still stands and it is now BOUNDED:
  * once this sweep has expired the payment, `confirm` finds it no longer PENDING and
- * refuses. That is the owner's rule applied, not an oversight — and the remedy for
- * money that did arrive is a wallet credit (`users.wallet.credit`,
- * `POST /users/:id/wallet/adjust`), which is audited, reversible by a second adjustment
- * and does not require reopening a closed payment.
+ * refuses. That is the owner's rule applied, not an oversight.
  *
- * That key is held by `owner` and `finance`, and NOT by `receipt_reviewer`, whose whole
- * grant is `receipts.view` and `receipts.review`. So the operator most likely to meet
- * this case is the one who cannot perform the remedy, and an installation that
- * separates those roles has to route it. Said here rather than left to be discovered.
+ * The remedy for money that did arrive used to be an unlinked `ADMIN_CREDIT`, under a
+ * key `receipt_reviewer` does not hold — so the operator most likely to meet the case
+ * could not act on it (D1 in `docs/wp10-payments-audit.md`). Since WP10 P1 a transfer
+ * the customer vouched for joins the late-review lane when this sweep expires it, and
+ * `LateTransferService` credits or dismisses it under `receipts.review`, once, against
+ * the payment. Nothing reopens the payment or the order either way.
  */
 export class PaymentExpiryService {
   constructor(private readonly deps: PaymentExpiryServiceDeps) {}
@@ -217,10 +223,25 @@ export class PaymentExpiryService {
           },
           tx,
         );
+        /*
+         * WHICH sentence, decided by whether the customer vouched for the transfer.
+         *
+         * `PAYMENT_EXPIRED` says the window closed. To somebody who has already sent the
+         * money and said so — or sent a receipt — that reads as "your money is lost",
+         * and it is not: the payment joins the late-review lane, and a reviewer will
+         * credit what arrived (P1). So they are told `PAYMENT_EXPIRED_UNDER_REVIEW`
+         * INSTEAD, never beside it; one closed payment, one sentence. The count is read
+         * in this transaction, after the row moved, so a receipt filed before the expiry
+         * is seen and one filed after it cannot be — `ReceiptService.submit` refuses a
+         * payment that is no longer PENDING.
+         */
+        const receipts = await this.deps.receipts.countForPayment(scope, payment.id, tx);
         await this.deps.notifier.notify(
           scope,
           payment.customerId,
-          'PAYMENT_EXPIRED',
+          customerVouchedFor(payment, receipts)
+            ? 'PAYMENT_EXPIRED_UNDER_REVIEW'
+            : 'PAYMENT_EXPIRED',
           payment.id,
           now,
           tx,

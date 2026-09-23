@@ -680,6 +680,22 @@ export interface OperationRepository {
   ): Promise<OperationRecord | null>;
 
   /**
+   * Whether an operation of this type for this ORDER is still undecided: `PLANNED`,
+   * `IN_FLIGHT` or `UNKNOWN` — every state `OPERATION_TERMINAL_STATES` leaves out.
+   *
+   * For a refund of the order's payment (`docs/wp10-payments-audit.md` P3), which waits
+   * while the operation that DELIVERS what the order bought might still create, or might
+   * already have created, the account. The caller names the type, from `PURCHASED_AS`,
+   * so a SUSPEND or a SYNC_USAGE carrying the same order id does not hold a refund.
+   */
+  hasUnresolvedForOrder(
+    scope: TenantContext,
+    orderId: string,
+    type: OperationType,
+    tx?: unknown,
+  ): Promise<boolean>;
+
+  /**
    * A service's operations, OLDEST first, bounded.
    *
    * The order is part of the contract because a caller counts with it:

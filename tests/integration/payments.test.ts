@@ -16,6 +16,7 @@ import type { ProductDraft } from '../../apps/api/src/modules/commerce/catalog/a
 import type { OrderRecord } from '../../apps/api/src/modules/commerce/orders/application/ports';
 import { DrizzleOrderRepository } from '../../apps/api/src/modules/commerce/orders/infrastructure/drizzle-order.repository';
 import { DrizzlePaymentRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-payment.repository';
+import { DrizzlePaymentReceiptRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-receipt.repository';
 import { PaymentExpiryService } from '../../apps/api/src/modules/commerce/payments/application/payment-expiry.service';
 import { CustomerNotifier } from '../../apps/api/src/modules/commerce/messaging/application/customer-notifier';
 import { DrizzleCustomerNotificationRepository } from '../../apps/api/src/modules/commerce/messaging/infrastructure/drizzle-customer-notification.repository';
@@ -1196,6 +1197,8 @@ describe('payments and settlement', () => {
       // lane is stateless and the isolation claim is about tenants, not about it.
       usernames: ctx.container.usernameLane,
       payments: new DrizzlePaymentRepository(ctx.container.database.db),
+      // WP10 P1: whether the customer vouched for a transfer decides the sentence.
+      receipts: new DrizzlePaymentReceiptRepository(ctx.container.database.db),
       orders: new DrizzleOrderRepository(ctx.container.database.db),
       uow: ctx.container.uow,
       audit: ctx.container.audit,

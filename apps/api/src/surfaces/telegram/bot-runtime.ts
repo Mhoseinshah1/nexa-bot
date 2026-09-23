@@ -8276,6 +8276,17 @@ export class BotRuntime {
        * financial product rule no contract states. The customer is told what is missing
        * and left to act on it.
        */
+      /*
+       * A transfer the customer SAID they sent is waiting for review (WP10 P2), so the
+       * wallet was not debited. Answered here rather than through `REFUSAL_REPLIES`,
+       * whose entry for this code answers a CANCELLATION — "this order cannot be
+       * cancelled" — and would tell a customer who tapped pay about something they did
+       * not do. One code, two commands, two sentences; the one this command owes is
+       * that the review decides the order and nothing was taken from the wallet.
+       */
+      if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.ORDER_TRANSFER_UNDER_REVIEW) {
+        return { key: 'bot.payment.transfer_under_review', values: {}, buttons: [], orderId };
+      }
       if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.WALLET_INSUFFICIENT_FUNDS) {
         const shortfall = shortfallOf(error.details);
         if (shortfall !== null) {
