@@ -77,16 +77,24 @@ on the strength of the rule in D4, and the list's docblock says so.
 `rotateSubscription(target, http, ref, previousUrl)` sends the `revoke_sub`, then reads
 the account back and compares the panel's current link with the one Nexa last stored:
 
-| `revoke_sub` answered         | read-back link             | outcome                                                                                       |
-| ----------------------------- | -------------------------- | --------------------------------------------------------------------------------------------- |
-| 2xx                           | differs from `previousUrl` | **rotated**: the new link                                                                     |
-| 2xx                           | equals `previousUrl`       | `MALFORMED_RESPONSE`: the panel said yes and changed nothing. Terminal, and nothing is stored |
-| 404                           | —                          | `found: false`: the account is gone                                                           |
-| 429                           | —                          | `RATE_LIMITED`                                                                                |
-| 400 / 403                     | —                          | `PROVIDER_REFUSED`: a rule; terminal                                                          |
-| transport failure, 5xx, other | differs from `previousUrl` | **rotated**: the rotation took effect and only its answer was lost                            |
-| transport failure, 5xx, other | equals `previousUrl`       | the original failure: provably not rotated, so a retry is a first attempt                     |
-| transport failure, 5xx, other | read-back fails as well    | the original failure. A retry rotates again, which converges (D3)                             |
+| `revoke_sub` answered             | read-back link             | outcome                                                                                       |
+| --------------------------------- | -------------------------- | --------------------------------------------------------------------------------------------- |
+| 2xx                               | differs from `previousUrl` | **rotated**: the new link                                                                     |
+| 2xx                               | equals `previousUrl`       | `MALFORMED_RESPONSE`: the panel said yes and changed nothing. Terminal, and nothing is stored |
+| 404                               | —                          | `found: false`: the account is gone                                                           |
+| 429                               | —                          | `RATE_LIMITED`                                                                                |
+| 400 / 403                         | —                          | `PROVIDER_REFUSED`: a rule; terminal                                                          |
+| any transport failure, 5xx, other | differs from `previousUrl` | **rotated**: the rotation took effect and only its answer was lost                            |
+| transport failure, 5xx, other     | equals `previousUrl`       | the original failure: provably not rotated, so a retry is a first attempt                     |
+| transport failure, 5xx, other     | read-back fails as well    | the original failure. A retry rotates again, which converges (D3)                             |
+
+**Every transport failure is read back**, including the kinds `SAFE_TO_REPLAY_FAILURE_KINDS`
+calls never-read. `SafeHttpClient` reports a socket that died after the request was
+written as `UNREACHABLE`, so for a rotation that kind does not prove nothing happened.
+Found by falsification (RR-03 in `docs/rickpanel-rotate-falsification.md`): the first
+version returned those kinds unread, and no test could tell. The shared classifier is
+not changed here; whether a post-write reset should stop being `UNREACHABLE` for the
+create path too is recorded as OQ-RP-09 (§6).
 
 Two consequences:
 
@@ -148,3 +156,40 @@ Marzban and 3X-UI stay without it:
 - **Customer self-service rotation** is WP6 (D1).
 - **Old-link invalidation** is not claimed anywhere. Proving it needs a reachable
   subscription host, which the owner's test environment did not have (§2).
+
+## 5. What was built, and where it is held
+
+| piece                                    | where                                                                                                                             |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `rotateSubscription` and D4's table      | `rickpanel.adapter.ts`; `tests/unit/rickpanel-adapter.test.ts` › RickPanel subscription rotation                                  |
+| the executor branch and `finishRotation` | `provisioner.service.ts`; `tests/integration/rickpanel-rotate-link.test.ts`                                                       |
+| the link stored and delivery re-armed    | `DrizzleServiceRepository.recordRotation`                                                                                         |
+| the compare-and-set on delivery writes   | `recordDelivery` and `recordRateLimited`, fed by `DeliveryService.deliver`; the two race cases in `rickpanel-rotate-link.test.ts` |
+| operator-only, `services.edit`           | `OPERATOR_SERVICE_OPERATIONS`, `OPERATOR_OPERATION_PERMISSION`                                                                    |
+| Web Admin                                | `POST /services/:id/rotate-link`; the action row on the service page                                                              |
+| Telegram Admin                           | `ra:` asks, `rb:` confirms; only the confirmation screen produces `rb:`                                                           |
+| RickPanel alone declares the capability  | `tests/integration/panels-http.test.ts`; `telegram-admin-services.test.ts` asserts no rotation is offered on a Marzban            |
+
+**The race is tested by a controlled interleaving, not by `Promise.all`.** The Telegram
+stand-in holds the old link's send until the rotation has committed, then answers it.
+Two answers are driven: a 200, which without the compare-and-set would mark the new
+link DELIVERED unsent, and a 429, which would park the new link behind a rate limit it
+never received.
+
+**One refusal lost its only input.** With `ROTATE_SUBSCRIPTION` performable, every
+member of `OPERATION_TYPES` is, so `isPerformableOperation`'s ABANDONED branch has no
+contract type left that reaches it. It stays, for the next type the contract gains;
+`tests/unit/registries.test.ts` pins the performable list so such a type cannot arrive
+without its branch. The integration case that used to exercise it now exercises the
+other refusal: a rotation on a 3X-UI panel is refused before the panel is dialled.
+
+## 6. Open questions
+
+| id       | question                                                                                                                                                                                    | what settles it                                                                                                                                               |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| OQ-RP-07 | After `revoke_sub`, does the subscription host refuse the OLD link?                                                                                                                         | Fetch both links from a reachable subscription host after a rotation on a disposable user. Until then nothing in Nexa claims the old link stops working (D6). |
+| OQ-RP-08 | Is a customer allowed to rotate their own link, and how often?                                                                                                                              | A product decision, WP6 (D1). The operation is built so that WP6 adds a surface and an entitlement rule, not a second implementation.                         |
+| OQ-RP-09 | `SafeHttpClient` classifies a connection reset after the request was written as `UNREACHABLE`, which `SAFE_TO_REPLAY_FAILURE_KINDS` treats as never read. Is that safe for the create path? | Distinguish a reset before the request was flushed from one after it, at the socket, and decide per kind. Rotation no longer depends on it (D4).              |
+
+Neither is exercised by `pnpm test:acceptance` yet. The acceptance suite has not been
+run against a RickPanel in any form, because this session has no disposable panel.

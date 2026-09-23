@@ -222,13 +222,14 @@ describe('panel HTTP surface', () => {
           'ADD_TIME',
         ],
         /*
-         * The same ten as Marzban, and NOT because RickPanel is a Marzban.
+         * Marzban's ten and one more, and NOT because RickPanel is a Marzban.
          *
          * The two are separate provider types precisely because they mean
          * different things by the same routes — `docs/rickpanel-adapter-audit.md`.
-         * The lists coincide because `RickpanelAdapter` implements the same ten
-         * operations, and they are written out separately so that one moving
-         * does not silently move the other.
+         * The lists shared ten entries because `RickpanelAdapter` implemented the
+         * same ten operations, and they were written out separately so that one
+         * moving would not silently move the other. That is what happened: rotation
+         * moved RickPanel's list and left Marzban's where it was.
          *
          * `LIMIT_DEVICES` is absent: the RickPanel contract describes no field
          * for a device limit, so the adapter sends none and the endpoint must
@@ -246,6 +247,10 @@ describe('panel HTTP surface', () => {
           'RENEW_USER',
           'ADD_VOLUME',
           'ADD_TIME',
+          // The one RickPanel has and Marzban does not: `revoke_sub`, measured on the
+          // owner's panel and proven per call by a read-back
+          // (`docs/rickpanel-rotate-audit.md`). Named absent for the other two below.
+          'ROTATE_SUBSCRIPTION_LINK',
         ],
         sanaei: [
           'HEALTH_CHECK',
@@ -263,13 +268,22 @@ describe('panel HTTP surface', () => {
         // capability moved to.
         for (const unimplemented of [
           'RESET_USAGE',
-          'ROTATE_SUBSCRIPTION_LINK',
           'DELIVER_RAW_CONFIGS',
           'DELIVER_CONFIG_FILE',
           'INACTIVE_ACCOUNT_INBOUND',
         ]) {
           expect(provider.capabilities, `${provider.key}.${unimplemented}`).not.toContain(
             unimplemented,
+          );
+        }
+        /*
+         * Rotation left the shared list above when RickPanel gained it, so it is named
+         * here on the two sides that still lack it — for the reason the management
+         * three are named below.
+         */
+        if (provider.key !== 'rickpanel') {
+          expect(provider.capabilities, `${provider.key}.ROTATE_SUBSCRIPTION_LINK`).not.toContain(
+            'ROTATE_SUBSCRIPTION_LINK',
           );
         }
         /*

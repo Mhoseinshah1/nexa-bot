@@ -73,6 +73,9 @@ const PREFIX = {
   terminateAsk: 'P:',
   /** The one destructive callback in the admin panel. */
   terminate: 'Q:',
+  /** A new subscription link, asked then confirmed. RickPanel's alone. */
+  rotateAsk: 'ra:',
+  rotate: 'rb:',
 } as const;
 
 const systemActor = (correlationId: string): ActorContext => ({
@@ -993,6 +996,14 @@ describe('the services section of the Telegram management panel', () => {
      * by one letter, which is why this is asserted rather than reviewed.
      */
     expect(body, 'a one-tap deletion was drawn').not.toContain(`${PREFIX.terminate}${service.id}`);
+    /*
+     * And no rotation, because this is a Marzban and only RickPanel declares
+     * `ROTATE_SUBSCRIPTION_LINK`. The RickPanel side, and the ask-then-confirm pair, are
+     * in `rickpanel-rotate-link.test.ts`.
+     */
+    expect(body, 'a rotation Marzban cannot do was offered').not.toContain(
+      `${PREFIX.rotateAsk}${service.id}`,
+    );
   });
 
   it('offers an administrator holding services.view alone no action at all', async () => {
@@ -1016,6 +1027,8 @@ describe('the services section of the Telegram management panel', () => {
       PREFIX.resume,
       PREFIX.terminateAsk,
       PREFIX.terminate,
+      PREFIX.rotateAsk,
+      PREFIX.rotate,
     ]) {
       expect(body, `${prefix} was drawn without services.edit`).not.toContain(
         `${prefix}${service.id}`,

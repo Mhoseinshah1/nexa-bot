@@ -18,15 +18,15 @@ finding rather than a gap — see F4E-02.
 
 ## The SYNC_USAGE sweep and the operation dispatch
 
-| #      | Rule                                                            | Mutation                                                                     | Named test                                                                                                         | Result   |
-| ------ | --------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | -------- |
-| F4E-06 | `PERFORMABLE_OPERATION_TYPES` names only what has a branch      | `'TERMINATE'` appended to the constant (see the note below)                  | `registries.test.ts` › names exactly the nine types this release performs, and no more                             | KILLED   |
-| F4E-07 | The executor refuses an unperformable type before anything else | `if (!isPerformableOperation(operation.type)) {` → `if (false as boolean) {` | `provisioning-delivery.test.ts` › refuses an operation type this release cannot perform, before contacting a panel | SURVIVED |
-| F4E-08 | An unperformable type is legal from NO service state            | `ROTATE_SUBSCRIPTION: []` → `ROTATE_SUBSCRIPTION: ['ACTIVE']`                | `provisioning-delivery.test.ts` › refuses an operation type this release cannot perform, before contacting a panel | SURVIVED |
-| F4E-09 | A usage sync writes what the panel said                         | `recordUsage(...)` call removed from `finishUsageSync`                       | `provisioning-delivery.test.ts` › refreshes a stale usage figure from the panel, and writes what the panel said    | KILLED   |
-| F4E-10 | A fresh figure is not re-read                                   | `COALESCE(usage_synced_at, created_at)` → `usage_synced_at IS NULL OR …`     | `provisioning-delivery.test.ts` › does not sync a service whose figure is still fresh                              | KILLED   |
-| F4E-11 | One sync per cadence window, however many ticks run             | the window removed from the derived operation id                             | `provisioning-delivery.test.ts` › plans ONE sync per cadence window however many ticks run                         | KILLED   |
-| F4E-12 | A failed sync claims no refresh it did not make                 | `if (!read.ok)` branch falls through to `recordUsage`                        | `provisioning-delivery.test.ts` › a sync that the panel refuses is FAILED, never UNKNOWN, and moves no service     | KILLED   |
+| #      | Rule                                                            | Mutation                                                                     | Named test                                                                                                      | Result   |
+| ------ | --------------------------------------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | -------- |
+| F4E-06 | `PERFORMABLE_OPERATION_TYPES` names only what has a branch      | `'TERMINATE'` appended to the constant (see the note below)                  | `registries.test.ts` › names exactly the ten types this release performs, and no more                           | KILLED   |
+| F4E-07 | The executor refuses an unperformable type before anything else | `if (!isPerformableOperation(operation.type)) {` → `if (false as boolean) {` | `provisioning-delivery.test.ts` › refuses a rotation on a panel that cannot rotate, before contacting a panel   | SURVIVED |
+| F4E-08 | An unperformable type is legal from NO service state            | `ROTATE_SUBSCRIPTION: []` → `ROTATE_SUBSCRIPTION: ['ACTIVE']`                | `provisioning-delivery.test.ts` › refuses a rotation on a panel that cannot rotate, before contacting a panel   | SURVIVED |
+| F4E-09 | A usage sync writes what the panel said                         | `recordUsage(...)` call removed from `finishUsageSync`                       | `provisioning-delivery.test.ts` › refreshes a stale usage figure from the panel, and writes what the panel said | KILLED   |
+| F4E-10 | A fresh figure is not re-read                                   | `COALESCE(usage_synced_at, created_at)` → `usage_synced_at IS NULL OR …`     | `provisioning-delivery.test.ts` › does not sync a service whose figure is still fresh                           | KILLED   |
+| F4E-11 | One sync per cadence window, however many ticks run             | the window removed from the derived operation id                             | `provisioning-delivery.test.ts` › plans ONE sync per cadence window however many ticks run                      | KILLED   |
+| F4E-12 | A failed sync claims no refresh it did not make                 | `if (!read.ok)` branch falls through to `recordUsage`                        | `provisioning-delivery.test.ts` › a sync that the panel refuses is FAILED, never UNKNOWN, and moves no service  | KILLED   |
 
 #### F4E-06 after Phase 4F
 
@@ -39,6 +39,23 @@ The MUTATION in that row is historical and is no longer applicable on this head:
 4F, so appending `'TERMINATE'` is now a no-op. The rule is unchanged and is
 re-measured on the current code as **F4F-30**, which removes the three types 4F
 added and kills the same case.
+
+#### F4E-06, F4E-07 and F4E-08 after RickPanel rotation
+
+The registry case was renamed again — nine types became ten — when
+`ROTATE_SUBSCRIPTION` became performable (`docs/rickpanel-rotate-audit.md`), and
+F4E-06 is repointed to it. F4F-30's mutation still kills it on this head.
+
+F4E-07 and F4E-08 cited the integration case that planned a `ROTATE_SUBSCRIPTION`
+because no code performed one. That is no longer true, so the case was rewritten into
+its successor: a rotation on a 3X-UI panel is refused before the panel is dialled. The
+rows now cite the successor, and their results are recorded as they stand on this head
+rather than re-derived: **every member of `OPERATION_TYPES` is performable**, so the
+membership check has no contract type left that reaches it, F4E-07's mutation has no
+reachable input, and F4E-08's target (an empty legal-from list for `ROTATE_SUBSCRIPTION`)
+no longer exists. Both refusals are kept for the next type the contract gains; the
+registry pin is what forces that type to arrive with its branch. The measurement below
+is the one made in 4E, when a type without a branch still existed.
 
 ### F4E-07 and F4E-08, the two survivals, and what they actually mean
 

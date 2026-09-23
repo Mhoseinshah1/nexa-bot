@@ -1026,6 +1026,11 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.admin.service_resent',
       'bot.admin.service_resume_button',
       'bot.admin.service_retry_button',
+      // RickPanel rotation: a button, the question it asks, and the confirmation. None
+      // carries a link, old or new; the customer receives the new one from delivery.
+      'bot.admin.service_rotate_link_ask',
+      'bot.admin.service_rotate_link_button',
+      'bot.admin.service_rotate_link_confirm_button',
       'bot.admin.service_suspend_button',
       'bot.admin.service_sync_button',
       'bot.admin.service_terminate_ask',

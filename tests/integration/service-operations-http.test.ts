@@ -405,6 +405,11 @@ describe('operator service actions over HTTP', () => {
       path: SERVICE_ROUTES.terminate(serviceId),
       payload: { idempotencyKey: 'k-term-0001', confirm: SERVICE_TERMINATE_CONFIRMATION },
     },
+    {
+      action: 'ROTATE_LINK',
+      path: SERVICE_ROUTES.rotateLink(serviceId),
+      payload: { idempotencyKey: 'k-rota-0001' },
+    },
   ];
 
   // -------------------------------------------------------------------------
@@ -455,6 +460,12 @@ describe('operator service actions over HTTP', () => {
       SUSPEND: 'AVAILABLE',
       RESUME: 'STATE',
       TERMINATE: 'AVAILABLE',
+      /*
+       * A Marzban declares no `ROTATE_SUBSCRIPTION_LINK`, so the route is REFUSED below
+       * for the same reason the matrix gives. The RickPanel side, where it is offered and
+       * accepted, is `rickpanel-rotate-link.test.ts`.
+       */
+      ROTATE_LINK: 'CAPABILITY',
     });
 
     for (const attempt of everyAction('placeholder')) {

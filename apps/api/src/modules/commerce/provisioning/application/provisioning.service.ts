@@ -156,6 +156,10 @@ export type CustomerServiceOperation = (typeof CUSTOMER_SERVICE_OPERATIONS)[numb
  * gives: they are purchases, and a purchase starts with an order. An operator granting
  * one for free is a Phase 7 product decision (`docs/open-questions.md`), not an
  * operation this list can quietly acquire.
+ *
+ * `ROTATE_SUBSCRIPTION` is the sixth, added with the first adapter that performs it. It
+ * is operator-only on purpose: a customer-facing rotation needs a rate and abuse rule
+ * nobody has decided (`docs/rickpanel-rotate-audit.md` D1).
  */
 export const OPERATOR_SERVICE_OPERATIONS = [
   'SUSPEND',
@@ -163,6 +167,7 @@ export const OPERATOR_SERVICE_OPERATIONS = [
   'TERMINATE',
   'SYNC_USAGE',
   'RECONCILE',
+  'ROTATE_SUBSCRIPTION',
 ] as const satisfies readonly OperationType[];
 
 export type OperatorServiceOperation = (typeof OPERATOR_SERVICE_OPERATIONS)[number];
@@ -172,7 +177,8 @@ export type OperatorServiceOperation = (typeof OPERATOR_SERVICE_OPERATIONS)[numb
  *
  * `TERMINATE` is `services.terminate` — a HIGH-risk key held by `owner` alone in the
  * frozen role catalogue — because it deletes the account on somebody's panel while the
- * customer keeps the order they paid for. The other four are `services.edit`.
+ * customer keeps the order they paid for. The other five are `services.edit`: a rotation
+ * replaces a link and keeps the account, the same weight as a suspend.
  *
  * A table rather than a conditional, so adding an operation cannot inherit the cheaper
  * key by being written in the wrong branch.
@@ -185,6 +191,7 @@ export const OPERATOR_OPERATION_PERMISSION: Readonly<
   TERMINATE: 'services.terminate',
   SYNC_USAGE: 'services.edit',
   RECONCILE: 'services.edit',
+  ROTATE_SUBSCRIPTION: 'services.edit',
 };
 
 /**

@@ -261,11 +261,18 @@ export class DeliveryService {
       );
     }
 
+    /*
+     * The link THIS attempt sends, and the one both records below are conditional on.
+     * A rotation that commits while the message is in flight replaces it, and the
+     * record of the old link's send must not land on the row that now holds the new
+     * one: that would mark a link DELIVERED the customer never received.
+     */
+    const sentUrl = service.subscriptionUrl;
     const result = await this.deps.messenger.send(scope, {
       chatId,
       botInstanceId,
       templateKey: 'bot.service.subscription',
-      values: { subscriptionUrl: service.subscriptionUrl },
+      values: { subscriptionUrl: sentUrl },
     });
 
     const now = this.deps.clock.now();
@@ -290,7 +297,7 @@ export class DeliveryService {
     if (result.outcome === 'RATE_LIMITED') {
       const retryAt = new Date(now.getTime() + (result.retryAfterMs ?? DELIVERY_BACKOFF_MS));
       const held = await this.deps.uow.run(scope, async (tx) =>
-        this.deps.services.recordRateLimited(scope, service.id, from, retryAt, now, tx),
+        this.deps.services.recordRateLimited(scope, service.id, from, retryAt, sentUrl, now, tx),
       );
       return { state: from, recorded: held };
     }
@@ -318,6 +325,7 @@ export class DeliveryService {
             to !== 'DELIVERED' ? null : outcome === 'DELIVERED' ? now : service.deliveredAt,
           nextAttemptAt:
             to === 'PENDING' ? new Date(now.getTime() + deliveryBackoffMs(attemptsAfter)) : null,
+          sentUrl,
         },
         now,
         tx,
@@ -519,7 +527,7 @@ export class DeliveryService {
         service.id,
         service.deliveryState,
         'FAILED',
-        { deliveredAt: null, nextAttemptAt: null },
+        { deliveredAt: null, nextAttemptAt: null, sentUrl: service.subscriptionUrl },
         now,
         tx,
       );

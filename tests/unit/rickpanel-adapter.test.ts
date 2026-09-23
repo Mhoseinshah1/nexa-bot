@@ -103,6 +103,30 @@ let putStatus: number | null = null;
  * on it name both candidates.
  */
 let missingSeedStatus = 422;
+/**
+ * How `POST /api/user/{name}/revoke_sub` behaves. Each mode is one row of
+ * `docs/rickpanel-rotate-audit.md` D4 — the modes that ROTATE change the stored link
+ * before answering, so a test can tell a rotation from its answer.
+ */
+type RevokeMode =
+  /** The owner's evidence: 200, and the link and token change. */
+  | 'rotates'
+  /** Rotates, then answers 500: the rotation happened and its answer was lost. */
+  | 'rotates-then-500'
+  /**
+   * Rotates, then drops the connection without answering. The client reports a
+   * socket that died after the request was written, which it classifies as
+   * UNREACHABLE; the read is what says the rotation happened.
+   */
+  | 'rotates-then-drops'
+  /** 500, and nothing changed. */
+  | 'fails-500'
+  /** 200, and nothing changed: a panel claiming a rotation it did not make. */
+  | 'no-op-200'
+  | 'refuses'
+  | 'rate-limited';
+let revokeMode: RevokeMode = 'rotates';
+let rotations = 0;
 let users = new Map<string, FakeUser>();
 let foreign = new Set<string>();
 let requests: { method: string; path: string; body: string; auth: string }[] = [];
@@ -200,6 +224,37 @@ beforeAll(async () => {
         }
       }
 
+      const revoke = /^\/api\/user\/([^/]+)\/revoke_sub$/.exec(url);
+      if (revoke !== null && request.method === 'POST') {
+        const held = users.get(decodeURIComponent(revoke[1] ?? ''));
+        if (held === undefined) return json(404, { detail: 'User not found' });
+        const rotate = (): void => {
+          rotations += 1;
+          held.subscription_url = `/sub/${held.username}-rotated-${String(rotations)}`;
+          held.sub_token = `${held.username}-rotated-${String(rotations)}`;
+        };
+        switch (revokeMode) {
+          case 'rotates':
+            rotate();
+            return json(200, { username: held.username });
+          case 'rotates-then-500':
+            rotate();
+            return json(500, { detail: 'boom' });
+          case 'rotates-then-drops':
+            rotate();
+            response.destroy();
+            return;
+          case 'fails-500':
+            return json(500, { detail: 'boom' });
+          case 'no-op-200':
+            return json(200, { username: held.username });
+          case 'refuses':
+            return json(400, { detail: 'your service does not allow this' });
+          case 'rate-limited':
+            return json(429, { detail: 'slow down' });
+        }
+      }
+
       const match = /^\/api\/user\/([^/]+)$/.exec(url);
       if (match !== null) {
         const name = decodeURIComponent(match[1] ?? '');
@@ -259,6 +314,8 @@ beforeEach(() => {
   deleteStatus = null;
   putStatus = null;
   missingSeedStatus = 422;
+  revokeMode = 'rotates';
+  rotations = 0;
   users = new Map();
   foreign = new Set();
   requests = [];
@@ -739,6 +796,110 @@ describe('RickPanel failure classification', () => {
     // than refunding. The difference from `PROVIDER_REFUSED` is the whole point
     // of declaring a second kind.
     expect(operationFailureOutcome('PROVIDER_ERROR', 'PROVISION')).toBe('UNKNOWN');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Rotation: docs/rickpanel-rotate-audit.md D4, one test per row
+// ---------------------------------------------------------------------------
+
+describe('RickPanel subscription rotation', () => {
+  const NAME = 'nxuhdjwuc3m5';
+  const previous = () => `${base}/sub/${NAME}-token`;
+  const rotate = () => adapter().rotateSubscription(target(), http(), ref(NAME), previous());
+  const posts = () =>
+    requests.filter((one) => one.method === 'POST' && one.path.endsWith('/revoke_sub'));
+
+  beforeEach(() => {
+    users.set(NAME, userRecord(NAME));
+  });
+
+  it('rotates through revoke_sub and returns the link it READ back', async () => {
+    const outcome = await rotate();
+    expect(outcome).toEqual({
+      ok: true,
+      found: true,
+      subscriptionUrl: `${base}/sub/${NAME}-rotated-1`,
+    });
+    expect(posts()).toHaveLength(1);
+    expect(posts()[0]?.path).toBe(`/api/user/${NAME}/revoke_sub`);
+    // A rotation asks for nothing else: no PUT, so expiry, limit and status cannot move.
+    expect(requests.some((one) => one.method === 'PUT')).toBe(false);
+    expect(reads()).toHaveLength(1);
+  });
+
+  it('refuses a 200 that left the link unchanged, and it is terminal', async () => {
+    revokeMode = 'no-op-200';
+    const outcome = await rotate();
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.failure).toBe('MALFORMED_RESPONSE');
+    expect(PROVIDER_FAILURE_RETRYABLE[outcome.failure]).toBe(false);
+    expect(operationFailureOutcome(outcome.failure, 'ROTATE_SUBSCRIPTION')).toBe('FAILED');
+  });
+
+  it('reports a rotation that happened even when its answer was a 500', async () => {
+    revokeMode = 'rotates-then-500';
+    const outcome = await rotate();
+    expect(outcome).toEqual({
+      ok: true,
+      found: true,
+      subscriptionUrl: `${base}/sub/${NAME}-rotated-1`,
+    });
+  });
+
+  it('reads back after a connection that dropped, and counts the rotation it finds', async () => {
+    /*
+     * The transport classifies a socket that died after the request was written as
+     * UNREACHABLE, a kind the contract lists as never read. For a rotation that is
+     * not safe to believe: the panel may have acted. So every transport failure is
+     * followed by the read, and the read decides.
+     */
+    revokeMode = 'rotates-then-drops';
+    const outcome = await rotate();
+    expect(outcome).toEqual({
+      ok: true,
+      found: true,
+      subscriptionUrl: `${base}/sub/${NAME}-rotated-1`,
+    });
+    expect(posts()).toHaveLength(1);
+  });
+
+  it('returns the original failure when the read proves nothing rotated', async () => {
+    revokeMode = 'fails-500';
+    const outcome = await rotate();
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.failure).toBe('PROVIDER_ERROR');
+    expect(outcome.status).toBe(500);
+    // Retried, never UNKNOWN: a rotation is a convergent mutation.
+    expect(operationFailureOutcome(outcome.failure, 'ROTATE_SUBSCRIPTION')).toBe('FAILED');
+    expect(reads()).toHaveLength(3);
+  });
+
+  it('answers found:false for an account the panel does not hold', async () => {
+    users.delete(NAME);
+    expect(await rotate()).toEqual({ ok: true, found: false });
+  });
+
+  it.each([
+    ['refuses', 'PROVIDER_REFUSED', 400],
+    ['rate-limited', 'RATE_LIMITED', 429],
+  ] as const)('returns a %s answer as it is, without reading', async (mode, failure, status) => {
+    revokeMode = mode;
+    const outcome = await rotate();
+    expect(outcome).toEqual({ ok: false, failure, status });
+    expect(reads()).toHaveLength(0);
+    expect(users.get(NAME)?.subscription_url).toBe(`/sub/${NAME}-token`);
+  });
+
+  it('carries the new link in one field and no credential anywhere', async () => {
+    const outcome = await rotate();
+    const text = asLogged(outcome);
+    expect(text).not.toContain('a-real-password');
+    expect(text).not.toContain('a-real-jwt');
+    expect(text).not.toContain('internal-vless-credential');
+    expect(text).not.toContain('sub_token');
   });
 });
 

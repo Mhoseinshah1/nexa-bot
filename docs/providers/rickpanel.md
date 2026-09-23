@@ -91,6 +91,7 @@ panels, two rules, two provider types — which is why the two must not be merge
 | Suspend / resume             | `PUT /api/user/{username}` carrying a status and nothing else                                |
 | Renew, add traffic, add time | `PUT /api/user/{username}` carrying the new figures                                          |
 | Terminate                    | `DELETE /api/user/{username}`                                                                |
+| New subscription link        | `POST /api/user/{username}/revoke_sub`, then `GET /api/user/{username}` to read the new link |
 
 ### Why a create is two calls
 
@@ -100,6 +101,23 @@ and Nexa reads the account back before it sends a customer anything. If the
 account is not readable yet, the order does not fail: the service is marked
 unreconciled and a later read adopts it. **Nexa never creates a second account to
 resolve the first.**
+
+### A new subscription link
+
+An operator can give a customer a new link from the service's actions, in the Web
+Admin or the Telegram management panel (`services.edit`; on Telegram it asks
+before it acts). Nexa asks the panel to mint a new token, then **reads the account
+back** and stores the link the panel now serves — never one assembled from the
+rotation's own answer. The customer is sent the new link by the ordinary delivery
+lane; a suspended service gets it when it is resumed.
+
+If the rotation's answer is lost, the read decides: a changed link counts as done,
+an unchanged one is tried again. If the panel answers yes and the link has not
+changed, Nexa reports it as a failed rotation and keeps the old link.
+
+**Nexa does not claim the old link stops working.** The owner's test panel changed
+the token, but its subscription host could not be reached to prove the old link is
+refused. Nothing Nexa tells the customer says otherwise. `docs/rickpanel-rotate-audit.md`.
 
 ### Refusals that are yours to fix, not ours to retry
 
@@ -158,7 +176,7 @@ pnpm test:acceptance
 against a **disposable** panel, never one carrying real customers. It fails rather
 than skips without one, on purpose.
 
-Five things that run would settle, each recorded as an open question in the audit
+Six things that run would settle, each recorded as an open question in the audit
 rather than guessed at here:
 
 - which field of the user record carries the subscription (`OQ-RP-01` — the owner's
@@ -168,6 +186,7 @@ rather than guessed at here:
 - whether the create accepts a status (`OQ-RP-02`);
 - what the create actually returns (`OQ-RP-03`);
 - how long node propagation takes (`OQ-RP-04`).
+- whether a rotated link's OLD link is refused by the subscription host (`OQ-RP-07`).
 
 Until then, the capabilities RickPanel advertises rest on a document and a fake.
 A Marzban acceptance result says nothing about any of this and must never be

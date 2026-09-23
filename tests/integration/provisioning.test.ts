@@ -697,7 +697,7 @@ describe('provisioning invariants', () => {
         serviceId,
         'PENDING',
         'PENDING',
-        { deliveredAt: null, nextAttemptAt: new Date(now.getTime() + 300_000) },
+        { deliveredAt: null, nextAttemptAt: new Date(now.getTime() + 300_000), sentUrl: null },
         now,
         tx,
       );
@@ -813,7 +813,7 @@ describe('provisioning invariants', () => {
         serviceId,
         'PENDING',
         'UNCONFIRMED',
-        { deliveredAt: null, nextAttemptAt: null },
+        { deliveredAt: null, nextAttemptAt: null, sentUrl: null },
         now,
         tx,
       );

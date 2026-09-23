@@ -6,6 +6,7 @@ import {
   type CanDeleteUser,
   type CanDisableUser,
   type CanEnableUser,
+  type CanRotateSubscription,
   type OperationState,
   type OperationType,
   type ProviderAdapter,
@@ -228,8 +229,10 @@ export function exhausted(attempts: number): boolean {
  * instead of producing a silent create on somebody's panel.
  *
  * `RENEW`, `ADD_TRAFFIC` and `ADD_TIME` joined in Phase 4F, once there was an order
- * behind each of them and a panel that could apply one. `ROTATE_SUBSCRIPTION` has
- * neither an adapter method nor a product decision behind it, and stays out.
+ * behind each of them and a panel that could apply one. `ROTATE_SUBSCRIPTION` joined
+ * with RickPanel's `rotateSubscription` and the operator-only decision recorded in
+ * `docs/rickpanel-rotate-audit.md`; a panel without the method and the capability is
+ * refused by `decideOperability` before it is dialled, as for every type here.
  *
  * `SUSPEND`, `RESUME` and `TERMINATE` joined the list once Marzban could perform them.
  * Membership here is NOT a claim that every panel can: `decideOperability` checks each
@@ -248,6 +251,7 @@ export const PERFORMABLE_OPERATION_TYPES = [
   'RENEW',
   'ADD_TRAFFIC',
   'ADD_TIME',
+  'ROTATE_SUBSCRIPTION',
 ] as const satisfies readonly OperationType[];
 
 export function isPerformableOperation(type: OperationType): boolean {
@@ -326,10 +330,14 @@ export const OPERATION_LEGAL_FROM: Readonly<Record<OperationType, readonly Servi
    */
   ADD_TRAFFIC: ['ACTIVE'],
   ADD_TIME: ['ACTIVE'],
-  // Not performable in this release. Empty rather than absent, so that a type reaching
-  // here is refused by the state check as well as by `isPerformableOperation` — two
-  // independent refusals, because this is the edit that must not fail open.
-  ROTATE_SUBSCRIPTION: [],
+  /*
+   * A new link for an account that exists and is certain: ACTIVE, and SUSPENDED
+   * deliberately — the ordinary response to a leaked link is to suspend first and
+   * rotate second. The delivery sweep claims only ACTIVE services, so a suspended
+   * customer is sent the new link when they are resumed, not while they are paused.
+   * `docs/rickpanel-rotate-audit.md` D2.
+   */
+  ROTATE_SUBSCRIPTION: ['ACTIVE', 'SUSPENDED'],
 };
 
 /**
@@ -430,6 +438,21 @@ export async function resumeCall(
   ref: ProviderUserRef,
 ): ReturnType<CanEnableUser['resumeUser']> {
   return adapter.resumeUser(target, http, ref);
+}
+
+/**
+ * The rotation call. The adapter settles its own ambiguity by reading the account back
+ * against `previousUrl`, so what returns is either a link the panel holds now or a
+ * failure that provably changed nothing — `ProviderAdapter.rotateSubscription`.
+ */
+export async function rotateCall(
+  adapter: CanRotateSubscription,
+  target: ProviderServiceTarget,
+  http: Parameters<CanRotateSubscription['rotateSubscription']>[1],
+  ref: ProviderUserRef,
+  previousUrl: string | null,
+): ReturnType<CanRotateSubscription['rotateSubscription']> {
+  return adapter.rotateSubscription(target, http, ref, previousUrl);
 }
 
 /**

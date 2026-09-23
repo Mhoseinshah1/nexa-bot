@@ -5,6 +5,7 @@ import {
   canDisableUser,
   canRenewUser,
   canEnableUser,
+  canRotateSubscription,
   isIdempotentMutation,
   isMutatingOperation,
   nextState,
@@ -27,6 +28,7 @@ import {
   type ProviderAdapter,
   type ProviderFailureKind,
   type ProviderRemovalOutcome,
+  type ProviderRotationOutcome,
   type ProviderStateChangeOutcome,
   type ProviderType,
   type TenantContext,
@@ -61,6 +63,7 @@ import {
   OPERATION_LEGAL_FROM,
   provisionCall,
   resumeCall,
+  rotateCall,
   allowanceCall,
   suspendCall,
   terminateCall,
@@ -739,6 +742,23 @@ export class ProvisionerService {
           operation,
           service,
           await terminateCall(adapter, target, http, ref),
+        );
+      }
+      /*
+       * A new subscription link. The guard is the same two-question guard as the three
+       * above, for the same reason, and the previous link travels with the call because
+       * it is what the adapter's read-back compares against.
+       */
+      case 'ROTATE_SUBSCRIPTION': {
+        if (!canRotateSubscription(adapter)) {
+          await this.refuse(scope, operation, service, 'CAPABILITY_UNSUPPORTED', now);
+          return this.refused(operation, 'CAPABILITY_UNSUPPORTED');
+        }
+        return this.finishRotation(
+          scope,
+          operation,
+          service,
+          await rotateCall(adapter, target, http, ref, service.subscriptionUrl),
         );
       }
       /*
@@ -1588,6 +1608,111 @@ export class ProvisionerService {
         aggregateType: 'Service',
         aggregateId: serviceId,
         payload: { customerId: service.customerId, from, to },
+      });
+    });
+
+    return this.attempted(operation, serviceId, 'SUCCEEDED', null);
+  }
+
+  /**
+   * Records what a ROTATE_SUBSCRIPTION did. `docs/rickpanel-rotate-audit.md` D4 and D5.
+   *
+   * ## A failure changes nothing on the service
+   *
+   * The adapter returns a failure only when the panel provably still serves the link
+   * Nexa holds, or when it could not tell. Either way the stored link stays: replacing
+   * it with anything not read from the panel would give the customer a link nobody
+   * minted. `ROTATE_SUBSCRIPTION` is in `IDEMPOTENT_MUTATIONS`, so `outcomeFor`
+   * answers `FAILED` and a retryable kind is tried again — which converges, because
+   * the goal is "a link minted after the request", not "exactly one new token".
+   *
+   * ## A success stores the link and re-arms delivery, in one transaction
+   *
+   * `recordRotation` writes the new link, puts delivery back to a fresh `PENDING` and
+   * clears any send in progress. The delivery writes are conditional on the link they
+   * sent, so a send of the OLD link still in flight records nothing when it lands, and
+   * the sweep sends the new one. The service must still be `ACTIVE` or `SUSPENDED`: a
+   * service terminated while the call was on the wire keeps what the terminate wrote,
+   * and the operation still SUCCEEDED, because the panel really did rotate.
+   *
+   * The audit row and the event carry no link. Both links are bearer capabilities, and
+   * neither the audit log nor the outbox is a place for one.
+   */
+  private async finishRotation(
+    scope: TenantContext,
+    operation: OperationRecord,
+    service: ServiceRecord,
+    rotated: ProviderRotationOutcome,
+  ): Promise<ExecutionResult> {
+    const now = this.deps.clock.now();
+    const serviceId = service.id;
+
+    if (!rotated.ok) {
+      const outcome = outcomeFor(rotated.failure, operation.type);
+      await this.recordManagementFailure(
+        scope,
+        operation,
+        service,
+        outcome,
+        rotated.failure,
+        failureNote(rotated.failure, rotated.status),
+        now,
+      );
+      return this.attempted(operation, serviceId, outcome, rotated.failure);
+    }
+
+    if (!rotated.found) {
+      // The divergence `finishStateChange` describes: recorded, and the service untouched.
+      await this.recordManagementFailure(
+        scope,
+        operation,
+        service,
+        'FAILED',
+        null,
+        'the panel does not have this service’s account',
+        now,
+      );
+      return this.attempted(operation, serviceId, 'FAILED', null);
+    }
+
+    const actor = this.actor();
+    await this.deps.uow.run(scope, async (tx) => {
+      await this.deps.operations.transition(
+        scope,
+        operation.id,
+        'IN_FLIGHT',
+        'SUCCEEDED',
+        {},
+        now,
+        tx,
+      );
+      const moved = await this.deps.services.recordRotation(
+        scope,
+        serviceId,
+        rotated.subscriptionUrl,
+        OPERATION_LEGAL_FROM.ROTATE_SUBSCRIPTION,
+        now,
+        tx,
+      );
+      if (!moved) return;
+      await this.deps.audit.record(
+        scope,
+        actor,
+        {
+          action: 'service.rotate_subscription',
+          entityType: 'Service',
+          entityId: serviceId,
+          before: { state: service.state, deliveryState: service.deliveryState },
+          after: { state: service.state, deliveryState: 'PENDING' },
+          result: 'SUCCESS',
+        },
+        tx,
+      );
+      await this.deps.outbox.write(tx, actor, {
+        eventType: 'ServiceSubscriptionRotated',
+        aggregateType: 'Service',
+        aggregateId: serviceId,
+        payload: { customerId: service.customerId },
       });
     });
 

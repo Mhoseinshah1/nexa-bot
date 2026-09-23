@@ -12,10 +12,11 @@ import type { PanelOperability, PanelOperabilityRefusal } from './ports.js';
 /**
  * What an operator may do to a service right now, decided in ONE place.
  *
- * Phase 6A. Seven actions, three authorities — the service's state, the panel's
- * capabilities, and whether an operation of that type is already open — and before this
- * file the answer was computed nowhere: the Web Admin had no writes at all, and the
- * customer surface had its own three-line version for its own three actions.
+ * Phase 6A, with seven actions; `ROTATE_LINK` made it eight. Three authorities — the
+ * service's state, the panel's capabilities, and whether an operation of that type is
+ * already open — and before this file the answer was computed nowhere: the Web Admin
+ * had no writes at all, and the customer surface had its own three-line version for its
+ * own three actions.
  *
  * ## Pure, and that is the point
  *
@@ -38,12 +39,14 @@ import type { PanelOperability, PanelOperabilityRefusal } from './ports.js';
  * The operation each action plans, or `null` where it plans none.
  *
  * `RESEND_CONFIG` is the null: it sends a message and writes a delivery row, and no
- * provider is called. Keeping it in the same list as the six that DO plan an operation
+ * provider is called. Keeping it in the same list as the seven that DO plan an operation
  * is deliberate — it is an action an operator takes on a service from the same screen,
  * and giving it a separate vocabulary would mean a second availability mechanism for one
  * button.
  *
  * `RETRY_PROVISION` maps to `PROVISION`, which is what it plans.
+ * `ROTATE_LINK` maps to `ROTATE_SUBSCRIPTION`, the name the operation vocabulary already
+ * had for it (`docs/rickpanel-rotate-audit.md`).
  */
 export const SERVICE_ACTION_OPERATION: Readonly<
   Record<ServiceOperatorAction, OperationType | null>
@@ -55,6 +58,7 @@ export const SERVICE_ACTION_OPERATION: Readonly<
   SUSPEND: 'SUSPEND',
   RESUME: 'RESUME',
   TERMINATE: 'TERMINATE',
+  ROTATE_LINK: 'ROTATE_SUBSCRIPTION',
 };
 
 /**
