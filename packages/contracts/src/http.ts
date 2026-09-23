@@ -3691,10 +3691,21 @@ export type TrialOverrideListResponse = z.infer<typeof trialOverrideListResponse
  * `affectedGrants` is the number the operator types back to confirm; the execute
  * request carries it and is refused if the reset would stamp any other number.
  */
+/**
+ * The identity of the SET of grants a preview described (Codex, PR #65).
+ *
+ * An MD5 over the counted grant ids in id order — not a secret, a set identity. A count
+ * alone lets a preview authorise a different reset: one previewed grant released and
+ * another customer's claimed leaves the number unchanged. The confirmation carries this
+ * back, and the server refuses a reset whose stamped set hashes to anything else.
+ */
+export const trialResetFingerprintSchema = z.string().regex(/^[0-9a-f]{32}$/);
+
 export const trialResetPreviewResponseSchema = z.object({
   preview: z.object({
     affectedGrants: z.number().int().nonnegative(),
     affectedCustomers: z.number().int().nonnegative(),
+    fingerprint: trialResetFingerprintSchema,
     sample: z.array(
       z.object({ customer: trialCustomerSchema, grants: z.number().int().positive() }),
     ),
@@ -3709,6 +3720,8 @@ export type TrialResetPreviewResponse = z.infer<typeof trialResetPreviewResponse
 export const executeTrialResetRequestSchema = z.object({
   idempotencyKey: z.string().min(8).max(255),
   expectedGrants: z.number().int().positive(),
+  /** The preview's `fingerprint`, so the confirmation binds to the set, not the count. */
+  expectedFingerprint: trialResetFingerprintSchema,
   reason: z.string().trim().min(1).max(TRIAL_ADMIN_REASON_MAX_LENGTH),
 });
 export type ExecuteTrialResetRequest = z.infer<typeof executeTrialResetRequestSchema>;
