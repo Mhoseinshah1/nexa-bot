@@ -129,9 +129,19 @@ transaction. It holds:
 - the bot.
 
 The confirmation re-derives the reseller layer from **live** terms and compares it with
-the layer the quote recorded. Any difference refuses with `RESELLER_TERMS_CHANGED` and a
-"start again" sentence; the order is never re-priced. This is the same rule WP8 applies to
-a discount withdrawn between a quote and its confirmation.
+the layer the quote recorded: the cost, and the step and rule that produced it. A
+difference refuses with `RESELLER_TERMS_CHANGED` and a "start again" sentence
+(`bot.order.terms_changed`); the order is never re-priced. This is the same rule WP8
+applies to a discount withdrawn between a quote and its confirmation.
+
+A change that leaves the layer unchanged is not refused. A list-priced reseller (layer
+`LIST`, or an `OVERRIDE` with no percent) who is suspended, or an ordinary customer
+registered onto a list-priced tier, between the draft and the confirmation pays exactly
+what they were quoted. Such an order confirms under the standing in force at confirmation:
+as an ordinary customer with no terms row, or with a `LIST` (or `OVERRIDE`) terms row.
+Audience and entitlement are still decided for that standing, so a suspended reseller is
+still refused a reseller-only product and a newly registered one still needs the grants.
+The terms row records the standing at confirmation.
 
 **R10 — Refunds unwind through the existing single path.**
 `RefundService` is untouched: a reseller order refunded as undeliverable, or refunded by an

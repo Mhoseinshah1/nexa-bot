@@ -887,6 +887,66 @@ describe('resellers (WP9-B)', () => {
       expect((await orderRow(drafted.id))?.state).toBe('DRAFT');
     });
 
+    it('confirms a list-priced change under the standing in force at confirmation, audience and grants included', async () => {
+      /*
+       * PR #69 review, F1. Only a change in the layer the terms produce refuses. A
+       * list-priced reseller suspended, or a customer registered onto a list-priced tier,
+       * between the draft and the confirmation pays exactly what they were quoted, so the
+       * order confirms — under the standing in force at confirmation, whose audience and
+       * entitlement are still decided.
+       */
+      const listTier = await tier({ name: 'List', percent: null });
+      const everyone = await product(100_000n);
+      const resellersOnly = await product(100_000n, { audience: 'RESELLERS_ONLY' });
+
+      // A list-priced reseller, suspended: confirmed at list, as an ordinary customer.
+      await register(resellerCustomer, listTier);
+      const suspendedDraft = await draft(resellerCustomer, everyone);
+      const onlyDraft = await draft(resellerCustomer, resellersOnly);
+      await setStatus(resellerCustomer, 'SUSPENDED');
+      const suspended = await confirm(resellerCustomer, suspendedDraft.id);
+      expect(suspended).toMatchObject({ state: 'AWAITING_PAYMENT' });
+      expect(suspended.totals.total.amountMinor).toBe(100_000n);
+      expect(
+        await termsRow(suspendedDraft.id),
+        'an ordinary customer has no terms',
+      ).toBeUndefined();
+      // The audience is still that of the standing now: no reseller-only product.
+      await expect(confirm(resellerCustomer, onlyDraft.id)).rejects.toMatchObject(
+        refusal(COMMERCE_ERROR_CODES.PRODUCT_NOT_FOR_AUDIENCE),
+      );
+
+      // The same with a reseller whose own override is the list price.
+      const overridden = await customer('940006');
+      await register(overridden, await tier({ percent: 20 }), { mode: 'LIST_PRICE' });
+      const overrideDraft = await draft(overridden, everyone);
+      await setStatus(overridden, 'SUSPENDED');
+      expect((await confirm(overridden, overrideDraft.id)).totals.total.amountMinor).toBe(100_000n);
+      expect(await termsRow(overrideDraft.id)).toBeUndefined();
+
+      // An ordinary customer registered onto a list-priced tier: a LIST terms row.
+      const plainDraft = await draft(ordinary, everyone);
+      await register(ordinary, listTier);
+      const registered = await confirm(ordinary, plainDraft.id);
+      expect(registered.totals.total.amountMinor).toBe(100_000n);
+      expect(await termsRow(plainDraft.id)).toMatchObject({
+        layer: 'LIST',
+        percent: null,
+        list_amount: '100000',
+        cost_amount: '100000',
+        margin_amount: '0',
+      });
+
+      // And registered onto a list-priced tier that grants nothing: the entitlement refuses.
+      const ungranted = await customer('940007');
+      const ungrantedDraft = await draft(ungranted, everyone);
+      await register(ungranted, await tier({ name: 'Bare', percent: null, grants: [] }));
+      await expect(confirm(ungranted, ungrantedDraft.id)).rejects.toMatchObject(
+        refusal(COMMERCE_ERROR_CODES.RESELLER_NOT_ENTITLED, { dimension: 'OPERATION' }),
+      );
+      expect((await orderRow(ungrantedDraft.id))?.state).toBe('DRAFT');
+    });
+
     it('refuses to confirm when a grant was withdrawn between the draft and the confirmation', async () => {
       const tierId = await tier();
       await register(resellerCustomer, tierId);

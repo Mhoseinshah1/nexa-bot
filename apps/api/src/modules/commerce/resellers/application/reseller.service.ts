@@ -157,9 +157,20 @@ export class ResellerService {
    * `PricingService.redeem`, inside the confirming transaction, for every order path.
    *
    * 1. The entitlement is decided again, from live grants: the authoritative decision.
-   * 2. The quote's reseller layer is compared with what the live terms produce now. Any
-   *    difference — a tier re-priced, an override changed, a reseller suspended or newly
-   *    registered — refuses with `RESELLER_TERMS_CHANGED`. The order is never re-priced.
+   * 2. The quote's reseller layer is compared with the layer the live terms produce now:
+   *    the cost, and the step and rule that took it off the list. A difference in either —
+   *    a tier re-priced, an override changed, a discounted reseller suspended or a
+   *    customer registered onto a discount — refuses with `RESELLER_TERMS_CHANGED`. The
+   *    order is never re-priced.
+   *
+   *    A change that leaves the layer as it was is NOT refused, and that is deliberate: a
+   *    list-priced reseller (layer `LIST`, or an `OVERRIDE` with no percent) who is
+   *    suspended, or an ordinary customer registered onto a list-priced tier, pays exactly
+   *    the price they were quoted. Such an order confirms under the standing in force NOW —
+   *    as an ordinary customer with no terms row, or as a reseller with a `LIST` or
+   *    `OVERRIDE` row — and the audience (`assertOrderable`) and the entitlement (step 1)
+   *    are still enforced for that standing. The terms row records the standing at
+   *    confirmation, not the one at the quote.
    * 3. The terms are written, once per order.
    */
   async recordPurchase(

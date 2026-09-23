@@ -98,8 +98,12 @@ Four reseller rules, each a way to sell below cost or on credit nobody granted:
   held to it by a unit test over every grant subset; confirmation decides
   again, authoritatively, in `ResellerService.recordPurchase`.
 - A quote is **honoured, never re-priced**: confirmation compares the quoted
-  layer with the live terms and refuses `RESELLER_TERMS_CHANGED`, then writes
-  `order_reseller_terms` once. History reads that row, never live settings.
+  layer with the layer the live terms produce and refuses
+  `RESELLER_TERMS_CHANGED` when the cost, step or rule differs. A change that
+  leaves the price as quoted (a list-priced reseller suspended, a customer
+  registered onto a list-priced tier) confirms under the standing in force at
+  confirmation, audience and entitlement included. `order_reseller_terms` is
+  written once; history reads that row, never live settings.
 - Credit is read **under the customer's wallet lock**, in the limit's own
   currency, by `settleFromWallet` only. Zero means no debt; an operator's
   manual debit never overdraws; a clawback never goes below zero.
