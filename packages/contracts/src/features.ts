@@ -171,6 +171,27 @@ export const FEATURE_FLAGS = [
     blastRadius: 'TENANT_WIDE',
     configuredBy: ['services.link_rotation_cooldown_hours'],
   },
+  {
+    key: 'referrals',
+    description:
+      'Run a referral program: a customer shares a link, and whoever joins through it is ' +
+      'attributed to them for good. Off by default, and turning it on is not enough on its ' +
+      'own: referral.commission_percent must be set before anyone is attributed or paid. The ' +
+      'referrer earns a share of the referred customer\u2019s paid orders \u2014 the first ' +
+      'one, or every one, per referral.commission_scope \u2014 credited to their wallet when ' +
+      'the order is delivered and taken back in proportion when it is refunded. Nothing is ' +
+      'paid for signing up, and trials earn nothing. Turning it off stops new attributions ' +
+      'and new commissions; commissions already promised are still paid.',
+    defaultEnabled: false,
+    // TENANT_WIDE: turning it on puts money on offer to every customer of the tenant at
+    // once, like `trials`, so it takes ADR-0010's typed confirmation and reason.
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: [
+      'referral.commission_percent',
+      'referral.commission_scope',
+      'referral.minimum_order_amount',
+    ],
+  },
 ] as const satisfies readonly FeatureFlagDefinition[];
 
 export type FeatureFlagKey = (typeof FEATURE_FLAGS)[number]['key'];

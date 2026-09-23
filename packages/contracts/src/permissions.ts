@@ -184,6 +184,11 @@ export const PERMISSIONS = [
   p('panels.edit', 'Create or edit provider panels', 'HIGH'),
   p('panels.credentials.rotate', 'Rotate panel credentials', 'CRITICAL'),
 
+  // Referral (WP9). Read-only: there is no administrative write to an attribution or a
+  // commission, because either would change who is owed money (`docs/wp9-referral-audit.md`
+  // F10).
+  p('referrals.view', 'View referral attributions and commissions', 'LOW'),
+
   // Resellers
   p('resellers.view', 'View resellers', 'LOW'),
   p('resellers.edit', 'Edit reseller entitlements', 'HIGH'),
@@ -360,6 +365,9 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
        */
       'payments.gateways.view',
       'payments.gateways.edit',
+      // A referral commission is money the tenant owes, credited and clawed back through
+      // the same ledger Finance already reads.
+      'referrals.view',
       'reports.view',
       'reports.export',
       'audit.view',

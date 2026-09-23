@@ -4143,13 +4143,32 @@ export const TEMPLATES = [
   },
   {
     key: 'bot.referral.invite',
-    description: "The customer's own referral code, for sharing.",
+    description:
+      "The customer's own referral link and code, for sharing, and how many people have " +
+      'joined through it (WP9 F12). Whoever opens the link as a NEW customer is attributed ' +
+      'to this one for good; the text promises no amount, because the rate belongs to the ' +
+      'orders the referred customer has not placed yet. Never rendered before WP9, so the ' +
+      'two tokens it gained change no message a customer has seen.',
     format: 'PLAIN_TEXT',
     placeholders: [
       {
         token: 'referralCode',
         type: 'STRING',
         description: "The customer's derived referral code.",
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'referralLink',
+        type: 'STRING',
+        description: 'The t.me deep link that carries the code to /start.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'referredCount',
+        type: 'NUMBER',
+        description: 'How many customers have been attributed to this one.',
         required: true,
         repeatable: false,
       },
@@ -4160,6 +4179,14 @@ export const TEMPLATES = [
     description:
       'Shown when a tenant has not configured a referral reward. The feature is ' +
       'disabled rather than paying zero.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.referral.button',
+    description:
+      'The button on the wallet screen that shows the customer their referral link. Drawn ' +
+      'only while the referral program is running.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },

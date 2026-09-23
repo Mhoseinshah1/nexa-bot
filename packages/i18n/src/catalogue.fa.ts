@@ -633,7 +633,9 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.discount.no_longer_valid':
     'تخفیف این سفارش دیگر معتبر نیست. هیچ مبلغی کسر نشده است. لطفاً سفارش را دوباره شروع کنید.',
 
-  'bot.referral.invite': 'کد معرف شما: {referralCode}',
+  'bot.referral.invite':
+    'لینک دعوت شما:\n{referralLink}\n\nکد معرف: {referralCode}\nتعداد دوستانی که با لینک شما عضو شده‌اند: {referredCount}\n\nهر کسی که برای اولین بار با این لینک وارد ربات شود، برای همیشه زیرمجموعه شما ثبت می‌شود.',
+  'bot.referral.button': '🎁 دعوت دوستان',
   'bot.referral.unconfigured': 'برنامه معرفی دوستان در حال حاضر فعال نیست.',
 
   'bot.trial.unavailable': 'سرویس آزمایشی در حال حاضر در دسترس نیست.',

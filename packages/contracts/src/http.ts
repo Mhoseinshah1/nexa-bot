@@ -41,6 +41,8 @@ import {
   DISCOUNT_REFUSAL_REASONS,
   DISCOUNT_STATUSES,
   DISCOUNT_TYPES,
+  REFERRAL_COMMISSION_STATES,
+  REFERRAL_TRIGGERS,
   TRIAL_LIMIT_MAX,
   TRIAL_LIMIT_MIN,
 } from './promotions.js';
@@ -2617,6 +2619,116 @@ export const orderPricingResponseSchema = z.object({
     .nullable(),
 });
 export type OrderPricingResponse = z.infer<typeof orderPricingResponseSchema>;
+
+// --- Referral (WP9) ------------------------------------------------------------
+
+/**
+ * Referral reads, for the operator (`docs/wp9-referral-audit.md` F10, F12).
+ *
+ * READ-ONLY by design: there is no route that writes an attribution or a commission,
+ * because either would change who is owed money. Every list is keyset-paged, newest
+ * first, with the tenant predicate applied before the page is cut.
+ */
+export const REFERRAL_PAGE_DEFAULT = 25;
+export const REFERRAL_PAGE_MAX = 100;
+
+/** One party to a referral, as the operator sees them: an id and a name to recognise. */
+export const referralPartySchema = z.object({
+  customerId: z.string(),
+  telegramUserId: z.string(),
+  displayName: z.string().nullable(),
+});
+export type ReferralPartyResponse = z.infer<typeof referralPartySchema>;
+
+export const referralSummarySchema = z.object({
+  id: z.string(),
+  referrer: referralPartySchema,
+  referee: referralPartySchema,
+  trigger: z.enum(REFERRAL_TRIGGERS),
+  createdAt: z.iso.datetime(),
+});
+export type ReferralSummaryResponse = z.infer<typeof referralSummarySchema>;
+
+export const referralListQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(REFERRAL_PAGE_MAX).optional(),
+  cursor: z.string().max(512).optional(),
+  /** Only this customer's referrals, as referrer. */
+  referrerId: uuidV7Schema.optional(),
+});
+export type ReferralListQuery = z.infer<typeof referralListQuerySchema>;
+
+export const referralListResponseSchema = z.object({
+  referrals: z.array(referralSummarySchema),
+  nextCursor: z.string().nullable(),
+});
+export type ReferralListResponse = z.infer<typeof referralListResponseSchema>;
+
+/**
+ * One commission, with what refunds have taken back.
+ *
+ * `earnedAmount` is null until the order is delivered. `reversedAmount` is the sum of
+ * every reversal's due and `unrecoveredAmount` the part the referrer's balance could not
+ * cover, which is recorded and never collected.
+ */
+export const referralCommissionSummarySchema = z.object({
+  id: z.string(),
+  referralId: z.string(),
+  orderId: z.string(),
+  referrer: referralPartySchema,
+  referee: referralPartySchema,
+  percent: z.number().int(),
+  basisAmount: z.string(),
+  promisedAmount: z.string(),
+  currency: z.enum(CURRENCY_CODES),
+  state: z.enum(REFERRAL_COMMISSION_STATES),
+  earnedAmount: z.string().nullable(),
+  reversedAmount: z.string(),
+  unrecoveredAmount: z.string(),
+  createdAt: z.iso.datetime(),
+  earnedAt: z.iso.datetime().nullable(),
+  voidedAt: z.iso.datetime().nullable(),
+});
+export type ReferralCommissionSummaryResponse = z.infer<typeof referralCommissionSummarySchema>;
+
+export const referralCommissionListQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(REFERRAL_PAGE_MAX).optional(),
+  cursor: z.string().max(512).optional(),
+  state: z.enum(REFERRAL_COMMISSION_STATES).optional(),
+  /** Only commissions owed to this customer. */
+  referrerId: uuidV7Schema.optional(),
+});
+export type ReferralCommissionListQuery = z.infer<typeof referralCommissionListQuerySchema>;
+
+export const referralCommissionListResponseSchema = z.object({
+  commissions: z.array(referralCommissionSummarySchema),
+  nextCursor: z.string().nullable(),
+});
+export type ReferralCommissionListResponse = z.infer<typeof referralCommissionListResponseSchema>;
+
+/**
+ * One customer's place in the referral graph: who referred them, how many they have
+ * referred, and what their commissions came to, per currency.
+ */
+export const customerReferralResponseSchema = z.object({
+  customerId: z.string(),
+  referredBy: referralSummarySchema.nullable(),
+  referredCount: z.number().int().nonnegative(),
+  totals: z.array(
+    z.object({
+      currency: z.enum(CURRENCY_CODES),
+      pendingAmount: z.string(),
+      earnedAmount: z.string(),
+      reversedAmount: z.string(),
+    }),
+  ),
+});
+export type CustomerReferralResponse = z.infer<typeof customerReferralResponseSchema>;
+
+export const REFERRAL_ROUTES = {
+  list: '/referrals',
+  commissions: '/referral-commissions',
+  customer: (id: string) => `/customers/${encodeURIComponent(id)}/referral`,
+} as const;
 
 // --- Orders ------------------------------------------------------------------
 
