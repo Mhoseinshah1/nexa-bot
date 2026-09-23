@@ -1658,4 +1658,173 @@ describe('resellers (WP9-B)', () => {
       ).toEqual({ withdrawnFirst: false, waited: true });
     });
   });
+  // -------------------------------------------------------------------------
+  // A suspension against the commercial transactions that read the reseller row
+  // -------------------------------------------------------------------------
+
+  describe('a suspension serialises with the commercial transactions that read the reseller', () => {
+    /*
+     * `ResellerService.standing` reads the reseller row FOR SHARE inside a transaction
+     * (`shareByCustomer`), so an operator's suspension — an UPDATE of that row — waits for
+     * a transaction that has already read the reseller as ACTIVE, and that transaction
+     * commits on the terms it read. With a plain read the suspension commits first, is
+     * reported done, and a sale or a credit debit still commits under the ACTIVE row it
+     * withdrew. The grant-withdrawal case above contends on the TIER row and cannot see
+     * this one: reverting `shareByCustomer` alone leaves it green.
+     *
+     * Both cases hold the commercial transaction open right after it read the reseller,
+     * start the suspension, and require `pg_stat_activity` to show it waiting on a lock in
+     * its UPDATE before the hold is released.
+     */
+
+    /** The waiting statement, or null once `settled()` is true or two seconds pass. */
+    async function lockWaitOn(statement: RegExp, settled: () => boolean): Promise<string | null> {
+      const deadline = Date.now() + 2_000;
+      while (!settled() && Date.now() < deadline) {
+        const waiting = await rows<{ query: string }>(sql`
+          SELECT query FROM pg_stat_activity
+           WHERE datname = current_database() AND wait_event_type = 'Lock'
+             AND pid <> pg_backend_pid()`);
+        const hit = waiting.find((w) => statement.test(w.query));
+        if (hit !== undefined) return hit.query;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      return null;
+    }
+
+    const statusOf = async (customerId: UserId) =>
+      (
+        await rows<{ status: string }>(
+          sql`SELECT status FROM resellers WHERE customer_id = ${customerId}`,
+        )
+      )[0]?.status;
+
+    it('a suspension serialises with a confirmation that read the reseller as ACTIVE', async () => {
+      const tierId = await tier({ percent: 20 });
+      await register(resellerCustomer, tierId);
+      const drafted = await draft(resellerCustomer, await product(100_000n));
+
+      // Held right after the confirmation's first `standing` read, inside its transaction.
+      const service = ctx.container.resellers;
+      const original = service.standing.bind(service);
+      let entered!: () => void;
+      const read = new Promise<void>((resolve) => (entered = resolve));
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      let readAs: string | null | undefined;
+      vi.spyOn(service, 'standing').mockImplementation(async (...args) => {
+        const standing = await original(...args);
+        if (readAs === undefined && args[2] !== undefined) {
+          readAs = standing?.reseller.status ?? null;
+          entered();
+          await gate;
+        }
+        return standing;
+      });
+
+      const finished: string[] = [];
+      const confirmation = confirm(resellerCustomer, drafted.id).then((order) => {
+        finished.push('confirmation');
+        return order;
+      });
+      confirmation.catch(() => undefined);
+      let suspension: Promise<void> = Promise.resolve();
+      let waitingIn: string | null = null;
+      try {
+        await read;
+        expect(readAs, 'the confirmation read the reseller as ACTIVE').toBe('ACTIVE');
+        suspension = setStatus(resellerCustomer, 'SUSPENDED').then(() => {
+          finished.push('suspension');
+        });
+        suspension.catch(() => undefined);
+        waitingIn = await lockWaitOn(/update\s+"resellers"/iu, () =>
+          finished.includes('suspension'),
+        );
+      } finally {
+        release();
+      }
+      const [confirmed, suspended] = await Promise.allSettled([confirmation, suspension]);
+
+      expect(
+        { waitingIn: waitingIn !== null, finished: [...finished] },
+        'the suspension must wait on the reseller row until the confirmation that read it ' +
+          'as ACTIVE has committed',
+      ).toEqual({ waitingIn: true, finished: ['confirmation', 'suspension'] });
+      expect(confirmed).toMatchObject({
+        status: 'fulfilled',
+        value: { state: 'AWAITING_PAYMENT' },
+      });
+      expect(suspended.status).toBe('fulfilled');
+      // The confirmation committed on the terms it read: the reseller's TIER price.
+      expect(await termsRow(drafted.id)).toMatchObject({
+        layer: 'TIER',
+        percent: 20,
+        cost_amount: '80000',
+      });
+      expect(await statusOf(resellerCustomer)).toBe('SUSPENDED');
+    });
+
+    it('a suspension waits for a wallet settlement that is spending credit', async () => {
+      await register(resellerCustomer, await tier({ credit: 100_000n }));
+      const order = await confirmed(resellerCustomer, await product(60_000n));
+      const later = await confirmed(resellerCustomer, await product(1_000n));
+
+      // Held right after the settlement read the allowance, under the wallet lock.
+      const service = ctx.container.resellers;
+      const original = service.creditAllowance.bind(service);
+      let entered!: () => void;
+      const read = new Promise<void>((resolve) => (entered = resolve));
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      let allowance: bigint | undefined;
+      vi.spyOn(service, 'creditAllowance').mockImplementation(async (...args) => {
+        const answer = await original(...args);
+        if (allowance === undefined) {
+          allowance = answer;
+          entered();
+          await gate;
+        }
+        return answer;
+      });
+
+      const finished: string[] = [];
+      const settlement = settle(resellerCustomer, order.id).then((result) => {
+        finished.push('settlement');
+        return result;
+      });
+      settlement.catch(() => undefined);
+      let suspension: Promise<void> = Promise.resolve();
+      let waitingIn: string | null = null;
+      try {
+        await read;
+        expect(allowance, 'the settlement read the credit line').toBe(100_000n);
+        suspension = setStatus(resellerCustomer, 'SUSPENDED').then(() => {
+          finished.push('suspension');
+        });
+        suspension.catch(() => undefined);
+        waitingIn = await lockWaitOn(/update\s+"resellers"/iu, () =>
+          finished.includes('suspension'),
+        );
+      } finally {
+        release();
+      }
+      const [settled, suspended] = await Promise.allSettled([settlement, suspension]);
+
+      expect(
+        { waitingIn: waitingIn !== null, finished: [...finished] },
+        'the suspension must wait on the reseller row until the settlement spending its ' +
+          'credit has committed',
+      ).toEqual({ waitingIn: true, finished: ['settlement', 'suspension'] });
+      // The settlement completed on the credit it read.
+      expect(settled).toMatchObject({ status: 'fulfilled', value: { order: { state: 'PAID' } } });
+      expect(await balance(resellerCustomer)).toBe(-60_000n);
+      expect(suspended.status).toBe('fulfilled');
+      expect(await statusOf(resellerCustomer)).toBe('SUSPENDED');
+      // And the credit line is gone for whatever comes after the suspension.
+      await expect(settle(resellerCustomer, later.id)).rejects.toMatchObject(
+        refusal(COMMERCE_ERROR_CODES.WALLET_INSUFFICIENT_FUNDS),
+      );
+      expect(await balance(resellerCustomer)).toBe(-60_000n);
+    });
+  });
 });
