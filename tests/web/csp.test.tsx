@@ -73,6 +73,8 @@ const GENEROUS_ROUTES = [
   { url: '/templates', body: { templates: [] } },
   { url: '/admins', body: { admins: [] } },
   { url: '/roles', body: { roles: [] } },
+  { url: '/referrals', body: { referrals: [], nextCursor: null } },
+  { url: '/referral-commissions', body: { commissions: [], nextCursor: null } },
 ];
 
 /**

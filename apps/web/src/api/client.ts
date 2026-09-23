@@ -1,4 +1,12 @@
 import {
+  REFERRAL_ROUTES,
+  customerReferralResponseSchema,
+  referralCommissionListResponseSchema,
+  referralListResponseSchema,
+  type CustomerReferralResponse,
+  type ReferralCommissionListResponse,
+  type ReferralCommissionState,
+  type ReferralListResponse,
   CASHBACK_RULE_ROUTES,
   DISCOUNT_ROUTES,
   PRICE_PREVIEW_ROUTE,
@@ -1799,4 +1807,58 @@ export function fetchPricePreview(query: {
 /** One order's adjustments, redemptions and cashback. Its own read, behind `orders.view`. */
 export function fetchOrderPricing(id: string): Promise<OrderPricingResponse> {
   return authedGet(ORDER_ROUTES.pricing(id), orderPricingResponseSchema);
+}
+
+// --- Referral (WP9-A) ---------------------------------------------------------
+
+/**
+ * One page of referral attributions, NEWEST first — the server keysets `(created_at, id)`
+ * DESCENDING, so the next page is OLDER.
+ *
+ * There is no write beside these three reads and there will not be one here: the server
+ * has none, because reassigning an attribution or editing a commission changes who is
+ * owed money (`docs/wp9-referral-audit.md` F10).
+ */
+export function fetchReferrals(
+  query: { limit?: number; cursor?: string; referrerId?: string } = {},
+): Promise<ReferralListResponse> {
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
+  if (query.referrerId !== undefined && query.referrerId !== '') {
+    params.set('referrerId', query.referrerId);
+  }
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${REFERRAL_ROUTES.list}?${suffix}` : REFERRAL_ROUTES.list,
+    referralListResponseSchema,
+  );
+}
+
+/** One page of the commission ledger, newest first, with what refunds took back. */
+export function fetchReferralCommissions(
+  query: {
+    limit?: number;
+    cursor?: string;
+    state?: ReferralCommissionState;
+    referrerId?: string;
+  } = {},
+): Promise<ReferralCommissionListResponse> {
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
+  if (query.state !== undefined) params.set('state', query.state);
+  if (query.referrerId !== undefined && query.referrerId !== '') {
+    params.set('referrerId', query.referrerId);
+  }
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${REFERRAL_ROUTES.commissions}?${suffix}` : REFERRAL_ROUTES.commissions,
+    referralCommissionListResponseSchema,
+  );
+}
+
+/** One customer's referrer, how many they referred, and their commissions per currency. */
+export function fetchCustomerReferral(customerId: string): Promise<CustomerReferralResponse> {
+  return authedGet(REFERRAL_ROUTES.customer(customerId), customerReferralResponseSchema);
 }

@@ -298,6 +298,7 @@ export const WEB_FA = {
   'web.nav_products': 'محصولات',
   'web.nav_payments': 'پرداخت‌ها و کیف پول',
   'web.nav_discounts': 'تخفیف‌ها و کش‌بک',
+  'web.nav_referrals': 'معرفی و پورسانت',
   'web.nav_resellers': 'نمایندگان',
   'web.nav_reports': 'گزارش‌ها',
   'web.nav_panels': 'پنل‌ها',
@@ -2065,6 +2066,65 @@ export const WEB_FA = {
   'web.cashback_state_pending': 'در انتظار تحویل',
   'web.cashback_state_earned': 'واریز شده',
   'web.cashback_state_void': 'باطل شده',
+  // --- Referral (WP9-A) ----------------------------------------------------
+  'web.referrals_title': 'معرفی و پورسانت',
+  'web.referrals_intro':
+    'چه کسی چه کسی را معرفی کرده و برای آن چه پورسانتی وعده داده، واریز یا برگشت داده شده است. این صفحه فقط خواندنی است.',
+  'web.referrals_filter_referrer': 'شناسهٔ معرف',
+  'web.referrals_filter_referrer_hint':
+    'شناسهٔ کامل مشتری؛ هر دو فهرست فقط به معرفی‌ها و پورسانت‌های همین معرف محدود می‌شوند.',
+  'web.referrals_filter_invalid_id': 'این یک شناسهٔ کامل مشتری نیست.',
+  'web.referrals_filter_apply': 'اعمال صافی',
+  'web.referrals_filter_clear': 'حذف صافی',
+  'web.referrals_filter_empty': 'موردی با این صافی پیدا نشد.',
+  'web.referrals_attributions_title': 'معرفی‌ها',
+  'web.referrals_attributions_hint':
+    'هر مشتری فقط یک معرف دارد و معرفی فقط هنگام ثبت‌نام ثبت می‌شود. دامنهٔ پورسانت همان لحظه ثبت می‌شود و بعداً تغییر نمی‌کند. تازه‌ترین در بالا.',
+  'web.referrals_attributions_empty': 'هنوز معرفی‌ای ثبت نشده است.',
+  'web.referrals_commissions_title': 'دفتر پورسانت',
+  'web.referrals_commissions_hint':
+    'هر پورسانت هنگام تأیید سفارش وعده داده می‌شود، با تحویل سرویس واریز می‌شود و با بازپرداخت به نسبت برگشت داده می‌شود. تازه‌ترین در بالا.',
+  'web.referrals_commissions_empty': 'هنوز پورسانتی ثبت نشده است.',
+  'web.referrals_state_all': 'همه',
+  'web.referrals_scope_title': 'قاعده‌هایی که این صفحه رعایت می‌کند',
+  'web.referrals_rule_read_only':
+    'هیچ معرفی‌ای جابه‌جا و هیچ پورسانتی دستی ویرایش نمی‌شود؛ هر دو تعیین می‌کنند چه کسی طلبکار است.',
+  'web.referrals_rule_configure':
+    'برنامهٔ معرفی از صفحهٔ قابلیت‌ها روشن می‌شود و درصد، دامنه و حداقل مبلغ سفارش از صفحهٔ تنظیمات.',
+  'web.referrals_rule_unrecovered':
+    'آن بخش از برگشت پورسانت که موجودی کیف پول معرف پوشش نداد فقط ثبت می‌شود و هرگز از او مطالبه نمی‌شود.',
+  'web.referral_referrer': 'معرف',
+  'web.referral_referee': 'معرفی‌شده',
+  'web.referral_trigger': 'دامنهٔ پورسانت',
+  'web.referral_created_at': 'زمان ثبت',
+  'web.referral_order': 'سفارش',
+  'web.referral_percent': 'درصد',
+  'web.referral_basis': 'مبنای محاسبه',
+  'web.referral_promised': 'مبلغ وعده‌داده‌شده',
+  'web.referral_earned': 'واریزشده',
+  'web.referral_reversed': 'برگشت‌داده‌شده',
+  'web.referral_unrecovered': 'وصول‌نشده',
+  'web.referral_settled_at': 'زمان تعیین تکلیف',
+  'web.referral_unrecovered_note':
+    'بخشی از برگشت پورسانت را موجودی کیف پول معرف پوشش نداد. این کسری فقط ثبت می‌شود و هرگز از معرف مطالبه نمی‌شود.',
+  'web.referral_trigger_signup': 'هنگام ثبت‌نام',
+  'web.referral_trigger_first_paid_order': 'فقط نخستین سفارش پرداخت‌شده',
+  'web.referral_trigger_every_paid_order': 'هر سفارش پرداخت‌شده',
+  'web.referral_commission_state_pending': 'در انتظار تحویل',
+  'web.referral_commission_state_earned': 'واریز شده',
+  'web.referral_commission_state_void': 'باطل شده',
+  'web.user_referral_title': 'معرفی',
+  'web.user_referral_denied':
+    'برای دیدن معرفی‌ها و پورسانت‌های این مشتری دسترسی referrals.view لازم است.',
+  'web.user_referral_referred_by': 'معرفی‌شده توسط',
+  'web.user_referral_not_referred': 'این مشتری با معرفی کسی ثبت‌نام نکرده است.',
+  'web.user_referral_referred_count': 'تعداد معرفی‌ها',
+  'web.user_referral_no_commissions': 'هنوز پورسانتی به این مشتری تعلق نگرفته است.',
+  'web.user_referral_totals': 'جمع پورسانت‌های این مشتری به تفکیک ارز',
+  'web.user_referral_pending': 'در انتظار تحویل',
+  'web.user_referral_earned': 'واریزشده',
+  'web.user_referral_reversed': 'برگشت‌داده‌شده',
+  'web.user_referral_all': 'معرفی‌ها و پورسانت‌های این معرف',
 } as const;
 
 export type WebKey = keyof typeof WEB_FA;

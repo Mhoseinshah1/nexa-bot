@@ -5,6 +5,7 @@ import {
   TRIAL_ADMIN_REASON_MAX_LENGTH,
   WALLET_PAGE_DEFAULT,
   telegramUserIdSchema,
+  type CustomerReferralResponse,
   type CustomerStatus,
   type CustomerSummaryResponse,
   type LedgerDirection,
@@ -22,6 +23,7 @@ import {
   fetchWallet,
   fetchWalletEntries,
   fetchCustomerTrial,
+  fetchCustomerReferral,
   removeTrialOverride,
   setTrialOverride,
   unblockCustomer,
@@ -46,6 +48,7 @@ import {
   STATE_LABELS as SERVICE_STATE_LABELS,
   STATE_TONES as SERVICE_STATE_TONES,
 } from './services';
+import { PartyCell, TriggerBadge } from './referrals';
 import {
   Badge,
   Banner,
@@ -58,6 +61,7 @@ import {
   KV,
   Ltr,
   Money,
+  Num,
   PageHead,
   Pills,
   StateSwitch,
@@ -485,6 +489,7 @@ export function UserDetailPage({
   mayViewOrders,
   mayViewServices,
   mayEditTrial,
+  mayViewReferrals,
   denied,
 }: {
   id: string;
@@ -505,6 +510,8 @@ export function UserDetailPage({
    */
   mayViewOrders: boolean;
   mayViewServices: boolean;
+  /** `referrals.view` (WP9-A): its own grant, never implied by `users.view`. */
+  mayViewReferrals: boolean;
   denied: boolean;
 }) {
   const notify = useToast();
@@ -678,6 +685,8 @@ export function UserDetailPage({
             <CustomerOrdersCard customerId={id} mayView={mayViewOrders} />
 
             <CustomerServicesCard customerId={id} mayView={mayViewServices} />
+
+            <CustomerReferralCard customerId={id} mayView={mayViewReferrals} />
 
             <Card title={t('web.users_scope_title')}>
               <p className="muted">{t('web.users_scope_body')}</p>
@@ -1413,3 +1422,109 @@ function TrialCard({ customerId, mayEdit }: { customerId: string; mayEdit: boole
     </Card>
   );
 }
+
+// ---------------------------------------------------------------------------
+// This customer's place in the referral graph (WP9-A)
+// ---------------------------------------------------------------------------
+
+/**
+ * Who referred this customer, how many they have referred, and what their commissions
+ * came to — per currency, because two currencies never add up to one figure.
+ *
+ * READ-ONLY, as every referral surface is (`docs/wp9-referral-audit.md` F10): there is no
+ * reassign and no adjust, because either would change who is owed money.
+ *
+ * `referrals.view` is decided at the route and never derived from `users.view`. Without
+ * it the card names the key and issues no request — the server charges the same key in
+ * `ReferralReadService.customer`, so the missing request is a courtesy, never the
+ * enforcement. The referees themselves are not listed here: the response carries a
+ * COUNT, and the link opens `/referrals` filtered to this referrer, which pages them.
+ */
+function CustomerReferralCard({ customerId, mayView }: { customerId: string; mayView: boolean }) {
+  const onLink = useLinkHandler();
+  const referral = useQuery({
+    queryKey: ['customer-referral', customerId],
+    queryFn: () => fetchCustomerReferral(customerId),
+    enabled: mayView,
+  });
+
+  if (!mayView) {
+    return (
+      <Card title={t('web.user_referral_title')}>
+        <Banner tone="info">{t('web.user_referral_denied')}</Banner>
+      </Card>
+    );
+  }
+
+  const row = referral.data;
+  return (
+    <Card title={t('web.user_referral_title')}>
+      <StateSwitch query={referral}>
+        {row === undefined ? null : (
+          <>
+            <KV
+              items={[
+                [
+                  t('web.user_referral_referred_by'),
+                  row.referredBy === null ? (
+                    <span key="by" className="muted">
+                      {t('web.user_referral_not_referred')}
+                    </span>
+                  ) : (
+                    <div key="by">
+                      <PartyCell party={row.referredBy.referrer} />
+                      <TriggerBadge value={row.referredBy.trigger} />{' '}
+                      <span className="muted small nowrap">
+                        {formatTimestamp(row.referredBy.createdAt)}
+                      </span>
+                    </div>
+                  ),
+                ],
+                [t('web.user_referral_referred_count'), <Num key="n" value={row.referredCount} />],
+              ]}
+            />
+            {row.totals.length === 0 ? (
+              <p className="muted">{t('web.user_referral_no_commissions')}</p>
+            ) : (
+              <DataTable
+                caption={t('web.user_referral_totals')}
+                columns={REFERRAL_TOTAL_COLUMNS}
+                rows={row.totals}
+                rowKey={(total) => total.currency}
+              />
+            )}
+          </>
+        )}
+      </StateSwitch>
+      <a href={`/referrals?referrerId=${encodeURIComponent(customerId)}`} onClick={onLink}>
+        {t('web.user_referral_all')}
+      </a>
+    </Card>
+  );
+}
+
+type ReferralTotal = CustomerReferralResponse['totals'][number];
+
+const REFERRAL_TOTAL_COLUMNS: readonly Column<ReferralTotal>[] = [
+  {
+    key: 'pending',
+    header: t('web.user_referral_pending'),
+    render: (total) => (
+      <Money value={{ amountMinor: total.pendingAmount, currency: total.currency }} />
+    ),
+  },
+  {
+    key: 'earned',
+    header: t('web.user_referral_earned'),
+    render: (total) => (
+      <Money value={{ amountMinor: total.earnedAmount, currency: total.currency }} />
+    ),
+  },
+  {
+    key: 'reversed',
+    header: t('web.user_referral_reversed'),
+    render: (total) => (
+      <Money value={{ amountMinor: total.reversedAmount, currency: total.currency }} />
+    ),
+  },
+];
