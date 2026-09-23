@@ -130,6 +130,12 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'یوزرنیم انتخاب‌شده برای این سفارش دیگر معتبر نیست و آزاد شد. لطفاً دوباره یوزرنیم انتخاب کنید. هیچ مبلغی کسر نشده است.',
   'bot.order.summary':
     'سفارش شما\nسرویس: {productTitle}\nمدت: {durationDays}\nحجم: {trafficBytes}\nیوزرنیم: {username}\nمبلغ قابل پرداخت: {total}',
+  'bot.order.summary_discounted':
+    'سفارش شما\nسرویس: {productTitle}\nمدت: {durationDays}\nحجم: {trafficBytes}\nیوزرنیم: {username}\nمبلغ: {subtotal}\nتخفیف: {discount}\nمبلغ قابل پرداخت: {total}',
+  'bot.order.summary_cashback':
+    'سفارش شما\nسرویس: {productTitle}\nمدت: {durationDays}\nحجم: {trafficBytes}\nیوزرنیم: {username}\nمبلغ قابل پرداخت: {total}\nکش‌بک: {cashback} پس از تحویل سرویس به کیف پول شما افزوده می‌شود.',
+  'bot.order.summary_discounted_cashback':
+    'سفارش شما\nسرویس: {productTitle}\nمدت: {durationDays}\nحجم: {trafficBytes}\nیوزرنیم: {username}\nمبلغ: {subtotal}\nتخفیف: {discount}\nمبلغ قابل پرداخت: {total}\nکش‌بک: {cashback} پس از تحویل سرویس به کیف پول شما افزوده می‌شود.',
   'bot.order.confirm_button': 'تأیید و ثبت سفارش',
   'bot.order.unavailable': 'این سرویس در حال حاضر قابل خرید نیست.',
   'bot.order.expired': 'مهلت این سفارش به پایان رسیده است. لطفاً دوباره سفارش دهید.',
@@ -621,6 +627,11 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // One message for every rejection reason, so the bot is not an oracle for guessing
   // codes. `templates.ts` records the reasoning.
   'bot.discount.rejected': 'این کد تخفیف قابل استفاده نیست.',
+  'bot.discount.enter_button': 'کد تخفیف',
+  'bot.discount.remove_button': 'حذف کد تخفیف',
+  'bot.discount.ask': 'کد تخفیف خود را در پیام بعدی بفرستید.',
+  'bot.discount.no_longer_valid':
+    'تخفیف این سفارش دیگر معتبر نیست. هیچ مبلغی کسر نشده است. لطفاً سفارش را دوباره شروع کنید.',
 
   'bot.referral.invite': 'کد معرف شما: {referralCode}',
   'bot.referral.unconfigured': 'برنامه معرفی دوستان در حال حاضر فعال نیست.',

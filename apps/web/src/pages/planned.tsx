@@ -10,12 +10,12 @@ import { Icon } from '../ui/icons';
  * dead path. A planned page still listed for a route that now resolves
  * elsewhere is unreachable prose claiming the capability is unbuilt.
  *
- * Four of the fifteen areas in the owner's route inventory still have no backend
- * at all: there is no reseller, discount or report endpoint, and no
- * bot-management surface. This page is what those four routes render. The count
- * is written out rather than derived because it is a CLAIM — users in 4A,
- * products and orders in 4B, payments in 4C and services in 4H each had to
- * change this sentence as well as the list below it.
+ * Three of the fifteen areas in the owner's route inventory still have no backend
+ * at all: there is no reseller or report endpoint, and no bot-management
+ * surface. This page is what those three routes render. The count is written out
+ * rather than derived because it is a CLAIM — users in 4A, products and orders
+ * in 4B, payments in 4C, services in 4H and discounts in WP8 each had to change
+ * this sentence as well as the list below it.
  *
  * It draws NO control. Not a disabled button, not a greyed table with sample
  * rows, not a search box that returns nothing. A disabled control still says
@@ -64,14 +64,14 @@ export const PLANNED_SURFACES: readonly PlannedSurface[] = [
    *
    * This is the same promotion `products` and `orders` had in 4B.
    */
-  {
-    key: 'discounts',
-    path: '/discounts',
-    label: 'web.nav_discounts',
-    summary: 'web.planned_discounts_summary',
-    missing: ['web.planned_missing_catalog', 'web.planned_missing_pricing'],
-    decisions: [],
-  },
+  /*
+   * `discounts` is no longer here. WP8 builds the surface — discount rules, cashback
+   * rules and the price preview, each on the permission the server charges — so the
+   * placeholder went in the same commit, for the reason `payments` gives above. No owner
+   * decision was recorded on it, so none had to move. Its two "missing" sentences said
+   * the catalogue did not exist and that pricing rules were declared but not enforced;
+   * both were false by then and went with it rather than being left in the catalogue.
+   */
   {
     key: 'resellers',
     path: '/resellers',

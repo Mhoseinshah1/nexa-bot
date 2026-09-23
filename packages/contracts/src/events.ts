@@ -110,6 +110,10 @@ export const EVENT_TYPES = [
   'ServiceSubscriptionRotated',
   'ProvisioningOutcomeUnknown',
   'DiscountRedeemed',
+  // WP8. The credit and its reversal are wallet entries too, and `WalletEntryRecorded`
+  // says so; these say WHY, for a module that reacts to cashback rather than to money.
+  'CashbackEarned',
+  'CashbackReversed',
   'ReferralRewarded',
   'TrialIssued',
 ] as const;
@@ -288,11 +292,38 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     /** The failure kind from the existing provider taxonomy, never a new one. */
     failureKind: z.string(),
   }),
+  /*
+   * One per redemption row, emitted in the confirming transaction (WP8 P6).
+   *
+   * `discountId` is the rule, and `code` is null for an `AUTOMATIC` rule, which has none.
+   * The shape changed in WP8 from a required `code`; nothing had ever emitted it, so no
+   * stored event carries the old one.
+   */
   DiscountRedeemed: z.object({
     customerId: z.string(),
     orderId: z.string(),
-    code: z.string(),
+    discountId: z.string(),
+    code: z.string().nullable(),
     amountMinor: z.string(),
+    currency: z.string(),
+  }),
+  CashbackEarned: z.object({
+    customerId: z.string(),
+    orderId: z.string(),
+    amountMinor: z.string(),
+    currency: z.string(),
+  }),
+  /*
+   * `dueMinor` is what the refund made owed back; `recoveredMinor` is what the balance
+   * could give; `unrecoveredMinor` is the rest, recorded and not collected (P9).
+   */
+  CashbackReversed: z.object({
+    customerId: z.string(),
+    orderId: z.string(),
+    refundId: z.string(),
+    dueMinor: z.string(),
+    recoveredMinor: z.string(),
+    unrecoveredMinor: z.string(),
     currency: z.string(),
   }),
   ReferralRewarded: z.object({

@@ -315,6 +315,23 @@ export interface ProvisionerDeps {
 }
 
 /**
+ * What each order purpose BOUGHT, as the operation that delivers it.
+ *
+ * Module-level and exported since WP8, so the one other reader — the cashback earner,
+ * which pays out when this operation SUCCEEDS — asks the same table rather than a copy
+ * of it. The rule and its reasoning are on `ProvisionerService.PURCHASED_AS`, below.
+ */
+export const PURCHASED_AS: Readonly<Record<OrderPurpose, OperationType>> = {
+  NEW_SERVICE: 'PROVISION',
+  RENEW: 'RENEW',
+  ADD_TRAFFIC: 'ADD_TRAFFIC',
+  ADD_TIME: 'ADD_TIME',
+  // A trial is a create nobody paid for, and it is given back on the same lane: it
+  // stops counting against the customer's limit. `docs/wp6-audit.md` A4.
+  TRIAL: 'PROVISION',
+};
+
+/**
  * The lane that actually creates services on panels.
  *
  * ## The shape of one tick
@@ -2211,15 +2228,7 @@ export class ProvisionerService {
    * is the whole content of this table: none of them is something a customer paid
    * for, so none of them failing is something to refund.
    */
-  private static readonly PURCHASED_AS: Readonly<Record<OrderPurpose, OperationType>> = {
-    NEW_SERVICE: 'PROVISION',
-    RENEW: 'RENEW',
-    ADD_TRAFFIC: 'ADD_TRAFFIC',
-    ADD_TIME: 'ADD_TIME',
-    // A trial is a create nobody paid for, and it is given back on the same lane: it
-    // stops counting against the customer's limit. `docs/wp6-audit.md` A4.
-    TRIAL: 'PROVISION',
-  };
+  private static readonly PURCHASED_AS = PURCHASED_AS;
 
   /**
    * A paid operation has definitively failed, so the customer gets their money back.

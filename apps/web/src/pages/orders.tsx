@@ -5,6 +5,8 @@ import {
   UNLIMITED_DURATION_DAYS,
   UNLIMITED_TRAFFIC_BYTES,
   uuidV7Schema,
+  type CashbackState,
+  type OrderPricingResponse,
   type OrderState,
   type OrderSummaryResponse,
   type PaymentState,
@@ -12,6 +14,7 @@ import {
 } from '@nexa/contracts';
 import {
   fetchOrder,
+  fetchOrderPricing,
   fetchOrders,
   fetchPayments,
   fetchServiceOperations,
@@ -563,6 +566,8 @@ export function OrderDetailPage({
               />
             </Card>
 
+            <OrderPricing orderId={row.id} />
+
             <Card title={t('web.order_lifecycle_title')}>
               <KV
                 items={[
@@ -915,3 +920,177 @@ const PAYMENT_STATE_LABELS: Readonly<Record<PaymentState, WebKey>> = {
   EXPIRED: 'web.payment_state_expired',
   UNKNOWN: 'web.payment_state_unknown',
 };
+
+// ---------------------------------------------------------------------------
+// Pricing (WP8)
+// ---------------------------------------------------------------------------
+
+/**
+ * The cashback state, and the fourth answer the wire can give: `null`.
+ *
+ * Null is not "none" — a quote with no cashback has no block at all. It is a DRAFT's
+ * promise, which is only recorded when the order is confirmed, so the label says that
+ * rather than borrowing `PENDING`'s "waiting for delivery" for an order nobody has
+ * confirmed.
+ */
+const CASHBACK_STATE_LABELS: Readonly<Record<CashbackState, WebKey>> = {
+  PENDING: 'web.cashback_state_pending',
+  EARNED: 'web.cashback_state_earned',
+  VOID: 'web.cashback_state_void',
+};
+
+const CASHBACK_STATE_TONES: Readonly<Record<CashbackState, Tone>> = {
+  PENDING: 'warn',
+  EARNED: 'ok',
+  VOID: 'neutral',
+};
+
+/**
+ * How this order's price was reached: the code entered, each promotional adjustment in
+ * the order the engine applied it, the redemptions confirmation recorded, and the
+ * cashback the quote promised with what has become of it.
+ *
+ * Its own read (`GET /orders/:id/pricing`) rather than fields on the order, for the
+ * reason the contract gives: a list of fifty orders has no business joining three more
+ * tables. The adjustments come from the STORED quote, so they are what the customer was
+ * charged even if a rule has since been retuned — the snapshot rule every `line*` field
+ * on this page follows.
+ *
+ * `orders.view` is what the page itself requires, and it is what the server charges for
+ * this read, so there is no separate permission to decide here.
+ */
+function OrderPricing({ orderId }: { orderId: string }) {
+  const pricing = useQuery({
+    queryKey: ['order-pricing', orderId],
+    queryFn: () => fetchOrderPricing(orderId),
+  });
+
+  return (
+    <Card title={t('web.order_pricing_title')} hint={t('web.order_pricing_hint')}>
+      <StateSwitch query={pricing}>
+        {pricing.data === undefined ? null : <OrderPricingBody pricing={pricing.data} />}
+      </StateSwitch>
+    </Card>
+  );
+}
+
+function OrderPricingBody({ pricing }: { pricing: OrderPricingResponse }) {
+  const money = (amountMinor: string) => (
+    <Money value={{ amountMinor, currency: pricing.currency }} />
+  );
+  const adjustmentColumns: readonly Column<OrderPricingResponse['adjustments'][number]>[] = [
+    { key: 'label', header: t('web.order_pricing_rule'), render: (row) => row.label },
+    {
+      key: 'before',
+      header: t('web.order_pricing_before'),
+      render: (row) => money(row.amountBefore),
+    },
+    {
+      key: 'after',
+      header: t('web.order_pricing_after'),
+      render: (row) => money(row.amountAfter),
+    },
+  ];
+  const redemptionColumns: readonly Column<OrderPricingResponse['redemptions'][number]>[] = [
+    {
+      key: 'rule',
+      header: t('web.order_pricing_rule'),
+      render: (row) => <Copyable value={row.discountId} />,
+    },
+    { key: 'amount', header: t('web.order_pricing_amount'), render: (row) => money(row.amount) },
+    {
+      key: 'at',
+      header: t('web.order_pricing_redeemed_at'),
+      render: (row) => <span className="nowrap">{formatTimestamp(row.createdAt)}</span>,
+    },
+  ];
+  const cashback = pricing.cashback;
+
+  return (
+    <>
+      <KV
+        items={[
+          [
+            t('web.order_pricing_code'),
+            pricing.discountCode === null ? (
+              <span key="c" className="muted">
+                {t('web.order_pricing_no_code')}
+              </span>
+            ) : (
+              <Ltr key="c">{pricing.discountCode}</Ltr>
+            ),
+          ],
+        ]}
+      />
+
+      <h3>{t('web.order_pricing_adjustments')}</h3>
+      {pricing.adjustments.length === 0 ? (
+        <p className="muted">{t('web.order_pricing_no_adjustments')}</p>
+      ) : (
+        <DataTable
+          caption={t('web.order_pricing_adjustments')}
+          columns={adjustmentColumns}
+          rows={pricing.adjustments}
+          // Position, not rule id: a quote may carry a step with no rule, and the steps
+          // are an ordered list whose order IS the information.
+          rowKey={(row) => String(pricing.adjustments.indexOf(row))}
+        />
+      )}
+
+      <h3>{t('web.order_pricing_redemptions')}</h3>
+      {pricing.redemptions.length === 0 ? (
+        <p className="muted">{t('web.order_pricing_no_redemptions')}</p>
+      ) : (
+        <DataTable
+          caption={t('web.order_pricing_redemptions')}
+          columns={redemptionColumns}
+          rows={pricing.redemptions}
+          rowKey={(row) => `${row.discountId}:${row.createdAt}`}
+        />
+      )}
+
+      <h3>{t('web.order_cashback_title')}</h3>
+      {cashback === null ? (
+        <p className="muted">{t('web.order_cashback_none')}</p>
+      ) : (
+        <>
+          <KV
+            items={[
+              [t('web.order_pricing_rule'), cashback.label],
+              [
+                t('web.order_cashback_percent'),
+                <span key="p" className="nowrap">
+                  <Ltr>{String(cashback.percent)}</Ltr> {t('web.discount_percent_unit')}
+                </span>,
+              ],
+              [t('web.order_cashback_promised'), money(cashback.promisedAmount)],
+              [
+                t('web.order_cashback_state'),
+                cashback.state === null ? (
+                  <Badge key="s" tone="neutral">
+                    {t('web.cashback_state_draft')}
+                  </Badge>
+                ) : (
+                  <Badge key="s" tone={CASHBACK_STATE_TONES[cashback.state]}>
+                    {t(CASHBACK_STATE_LABELS[cashback.state])}
+                  </Badge>
+                ),
+              ],
+              [t('web.order_cashback_earned'), money(cashback.earnedAmount)],
+              [t('web.order_cashback_reversed'), money(cashback.reversedAmount)],
+              [t('web.order_cashback_unrecovered'), money(cashback.unrecoveredAmount)],
+            ]}
+          />
+          {cashback.unrecoveredAmount !== '0' && (
+            /*
+             * Said, because the figure alone invites the wrong action. A reversal the
+             * wallet could not cover is RECORDED and never collected — there is no debt
+             * to chase, and an operator reading a bare number might go looking for one.
+             */
+            <Banner tone="warn">{t('web.order_cashback_unrecovered_note')}</Banner>
+          )}
+        </>
+      )}
+    </>
+  );
+}

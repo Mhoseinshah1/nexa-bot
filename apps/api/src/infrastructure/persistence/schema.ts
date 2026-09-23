@@ -90,6 +90,16 @@ import {
   OPERATION_TYPES,
   DISCOUNT_TYPES,
   DISCOUNT_STATUSES,
+  DISCOUNT_KINDS,
+  DISCOUNTABLE_PURPOSES,
+  DISCOUNT_CODE_CAPTURE_CLOSE_REASONS,
+  DISCOUNT_LABEL_MAX_LENGTH,
+  DISCOUNT_PRIORITY_MIN,
+  DISCOUNT_PRIORITY_MAX,
+  CASHBACK_RULE_STATUSES,
+  CASHBACK_STATES,
+  CASHBACK_PERCENT_MIN,
+  CASHBACK_PERCENT_MAX,
   REFERRAL_TRIGGERS,
   RESELLER_STATUSES,
   RESELLER_PRICING_MODES,
@@ -138,6 +148,28 @@ export function enumCheck(column: string, values: readonly string[]): SQL {
     })
     .join(', ');
   return sql.raw(`${column} IN (${list})`);
+}
+
+/**
+ * A text-array column holding a non-empty subset of an enum (WP8: `applies_to`).
+ *
+ * The array counterpart of `enumCheck`, with the same assertions and the same escaping:
+ * every member is a compile-time enum literal, and the column name is a plain one. Empty
+ * is refused because "applies to nothing" is a rule that silently never fires.
+ */
+export function enumSubsetCheck(column: string, values: readonly string[]): SQL {
+  if (!/^[a-z_][a-z0-9_]*$/.test(column)) {
+    throw new Error(`enumSubsetCheck: "${column}" is not a plain column name.`);
+  }
+  const list = values
+    .map((value) => {
+      if (!ENUM_LITERAL.test(value)) {
+        throw new Error(`enumSubsetCheck: "${value}" is not a plain enum literal.`);
+      }
+      return `'${value.replace(/'/g, "''")}'`;
+    })
+    .join(', ');
+  return sql.raw(`cardinality(${column}) > 0 AND ${column} <@ ARRAY[${list}]::text[]`);
 }
 
 /**
@@ -4884,16 +4916,21 @@ export const provisioningOperations = pgTable(
 );
 
 /**
- * A discount code.
+ * A discount rule (`docs/wp8-pricing-audit.md` P3).
+ *
+ * A `CODE` rule applies when a customer enters its code; an `AUTOMATIC` rule applies to
+ * every order it is eligible for. `code` is required for the first and forbidden for the
+ * second, and `discounts_code_kind_check` says so in the database as well.
  *
  * `value` is whole percent for `PERCENTAGE` and minor units for `FIXED_AMOUNT`, and
  * `currency` is required for the second and forbidden for the first — a percentage with
  * a currency is a category error that would eventually be read as an amount.
  *
- * `redemption_count` is a counter and NOT the authority on whether the limit is
- * exhausted: the authority is the conditional UPDATE that increments it
- * (`WHERE redemption_count < limit`), so two concurrent redemptions cannot both pass.
- * The counter exists so a list can show usage without aggregating.
+ * There is no counter. The limits are decided by counting LIVE redemptions — rows whose
+ * order is `AWAITING_PAYMENT` or `PAID` — under this row's lock, at confirmation (P6).
+ * The `redemption_count` column this table had until WP8 claimed "the conditional UPDATE
+ * that increments it" was the authority; no such UPDATE ever existed, nothing ever wrote
+ * it, and a counter the limit does not read is a second answer to "how many".
  */
 export const discounts = pgTable(
   'discounts',
@@ -4902,19 +4939,42 @@ export const discounts = pgTable(
     tenantId: uuid('tenant_id')
       .notNull()
       .references(() => tenants.id),
-    /** Normalised to upper case before storage, so case cannot split a counter. */
-    code: text('code').notNull(),
+    kind: text('kind').notNull(),
+    /** Normalised to upper case before storage, so case cannot split a rule. Null for `AUTOMATIC`. */
+    code: text('code'),
+    /** The operator's name for the rule, and the quote trace's `ruleLabel`. */
+    label: text('label').notNull(),
     type: text('type').notNull(),
     status: text('status').notNull().default('INACTIVE'),
     /** Whole percent, or minor units. See the docblock. */
     value: bigint('value', { mode: 'bigint' }).notNull(),
     currency: text('currency'),
+    /** A non-empty subset of `DISCOUNTABLE_PURPOSES`. */
+    appliesTo: text('applies_to').array().notNull(),
+    /** At most one of the two scopes; neither means every product and every add-on. */
+    productId: uuid('product_id'),
+    categoryId: uuid('category_id'),
+    /** When set, only this customer is eligible — the legacy per-user discount, as a rule. */
+    customerId: uuid('customer_id'),
+    firstPurchaseOnly: boolean('first_purchase_only').notNull().default(false),
     startsAt: timestamptz('starts_at'),
     endsAt: timestamptz('ends_at'),
     /** Null means unlimited. Two limits, because "100 uses" and "1 each" differ. */
     totalRedemptionsLimit: integer('total_redemptions_limit'),
     perCustomerLimit: integer('per_customer_limit'),
     minimumSubtotalAmount: bigint('minimum_subtotal_amount', { mode: 'bigint' }),
+    /** Higher applies first; ties go to the older rule (P4). */
+    priority: integer('priority').notNull().default(0),
+    stackable: boolean('stackable').notNull().default(false),
+    /**
+     * RETAINED FOR ONE RELEASE, and read by nothing in this one.
+     *
+     * The counter the limits never trusted; they count LIVE redemptions instead (P6). It
+     * is not dropped here because the release before this one may still be running during
+     * the rollback window, and a column dropped under it is the narrowing
+     * `migration-compatibility.test.ts` refuses. The next release drops it, once nothing
+     * that could be rolled back to still knows it exists.
+     */
     redemptionCount: integer('redemption_count').notNull().default(0),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
@@ -4922,10 +4982,31 @@ export const discounts = pgTable(
   (table) => [
     uniqueIndex('discounts_tenant_code_key').on(table.tenantId, table.code),
     index('discounts_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
+    /** The candidates the engine reads for every quote: live automatic rules. */
+    index('discounts_tenant_live_idx').on(table.tenantId, table.kind, table.status),
+    foreignKey({
+      columns: [table.tenantId, table.productId],
+      foreignColumns: [products.tenantId, products.id],
+      name: 'discounts_product_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.categoryId],
+      foreignColumns: [productCategories.tenantId, productCategories.id],
+      name: 'discounts_category_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'discounts_customer_fk',
+    }),
+    check('discounts_kind_check', enumCheck('kind', DISCOUNT_KINDS)),
     check('discounts_type_check', enumCheck('type', DISCOUNT_TYPES)),
     check('discounts_status_check', enumCheck('status', DISCOUNT_STATUSES)),
     check('discounts_currency_check', nullableEnumCheck('currency', CURRENCY_CODES)),
     check('discounts_value_check', sql`value > 0`),
+    check('discounts_count_check', sql`redemption_count >= 0`),
+    /** A code rule carries a code and an automatic one carries none. Both halves. */
+    check('discounts_code_kind_check', sql`(kind = 'CODE') = (code IS NOT NULL)`),
     /** A percentage is 1..100 and carries no currency; a fixed amount carries one. */
     check(
       'discounts_percentage_check',
@@ -4940,19 +5021,46 @@ export const discounts = pgTable(
       'discounts_limits_check',
       sql`(total_redemptions_limit IS NULL OR total_redemptions_limit > 0) AND (per_customer_limit IS NULL OR per_customer_limit > 0)`,
     ),
-    check('discounts_count_check', sql`redemption_count >= 0`),
+    check(
+      'discounts_minimum_check',
+      sql`minimum_subtotal_amount IS NULL OR minimum_subtotal_amount >= 0`,
+    ),
     /** The code is ASCII and upper case in the database, not only in the application. */
     check('discounts_code_shape_check', sql`code ~ '^[A-Z0-9_-]{3,40}$'`),
+    check(
+      'discounts_label_check',
+      sql`char_length(label) BETWEEN 1 AND ${sql.raw(String(DISCOUNT_LABEL_MAX_LENGTH))}`,
+    ),
+    /**
+     * A non-empty subset of the discountable purposes. `TRIAL` is never a member: a
+     * discount on a free order is a discount of nothing.
+     */
+    check('discounts_applies_to_check', enumSubsetCheck('applies_to', DISCOUNTABLE_PURPOSES)),
+    check('discounts_scope_check', sql`product_id IS NULL OR category_id IS NULL`),
+    /** "First purchase" is a question about new purchases, and only about them. */
+    check(
+      'discounts_first_purchase_check',
+      sql`NOT first_purchase_only OR applies_to = ARRAY['NEW_SERVICE']::text[]`,
+    ),
+    check(
+      'discounts_priority_check',
+      sql`priority BETWEEN ${sql.raw(String(DISCOUNT_PRIORITY_MIN))} AND ${sql.raw(String(DISCOUNT_PRIORITY_MAX))}`,
+    ),
     unique('discounts_tenant_id_key').on(table.tenantId, table.id),
   ],
 );
 
 /**
- * One redemption — the fact that a code was applied to an order.
+ * One redemption — the fact that a rule was applied to a confirmed order.
  *
- * Unique on `(tenant_id, order_id)` so an order cannot redeem twice even if a retry
- * re-enters the discount step, and indexed on `(discount_id, customer_id)` so the
- * per-customer limit is a bounded count rather than a scan.
+ * Written at confirmation, under the rule's row lock, with the amount the quote trace
+ * took off (P6). Unique on `(tenant_id, order_id, discount_id)`: a stacked order redeems
+ * more than one rule, and no order redeems the same rule twice, however often a retry
+ * re-enters the step.
+ *
+ * A redemption is LIVE while its order is `AWAITING_PAYMENT` or `PAID`. A cancelled,
+ * expired or refunded order frees its use without anything having to run, which is why
+ * there is no released-at column to forget to write.
  */
 export const discountRedemptions = pgTable(
   'discount_redemptions',
@@ -4964,7 +5072,7 @@ export const discountRedemptions = pgTable(
     discountId: uuid('discount_id').notNull(),
     customerId: uuid('customer_id').notNull(),
     orderId: uuid('order_id').notNull(),
-    /** What it actually took off, snapshotted — the code may be re-tuned later. */
+    /** What it actually took off, snapshotted — the rule may be re-tuned later. */
     amount: bigint('amount', { mode: 'bigint' }).notNull(),
     currency: text('currency').notNull(),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
@@ -4993,11 +5101,263 @@ export const discountRedemptions = pgTable(
       foreignColumns: [orders.tenantId, orders.id, orders.customerId],
       name: 'discount_redemptions_order_fk',
     }),
-    /** One redemption per order, as a constraint rather than a check-then-write. */
-    uniqueIndex('discount_redemptions_order_key').on(table.tenantId, table.orderId),
+    /** One redemption per rule per order, as a constraint rather than a check-then-write. */
+    uniqueIndex('discount_redemptions_order_discount_key').on(
+      table.tenantId,
+      table.orderId,
+      table.discountId,
+    ),
     index('discount_redemptions_discount_customer_idx').on(table.discountId, table.customerId),
     check('discount_redemptions_currency_check', enumCheck('currency', CURRENCY_CODES)),
     check('discount_redemptions_amount_check', sql`amount > 0`),
+  ],
+);
+
+/**
+ * The window in which a customer's next plain message is read as a discount code (P11).
+ *
+ * `username_captures`, again, down to the partial unique index and for the same reason:
+ * an open window is the only thing that lets an ordinary message be read as an answer,
+ * so it is a ROW with an owner, a draft and a deadline. The only thing it can DO is
+ * re-quote the one draft it names, for the one customer it names.
+ */
+export const discountCodeCaptures = pgTable(
+  'discount_code_captures',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    customerId: uuid('customer_id').notNull(),
+    orderId: uuid('order_id').notNull(),
+    openedAt: timestamptz('opened_at').notNull().defaultNow(),
+    expiresAt: timestamptz('expires_at').notNull(),
+    closedAt: timestamptz('closed_at'),
+    closeReason: text('close_reason'),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'discount_code_captures_customer_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.orderId, table.customerId],
+      foreignColumns: [orders.tenantId, orders.id, orders.customerId],
+      name: 'discount_code_captures_order_fk',
+    }),
+    /** ONE open window per customer per bot, decided by the database. */
+    uniqueIndex('discount_code_captures_open_key')
+      .on(table.tenantId, table.botInstanceId, table.customerId)
+      .where(sql`closed_at IS NULL`),
+    check(
+      'discount_code_captures_close_reason_check',
+      nullableEnumCheck('close_reason', DISCOUNT_CODE_CAPTURE_CLOSE_REASONS),
+    ),
+    check('discount_code_captures_closed_check', sql`(closed_at IS NULL) = (close_reason IS NULL)`),
+    check('discount_code_captures_expiry_check', sql`expires_at > opened_at`),
+  ],
+);
+
+/**
+ * A cashback rule (P8). Not a discount: it never changes what the customer pays.
+ *
+ * Among the eligible rules for a quote, the highest `percent` wins, then the older rule
+ * (`O-6`'s fallback, "max wins"); cashback rules never stack.
+ */
+export const cashbackRules = pgTable(
+  'cashback_rules',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    label: text('label').notNull(),
+    status: text('status').notNull().default('INACTIVE'),
+    percent: integer('percent').notNull(),
+    appliesTo: text('applies_to').array().notNull(),
+    productId: uuid('product_id'),
+    categoryId: uuid('category_id'),
+    startsAt: timestamptz('starts_at'),
+    endsAt: timestamptz('ends_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    index('cashback_rules_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
+    index('cashback_rules_tenant_status_idx').on(table.tenantId, table.status),
+    foreignKey({
+      columns: [table.tenantId, table.productId],
+      foreignColumns: [products.tenantId, products.id],
+      name: 'cashback_rules_product_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.categoryId],
+      foreignColumns: [productCategories.tenantId, productCategories.id],
+      name: 'cashback_rules_category_fk',
+    }),
+    check('cashback_rules_status_check', enumCheck('status', CASHBACK_RULE_STATUSES)),
+    check(
+      'cashback_rules_percent_check',
+      sql`percent BETWEEN ${sql.raw(String(CASHBACK_PERCENT_MIN))} AND ${sql.raw(String(CASHBACK_PERCENT_MAX))}`,
+    ),
+    check(
+      'cashback_rules_label_check',
+      sql`char_length(label) BETWEEN 1 AND ${sql.raw(String(DISCOUNT_LABEL_MAX_LENGTH))}`,
+    ),
+    check('cashback_rules_applies_to_check', enumSubsetCheck('applies_to', DISCOUNTABLE_PURPOSES)),
+    check('cashback_rules_scope_check', sql`product_id IS NULL OR category_id IS NULL`),
+    check(
+      'cashback_rules_window_check',
+      sql`starts_at IS NULL OR ends_at IS NULL OR starts_at < ends_at`,
+    ),
+    unique('cashback_rules_tenant_id_key').on(table.tenantId, table.id),
+  ],
+);
+
+/**
+ * An order's cashback, from confirmation to its end (P8, P9).
+ *
+ * Written at confirmation from the quote's `cashback`, `PENDING`. Moves ONCE: to `EARNED`
+ * when the order is delivered, with the credit it wrote, or to `VOID` when the order ends
+ * without delivery. Everything the quote promised is frozen here by
+ * `nexa_order_cashback_guard`, so a rule retuned after the sale cannot change a promise
+ * already made.
+ *
+ * `earned_amount` may be less than `amount` — a refund that completed before delivery
+ * reduces what is earned rather than having to be reversed — and may be ZERO when the
+ * whole payment went back first. A zero earning writes no wallet entry, and the check
+ * below says both halves of that.
+ */
+export const orderCashback = pgTable(
+  'order_cashback',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    orderId: uuid('order_id').notNull(),
+    customerId: uuid('customer_id').notNull(),
+    ruleId: uuid('rule_id').notNull(),
+    ruleLabel: text('rule_label').notNull(),
+    percent: integer('percent').notNull(),
+    /** What the quote promised, on the order's final total. */
+    amount: bigint('amount', { mode: 'bigint' }).notNull(),
+    currency: text('currency').notNull(),
+    state: text('state').notNull().default('PENDING'),
+    earnedAmount: bigint('earned_amount', { mode: 'bigint' }),
+    earnedEntryId: uuid('earned_entry_id'),
+    earnedAt: timestamptz('earned_at'),
+    voidedAt: timestamptz('voided_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.orderId, table.customerId],
+      foreignColumns: [orders.tenantId, orders.id, orders.customerId],
+      name: 'order_cashback_order_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.ruleId],
+      foreignColumns: [cashbackRules.tenantId, cashbackRules.id],
+      name: 'order_cashback_rule_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.earnedEntryId],
+      foreignColumns: [walletEntries.tenantId, walletEntries.id],
+      name: 'order_cashback_earned_entry_fk',
+    }),
+    /** One promise per order. */
+    uniqueIndex('order_cashback_tenant_order_key').on(table.tenantId, table.orderId),
+    /** The earner's discovery index: promises still waiting on their order. */
+    index('order_cashback_pending_idx')
+      .on(table.tenantId, table.createdAt, table.id)
+      .where(sql`state = 'PENDING'`),
+    check('order_cashback_state_check', enumCheck('state', CASHBACK_STATES)),
+    check('order_cashback_currency_check', enumCheck('currency', CURRENCY_CODES)),
+    check('order_cashback_amount_check', sql`amount > 0`),
+    check(
+      'order_cashback_percent_check',
+      sql`percent BETWEEN ${sql.raw(String(CASHBACK_PERCENT_MIN))} AND ${sql.raw(String(CASHBACK_PERCENT_MAX))}`,
+    ),
+    /** Earned exactly when stamped earned, with an amount never above the promise. */
+    check(
+      'order_cashback_earned_check',
+      sql`(state = 'EARNED') = (earned_at IS NOT NULL) AND (state = 'EARNED') = (earned_amount IS NOT NULL) AND (earned_amount IS NULL OR (earned_amount >= 0 AND earned_amount <= amount))`,
+    ),
+    /** A credit was written exactly when something was earned. */
+    check(
+      'order_cashback_entry_check',
+      sql`(earned_entry_id IS NOT NULL) = (earned_amount IS NOT NULL AND earned_amount > 0)`,
+    ),
+    check('order_cashback_void_check', sql`(state = 'VOID') = (voided_at IS NOT NULL)`),
+    unique('order_cashback_tenant_id_key').on(table.tenantId, table.id),
+  ],
+);
+
+/**
+ * One reversal of earned cashback, caused by one completed refund (P9). Append-only.
+ *
+ * `due` is what the refund made owed back, from the cumulative formula; `recovered` is
+ * what the wallet balance could give, as a `CASHBACK_REVERSAL` debit; `unrecovered` is
+ * the rest — the explicit liability rule: the balance never goes negative and history is
+ * never edited, so what cannot be taken is RECORDED here and shown to the operator.
+ */
+export const cashbackReversals = pgTable(
+  'cashback_reversals',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    orderCashbackId: uuid('order_cashback_id').notNull(),
+    orderId: uuid('order_id').notNull(),
+    customerId: uuid('customer_id').notNull(),
+    refundId: uuid('refund_id').notNull(),
+    dueAmount: bigint('due_amount', { mode: 'bigint' }).notNull(),
+    recoveredAmount: bigint('recovered_amount', { mode: 'bigint' }).notNull(),
+    unrecoveredAmount: bigint('unrecovered_amount', { mode: 'bigint' }).notNull(),
+    currency: text('currency').notNull(),
+    walletEntryId: uuid('wallet_entry_id'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.orderCashbackId],
+      foreignColumns: [orderCashback.tenantId, orderCashback.id],
+      name: 'cashback_reversals_cashback_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.orderId, table.customerId],
+      foreignColumns: [orders.tenantId, orders.id, orders.customerId],
+      name: 'cashback_reversals_order_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.refundId],
+      foreignColumns: [refunds.tenantId, refunds.id],
+      name: 'cashback_reversals_refund_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.walletEntryId],
+      foreignColumns: [walletEntries.tenantId, walletEntries.id],
+      name: 'cashback_reversals_entry_fk',
+    }),
+    /** One reversal per refund: a replayed completion reverses nothing twice. */
+    uniqueIndex('cashback_reversals_tenant_refund_key').on(table.tenantId, table.refundId),
+    index('cashback_reversals_cashback_idx').on(table.tenantId, table.orderCashbackId),
+    check('cashback_reversals_currency_check', enumCheck('currency', CURRENCY_CODES)),
+    check(
+      'cashback_reversals_amounts_check',
+      sql`due_amount > 0 AND recovered_amount >= 0 AND unrecovered_amount >= 0 AND due_amount = recovered_amount + unrecovered_amount`,
+    ),
+    check(
+      'cashback_reversals_entry_check',
+      sql`(wallet_entry_id IS NOT NULL) = (recovered_amount > 0)`,
+    ),
   ],
 );
 

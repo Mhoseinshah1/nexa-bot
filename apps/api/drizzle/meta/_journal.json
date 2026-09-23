@@ -736,6 +736,20 @@
       "when": 1790144017788,
       "tag": "0104_trial_override_permission",
       "breakpoints": true
+    },
+    {
+      "idx": 105,
+      "version": "7",
+      "when": 1790160605245,
+      "tag": "0105_wp8_pricing_discounts_cashback",
+      "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1790160620427,
+      "tag": "0106_wp8_cashback_guards",
+      "breakpoints": true
     }
   ]
 }

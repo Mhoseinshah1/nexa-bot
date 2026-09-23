@@ -26,6 +26,7 @@ import { OrderDetailPage, OrdersPage } from './pages/orders';
 import { ServiceDetailPage, ServicesPage } from './pages/services';
 import { UsersPage, UserDetailPage } from './pages/users';
 import { TrialsPage } from './pages/trials';
+import { DiscountsPage } from './pages/discounts';
 
 /**
  * The Web Admin shell.
@@ -277,6 +278,17 @@ export const NAV: readonly NavEntry[] = [
     path: '/discounts',
     label: 'web.nav_discounts',
     icon: 'discounts',
+    /*
+     * `catalog.view`, and only that — the rule the payment-accounts entry above states.
+     *
+     * WP8 made this a real page. Both rule lists, the edit forms (which open from a
+     * row), activate and deactivate (buttons on a row) and the price preview all need
+     * `catalog.view`, which `DiscountAdminService.list`, `CashbackRuleAdminService.list`
+     * and `PricingReadService.preview` each charge. An actor holding only
+     * `catalog.discounts.edit` or `catalog.pricing.edit` could reach nothing but a
+     * blank create form, so a link offered on either would be a promise the page could
+     * not keep.
+     */
     permission: 'catalog.view',
     group: 'web.navgroup_sales',
   },
@@ -609,6 +621,26 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
       ),
       crumbs: [{ label: t('web.payment_gateways_title') }],
       title: t('web.payment_gateways_title'),
+    };
+  }
+
+  if (route.path === '/discounts') {
+    return {
+      element: (
+        <DiscountsPage
+          denied={!may('catalog.view')}
+          /*
+           * Two write keys, passed separately because the server charges them
+           * separately: a discount on `catalog.discounts.edit`, a cashback rule on
+           * `catalog.pricing.edit`. Folding them into one would draw a form the server
+           * refuses for somebody holding the other.
+           */
+          mayEditDiscounts={may('catalog.discounts.edit')}
+          mayEditCashback={may('catalog.pricing.edit')}
+        />
+      ),
+      crumbs: [{ label: t('web.discounts_title') }],
+      title: t('web.discounts_title'),
     };
   }
 

@@ -170,6 +170,15 @@ export const BOT_INTENTS = [
   'USERNAME_CUSTOM',
   'USERNAME_AUTOMATIC',
   'USERNAME_TEXT',
+  /*
+   * WP8 P11 — a discount code on a new-purchase draft. ENTER opens the window in which
+   * the customer's next plain message is read as a code; REMOVE re-quotes the draft
+   * without one. The typed code itself arrives as `USERNAME_TEXT` and is offered to the
+   * code window only after the username window has said it is not open — at most one
+   * of the two is ever open, because opening either closes the other.
+   */
+  'DISCOUNT_CODE_ENTER',
+  'DISCOUNT_CODE_REMOVE',
   'HELP',
   'RECEIPT_UPLOAD',
   /*
@@ -654,6 +663,16 @@ export const SERVICE_ACTION_CONFIRM_CALLBACK_PREFIX = 'q:';
  */
 export const USERNAME_CUSTOM_CALLBACK_PREFIX = 'j:';
 export const USERNAME_AUTOMATIC_CALLBACK_PREFIX = 'Z:';
+
+/**
+ * The two discount-code buttons on a new-purchase summary (WP8 P11).
+ *
+ * Both carry the ORDER and nothing else. The code is never callback data: it is typed,
+ * into a window the server opened for this one draft, and re-decided by the engine when
+ * it arrives.
+ */
+export const DISCOUNT_CODE_ENTER_CALLBACK_PREFIX = 'dc:';
+export const DISCOUNT_CODE_REMOVE_CALLBACK_PREFIX = 'dx:';
 
 /**
  * The management panel's prefixes (Phase 5T), deliberately UPPERCASE.
@@ -2055,6 +2074,20 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
         id,
       );
     }
+    if (data.startsWith(DISCOUNT_CODE_ENTER_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'DISCOUNT_CODE_ENTER',
+        data.slice(DISCOUNT_CODE_ENTER_CALLBACK_PREFIX.length),
+        id,
+      );
+    }
+    if (data.startsWith(DISCOUNT_CODE_REMOVE_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'DISCOUNT_CODE_REMOVE',
+        data.slice(DISCOUNT_CODE_REMOVE_CALLBACK_PREFIX.length),
+        id,
+      );
+    }
     if (data.startsWith(SERVICE_ACTION_CONFIRM_CALLBACK_PREFIX)) {
       return callbackCommand(
         'SERVICE_ACTION_CONFIRM',
@@ -3082,6 +3115,18 @@ export const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
    */
   [COMMERCE_ERROR_CODES.SERVICE_USERNAME_INVALID]: 'bot.username.invalid',
   [COMMERCE_ERROR_CODES.SERVICE_USERNAME_TAKEN]: 'bot.username.taken',
+  /*
+   * WP8. ONE sentence for every reason a code is refused — unknown, exhausted, out of
+   * window, not for this plan — because a bot that told them apart would be an oracle
+   * for guessing codes. The window stays open, so the customer can type another.
+   */
+  [COMMERCE_ERROR_CODES.DISCOUNT_CODE_REJECTED]: 'bot.discount.rejected',
+  /*
+   * At confirmation: a discount the summary included no longer holds. Nothing was
+   * charged and the order was not re-priced — the customer starts again and sees the
+   * quote as it now stands.
+   */
+  [COMMERCE_ERROR_CODES.DISCOUNT_NO_LONGER_VALID]: 'bot.discount.no_longer_valid',
   [COMMERCE_ERROR_CODES.SERVICE_USERNAME_EXHAUSTED]: 'bot.username.exhausted',
   [COMMERCE_ERROR_CODES.SERVICE_USERNAME_UNGENERATABLE]: 'bot.username.unavailable',
   [COMMERCE_ERROR_CODES.SERVICE_USERNAME_MODE_UNAVAILABLE]: 'bot.username.mode_unavailable',
@@ -6525,6 +6570,25 @@ export class BotRuntime {
     if (command.intent === 'USERNAME_AUTOMATIC' && command.targetId !== null) {
       return this.automaticUsername(scope, actor, command.targetId, customer, input.idempotencyKey);
     }
+    if (command.intent === 'DISCOUNT_CODE_ENTER' && command.targetId !== null) {
+      return this.enterDiscountCode(
+        scope,
+        actor,
+        command.targetId,
+        customer,
+        input.botInstanceId,
+        input.idempotencyKey,
+      );
+    }
+    if (command.intent === 'DISCOUNT_CODE_REMOVE' && command.targetId !== null) {
+      return this.removeDiscountCode(
+        scope,
+        actor,
+        command.targetId,
+        customer,
+        input.idempotencyKey,
+      );
+    }
     /*
      * The one intent produced by an ordinary message, and the one place this surface
      * asks the database what an ordinary message meant.
@@ -7577,8 +7641,49 @@ export class BotRuntime {
    * overrode before this step existed is unaffected.
    */
   private orderSummary(order: OrderRecord, username: string | null): PendingReply {
+    const discounted = order.totals.discount.amountMinor > 0n;
+    const cashback = order.totals.quote.cashback;
+    /*
+     * The variant is chosen from the QUOTE, never from what the customer did: an
+     * automatic rule discounts a draft nobody typed a code into, and a total the customer
+     * cannot reconcile with the list price reads as a mistake. Four keys because the
+     * renderer has no conditional lines — a missing value renders as its token.
+     */
+    const key =
+      discounted && cashback !== undefined
+        ? 'bot.order.summary_discounted_cashback'
+        : discounted
+          ? 'bot.order.summary_discounted'
+          : cashback !== undefined
+            ? 'bot.order.summary_cashback'
+            : 'bot.order.summary';
+    const buttons: CustomerButton[] = [
+      {
+        label: { kind: 'TEMPLATE', key: 'bot.order.confirm_button' },
+        data: `${CONFIRM_CALLBACK_PREFIX}${order.id}`,
+      },
+    ];
+    /*
+     * The code buttons, on a new-purchase DRAFT only (P7): a commercial order's evidence
+     * row is written with its draft and cannot follow a code entered afterwards, and a
+     * confirmed order's price is frozen. The server refuses both anyway — this is not
+     * the check, only the absence of a button that could not work.
+     */
+    if (order.state === 'DRAFT' && order.purpose === 'NEW_SERVICE') {
+      buttons.push(
+        order.discountCode === null
+          ? {
+              label: { kind: 'TEMPLATE', key: 'bot.discount.enter_button' },
+              data: `${DISCOUNT_CODE_ENTER_CALLBACK_PREFIX}${order.id}`,
+            }
+          : {
+              label: { kind: 'TEMPLATE', key: 'bot.discount.remove_button' },
+              data: `${DISCOUNT_CODE_REMOVE_CALLBACK_PREFIX}${order.id}`,
+            },
+      );
+    }
     return {
-      key: 'bot.order.summary',
+      key,
       // From the ORDER's own snapshot, not from the product and not from the callback
       // data. `templates.ts` says so in terms: "Every figure in it comes from the price
       // quote, never from callback data."
@@ -7589,15 +7694,104 @@ export class BotRuntime {
         trafficBytes: order.line.specification.trafficBytes,
         // The CANONICAL form the allocator returned, never what the customer typed.
         ...(username === null ? {} : { username }),
+        ...(discounted ? { subtotal: order.totals.subtotal, discount: order.totals.discount } : {}),
+        ...(cashback === undefined ? {} : { cashback: cashback.amount }),
       },
-      buttons: [
-        {
-          label: { kind: 'TEMPLATE', key: 'bot.order.confirm_button' },
-          data: `${CONFIRM_CALLBACK_PREFIX}${order.id}`,
-        },
-      ],
+      buttons,
       orderId: order.id,
     };
+  }
+
+  /**
+   * The summary again, for a draft whose quote just changed under a code.
+   *
+   * The username is read back rather than carried, because the code turn does not know
+   * it: the window that brought the code names only the order.
+   */
+  private async repricedSummary(
+    scope: TenantContext,
+    actor: ActorContext,
+    order: OrderRecord,
+    customer: CustomerRecord,
+  ): Promise<PendingReply> {
+    const step = await this.deps.orders.usernameStep(scope, actor, {
+      customerId: customer.id,
+      orderId: order.id,
+    });
+    return this.orderSummary(order, step.reservation?.username ?? null);
+  }
+
+  /** Opens the code window for one draft and asks for the code. */
+  private async enterDiscountCode(
+    scope: TenantContext,
+    actor: ActorContext,
+    orderId: string,
+    customer: CustomerRecord,
+    botInstanceId: string,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    try {
+      await this.deps.orders.beginDiscountCodeEntry(scope, actor, {
+        idempotencyKey: `${idempotencyKey}:discount-entry`,
+        botInstanceId,
+        customerId: customer.id,
+        orderId,
+      });
+      return { key: 'bot.discount.ask', values: {}, buttons: [], orderId };
+    } catch (error) {
+      return refusal(error);
+    }
+  }
+
+  /** Takes the code off a draft: the draft is re-quoted from its own snapshot. */
+  private async removeDiscountCode(
+    scope: TenantContext,
+    actor: ActorContext,
+    orderId: string,
+    customer: CustomerRecord,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    try {
+      const order = await this.deps.orders.applyDiscountCode(scope, actor, {
+        idempotencyKey: `${idempotencyKey}:discount-remove`,
+        customerId: customer.id,
+        orderId,
+        code: null,
+      });
+      return this.repricedSummary(scope, actor, order, customer);
+    } catch (error) {
+      return refusal(error);
+    }
+  }
+
+  /**
+   * An ordinary message the username window did not claim. A code only if the code
+   * window says so; otherwise the fallback every unrecognised message has always had.
+   */
+  private async typedDiscountCode(
+    scope: TenantContext,
+    actor: ActorContext,
+    text: string,
+    customer: CustomerRecord,
+    botInstanceId: string,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    try {
+      const result = await this.deps.orders.submitTypedDiscountCode(scope, actor, {
+        idempotencyKey: `${idempotencyKey}:discount-text`,
+        botInstanceId,
+        customerId: customer.id,
+        text,
+      });
+      if (result.outcome === 'NO_WINDOW') {
+        return { key: 'bot.unknown_command', values: {}, buttons: [], orderId: null };
+      }
+      return this.repricedSummary(scope, actor, result.order, customer);
+    } catch (error) {
+      // `DISCOUNT_CODE_REJECTED` through the shared table: one sentence for every reason,
+      // and the window left open by the rolled-back transaction.
+      return refusal(error);
+    }
   }
 
   /**
@@ -7748,7 +7942,8 @@ export class BotRuntime {
         text,
       });
       if (result.outcome === 'NO_WINDOW') {
-        return { key: 'bot.unknown_command', values: {}, buttons: [], orderId: null };
+        // Not a username. Perhaps a discount code; otherwise the fallback it always got.
+        return this.typedDiscountCode(scope, actor, text, customer, botInstanceId, idempotencyKey);
       }
       // The customer's read. See `automaticUsername` for what `get` did here.
       const order = await this.deps.orders.orderForCustomer(scope, actor, {

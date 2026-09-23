@@ -1191,6 +1191,31 @@ export const COMMERCE_ERROR_CODES = {
    * row that changed nothing is an entry an operator has to read past.
    */
   TRIAL_RESET_NOTHING: 'commerce.trial_reset_nothing',
+  /**
+   * An entered discount code that will not be applied — for EVERY reason.
+   *
+   * Unknown, inactive, out of its window, out of scope, exhausted, or skipped by the
+   * stacking rule: one code and one customer sentence (`bot.discount.rejected`), because
+   * distinguishing them tells a customer which guessed codes exist. The reason is in the
+   * error's details as a `DISCOUNT_REFUSAL_REASONS` member, for the audit row and the
+   * operator. `docs/wp8-pricing-audit.md` P4.
+   */
+  DISCOUNT_CODE_REJECTED: 'commerce.discount_code_rejected',
+  /**
+   * A discount the confirmed quote relied on no longer holds at confirmation.
+   *
+   * Deactivated, out of its window, or its last use taken by another order since the
+   * customer saw the summary. The order is NOT re-priced — that would charge a number
+   * the customer never saw — it is refused, and the customer starts it again and sees the
+   * quote as it now stands. P6.
+   */
+  DISCOUNT_NO_LONGER_VALID: 'commerce.discount_no_longer_valid',
+  /** An operator's discount rule id that names nothing in this tenant. */
+  DISCOUNT_NOT_FOUND: 'commerce.discount_not_found',
+  /** A `CODE` rule whose code another rule of this tenant already uses, in any case. */
+  DISCOUNT_CODE_TAKEN: 'commerce.discount_code_taken',
+  /** An operator's cashback rule id that names nothing in this tenant. */
+  CASHBACK_RULE_NOT_FOUND: 'commerce.cashback_rule_not_found',
 } as const;
 
 /*

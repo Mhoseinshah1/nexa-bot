@@ -6,6 +6,7 @@ import {
   type Money,
   type PriceQuote,
   type PriceQuoteStep,
+  type PriceQuoteWire,
 } from '@nexa/contracts';
 import type { ProductRecord } from '../../catalog/application/ports.js';
 import type { OrderTotalsRecord } from './ports.js';
@@ -20,14 +21,13 @@ import type { OrderTotalsRecord } from './ports.js';
 export const BASE_PRICE_RULE_LABEL = "The product's list price";
 
 /**
- * The pricing engine, at the only step Phase 4B owns.
+ * The BASE of every quote: the one step Phase 4B owns.
  *
  * `PRICING_PRECEDENCE` declares six steps and this applies exactly one of them.
- * The other five are tiers, panel adjustments, custom formulas, per-user overrides and
- * promotional discounts — every one of which belongs to a phase that does not exist,
- * and each of which would need a rule table, a precedence test and an operator surface
- * before it could be believed. Implementing a step with no rules behind it would put a
- * step into the trace that says a rule fired when none did.
+ * `PROMOTIONAL_DISCOUNT` is WP8's, applied on top of this by
+ * `pricing/domain/pricing-engine.ts`; tiers, panel adjustments, custom formulas and
+ * per-user overrides still have no rules behind them, and implementing a step with no
+ * rule would put a step into the trace that says a rule fired when none did.
  *
  * What this DOES do is produce a real quote with a real trace. `pricing.ts` calls the
  * trace mandatory — "a quote without a trace is not a quote" — so the one step that
@@ -41,6 +41,23 @@ export const BASE_PRICE_RULE_LABEL = "The product's list price";
  */
 export function quoteProduct(
   product: ProductRecord,
+  price: Money,
+  quantity: number,
+  quotedAt: Date,
+): OrderTotalsRecord {
+  return quoteLine(product.id, price, quantity, quotedAt);
+}
+
+/**
+ * The same `BASE_PRICE` step, from a line rather than a product row (WP8 P6).
+ *
+ * A draft re-quoted for a discount code is priced from its OWN snapshot — the unit price
+ * and quantity the customer was shown — never from today's product, which may have been
+ * re-priced since. So the base has to be computable from those two facts and the product
+ * id alone, and `quoteProduct` is now this with the id read off the row.
+ */
+export function quoteLine(
+  productId: ProductRecord['id'],
   price: Money,
   quantity: number,
   quotedAt: Date,
@@ -78,7 +95,7 @@ export function quoteProduct(
   };
 
   const quote: PriceQuote = {
-    productId: product.id,
+    productId,
     quotedAt: quotedAt.toISOString(),
     currency,
     finalAmount: total,
@@ -189,5 +206,53 @@ export function quoteTrial(
       finalAmount: nothing,
       trace: [step],
     },
+  };
+}
+
+/**
+ * The quote, with every amount as a decimal string. See `priceQuoteWireSchema`.
+ *
+ * ONE serialiser for both places a quote leaves memory: the `orders.quote` column and
+ * the operator's price preview. Two copies would be two answers to "what does a stored
+ * quote look like", and the preview exists to show exactly what checkout stores.
+ */
+export function priceQuoteToWire(quote: PriceQuote): PriceQuoteWire {
+  return {
+    productId: quote.productId,
+    quotedAt: quote.quotedAt,
+    currency: quote.currency,
+    finalAmount: {
+      amountMinor: quote.finalAmount.amountMinor.toString(),
+      currency: quote.finalAmount.currency,
+    },
+    trace: quote.trace.map((step) => ({
+      step: step.step,
+      effect: step.effect,
+      ruleId: step.ruleId,
+      ruleLabel: step.ruleLabel,
+      amountBefore: {
+        amountMinor: step.amountBefore.amountMinor.toString(),
+        currency: step.amountBefore.currency,
+      },
+      amountAfter: {
+        amountMinor: step.amountAfter.amountMinor.toString(),
+        currency: step.amountAfter.currency,
+      },
+    })),
+    // Written only when present, so a quote without cashback stores exactly the document
+    // every quote stored before WP8.
+    ...(quote.cashback === undefined
+      ? {}
+      : {
+          cashback: {
+            ruleId: quote.cashback.ruleId,
+            ruleLabel: quote.cashback.ruleLabel,
+            percent: quote.cashback.percent,
+            amount: {
+              amountMinor: quote.cashback.amount.amountMinor.toString(),
+              currency: quote.cashback.amount.currency,
+            },
+          },
+        }),
   };
 }

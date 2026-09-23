@@ -1,5 +1,6 @@
-import { and, asc, eq, getTableColumns, isNotNull, lte, sql, type SQL } from 'drizzle-orm';
-import { money, priceQuoteWireSchema, type PriceQuote, type PriceQuoteWire } from '@nexa/contracts';
+import { and, asc, eq, getTableColumns, isNotNull, isNull, lte, sql, type SQL } from 'drizzle-orm';
+import { money, priceQuoteWireSchema, type PriceQuote } from '@nexa/contracts';
+import { priceQuoteToWire } from '../application/order-pricing.js';
 import type {
   CurrencyCode,
   OrderId,
@@ -24,6 +25,7 @@ import type {
   OrderRecord,
   OrderRepository,
   OrderSearch,
+  OrderTotalsRecord,
 } from '../application/ports.js';
 
 /**
@@ -86,7 +88,7 @@ export class DrizzleOrderRepository implements OrderRepository {
         discountAmount: draft.totals.discount.amountMinor,
         totalAmount: draft.totals.total.amountMinor,
         currency: draft.totals.currency,
-        quote: quoteToJson(draft.totals.quote),
+        quote: priceQuoteToWire(draft.totals.quote),
         expiresAt: draft.expiresAt,
         createdAt: draft.now,
         updatedAt: draft.now,
@@ -327,33 +329,36 @@ export class DrizzleOrderRepository implements OrderRepository {
 
     return rows.map(toRecord);
   }
-}
 
-/** The quote, with every amount as a decimal string. See `priceQuoteWireSchema`. */
-function quoteToJson(quote: PriceQuote): PriceQuoteWire {
-  return {
-    productId: quote.productId,
-    quotedAt: quote.quotedAt,
-    currency: quote.currency,
-    finalAmount: {
-      amountMinor: quote.finalAmount.amountMinor.toString(),
-      currency: quote.finalAmount.currency,
-    },
-    trace: quote.trace.map((step) => ({
-      step: step.step,
-      effect: step.effect,
-      ruleId: step.ruleId,
-      ruleLabel: step.ruleLabel,
-      amountBefore: {
-        amountMinor: step.amountBefore.amountMinor.toString(),
-        currency: step.amountBefore.currency,
-      },
-      amountAfter: {
-        amountMinor: step.amountAfter.amountMinor.toString(),
-        currency: step.amountAfter.currency,
-      },
-    })),
-  };
+  async reprice(
+    scope: TenantContext,
+    id: OrderId,
+    input: { readonly totals: OrderTotalsRecord; readonly discountCode: string | null },
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(orders)
+      .set({
+        subtotalAmount: input.totals.subtotal.amountMinor,
+        discountAmount: input.totals.discount.amountMinor,
+        totalAmount: input.totals.total.amountMinor,
+        quote: priceQuoteToWire(input.totals.quote),
+        discountCode: input.discountCode,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(orders.tenantId, tenantId),
+          eq(orders.id, id),
+          eq(orders.state, 'DRAFT'),
+          isNull(orders.confirmedAt),
+        ),
+      )
+      .returning({ id: orders.id });
+    return rows.length === 1;
+  }
 }
 
 /**
@@ -383,6 +388,16 @@ function quoteFromJson(raw: unknown, orderId: string): PriceQuote {
       amountBefore: money(BigInt(step.amountBefore.amountMinor), step.amountBefore.currency),
       amountAfter: money(BigInt(step.amountAfter.amountMinor), step.amountAfter.currency),
     })),
+    ...(wire.cashback === undefined
+      ? {}
+      : {
+          cashback: {
+            ruleId: wire.cashback.ruleId,
+            ruleLabel: wire.cashback.ruleLabel,
+            percent: wire.cashback.percent,
+            amount: money(BigInt(wire.cashback.amount.amountMinor), wire.cashback.amount.currency),
+          },
+        }),
   };
 }
 
@@ -426,6 +441,7 @@ function toRecord(row: typeof orders.$inferSelect): OrderRecord {
       currency,
       quote: quoteFromJson(row.quote, row.id),
     },
+    discountCode: row.discountCode,
     expiresAt: row.expiresAt,
     confirmedAt: row.confirmedAt,
     settledAt: row.settledAt,

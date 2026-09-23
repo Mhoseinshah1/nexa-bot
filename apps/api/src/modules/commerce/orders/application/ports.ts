@@ -71,6 +71,14 @@ export interface OrderRecord {
   readonly line: OrderLine;
   readonly totals: OrderTotalsRecord;
   /**
+   * The code the customer entered, normalised, or null (WP8 P6).
+   *
+   * What the code bought is in `totals.quote`; this is only what was typed, kept so a
+   * re-quote can tell "no code" from "a code that no longer applies". Frozen with the
+   * rest of the quote at confirmation by `nexa_orders_snapshot_guard`.
+   */
+  readonly discountCode: string | null;
+  /**
    * The deadline, carried from DRAFT onward.
    *
    * On a DRAFT it is what stops a customer holding a stale price open for ever — the
@@ -243,4 +251,21 @@ export interface OrderRepository {
     limit: number,
     tx: unknown,
   ): Promise<readonly OrderRecord[]>;
+
+  /**
+   * Replaces a DRAFT's quote and its entered code (WP8 P6), and reports whether it did.
+   *
+   * Conditional on `state = 'DRAFT' AND confirmed_at IS NULL`: the snapshot guard would
+   * refuse a confirmed order's quote anyway, and saying it here as well means a re-quote
+   * racing a confirmation loses cleanly instead of raising. The line — title, price,
+   * specification — is not an argument: a re-quote re-prices the draft's own snapshot,
+   * never today's product.
+   */
+  reprice(
+    scope: TenantContext,
+    id: OrderId,
+    input: { readonly totals: OrderTotalsRecord; readonly discountCode: string | null },
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean>;
 }

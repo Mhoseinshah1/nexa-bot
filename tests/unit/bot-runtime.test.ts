@@ -621,6 +621,19 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.catalog.next_page_button',
       'bot.catalog.previous_page_button',
       /*
+       * WP8's five discount keys, reviewed against this case's rule. `enter_button` is
+       * drawn only on a new-purchase DRAFT, the one order a code can reach (P7), and
+       * opens a window `ask` names; `remove_button` only when a code is on it.
+       * `rejected` answers a typed code with one sentence for every reason, and
+       * `no_longer_valid` answers a confirmation whose discount stopped holding — it
+       * sends the customer back to start again, a flow this head has.
+       */
+      'bot.discount.ask',
+      'bot.discount.enter_button',
+      'bot.discount.no_longer_valid',
+      'bot.discount.rejected',
+      'bot.discount.remove_button',
+      /*
        * `bot.help` is 4H's, and it is the one key here that exists to make the OTHERS
        * findable. `docs/phase4h-audit.md` §9: four commands answered, none registered
        * with Telegram, and the greeting named only `/catalog` — so `/wallet` and
@@ -652,6 +665,14 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.order.not_awaiting_payment',
       'bot.order.settled',
       'bot.order.summary',
+      /*
+       * WP8's three summary variants: the same summary with the figures the quote
+       * carries — the subtotal and discount taken off, the cashback promised after
+       * delivery. Chosen from the quote, so each is sent only when its figures exist.
+       */
+      'bot.order.summary_cashback',
+      'bot.order.summary_discounted',
+      'bot.order.summary_discounted_cashback',
       /*
        * The refusal when the customer has already said they paid.
        *
@@ -1215,10 +1236,15 @@ describe('the derivations Phase 4 depends on being stable', () => {
 
 describe('the financial rules, as integer arithmetic', () => {
   it('never uses a float, and rounds a percentage in the customer’s favour', () => {
-    // 33% of 1000 is 330; of 1001 it is 330.33, truncated to 330. Rounding up would add a
-    // unit of a tenant's revenue on every order.
+    // 33% of 1000 is 330; of 1001 it is 330.33, rounded UP to 331, so the customer pays
+    // 670 — at most the 67% they were promised. This line used to pin 330, and its comment
+    // called truncation the customer's favour; it is the tenant's: a smaller discount is a
+    // larger bill. `docs/wp8-pricing-audit.md` P5 records the correction.
     expect(discountAmountMinor('PERCENTAGE', 1000n, 33n)).toBe(330n);
-    expect(discountAmountMinor('PERCENTAGE', 1001n, 33n)).toBe(330n);
+    expect(discountAmountMinor('PERCENTAGE', 1001n, 33n)).toBe(331n);
+    expect(1001n - discountAmountMinor('PERCENTAGE', 1001n, 33n)).toBeLessThanOrEqual(
+      (1001n * 67n) / 100n,
+    );
     expect(discountAmountMinor('PERCENTAGE', 1000n, 100n)).toBe(1000n);
     expect(discountAmountMinor('FIXED_AMOUNT', 1000n, 250n)).toBe(250n);
     expect(discountAmountMinor('PERCENTAGE', 0n, 50n)).toBe(0n);

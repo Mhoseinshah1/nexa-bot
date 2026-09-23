@@ -19,7 +19,8 @@ import type { ProductId } from './ids.js';
  * (see docs/open-questions.md, O-1). It is data, so changing it is a contract
  * change with a visible test diff.
  *
- * Phase 0 ships the shape only. The engine is Phase 4.
+ * Phase 0 shipped the shape only. Phase 4B applied `BASE_PRICE`; WP8 adds
+ * `PROMOTIONAL_DISCOUNT` and the cashback promise (`docs/wp8-pricing-audit.md`).
  */
 
 export const PRICING_STEPS = [
@@ -66,6 +67,22 @@ export interface PriceQuoteStep {
   readonly amountAfter: Money;
 }
 
+/**
+ * The cashback promised with a quote (WP8 P8).
+ *
+ * Beside the trace and never in it: cashback does not change what the customer pays, so
+ * a step for it would make `finalAmount` and the last step's `amountAfter` disagree, or
+ * make one of them wrong. It is the rule that fired, the percent it had then, and the
+ * amount it came to on `finalAmount` — all snapshotted, because the rule may be retuned
+ * before the order is delivered.
+ */
+export interface PriceQuoteCashback {
+  readonly ruleId: string;
+  readonly ruleLabel: string;
+  readonly percent: number;
+  readonly amount: Money;
+}
+
 export interface PriceQuote {
   readonly productId: ProductId | null;
   readonly quotedAt: string;
@@ -73,6 +90,8 @@ export interface PriceQuote {
   readonly finalAmount: Money;
   /** Mandatory. A quote without a trace is not a quote. */
   readonly trace: readonly PriceQuoteStep[];
+  /** Absent when no cashback rule applied, including on every quote written before WP8. */
+  readonly cashback?: PriceQuoteCashback;
 }
 
 /** At most one discount code per order. Stacking is a margin decision, not a default. */
@@ -100,6 +119,13 @@ export const priceQuoteStepWireSchema = z.object({
   amountAfter: moneySchema,
 });
 
+export const priceQuoteCashbackWireSchema = z.object({
+  ruleId: z.string(),
+  ruleLabel: z.string(),
+  percent: z.number().int().min(1).max(100),
+  amount: moneySchema,
+});
+
 export const priceQuoteWireSchema = z.object({
   productId: z.string().nullable(),
   quotedAt: z.iso.datetime(),
@@ -107,6 +133,12 @@ export const priceQuoteWireSchema = z.object({
   finalAmount: moneySchema,
   /** Mandatory, and non-empty: `PriceQuote` calls a quote without a trace not a quote. */
   trace: z.array(priceQuoteStepWireSchema).min(1),
+  /**
+   * Optional, so every quote stored before WP8 still parses — a stored document is read
+   * back through this schema, and a new required field would turn every historical order
+   * into a refusal.
+   */
+  cashback: priceQuoteCashbackWireSchema.optional(),
 });
 
 export type PriceQuoteWire = z.infer<typeof priceQuoteWireSchema>;

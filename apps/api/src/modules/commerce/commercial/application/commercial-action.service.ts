@@ -50,6 +50,7 @@ import type {
   OrderTotalsRecord,
 } from '../../orders/application/ports.js';
 import { quoteAddon, quoteProduct } from '../../orders/application/order-pricing.js';
+import type { PricingService } from '../../pricing/application/pricing.service.js';
 import type { ServiceRecord, ServiceRepository } from '../../provisioning/application/ports.js';
 import { OPERATION_LEGAL_FROM } from '../../provisioning/application/provision-executor.js';
 import type { CommercialActionRecord, CommercialActionRepository } from './ports.js';
@@ -128,6 +129,12 @@ export interface CommercialActionServiceDeps {
   readonly scopeActivity: ScopeActivityReader;
   readonly outbox: OutboxWriter;
   readonly settings: SettingsResolver;
+  /**
+   * The pricing engine's door (WP8 P7): automatic rules and the cashback promise apply
+   * to renewals and add-ons at draft time, and confirmation redeems them. Codes do not
+   * reach this service — the commercial evidence row is written with the draft.
+   */
+  readonly pricing: Pick<PricingService, 'price' | 'redeem'>;
   readonly clock: Clock;
   readonly ids: IdGenerator;
 }
@@ -543,6 +550,10 @@ export class CommercialActionService {
         await this.assertPanelCanPerform(scope, service, action.kind, tx);
         await this.assertStillOffered(scope, action, tx);
 
+        // What the quote spent, redeemed under the rules' locks, before the transition
+        // (WP8 P6) — the same call `OrderService.confirm` makes, for the same reasons.
+        await this.deps.pricing.redeem(scope, actor, before, now, tx);
+
         const to = nextState(ORDER_MACHINE, 'DRAFT', 'CONFIRM');
         if (to === null) throw new Error('ORDER_MACHINE no longer allows CONFIRM from DRAFT.');
 
@@ -669,7 +680,18 @@ export class CommercialActionService {
       );
     }
 
-    const totals = quoteProduct(product, price, MAX_ORDER_QUANTITY, now);
+    const { totals } = await this.deps.pricing.price(
+      scope,
+      {
+        base: quoteProduct(product, price, MAX_ORDER_QUANTITY, now),
+        purpose: 'RENEW',
+        productId: product.id,
+        categoryId: product.categoryId,
+        customerId: service.customerId,
+        now,
+      },
+      tx,
+    );
     return {
       productId: product.id,
       addonId: null,
@@ -749,7 +771,22 @@ export class CommercialActionService {
     }
     await this.assertSalesCurrency(scope, addon.price, tx);
 
-    const totals = quoteAddon(addon.price, now);
+    /*
+     * An add-on is not a product and has no category, so only a rule scoped to neither
+     * can reach it — a product- or category-scoped rule is refused on scope by the engine.
+     */
+    const { totals } = await this.deps.pricing.price(
+      scope,
+      {
+        base: quoteAddon(addon.price, now),
+        purpose: kind,
+        productId: null,
+        categoryId: null,
+        customerId: service.customerId,
+        now,
+      },
+      tx,
+    );
     /*
      * The line snapshot carries the amount in the field this kind reads and ZERO in the
      * other, which `orders_quantity_line_check` pins. The zero means "no time was

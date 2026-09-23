@@ -9,6 +9,8 @@ import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/se
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import type { ProductDraft } from '../../apps/api/src/modules/commerce/catalog/application/ports';
 import {
+  adminActorFor,
+  createAdmin,
   makePanelSellable,
   migrateOnce,
   resetDatabase,
@@ -515,14 +517,149 @@ describe('the customer purchase flow over Telegram', () => {
     expect(text).toContain('پلن پایه');
     expect(text).toContain(formatMoney(money(250_000n, 'IRT')));
 
-    // And exactly one button, naming the ORDER rather than the product.
+    // Two buttons, both naming the ORDER rather than the product: confirm, and — on a
+    // new-purchase draft, the one order a code can reach (WP8 P7) — enter a code.
     const buttons = buttonsOf(lastMessage());
-    expect(buttons).toHaveLength(1);
+    expect(buttons).toHaveLength(2);
     expect(buttons[0]?.text).toBe(CATALOGUE_FA['bot.order.confirm_button']);
     expect(buttons[0]?.callback_data).toBe(`c:${String(rows[0]?.['id'])}`);
+    expect(buttons[1]?.text).toBe(CATALOGUE_FA['bot.discount.enter_button']);
+    expect(buttons[1]?.callback_data).toBe(`dc:${String(rows[0]?.['id'])}`);
 
     // Nothing about payment, because nothing can take one.
     expect(text).not.toContain(CATALOGUE_FA['bot.order.awaiting_payment']);
+  });
+
+  /** A discount rule, created and activated the way an operator does it (WP8). */
+  async function discount(write: {
+    kind: 'CODE' | 'AUTOMATIC';
+    code: string | null;
+    value: bigint;
+  }): Promise<string> {
+    const owner = adminActorFor(
+      await createAdmin(api.container, tenantA, {
+        username: 'owner-tg-discount',
+        roleKeys: ['owner'],
+      }),
+    );
+    const created = await api.container.discounts.create(tenantA, owner, {
+      idempotencyKey: `tg-discount-${write.kind}-${String(write.code)}`,
+      write: {
+        ...write,
+        label: 'حراج',
+        type: 'PERCENTAGE',
+        currency: null,
+        appliesTo: ['NEW_SERVICE'],
+        productId: null,
+        categoryId: null,
+        customerId: null,
+        firstPurchaseOnly: false,
+        minimumSubtotal: null,
+        startsAt: null,
+        endsAt: null,
+        totalLimit: null,
+        perCustomerLimit: null,
+        priority: 0,
+        stackable: false,
+      },
+    });
+    await api.container.discounts.activate(tenantA, owner, {
+      idempotencyKey: `tg-discount-activate-${created.rule.id}`,
+      discountId: created.rule.id,
+    });
+    return created.rule.id;
+  }
+
+  it('takes a typed discount code into the window it opened, prices it, and takes it off again', async () => {
+    await discount({ kind: 'CODE', code: 'SPRING', value: 20n });
+    const sellable = await product(tenantA, 'ACTIVE');
+    await tap(`p:${sellable.id}`);
+    const orderId = String((await orders())[0]?.['id']);
+    await tap(`Z:${orderId}`);
+    expect(buttonsOf(lastMessage()).map((b) => b.callback_data)).toEqual([
+      `c:${orderId}`,
+      `dc:${orderId}`,
+    ]);
+
+    // Before the window, a code is just a message nobody asked for.
+    await command('SPRING');
+    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
+
+    await tap(`dc:${orderId}`);
+    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.discount.ask']);
+
+    // A code that will not apply: one sentence, and the window stays open for another.
+    await command('WRONG');
+    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.discount.rejected']);
+
+    await command('spring');
+    const text = String(lastMessage()?.body['text']);
+    // Labelled lines, not bare figures: «250,000 تومان» contains «50,000 تومان».
+    expect(text).toContain(`مبلغ: ${formatMoney(money(250_000n, 'IRT'))}`);
+    expect(text).toContain(`تخفیف: ${formatMoney(money(50_000n, 'IRT'))}`);
+    expect(text).toContain(`مبلغ قابل پرداخت: ${formatMoney(money(200_000n, 'IRT'))}`);
+    expect(buttonsOf(lastMessage()).map((b) => b.callback_data)).toEqual([
+      `c:${orderId}`,
+      `dx:${orderId}`,
+    ]);
+    expect((await orders())[0]?.['total_amount']).toBe(200_000n);
+
+    // The window closed on the accepted code: the next message is ordinary again.
+    await command('SPRING');
+    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
+
+    await tap(`dx:${orderId}`);
+    expect(String(lastMessage()?.body['text'])).not.toContain('تخفیف');
+    expect(buttonsOf(lastMessage()).map((b) => b.callback_data)).toEqual([
+      `c:${orderId}`,
+      `dc:${orderId}`,
+    ]);
+    expect((await orders())[0]?.['total_amount']).toBe(250_000n);
+  });
+
+  it('closes a code window whose draft was confirmed from the summary still on screen', async () => {
+    await discount({ kind: 'CODE', code: 'SPRING', value: 20n });
+    const sellable = await product(tenantA, 'ACTIVE');
+    await tap(`p:${sellable.id}`);
+    const orderId = String((await orders())[0]?.['id']);
+    await tap(`Z:${orderId}`);
+    await tap(`dc:${orderId}`);
+    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.discount.ask']);
+
+    // The confirm button on the summary above the prompt is still live.
+    await tap(`c:${orderId}`);
+    expect((await orders())[0]?.['state']).not.toBe('DRAFT');
+
+    // The first message after it is ordinary, and it closed the window for good: a
+    // refusal would have rolled the close back and caught this message and every next one.
+    await command('SPRING');
+    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
+    const windows = await api.container.database.db.execute(
+      sql`SELECT close_reason FROM discount_code_captures WHERE order_id = ${orderId}`,
+    );
+    expect(windows.rows).toEqual([{ close_reason: 'SUPERSEDED' }]);
+    await command('hello');
+    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
+  });
+
+  it('explains an automatic discount on the summary, and refuses to confirm it once withdrawn', async () => {
+    const id = await discount({ kind: 'AUTOMATIC', code: null, value: 20n });
+    const sellable = await product(tenantA, 'ACTIVE');
+    await tap(`p:${sellable.id}`);
+    const orderId = String((await orders())[0]?.['id']);
+    await tap(`Z:${orderId}`);
+    const text = String(lastMessage()?.body['text']);
+    expect(text, 'the list price the customer can reconcile').toContain(
+      `مبلغ: ${formatMoney(money(250_000n, 'IRT'))}`,
+    );
+    expect(text).toContain(`تخفیف: ${formatMoney(money(50_000n, 'IRT'))}`);
+
+    await api.container.database.db.execute(
+      sql`UPDATE discounts SET status = 'INACTIVE' WHERE id = ${id}`,
+    );
+    await tap(`c:${orderId}`);
+    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.discount.no_longer_valid']);
+    expect((await orders())[0]?.['state']).toBe('DRAFT');
   });
 
   it('stops the button spinning, AFTER the real answer', async () => {

@@ -566,6 +566,190 @@ export const TEMPLATES = [
     ],
   },
   {
+    key: 'bot.order.summary_discounted',
+    description:
+      'The order summary for a quote with a discount (WP8). The plain summary plus the ' +
+      'subtotal and the amount taken off, because a total the customer cannot reconcile ' +
+      'with the list price reads as a mistake. Every figure comes from the price quote.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'productTitle',
+        type: 'STRING',
+        description: 'The product title as snapshotted onto the order.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'total',
+        type: 'MONEY',
+        description: 'The server-calculated total.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'durationDays',
+        type: 'DURATION_DAYS',
+        description: 'Days of validity, or 0 for unlimited.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'trafficBytes',
+        type: 'BYTES',
+        description: 'Traffic allowance in bytes, or 0 for unlimited. The renderer owns the unit.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        /* Optional and canonical, for the reasons `bot.order.summary` gives. */
+        token: 'username',
+        type: 'STRING',
+        description: 'The canonical username reserved for this order.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'subtotal',
+        type: 'MONEY',
+        description: "The price before any discount: the quote's BASE_PRICE amount.",
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'discount',
+        type: 'MONEY',
+        description:
+          'The total the applied discounts took off, from the quote trace. Always greater than zero on this variant.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.order.summary_cashback',
+    description:
+      'The order summary for a quote that promises cashback and has no discount (WP8). ' +
+      'Says the cashback is credited after delivery and nothing about when: it is a ' +
+      'promise recorded at confirmation, not money moved.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'productTitle',
+        type: 'STRING',
+        description: 'The product title as snapshotted onto the order.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'total',
+        type: 'MONEY',
+        description: 'The server-calculated total.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'durationDays',
+        type: 'DURATION_DAYS',
+        description: 'Days of validity, or 0 for unlimited.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'trafficBytes',
+        type: 'BYTES',
+        description: 'Traffic allowance in bytes, or 0 for unlimited. The renderer owns the unit.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        /* Optional and canonical, for the reasons `bot.order.summary` gives. */
+        token: 'username',
+        type: 'STRING',
+        description: 'The canonical username reserved for this order.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'cashback',
+        type: 'MONEY',
+        description:
+          'The cashback the quote promises, credited to the wallet after delivery. Always greater than zero on this variant.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.order.summary_discounted_cashback',
+    description:
+      'The order summary for a quote with both a discount and a cashback promise (WP8). ' +
+      'A variant rather than optional lines, because the renderer has no conditional ' +
+      'lines and a missing value renders as its token.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'productTitle',
+        type: 'STRING',
+        description: 'The product title as snapshotted onto the order.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'total',
+        type: 'MONEY',
+        description: 'The server-calculated total.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'durationDays',
+        type: 'DURATION_DAYS',
+        description: 'Days of validity, or 0 for unlimited.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'trafficBytes',
+        type: 'BYTES',
+        description: 'Traffic allowance in bytes, or 0 for unlimited. The renderer owns the unit.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        /* Optional and canonical, for the reasons `bot.order.summary` gives. */
+        token: 'username',
+        type: 'STRING',
+        description: 'The canonical username reserved for this order.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'subtotal',
+        type: 'MONEY',
+        description: "The price before any discount: the quote's BASE_PRICE amount.",
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'discount',
+        type: 'MONEY',
+        description:
+          'The total the applied discounts took off, from the quote trace. Always greater than zero on this variant.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'cashback',
+        type: 'MONEY',
+        description:
+          'The cashback the quote promises, credited to the wallet after delivery. Always greater than zero on this variant.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
     key: 'bot.order.awaiting_payment',
     description: 'Confirms that an order is recorded and waiting for payment.',
     format: 'PLAIN_TEXT',
@@ -3922,6 +4106,38 @@ export const TEMPLATES = [
       'Shown when a code cannot be applied. One message for every reason: telling a ' +
       'customer whether a code exists but is exhausted is an oracle for guessing ' +
       'codes.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.discount.enter_button',
+    description:
+      'The button on a new-purchase summary that opens the discount-code window (WP8 ' +
+      'P11). A label, not a claim that any code will apply.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.discount.remove_button',
+    description: 'The button that takes an entered code off a draft and re-quotes it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.discount.ask',
+    description:
+      'Asks for the code once the window is open. It names the window, so a customer ' +
+      'knows their next message is read as a code — the one thing that keeps an ' +
+      'ordinary message from being swallowed by a prompt they did not know was waiting.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.discount.no_longer_valid',
+    description:
+      'Shown at confirmation when a discount the summary included no longer holds. ' +
+      'Nothing was charged and the order was not re-priced; the customer starts again ' +
+      'and sees the quote as it now stands.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },

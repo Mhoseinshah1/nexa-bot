@@ -40,9 +40,33 @@ template keeps the `nx…` shape. `docs/phase6c-username-falsification.md`.
 **Marzban is the supported mutable provider.** 3X-UI keeps the five
 capabilities it has — of which only `CREATE_USER` mutates anything — and gains
 no new mutable scope: the owner's correction, recorded in
-`docs/phase4e-audit.md`. What remains unbuilt is Phase 7: discounts,
-referral, cashback, affiliate, resellers and promotions. Do not add them
-without an explicit instruction.
+`docs/phase4e-audit.md`.
+
+**Discounts and cashback are built (WP8, `docs/wp8-pricing-audit.md`).** What
+remains unbuilt is referral, affiliate, resellers and any other promotion. Do
+not add them without an explicit instruction.
+
+Four pricing rules, each a way to charge a customer a number they did not see
+or give away money twice:
+
+- There is **one pricing boundary**, `PricingService.price` over the pure
+  `pricing-engine.ts`. Checkout, a typed code, the commercial actions and the
+  operator's preview all go through it; a second calculation is a second
+  answer to "what does this cost".
+- A quote is **honoured, never re-priced**. Confirmation re-decides only what
+  can make the quote unfulfillable — status, window, limits, first purchase —
+  under the rules' row locks in id order, and refuses with
+  `DISCOUNT_NO_LONGER_VALID` rather than charging a different figure. A code
+  re-quotes a draft from its OWN snapshot, never from today's price.
+- A limit counts **live redemptions** (order `AWAITING_PAYMENT` or `PAID`),
+  asked of the order at read time; there is no counter. A customer is told one
+  sentence for every code refusal — the reason is an oracle for guessing codes.
+- Cashback is **earned once, at delivery** (an op of the order's `PURCHASED_AS`
+  type `SUCCEEDED`), by the provisioner loop's sweep, never by hooks at each
+  success site. A refund reverses it by the cumulative target, so partial
+  refunds sum to one full one; what the balance cannot cover is recorded as
+  unrecovered and never collected. The reversal judges the promise's state
+  only under the customer's wallet lock.
 
 **The deployment checkpoint after Phase 2 is done too**: an immutable image,
 a production Compose topology behind Caddy, an Ubuntu installer, and `botctl`
