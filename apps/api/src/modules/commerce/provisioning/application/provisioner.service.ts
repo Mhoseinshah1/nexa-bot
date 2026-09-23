@@ -61,6 +61,7 @@ import {
   isPerformableOperation,
   MANAGEMENT_TARGET_STATE,
   OPERATION_LEGAL_FROM,
+  ROTATION_STORE_STATES,
   provisionCall,
   resumeCall,
   rotateCall,
@@ -1631,9 +1632,11 @@ export class ProvisionerService {
    * `recordRotation` writes the new link, puts delivery back to a fresh `PENDING` and
    * clears any send in progress. The delivery writes are conditional on the link they
    * sent, so a send of the OLD link still in flight records nothing when it lands, and
-   * the sweep sends the new one. The service must still be `ACTIVE` or `SUSPENDED`: a
-   * service terminated while the call was on the wire keeps what the terminate wrote,
-   * and the operation still SUCCEEDED, because the panel really did rotate.
+   * the sweep sends the new one. The service must still have an account —
+   * `ROTATION_STORE_STATES`, which includes `EXPIRED` because an expiry can commit while
+   * the call is on the wire and a renewal would bring the stale link back. A service
+   * terminated meanwhile keeps what the terminate wrote, and the operation still
+   * SUCCEEDED, because the panel really did rotate.
    *
    * The audit row and the event carry no link. Both links are bearer capabilities, and
    * neither the audit log nor the outbox is a place for one.
@@ -1690,7 +1693,7 @@ export class ProvisionerService {
         scope,
         serviceId,
         rotated.subscriptionUrl,
-        OPERATION_LEGAL_FROM.ROTATE_SUBSCRIPTION,
+        ROTATION_STORE_STATES,
         now,
         tx,
       );
@@ -1702,8 +1705,10 @@ export class ProvisionerService {
           action: 'service.rotate_subscription',
           entityType: 'Service',
           entityId: serviceId,
-          before: { state: service.state, deliveryState: service.deliveryState },
-          after: { state: service.state, deliveryState: 'PENDING' },
+          // No state: it may have moved while the call was on the wire, and this row
+          // records what the rotation changed, which is the delivery and nothing else.
+          before: { deliveryState: service.deliveryState },
+          after: { deliveryState: 'PENDING' },
           result: 'SUCCESS',
         },
         tx,

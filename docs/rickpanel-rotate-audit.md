@@ -105,7 +105,10 @@ Two consequences:
 
 ### D5 — Storing the new link, and the delivery race
 
-On success, one transaction:
+On success, one transaction. The link is stored if the service still has an account —
+`ACTIVE`, `SUSPENDED` or `EXPIRED` (`ROTATION_STORE_STATES`). `EXPIRED` is there because an
+expiry can commit while the call is on the wire, and a renewal would otherwise bring the
+pre-rotation link back (Codex review of PR #62). The transaction:
 
 - marks the operation `SUCCEEDED`;
 - writes the new link to the service, conditional on the service still being
@@ -121,10 +124,14 @@ completion would record `DELIVERED` against a row that now holds the NEW link, a
 new link would never be sent: a customer holding a dead link while the service says it
 was delivered.
 
-The fix is a compare-and-set on the delivery writes:
+The fix is a compare-and-set on every delivery write, the stamp before the send
+included:
 
-- `recordDelivery` and `recordRateLimited` now require the row to still hold **the
-  link that was sent**. A send overtaken by a rotation records nothing.
+- `markSendStarted`, `recordDelivery` and `recordRateLimited` require the row to still
+  hold **the link being sent**. A claim overtaken by a rotation before its send is
+  stamped sends nothing (Codex review of PR #62: the stamp used to check the delivery
+  state alone, and it could land on the rotated row after the rotation had cleared it).
+  A send overtaken after it records nothing.
 - The rotation cleared `delivery_send_started_at`, so the row is claimable, and the
   next sweep sends the new link.
 
@@ -159,16 +166,16 @@ Marzban and 3X-UI stay without it:
 
 ## 5. What was built, and where it is held
 
-| piece                                    | where                                                                                                                             |
-| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `rotateSubscription` and D4's table      | `rickpanel.adapter.ts`; `tests/unit/rickpanel-adapter.test.ts` › RickPanel subscription rotation                                  |
-| the executor branch and `finishRotation` | `provisioner.service.ts`; `tests/integration/rickpanel-rotate-link.test.ts`                                                       |
-| the link stored and delivery re-armed    | `DrizzleServiceRepository.recordRotation`                                                                                         |
-| the compare-and-set on delivery writes   | `recordDelivery` and `recordRateLimited`, fed by `DeliveryService.deliver`; the two race cases in `rickpanel-rotate-link.test.ts` |
-| operator-only, `services.edit`           | `OPERATOR_SERVICE_OPERATIONS`, `OPERATOR_OPERATION_PERMISSION`                                                                    |
-| Web Admin                                | `POST /services/:id/rotate-link`; the action row on the service page                                                              |
-| Telegram Admin                           | `ra:` asks, `rb:` confirms; only the confirmation screen produces `rb:`                                                           |
-| RickPanel alone declares the capability  | `tests/integration/panels-http.test.ts`; `telegram-admin-services.test.ts` asserts no rotation is offered on a Marzban            |
+| piece                                    | where                                                                                                                                                                                     |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rotateSubscription` and D4's table      | `rickpanel.adapter.ts`; `tests/unit/rickpanel-adapter.test.ts` › RickPanel subscription rotation                                                                                          |
+| the executor branch and `finishRotation` | `provisioner.service.ts`; `tests/integration/rickpanel-rotate-link.test.ts`                                                                                                               |
+| the link stored and delivery re-armed    | `DrizzleServiceRepository.recordRotation`                                                                                                                                                 |
+| the compare-and-set on delivery writes   | `recordDelivery` and `recordRateLimited`, fed by `DeliveryService.deliver`; the two race cases in `rickpanel-rotate-link.test.ts`                                                         |
+| operator-only, `services.edit`           | `OPERATOR_SERVICE_OPERATIONS`, `OPERATOR_OPERATION_PERMISSION`                                                                                                                            |
+| Web Admin                                | `POST /services/:id/rotate-link`; the action row on the service page                                                                                                                      |
+| Telegram Admin                           | `ra:` asks, `rb:<id>.<stamp>` confirms. Only the confirmation screen draws `rb:`, and its stamp is a digest of the link asked about, so a rotation spends the confirmation that caused it |
+| RickPanel alone declares the capability  | `tests/integration/panels-http.test.ts`; `telegram-admin-services.test.ts` asserts no rotation is offered on a Marzban                                                                    |
 
 **The race is tested by a controlled interleaving, not by `Promise.all`.** The Telegram
 stand-in holds the old link's send until the rotation has committed, then answers it.

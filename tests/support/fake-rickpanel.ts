@@ -97,6 +97,11 @@ export interface FakeRickpanel {
   unprocessableCreates: number;
   /** What the next `revoke_sub` does. */
   revokeMode: RickpanelRevokeMode;
+  /**
+   * Run after a `rotates` revoke has changed the token and before it answers: a hook
+   * for a test to change the world while the rotation is on the wire.
+   */
+  afterRotation: (() => Promise<void>) | null;
   readonly requests: readonly FakeRickpanelRequest[];
   /** Everything this panel holds, keyed by username — the observer's view. */
   readonly users: ReadonlyMap<string, FakeRickpanelUser>;
@@ -124,6 +129,7 @@ export async function startFakeRickpanel(
   let behaviour: RickpanelBehaviour = options.behaviour ?? 'healthy';
   let unprocessableCreates = 0;
   let revokeMode: RickpanelRevokeMode = 'rotates';
+  let afterRotation: (() => Promise<void>) | null = null;
   let rotationCounter = 0;
 
   const present = (user: FakeRickpanelUser): Record<string, unknown> => ({
@@ -225,7 +231,12 @@ export async function startFakeRickpanel(
         if (revokeMode === 'rotates-then-drops') return void response.destroy();
         // The body is not evidence and the adapter does not read it: the link comes
         // from the read-back, as it does after a create.
-        return void json(200, present(held));
+        const hook = afterRotation;
+        if (hook === null) return void json(200, present(held));
+        // The rotation is done and its answer has not left: what a caller does here
+        // happens while the call is on the wire, from the caller's side.
+        void hook().then(() => json(200, present(held)));
+        return;
       }
 
       const single = /^\/api\/user\/([^/]+)$/.exec(path);
@@ -274,6 +285,12 @@ export async function startFakeRickpanel(
     },
     set unprocessableCreates(next: number) {
       unprocessableCreates = next;
+    },
+    get afterRotation() {
+      return afterRotation;
+    },
+    set afterRotation(next: (() => Promise<void>) | null) {
+      afterRotation = next;
     },
     get revokeMode() {
       return revokeMode;

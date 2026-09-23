@@ -247,11 +247,26 @@ export class DeliveryService {
      * it records.
      *
      * A `false` means the row moved between reading it and here: another sweep, or the
-     * customer's own re-request, is already sending. Refused rather than sent, because
-     * two senders is the duplicate this whole file is arranged around.
+     * customer's own re-request, is already sending — or a rotation replaced the link
+     * this caller read. Refused rather than sent, because two senders is the duplicate
+     * this whole file is arranged around, and an old link is not the customer's link.
+     *
+     * The stamp is conditional on the LINK too, the same compare-and-set the two
+     * records below make. Without it a rotation that committed between the sweep's
+     * read and this stamp would let the old link go out, and the stamp would land on
+     * the rotated row after the rotation had cleared it — stranding the new link behind
+     * a send nobody will record, until the reaper gives up on it.
      */
+    const sentUrl = service.subscriptionUrl;
     const started = await this.deps.uow.run(scope, async (tx) =>
-      this.deps.services.markSendStarted(scope, service.id, from, this.deps.clock.now(), tx),
+      this.deps.services.markSendStarted(
+        scope,
+        service.id,
+        from,
+        sentUrl,
+        this.deps.clock.now(),
+        tx,
+      ),
     );
     if (!started) {
       throw errors.conflict(
@@ -262,12 +277,11 @@ export class DeliveryService {
     }
 
     /*
-     * The link THIS attempt sends, and the one both records below are conditional on.
-     * A rotation that commits while the message is in flight replaces it, and the
-     * record of the old link's send must not land on the row that now holds the new
-     * one: that would mark a link DELIVERED the customer never received.
+     * `sentUrl` is the link THIS attempt sends, and the one both records below are
+     * conditional on. A rotation that commits while the message is in flight replaces
+     * it, and the record of the old link's send must not land on the row that now holds
+     * the new one: that would mark a link DELIVERED the customer never received.
      */
-    const sentUrl = service.subscriptionUrl;
     const result = await this.deps.messenger.send(scope, {
       chatId,
       botInstanceId,

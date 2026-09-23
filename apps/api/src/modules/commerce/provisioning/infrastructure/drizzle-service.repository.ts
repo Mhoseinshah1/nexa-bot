@@ -400,6 +400,7 @@ export class DrizzleServiceRepository implements ServiceRepository {
     scope: TenantContext,
     id: string,
     from: ServiceDeliveryState,
+    sentUrl: string,
     now: Date,
     tx: TransactionScope,
   ): Promise<boolean> {
@@ -413,6 +414,7 @@ export class DrizzleServiceRepository implements ServiceRepository {
           eq(services.id, id),
           eq(services.deliveryState, from),
           isNull(services.deliverySendStartedAt),
+          eq(services.subscriptionUrl, sentUrl),
         ),
       )
       .returning({ id: services.id });

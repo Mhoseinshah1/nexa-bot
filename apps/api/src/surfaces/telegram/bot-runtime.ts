@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   COMMERCE_ERROR_CODES,
   PANEL_ERROR_CODES,
@@ -860,8 +861,32 @@ export const ADMIN_SERVICE_TERMINATE_CALLBACK_PREFIX = 'Q:';
  * using, and a mis-tap on a phone is not a reason for them to lose it.
  */
 export const ADMIN_SERVICE_ROTATE_ASK_CALLBACK_PREFIX = 'ra:';
-/** The rotating callback. Produced by the confirmation screen alone. */
+/**
+ * The rotating callback. Produced by the confirmation screen alone, and bound to the
+ * link that screen was asked about: `rb:<serviceId>.<stamp>`, where the stamp is
+ * `rotationStamp` of the service's link at the time of asking. Once a rotation has
+ * replaced that link the stamp no longer matches and the old button is refused, so a
+ * confirmation is spent by the rotation it confirmed rather than living on in the chat.
+ * 3 + 36 + 1 + 12 = 52 bytes, inside Telegram's 64.
+ */
 export const ADMIN_SERVICE_ROTATE_CALLBACK_PREFIX = 'rb:';
+
+/**
+ * A short digest of a subscription link, for binding a confirmation to it.
+ *
+ * The first twelve hex characters of a SHA-256: enough that two links a rotation
+ * produced do not collide by accident, and a one-way function of a high-entropy token,
+ * so the chat carries nothing a link can be recovered from. The link itself never
+ * reaches an admin message.
+ */
+export function rotationStamp(subscriptionUrl: string | null): string {
+  return createHash('sha256')
+    .update(subscriptionUrl ?? '')
+    .digest('hex')
+    .slice(0, ROTATION_STAMP_LENGTH);
+}
+const ROTATION_STAMP_LENGTH = 12;
+const ROTATION_STAMP_PATTERN = /^[0-9a-f]{12}$/;
 /*
  * The panels section, Phase 6B. `R:` and `S:` are the section and one panel; `Y:` is
  * the only one of the eight that carries a CURSOR rather than a uuid, which is why it
@@ -1233,7 +1258,11 @@ interface AdminServiceAsk {
   readonly permission: PermissionKey;
   readonly key: TemplateKey;
   readonly confirmKey: TemplateKey;
-  readonly confirmPrefix: string;
+  /** The confirming callback for this service, as the confirmation screen draws it. */
+  readonly confirmData: (service: {
+    readonly id: string;
+    readonly subscriptionUrl: string | null;
+  }) => string;
 }
 
 const ADMIN_SERVICE_TERMINATE_ASK: AdminServiceAsk = {
@@ -1241,7 +1270,7 @@ const ADMIN_SERVICE_TERMINATE_ASK: AdminServiceAsk = {
   permission: SERVICES_TERMINATE_PERMISSION,
   key: 'bot.admin.service_terminate_ask',
   confirmKey: 'bot.admin.service_terminate_confirm_button',
-  confirmPrefix: ADMIN_SERVICE_TERMINATE_CALLBACK_PREFIX,
+  confirmData: (service) => `${ADMIN_SERVICE_TERMINATE_CALLBACK_PREFIX}${service.id}`,
 };
 
 const ADMIN_SERVICE_ROTATE_ASK: AdminServiceAsk = {
@@ -1249,7 +1278,8 @@ const ADMIN_SERVICE_ROTATE_ASK: AdminServiceAsk = {
   permission: SERVICES_EDIT_PERMISSION,
   key: 'bot.admin.service_rotate_link_ask',
   confirmKey: 'bot.admin.service_rotate_link_confirm_button',
-  confirmPrefix: ADMIN_SERVICE_ROTATE_CALLBACK_PREFIX,
+  confirmData: (service) =>
+    `${ADMIN_SERVICE_ROTATE_CALLBACK_PREFIX}${service.id}.${rotationStamp(service.subscriptionUrl)}`,
 };
 
 /**
@@ -1630,8 +1660,35 @@ const ADMIN_SERVICE_CALLBACKS: readonly (readonly [string, BotIntent])[] = [
   [ADMIN_SERVICE_TERMINATE_ASK_CALLBACK_PREFIX, 'ADMIN_SERVICE_TERMINATE_ASK'],
   [ADMIN_SERVICE_TERMINATE_CALLBACK_PREFIX, 'ADMIN_SERVICE_TERMINATE'],
   [ADMIN_SERVICE_ROTATE_ASK_CALLBACK_PREFIX, 'ADMIN_SERVICE_ROTATE_ASK'],
-  [ADMIN_SERVICE_ROTATE_CALLBACK_PREFIX, 'ADMIN_SERVICE_ROTATE'],
+  // `rb:` is not here: it carries a stamp as well as an id, so it is decoded before this
+  // table is consulted — see `adminServiceRotateCommand`.
 ];
+
+/**
+ * The rotating callback, or null when `data` is not one.
+ *
+ * Validated here and nowhere later: the id as a UUIDv7, the stamp as twelve hex
+ * characters. Anything else is UNSUPPORTED, including the bare `rb:<id>` an older
+ * keyboard would have carried — a confirmation with no stamp confirms nothing.
+ */
+function adminServiceRotateCommand(data: string, id: string | null): BotCommand | null {
+  if (!data.startsWith(ADMIN_SERVICE_ROTATE_CALLBACK_PREFIX)) return null;
+  const unsupported: BotCommand = { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+  const [rawId, stamp, ...rest] = data
+    .slice(ADMIN_SERVICE_ROTATE_CALLBACK_PREFIX.length)
+    .split('.');
+  const service = uuidV7Schema.safeParse(rawId);
+  if (rest.length > 0 || stamp === undefined || !ROTATION_STAMP_PATTERN.test(stamp)) {
+    return unsupported;
+  }
+  if (!service.success) return unsupported;
+  return {
+    intent: 'ADMIN_SERVICE_ROTATE',
+    targetId: service.data,
+    args: [stamp],
+    callbackQueryId: id,
+  };
+}
 
 /**
  * How many services one `/services` answer shows.
@@ -2114,6 +2171,8 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
      * chances to point a prefix at the wrong intent — and the one that matters is the
      * last row, where a mis-wiring would make the ASKING callback the destructive one.
      */
+    const rotate = adminServiceRotateCommand(data, id);
+    if (rotate !== null) return rotate;
     for (const [prefix, intent] of ADMIN_SERVICE_CALLBACKS) {
       if (data.startsWith(prefix)) return callbackCommand(intent, data.slice(prefix.length), id);
     }
@@ -3669,6 +3728,18 @@ export class BotRuntime {
                 permissions,
                 ADMIN_SERVICE_ROTATE_ASK,
               );
+        // Its own case, ABOVE the stacked ones below: a case placed inside that stack
+        // would catch every intent stacked above it.
+        case 'ADMIN_SERVICE_ROTATE':
+          return command.targetId === null
+            ? null
+            : await this.adminServiceRotateConfirm(
+                scope,
+                adminActor,
+                command.targetId,
+                (command.args ?? [])[0] ?? '',
+                input.idempotencyKey,
+              );
         case 'ADMIN_SERVICE_SYNC':
         case 'ADMIN_SERVICE_RESEND':
         case 'ADMIN_SERVICE_RETRY':
@@ -3676,7 +3747,6 @@ export class BotRuntime {
         case 'ADMIN_SERVICE_SUSPEND':
         case 'ADMIN_SERVICE_RESUME':
         case 'ADMIN_SERVICE_TERMINATE':
-        case 'ADMIN_SERVICE_ROTATE':
           return command.targetId === null
             ? null
             : await this.adminServiceAct(
@@ -5132,11 +5202,47 @@ export class BotRuntime {
       buttons: [
         {
           label: { kind: 'TEMPLATE' as const, key: ask.confirmKey },
-          data: `${ask.confirmPrefix}${found.service.id}`,
+          data: ask.confirmData(found.service),
         },
       ],
       orderId: null,
     };
+  }
+
+  /**
+   * The rotation's confirmation: acted on only while the link it was asked about is
+   * still the service's link.
+   *
+   * A rotation leaves the service `ACTIVE`, so without the stamp the old confirmation
+   * would stay pressable for ever and each press would replace the customer's link
+   * again — one tap, which is what asking first exists to prevent. A press before the
+   * first rotation has finished finds the stamp unchanged and reaches
+   * `requestFromOperator`, whose open-operation return answers it with the rotation
+   * already planned. A press after it finds a different link and is refused.
+   *
+   * The read goes through `serviceAdmin.detail`, which charges `services.view`; the
+   * write charges `services.edit` in `requestFromOperator`, as every action does.
+   */
+  private async adminServiceRotateConfirm(
+    scope: TenantContext,
+    actor: ActorContext,
+    serviceId: string,
+    stamp: string,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    let found;
+    try {
+      found = await this.deps.serviceAdmin.detail(scope, actor, serviceId);
+    } catch (error) {
+      if (isServiceRefusal(error)) {
+        return { key: 'bot.admin.service_unavailable', values: {}, buttons: [], orderId: null };
+      }
+      throw error;
+    }
+    if (rotationStamp(found.service.subscriptionUrl) !== stamp) {
+      return { key: 'bot.admin.service_unavailable', values: {}, buttons: [], orderId: null };
+    }
+    return this.adminServiceAct(scope, actor, 'ADMIN_SERVICE_ROTATE', serviceId, idempotencyKey);
   }
 
   /**

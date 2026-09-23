@@ -341,6 +341,22 @@ export const OPERATION_LEGAL_FROM: Readonly<Record<OperationType, readonly Servi
 };
 
 /**
+ * The states in which a rotation that SUCCEEDED on the panel is stored.
+ *
+ * Wider than `OPERATION_LEGAL_FROM.ROTATE_SUBSCRIPTION`, which decides whether a
+ * rotation may START. Once `revoke_sub` has run, the panel holds a new link whether or
+ * not the service moved while the call was on the wire, and the question becomes
+ * whether the account still exists. It does for `EXPIRED`: the expiry sweep changes
+ * Nexa's state and nothing on the panel, and a later renewal returns the service to
+ * `ACTIVE` — carrying the link Nexa stored. Refusing the store there would leave Nexa
+ * holding the pre-rotation link for a renewed customer. Delivery is re-armed as well,
+ * and the sweep claims only `ACTIVE` services, so the link is sent on renewal.
+ *
+ * `TERMINATED` is not here: the account is gone, and there is nothing to hand anybody.
+ */
+export const ROTATION_STORE_STATES: readonly ServiceState[] = ['ACTIVE', 'SUSPENDED', 'EXPIRED'];
+
+/**
  * The provider call for one operation, and nothing else.
  *
  * Deliberately separated from everything that touches the database so that the rule

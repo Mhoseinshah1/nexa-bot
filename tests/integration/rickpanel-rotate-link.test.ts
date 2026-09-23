@@ -17,6 +17,8 @@ import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/ca
 import { DrizzleOperationRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-operation.repository';
 import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
 import type { ServiceRecord } from '../../apps/api/src/modules/commerce/provisioning/application/ports';
+import { ROTATION_STORE_STATES } from '../../apps/api/src/modules/commerce/provisioning/application/provision-executor';
+import { rotationStamp } from '../../apps/api/src/surfaces/telegram/bot-runtime';
 import { startFakeRickpanel, type FakeRickpanel } from '../support/fake-rickpanel';
 import {
   adminActorFor,
@@ -416,7 +418,7 @@ describe('a RickPanel subscription rotation', () => {
     expect(panel.revokeCalls()).toBe(0);
   });
 
-  it('stores a rotation only on a service that is still ACTIVE or SUSPENDED', async () => {
+  it('stores no rotation on a service that was terminated while it was on the wire', async () => {
     /*
      * The write's own condition, asked directly. The provisioner checks the state before
      * it dials the panel, and a terminate can commit while `revoke_sub` is on the wire;
@@ -435,7 +437,7 @@ describe('a RickPanel subscription rotation', () => {
         tenantA,
         service.id,
         'https://late.example/sub/x/y',
-        ['ACTIVE', 'SUSPENDED'],
+        ROTATION_STORE_STATES,
         ctx.container.clock.now(),
         tx,
       ),
@@ -444,6 +446,35 @@ describe('a RickPanel subscription rotation', () => {
     const after = await reload(service.id);
     expect(after.subscriptionUrl).toBe(service.subscriptionUrl);
     expect(after.deliveryState).toBe('DELIVERED');
+  });
+
+  it('keeps the link the panel minted when the service expired while the call was on the wire', async () => {
+    /*
+     * Codex review of PR #62: the expiry sweep can commit between the executor's state
+     * check and the store. The panel has already rotated, so refusing the store would
+     * leave Nexa holding the pre-rotation link — and a renewal would bring that link
+     * back to an ACTIVE service. The link is stored and delivery re-armed; the sweep
+     * claims only ACTIVE services, so nothing is sent to an expired customer.
+     */
+    const service = await deliveredService('rot-expired');
+    panel.afterRotation = async () => {
+      await ctx.container.database.db.execute(
+        sql`UPDATE services SET state = 'EXPIRED' WHERE id = ${service.id}`,
+      );
+    };
+
+    await rotate(service.id, 'rot-expired-1');
+    await ctx.container.provisionerLoop.tick();
+
+    const after = await reload(service.id);
+    expect(after.state).toBe('EXPIRED');
+    expect((await rotationOperation(service.id))?.state).toBe('SUCCEEDED');
+    expect(after.subscriptionUrl).toContain(
+      panel.users.get(service.providerUsername ?? '')?.subToken ?? 'no-token',
+    );
+    expect(after.subscriptionUrl).not.toBe(service.subscriptionUrl);
+    expect(after.deliveryState).toBe('PENDING');
+    expect(linksSent(), 'nothing is sent to an expired service').toHaveLength(1);
   });
 
   /**
@@ -547,6 +578,32 @@ describe('a RickPanel subscription rotation', () => {
     expect(linksSent()[1]).toContain(rotated.subscriptionUrl ?? 'no-url');
   });
 
+  it('sends nothing for a claim the rotation overtook before the send was stamped', async () => {
+    /*
+     * Codex review of PR #62, the window BEFORE the send: the sweep has read the
+     * service, the rotation commits, and only then does the sweep stamp its send. The
+     * stamp used to check the delivery state alone, so the old link went out and the
+     * stamp landed on the rotated row after the rotation had cleared it — the new link
+     * stranded behind a send nobody would record. Driven by handing `deliver` the
+     * record the sweep read, which is exactly what the sweep holds at that moment.
+     */
+    const stale = await undeliveredService('race-stamp');
+
+    await rotate(stale.id, 'race-stamp-1');
+    await ctx.container.provisioner.runOnce(tenantA);
+    const rotated = await reload(stale.id);
+    expect(rotated.subscriptionUrl).not.toBe(stale.subscriptionUrl);
+
+    await expect(ctx.container.delivery.deliver(tenantA, stale, '930930', BOT_A)).rejects.toThrow();
+    expect(linksSent(), 'the old link went out').toHaveLength(0);
+    expect((await reload(stale.id)).deliverySendStartedAt).toBeNull();
+
+    await ctx.container.delivery.deliverDue(tenantA, 10);
+    expect(linksSent()).toHaveLength(1);
+    expect(linksSent()[0]).toContain(rotated.subscriptionUrl ?? 'no-url');
+    expect((await reload(stale.id)).deliveryState).toBe('DELIVERED');
+  });
+
   // =========================================================================
   // The Telegram management panel: ask, then confirm
   // =========================================================================
@@ -577,6 +634,13 @@ describe('a RickPanel subscription rotation', () => {
       telegramUserId,
       from: { id: Number(telegramUserId), first_name: 'کاربر' },
     };
+  };
+
+  /** The confirming callback the last message drew for this service, stamp included. */
+  const confirmData = (serviceId: string): string => {
+    const found = new RegExp(`${PREFIX.rotate}${serviceId}\\.[0-9a-f]{12}`).exec(lastMessage());
+    if (found === null) throw new Error('no confirmation was drawn');
+    return found[0];
   };
 
   const lastMessage = () =>
@@ -631,14 +695,13 @@ describe('a RickPanel subscription rotation', () => {
       tap(`${PREFIX.rotateAsk}${service.id}`, '700101'),
     );
     expect(asked.replyKey).toBe('bot.admin.service_rotate_link_ask');
-    expect(lastMessage()).toContain(`${PREFIX.rotate}${service.id}`);
+    const confirm = confirmData(service.id);
+    // Bound to the link it was asked about, by a digest and never the link itself.
+    expect(confirm).toBe(`${PREFIX.rotate}${service.id}.${rotationStamp(service.subscriptionUrl)}`);
+    expect(lastMessage()).not.toContain('/sub/');
     expect(await rotationOperation(service.id), 'the question planned something').toBeUndefined();
 
-    const confirmed = await runtime.handle(
-      tenantA,
-      systemActor('bot'),
-      tap(`${PREFIX.rotate}${service.id}`, '700101'),
-    );
+    const confirmed = await runtime.handle(tenantA, systemActor('bot'), tap(confirm, '700101'));
     expect(confirmed.replyKey).toBe('bot.admin.service_planned');
     expect((await rotationOperation(service.id))?.state).toBe('PLANNED');
     // The admin chat is told it was RECORDED, and it carries no link, old or new.
@@ -668,15 +731,64 @@ describe('a RickPanel subscription rotation', () => {
       tap(`${PREFIX.rotateAsk}${service.id}`, '700102'),
     );
     expect(asked.replyKey).toBe('bot.admin.refused');
+    // A CRAFTED confirmation, with the right stamp: the stamp is not the authority.
     await runtime.handle(
       tenantA,
       systemActor('bot'),
-      tap(`${PREFIX.rotate}${service.id}`, '700102'),
+      tap(`${PREFIX.rotate}${service.id}.${rotationStamp(service.subscriptionUrl)}`, '700102'),
     );
     expect(
       await rotationOperation(service.id),
       'a crafted confirmation planned a rotation',
     ).toBeUndefined();
     expect(panel.revokeCalls()).toBe(0);
+  });
+
+  it('spends a confirmation with the rotation it confirmed', async () => {
+    /*
+     * Codex review of PR #62: a rotation leaves the service ACTIVE, so an unstamped
+     * confirmation stayed pressable for ever and each press replaced the link again.
+     * A second press BEFORE the rotation runs is the same request and plans nothing
+     * new; a press AFTER it finds a different link and is refused.
+     */
+    const service = await deliveredService('tg-rot-once');
+    await bindOwner('700103');
+    const runtime = ctx.container.botRuntime;
+
+    await runtime.handle(
+      tenantA,
+      systemActor('bot'),
+      tap(`${PREFIX.rotateAsk}${service.id}`, '700103'),
+    );
+    const confirm = confirmData(service.id);
+
+    expect(
+      (await runtime.handle(tenantA, systemActor('bot'), tap(confirm, '700103'))).replyKey,
+    ).toBe('bot.admin.service_planned');
+    expect(
+      (await runtime.handle(tenantA, systemActor('bot'), tap(confirm, '700103'))).replyKey,
+    ).toBe('bot.admin.service_planned');
+    await ctx.container.provisionerLoop.tick();
+    expect(panel.revokeCalls()).toBe(1);
+
+    const stale = await runtime.handle(tenantA, systemActor('bot'), tap(confirm, '700103'));
+    expect(stale.replyKey).toBe('bot.admin.service_unavailable');
+    await ctx.container.provisionerLoop.tick();
+    expect(panel.revokeCalls(), 'an old confirmation rotated the link again').toBe(1);
+    const rotations = (await operations.listForService(tenantA, service.id, 20)).filter(
+      (operation) => operation.type === 'ROTATE_SUBSCRIPTION',
+    );
+    expect(rotations).toHaveLength(1);
+  });
+
+  it('refuses a confirmation that carries no stamp', async () => {
+    const service = await deliveredService('tg-rot-bare');
+    await bindOwner('700104');
+    await ctx.container.botRuntime.handle(
+      tenantA,
+      systemActor('bot'),
+      tap(`${PREFIX.rotate}${service.id}`, '700104'),
+    );
+    expect(await rotationOperation(service.id)).toBeUndefined();
   });
 });

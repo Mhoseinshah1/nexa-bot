@@ -281,11 +281,16 @@ export interface ServiceRepository {
    * caller: its own transaction, committed before the send, so a crash cannot roll back
    * the one fact that says a message may already be out. A `false` means somebody else
    * moved the row first and this caller must send nothing.
+   *
+   * `sentUrl` is the link about to be sent, and the row must still hold it — the same
+   * compare-and-set `recordDelivery` makes, for the window before the send rather than
+   * after it.
    */
   markSendStarted(
     scope: TenantContext,
     id: string,
     from: ServiceDeliveryState,
+    sentUrl: string,
     now: Date,
     tx: TransactionScope,
   ): Promise<boolean>;
