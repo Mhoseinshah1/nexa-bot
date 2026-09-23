@@ -1,5 +1,6 @@
 import { and, asc, eq, getTableColumns, isNotNull, isNull, lte, sql, type SQL } from 'drizzle-orm';
-import { money, priceQuoteWireSchema, type PriceQuote, type PriceQuoteWire } from '@nexa/contracts';
+import { money, priceQuoteWireSchema, type PriceQuote } from '@nexa/contracts';
+import { priceQuoteToWire } from '../application/order-pricing.js';
 import type {
   CurrencyCode,
   OrderId,
@@ -87,7 +88,7 @@ export class DrizzleOrderRepository implements OrderRepository {
         discountAmount: draft.totals.discount.amountMinor,
         totalAmount: draft.totals.total.amountMinor,
         currency: draft.totals.currency,
-        quote: quoteToJson(draft.totals.quote),
+        quote: priceQuoteToWire(draft.totals.quote),
         expiresAt: draft.expiresAt,
         createdAt: draft.now,
         updatedAt: draft.now,
@@ -343,7 +344,7 @@ export class DrizzleOrderRepository implements OrderRepository {
         subtotalAmount: input.totals.subtotal.amountMinor,
         discountAmount: input.totals.discount.amountMinor,
         totalAmount: input.totals.total.amountMinor,
-        quote: quoteToJson(input.totals.quote),
+        quote: priceQuoteToWire(input.totals.quote),
         discountCode: input.discountCode,
         updatedAt: now,
       })
@@ -358,48 +359,6 @@ export class DrizzleOrderRepository implements OrderRepository {
       .returning({ id: orders.id });
     return rows.length === 1;
   }
-}
-
-/** The quote, with every amount as a decimal string. See `priceQuoteWireSchema`. */
-function quoteToJson(quote: PriceQuote): PriceQuoteWire {
-  return {
-    productId: quote.productId,
-    quotedAt: quote.quotedAt,
-    currency: quote.currency,
-    finalAmount: {
-      amountMinor: quote.finalAmount.amountMinor.toString(),
-      currency: quote.finalAmount.currency,
-    },
-    trace: quote.trace.map((step) => ({
-      step: step.step,
-      effect: step.effect,
-      ruleId: step.ruleId,
-      ruleLabel: step.ruleLabel,
-      amountBefore: {
-        amountMinor: step.amountBefore.amountMinor.toString(),
-        currency: step.amountBefore.currency,
-      },
-      amountAfter: {
-        amountMinor: step.amountAfter.amountMinor.toString(),
-        currency: step.amountAfter.currency,
-      },
-    })),
-    // Written only when present, so a quote without cashback stores exactly the document
-    // every quote stored before WP8.
-    ...(quote.cashback === undefined
-      ? {}
-      : {
-          cashback: {
-            ruleId: quote.cashback.ruleId,
-            ruleLabel: quote.cashback.ruleLabel,
-            percent: quote.cashback.percent,
-            amount: {
-              amountMinor: quote.cashback.amount.amountMinor.toString(),
-              currency: quote.cashback.amount.currency,
-            },
-          },
-        }),
-  };
 }
 
 /**

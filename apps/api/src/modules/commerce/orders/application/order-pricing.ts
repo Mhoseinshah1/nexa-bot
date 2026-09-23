@@ -6,6 +6,7 @@ import {
   type Money,
   type PriceQuote,
   type PriceQuoteStep,
+  type PriceQuoteWire,
 } from '@nexa/contracts';
 import type { ProductRecord } from '../../catalog/application/ports.js';
 import type { OrderTotalsRecord } from './ports.js';
@@ -205,5 +206,53 @@ export function quoteTrial(
       finalAmount: nothing,
       trace: [step],
     },
+  };
+}
+
+/**
+ * The quote, with every amount as a decimal string. See `priceQuoteWireSchema`.
+ *
+ * ONE serialiser for both places a quote leaves memory: the `orders.quote` column and
+ * the operator's price preview. Two copies would be two answers to "what does a stored
+ * quote look like", and the preview exists to show exactly what checkout stores.
+ */
+export function priceQuoteToWire(quote: PriceQuote): PriceQuoteWire {
+  return {
+    productId: quote.productId,
+    quotedAt: quote.quotedAt,
+    currency: quote.currency,
+    finalAmount: {
+      amountMinor: quote.finalAmount.amountMinor.toString(),
+      currency: quote.finalAmount.currency,
+    },
+    trace: quote.trace.map((step) => ({
+      step: step.step,
+      effect: step.effect,
+      ruleId: step.ruleId,
+      ruleLabel: step.ruleLabel,
+      amountBefore: {
+        amountMinor: step.amountBefore.amountMinor.toString(),
+        currency: step.amountBefore.currency,
+      },
+      amountAfter: {
+        amountMinor: step.amountAfter.amountMinor.toString(),
+        currency: step.amountAfter.currency,
+      },
+    })),
+    // Written only when present, so a quote without cashback stores exactly the document
+    // every quote stored before WP8.
+    ...(quote.cashback === undefined
+      ? {}
+      : {
+          cashback: {
+            ruleId: quote.cashback.ruleId,
+            ruleLabel: quote.cashback.ruleLabel,
+            percent: quote.cashback.percent,
+            amount: {
+              amountMinor: quote.cashback.amount.amountMinor.toString(),
+              currency: quote.cashback.amount.currency,
+            },
+          },
+        }),
   };
 }

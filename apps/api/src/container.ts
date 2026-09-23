@@ -174,6 +174,9 @@ import {
 } from './modules/commerce/payments/application/payment-expiry-loop.js';
 import { OrderService } from './modules/commerce/orders/application/order.service.js';
 import { DrizzleOrderRepository } from './modules/commerce/orders/infrastructure/drizzle-order.repository.js';
+import { DiscountAdminService } from './modules/commerce/pricing/application/discount-admin.service.js';
+import { CashbackRuleAdminService } from './modules/commerce/pricing/application/cashback-rule-admin.service.js';
+import { PricingReadService } from './modules/commerce/pricing/application/pricing-read.service.js';
 import { PricingService } from './modules/commerce/pricing/application/pricing.service.js';
 import { CashbackService } from './modules/commerce/pricing/application/cashback.service.js';
 import { DrizzleDiscountRepository } from './modules/commerce/pricing/infrastructure/drizzle-discount.repository.js';
@@ -399,6 +402,12 @@ export interface Container {
   readonly products: ProductService;
   readonly productCategories: ProductCategoryService;
   readonly serviceAddons: ServiceAddonService;
+  /** Discount rules, as an operator manages them (WP8). */
+  readonly discounts: DiscountAdminService;
+  /** Cashback rules, as an operator manages them (WP8). */
+  readonly cashbackRules: CashbackRuleAdminService;
+  /** The operator's price preview and an order's pricing detail (WP8). */
+  readonly pricingRead: PricingReadService;
   readonly commercialActions: CommercialActionService;
   /** A customer's free trial (WP6-A): issued through the purchase path, costs nothing. */
   readonly trials: TrialService;
@@ -1118,6 +1127,53 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     orderCashback: orderCashbackRepository,
     outbox,
     ids,
+  });
+  /*
+   * The operator's half of pricing (P12): the two rule catalogues and the read-only
+   * preview. The preview is handed `pricingService` itself, so what an operator is
+   * shown is what checkout would charge.
+   */
+  const discountAdminService = new DiscountAdminService({
+    discounts: discountRepository,
+    products: productRepository,
+    categories: productCategoryRepository,
+    customers: customerRepository,
+    /* `sales.currency`: a fixed amount in any other currency would never apply. */
+    settings: settingsResolver,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    uow,
+    idempotency,
+    clock,
+    ids,
+  });
+  const cashbackRuleAdminService = new CashbackRuleAdminService({
+    rules: cashbackRuleRepository,
+    products: productRepository,
+    categories: productCategoryRepository,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    uow,
+    idempotency,
+    clock,
+    ids,
+  });
+  const pricingReadService = new PricingReadService({
+    pricing: pricingService,
+    products: productRepository,
+    addons: serviceAddonRepository,
+    customers: customerRepository,
+    orders: orderRepository,
+    discounts: discountRepository,
+    orderCashback: orderCashbackRepository,
+    guard,
+    clock,
   });
   const orderService = new OrderService({
     pricing: pricingService,
@@ -2816,6 +2872,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     products: productService,
     productCategories: productCategoryService,
     serviceAddons: serviceAddonService,
+    discounts: discountAdminService,
+    cashbackRules: cashbackRuleAdminService,
+    pricingRead: pricingReadService,
     commercialActions: commercialActionService,
     trials: trialService,
     trialAdmin: trialAdminService,

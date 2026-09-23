@@ -100,11 +100,7 @@ export class CashbackService {
         return this.deps.orderCashback.void(scope, promise.id, now, tx);
       }
 
-      const payment = await this.deps.payments.findConfirmedForOrder(
-        scope,
-        orderId as OrderId,
-        tx,
-      );
+      const payment = await this.deps.payments.findConfirmedForOrder(scope, orderId as OrderId, tx);
       if (payment === null) {
         /*
          * Delivered, with no confirmed payment behind it: a trial never gets here (its
