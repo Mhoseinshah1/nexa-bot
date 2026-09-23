@@ -3372,6 +3372,8 @@ export const SERVICE_ROUTES = {
   suspend: (id: string) => `/services/${encodeURIComponent(id)}/suspend`,
   resume: (id: string) => `/services/${encodeURIComponent(id)}/resume`,
   terminate: (id: string) => `/services/${encodeURIComponent(id)}/terminate`,
+  /** `ROTATE_LINK`: a new subscription link, minted by the panel. `services.edit`. */
+  rotateLink: (id: string) => `/services/${encodeURIComponent(id)}/rotate-link`,
 } as const;
 
 // --- Backup and disaster recovery -------------------------------------------
