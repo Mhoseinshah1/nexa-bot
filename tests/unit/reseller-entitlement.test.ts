@@ -4,6 +4,9 @@ import {
   money,
   resellerPriceLayer,
   resellerReductionMinor,
+  resellerRegisterSchema,
+  resellerTierWriteSchema,
+  resellerUpdateSchema,
 } from '@nexa/contracts';
 import type { OrderTotalsRecord } from '../../apps/api/src/modules/commerce/orders/application/ports';
 import {
@@ -277,8 +280,68 @@ describe('the reseller price layer', () => {
 
   it('rounds the reduction in the buyer’s favour and never past the whole', () => {
     expect(resellerReductionMinor(10_005n, 10)).toBe(1_001n);
-    expect(resellerReductionMinor(10_000n, 100)).toBe(10_000n);
     expect(resellerReductionMinor(10_000n, null)).toBe(0n);
+    expect(resellerReductionMinor(0n, 50)).toBe(0n);
+  });
+
+  /*
+   * PR #69 review, F4. A reseller cost of zero is an order nobody can pay: the payment and
+   * ledger amount checks refuse a zero amount at settlement, after the customer confirmed.
+   * The reduction is capped at `subtotal − 1`, so a positive subtotal keeps one minor unit.
+   */
+  it('never takes a positive subtotal below one minor unit', () => {
+    // 1% of 1 rounds its reduction UP to 1, which was the whole subtotal.
+    expect(1n - resellerReductionMinor(1n, 1)).toBe(1n);
+    expect(1n - resellerReductionMinor(1n, 99)).toBe(1n);
+    // 99% of 100 is exactly 99: the floor is not what decides it.
+    expect(100n - resellerReductionMinor(100n, 99)).toBe(1n);
+    // 99% of 101 rounds its reduction up to 100, leaving 1.
+    expect(101n - resellerReductionMinor(101n, 99)).toBe(1n);
+    // A rate the write schemas refuse but the database still stores.
+    expect(10_000n - resellerReductionMinor(10_000n, 100)).toBe(1n);
+    // Below the floor nothing changes.
+    expect(100n - resellerReductionMinor(100n, 98)).toBe(2n);
+  });
+
+  it('keeps that unit through the pricing layer, as a step with a positive cost', () => {
+    const priced = applyResellerLayer(base(1n), terms('TIER', 1));
+    // Nothing is taken off, so no step fires, and the cost is the one unit.
+    expect(priced.total.amountMinor).toBe(1n);
+    expect(quotedResellerLayer(priced.quote.trace)).toBeNull();
+    const deep = applyResellerLayer(base(100n), terms('TIER', 99));
+    expect(deep.subtotal.amountMinor).toBe(1n);
+    expect(deep.total.amountMinor).toBe(1n);
+  });
+
+  it('refuses a 100% rate in every reseller write schema, and accepts 99', () => {
+    const id = '01900000-0000-7000-8000-00000000abcd';
+    const tier = (discountPercentage: number) =>
+      resellerTierWriteSchema.safeParse({
+        idempotencyKey: 'a-long-enough-key',
+        name: 'Gold',
+        pricingMode: 'PERCENTAGE_DISCOUNT',
+        discountPercentage,
+        creditLimit: { amount: '0', currency: 'IRT' },
+      }).success;
+    const shape = { tierId: id, pricingMode: 'PERCENTAGE_DISCOUNT', creditLimit: null };
+    const register = (discountPercentage: number) =>
+      resellerRegisterSchema.safeParse({
+        idempotencyKey: 'a-long-enough-key',
+        customerId: id,
+        ...shape,
+        discountPercentage,
+      }).success;
+    const update = (discountPercentage: number) =>
+      resellerUpdateSchema.safeParse({
+        idempotencyKey: 'a-long-enough-key',
+        status: 'ACTIVE',
+        ...shape,
+        discountPercentage,
+      }).success;
+    for (const accepts of [tier, register, update]) {
+      expect(accepts(99)).toBe(true);
+      expect(accepts(100)).toBe(false);
+    }
   });
 
   it('replaces the subtotal with the tier cost, as one TIER_PRICE step, and no discount', () => {

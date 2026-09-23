@@ -1010,6 +1010,39 @@ describe('resellers (WP9-B)', () => {
   describe('the credit line (R8)', () => {
     const L = 100_000n;
 
+    it('keeps a 99% reseller price payable: one minor unit, confirmed and settled from the wallet', async () => {
+      /*
+       * PR #69 review, F4. A 100% rate, or the upward rounding on a tiny subtotal, priced a
+       * reseller order at ZERO, which `payments_amount_check` and
+       * `wallet_entries_amount_check` refuse at settlement — after the customer confirmed.
+       * The reduction now stops one minor unit short of the subtotal.
+       */
+      const tierId = await tier({ percent: 99 });
+      await register(resellerCustomer, tierId);
+      const order = await confirmed(resellerCustomer, await product(101n));
+      // 99% of 101 rounds its reduction up to 100: the cost is the one unit left.
+      expect(order.totals.subtotal.amountMinor).toBe(1n);
+      expect(order.totals.total.amountMinor).toBe(1n);
+      expect(await termsRow(order.id)).toMatchObject({
+        layer: 'TIER',
+        percent: 99,
+        list_amount: '101',
+        cost_amount: '1',
+        sale_amount: '1',
+        margin_amount: '100',
+      });
+
+      await adjust(resellerCustomer, 'CREDIT', 1n);
+      const { payment, order: paid } = await settle(resellerCustomer, order.id);
+      expect(paid.state).toBe('PAID');
+      expect(payment.amount.amountMinor).toBe(1n);
+      expect(await balance(resellerCustomer)).toBe(0n);
+
+      // And a one-unit product at 99% keeps its one unit rather than losing all of it.
+      const single = await confirmed(resellerCustomer, await product(1n));
+      expect(single.totals.total.amountMinor).toBe(1n);
+    });
+
     it('grants no debt on a zero limit: a zero balance cannot pay', async () => {
       await register(resellerCustomer, await tier({ credit: 0n }));
       const order = await confirmed(resellerCustomer, await product(1_000n));
