@@ -102,6 +102,7 @@ describe('the global trial reset', () => {
         preview: {
           affectedGrants: 7,
           affectedCustomers: 3,
+          fingerprint: 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
           sample: [
             {
               customer: {
@@ -147,7 +148,13 @@ describe('the global trial reset', () => {
       ).toBe(true),
     );
     const sent = api.calls.find((call) => call.method === 'POST');
-    expect(sent?.body).toMatchObject({ expectedGrants: 7, reason: 'new season' });
+    // The count the operator typed AND the set the server previewed, carried back
+    // unchanged (Codex, PR #65).
+    expect(sent?.body).toMatchObject({
+      expectedGrants: 7,
+      expectedFingerprint: 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
+      reason: 'new season',
+    });
   });
 
   it('names the permission rather than drawing a reset for an actor without it', async () => {

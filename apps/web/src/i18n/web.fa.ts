@@ -1780,7 +1780,7 @@ export const WEB_FA = {
   'web.trials_reset_reason_label': 'دلیل (الزامی)',
   'web.trials_reset_execute': 'بازنشانی',
   'web.trials_reset_done': 'بازنشانی انجام شد.',
-  'web.trials_reset_denied': 'بازنشانی به دسترسی settings.destructive نیاز دارد.',
+  'web.trials_reset_denied': 'بازنشانی به دسترسی‌های settings.destructive و users.view نیاز دارد.',
   'web.trials_history_title': 'سابقه بازنشانی‌ها',
   'web.trials_history_empty': 'تاکنون بازنشانی انجام نشده است.',
   'web.trials_history_denied': 'برای دیدن سابقه به دسترسی settings.view نیاز است.',

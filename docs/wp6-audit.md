@@ -297,14 +297,17 @@ eligibility rule applied to a smaller table.
 ### B3 — The global reset follows ADR-0010
 
 1. **Dry run.** `previewReset` counts the grants that would be stamped and the
-   customers they belong to, and returns a sample of at most ten customers. It writes
-   nothing.
+   customers they belong to, states the set's `fingerprint` (MD5 over the grant ids in
+   id order), and returns a sample of at most ten customers. It writes nothing. All of
+   it is ONE statement, so the totals, the fingerprint and the sample describe one
+   snapshot.
 2. **Counted preview.** The operator is shown those two numbers and the sample.
 3. **Confirmation.** The execute request carries `expectedGrants`, the count the
-   operator was shown and typed back, plus a mandatory reason. The server does the
-   stamping and compares its count with `expectedGrants` in the same transaction. On a
-   mismatch it refuses with `TRIAL_RESET_STALE` and rolls back, so a preview can never
-   authorise a different reset than the one it described. A reset with nothing to
+   operator was shown and typed back, the preview's `fingerprint`, and a mandatory
+   reason. The server does the stamping and compares both its count and the fingerprint
+   of what it stamped, in the same transaction. On either mismatch it refuses with
+   `TRIAL_RESET_STALE` and rolls back, so a preview can never authorise a different
+   reset than the one it described — including a different set of the same size. A reset with nothing to
    stamp is refused with `TRIAL_RESET_NOTHING`; a no-op would add a history row that
    records nothing.
 4. **Audited execution.** One audit row carries the actor, the reason and both counts.
@@ -315,7 +318,9 @@ eligibility rule applied to a smaller table.
 
 The permission is `settings.destructive` (CRITICAL). It is declared for exactly this
 kind of bulk mutation (`features.ts`), it was charged by nothing until now, and it is
-seeded to `owner` only. Viewing the history takes `settings.view`.
+seeded to `owner` only. The PREVIEW also takes `users.view`, because its sample names
+customers and `settings.destructive` does not require it. Viewing the history takes
+`settings.view`.
 
 **Concurrency.** The stamping is one conditional `UPDATE … WHERE released_at IS NULL AND
 reset_at IS NULL`.
@@ -329,6 +334,12 @@ reset_at IS NULL`.
   twice or goes negative. If the reset is the one that waited, it is refused as stale.
 - **A claim running alongside a reset.** Its new grant is not in the reset's snapshot. It
   stays counted, as a trial taken after the reset should be.
+- **The same command twice at once.** Both miss the replay read; the second waits, stamps
+  nothing and is refused. It then reads the idempotency record again, outside its
+  rolled-back transaction, and answers with the reset the first recorded.
+
+The four changes above — the fingerprint, the single-statement preview, `users.view` on
+the preview and the same-command re-read — are the Codex review of PR #65.
 
 ### B4 — The operator's view
 

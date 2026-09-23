@@ -169,7 +169,13 @@ function ResetCard({ mayReset }: { mayReset: boolean }) {
 
   const execute = useMutation({
     mutationFn: () => {
-      const body = { expectedGrants: Number(typed.trim()), reason: reason.trim() };
+      // The fingerprint binds the confirmation to the SET the preview showed, not only
+      // to its size (Codex, PR #65). It is the server's, carried back unchanged.
+      const body = {
+        expectedGrants: Number(typed.trim()),
+        expectedFingerprint: preview?.fingerprint ?? '',
+        reason: reason.trim(),
+      };
       return executeTrialReset({ ...body, idempotencyKey: submission.current(body) });
     },
     onSuccess: () => {

@@ -263,9 +263,18 @@ export class TrialAdminService {
     );
   }
 
-  /** ADR-0010 steps 1 and 2: what a reset would stamp now. Writes nothing. */
+  /**
+   * ADR-0010 steps 1 and 2: what a reset would stamp now. Writes nothing.
+   *
+   * Charged `users.view` as well as `settings.destructive` (Codex, PR #65): the sample
+   * names customers — their ids, Telegram ids, usernames and first names — and the
+   * catalogue gates that data behind `users.view`, which `settings.destructive` does not
+   * require. A custom role holding one and not the other must not read customers
+   * through the reset screen.
+   */
   async previewReset(scope: TenantContext, actor: ActorContext): Promise<TrialResetPreview> {
     await this.deps.guard.check(scope, actor, TRIAL_RESET_PERMISSION);
+    await this.deps.guard.check(scope, actor, TRIAL_VIEW_PERMISSION);
     return this.deps.resets.preview(scope, TRIAL_RESET_PREVIEW_SAMPLE);
   }
 
@@ -283,6 +292,7 @@ export class TrialAdminService {
     input: {
       readonly idempotencyKey: string;
       readonly expectedGrants: number;
+      readonly expectedFingerprint: string;
       readonly reason: string;
     },
   ): Promise<TrialResetRecord> {
@@ -300,7 +310,11 @@ export class TrialAdminService {
       );
     }
     const denial = { action: 'trial.reset', entityType: 'Tenant', entityId: scope.tenantId };
-    const requestHash = hashRequest({ expectedGrants: input.expectedGrants, reason });
+    const requestHash = hashRequest({
+      expectedGrants: input.expectedGrants,
+      expectedFingerprint: input.expectedFingerprint,
+      reason,
+    });
     await this.authorize(scope, actor, TRIAL_RESET_PERMISSION, denial);
     // `trial_resets.actor_admin_id` is NOT NULL: a reset is a person's decision, and a
     // job holding the permission is not a person who can be asked why.
@@ -325,6 +339,61 @@ export class TrialAdminService {
 
     const now = this.deps.clock.now();
     const id = this.deps.ids.uuid();
+    try {
+      return await this.stampAndRecord(scope, actor, denial, requestHash, {
+        ...input,
+        id,
+        actorAdminId,
+        reason,
+        now,
+      });
+    } catch (error) {
+      /*
+       * The same command, twice, at once (Codex, PR #65).
+       *
+       * Both miss the replay read above; the winner stamps, remembers its key and commits;
+       * the loser's UPDATE waits on the winner's rows and then stamps nothing, so it is
+       * refused as NOTHING — or as STALE, when a claim arrived meanwhile — although the
+       * identical request succeeded. Its transaction has rolled back, so a fresh read now
+       * sees the winner's key, and the loser answers with the reset that was recorded.
+       */
+      const code = (error as { code?: unknown } | null)?.code;
+      if (
+        code === COMMERCE_ERROR_CODES.TRIAL_RESET_NOTHING ||
+        code === COMMERCE_ERROR_CODES.TRIAL_RESET_STALE
+      ) {
+        const settled = await this.deps.idempotency.find<{ resetId: string }>(
+          scope,
+          NAMESPACE,
+          input.idempotencyKey,
+          requestHash,
+        );
+        if (settled !== null) {
+          const recorded = await this.deps.resets.findById(scope, settled.result.resetId);
+          if (recorded !== null) return recorded;
+        }
+      }
+      throw error;
+    }
+  }
+
+  /** The one transaction a reset is: stamp, compare with the confirmation, audit, remember. */
+  private stampAndRecord(
+    scope: TenantContext,
+    actor: ActorContext,
+    denial: { readonly action: string; readonly entityType: string; readonly entityId: string },
+    requestHash: string,
+    input: {
+      readonly idempotencyKey: string;
+      readonly expectedGrants: number;
+      readonly expectedFingerprint: string;
+      readonly id: string;
+      readonly actorAdminId: string;
+      readonly reason: string;
+      readonly now: Date;
+    },
+  ): Promise<TrialResetRecord> {
+    const { id, actorAdminId, reason, now } = input;
     return runAuthorizedMutation(
       this.mutationDeps(),
       scope,
@@ -344,7 +413,15 @@ export class TrialAdminService {
             'No customer has a trial that counts, so there is nothing to reset.',
           );
         }
-        if (recorded.affectedGrants !== input.expectedGrants) {
+        /*
+         * The count AND the set (Codex, PR #65). A count alone is satisfied by a
+         * different set of the same size — one previewed grant released and another
+         * customer's claimed — and then this would reset a grant the operator never saw.
+         */
+        if (
+          recorded.affectedGrants !== input.expectedGrants ||
+          recorded.fingerprint !== input.expectedFingerprint
+        ) {
           // Thrown INSIDE the transaction: the stamps and the record roll back with it.
           throw errors.conflict(
             COMMERCE_ERROR_CODES.TRIAL_RESET_STALE,
@@ -381,7 +458,10 @@ export class TrialAdminService {
           { resetId: recorded.id },
           tx,
         );
-        return recorded;
+        // The fingerprint was for the comparison above; the answer is the record, the
+        // same shape a replay reads back from `findById`.
+        const { fingerprint: _stamped, ...record } = recorded;
+        return record;
       },
     );
   }

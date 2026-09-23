@@ -24,6 +24,8 @@ import { createAdmin, migrateOnce, resetDatabase, tenantA, testConfig } from './
  */
 
 const ORIGIN = 'https://admin.example.test';
+/** A well-formed fingerprint of no set, for requests refused before any set is compared. */
+const NO_SET = '0'.repeat(32);
 
 describe('trial HTTP surface', () => {
   let api: ApiApp;
@@ -154,6 +156,7 @@ describe('trial HTTP surface', () => {
     const reset = await post(TRIAL_ROUTES.resets, operatorCookie, {
       idempotencyKey: idempotencyKey(),
       expectedGrants: 1,
+      expectedFingerprint: NO_SET,
       reason: 'not an owner',
     });
     expect(reset.statusCode).toBe(403);
@@ -165,12 +168,15 @@ describe('trial HTTP surface', () => {
     expect(trialResetPreviewResponseSchema.parse(preview.json()).preview).toEqual({
       affectedGrants: 0,
       affectedCustomers: 0,
+      // MD5 of the empty set: the preview states the set it describes even when empty.
+      fingerprint: 'd41d8cd98f00b204e9800998ecf8427e',
       sample: [],
     });
 
     const reset = await post(TRIAL_ROUTES.resets, ownerCookie, {
       idempotencyKey: idempotencyKey(),
       expectedGrants: 1,
+      expectedFingerprint: NO_SET,
       reason: 'nothing to do',
     });
     expect(reset.statusCode).toBeGreaterThanOrEqual(400);
@@ -195,8 +201,16 @@ describe('trial HTTP surface', () => {
     const blank = await post(TRIAL_ROUTES.resets, ownerCookie, {
       idempotencyKey: idempotencyKey(),
       expectedGrants: 1,
+      expectedFingerprint: NO_SET,
       reason: '',
     });
     expect(blank.statusCode).toBe(400);
+    // A count alone no longer confirms a reset (Codex, PR #65).
+    const countOnly = await post(TRIAL_ROUTES.resets, ownerCookie, {
+      idempotencyKey: idempotencyKey(),
+      expectedGrants: 1,
+      reason: 'count only',
+    });
+    expect(countOnly.statusCode).toBe(400);
   });
 });

@@ -24,44 +24,65 @@ export class DrizzleTrialResetRepository implements TrialResetRepository {
   async preview(scope: TenantContext, sampleSize: number): Promise<TrialResetPreview> {
     const tenantId = requireTenantId(scope);
     /*
-     * The same predicate `execute` stamps by, so the dry run describes the reset it
-     * previews — and `execute` refuses when, by the time it runs, it no longer does.
+     * ONE statement, so the totals, the fingerprint and the sample describe ONE snapshot
+     * (Codex, PR #65). They were two autocommit statements, and a claim, a release or
+     * another reset committing between them made the evidence for a destructive
+     * confirmation describe two different databases — totals of zero beside a sample
+     * holding a grant.
+     *
+     * `counted` is the same predicate `execute` stamps by, so the dry run describes the
+     * reset it previews — and `execute` refuses when, by the time it runs, it no longer
+     * does. The fingerprint is computed over the same ids, in id order, as `execute`
+     * computes it over what it stamped.
      */
-    const totals = await this.db.execute<{ grants: number; customers: number }>(sql`
-      SELECT count(*)::int AS grants, count(DISTINCT customer_id)::int AS customers
-        FROM trial_grants
-       WHERE tenant_id = ${tenantId} AND released_at IS NULL AND reset_at IS NULL
-    `);
-    const sample = await this.db.execute<{
-      customer_id: string;
-      telegram_user_id: string;
-      username: string | null;
-      first_name: string | null;
-      status: string;
+    const result = await this.db.execute<{
       grants: number;
+      customers: number;
+      fingerprint: string;
+      sample: {
+        customer_id: string;
+        telegram_user_id: string;
+        username: string | null;
+        first_name: string | null;
+        status: string;
+        grants: number;
+      }[];
     }>(sql`
-      SELECT c.id AS customer_id, c.telegram_user_id, c.username, c.first_name, c.status,
-             count(*)::int AS grants
-        FROM trial_grants g
-        JOIN customers c ON c.tenant_id = g.tenant_id AND c.id = g.customer_id
-       WHERE g.tenant_id = ${tenantId} AND g.released_at IS NULL AND g.reset_at IS NULL
-       GROUP BY c.id, c.telegram_user_id, c.username, c.first_name, c.status
-       ORDER BY grants DESC, c.id ASC
-       LIMIT ${sampleSize}
+      WITH counted AS (
+        SELECT id, customer_id
+          FROM trial_grants
+         WHERE tenant_id = ${tenantId} AND released_at IS NULL AND reset_at IS NULL
+      ),
+      per_customer AS (
+        SELECT customer_id, count(*)::int AS grants FROM counted GROUP BY customer_id
+      )
+      SELECT
+        (SELECT count(*)::int FROM counted) AS grants,
+        (SELECT count(*)::int FROM per_customer) AS customers,
+        (SELECT md5(coalesce(string_agg(id::text, ',' ORDER BY id), '')) FROM counted)
+          AS fingerprint,
+        (SELECT coalesce(json_agg(top ORDER BY top.grants DESC, top.customer_id ASC), '[]'::json)
+           FROM (SELECT c.id AS customer_id, c.telegram_user_id, c.username, c.first_name,
+                        c.status, p.grants
+                   FROM per_customer p
+                   JOIN customers c ON c.tenant_id = ${tenantId} AND c.id = p.customer_id
+                  ORDER BY p.grants DESC, c.id ASC
+                  LIMIT ${sampleSize}) AS top) AS sample
     `);
-    const total = totals.rows[0];
+    const row = result.rows[0];
     return {
-      affectedGrants: total?.grants ?? 0,
-      affectedCustomers: total?.customers ?? 0,
-      sample: sample.rows.map((row) => ({
+      affectedGrants: row?.grants ?? 0,
+      affectedCustomers: row?.customers ?? 0,
+      fingerprint: row?.fingerprint ?? '',
+      sample: (row?.sample ?? []).map((entry) => ({
         customer: {
-          id: row.customer_id as UserId,
-          telegramUserId: row.telegram_user_id,
-          username: row.username,
-          firstName: row.first_name,
-          status: row.status as CustomerStatus,
+          id: entry.customer_id as UserId,
+          telegramUserId: entry.telegram_user_id,
+          username: entry.username,
+          firstName: entry.first_name,
+          status: entry.status as CustomerStatus,
         },
-        grants: row.grants,
+        grants: entry.grants,
       })),
     };
   }
@@ -75,7 +96,7 @@ export class DrizzleTrialResetRepository implements TrialResetRepository {
       readonly now: Date;
     },
     tx: TransactionScope,
-  ): Promise<TrialResetRecord | null> {
+  ): Promise<(TrialResetRecord & { readonly fingerprint: string }) | null> {
     const tenantId = requireTenantId(scope);
     /*
      * ONE statement: stamp, then record what was stamped.
@@ -100,24 +121,34 @@ export class DrizzleTrialResetRepository implements TrialResetRepository {
       affected_grants: number;
       affected_customers: number;
       created_at: Date;
+      fingerprint: string;
     }>(sql`
       WITH stamped AS (
         UPDATE trial_grants
            SET reset_at = ${input.now}, reset_id = ${input.id}
          WHERE tenant_id = ${tenantId} AND released_at IS NULL AND reset_at IS NULL
-        RETURNING customer_id
+        RETURNING id, customer_id
+      ),
+      recorded AS (
+        INSERT INTO trial_resets
+               (id, tenant_id, actor_admin_id, reason, affected_grants, affected_customers, created_at)
+        SELECT ${input.id}, ${tenantId}, ${input.actorAdminId}, ${input.reason},
+               count(*), count(DISTINCT customer_id), ${input.now}
+          FROM stamped
+        HAVING count(*) > 0
+        RETURNING id, actor_admin_id, reason, affected_grants, affected_customers, created_at
       )
-      INSERT INTO trial_resets
-             (id, tenant_id, actor_admin_id, reason, affected_grants, affected_customers, created_at)
-      SELECT ${input.id}, ${tenantId}, ${input.actorAdminId}, ${input.reason},
-             count(*), count(DISTINCT customer_id), ${input.now}
-        FROM stamped
-      HAVING count(*) > 0
-      RETURNING id, actor_admin_id, reason, affected_grants, affected_customers, created_at
+      -- The fingerprint of what THIS statement stamped, computed exactly as the preview
+      -- computes it, so the caller can refuse a stamp of a set nobody previewed.
+      SELECT recorded.*,
+             (SELECT md5(coalesce(string_agg(id::text, ',' ORDER BY id), '')) FROM stamped)
+               AS fingerprint
+        FROM recorded
     `);
     const row = result.rows[0];
     if (row === undefined) return null;
     return {
+      fingerprint: row.fingerprint,
       id: row.id,
       actorAdminId: row.actor_admin_id,
       reason: row.reason,

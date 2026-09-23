@@ -129,6 +129,7 @@ export class TrialsController {
     const recorded = await this.container.trialAdmin.executeReset(scope, actor, {
       idempotencyKey: command.idempotencyKey,
       expectedGrants: command.expectedGrants,
+      expectedFingerprint: command.expectedFingerprint,
       reason: command.reason,
     });
     return { reset: toReset(recorded) };
@@ -203,6 +204,7 @@ function toPreview(preview: TrialResetPreview): TrialResetPreviewResponse['previ
   return {
     affectedGrants: preview.affectedGrants,
     affectedCustomers: preview.affectedCustomers,
+    fingerprint: preview.fingerprint,
     sample: preview.sample.map((entry) => ({ customer: entry.customer, grants: entry.grants })),
   };
 }

@@ -201,6 +201,12 @@ describe('trial overrides and the global reset', () => {
     }
   }
 
+  /** The set a reset would stamp now, as the preview states it. */
+  const fingerprint = async (): Promise<string> =>
+    (await ctx.container.trialAdmin.previewReset(tenantA, owner)).fingerprint;
+  /** A well-formed fingerprint of no set, for cases refused before any set is compared. */
+  const NO_SET = '0'.repeat(32);
+
   /** Holds a row lock in an outside transaction until `release` is called. */
   async function hold(statement: ReturnType<typeof sql>): Promise<{
     release: () => void;
@@ -295,6 +301,7 @@ describe('trial overrides and the global reset', () => {
     const reset = await ctx.container.trialAdmin.executeReset(tenantA, owner, {
       idempotencyKey: 'reset-1',
       expectedGrants: 4,
+      expectedFingerprint: preview.fingerprint,
       reason: 'new season',
     });
     expect(reset).toMatchObject({
@@ -354,6 +361,7 @@ describe('trial overrides and the global reset', () => {
         ctx.container.trialAdmin.executeReset(tenantA, owner, {
           idempotencyKey: 'stale-1',
           expectedGrants: preview.affectedGrants,
+          expectedFingerprint: preview.fingerprint,
           reason: 'confirmed against an old count',
         }),
       ),
@@ -375,6 +383,7 @@ describe('trial overrides and the global reset', () => {
         ctx.container.trialAdmin.executeReset(tenantA, owner, {
           idempotencyKey: 'empty-1',
           expectedGrants: 1,
+          expectedFingerprint: NO_SET,
           reason: 'nothing here',
         }),
       ),
@@ -393,12 +402,14 @@ describe('trial overrides and the global reset', () => {
     const first = await claim(alice, 'w-1');
     await claim(bob, 'w-2');
     if (first.outcome !== 'ISSUED') throw new Error('setup');
+    const previewed = await fingerprint();
     const { release, done } = await hold(
       sql`UPDATE trial_grants SET released_at = now() WHERE order_id = ${first.orderId}`,
     );
     const reset = ctx.container.trialAdmin.executeReset(tenantA, owner, {
       idempotencyKey: 'wait-1',
       expectedGrants: 2,
+      expectedFingerprint: previewed,
       reason: 'races a release',
     });
     await awaitBlocked(1, 'the reset');
@@ -410,10 +421,12 @@ describe('trial overrides and the global reset', () => {
       await count(sql`SELECT count(*)::int AS n FROM trial_grants WHERE reset_at IS NOT NULL`),
     ).toBe(0);
     // Preview again, and the reset that describes the world as it is goes through.
-    expect((await ctx.container.trialAdmin.previewReset(tenantA, owner)).affectedGrants).toBe(1);
+    const again = await ctx.container.trialAdmin.previewReset(tenantA, owner);
+    expect(again.affectedGrants).toBe(1);
     const done2 = await ctx.container.trialAdmin.executeReset(tenantA, owner, {
       idempotencyKey: 'wait-2',
       expectedGrants: 1,
+      expectedFingerprint: again.fingerprint,
       reason: 'again',
     });
     expect(done2).toMatchObject({ affectedGrants: 1, affectedCustomers: 1 });
@@ -433,12 +446,18 @@ describe('trial overrides and the global reset', () => {
     const first = await claim(alice, 'r2-1');
     await claim(bob, 'r2-2');
     if (first.outcome !== 'ISSUED') throw new Error('setup');
+    const previewed = await fingerprint();
     const { release, done } = await hold(
       sql`SELECT id FROM trial_grants WHERE order_id = ${first.orderId} FOR NO KEY UPDATE`,
     );
     const confirm = (key: string) =>
       ctx.container.trialAdmin
-        .executeReset(tenantA, owner, { idempotencyKey: key, expectedGrants: 2, reason: key })
+        .executeReset(tenantA, owner, {
+          idempotencyKey: key,
+          expectedGrants: 2,
+          expectedFingerprint: previewed,
+          reason: key,
+        })
         .then(
           (reset) => ({ reset }),
           (error: unknown) => ({ error }),
@@ -469,9 +488,115 @@ describe('trial overrides and the global reset', () => {
     ).toBe(1);
   });
 
+  it('refuses a reset whose previewed set changed although its size did not', async () => {
+    /*
+     * Codex, PR #65. Alice and Bob are previewed; Alice's grant is then given back and a
+     * third customer takes a trial. Two grants still count, so a count-only confirmation
+     * matched — and reset Carol's grant, which the operator never saw.
+     */
+    const first = await claim(alice, 'set-1');
+    await claim(bob, 'set-2');
+    if (first.outcome !== 'ISSUED') throw new Error('setup');
+    const preview = await ctx.container.trialAdmin.previewReset(tenantA, owner);
+    expect(preview.affectedGrants).toBe(2);
+
+    await ctx.container.database.db.execute(
+      sql`UPDATE trial_grants SET released_at = now() WHERE order_id = ${first.orderId}`,
+    );
+    const carol = await customer(tenantA, '960003', BOT_A);
+    expect((await claim(carol, 'set-3')).outcome).toBe('ISSUED');
+    expect((await ctx.container.trialAdmin.previewReset(tenantA, owner)).affectedGrants).toBe(2);
+
+    expect(
+      await refusal(
+        ctx.container.trialAdmin.executeReset(tenantA, owner, {
+          idempotencyKey: 'set-reset',
+          expectedGrants: preview.affectedGrants,
+          expectedFingerprint: preview.fingerprint,
+          reason: 'confirmed against a different set',
+        }),
+      ),
+    ).toBe(COMMERCE_ERROR_CODES.TRIAL_RESET_STALE);
+    expect(await count(sql`SELECT count(*)::int AS n FROM trial_resets`)).toBe(0);
+    expect(
+      await count(sql`SELECT count(*)::int AS n FROM trial_grants WHERE reset_at IS NOT NULL`),
+    ).toBe(0);
+  });
+
+  it('answers a concurrent retry of the same command with the reset it recorded', async () => {
+    /*
+     * Codex, PR #65. ONE command sent twice at once — the same key, the same body. Both
+     * miss the replay read; the barrier holds a grant row, and BOTH are proven waiting
+     * before it is released. The first stamps and remembers its key; the second then
+     * stamps nothing and used to be refused as NOTHING, telling the operator nothing was
+     * reset when their command had succeeded.
+     */
+    const first = await claim(alice, 'same-1');
+    await claim(bob, 'same-2');
+    if (first.outcome !== 'ISSUED') throw new Error('setup');
+    const input = {
+      idempotencyKey: 'same-key',
+      expectedGrants: 2,
+      expectedFingerprint: await fingerprint(),
+      reason: 'sent twice',
+    };
+    const { release, done } = await hold(
+      sql`SELECT id FROM trial_grants WHERE order_id = ${first.orderId} FOR NO KEY UPDATE`,
+    );
+    const both = Promise.all([
+      ctx.container.trialAdmin.executeReset(tenantA, owner, input),
+      ctx.container.trialAdmin.executeReset(tenantA, owner, input),
+    ]);
+    await awaitBlocked(2, 'both copies of the reset');
+    release();
+    await done;
+    const [a, b] = await both;
+
+    expect(a.id).toBe(b.id);
+    expect(a).toMatchObject({ affectedGrants: 2, affectedCustomers: 2 });
+    expect(await count(sql`SELECT count(*)::int AS n FROM trial_resets`)).toBe(1);
+  });
+
+  it('does not show customers to a role that may reset but may not view them', async () => {
+    /*
+     * Codex, PR #65. The preview's sample names customers, which the catalogue gates
+     * behind `users.view`; `settings.destructive` does not require it. A custom role
+     * holding the one and not the other is refused the preview.
+     */
+    const roleId = ctx.container.ids.uuid();
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO roles (id, tenant_id, key, name, is_system)
+      VALUES (${roleId}, ${tenantA.tenantId}, 'reset_only', 'reset_only', false)`);
+    for (const permission of ['settings.view', 'settings.destructive']) {
+      await ctx.container.database.db.execute(sql`
+        INSERT INTO role_permissions (tenant_id, role_id, permission_key)
+        VALUES (${tenantA.tenantId}, ${roleId}, ${permission})`);
+    }
+    const admin = await createAdmin(ctx.container, tenantA, { username: 'reset-only' });
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO admin_roles (tenant_id, admin_id, role_id)
+      VALUES (${tenantA.tenantId}, ${admin.id}, ${roleId})`);
+    await claim(alice, 'view-1');
+
+    expect(
+      await refusal(ctx.container.trialAdmin.previewReset(tenantA, adminActorFor(admin))),
+    ).toBe(PLATFORM_ERROR_CODES.PERMISSION_DENIED);
+    // The owner, who holds both, is shown the customer.
+    expect(
+      (await ctx.container.trialAdmin.previewReset(tenantA, owner)).sample.map(
+        (row) => row.customer.id,
+      ),
+    ).toEqual([alice]);
+  });
+
   it('answers a replayed reset with the reset it recorded, once', async () => {
     await claim(alice, 'p-1');
-    const input = { idempotencyKey: 'replay-1', expectedGrants: 1, reason: 'once' };
+    const input = {
+      idempotencyKey: 'replay-1',
+      expectedGrants: 1,
+      expectedFingerprint: await fingerprint(),
+      reason: 'once',
+    };
     const first = await ctx.container.trialAdmin.executeReset(tenantA, owner, input);
     const second = await ctx.container.trialAdmin.executeReset(tenantA, owner, input);
     expect(second).toEqual(first);
@@ -549,6 +674,7 @@ describe('trial overrides and the global reset', () => {
         ctx.container.trialAdmin.executeReset(tenantA, operator, {
           idempotencyKey: 'perm-reset',
           expectedGrants: 1,
+          expectedFingerprint: NO_SET,
           reason: 'not mine to do',
         }),
       ),
@@ -585,6 +711,7 @@ describe('trial overrides and the global reset', () => {
         ctx.container.trialAdmin.executeReset(tenantB, ownerB, {
           idempotencyKey: 'tb-reset',
           expectedGrants: 1,
+          expectedFingerprint: NO_SET,
           reason: 'wrong tenant',
         }),
       ),
@@ -607,6 +734,7 @@ describe('trial overrides and the global reset', () => {
         ctx.container.trialAdmin.executeReset(tenantA, owner, {
           idempotencyKey: 'stop-reset',
           expectedGrants: 1,
+          expectedFingerprint: NO_SET,
           reason: 'during a stop',
         }),
       ),
@@ -633,6 +761,7 @@ describe('trial overrides and the global reset', () => {
         ctx.container.trialAdmin.executeReset(tenantA, owner, {
           idempotencyKey: 'blank',
           expectedGrants: 1,
+          expectedFingerprint: NO_SET,
           reason: '   ',
         }),
       ),

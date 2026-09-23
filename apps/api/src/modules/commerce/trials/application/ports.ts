@@ -118,6 +118,12 @@ export interface TrialResetRecord {
 export interface TrialResetPreview {
   readonly affectedGrants: number;
   readonly affectedCustomers: number;
+  /**
+   * The identity of the counted SET: MD5 over the grant ids in id order (Codex, PR
+   * #65). A count alone cannot tell "the grants I was shown" from "the same number of
+   * other grants", and a reset confirmed against a count could stamp a set nobody saw.
+   */
+  readonly fingerprint: string;
   readonly sample: readonly {
     readonly customer: TrialOverrideListRow['customer'];
     readonly grants: number;
@@ -146,7 +152,7 @@ export interface TrialResetRepository {
       readonly now: Date;
     },
     tx: TransactionScope,
-  ): Promise<TrialResetRecord | null>;
+  ): Promise<(TrialResetRecord & { readonly fingerprint: string }) | null>;
   findById(scope: TenantContext, id: string): Promise<TrialResetRecord | null>;
   list(
     scope: TenantContext,

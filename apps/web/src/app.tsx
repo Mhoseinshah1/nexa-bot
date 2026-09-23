@@ -498,7 +498,8 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
       element: (
         <TrialsPage
           mayViewOverrides={may('users.view')}
-          mayReset={may('settings.destructive')}
+          // The preview names customers, so it is `users.view` as well (Codex, PR #65).
+          mayReset={may('settings.destructive') && may('users.view')}
           mayViewHistory={may('settings.view')}
         />
       ),
