@@ -41,6 +41,7 @@ import {
   DISCOUNT_REFUSAL_REASONS,
   DISCOUNT_STATUSES,
   DISCOUNT_TYPES,
+  REFERRAL_COMMISSION_SCOPES,
   REFERRAL_COMMISSION_STATES,
   REFERRAL_TRIGGERS,
   TRIAL_LIMIT_MAX,
@@ -2676,6 +2677,8 @@ export const referralCommissionSummarySchema = z.object({
   orderId: z.string(),
   referrer: referralPartySchema,
   referee: referralPartySchema,
+  /** The scope the referral was made under, frozen onto the commission when promised. */
+  scope: z.enum(REFERRAL_COMMISSION_SCOPES),
   percent: z.number().int(),
   basisAmount: z.string(),
   promisedAmount: z.string(),
@@ -2706,11 +2709,15 @@ export const referralCommissionListResponseSchema = z.object({
 export type ReferralCommissionListResponse = z.infer<typeof referralCommissionListResponseSchema>;
 
 /**
- * One customer's place in the referral graph: who referred them, how many they have
- * referred, and what their commissions came to, per currency.
+ * One customer's place in the referral graph: who referred them, their own code once they
+ * have asked for it, how many they have referred, and what their commissions came to, per
+ * currency. `unrecoveredAmount` is the part of `reversedAmount` their balance could not
+ * cover — recorded, never collected.
  */
 export const customerReferralResponseSchema = z.object({
   customerId: z.string(),
+  /** Null until the customer first opens their invite: a code is recorded on first ask. */
+  code: z.string().nullable(),
   referredBy: referralSummarySchema.nullable(),
   referredCount: z.number().int().nonnegative(),
   totals: z.array(
@@ -2719,6 +2726,7 @@ export const customerReferralResponseSchema = z.object({
       pendingAmount: z.string(),
       earnedAmount: z.string(),
       reversedAmount: z.string(),
+      unrecoveredAmount: z.string(),
     }),
   ),
 });
@@ -2727,7 +2735,8 @@ export type CustomerReferralResponse = z.infer<typeof customerReferralResponseSc
 export const REFERRAL_ROUTES = {
   list: '/referrals',
   commissions: '/referral-commissions',
-  customer: (id: string) => `/customers/${encodeURIComponent(id)}/referral`,
+  // Under `/users`, as every per-customer route is (`CUSTOMER_ROUTES`).
+  customer: (id: string) => `/users/${encodeURIComponent(id)}/referral`,
 } as const;
 
 // --- Orders ------------------------------------------------------------------
