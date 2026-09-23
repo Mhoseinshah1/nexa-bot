@@ -54,6 +54,19 @@ So there is nothing to configure, and Nexa does not pretend otherwise. A
 RickPanel with working credentials and a successful connection test is sellable
 immediately.
 
+One thing Nexa sends that you did not choose: every create carries
+`"proxies": {"vless": {}}`. A PARTIAL set is ignored, as the documentation says,
+but an ABSENT one is refused. That refusal is why RickPanel purchases were being
+refunded before this was fixed (`docs/rickpanel-create-hotfix.md`).
+
+The seed is a compatibility requirement of the panel's API:
+
+- it is not a setting;
+- it does not limit the subscription to VLESS: the panel creates every protocol it
+  serves;
+- Nexa never reads or forwards the credentials the panel generates from it. Your
+  customer receives the subscription link and nothing else.
+
 This is the opposite of Marzban, where naming your inbounds is mandatory and
 omitting them produces an account that answers 200 and serves zero bytes. Two
 panels, two rules, two provider types — which is why the two must not be merged.
@@ -70,14 +83,14 @@ panels, two rules, two provider types — which is why the two must not be merge
 
 ## What Nexa does on your panel
 
-| Nexa operation               | What it sends                                                 |
-| ---------------------------- | ------------------------------------------------------------- |
-| Health check                 | `POST /api/admin/token`, then `GET /api/system`               |
-| Create a service             | `POST /api/user`, then `GET /api/user/{username}` to confirm  |
-| Read usage                   | `GET /api/user/{username}`                                    |
-| Suspend / resume             | `PUT /api/user/{username}` carrying a status and nothing else |
-| Renew, add traffic, add time | `PUT /api/user/{username}` carrying the new figures           |
-| Terminate                    | `DELETE /api/user/{username}`                                 |
+| Nexa operation               | What it sends                                                                                |
+| ---------------------------- | -------------------------------------------------------------------------------------------- |
+| Health check                 | `POST /api/admin/token`, then `GET /api/system`                                              |
+| Create a service             | `POST /api/user` (with the fixed `proxies` seed), then `GET /api/user/{username}` to confirm |
+| Read usage                   | `GET /api/user/{username}`                                                                   |
+| Suspend / resume             | `PUT /api/user/{username}` carrying a status and nothing else                                |
+| Renew, add traffic, add time | `PUT /api/user/{username}` carrying the new figures                                          |
+| Terminate                    | `DELETE /api/user/{username}`                                                                |
 
 ### Why a create is two calls
 
@@ -125,9 +138,11 @@ consider setting that panel's username policy to `RANDOM`.
 
 ## What has NOT been verified
 
-**No RickPanel has been contacted by this code.** The adapter was written from the
+**This code has not been run against a RickPanel.** The adapter was written from the
 OpenAPI document the owner supplied, and verified against a fake this repository
-wrote. `docs/real-panel-acceptance.md` is blunt about what that is worth: a fake
+wrote. The owner's own direct calls to a correctly connected panel are recorded in
+`docs/rickpanel-create-hotfix.md` §2. They are where the create's `proxies` seed
+comes from, and the fake was corrected to match them. `docs/real-panel-acceptance.md` is blunt about what that is worth: a fake
 we wrote and an adapter we wrote can only prove they agree with each other, and
 four defects reached `main` that way.
 
@@ -143,10 +158,13 @@ pnpm test:acceptance
 against a **disposable** panel, never one carrying real customers. It fails rather
 than skips without one, on purpose.
 
-Four things that run would settle, each recorded as an open question in the audit
+Five things that run would settle, each recorded as an open question in the audit
 rather than guessed at here:
 
-- which field of the user record carries the subscription (`OQ-RP-01`);
+- which field of the user record carries the subscription (`OQ-RP-01` — the owner's
+  calls show `subscription_url`, the field the adapter tries first);
+- what a create with no `proxies` is answered with, and whether that is
+  deterministic (`OQ-RP-06`);
 - whether the create accepts a status (`OQ-RP-02`);
 - what the create actually returns (`OQ-RP-03`);
 - how long node propagation takes (`OQ-RP-04`).

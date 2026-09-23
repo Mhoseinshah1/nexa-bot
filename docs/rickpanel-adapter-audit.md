@@ -228,10 +228,19 @@ what that is worth.
 
 ### Open questions, not guesses
 
-| id       | question                                                                | why it is not resolved here                                                                                                |
-| -------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| OQ-RP-01 | What are the subscription field names on the fetched user record?       | The document names the three facts and no keys. The adapter tries three shapes and reports MALFORMED rather than assuming. |
-| OQ-RP-02 | Does `POST /api/user` accept `status`, as Marzban's does?               | Not declared. The adapter does not send it on create; the panel's own default applies, and a suspend is a separate PUT.    |
-| OQ-RP-03 | What does the create actually return — the user, or an acknowledgement? | "Success", no schema. The adapter does not depend on the answer: it reads the user back either way.                        |
-| OQ-RP-04 | How long does node propagation take?                                    | Unmeasured. The bounded read policy is stated in the adapter as an assumption, not a measurement.                          |
-| OQ-RP-05 | After an `UNKNOWN` create, can a found account be proved to be OURS?    | No, and not by reading harder. Needs durable per-operation provenance — a schema change. Shared with Marzban. See F-RP-4.  |
+| id       | question                                                                | why it is not resolved here                                                                                                            |
+| -------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| OQ-RP-01 | What are the subscription field names on the fetched user record?       | The document names the three facts and no keys. The adapter tries three shapes and reports MALFORMED rather than assuming.             |
+| OQ-RP-02 | Does `POST /api/user` accept `status`, as Marzban's does?               | Not declared. The adapter does not send it on create; the panel's own default applies, and a suspend is a separate PUT.                |
+| OQ-RP-03 | What does the create actually return — the user, or an acknowledgement? | "Success", no schema. The adapter does not depend on the answer: it reads the user back either way.                                    |
+| OQ-RP-04 | How long does node propagation take?                                    | Unmeasured. The bounded read policy is stated in the adapter as an assumption, not a measurement.                                      |
+| OQ-RP-05 | After an `UNKNOWN` create, can a found account be proved to be OURS?    | No, and not by reading harder. Needs durable per-operation provenance — a schema change. Shared with Marzban. See F-RP-4.              |
+| OQ-RP-06 | What does a create with no `proxies` answer, and is it deterministic?   | Unmeasured. An absent set is refused (owner's evidence); the status is not captured. Kept UNKNOWN — `docs/rickpanel-create-hotfix.md`. |
+
+**Amended by `docs/rickpanel-create-hotfix.md`.**
+
+- The "Create payload" row above understated RickPanel. A PARTIAL `proxies` set is
+  ignored, but an ABSENT one is refused, so every create now carries the fixed seed
+  `{"vless": {}}`.
+- OQ-RP-01 is answered by the owner's direct calls: the read-back record carries
+  `subscription_url`.
