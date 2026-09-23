@@ -1,5 +1,5 @@
 {
-  "id": "717747ed-6ec9-49d5-b809-52a39d7fa713",
+  "id": "175e3188-f6ac-448e-a771-4f3fc388d228",
   "prevId": "89eabf92-8eed-49db-8a28-f24c776d1e24",
   "version": "7",
   "dialect": "postgresql",
@@ -1996,7 +1996,7 @@
       "checkConstraints": {
         "customer_notifications_kind_check": {
           "name": "customer_notifications_kind_check",
-          "value": "kind IN ('PAYMENT_REJECTED', 'PAYMENT_EXPIRED', 'ORDER_EXPIRED', 'SERVICE_ACTION_SUCCEEDED', 'SERVICE_ACTION_FAILED', 'SERVICE_PROVISION_DELAYED', 'PAYMENT_TRANSFER_RECORDED', 'ORDER_CANCELLED', 'WALLET_TOPUP_CREDITED', 'ORDER_REFUNDED_TO_WALLET', 'SERVICE_EXPIRY_FIRST', 'SERVICE_EXPIRY_SECOND', 'SERVICE_EXPIRED', 'SERVICE_USAGE_FIRST', 'SERVICE_USAGE_SECOND', 'SERVICE_USAGE_FINAL', 'TRIAL_NOT_DELIVERED', 'PAYMENT_EXPIRED_UNDER_REVIEW', 'LATE_TRANSFER_CREDITED', 'REFUND_COMPLETED')"
+          "value": "kind IN ('PAYMENT_REJECTED', 'PAYMENT_EXPIRED', 'ORDER_EXPIRED', 'SERVICE_ACTION_SUCCEEDED', 'SERVICE_ACTION_FAILED', 'SERVICE_PROVISION_DELAYED', 'PAYMENT_TRANSFER_RECORDED', 'ORDER_CANCELLED', 'WALLET_TOPUP_CREDITED', 'ORDER_REFUNDED_TO_WALLET', 'SERVICE_EXPIRY_FIRST', 'SERVICE_EXPIRY_SECOND', 'SERVICE_EXPIRED', 'SERVICE_USAGE_FIRST', 'SERVICE_USAGE_SECOND', 'SERVICE_USAGE_FINAL', 'TRIAL_NOT_DELIVERED', 'RECEIPT_CREDITED_TO_WALLET', 'WALLET_TOPUP_GIFT_CREDITED', 'REFUND_COMPLETED')"
         },
         "customer_notifications_state_check": {
           "name": "customer_notifications_state_check",
@@ -3078,169 +3078,6 @@
         "feature_flag_states_version_check": {
           "name": "feature_flag_states_version_check",
           "value": "version >= 1"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.late_transfer_decisions": {
-      "name": "late_transfer_decisions",
-      "schema": "",
-      "columns": {
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "payment_id": {
-          "name": "payment_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "decision": {
-          "name": "decision",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "reason": {
-          "name": "reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "note": {
-          "name": "note",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "amount": {
-          "name": "amount",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "currency": {
-          "name": "currency",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "wallet_entry_id": {
-          "name": "wallet_entry_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "decided_by_admin_id": {
-          "name": "decided_by_admin_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "decided_at": {
-          "name": "decided_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "late_transfer_decisions_tenant_id_tenants_id_fk": {
-          "name": "late_transfer_decisions_tenant_id_tenants_id_fk",
-          "tableFrom": "late_transfer_decisions",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "late_transfer_decisions_decided_by_admin_id_admins_id_fk": {
-          "name": "late_transfer_decisions_decided_by_admin_id_admins_id_fk",
-          "tableFrom": "late_transfer_decisions",
-          "tableTo": "admins",
-          "columnsFrom": [
-            "decided_by_admin_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "late_transfer_decisions_payment_fk": {
-          "name": "late_transfer_decisions_payment_fk",
-          "tableFrom": "late_transfer_decisions",
-          "tableTo": "payments",
-          "columnsFrom": [
-            "tenant_id",
-            "payment_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "late_transfer_decisions_entry_fk": {
-          "name": "late_transfer_decisions_entry_fk",
-          "tableFrom": "late_transfer_decisions",
-          "tableTo": "wallet_entries",
-          "columnsFrom": [
-            "tenant_id",
-            "wallet_entry_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "late_transfer_decisions_pkey": {
-          "name": "late_transfer_decisions_pkey",
-          "columns": [
-            "tenant_id",
-            "payment_id"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "late_transfer_decisions_decision_check": {
-          "name": "late_transfer_decisions_decision_check",
-          "value": "decision IN ('CREDITED', 'DISMISSED')"
-        },
-        "late_transfer_decisions_reason_enum_check": {
-          "name": "late_transfer_decisions_reason_enum_check",
-          "value": "reason IS NULL OR reason IN ('NOT_RECEIVED', 'AMOUNT_UNDERPAID', 'AMOUNT_OVERPAID', 'WRONG_BENEFICIARY', 'DUPLICATE_REFERENCE', 'UNREADABLE_EVIDENCE', 'OTHER')"
-        },
-        "late_transfer_decisions_reason_check": {
-          "name": "late_transfer_decisions_reason_check",
-          "value": "(decision = 'DISMISSED') = (reason IS NOT NULL)"
-        },
-        "late_transfer_decisions_note_check": {
-          "name": "late_transfer_decisions_note_check",
-          "value": "note IS NULL OR length(btrim(note)) BETWEEN 1 AND 500"
-        },
-        "late_transfer_decisions_currency_check": {
-          "name": "late_transfer_decisions_currency_check",
-          "value": "currency IS NULL OR currency IN ('IRT', 'IRR', 'USD', 'EUR', 'USDT')"
-        },
-        "late_transfer_decisions_credit_check": {
-          "name": "late_transfer_decisions_credit_check",
-          "value": "(decision = 'CREDITED') = (amount IS NOT NULL) AND (amount IS NULL) = (currency IS NULL) AND (amount IS NULL) = (wallet_entry_id IS NULL) AND (amount IS NULL OR amount > 0)"
         }
       },
       "isRLSEnabled": false
@@ -6741,6 +6578,13 @@
           "notNull": true,
           "default": 0
         },
+        "topup_cashback_percent": {
+          "name": "topup_cashback_percent",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -6855,6 +6699,10 @@
         "payment_gateways_sort_order_check": {
           "name": "payment_gateways_sort_order_check",
           "value": "sort_order BETWEEN 0 AND 100000"
+        },
+        "payment_gateways_topup_cashback_percent_check": {
+          "name": "payment_gateways_topup_cashback_percent_check",
+          "value": "topup_cashback_percent BETWEEN 0 AND 100"
         }
       },
       "isRLSEnabled": false
@@ -6932,6 +6780,12 @@
         "telegram_message_id": {
           "name": "telegram_message_id",
           "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "caption": {
+          "name": "caption",
+          "type": "text",
           "primaryKey": false,
           "notNull": false
         },
@@ -7077,6 +6931,10 @@
         "payment_receipts_size_check": {
           "name": "payment_receipts_size_check",
           "value": "file_size IS NULL OR file_size > 0"
+        },
+        "payment_receipts_caption_check": {
+          "name": "payment_receipts_caption_check",
+          "value": "caption IS NULL OR length(caption) BETWEEN 1 AND 1024"
         }
       },
       "isRLSEnabled": false
@@ -7197,6 +7055,18 @@
         "expires_at": {
           "name": "expires_at",
           "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "gateway_provider": {
+          "name": "gateway_provider",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "topup_cashback_percent": {
+          "name": "topup_cashback_percent",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false
         },
@@ -7520,6 +7390,14 @@
         "payments_customer_signal_check": {
           "name": "payments_customer_signal_check",
           "value": "customer_signalled_at IS NULL OR method = 'MANUAL_TRANSFER'"
+        },
+        "payments_gateway_provider_check": {
+          "name": "payments_gateway_provider_check",
+          "value": "gateway_provider IS NULL OR gateway_provider IN ('MANUAL_TRANSFER')"
+        },
+        "payments_topup_cashback_percent_check": {
+          "name": "payments_topup_cashback_percent_check",
+          "value": "topup_cashback_percent IS NULL OR topup_cashback_percent BETWEEN 0 AND 100"
         }
       },
       "isRLSEnabled": false
@@ -8667,6 +8545,145 @@
         "receipt_captures_expiry_check": {
           "name": "receipt_captures_expiry_check",
           "value": "expires_at > opened_at"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.receipt_credits": {
+      "name": "receipt_credits",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "payment_id": {
+          "name": "payment_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "amount": {
+          "name": "amount",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "currency": {
+          "name": "currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "wallet_entry_id": {
+          "name": "wallet_entry_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "decided_by_admin_id": {
+          "name": "decided_by_admin_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "decided_at": {
+          "name": "decided_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "note": {
+          "name": "note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "receipt_credits_tenant_id_tenants_id_fk": {
+          "name": "receipt_credits_tenant_id_tenants_id_fk",
+          "tableFrom": "receipt_credits",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "receipt_credits_decided_by_admin_id_admins_id_fk": {
+          "name": "receipt_credits_decided_by_admin_id_admins_id_fk",
+          "tableFrom": "receipt_credits",
+          "tableTo": "admins",
+          "columnsFrom": [
+            "decided_by_admin_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "receipt_credits_payment_fk": {
+          "name": "receipt_credits_payment_fk",
+          "tableFrom": "receipt_credits",
+          "tableTo": "payments",
+          "columnsFrom": [
+            "tenant_id",
+            "payment_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "receipt_credits_entry_fk": {
+          "name": "receipt_credits_entry_fk",
+          "tableFrom": "receipt_credits",
+          "tableTo": "wallet_entries",
+          "columnsFrom": [
+            "tenant_id",
+            "wallet_entry_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "receipt_credits_pkey": {
+          "name": "receipt_credits_pkey",
+          "columns": [
+            "tenant_id",
+            "payment_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "receipt_credits_amount_check": {
+          "name": "receipt_credits_amount_check",
+          "value": "amount > 0"
+        },
+        "receipt_credits_currency_check": {
+          "name": "receipt_credits_currency_check",
+          "value": "currency IN ('IRT', 'IRR', 'USD', 'EUR', 'USDT')"
+        },
+        "receipt_credits_note_check": {
+          "name": "receipt_credits_note_check",
+          "value": "note IS NULL OR length(btrim(note)) BETWEEN 1 AND 500"
         }
       },
       "isRLSEnabled": false
@@ -13256,8 +13273,8 @@
           "method": "btree",
           "with": {}
         },
-        "wallet_entries_late_transfer_payment_key": {
-          "name": "wallet_entries_late_transfer_payment_key",
+        "wallet_entries_receipt_credit_payment_key": {
+          "name": "wallet_entries_receipt_credit_payment_key",
           "columns": [
             {
               "expression": "tenant_id",
@@ -13273,7 +13290,29 @@
             }
           ],
           "isUnique": true,
-          "where": "reason = 'LATE_TRANSFER'",
+          "where": "reason = 'RECEIPT_CREDIT'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "wallet_entries_topup_cashback_payment_key": {
+          "name": "wallet_entries_topup_cashback_payment_key",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "payment_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "reason = 'CASHBACK_TOPUP'",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -13371,7 +13410,7 @@
         },
         "wallet_entries_reason_check": {
           "name": "wallet_entries_reason_check",
-          "value": "reason IN ('TOPUP_GATEWAY', 'TOPUP_RECEIPT', 'TOPUP_STARS', 'TOPUP_CRYPTO', 'LATE_TRANSFER', 'PURCHASE', 'PURCHASE_REVERSAL', 'REFUND', 'CASHBACK_GATEWAY', 'CASHBACK_TOPUP', 'CASHBACK_RENEWAL', 'CASHBACK_PURCHASE', 'CASHBACK_REVERSAL', 'REFERRAL_COMMISSION', 'REFERRAL_COMMISSION_REVERSAL', 'REFERRAL_SIGNUP_GIFT', 'START_GIFT', 'LOTTERY_WIN', 'LUCK_WHEEL_WIN', 'ADMIN_CREDIT', 'ADMIN_DEBIT', 'MASS_CREDIT', 'MASS_DEBIT', 'RESELLER_SETTLEMENT', 'RESELLER_MEMBERSHIP_FEE', 'CHARGEBACK', 'CORRECTION', 'OTHER')"
+          "value": "reason IN ('TOPUP_GATEWAY', 'TOPUP_RECEIPT', 'TOPUP_STARS', 'TOPUP_CRYPTO', 'RECEIPT_CREDIT', 'PURCHASE', 'PURCHASE_REVERSAL', 'REFUND', 'CASHBACK_GATEWAY', 'CASHBACK_TOPUP', 'CASHBACK_RENEWAL', 'CASHBACK_PURCHASE', 'CASHBACK_REVERSAL', 'REFERRAL_COMMISSION', 'REFERRAL_COMMISSION_REVERSAL', 'REFERRAL_SIGNUP_GIFT', 'START_GIFT', 'LOTTERY_WIN', 'LUCK_WHEEL_WIN', 'ADMIN_CREDIT', 'ADMIN_DEBIT', 'MASS_CREDIT', 'MASS_DEBIT', 'RESELLER_SETTLEMENT', 'RESELLER_MEMBERSHIP_FEE', 'CHARGEBACK', 'CORRECTION', 'OTHER')"
         },
         "wallet_entries_currency_check": {
           "name": "wallet_entries_currency_check",
@@ -13385,9 +13424,13 @@
           "name": "wallet_entries_topup_payment_check",
           "value": "reason <> 'TOPUP_RECEIPT' OR payment_id IS NOT NULL"
         },
-        "wallet_entries_late_transfer_payment_check": {
-          "name": "wallet_entries_late_transfer_payment_check",
-          "value": "reason <> 'LATE_TRANSFER' OR payment_id IS NOT NULL"
+        "wallet_entries_receipt_credit_payment_check": {
+          "name": "wallet_entries_receipt_credit_payment_check",
+          "value": "reason <> 'RECEIPT_CREDIT' OR payment_id IS NOT NULL"
+        },
+        "wallet_entries_topup_cashback_payment_check": {
+          "name": "wallet_entries_topup_cashback_payment_check",
+          "value": "reason <> 'CASHBACK_TOPUP' OR payment_id IS NOT NULL"
         }
       },
       "isRLSEnabled": false

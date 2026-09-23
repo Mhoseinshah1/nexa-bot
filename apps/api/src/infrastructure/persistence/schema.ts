@@ -74,9 +74,10 @@ import {
   PAYMENT_METHODS,
   PAYMENT_EVIDENCE_KINDS,
   PAYMENT_RESOLVED_STATES,
-  LATE_TRANSFER_DECISIONS,
-  LATE_TRANSFER_NOTE_MAX_LENGTH,
-  PAYMENT_REJECTION_REASONS,
+  PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MAX,
+  PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MIN,
+  RECEIPT_CAPTION_MAX_LENGTH,
+  RECEIPT_CREDIT_NOTE_MAX_LENGTH,
   LEDGER_DIRECTIONS,
   LEDGER_REASONS,
   SERVICE_DELIVERY_STATES,
@@ -3249,6 +3250,25 @@ export const payments = pgTable(
      */
     customerSignalledAt: timestamptz('customer_signalled_at'),
     expiresAt: timestamptz('expires_at'),
+    /**
+     * The route the payment was offered through, snapshotted when it was created
+     * (Payment File 02 §21, `docs/payments-file02-design.md` D5 and D7).
+     *
+     * Nullable: a wallet settlement goes through no route, and every payment created
+     * before this column existed has none recorded. Frozen after insert by
+     * `nexa_payments_confirmation_guard` (0114), in every state.
+     */
+    gatewayProvider: text('gateway_provider'),
+    /**
+     * The top-up gift this payment PROMISED, snapshotted from its route's
+     * `topup_cashback_percent` when it was created (D5).
+     *
+     * Null for an order payment — an order earns no top-up gift — and for a payment
+     * created before this column existed; `0` for a top-up through a route that offered
+     * none. Frozen after insert, so an operator changing the route's percentage later
+     * cannot change a promise already made: Payment File 02 §17's snapshot rule.
+     */
+    topupCashbackPercent: integer('topup_cashback_percent'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -3393,6 +3413,14 @@ export const payments = pgTable(
     check(
       'payments_customer_signal_check',
       sql`customer_signalled_at IS NULL OR method = 'MANUAL_TRANSFER'`,
+    ),
+    check(
+      'payments_gateway_provider_check',
+      nullableEnumCheck('gateway_provider', PAYMENT_GATEWAY_PROVIDERS),
+    ),
+    check(
+      'payments_topup_cashback_percent_check',
+      sql`topup_cashback_percent IS NULL OR topup_cashback_percent BETWEEN ${sql.raw(String(PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MIN))} AND ${sql.raw(String(PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MAX))}`,
     ),
     unique('payments_tenant_id_key').on(table.tenantId, table.id),
   ],
@@ -3599,6 +3627,13 @@ export const paymentGateways = pgTable(
     deactivateAfterPayments: integer('deactivate_after_payments').notNull().default(0),
     activateAfterAccountDays: integer('activate_after_account_days').notNull().default(0),
     sortOrder: integer('sort_order').notNull().default(0),
+    /**
+     * The top-up gift this route promises, a whole percentage of a top-up's principal
+     * (Payment File 02 §17, D5). `0` is no gift and the default, so every existing route
+     * keeps promising nothing until an operator says otherwise. A top-up snapshots it
+     * onto `payments.topup_cashback_percent` when it is created.
+     */
+    topupCashbackPercent: integer('topup_cashback_percent').notNull().default(0),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -3659,6 +3694,10 @@ export const paymentGateways = pgTable(
       sql`instructions IS NULL OR length(instructions) BETWEEN 1 AND 1000`,
     ),
     check('payment_gateways_sort_order_check', sql`sort_order BETWEEN 0 AND 100000`),
+    check(
+      'payment_gateways_topup_cashback_percent_check',
+      sql`topup_cashback_percent BETWEEN ${sql.raw(String(PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MIN))} AND ${sql.raw(String(PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MAX))}`,
+    ),
   ],
 );
 
@@ -3923,6 +3962,12 @@ export const paymentReceipts = pgTable(
     fileName: text('file_name'),
     /** Which message carried it, so an operator can find it in the chat if they must. */
     telegramMessageId: bigint('telegram_message_id', { mode: 'bigint' }),
+    /**
+     * The caption the customer sent with the file, trimmed, or NULL for none (Payment
+     * File 02 §10, D3). CUSTOMER text: rendered into the reviewer's Telegram caption and
+     * nowhere else, never logged, and never returned to a browser.
+     */
+    caption: text('caption'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
   },
   (table) => [
@@ -3953,6 +3998,10 @@ export const paymentReceipts = pgTable(
     index('payment_receipts_payment_idx').on(table.tenantId, table.paymentId, table.createdAt),
     check('payment_receipts_kind_check', enumCheck('kind', PAYMENT_RECEIPT_KINDS)),
     check('payment_receipts_size_check', sql`file_size IS NULL OR file_size > 0`),
+    check(
+      'payment_receipts_caption_check',
+      sql`caption IS NULL OR length(caption) BETWEEN 1 AND ${sql.raw(String(RECEIPT_CAPTION_MAX_LENGTH))}`,
+    ),
     unique('payment_receipts_tenant_id_key').on(table.tenantId, table.id),
   ],
 );
@@ -4120,108 +4169,103 @@ export const walletEntries = pgTable(
       .on(table.tenantId, table.paymentId)
       .where(sql`reason = 'TOPUP_RECEIPT'`),
     /**
-     * A late-transfer credit names the payment it was for. The top-up rule above, for
-     * the second reason whose whole meaning is a payment (WP10 P1).
+     * A receipt credit names the payment whose receipt it disposed of (Payment File 02
+     * §12, D2). The top-up rule above, for the second reason whose whole meaning is a
+     * payment.
      */
     check(
-      'wallet_entries_late_transfer_payment_check',
-      sql`reason <> 'LATE_TRANSFER' OR payment_id IS NOT NULL`,
+      'wallet_entries_receipt_credit_payment_check',
+      sql`reason <> 'RECEIPT_CREDIT' OR payment_id IS NOT NULL`,
     ),
     /**
-     * ONE late-transfer credit per payment, decided by the database.
-     *
-     * The second of the two constraints P1 names, and it holds on its own: two reviewers
-     * crediting together, a retry, and a writer that forgot the decision row all name the
-     * same payment. `<paymentId>:late` gives the same guarantee through the reference
-     * key; this is the one a change to the reference cannot remove.
+     * ONE receipt credit per payment, decided by the database — invariant 8 of Payment
+     * File 02 §23, held here on its own and again by `receipt_credits`' primary key. Two
+     * reviewers crediting together, a retry, and a writer that forgot the disposition row
+     * all name the same payment. `<paymentId>:receipt-credit` gives the same guarantee
+     * through the reference key; this is the one a change to the reference cannot remove.
      */
-    uniqueIndex('wallet_entries_late_transfer_payment_key')
+    uniqueIndex('wallet_entries_receipt_credit_payment_key')
       .on(table.tenantId, table.paymentId)
-      .where(sql`reason = 'LATE_TRANSFER'`),
+      .where(sql`reason = 'RECEIPT_CREDIT'`),
+    /**
+     * A top-up gift names the top-up that earned it (D5), and there is ONE per payment:
+     * invariant 11. A replayed confirmation, a racing one and a future gateway callback
+     * all name the same payment, so all but one conflict here.
+     */
+    check(
+      'wallet_entries_topup_cashback_payment_check',
+      sql`reason <> 'CASHBACK_TOPUP' OR payment_id IS NOT NULL`,
+    ),
+    uniqueIndex('wallet_entries_topup_cashback_payment_key')
+      .on(table.tenantId, table.paymentId)
+      .where(sql`reason = 'CASHBACK_TOPUP'`),
     unique('wallet_entries_tenant_id_key').on(table.tenantId, table.id),
   ],
 );
 
 /**
- * A late transfer's one decision (`docs/wp10-payments-audit.md` P1).
+ * A card-to-card receipt's credit-to-wallet disposition (Payment File 02 §12,
+ * `docs/payments-file02-design.md` D2).
  *
- * An EXPIRED manual transfer the customer vouched for — a signal or a receipt — sits in
- * the late-review lane until a reviewer decides it, once: `CREDITED` puts the payment's
- * exact amount on the wallet under `LATE_TRANSFER`, `DISMISSED` moves nothing and names
- * a reason. The payment stays EXPIRED and its order closed either way; this row is what
- * takes the payment out of the lane.
+ * One of a receipt's three mutually exclusive final dispositions — approve, reject, or
+ * this — and the only one that needs its own row: approve and reject are the payment's
+ * own CONFIRMED and FAILED. A credit moves the payment `PENDING -> FAILED` through the
+ * same conditional UPDATE a rejection uses, and this row records what that FAILED
+ * meant: the reviewer judged `amount` arrived and put exactly that on the wallet under
+ * `RECEIPT_CREDIT`.
  *
- * Keyed by `(tenant_id, payment_id)`, which is the concurrency story: two reviewers, or a
- * credit racing a dismissal, produce one row, and the loser meets this key. The ledger's
- * `wallet_entries_late_transfer_payment_key` enforces the same thing on the money, on its
- * own.
+ * Keyed by `(tenant_id, payment_id)`: at most one per payment, which is invariant 8, and
+ * held again on its own by `wallet_entries_receipt_credit_payment_key` on the money.
  *
- * Append-only (0111): no UPDATE and no DELETE. A wrong decision is not edited; the money
- * it moved is corrected by a new ledger entry, the way every other correction here is.
- * The same migration refuses a decision on a payment that is not an expired transfer and
- * a credit whose amount is not the payment's — facts about another table a CHECK cannot
- * read.
+ * Append-only (0114): no UPDATE and no DELETE. The same migration refuses a row whose
+ * payment is not a FAILED manual transfer, or whose entry is not that payment's
+ * `RECEIPT_CREDIT` CREDIT of the same amount and currency — facts about other tables a
+ * CHECK cannot read.
  */
-export const lateTransferDecisions = pgTable(
-  'late_transfer_decisions',
+export const receiptCredits = pgTable(
+  'receipt_credits',
   {
     tenantId: uuid('tenant_id')
       .notNull()
       .references(() => tenants.id),
     paymentId: uuid('payment_id').notNull(),
-    decision: text('decision').notNull(),
-    /** Required on a dismissal, absent on a credit. */
-    reason: text('reason'),
-    /** The reviewer's own words, bounded. Never customer text. */
-    note: text('note'),
     /**
-     * What was credited, for a credit: the payment's own amount and currency, checked
-     * against the payment by 0111. Stored rather than joined, for the rule `refunds`
-     * states — never an amount without its currency, readable on its own.
+     * What was credited: the reviewer's figure, in the PAYMENT's currency. Stored rather
+     * than joined, for the rule `refunds` states — never an amount without its currency,
+     * readable on its own — and checked against the ledger entry by 0114.
      */
-    amount: bigint('amount', { mode: 'bigint' }),
-    currency: text('currency'),
-    /** The `LATE_TRANSFER` ledger entry a credit wrote. */
-    walletEntryId: uuid('wallet_entry_id'),
+    amount: bigint('amount', { mode: 'bigint' }).notNull(),
+    currency: text('currency').notNull(),
+    /** The `RECEIPT_CREDIT` ledger entry this disposition wrote. */
+    walletEntryId: uuid('wallet_entry_id').notNull(),
+    /** The reviewer. NOT NULL: a decision about somebody's money with nobody named is not one. */
     decidedByAdminId: uuid('decided_by_admin_id')
       .notNull()
       .references(() => admins.id),
     decidedAt: timestamptz('decided_at').notNull(),
+    /** The reviewer's own words, bounded. Never customer text. */
+    note: text('note'),
   },
   (table) => [
     primaryKey({
       columns: [table.tenantId, table.paymentId],
-      name: 'late_transfer_decisions_pkey',
+      name: 'receipt_credits_pkey',
     }),
     foreignKey({
       columns: [table.tenantId, table.paymentId],
       foreignColumns: [payments.tenantId, payments.id],
-      name: 'late_transfer_decisions_payment_fk',
+      name: 'receipt_credits_payment_fk',
     }),
     foreignKey({
       columns: [table.tenantId, table.walletEntryId],
       foreignColumns: [walletEntries.tenantId, walletEntries.id],
-      name: 'late_transfer_decisions_entry_fk',
+      name: 'receipt_credits_entry_fk',
     }),
-    check('late_transfer_decisions_decision_check', enumCheck('decision', LATE_TRANSFER_DECISIONS)),
+    check('receipt_credits_amount_check', sql`amount > 0`),
+    check('receipt_credits_currency_check', enumCheck('currency', CURRENCY_CODES)),
     check(
-      'late_transfer_decisions_reason_enum_check',
-      nullableEnumCheck('reason', PAYMENT_REJECTION_REASONS),
-    ),
-    /** A dismissal names why; a credit has nothing to explain. */
-    check(
-      'late_transfer_decisions_reason_check',
-      sql`(decision = 'DISMISSED') = (reason IS NOT NULL)`,
-    ),
-    check(
-      'late_transfer_decisions_note_check',
-      sql`note IS NULL OR length(btrim(note)) BETWEEN 1 AND ${sql.raw(String(LATE_TRANSFER_NOTE_MAX_LENGTH))}`,
-    ),
-    check('late_transfer_decisions_currency_check', nullableEnumCheck('currency', CURRENCY_CODES)),
-    /** A credit carries its amount, its currency and its entry; a dismissal none of them. */
-    check(
-      'late_transfer_decisions_credit_check',
-      sql`(decision = 'CREDITED') = (amount IS NOT NULL) AND (amount IS NULL) = (currency IS NULL) AND (amount IS NULL) = (wallet_entry_id IS NULL) AND (amount IS NULL OR amount > 0)`,
+      'receipt_credits_note_check',
+      sql`note IS NULL OR length(btrim(note)) BETWEEN 1 AND ${sql.raw(String(RECEIPT_CREDIT_NOTE_MAX_LENGTH))}`,
     ),
   ],
 );
