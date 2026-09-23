@@ -67,6 +67,7 @@ const RECORDS = [
   'docs/wp5-falsification.md',
   'docs/rickpanel-hotfix-falsification.md',
   'docs/rickpanel-rotate-falsification.md',
+  'docs/rickpanel-management-falsification.md',
   'docs/wp6-falsification.md',
   /*
    * `docs/wp1-falsification.md` is DELIBERATELY absent, and that is a gap rather
@@ -107,7 +108,7 @@ const RECORDS = [
  * have to be a map, and a map is a place for a record to be added with no entry
  * and checked against nothing — which is this script's own failure mode.
  */
-const EXPECTED = 1414;
+const EXPECTED = 1424;
 /**
  * A table whose last column is one of these is making citations.
  *
