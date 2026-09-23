@@ -60,7 +60,7 @@ requires. The unmerged §10-A work is reshaped to fit File 02 before that PR is 
 - inserts a `receipt_credits` row, keyed by `(tenant, payment)`. The row holds the amount, the entry id, the admin and a note. It is append-only, and an insert trigger refuses any row whose payment is not a FAILED `MANUAL_TRANSFER` or whose entry is not that payment's `RECEIPT_CREDIT`;
 - writes `WalletEntryRecorded` and an audit row, and sends the customer the `RECEIPT_CREDITED_TO_WALLET` kind.
 
-**Why the three cannot both happen.** All three race on the same conditional UPDATE, which only succeeds `FROM PENDING`. That is invariant 7. A loser is answered `PAYMENT_ALREADY_RESOLVED` and has no side effect.
+**Why the three cannot both happen.** All three race on the same conditional UPDATE, which only succeeds `FROM PENDING`. That is invariant 7. A loser is answered with the existing already-resolved refusal, `PAYMENT_STATE_INVALID`, carrying the standing `state` (and `disposition: 'CREDITED_TO_WALLET'` when a credit won), and has no side effect. A reject arriving after a credit is refused the same way rather than being answered as an idempotent rejection.
 
 **Invariant 8.** Crediting at most once is held twice over: by the table's primary key and by the unique index on the ledger entry.
 
@@ -134,7 +134,7 @@ The WP8 engine already does what §16 asks. This package adds the tests that wer
 
 **Payment list columns.** The list adds the payment id, the customer's Telegram id and username, the gateway, the external reference and the updated-at time. The API summary gains `gatewayProvider`, `externalReference`, and the customer's `telegramUserId` and `username`. The detail page stays current-state, with no timeline.
 
-**The compensation list.** A new read route lists every refund with reason `UNDELIVERABLE` and channel `WALLET_CREDIT`: payment, order, customer, principal, the amount credited, the reason, the state and the time. It uses keyset paging and requires `payments.view`.
+**The compensation list.** A new read route, `GET /compensations`, lists every refund with reason `UNDELIVERABLE` and channel `WALLET_CREDIT`: payment, order, customer, principal, the amount credited, the reason, the state and the time. It uses keyset paging and requires `payments.view`.
 
 ### D8 — Kept from §10-A
 
@@ -218,3 +218,31 @@ Explicitly not built:
   - the Web Admin has no card-to-card mutation left, checked by route registration and the web tests;
   - Telegram shows the review as a single message, and the amount capture and its confirmation work.
 - **Falsification:** every new rule is reverted alone and its named test watched to fail, recorded in `docs/wp10-falsification.md`.
+
+## 6. Implementation notes
+
+What the backend does, where it differs in detail from the text above, and why.
+
+- **The loser's code.** No new error code was added: `PAYMENT_STATE_INVALID` is the refusal every
+  surface already maps for "this payment was resolved another way", so the D2 loser reuses it, with
+  `state` and, after a credit, `disposition: 'CREDITED_TO_WALLET'` in the details. A credit asked of a
+  transfer with no receipt is the same code with `reason: 'NO_RECEIPT'`.
+- **The credit's guard.** 0114's insert trigger also requires the disposition's administrator to be
+  the one who resolved the payment, and the entry to be the payment's own customer's, beside the
+  amount, currency, reason and direction the design names.
+- **The credit's lock order** is the payment's row, then the customer's wallet lock — the order
+  `RefundService`, `signalTransferSent` and `settleFromWallet` already take.
+- **A stale reissue keeps a receipted transfer.** `requestManualTransfer` and `requestWalletTopup`
+  close a PENDING payment past its deadline before issuing a new one. A payment with a receipt is not
+  stale under D1, so both hand it back instead of closing it.
+- **`withdrawPending` takes the payment `FOR UPDATE`** before counting receipts, the lock
+  `ReceiptService.submit` files under, so a receipt cannot commit between the count and the
+  conditional UPDATE.
+- **The caption** is extracted and normalised at the Telegram boundary (`normalizeReceiptCaption`,
+  code points, 1024) and stored; rendering it into the reviewer's caption is the Telegram review
+  surface's.
+- **The gateway edit** requires `topupCashbackPercent` on every save. The Web form, until it grows the
+  field, sends the route's current value back.
+- **`payments` refuses DELETE** (0114), the optional backstop the design mentions.
+- **Surfaces not built here**: the single-message Telegram review with the amount capture (D3), and
+  the Web compensation page and list columns (D7). The API routes and contracts for both are in place.

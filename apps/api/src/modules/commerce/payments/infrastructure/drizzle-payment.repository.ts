@@ -487,10 +487,12 @@ export class DrizzlePaymentRepository implements PaymentRepository {
           isNotNull(payments.expiresAt),
           lte(payments.expiresAt, now),
           /*
-           * Again HERE, not only in the candidates, for the reason every predicate above
-           * is restated: the UPDATE re-evaluates its own WHERE after the row lock is
-           * granted, and a receipt filed between the candidate scan and this statement
-           * committed under that same lock (`ReceiptService.submit` holds it).
+           * Restated HERE, as every predicate above is, so the UPDATE never depends on
+           * the sub-select alone. Today it is redundant, and the falsification record
+           * says so (PAY-01u survives): the candidates are locked `FOR UPDATE SKIP
+           * LOCKED` by this same statement, and `ReceiptService.submit` files a receipt
+           * under that row lock, so no receipt can land between the two. It is kept for
+           * the day the candidate query stops taking the lock.
            */
           noReceiptFiled(),
           sql`${payments.id} IN ${due}`,

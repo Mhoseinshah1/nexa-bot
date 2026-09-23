@@ -154,6 +154,41 @@ describe('a customer sending a receipt', () => {
     expect(rows[0]?.file_size).toBe('4096');
   });
 
+  it('keeps the customer’s caption with the receipt, and the database bounds it (D3)', async () => {
+    const payment = await pending('r2c');
+    await signal(payment.id, 'r2c-signal');
+
+    await submit(payment.id, { ...photo('u-r2c'), caption: 'از کارت همسرم' }, 'r2c-file');
+
+    const stored = (await ctx.container.database.db.execute(
+      sql`SELECT caption FROM payment_receipts WHERE payment_id = ${payment.id}` as never,
+    )) as unknown as { rows: { caption: string | null }[] };
+    expect(stored.rows).toEqual([{ caption: 'از کارت همسرم' }]);
+
+    // The Telegram boundary normalises (`normalizeReceiptCaption`: empty to null, cut at
+    // 1024). The CHECK is what holds for a writer that skips it.
+    for (const [n, caption] of [
+      [1, ''],
+      [2, 'x'.repeat(1025)],
+    ] as const) {
+      const error = await submit(
+        payment.id,
+        { ...photo(`u-r2c-${n}`), caption },
+        `r2c-file-${n}`,
+      ).then(
+        () => null,
+        (caught: unknown) => caught,
+      );
+      let message = '';
+      for (let at: unknown = error, depth = 0; at instanceof Error && depth < 5; depth += 1) {
+        message += ` ${at.message}`;
+        at = (at as { cause?: unknown }).cause;
+      }
+      expect(message, `a caption of ${caption.length}`).toMatch(/payment_receipts_caption_check/u);
+    }
+    expect(await receiptRows(payment.id)).toHaveLength(1);
+  });
+
   it('refuses a file nobody asked for, by name', async () => {
     const payment = await pending('r3');
     // No tap, so no window. The payment exists and is pending, which is what makes this
