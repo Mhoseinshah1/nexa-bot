@@ -46,6 +46,8 @@ import {
   SERVICE_RESUME_CALLBACK_PREFIX,
   SERVICE_SUSPEND_CALLBACK_PREFIX,
   SERVICE_TERMINATE_ASK_CALLBACK_PREFIX,
+  SERVICE_ROTATE_ASK_CALLBACK_PREFIX,
+  SERVICE_ROTATE_CALLBACK_PREFIX,
   SERVICE_TERMINATE_CALLBACK_PREFIX,
   SERVICE_RENEW_CALLBACK_PREFIX,
   SERVICE_ADD_TRAFFIC_CALLBACK_PREFIX,
@@ -766,6 +768,17 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.service.renew_button',
       'bot.service.resend_button',
       'bot.service.resume_button',
+      /*
+       * WP6-C's four, reviewed against this case's rule. The button is drawn only when
+       * the server has just offered a rotation; the ask names the cooldown and promises
+       * a new link — which the delivery lane sends — and says NOTHING about the old one,
+       * whose invalidation is unproven; the cooldown refusal names the instant the
+       * server gave. None of them promises a flow this head lacks.
+       */
+      'bot.service.rotate_ask',
+      'bot.service.rotate_button',
+      'bot.service.rotate_confirm_button',
+      'bot.service.rotate_cooldown',
       'bot.service.suspend_button',
       'bot.service.terminate_button',
       'bot.service.terminate_confirm',
@@ -1290,6 +1303,8 @@ describe('a callback prefix decides what happens, so no prefix may shadow anothe
     SERVICE_RESUME: SERVICE_RESUME_CALLBACK_PREFIX,
     SERVICE_TERMINATE_ASK: SERVICE_TERMINATE_ASK_CALLBACK_PREFIX,
     SERVICE_TERMINATE: SERVICE_TERMINATE_CALLBACK_PREFIX,
+    SERVICE_ROTATE_ASK: SERVICE_ROTATE_ASK_CALLBACK_PREFIX,
+    SERVICE_ROTATE: SERVICE_ROTATE_CALLBACK_PREFIX,
     SERVICE_RENEW: SERVICE_RENEW_CALLBACK_PREFIX,
     SERVICE_ADD_TRAFFIC: SERVICE_ADD_TRAFFIC_CALLBACK_PREFIX,
     SERVICE_ADD_TIME: SERVICE_ADD_TIME_CALLBACK_PREFIX,
