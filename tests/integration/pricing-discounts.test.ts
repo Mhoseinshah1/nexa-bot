@@ -614,6 +614,68 @@ describe('discounts reach the order, and confirmation keeps its word', () => {
     expect((await Promise.all([a, b])).sort()).toEqual(['OK', 'commerce.discount_no_longer_valid']);
   });
 
+  it('serialises first purchases through DIFFERENT rules on the customer’s first-purchase lock', async () => {
+    /*
+     * Two first-purchase rules, each scoped to its own product, so no rule row is shared
+     * and the rule locks serialise nothing. What makes the second confirmation see the
+     * first is the per-customer advisory lock — held here from outside, both
+     * confirmations proven waiting on it, then released.
+     */
+    // Two PANELS as well: two orders on one panel already queue on its row lock
+    // before either reaches the first-purchase lock, which would prove nothing here.
+    const panelA2 = ctx.container.ids.uuid();
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
+      VALUES (${panelA2}, ${tenantA.tenantId}, 'Panel A2', 'sanaei', 'https://a2.example.test', 'ACTIVE')`);
+    await makePanelSellable(ctx.container, tenantA, panelA2);
+    const p1 = await product(100_000n);
+    const p2 = await product(100_000n, tenantA, panelA2);
+    await rule({ label: 'اول یک', firstPurchaseOnly: true, productId: p1 });
+    await rule({ label: 'اول دو', firstPurchaseOnly: true, productId: p2 });
+    const one = await draft(customerA, p1);
+    const two = await draft(customerA, p2);
+    expect(one.totals.discount.amountMinor).toBe(20_000n);
+    expect(two.totals.discount.amountMinor).toBe(20_000n);
+
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => (open = resolve));
+    let held!: () => void;
+    const holding = new Promise<void>((resolve) => (held = resolve));
+    const holder = ctx.container.database.db.transaction(async (tx) => {
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtextextended(${`nexa:first-purchase:${String(tenantA.tenantId)}:${customerA}`}, 0))`,
+      );
+      held();
+      await gate;
+    });
+    await holding;
+
+    const a = confirm(customerA, one).then(
+      () => 'OK',
+      (e: { code: string }) => e.code,
+    );
+    const b = confirm(customerA, two).then(
+      () => 'OK',
+      (e: { code: string }) => e.code,
+    );
+    try {
+      const deadline = Date.now() + 5_000;
+      while (
+        (await count(
+          sql`SELECT count(*)::int AS n FROM pg_locks WHERE NOT granted AND locktype = 'advisory'`,
+        )) < 2
+      ) {
+        if (Date.now() > deadline) throw new Error('the confirmations never queued on the lock');
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    } finally {
+      open();
+      await holder;
+    }
+
+    expect((await Promise.all([a, b])).sort()).toEqual(['OK', 'commerce.discount_no_longer_valid']);
+  });
+
   // -------------------------------------------------------------------------
   // The operator's side, and isolation
   // -------------------------------------------------------------------------
