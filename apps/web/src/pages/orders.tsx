@@ -478,10 +478,12 @@ export function OrderDetailPage({
                * The other terminal outcome, said out loud.
                *
                * A `REFUNDED` badge in the lifecycle card is a state; this says what
-               * it MEANS — the money went back to the wallet automatically, in the
-               * transaction that found the order undeliverable — and points at the
-               * two places the exact figure is recorded. The card below shows what
-               * was attempted and why it failed.
+               * it MEANS — the money went back, either automatically in the
+               * transaction that found the order undeliverable or, since WP10 P3, by
+               * operator refunds that reached the payment's full amount — and points
+               * at the two places the exact figure is recorded. Neither cause touches
+               * a service, and the copy says so. The card below shows what was
+               * attempted.
                */
               <Banner tone="info" title={t('web.order_refunded_banner_title')}>
                 {t('web.order_refunded_banner_body')}

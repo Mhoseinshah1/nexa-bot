@@ -1004,6 +1004,34 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.admin.customers_more_button',
       'bot.admin.customers_none',
       'bot.admin.customers_section',
+      /*
+       * WP10's nineteen, the late-review lane inside the receipts section. Reviewed
+       * against the same rule: none names a command, and none promises what the lane
+       * does not do — every screen says the payment and its order stay expired, and
+       * the credit's sentence names the payment's own amount, the only one a credit can
+       * move. `late_dismiss_reasons` sends the one reason it does not offer (`OTHER`,
+       * which needs a note) to the Web Admin, which has that field. None carries a
+       * receipt's file id or a card number; the receipts go as media by file_id.
+       */
+      'bot.admin.late_already_decided',
+      'bot.admin.late_credit_button',
+      'bot.admin.late_credited',
+      'bot.admin.late_dismiss_button',
+      'bot.admin.late_dismiss_reasons',
+      'bot.admin.late_dismissed',
+      'bot.admin.late_not_eligible',
+      'bot.admin.late_reason_amount_overpaid',
+      'bot.admin.late_reason_amount_underpaid',
+      'bot.admin.late_reason_duplicate_reference',
+      'bot.admin.late_reason_not_received',
+      'bot.admin.late_reason_unreadable_evidence',
+      'bot.admin.late_reason_wrong_beneficiary',
+      'bot.admin.late_review_back_button',
+      'bot.admin.late_review_button',
+      'bot.admin.late_review_gone',
+      'bot.admin.late_review_item',
+      'bot.admin.late_review_list',
+      'bot.admin.late_review_none',
       'bot.admin.linked',
       'bot.admin.panel',
       /*
@@ -1675,6 +1703,71 @@ describe('choosing a photo size', () => {
 
   it('still chooses a size that declared no dimensions at all, rather than nothing', () => {
     expect(chosen([{ file_id: 'bare', file_unique_id: 'u-bare' }])).toBe('bare');
+  });
+});
+
+describe('the Telegram Admin late-review lane, at the boundary', () => {
+  /*
+   * WP10 P1. Every payload is client-supplied `callback_data`, so these are the ways a
+   * modified client could try to turn one tap into another — above all a READ or the
+   * reasons screen into a decision, or a string of its choosing into a reason.
+   */
+  const payment = '0191f4a0-2d3c-7c2b-9a41-6f2b0c7e51aa';
+  const tap = (data: string) => intentOf({ callback_query: { id: 'cbq', data } });
+
+  it('routes the bare lane by equality, and each lb: code to its own intent', () => {
+    expect(tap('la:')).toMatchObject({ intent: 'ADMIN_LATE_REVIEW', targetId: null });
+    const expected: Record<string, string> = {
+      v: 'ADMIN_LATE_ITEM',
+      c: 'ADMIN_LATE_CREDIT',
+      d: 'ADMIN_LATE_DISMISS_ASK',
+    };
+    for (const [code, intent] of Object.entries(expected)) {
+      expect(tap(`lb:${code}:${payment}`), `lb:${code}`).toMatchObject({
+        intent,
+        targetId: payment,
+      });
+    }
+  });
+
+  it('carries each offered reason through as its code, and fits in 64 bytes', () => {
+    /*
+     * The code travels, never the reason's name: the handler maps it through
+     * `ADMIN_LATE_REASON_CODES`, so a client cannot name a reason the table lacks.
+     */
+    for (const code of ['n', 'u', 'o', 'w', 'r', 'e']) {
+      const data = `lc:${code}:${payment}`;
+      expect(Buffer.byteLength(data, 'utf8')).toBeLessThanOrEqual(64);
+      expect(tap(data), data).toMatchObject({
+        intent: 'ADMIN_LATE_DISMISS',
+        targetId: payment,
+        args: [code],
+      });
+    }
+  });
+
+  it('refuses a dismissal as OTHER, the reason whose note this surface cannot take', () => {
+    /*
+     * `OTHER` says its reason in the note, and a Telegram dismissal carries none — there
+     * is no prompt that captures the next message (INCIDENT-FIN-001). So the tap has no
+     * code for it: a client that invents one is UNSUPPORTED, and the reason stays with
+     * the Web Admin, which has the field.
+     */
+    expect(tap(`lc:x:${payment}`).intent).toBe('UNSUPPORTED');
+    expect(tap(`lc:OTHER:${payment}`).intent).toBe('UNSUPPORTED');
+  });
+
+  it.each([
+    ['the lane with a payload', `la:${payment}`],
+    ['an unknown item code', `lb:x:${payment}`],
+    ['a missing id', 'lb:c:'],
+    ['a v4 id', 'lb:c:0191f4a0-2d3c-4c2b-9a41-6f2b0c7e51aa'],
+    ['a trailing segment on a credit', `lb:c:${payment}:extra`],
+    ['a reason spelled out', `lc:NOT_RECEIVED:${payment}`],
+    ['a reason with no id', 'lc:n:'],
+    ['a trailing segment on a dismissal', `lc:n:${payment}:extra`],
+  ])('refuses %s as UNSUPPORTED', (_label, data) => {
+    expect(tap(data).intent).toBe('UNSUPPORTED');
   });
 });
 

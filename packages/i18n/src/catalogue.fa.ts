@@ -219,6 +219,34 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.approved': 'پرداخت تأیید شد و نتیجه برای مشتری ثبت گردید.',
   'bot.admin.rejected': 'پرداخت رد شد و نتیجه برای مشتری ثبت گردید.',
   /*
+   * WP10 P1 — the late-review lane. Every screen says the payment and its order stay
+   * closed: the decision is about the money alone, and "approve" would promise the order
+   * back, which is what does not happen.
+   */
+  'bot.admin.late_review_button': '⏰ بررسی دیرهنگام',
+  'bot.admin.late_review_list':
+    'کارت‌به‌کارت‌هایی که مهلتشان تمام شده اما مشتری گفته واریز کرده یا رسید فرستاده است. پرداخت و سفارش آن‌ها بسته می‌مانند؛ تصمیم فقط دربارهٔ پول است:',
+  'bot.admin.late_review_none': 'در حال حاضر هیچ پرداختی در انتظار بررسی دیرهنگام نیست.',
+  'bot.admin.late_review_item':
+    'بررسی دیرهنگام\nکد پیگیری: {reference}\nمبلغ: {total}\nمشتری: {customer}\n\nمهلت این پرداخت تمام شده و پرداخت و سفارش آن منقضی می‌مانند. اگر پول رسیده است، دقیقاً همین مبلغ به کیف پول مشتری واریز می‌شود؛ اگر نرسیده است، با انتخاب دلیل رد می‌شود. برای هر پرداخت فقط یک تصمیم ثبت می‌شود. رسیدهای ارسالی، اگر باشد، در پیام‌های بعدی است.',
+  'bot.admin.late_review_gone': 'این پرداخت در صف بررسی دیرهنگام نیست.',
+  'bot.admin.late_credit_button': '✅ پول رسیده — واریز به کیف پول',
+  'bot.admin.late_dismiss_button': '❌ پول نرسیده — رد',
+  'bot.admin.late_dismiss_reasons':
+    'دلیل رد را انتخاب کنید. هیچ مبلغی جابه‌جا نمی‌شود و به مشتری اعلام می‌شود که پرداخت رد شد. اگر دلیل دیگری دارید، آن را همراه با توضیح در پنل وب ثبت کنید.',
+  'bot.admin.late_reason_not_received': 'واریزی متناظر نرسیده است',
+  'bot.admin.late_reason_amount_underpaid': 'مبلغ واریزی کمتر است',
+  'bot.admin.late_reason_amount_overpaid': 'مبلغ واریزی بیشتر است',
+  'bot.admin.late_reason_wrong_beneficiary': 'به حساب دیگری واریز شده است',
+  'bot.admin.late_reason_duplicate_reference': 'شمارهٔ پیگیری بانکی تکراری است',
+  'bot.admin.late_reason_unreadable_evidence': 'رسید قابل تطبیق نیست',
+  'bot.admin.late_credited':
+    'مبلغ {total} به کیف پول مشتری واریز شد. پرداخت و سفارش منقضی ماندند و نتیجه برای مشتری ثبت گردید.',
+  'bot.admin.late_dismissed': 'پرداخت رد شد و مبلغی جابه‌جا نشد. نتیجه برای مشتری ثبت گردید.',
+  'bot.admin.late_not_eligible': 'این پرداخت در صف بررسی دیرهنگام نیست و کاری انجام نشد.',
+  'bot.admin.late_already_decided': 'برای این پرداخت پیش‌تر تصمیمی ثبت شده است و کاری انجام نشد.',
+  'bot.admin.late_review_back_button': '↩️ بازگشت به فهرست',
+  /*
    * The services section, Phase 6A. Every action goes through the canonical path the
    * Web Admin uses; these strings are what an administrator reads while it does.
    */

@@ -82,3 +82,51 @@ interleaving never forms — a harness failure, not a verdict — so it is not c
 - **The Telegram mapping of `ORDER_TRANSFER_UNDER_REVIEW` on the wallet-pay path** to
   `bot.payment.transfer_under_review` is pinned by `bot-runtime.test.ts`'s sendable-key
   list, not by a mutation here.
+
+## The §10-A surfaces — the Web Admin and the Telegram panel
+
+The same procedure, for the operator surfaces of P1 and P3: each rule reverted alone in a
+separate worktree (detached at the telegram commit, removed afterwards) against its own
+database (`nexa_wp10s_mut`), only the named tests run with vitest's `-t` anchored on each
+title, the named tests first run green on the unmutated tree, a mutation counted only when
+vitest's JSON report listed a named test FAILED, and the file restored with
+`git checkout` before the next. The web rows need no database; the Telegram rows run
+against it through the real runtime. Every failure was read, and every one died on an
+assertion. No mutation touched `packages/contracts`.
+
+| #        | rule                                                              | mutation                                                                   | tests that die                                                                                                                                                            | result |
+| -------- | ----------------------------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| WP10S-01 | the Web draws the two late decisions only for `receipts.review`   | `!mayReview` in `LateReviewCard` replaced by `false`                       | `payments-late-review.test.tsx` › names receipts.review instead of drawing either decision without it; › draws the decisions from receipts.review, not from payments.view | KILLED |
+| WP10S-02 | the Web cannot send a dismissal without a reason                  | `reason === ''` dropped from the dismiss button's `disabled`               | `payments-late-review.test.tsx` › cannot dismiss without a reason                                                                                                         | KILLED |
+| WP10S-03 | the Web credit asks first, naming the exact amount                | the credit button's `setAsking(true)` replaced by `credit.mutate()`        | `payments-late-review.test.tsx` › asks before crediting, naming the exact amount and that payment and order stay expired                                                  | KILLED |
+| WP10S-04 | the Web lane is the server's `lateReview` filter                  | `lateReview: true` no longer sent in the lane                              | `payments-late-review.test.tsx` › asks the server for the lane, and nothing that would contradict it                                                                      | KILLED |
+| WP10S-05 | the Web lane sends no state that would empty it                   | the state filter sent in the lane as well                                  | `payments-late-review.test.tsx` › asks the server for the lane, and nothing that would contradict it                                                                      | KILLED |
+| WP10S-06 | a refund refused for `DELIVERY_IN_PROGRESS` says so               | `refundMessageFor` on the request error replaced by `messageFor`           | `payments-late-review.test.tsx` › names DELIVERY_IN_PROGRESS when the server refuses a refund for it                                                                      | KILLED |
+| WP10S-07 | "the order is REFUNDED" is read from the order's state            | `orderRefunded` made true for any order that loaded                        | `payments-late-review.test.tsx` › says nothing about the order while it is still PAID                                                                                     | KILLED |
+| WP10S-08 | the refund card reads no order without `orders.view`              | `mayViewOrders` dropped from the order query's `enabled`                   | `payments-late-review.test.tsx` › neither asks for nor describes the order without orders.view                                                                            | KILLED |
+| WP10S-09 | the Web late card is drawn from the server's `lateReviewEligible` | the card's gate recomputed as `state !== 'EXPIRED'`                        | `payments-late-review.test.tsx` › draws nothing for an expired transfer the server says is not in the lane                                                                | KILLED |
+| WP10S-10 | Telegram draws the late decisions only for `receipts.review`      | `mayDecide` in `adminLateItem`'s buttons replaced by `true`                | `telegram-admin-late-review.test.ts` › draws no decision for a reader without receipts.review, and refuses one sent anyway                                                | KILLED |
+| WP10S-11 | Telegram draws the lane's door only for `payments.view`           | `permissions.has(PAYMENTS_VIEW_PERMISSION)` dropped from `adminReceipts`   | `telegram-admin-late-review.test.ts` › draws no door for a receipts reader without payments.view, and the lane refuses them                                               | KILLED |
+| WP10S-12 | a Telegram dismissal cannot be OTHER                              | `x: 'OTHER'` added to `ADMIN_LATE_REASON_CODES`                            | `bot-runtime.test.ts` › refuses a dismissal as OTHER, the reason whose note this surface cannot take                                                                      | KILLED |
+| WP10S-13 | a second Telegram decision is told it was already decided         | the `LATE_TRANSFER_ALREADY_DECIDED` row removed from `ADMIN_LATE_REFUSALS` | `telegram-admin-late-review.test.ts` › answers a second tap with already-decided and credits nothing more                                                                 | KILLED |
+| WP10S-14 | a Telegram dismissal carries the reason that was tapped           | the reason looked up from the code replaced by `'NOT_RECEIVED'`            | `telegram-admin-late-review.test.ts` › dismisses with the tapped reason and no note, and moves nothing                                                                    | KILLED |
+| WP10S-15 | Telegram's reasons screen is refused without `receipts.review`    | the `!mayDecide` refusal removed from `adminLateDismissAsk`                | `telegram-admin-late-review.test.ts` › draws no decision for a reader without receipts.review, and refuses one sent anyway                                                | KILLED |
+| WP10S-16 | a Telegram item outside the lane offers no decision               | `!view.eligible` dropped from `lateLaneMember`                             | `telegram-admin-late-review.test.ts` › answers an item that is not in the lane, and one another tenant owns, as gone                                                      | KILLED |
+| WP10S-17 | the Telegram lane is the server's `lateReview` filter             | `lateReview: true` removed from `adminLateReview`'s search                 | `telegram-admin-late-review.test.ts` › lists the vouched-for expired transfers and nothing else                                                                           | KILLED |
+| WP10S-18 | a Telegram decision outside the lane is told it is not eligible   | the `LATE_TRANSFER_NOT_ELIGIBLE` row removed from `ADMIN_LATE_REFUSALS`    | `telegram-admin-late-review.test.ts` › answers a decision on a payment nobody vouched for as not eligible                                                                 | KILLED |
+
+**WP10S-10 and WP10S-15 cite one test.** It asserts the item draws neither button for a
+reader and that the reasons screen, the credit and the dismissal sent anyway are each
+refused; each mutation fails a different one of those assertions (the drawn `lb:c:`, then
+the reasons screen answered instead of refused).
+
+**What these rows do not cover:**
+
+- **The authorization itself.** Every refusal a crafted Telegram callback or a Web request
+  meets is `LateTransferService`'s guard, falsified as WP10-10 above; these rows are the
+  surfaces not PROMISING what the guard refuses.
+- **The Web's ALREADY_DECIDED re-read, the in-flight disabling of both decisions and the
+  exact request bodies** are asserted in `payments-late-review.test.tsx` but no mutation
+  here targets them alone.
+- **The order page's rewritten REFUNDED banner** is copy, pinned by
+  `products-and-orders.test.tsx`'s existing wording checks, not by a mutation here.

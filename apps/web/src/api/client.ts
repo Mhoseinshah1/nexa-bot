@@ -80,6 +80,7 @@ import {
   type PaymentListResponse,
   type PaymentMethod,
   type PaymentReceiptListResponse,
+  type PaymentRejectionReason,
   type PaymentResponse,
   type PaymentState,
   type WalletEntryListResponse,
@@ -1040,6 +1041,12 @@ export function fetchPayments(
     customerId?: string;
     orderId?: string;
     reference?: string;
+    /**
+     * The late-review lane (WP10 P1): EXPIRED manual transfers the customer vouched for,
+     * with no decision yet. Sent as the literal `true` the contract reads; `false` is a
+     * filter too (everything else), and absent is no filter at all.
+     */
+    lateReview?: boolean;
   } = {},
 ): Promise<PaymentListResponse> {
   const params = new URLSearchParams();
@@ -1054,6 +1061,7 @@ export function fetchPayments(
   if (query.reference !== undefined && query.reference !== '') {
     params.set('reference', query.reference);
   }
+  if (query.lateReview !== undefined) params.set('lateReview', String(query.lateReview));
   const suffix = params.toString();
   return authedGet(
     suffix ? `${PAYMENT_ROUTES.list}?${suffix}` : PAYMENT_ROUTES.list,
@@ -1352,6 +1360,35 @@ export function rejectPayment(input: {
 }): Promise<PaymentResponse> {
   const { id, ...body } = input;
   return post(PAYMENT_ROUTES.reject(id), body, paymentResponseSchema);
+}
+
+/**
+ * Crediting a late transfer to the customer's wallet (WP10 P1).
+ *
+ * A KEY and nothing else. The amount is the payment's own and the contract has no field
+ * that could restate it — the same rule `confirmPayment` follows, for the same reason.
+ * The payment stays EXPIRED; the response shows the decision standing on it.
+ */
+export function creditLateTransfer(input: {
+  id: string;
+  idempotencyKey: string;
+}): Promise<PaymentResponse> {
+  const { id, ...body } = input;
+  return post(PAYMENT_ROUTES.lateCredit(id), body, paymentResponseSchema);
+}
+
+/**
+ * Dismissing a late transfer: nothing moves, and a reason from the closed list says why.
+ * The note is optional beside it and sent as null when empty.
+ */
+export function dismissLateTransfer(input: {
+  id: string;
+  idempotencyKey: string;
+  reason: PaymentRejectionReason;
+  note: string | null;
+}): Promise<PaymentResponse> {
+  const { id, ...body } = input;
+  return post(PAYMENT_ROUTES.lateDismiss(id), body, paymentResponseSchema);
 }
 
 export function fetchPanels(

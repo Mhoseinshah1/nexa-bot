@@ -757,6 +757,12 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
            */
           mayViewRefunds={may('refunds.view')}
           mayIssueRefunds={may('refunds.issue')}
+          /*
+           * `orders.view`, for the ORDER's state after a full refund (WP10 P3). The card
+           * reads the order rather than inferring it from the refund rows, and without
+           * this it says nothing about an order the operator may not open.
+           */
+          mayViewOrders={may('orders.view')}
           denied={!may('payments.view')}
         />
       ),

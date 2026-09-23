@@ -26,6 +26,7 @@ import type {
   OrderId,
   OrderPurpose,
   PaymentId,
+  PaymentRejectionReason,
   PermissionKey,
   ProductId,
   ServiceActionAvailability,
@@ -48,6 +49,7 @@ import type { CustomerService } from '../../modules/commerce/customers/applicati
 import type { PaymentDestinationRenderer } from '../../modules/commerce/payments/infrastructure/destination-renderer.js';
 import type { InboundReceiptFile } from '../../modules/commerce/payments/application/receipt-ports.js';
 import type { ReceiptService } from '../../modules/commerce/payments/application/receipt.service.js';
+import type { LateTransferService } from '../../modules/commerce/payments/application/late-transfer.service.js';
 import type {
   CustomerButton,
   CustomerSendOutcome,
@@ -68,6 +70,7 @@ import type { CommercialActionService } from '../../modules/commerce/commercial/
 import type { TrialService } from '../../modules/commerce/trials/application/trial.service.js';
 import type { OrderService } from '../../modules/commerce/orders/application/order.service.js';
 import type { OrderRecord } from '../../modules/commerce/orders/application/ports.js';
+import type { PaymentRecord } from '../../modules/commerce/payments/application/ports.js';
 import type {
   ManualTransferInstruction,
   PaymentService,
@@ -202,6 +205,21 @@ export const BOT_INTENTS = [
   'ADMIN_RECEIPT',
   'ADMIN_APPROVE',
   'ADMIN_REJECT',
+  /*
+   * WP10 P1 — the late-review lane, inside the receipts section.
+   *
+   * `ADMIN_LATE_REVIEW` is the queue; `ADMIN_LATE_ITEM` one payment in it. The two
+   * decisions are `ADMIN_LATE_CREDIT`, one tap as an approval is, and a dismissal that
+   * needs a REASON — so `ADMIN_LATE_DISMISS_ASK` draws the closed list as buttons and
+   * `ADMIN_LATE_DISMISS` is the tap on one, carrying its code in the callback data.
+   * There is no typed-note turn: a prompt that captures the next message is
+   * INCIDENT-FIN-001, and the one reason that needs a note stays in the Web Admin.
+   */
+  'ADMIN_LATE_REVIEW',
+  'ADMIN_LATE_ITEM',
+  'ADMIN_LATE_CREDIT',
+  'ADMIN_LATE_DISMISS_ASK',
+  'ADMIN_LATE_DISMISS',
   'ADMIN_SECTION',
   /*
    * WP1 — one administrator, and the one write this surface may make about them.
@@ -754,6 +772,13 @@ const ADMINS_VIEW_PERMISSION = 'admins.view' as PermissionKey;
 const ADMINS_EDIT_PERMISSION = 'admins.edit' as PermissionKey;
 const RECEIPTS_REVIEW_PERMISSION = 'receipts.review' as PermissionKey;
 /*
+ * What the late-review lane's BUTTON is drawn for (WP10 P1), and nothing more. The lane
+ * is a payment list, and `PaymentService.list` charges `payments.view` — the key
+ * `receipts.review` already requires (`PERMISSION_REQUIRES`) — so an administrator whose
+ * receipts section lacks it is not offered a list that would refuse them.
+ */
+const PAYMENTS_VIEW_PERMISSION = 'payments.view' as PermissionKey;
+/*
  * The three the services section reads, and the same rule applies: these decide which
  * BUTTONS exist, which is not authorization. `ServiceAdminService`, `ProvisioningService`
  * and `DeliveryService` each charge their own key through the same guard the Web Admin
@@ -1051,6 +1076,87 @@ export const ADMIN_CATEGORY_CALLBACK_PREFIX = 'kb:';
 export const ADMIN_CATEGORY_PRODUCTS_CALLBACK_PREFIX = 'kc:';
 export const ADMIN_CATEGORY_PICK_CALLBACK_PREFIX = 'kd:';
 export const ADMIN_CATEGORY_ASSIGN_CALLBACK_PREFIX = 'ke:';
+
+/*
+ * The late-review lane, WP10 P1 — two-character prefixes, the shape the categories
+ * section introduced: `l` then a letter then a colon, so neither the customer's `l:` nor
+ * any of these begins another, which `bot-runtime.test.ts` checks over every export.
+ *
+ * - `la:` alone is the lane. Matched by EQUALITY: it carries nothing.
+ * - `lb:<code>:<uuid>` is one payment and what to do with it; the code is looked up in
+ *   `ADMIN_LATE_CODES`, so an unknown one is UNSUPPORTED. 41 bytes.
+ * - `lc:<reason>:<uuid>` is a dismissal with its reason; the reason is looked up in
+ *   `ADMIN_LATE_REASON_CODES`, so no client-supplied string reaches the service as a
+ *   reason. 41 bytes, inside Telegram's 64.
+ */
+export const ADMIN_LATE_REVIEW_CALLBACK_PREFIX = 'la:';
+export const ADMIN_LATE_ITEM_CALLBACK_PREFIX = 'lb:';
+export const ADMIN_LATE_DISMISS_CALLBACK_PREFIX = 'lc:';
+
+/**
+ * What an `lb:` code means. `v` reads, `c` credits, `d` ASKS for a dismissal's reason —
+ * it moves nothing, and the dismissal itself is only ever an `lc:` tap.
+ */
+const ADMIN_LATE_CODES = {
+  v: 'ADMIN_LATE_ITEM',
+  c: 'ADMIN_LATE_CREDIT',
+  d: 'ADMIN_LATE_DISMISS_ASK',
+} as const satisfies Record<string, BotIntent>;
+type AdminLateCode = keyof typeof ADMIN_LATE_CODES;
+
+function isAdminLateCode(value: string): value is AdminLateCode {
+  return Object.hasOwn(ADMIN_LATE_CODES, value);
+}
+
+/**
+ * The dismissal reasons a TAP can carry, and the letter each travels as.
+ *
+ * `OTHER` is deliberately absent. It is the reason whose note says why
+ * (`PAYMENT_REJECTION_REASONS`), and this surface has no way to take a note — a prompt
+ * capturing the next message is INCIDENT-FIN-001 — so a Telegram `OTHER` would be a
+ * dismissal nobody can explain. `bot.admin.late_dismiss_reasons` sends it to the Web
+ * Admin, which has the field.
+ */
+const ADMIN_LATE_REASON_CODES = {
+  n: 'NOT_RECEIVED',
+  u: 'AMOUNT_UNDERPAID',
+  o: 'AMOUNT_OVERPAID',
+  w: 'WRONG_BENEFICIARY',
+  r: 'DUPLICATE_REFERENCE',
+  e: 'UNREADABLE_EVIDENCE',
+} as const satisfies Record<string, PaymentRejectionReason>;
+type AdminLateReasonCode = keyof typeof ADMIN_LATE_REASON_CODES;
+
+function isAdminLateReasonCode(value: string): value is AdminLateReasonCode {
+  return Object.hasOwn(ADMIN_LATE_REASON_CODES, value);
+}
+
+/** The button for each reason, in the order the chooser draws them. */
+const ADMIN_LATE_REASON_BUTTONS: readonly (readonly [AdminLateReasonCode, TemplateKey])[] = [
+  ['n', 'bot.admin.late_reason_not_received'],
+  ['u', 'bot.admin.late_reason_amount_underpaid'],
+  ['o', 'bot.admin.late_reason_amount_overpaid'],
+  ['w', 'bot.admin.late_reason_wrong_beneficiary'],
+  ['r', 'bot.admin.late_reason_duplicate_reference'],
+  ['e', 'bot.admin.late_reason_unreadable_evidence'],
+];
+
+/**
+ * The lane's refusals, each to the sentence an administrator is told — the shape
+ * `REFUSAL_REPLIES` gives the customer's half.
+ *
+ * Two are facts about the PAYMENT (not in the lane; already decided) and get their own
+ * sentences. A permission denial stays `bot.admin.refused`, the panel's one answer for
+ * every refusal about the administrator, for the reason that key's description gives.
+ * An unknown or another tenant's payment is `late_review_gone`, the answer a stale
+ * button gets. Anything else rethrows to `adminTurn`, which answers `refused`.
+ */
+const ADMIN_LATE_REFUSALS: Readonly<Record<string, TemplateKey>> = {
+  [COMMERCE_ERROR_CODES.LATE_TRANSFER_NOT_ELIGIBLE]: 'bot.admin.late_not_eligible',
+  [COMMERCE_ERROR_CODES.LATE_TRANSFER_ALREADY_DECIDED]: 'bot.admin.late_already_decided',
+  [COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND]: 'bot.admin.late_review_gone',
+  [PLATFORM_ERROR_CODES.PERMISSION_DENIED]: 'bot.admin.refused',
+};
 
 /** How many categories one page of the operator list — and of the picker — shows. */
 const ADMIN_CATEGORY_PAGE_SIZE = 8;
@@ -2344,6 +2450,8 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
       const command = callbackCommand('ADMIN_ADMIN_STATUS', adminId, id);
       return command.targetId === null ? command : { ...command, args: [code] };
     }
+    const late = adminLateCommand(data, id);
+    if (late !== null) return late;
     const categories = adminCategoryCommand(data, id);
     if (categories !== null) return categories;
     return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
@@ -2657,6 +2765,45 @@ function callbackCommand(
 }
 
 /**
+ * The late-review lane's three callbacks, or null when `data` is none of them.
+ *
+ * Every payload is validated HERE: a code through `ADMIN_LATE_CODES`, a reason through
+ * `ADMIN_LATE_REASON_CODES`, an id through `callbackCommand`. Anything else is
+ * UNSUPPORTED, and none of this authorizes anything — `LateTransferService` charges
+ * `receipts.review` on both decisions, and `PaymentService` charges `payments.view` on
+ * every read.
+ */
+function adminLateCommand(data: string, id: string | null): BotCommand | null {
+  const unsupported: BotCommand = { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+  if (data === ADMIN_LATE_REVIEW_CALLBACK_PREFIX) {
+    return { intent: 'ADMIN_LATE_REVIEW', targetId: null, callbackQueryId: id };
+  }
+  if (data.startsWith(ADMIN_LATE_ITEM_CALLBACK_PREFIX)) {
+    const [code, paymentId, ...rest] = data
+      .slice(ADMIN_LATE_ITEM_CALLBACK_PREFIX.length)
+      .split(':');
+    if (code === undefined || !isAdminLateCode(code) || paymentId === undefined) return unsupported;
+    return rest.length > 0 ? unsupported : callbackCommand(ADMIN_LATE_CODES[code], paymentId, id);
+  }
+  if (data.startsWith(ADMIN_LATE_DISMISS_CALLBACK_PREFIX)) {
+    const [code, paymentId, ...rest] = data
+      .slice(ADMIN_LATE_DISMISS_CALLBACK_PREFIX.length)
+      .split(':');
+    if (
+      code === undefined ||
+      !isAdminLateReasonCode(code) ||
+      paymentId === undefined ||
+      rest.length > 0
+    ) {
+      return unsupported;
+    }
+    const command = callbackCommand('ADMIN_LATE_DISMISS', paymentId, id);
+    return command.targetId === null ? command : { ...command, args: [code] };
+  }
+  return null;
+}
+
+/**
  * The categories section's five callbacks, or null when `data` is none of them.
  *
  * Every payload is validated HERE and nowhere later: a page through `parseCatalogPage`,
@@ -2778,7 +2925,21 @@ export interface BotRuntimeDeps {
    * addendum's own words — *"settlement still requires the existing authorized operator
    * confirmation"* — are a dependency here rather than only a permission.
    */
-  readonly receipts: Pick<ReceiptService, 'submit' | 'reviewQueue' | 'reviewItem'>;
+  readonly receipts: Pick<
+    ReceiptService,
+    'submit' | 'reviewQueue' | 'reviewItem' | 'listForPayment'
+  >;
+  /**
+   * The late-review lane's two decisions and its view (WP10 P1), for the receipts
+   * section.
+   *
+   * A `Pick` of the three this surface needs: `viewsFor` answers whether a payment is in
+   * the lane with the SAME predicate the decisions refuse with, so the buttons are drawn
+   * from the answer the write will give. Both decisions charge `receipts.review`
+   * themselves. Optional, as `productCategories` is: a runtime built without it draws no
+   * lane button, rather than one that fails.
+   */
+  readonly lateTransfers?: Pick<LateTransferService, 'credit' | 'dismiss' | 'viewsFor'>;
   readonly wallet: WalletService;
   readonly services: ProvisioningService;
   /**
@@ -3790,7 +3951,53 @@ export class BotRuntime {
             orderId: null,
           };
         case 'ADMIN_RECEIPTS':
-          return await this.adminReceipts(scope, adminActor);
+          return await this.adminReceipts(scope, adminActor, permissions);
+        case 'ADMIN_LATE_REVIEW':
+          return await this.adminLateReview(scope, adminActor);
+        case 'ADMIN_LATE_ITEM':
+          return command.targetId === null
+            ? null
+            : await this.adminLateItem(
+                scope,
+                adminActor,
+                command.targetId,
+                input,
+                permissions.has(RECEIPTS_REVIEW_PERMISSION),
+              );
+        case 'ADMIN_LATE_DISMISS_ASK':
+          return command.targetId === null
+            ? null
+            : await this.adminLateDismissAsk(
+                scope,
+                adminActor,
+                command.targetId,
+                permissions.has(RECEIPTS_REVIEW_PERMISSION),
+              );
+        case 'ADMIN_LATE_CREDIT':
+          return command.targetId === null
+            ? null
+            : await this.adminLateDecide(
+                scope,
+                adminActor,
+                command.targetId,
+                null,
+                input.idempotencyKey,
+              );
+        case 'ADMIN_LATE_DISMISS': {
+          /*
+           * The cast is safe because the BOUNDARY validated it: `adminLateCommand`
+           * produces this intent only for a code in `ADMIN_LATE_REASON_CODES`.
+           */
+          const code = command.args?.[0];
+          if (command.targetId === null || code === undefined) return null;
+          return await this.adminLateDecide(
+            scope,
+            adminActor,
+            command.targetId,
+            ADMIN_LATE_REASON_CODES[code as AdminLateReasonCode],
+            input.idempotencyKey,
+          );
+        }
         case 'ADMIN_RECEIPT':
           return command.targetId === null
             ? null
@@ -4176,18 +4383,43 @@ export class BotRuntime {
    * amount rather than a payment id: the reference is what the customer quoted to their
    * bank and what a reviewer matches against a statement.
    */
-  private async adminReceipts(scope: TenantContext, actor: ActorContext): Promise<PendingReply> {
+  private async adminReceipts(
+    scope: TenantContext,
+    actor: ActorContext,
+    permissions: ReadonlySet<PermissionKey>,
+  ): Promise<PendingReply> {
     const items = await this.deps.receipts.reviewQueue(scope, actor, ADMIN_QUEUE_LIMIT);
+    /*
+     * The late-review lane's door, on BOTH answers — an empty pending queue is exactly
+     * when a reviewer should look at what expired. Drawn for `payments.view`, which the
+     * lane's list charges; the decisions inside charge `receipts.review` again.
+     */
+    const lane =
+      this.deps.lateTransfers !== undefined && permissions.has(PAYMENTS_VIEW_PERMISSION)
+        ? [
+            {
+              label: { kind: 'TEMPLATE' as const, key: 'bot.admin.late_review_button' as const },
+              data: ADMIN_LATE_REVIEW_CALLBACK_PREFIX,
+            },
+          ]
+        : [];
     if (items.length === 0) {
-      return { key: 'bot.admin.receipts_none', values: {}, buttons: [], orderId: null };
+      return { key: 'bot.admin.receipts_none', values: {}, buttons: lane, orderId: null };
     }
     return {
       key: 'bot.admin.receipts_list',
       values: {},
-      buttons: items.map((item) => ({
-        label: { kind: 'TEXT' as const, text: item.payment.reference, amount: item.payment.amount },
-        data: `${ADMIN_RECEIPT_CALLBACK_PREFIX}${item.payment.id}`,
-      })),
+      buttons: [
+        ...items.map((item) => ({
+          label: {
+            kind: 'TEXT' as const,
+            text: item.payment.reference,
+            amount: item.payment.amount,
+          },
+          data: `${ADMIN_RECEIPT_CALLBACK_PREFIX}${item.payment.id}`,
+        })),
+        ...lane,
+      ],
       orderId: null,
     };
   }
@@ -4309,6 +4541,243 @@ export class BotRuntime {
       note: 'Rejected in the Telegram management panel.',
     });
     return { key: 'bot.admin.rejected', values: {}, buttons: [], orderId: null };
+  }
+
+  // -------------------------------------------------------------------------
+  // The late-review lane (WP10 P1)
+  // -------------------------------------------------------------------------
+
+  /** The lane service, or the refusal a runtime built without it gives. */
+  private requireLateTransfers(): NonNullable<BotRuntimeDeps['lateTransfers']> {
+    const late = this.deps.lateTransfers;
+    if (late === undefined) {
+      // Unreachable through a drawn button — the door is not drawn without it — and a
+      // crafted callback is answered as any other refusal by `adminTurn`.
+      throw new Error('The late-review lane is not wired into this runtime.');
+    }
+    return late;
+  }
+
+  /**
+   * The lane: EXPIRED manual transfers the customer vouched for, with no decision yet.
+   *
+   * The SERVER's filter — `lateReview` on the ordinary payment list, the one the Web
+   * Admin's lane reads — so the Telegram queue and the Web lane cannot disagree about
+   * who is in it. Bounded by `ADMIN_QUEUE_LIMIT` for the reason that constant gives: a
+   * keyboard, and ten rows are ten decisions. The Web Admin pages the rest.
+   */
+  private async adminLateReview(scope: TenantContext, actor: ActorContext): Promise<PendingReply> {
+    this.requireLateTransfers();
+    const page = await this.deps.payments.list(scope, actor, {
+      limit: ADMIN_QUEUE_LIMIT,
+      search: { lateReview: true },
+    });
+    if (page.items.length === 0) {
+      return { key: 'bot.admin.late_review_none', values: {}, buttons: [], orderId: null };
+    }
+    return {
+      key: 'bot.admin.late_review_list',
+      values: {},
+      buttons: page.items.map((payment) => ({
+        label: { kind: 'TEXT' as const, text: payment.reference, amount: payment.amount },
+        data: `${ADMIN_LATE_ITEM_CALLBACK_PREFIX}v:${payment.id}`,
+      })),
+      orderId: null,
+    };
+  }
+
+  /**
+   * The payment, if it is in the lane NOW — else the sentence that says why not.
+   *
+   * Asked through `viewsFor`, which decides membership with `lateReviewRefusal`: the
+   * predicate `credit` and `dismiss` refuse with. So a screen that draws the decisions
+   * is a screen whose decisions would be accepted, as of this read.
+   */
+  private async lateLaneMember(
+    scope: TenantContext,
+    actor: ActorContext,
+    paymentId: string,
+  ): Promise<{ readonly payment: PaymentRecord } | { readonly reply: PendingReply }> {
+    const late = this.requireLateTransfers();
+    let payment: PaymentRecord;
+    try {
+      payment = await this.deps.payments.get(scope, actor, paymentId);
+    } catch (error) {
+      const reply = this.lateRefusal(error);
+      if (reply !== null) return { reply };
+      throw error;
+    }
+    const view = (await late.viewsFor(scope, actor, [payment])).get(payment.id);
+    /*
+     * A decided payment says so — the one fact a stale button most needs — and every
+     * other way of not being in the lane is the one "not in the lane" sentence.
+     */
+    if (view !== undefined && view.decision !== null) {
+      return {
+        reply: { key: 'bot.admin.late_already_decided', values: {}, buttons: [], orderId: null },
+      };
+    }
+    if (view === undefined || !view.eligible) {
+      return {
+        reply: { key: 'bot.admin.late_review_gone', values: {}, buttons: [], orderId: null },
+      };
+    }
+    return { payment };
+  }
+
+  /**
+   * One payment in the lane: the facts, the receipts, and the two decisions.
+   *
+   * The media first and the facts second — look, then decide — for the reason
+   * `adminReceipt` gives, and a failed media send does not fail the turn. The decision
+   * buttons only for `receipts.review`: the service charges it on the tap, and drawing
+   * them for a reader would be two buttons whose every press is refused.
+   */
+  private async adminLateItem(
+    scope: TenantContext,
+    actor: ActorContext,
+    paymentId: string,
+    input: { readonly update: unknown },
+    mayDecide: boolean,
+  ): Promise<PendingReply> {
+    const member = await this.lateLaneMember(scope, actor, paymentId);
+    if ('reply' in member) return member.reply;
+    const { payment } = member;
+
+    const chatId = privateChatIdOf(input.update);
+    if (chatId !== null) {
+      const receipts = await this.deps.receipts.listForPayment(scope, actor, payment.id);
+      for (const receipt of receipts) {
+        await this.deps.messenger.sendFile(scope, {
+          chatId,
+          // The bot that RECEIVED the upload: a `file_id` is scoped to that bot.
+          botInstanceId: receipt.botInstanceId,
+          kind: receipt.kind === 'PHOTO' ? 'PHOTO' : 'DOCUMENT',
+          fileId: receipt.fileId,
+        });
+      }
+    }
+
+    return {
+      key: 'bot.admin.late_review_item',
+      values: {
+        reference: payment.reference,
+        // The payment's OWN amount: exactly what a credit moves, and the only figure a
+        // credit can move — the contract has no field to name another.
+        total: payment.amount,
+        customer: payment.customerId,
+      },
+      buttons: [
+        ...(mayDecide
+          ? [
+              {
+                label: { kind: 'TEMPLATE' as const, key: 'bot.admin.late_credit_button' as const },
+                data: `${ADMIN_LATE_ITEM_CALLBACK_PREFIX}c:${payment.id}`,
+                row: 0,
+              },
+              {
+                label: { kind: 'TEMPLATE' as const, key: 'bot.admin.late_dismiss_button' as const },
+                data: `${ADMIN_LATE_ITEM_CALLBACK_PREFIX}d:${payment.id}`,
+                row: 0,
+              },
+            ]
+          : []),
+        {
+          label: { kind: 'TEMPLATE' as const, key: 'bot.admin.late_review_back_button' as const },
+          data: ADMIN_LATE_REVIEW_CALLBACK_PREFIX,
+        },
+      ],
+      orderId: null,
+    };
+  }
+
+  /**
+   * The dismissal's reasons, as buttons. Moves nothing: the dismissal is the next tap.
+   *
+   * Re-asks the lane first, so a payment somebody decided since the item was drawn is
+   * answered here rather than offered six buttons that would each be refused. Without
+   * `receipts.review` it is the panel's one refusal — the reasons are the decision.
+   */
+  private async adminLateDismissAsk(
+    scope: TenantContext,
+    actor: ActorContext,
+    paymentId: string,
+    mayDecide: boolean,
+  ): Promise<PendingReply> {
+    if (!mayDecide) return { key: 'bot.admin.refused', values: {}, buttons: [], orderId: null };
+    const member = await this.lateLaneMember(scope, actor, paymentId);
+    if ('reply' in member) return member.reply;
+    const { payment } = member;
+    return {
+      key: 'bot.admin.late_dismiss_reasons',
+      values: {},
+      buttons: [
+        ...ADMIN_LATE_REASON_BUTTONS.map(([code, key]) => ({
+          label: { kind: 'TEMPLATE' as const, key },
+          data: `${ADMIN_LATE_DISMISS_CALLBACK_PREFIX}${code}:${payment.id}`,
+        })),
+        {
+          label: { kind: 'TEMPLATE' as const, key: 'bot.admin.late_review_back_button' as const },
+          data: `${ADMIN_LATE_ITEM_CALLBACK_PREFIX}v:${payment.id}`,
+        },
+      ],
+      orderId: null,
+    };
+  }
+
+  /**
+   * A credit (`reason` null) or a dismissal with its reason, through the SAME
+   * `LateTransferService` methods the Web Admin calls.
+   *
+   * Everything that makes the decision safe lives in there: `receipts.review`, the
+   * payment's row lock taken first, the one decision row per payment, the exact amount,
+   * the audit row and the customer's notification. This surface decides nothing — it
+   * does not re-check the lane before the write, because the service checks it under the
+   * lock and a surface check would be a second, staler answer.
+   *
+   * A redelivered tap replays through the update's own key; a second tap, or a second
+   * reviewer, reaches the lock second and is told `late_already_decided`.
+   */
+  private async adminLateDecide(
+    scope: TenantContext,
+    actor: ActorContext,
+    paymentId: string,
+    reason: PaymentRejectionReason | null,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    const late = this.requireLateTransfers();
+    try {
+      if (reason === null) {
+        const { payment } = await late.credit(scope, actor, paymentId, {
+          // SUFFIXED: the bare key is the update's, already spent resolving this turn.
+          idempotencyKey: `${idempotencyKey}:late-credit`,
+        });
+        return {
+          key: 'bot.admin.late_credited',
+          values: { total: payment.amount },
+          buttons: [],
+          orderId: null,
+        };
+      }
+      await late.dismiss(scope, actor, paymentId, {
+        idempotencyKey: `${idempotencyKey}:late-dismiss`,
+        reason,
+        // No note: this surface has no prompt that could take one, and a note written
+        // here on the reviewer's behalf would be text they did not write.
+        note: null,
+      });
+      return { key: 'bot.admin.late_dismissed', values: {}, buttons: [], orderId: null };
+    } catch (error) {
+      const reply = this.lateRefusal(error);
+      if (reply !== null) return reply;
+      throw error;
+    }
+  }
+
+  /** The lane's refusal as a reply, or null for one `ADMIN_LATE_REFUSALS` does not name. */
+  private lateRefusal(error: unknown): PendingReply | null {
+    const key = isNexaError(error) ? ADMIN_LATE_REFUSALS[error.code] : undefined;
+    return key === undefined ? null : { key, values: {}, buttons: [], orderId: null };
   }
 
   /**
