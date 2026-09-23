@@ -1,5 +1,9 @@
 # WP10 — Payment / Receipt / Reconciliation: audit and decisions
 
+> **Superseded in part.** The owner's Payment Spec File 02 is now the authority for this
+> package; `docs/payments-file02-design.md` records where it overrides the decisions below.
+> P1 (the late-review lane) and §10-B P5–P9 and P11 are withdrawn; P2, P3, P4 and P13 stand.
+
 §10 of the autonomous execution plan. This document records what the payment, receipt,
 refund and ledger code does at `0ff0448`, measured against §10.1–§10.16. It then records
 the decisions P1–P12 this package implements, and what is deliberately not built.

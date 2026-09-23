@@ -2217,3 +2217,27 @@ reseller pays. Pricing every row would put one quote per product into a list rea
 would show a price no confirmation has promised. If the owner wants reseller prices in the
 list, it is a presentation of a quote the list does not currently make, and it needs
 deciding which surfaces show it.
+
+## OQ-WP10-01 — which external payment gateway, and Payment Spec File 01
+
+The owner's Payment Spec File 02 requires, for automated external gateways, one active
+gateway at a time, an exactly-once authenticated callback, reconciliation bounded at the
+payment window plus ten minutes, and an automatic amount-mismatch outcome
+(`docs/payments-file02-design.md` §3). No external provider exists in the code
+(`PAYMENT_GATEWAY_PROVIDERS = ['MANUAL_TRANSFER']`) and none is named: File 02 cites
+Telegram Stars only as an example, and Stars are not Toman, so it also needs an exchange
+rule the owner has not given (`OQ-5D-01`). File 02 refers to a File 01 that was not
+supplied; it may name the gateways, the Telegram receipt message layout and whether admins
+are pushed a message when a receipt arrives.
+
+UNRESOLVED. The gateway machinery is built with its first provider, against that
+provider's real sandbox, per `CLAUDE.md`'s provider rule. Until then no external gateway can
+be enabled.
+
+## OQ-WP10-02 — the customer's claimed amount, reference and date on a receipt
+
+Not captured: the reviewer reads them from the image, and asking for them adds turns to the
+Telegram flow. The customer's own caption is stored and shown to the reviewer
+(`docs/payments-file02-design.md` D3).
+
+UNRESOLVED.
