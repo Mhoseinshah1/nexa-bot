@@ -67,6 +67,9 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'خوش آمدید. حساب شما در این ربات ساخته شد. برای دیدن سرویس‌ها دستور /catalog را بفرستید.',
   'bot.start.welcome_back': 'خوش آمدید. برای دیدن سرویس‌های قابل خرید دستور /catalog را بفرستید.',
   'bot.blocked': 'دسترسی این حساب به ربات بسته شده است.',
+  // File 01 §9, word for word: the account is blocked, why, and who to talk to.
+  'bot.blocked_with_reason':
+    'حساب شما مسدود شده است.\n\nدلیل:\n{reason}\n\nبرای بررسی یا رفع مسدودی با پشتیبانی در ارتباط باشید.',
 
   // What this bot can do, and the descriptions Telegram shows in its own command menu.
   // One list in `BOT_COMMANDS` feeds both, so a command cannot be registered and
@@ -258,6 +261,20 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * mandatory reason read by the same one-prompt-per-administrator capture, then a commit
    * that restates it. It blocks the customer and decides nothing about the payment.
    */
+  /*
+   * File 01 §7 — a rejection needs a mandatory reason, which the customer is told.
+   */
+  'bot.admin.reject_reason_prompt':
+    'رد پرداخت {reference}: دلیل رد را بفرستید. وارد کردن دلیل اجباری است و برای مشتری ارسال می‌شود. تا {minutes} دقیقه منتظر پیام شما هستم.',
+  'bot.admin.reject_reason_invalid':
+    'این پیام دلیل معتبری نیست. دلیل نباید خالی باشد و حداکثر {max} نویسه است. دوباره بفرستید.',
+  'bot.admin.reject_confirm':
+    'پرداخت {reference} با این دلیل رد شود؟\nدلیل: {reason}\nاین دلیل برای مشتری ارسال می‌شود.',
+  'bot.admin.reject_confirm_button': '❌ رد شود',
+  'bot.admin.reject_cancel_button': '✖️ انصراف',
+  'bot.admin.reject_cancelled': 'رد پرداخت لغو شد و چیزی جابه‌جا نشد. رسید همچنان در صف بررسی است.',
+  'bot.admin.reject_expired':
+    'مهلت وارد کردن دلیل تمام شده است و پرداخت رد نشد. برای رد کردن، دوباره از رسید اقدام کنید.',
   'bot.admin.block_button': '⛔ بلاک کردن کاربر',
   'bot.admin.block_ask':
     'کاربر {customer} بلاک شود؟\nبلاک کردن، این رسید را تأیید، رد یا به کیف پول واریز نمی‌کند و رسید همچنان در صف بررسی می‌ماند.',
@@ -606,7 +623,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * One kind, one frozen template (ADR 0030), so the sentence has to be true of both.
    */
   'bot.payment.rejected':
-    'پرداخت شما بررسی شد و تأیید نشد. اگر سفارشی در انتظار پرداخت دارید، تا پایان مهلت آن می‌توانید دوباره پرداخت کنید.',
+    'پرداخت شما بررسی شد و تأیید نشد.\nدلیل: {reason}\nاگر سفارشی در انتظار پرداخت دارید، تا پایان مهلت آن می‌توانید دوباره پرداخت کنید.',
   'bot.payment.expired': 'مهلت پرداخت شما به پایان رسید و این پرداخت بسته شد.',
   /*
    * P2. Paying from the wallet while a transfer the customer vouched for is waiting: the

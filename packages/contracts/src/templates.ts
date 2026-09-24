@@ -365,6 +365,26 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.blocked_with_reason',
+    description:
+      'Shown to a blocked customer whose block carries a reason (File 01 \u00a79, the owner\u2019s ' +
+      'correction to WP10): the account is blocked, why, and to contact support. A key of its ' +
+      'own beside `bot.blocked` rather than a placeholder on it, so a block with no reason ' +
+      'still reads as a whole sentence and every existing override of `bot.blocked` keeps ' +
+      'working. The reason is read from THIS customer\u2019s own row when the reply is rendered.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reason',
+        type: 'STRING',
+        description:
+          'The reason stored on this customer\u2019s block, as the administrator typed it.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
     key: 'bot.catalog.empty',
     description:
       'Shown when a tenant has no listed, priced, fulfillable product. The honest ' +
@@ -1688,6 +1708,99 @@ export const TEMPLATES = [
     description:
       'The reason capture closed before it was used \u2014 its window passed, or another prompt ' +
       'was opened since. Nothing was written; start again from the receipt.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  /*
+   * File 01 \u00a77, the owner\u2019s correction to the WP10 follow-up: a rejection needs a MANDATORY
+   * reason. The reject button opens a reason capture; the typed reason is restated; the
+   * confirm rejects, once, through the one conditional PENDING\u2192FAILED edge.
+   */
+  {
+    key: 'bot.admin.reject_reason_prompt',
+    description:
+      'Asks for the mandatory reason of a rejection. Only this administrator\u2019s next plain ' +
+      'message, for a few minutes, is read as it; nothing is rejected yet.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description: 'The payment reference.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'minutes',
+        type: 'NUMBER',
+        description: 'How long the reason is waited for.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.reject_reason_invalid',
+    description:
+      'The message is not a usable reason (empty, or longer than the bound). The capture stays ' +
+      'open for the next one; nothing was rejected.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'max',
+        type: 'NUMBER',
+        description: 'The longest reason accepted, in characters.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.reject_confirm',
+    description:
+      'Restates the payment and the reason before the rejection is written, and says the ' +
+      'customer will be told the reason.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description: 'The payment reference.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'reason',
+        type: 'STRING',
+        description: 'The reason as it will be stored and sent to the customer.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.reject_confirm_button',
+    description: 'Rejects with the stated reason. Carries the capture id and nothing else.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.reject_cancel_button',
+    description: 'Abandons the rejection. Nothing moves; the receipt stays in the queue.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.reject_cancelled',
+    description: 'The rejection was abandoned. Nothing moved; the receipt is still in the queue.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.reject_expired',
+    description:
+      'The reason capture closed before it was used \u2014 its window passed, or another prompt ' +
+      'was opened since. Nothing was rejected; start again from the receipt.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -3888,9 +4001,24 @@ export const TEMPLATES = [
       'it. Sent by the customer notification lane, not as a reply \u2014 the rejection ' +
       'happens while the customer is not looking. Says the payment is closed and the ' +
       'order is not: a rejection leaves the order open until its own deadline, so the ' +
-      'customer may transfer again or pay from their wallet within the window.',
+      'customer may transfer again or pay from their wallet within the window. Carries the ' +
+      'reviewer\u2019s mandatory reason (File 01 \u00a77).',
     format: 'PLAIN_TEXT',
-    placeholders: [],
+    placeholders: [
+      /*
+       * OPTIONAL, so an override written before it stays valid. Not a producer payload
+       * (ADR 0030 \u00a71): the lane READS it from the payment the notification names, as it
+       * reads the refund and credit figures. A dash for a rejection that has no reason \u2014
+       * one recorded before the reason was mandatory.
+       */
+      {
+        token: 'reason',
+        type: 'STRING',
+        description: 'Why the reviewer rejected the transfer, as they typed it, or a dash.',
+        required: false,
+        repeatable: false,
+      },
+    ],
   },
   {
     key: 'bot.payment.expired',

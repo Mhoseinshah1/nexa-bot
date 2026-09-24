@@ -119,9 +119,23 @@ export type AdminAmountCaptureCloseReason = (typeof ADMIN_AMOUNT_CAPTURE_CLOSE_R
  * - `RECEIPT_BLOCK_REASON` — the block's reason; `reason` is set once, `amount_minor` never.
  *   The capture names the PAYMENT, which is the context link the block's audit carries and
  *   what derives the customer. It is not a disposition: nothing about the payment moves.
+ * - `RECEIPT_REJECT_REASON` — a rejection's MANDATORY reason (File 01 §7, the owner's
+ *   correction to the follow-up): `reason` is set once, and the confirm that restates it is
+ *   what rejects, through the one conditional PENDING→FAILED edge.
  */
-export const ADMIN_CAPTURE_PURPOSES = ['RECEIPT_CREDIT_AMOUNT', 'RECEIPT_BLOCK_REASON'] as const;
+export const ADMIN_CAPTURE_PURPOSES = [
+  'RECEIPT_CREDIT_AMOUNT',
+  'RECEIPT_BLOCK_REASON',
+  'RECEIPT_REJECT_REASON',
+] as const;
 export type AdminCapturePurpose = (typeof ADMIN_CAPTURE_PURPOSES)[number];
+
+/**
+ * The bound on a reason an administrator types into a capture — a block's or a rejection's.
+ * The customers path's own bound (`CUSTOMER_BLOCK_REASON_MAX_LENGTH`), so a reason the capture
+ * accepts is one the block accepts; a longer message is refused, never cut.
+ */
+export const ADMIN_CAPTURE_REASON_MAX_LENGTH = 500;
 
 /**
  * The states of one administrator's push of one receipt (ADR-0031).
@@ -129,19 +143,19 @@ export type AdminCapturePurpose = (typeof ADMIN_CAPTURE_PURPOSES)[number];
  * The customer lane's outcome table (ADR-0030 §2), applied to an administrator:
  *
  * - `PENDING` — queued, or backing off after a refusal or a rate limit.
- * - `SENT` — Telegram accepted it.
- * - `UNCONFIRMED` — Telegram MAY have delivered it (a timeout, a 5xx, an unreadable 2xx,
- *   or a send whose process died mid-flight). Terminal and never re-sent: a second copy
- *   of a receipt with live decision buttons is the spam the owner forbade, and the pull
- *   queue is where a reviewer finds it either way.
- * - `FAILED` — refused on every permitted attempt.
+ * - `DELIVERED` — Telegram DEFINITELY accepted it.
+ * - `UNKNOWN` — Telegram MAY have delivered it (a timeout, a 5xx, an unreadable 2xx, or a
+ *   send whose process died mid-flight). Never recorded as delivered and never re-sent: a
+ *   second copy of a receipt with live decision buttons is the spam the owner forbade, and
+ *   the pull queue is where a reviewer finds it either way.
+ * - `FAILED` — DEFINITELY not delivered: refused on every permitted attempt.
  * - `SUPERSEDED` — not sent, because what it would say stopped being true before the send:
  *   the payment was decided, or the administrator no longer holds the authority.
  */
 export const RECEIPT_REVIEW_PUSH_STATES = [
   'PENDING',
-  'SENT',
-  'UNCONFIRMED',
+  'DELIVERED',
+  'UNKNOWN',
   'FAILED',
   'SUPERSEDED',
 ] as const;
