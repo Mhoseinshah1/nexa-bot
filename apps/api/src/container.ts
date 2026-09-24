@@ -3459,6 +3459,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         },
       },
       resellers: resellerService,
+      referralGifts: referralSignupGiftService,
+      media: tenantMediaService,
       /*
        * The one write the turn makes after its Telegram send, and the transaction
        * it needs, kept OUT of the surface.
