@@ -244,5 +244,46 @@ What the backend does, where it differs in detail from the text above, and why.
 - **The gateway edit** requires `topupCashbackPercent` on every save. The Web form, until it grows the
   field, sends the route's current value back.
 - **`payments` refuses DELETE** (0114), the optional backstop the design mentions.
-- **Surfaces not built here**: the single-message Telegram review with the amount capture (D3), and
-  the Web compensation page and list columns (D7). The API routes and contracts for both are in place.
+- **Surfaces**: built in the follow-up commits; §7 records how they differ in detail from D3 and D7.
+
+## 7. Surface implementation notes
+
+What the surfaces do, where it differs in detail from D3, D5 and D7, and why.
+
+- **One message, and when it is two.** The review item is a `sendPhoto`/`sendDocument` of the
+  first receipt with `bot.admin.receipt` as its caption and the decisions as its keyboard; later
+  receipts follow bare. A file Telegram REFUSES (a `file_id` gone, or a reviewer who never
+  opened the bot that received the upload — a `file_id` belongs to that bot) is followed by the
+  same caption and buttons as a text message from the reviewer's own bot. Not on `UNKNOWN` or
+  `RATE_LIMITED`: the first may have arrived and the second would be refused again.
+- **The caption is PLAIN_TEXT.** A customer's `<b>` or `{total}` renders literally; nothing they
+  wrote is interpreted. It is bounded twice: the note to 600 code points by the surface, and a
+  plain caption over Telegram's 1,024 is cut by the transport rather than refused. The note is
+  the first caption the customer wrote on any of the payment's receipts. `username`, `order` and
+  `note` are optional placeholders because the key shipped in Phase 5T; the runtime always
+  supplies them, with a dash for none.
+- **The capture reads ONE amount.** Once an amount is recorded the capture stops reading, so the
+  figure a confirmation states cannot change under its button; a different figure means cancel
+  and start again. Five minutes (`ADMIN_AMOUNT_CAPTURE_TTL_MS`), shorter than the customer
+  windows. It is asked before any customer window, and only by the sender's own administrator
+  id, so another administrator's message and every customer's pass through untouched; a slash
+  command is parsed before plain text is offered to anything.
+- **Confirm closes, then credits.** The capture is closed `CONFIRMED` in its own transaction and
+  `creditToWallet` is called under `receipt-credit-capture:<captureId>`. A capture found
+  `CONFIRMED` is credited again under the same key, which replays — so a double tap, a race and a
+  tap after a crash between the two are one credit. Two confirms racing inside the same instant
+  produce one credit; the loser may be told `bot.admin.receipt_gone` rather than `credited`.
+- **Authority.** The button is drawn for `receipts.review` AND `users.wallet.credit`. Opening a
+  capture and confirming one charge both through the guard, the capture's writes re-check
+  `receipts.review` and the scope's activity inside their transaction, and `creditToWallet`
+  charges both again. Cancelling needs `receipts.review` only.
+- **Notification amounts (§18).** A reader, not a payload: the lane reads the payment's own
+  `TOPUP_RECEIPT`, `CASHBACK_TOPUP` or `RECEIPT_CREDIT` entry, fixed per kind, and a payment with
+  none is spent unsent (`FAILED`), as the refund sentence already was.
+- **Withdrawal copy (§9).** A withdrawal of a receipted transfer is answered with its own
+  sentence about the PAYMENT (`bot.payment.withdraw_under_review`): the shared
+  `bot.order.transfer_under_review` speaks of cancelling an order, which a top-up does not have.
+- **Web.** The compensation list is its own page at `/compensations`, after payments in the
+  navigation, under `payments.view`. The gateway form's gift is validated as a whole 0–100 at the
+  field and never clamped. The client's `lateReview` filter, left from the withdrawn lane, is
+  removed.

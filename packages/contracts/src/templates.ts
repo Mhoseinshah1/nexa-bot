@@ -1013,7 +1013,7 @@ export const TEMPLATES = [
        * shipped with no placeholder since 4C, so an installation may hold an override
        * without the token, and declaring it required would make that override unsavable.
        * The runtime supplies it unconditionally, and sends NOTHING when the ledger holds
-       * no principal for the payment \u2014 never a sentence with an empty amount.
+       * no principal for the payment — never a sentence with an empty amount.
        */
       {
         token: 'amount',

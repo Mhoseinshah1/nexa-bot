@@ -167,3 +167,68 @@ mutated rule no longer held.
 - The receipt caption's normaliser (`normalizeReceiptCaption`: trim, empty to null, 1024
   code points) is pinned by the unit tests in `bot-runtime.test.ts`, not by a mutation;
   PAY-35 covers the column's bound.
+
+## Payment File 02 — the surfaces
+
+The Telegram review, the credit-to-wallet capture, the §18 notification amounts and the Web
+Admin diagnostics (`docs/payments-file02-design.md` §7). Each rule was reverted alone in a
+separate worktree (`/home/user/nexa-wp10-mut`, detached at `73e73f8`, removed afterwards)
+against its own database (`nexa_wp10_mut`, dropped afterwards), by the same driver as the
+section above: the named tests were run on the unmutated tree first and a mutation counted
+only after every one of them passed; the mutation was then applied as an exact string
+replacement, the same tests run with vitest's `-t` on their titles, vitest's JSON report
+required to list at least one of them FAILED, and the file restored with `git checkout` and
+compared byte for byte before the next. No mutation touched `packages/contracts`. Every
+failure was read; all but the six below died on an assertion.
+
+| #      | rule                                                                           | mutation                                                                          | tests that die                                                                                                                                  | result |
+| ------ | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| PAY-36 | D3: the review item is ONE message, the receipt with the caption and buttons   | the `media` field dropped from `adminReceipt`'s reply (facts sent as text)        | `telegram-admin-receipts.test.ts` › sends the first receipt as ONE photo: the facts as its caption, three decisions on it                       | KILLED |
+| PAY-37 | D3: a file Telegram refuses falls back to the same caption and buttons as text | the `REFUSED` fallback to `asText()` removed from `handle`                        | `telegram-admin-receipts.test.ts` › falls back to the same caption and buttons as text when Telegram refuses the file                           | KILLED |
+| PAY-38 | D3: the credit button is drawn only for `users.wallet.credit` too              | `permissions.has(WALLET_CREDIT_PERMISSION)` dropped from `receiptDecisionButtons` | `telegram-admin-receipts.test.ts` › draws no credit button for a reviewer without users.wallet.credit, and refuses the crafted tap              | KILLED |
+| PAY-39 | D3: opening a capture charges `users.wallet.credit`                            | the wallet `authorize` removed from `ReceiptCreditCaptureService.open`            | `telegram-admin-receipts.test.ts` › draws no credit button for a reviewer without users.wallet.credit, and refuses the crafted tap              | KILLED |
+| PAY-40 | D3: only the sender's OWN capture reads their message                          | `eq(adminId)` dropped from `findAwaitingAmount`                                   | `telegram-admin-receipts.test.ts` › is fed by nobody else: another administrator’s message, a customer’s, or a command                          | KILLED |
+| PAY-41 | D3: only the capture's administrator can confirm it                            | `found.adminId !== adminId` removed from `confirm`                                | `telegram-admin-receipts.test.ts` › is not confirmed by another administrator’s tap on its button                                               | KILLED |
+| PAY-42 | D3: a capture reads ONE amount                                                 | `isNull(amount_minor)` dropped from `findAwaitingAmount` and `recordAmount`       | `telegram-admin-receipts.test.ts` › reads ONE amount: a second number after the confirmation is not the capture’s                               | KILLED |
+| PAY-43 | D3: a typed amount after the deadline is refused                               | the expiry test in `submitAmount` made `false`                                    | `telegram-admin-receipts.test.ts` › expires: a late amount and a late confirm are both answered, and nothing moves                              | KILLED |
+| PAY-44 | D3: a confirm after the deadline credits nothing                               | the expiry test in `confirm` made `false`                                         | `telegram-admin-receipts.test.ts` › expires: a late amount and a late confirm are both answered, and nothing moves                              | KILLED |
+| PAY-45 | D3: the credit's key is derived from the capture                               | `receiptCreditCaptureKey` fed a fresh uuid per confirm                            | `telegram-admin-receipts.test.ts` › credits ONCE when the confirm is tapped twice, and says so both times                                       | KILLED |
+| PAY-46 | D3: an unreadable amount is answered, never swallowed                          | the `INVALID` outcome replaced by `NO_CAPTURE`                                    | `telegram-admin-receipts.test.ts` › answers an unreadable amount and keeps the capture open for the next one                                    | KILLED |
+| PAY-47 | D3: Persian and Arabic digits are read as digits                               | `toLatinDigits` made to match nothing                                             | `typed-amount.test.ts` › reads %j as %s                                                                                                         | KILLED |
+| PAY-48 | D3: thousands separators only where thousands are                              | the three-digit group check removed from `groupedDigits`                          | `typed-amount.test.ts` › refuses %s                                                                                                             | KILLED |
+| PAY-49 | §18: the top-up sentence names the PRINCIPAL                                   | `WALLET_TOPUP_CREDITED` mapped to `CASHBACK_TOPUP`                                | `wallet-topup.test.ts` › tells the customer the principal and the gift as two sentences, each naming its own amount (§18)                       | KILLED |
+| PAY-50 | §18: the receipt-credit sentence names the `RECEIPT_CREDIT` entry              | `RECEIPT_CREDITED_TO_WALLET` mapped to `TOPUP_RECEIPT`                            | `receipt-dispositions.test.ts` › tells the customer the amount the reviewer credited, from its RECEIPT_CREDIT entry (§18)                       | KILLED |
+| PAY-51 | §18: no ledger entry, no money sentence                                        | a null figure rendered as `{}` instead of withholding the row                     | `customer-notifications.test.ts` › delivers the refund-completed fact with no values, and never a money sentence with no ledger entry behind it | KILLED |
+| PAY-52 | §18: the figure is ONE reason's entries, not every credit of the payment       | `eq(reason)` dropped from `creditedForPayment`                                    | `wallet-topup.test.ts` › tells the customer the principal and the gift as two sentences, each naming its own amount (§18)                       | KILLED |
+| PAY-53 | D3: a plain caption is sent with no parse mode                                 | `fileMessageBody` sets `parse_mode: HTML` unconditionally                         | `telegram-admin-receipts.test.ts` › renders the customer’s note as text, never as markup or a template token                                    | KILLED |
+| PAY-54 | D3: a plain caption is cut to Telegram's 1,024                                 | `boundCaption` returns its input                                                  | `telegram-file-message.test.ts` › cuts a plain caption to Telegram’s bound, never splitting a surrogate pair                                    | KILLED |
+| PAY-55 | D3: the customer's note is bounded to 600 code points                          | `reviewNoteOf`'s bound made always true                                           | `bot-runtime.test.ts` › carries the customer’s note into the caption bounded, and a dash for none                                               | KILLED |
+| PAY-56 | §9: a receipted withdrawal is answered about the PAYMENT                       | `cancelPayment` back to the shared `refusal`                                      | `telegram-admin-receipts.test.ts` › answers a withdrawal of the receipted transfer with the sentence about the payment                          | KILLED |
+| PAY-57 | D3: a credit asked of a transfer with no receipt says so                       | the `NO_RECEIPT` branch of `creditRefusal` made unreachable                       | `bot-runtime.test.ts` › answers the credit’s refusals about the payment, and rethrows everything else                                           | KILLED |
+| PAY-58 | D5 (web): the gift is a whole 0–100, refused outside it                        | `percentOf`'s ceiling raised to 1000                                              | `payment-gateways.test.tsx` › refuses a figure outside 0–100 at the field, and will not save it                                                 | KILLED |
+| PAY-59 | D5 (web): the gift is saved as the operator typed it                           | the form sends the route's stored percent back instead                            | `payment-gateways.test.tsx` › opens with the route’s gift, explains it, and saves the percentage as typed                                       | KILLED |
+| PAY-60 | D7 (web): the compensation link is behind `payments.view`                      | the nav entry's permission changed to `refunds.view`                              | `compensations.test.tsx` › is reached under payments with payments.view, and asks nothing without it                                            | KILLED |
+| PAY-61 | D7 (web): the compensation page asks nothing without `payments.view`           | the route passes `denied={false}`                                                 | `compensations.test.tsx` › is reached under payments with payments.view, and asks nothing without it                                            | KILLED |
+| PAY-62 | D7 (web): the list shows the customer's Telegram id                            | the list column passes `telegramUserId={null}`                                    | `payments.test.tsx` › lists the payment id, the Telegram id and username, the gateway, the external reference and updated-at                    | KILLED |
+| PAY-63 | D2 (web): the detail shows a receipt's credit disposition                      | the disposition card guarded by `false &&`                                        | `payments.test.tsx` › shows a receipt’s credit-to-wallet disposition read-only: amount, admin, time and note                                    | KILLED |
+| PAY-64 | D5 (web): the detail shows a top-up's gift snapshot                            | the gift card guarded by `false &&`                                               | `payments.test.tsx` › shows the gift a top-up promised, and no gift card for an order payment                                                   | KILLED |
+
+**Failures that were not an assertion:** PAY-58 died when the field's refusal sentence was
+not on the page to be found, and PAY-62, PAY-63 and PAY-64 the same way — Testing Library's
+`getByText` throws rather than asserting — each because the mutated rule no longer drew what
+the test looks for. PAY-61 died inside a `waitFor` whose assertion never became true (the page
+fetched without `payments.view`). PAY-47 killed six of the twelve `reads %j as %s` cases: the
+six written in Persian or Arabic-Indic digits; the Latin ones passed, as they should.
+
+**What these rows do not cover:**
+
+- PAY-42 reverts ONE rule held by two predicates — `findAwaitingAmount` and `recordAmount`
+  both require no amount yet — and removes both. Either alone is an equivalent mutant: with
+  the first gone the second refuses the write and the message falls through as
+  `NO_CAPTURE`; with the second gone the first never offers the capture.
+- Two confirms racing in the same instant (`credits ONCE when two confirms race`) is a
+  regression, not a mutation target: its money guarantee is PAY-16's and PAY-19's (the
+  ledger index and the disposition's key), and the capture's own derived key is PAY-45.
+- The caption's optional placeholders and the dashes the runtime supplies for a top-up, a
+  customer with no username and a receipt with no note are pinned by the integration and
+  unit cases above, not by a separate mutation.
