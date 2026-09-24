@@ -939,6 +939,8 @@ describe('a customer topping up their wallet', () => {
           },
           sortOrder: 0,
           topupCashbackPercent: percent,
+          allowServicePurchase: true,
+          allowWalletTopup: true,
         },
       });
 

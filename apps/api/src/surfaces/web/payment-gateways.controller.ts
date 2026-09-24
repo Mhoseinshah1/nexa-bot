@@ -79,6 +79,10 @@ export class PaymentGatewaysController {
       eligibility: input.eligibility,
       sortOrder: input.sortOrder,
       topupCashbackPercent: input.topupCashbackPercent,
+      // Optional on the wire for the previous release's client; the config schema
+      // defaults an absent switch to ON, which is the state every existing row is in.
+      allowServicePurchase: input.allowServicePurchase,
+      allowWalletTopup: input.allowWalletTopup,
     });
     const gateway = await this.container.paymentGateways.configure(scope, actor, {
       idempotencyKey: input.idempotencyKey,
@@ -153,6 +157,8 @@ function toView(gateway: PaymentGatewayRecord, currency: SalesCurrencyCode): Pay
     },
     sortOrder: gateway.sortOrder,
     topupCashbackPercent: gateway.topupCashbackPercent,
+    allowServicePurchase: gateway.allowServicePurchase,
+    allowWalletTopup: gateway.allowWalletTopup,
     createdAt: gateway.createdAt.toISOString(),
     updatedAt: gateway.updatedAt.toISOString(),
   };

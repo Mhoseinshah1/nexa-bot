@@ -729,6 +729,8 @@ describe('a submitted receipt and its three dispositions', () => {
           },
           sortOrder: 0,
           topupCashbackPercent: 10,
+          allowServicePurchase: true,
+          allowWalletTopup: true,
         },
       });
       await ctx.container.database.db.execute(sql`

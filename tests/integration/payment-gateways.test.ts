@@ -67,6 +67,10 @@ const OPEN = {
   sortOrder: 0,
   // No top-up gift (D5): 0 is the default, and the case about the gift sets it.
   topupCashbackPercent: 0,
+  // Offered for both purposes, the state every route starts in; the purposes suite
+  // (`payment-gateway-purposes.test.ts`) is where one is switched off.
+  allowServicePurchase: true,
+  allowWalletTopup: true,
 } as const;
 
 describe('payment routes', () => {
