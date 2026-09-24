@@ -111,6 +111,8 @@ import { DrizzleSettingRepository } from './modules/control/settings/infrastruct
 import { SettingsResolver } from './modules/control/settings/application/settings-resolver.js';
 import { SettingsService } from './modules/control/settings/application/settings.service.js';
 import { ReminderThresholdsGuard } from './modules/control/settings/application/reminder-thresholds.guard.js';
+import { TenantMediaService } from './modules/control/media/application/tenant-media.service.js';
+import { DrizzleTenantMediaRepository } from './modules/control/media/infrastructure/drizzle-tenant-media.repository.js';
 import { CONTROL_ERROR_CODES, SERVICE_REMINDER_DEFAULTS, isNexaError } from '@nexa/contracts';
 import { DrizzleFeatureFlagRepository } from './modules/control/features/infrastructure/drizzle-feature-flags.repository.js';
 import {
@@ -448,6 +450,7 @@ export interface Container {
   readonly referralCommissions: ReferralCommissionService;
   /** WP9: the operator's read-only view of attributions and commissions. */
   readonly referralsRead: ReferralReadService;
+  readonly tenantMedia: TenantMediaService;
   /** WP9-B: a reseller's standing, entitlements, pricing layer, credit and purchase record. */
   readonly resellers: ResellerService;
   /** WP9-B: reseller tiers, grants and resellers, as an operator manages them. */
@@ -1583,6 +1586,19 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
   });
+  /* The tenant's media slots (customer UX §I): the referral banner, bytes in the database. */
+  const tenantMediaService = new TenantMediaService({
+    repository: new DrizzleTenantMediaRepository(database.db),
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    uow,
+    idempotency,
+    clock,
+  });
+
   const refundService = new RefundService({
     cashback: cashbackService,
     referrals: referralCommissionService,
@@ -3159,6 +3175,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     referrals: referralProgram,
     referralCommissions: referralCommissionService,
     referralsRead: referralReadService,
+    tenantMedia: tenantMediaService,
     resellers: resellerService,
     resellersAdmin: resellerAdminService,
     commercialActions: commercialActionService,

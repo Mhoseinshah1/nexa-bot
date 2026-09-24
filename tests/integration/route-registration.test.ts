@@ -165,6 +165,10 @@ describe('dynamic route registration', () => {
       ['GET', 'referrals'],
       ['GET', 'referral-commissions'],
       ['GET', `users/${id}/referral`],
+      // Customer UX §I: the referral banner slot.
+      ['GET', 'media/REFERRAL_BANNER'],
+      ['POST', 'media/REFERRAL_BANNER'],
+      ['POST', 'media/REFERRAL_BANNER/clear'],
       // WP9-B: reseller tiers and resellers.
       ['GET', 'reseller-tiers'],
       ['POST', 'reseller-tiers'],
