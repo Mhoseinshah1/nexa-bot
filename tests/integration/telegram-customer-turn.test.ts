@@ -656,7 +656,8 @@ describe('the customer Telegram turn', () => {
 
     await api.container.database.db.execute(sql`
       UPDATE customers
-         SET status = 'BLOCKED', blocked_at = now(), blocked_reason = 'blocked after the turn'
+         SET status = 'BLOCKED', blocked_at = now(), blocked_reason = 'blocked after the turn',
+             blocked_reason_shown = true
        WHERE id = ${row['id'] as string}`);
     sent = [];
 
@@ -682,7 +683,8 @@ describe('the customer Telegram turn', () => {
     const row = (await customers())[0] as Record<string, unknown>;
     await api.container.database.db.execute(sql`
       UPDATE customers
-         SET status = 'BLOCKED', blocked_at = now(), blocked_reason = 'operator note'
+         SET status = 'BLOCKED', blocked_at = now(), blocked_reason = 'operator note',
+             blocked_reason_shown = true
        WHERE id = ${row['id'] as string}`);
     sent = [];
     const blockedReply = (await customers())[0] as Record<string, unknown>;

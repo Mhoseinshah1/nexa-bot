@@ -3671,10 +3671,16 @@ const PRE_REASON_BLOCK_NOTE = 'Blocked from the Telegram management panel.';
  * blocked, WHY — the reason stored on THIS customer's own row, and nothing else of the block's
  * record — and to contact support. A block with no reason keeps `bot.blocked`, a whole sentence
  * with no empty "reason" line in it.
+ *
+ * Only a reason written to be shown is shown (pre-release hardening V2): until WP10's follow-up
+ * the Web Admin told the operator this note "is never shown to the customer", and a block
+ * written then keeps `blockedReasonShown` FALSE and is answered with `bot.blocked`.
  */
-export function blockedReply(customer: Pick<CustomerRecord, 'blockedReason'>): PendingReply {
+export function blockedReply(
+  customer: Pick<CustomerRecord, 'blockedReason' | 'blockedReasonShown'>,
+): PendingReply {
   const reason = customer.blockedReason?.trim() ?? '';
-  if (reason === '' || reason === PRE_REASON_BLOCK_NOTE) {
+  if (!customer.blockedReasonShown || reason === '' || reason === PRE_REASON_BLOCK_NOTE) {
     return { key: 'bot.blocked', values: {}, buttons: [], orderId: null };
   }
   return { key: 'bot.blocked_with_reason', values: { reason }, buttons: [], orderId: null };

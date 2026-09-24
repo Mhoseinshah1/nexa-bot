@@ -233,15 +233,25 @@ describe('the typed reason', () => {
 });
 
 describe('what a blocked customer is told (File 01 §9)', () => {
+  const shown = (blockedReason: string | null) => ({ blockedReason, blockedReasonShown: true });
+
   it('names THEIR stored reason, and falls back to the whole blocked sentence without one', () => {
-    expect(blockedReply({ blockedReason: 'دلیل' })).toMatchObject({
+    expect(blockedReply(shown('دلیل'))).toMatchObject({
       key: 'bot.blocked_with_reason',
       values: { reason: 'دلیل' },
     });
-    expect(blockedReply({ blockedReason: null })).toMatchObject({ key: 'bot.blocked', values: {} });
-    expect(blockedReply({ blockedReason: '   ' })).toMatchObject({ key: 'bot.blocked' });
-    expect(
-      blockedReply({ blockedReason: 'Blocked from the Telegram management panel.' }),
-    ).toMatchObject({ key: 'bot.blocked' });
+    expect(blockedReply(shown(null))).toMatchObject({ key: 'bot.blocked', values: {} });
+    expect(blockedReply(shown('   '))).toMatchObject({ key: 'bot.blocked' });
+    expect(blockedReply(shown('Blocked from the Telegram management panel.'))).toMatchObject({
+      key: 'bot.blocked',
+    });
+  });
+
+  it('never shows a reason written when the operator was told it would stay private (V2)', () => {
+    // A block from before WP10's follow-up: the Web Admin's copy then read "this note is for
+    // the operator and is never shown to the customer".
+    const reply = blockedReply({ blockedReason: 'مشکوک به تقلب', blockedReasonShown: false });
+    expect(reply).toMatchObject({ key: 'bot.blocked', values: {} });
+    expect(JSON.stringify(reply)).not.toContain('مشکوک');
   });
 });

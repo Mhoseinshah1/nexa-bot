@@ -439,6 +439,51 @@ describe('Block User and the rejection reason, from the receipt message', () => 
       expect(lastText(f)).toBe(CATALOGUE_FA['bot.blocked']);
     });
 
+    /*
+     * Pre-release hardening V2. Until WP10's follow-up the Web Admin's hint under this field
+     * read "this note is for the operator and is never shown to the customer". A row blocked
+     * then is written here exactly as that release wrote it — no `blocked_reason_shown` — and
+     * its note must stay private after the upgrade.
+     */
+    it('a reason written before the customer was shown reasons is never shown', async () => {
+      await f.ctx.container.database.db.execute(sql`
+        UPDATE customers
+           SET status = 'BLOCKED', blocked_at = now(), blocked_reason = 'یادداشت داخلی اپراتور'
+         WHERE id = ${f.customer}`);
+      await say(f, '/start', TG.customer);
+      expect(lastText(f)).toBe(CATALOGUE_FA['bot.blocked']);
+      expect(lastText(f)).not.toContain('یادداشت داخلی');
+    });
+
+    it('a block written now is marked shown, and an unblock clears the mark with the reason', async () => {
+      await f.ctx.container.customers.block(tenantA, f.owner, {
+        idempotencyKey: 'block-shown',
+        customerId: f.customer,
+        reason: 'دلیل برای مشتری',
+      });
+      const flag = async () =>
+        (
+          await rows<{ shown: boolean }>(
+            f,
+            sql`SELECT blocked_reason_shown AS shown FROM customers WHERE id = ${f.customer}`,
+          )
+        )[0]?.shown;
+      expect(await flag()).toBe(true);
+      await f.ctx.container.customers.unblock(tenantA, f.owner, {
+        idempotencyKey: 'unblock-shown',
+        customerId: f.customer,
+        reason: null,
+      });
+      expect(await flag()).toBe(false);
+      // A block with no reason has nothing to show, so nothing is marked shown.
+      await f.ctx.container.customers.block(tenantA, f.owner, {
+        idempotencyKey: 'block-unshown',
+        customerId: f.customer,
+        reason: null,
+      });
+      expect(await flag()).toBe(false);
+    });
+
     it('the customer blocked from a receipt gets the blocked-account reply with that reason', async () => {
       const payment = await pendingWithReceipt(f, 'b-customer-sees');
       const captureId = await blockUpTo(payment, TG.owner, 'رسید تقلبی');
