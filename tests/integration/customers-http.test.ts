@@ -539,6 +539,24 @@ describe('customer HTTP surface', () => {
     expect((audits.rows[1] as { after: { changed: boolean } }).after.changed).toBe(false);
   });
 
+  it('remembers a Web block under WEB and audits it as WEB (OQ-WP10F-04)', async () => {
+    const id = await customerIn(tenantA, '900400009');
+    const key = idempotencyKey();
+    const response = await post(CUSTOMER_ROUTES.block(id), operatorCookie, {
+      idempotencyKey: key,
+      reason: 'from the web',
+    });
+    expect(response.statusCode).toBe(201);
+
+    const recorded = await api.container.database.db.execute(sql`
+      SELECT scope_ref FROM request_idempotency WHERE key = ${key}`);
+    expect(recorded.rows).toEqual([{ scope_ref: `${tenantA.tenantId}|WEB` }]);
+    const audit = await api.container.database.db.execute(sql`
+      SELECT source_surface FROM audit_logs
+       WHERE entity_id = ${id} AND action = 'customer.block'`);
+    expect(audit.rows).toEqual([{ source_surface: 'WEB' }]);
+  });
+
   it('treats the SAME key as a replay rather than a second command', async () => {
     const id = await customerIn(tenantA, '900400002');
     const key = idempotencyKey();

@@ -6518,7 +6518,9 @@ export class BotRuntime {
     idempotencyKey: string,
   ): Promise<PendingReply> {
     const input = {
-      idempotencyKey,
+      // Suffixed: the update's own key is `resolveFromUpdate`'s record in the `TELEGRAM`
+      // namespace, which is where a Telegram administrator's block is now remembered too.
+      idempotencyKey: `${idempotencyKey}:customer-status`,
       customerId,
       // Unchanged (OQ-WP10F-03 stays out of scope): a fixed note about the surface, which
       // `blockedReply` recognises and never shows the customer as a reason.
