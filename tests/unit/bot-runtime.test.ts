@@ -610,25 +610,7 @@ describe('profile metadata, normalised before it is ever stored', () => {
      */
     expect([...sent].filter((key) => !key.startsWith('bot.admin.')).sort()).toEqual([
       'bot.blocked',
-      // File 01 §9 (the owner's correction to WP10): the blocked text carrying THEIR reason.
       'bot.blocked_with_reason',
-      /*
-       * The five catalogue keys WP5 added, each reviewed against this case's rule.
-       *
-       *   `back_to_categories_button`  returns to page 0 of a list that exists.
-       *   `categories_heading`         introduces a list the SQL guarantees is non-empty
-       *                                per row — a category with nothing to buy is not
-       *                                in it, so the heading never promises a dead end.
-       *   `category_empty`             the one honest answer when the last product in a
-       *                                category was withdrawn between two taps; it says
-       *                                to look at the other categories, which exist.
-       *   `next_page_button`, `previous_page_button`
-       *                                drawn only when that page really exists, so
-       *                                neither can lead to an empty page.
-       *
-       * `bot.catalog.heading` STAYS, now introducing the list inside a category; reused
-       * rather than replaced so a tenant's existing override keeps its wording.
-       */
       'bot.catalog.back_to_categories_button',
       'bot.catalog.categories_heading',
       'bot.catalog.category_empty',
@@ -636,73 +618,23 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.catalog.heading',
       'bot.catalog.next_page_button',
       'bot.catalog.previous_page_button',
-      /*
-       * WP8's five discount keys, reviewed against this case's rule. `enter_button` is
-       * drawn only on a new-purchase DRAFT, the one order a code can reach (P7), and
-       * opens a window `ask` names; `remove_button` only when a code is on it.
-       * `rejected` answers a typed code with one sentence for every reason, and
-       * `no_longer_valid` answers a confirmation whose discount stopped holding — it
-       * sends the customer back to start again, a flow this head has.
-       */
       'bot.discount.ask',
       'bot.discount.enter_button',
       'bot.discount.no_longer_valid',
       'bot.discount.rejected',
       'bot.discount.remove_button',
-      /*
-       * `bot.help` is 4H's, and it is the one key here that exists to make the OTHERS
-       * findable. `docs/phase4h-audit.md` §9: four commands answered, none registered
-       * with Telegram, and the greeting named only `/catalog` — so `/wallet` and
-       * `/services` were reachable by guessing alone. Reviewed against this case's own
-       * rule: every command its copy names answers on this head.
-       */
+      'bot.faq.page',
       'bot.help',
+      'bot.menu.main_button',
       'bot.order.awaiting_payment',
-      /*
-       * The 4H order-cancellation trio, reviewed against this case's own rule.
-       *
-       * `docs/phase4h-audit.md` §3: `ORDER_MACHINE`'s CANCEL edge became WRITABLE in 4G
-       * and still had no caller, so `bot.order.cancelled` was a frozen sentence with
-       * nowhere to be sent from. The button now sits beside the two pay buttons, the
-       * confirm question stands between it and the cancellation, and the third is the
-       * answer to the question — the same three-key shape the payment withdrawal and
-       * the service termination already use, for the reason both record: a destructive
-       * tap a customer can reach by scrolling is not a decision they have made.
-       *
-       * None of the three instructs the customer to do anything: they describe what the
-       * tap does and what cannot be taken back.
-       */
       'bot.order.cancel_button',
       'bot.order.cancel_confirm',
       'bot.order.cancel_confirm_button',
       'bot.order.cancelled',
-      'bot.order.confirm_button',
       'bot.order.expired',
       'bot.order.not_awaiting_payment',
       'bot.order.settled',
-      'bot.order.summary',
-      /*
-       * WP8's three summary variants: the same summary with the figures the quote
-       * carries — the subtotal and discount taken off, the cashback promised after
-       * delivery. Chosen from the quote, so each is sent only when its figures exist.
-       */
-      'bot.order.summary_cashback',
-      'bot.order.summary_discounted',
-      'bot.order.summary_discounted_cashback',
-      /*
-       * A reseller's price changed between the summary and the tap (WP9-B R9). Like
-       * `bot.discount.no_longer_valid` it says nothing was charged and asks them to start
-       * the order again — the catalogue they already have — and names no command.
-       */
       'bot.order.terms_changed',
-      /*
-       * The refusal when the customer has already said they paid.
-       *
-       * Its Persian tells them to WAIT for a review they asked for, which is the one
-       * instruction in this set — and it is an instruction to do nothing, not one to
-       * send a command. It is a distinct key because `bot.order.not_awaiting_payment`
-       * would say the order can no longer be acted on, and here it is perfectly live.
-       */
       'bot.order.transfer_under_review',
       'bot.order.unavailable',
       'bot.payment.cancel_button',
@@ -711,181 +643,99 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.cancelled',
       'bot.payment.copy_amount_button',
       'bot.payment.copy_card_button',
+      'bot.payment.gateway_button',
       'bot.payment.manual_button',
       'bot.payment.manual_instructions',
       'bot.payment.not_pending',
-      /*
-       * The five 5R keys. Each reviewed against this case's own rule — does the copy
-       * promise a flow this head has — and the answer for all five is yes, because 5R is
-       * the phase that builds the flow they describe.
-       *
-       *   `receipt_prompt`        asks for the file and names the minutes remaining. It
-       *                           is sent only when a window was genuinely opened in the
-       *                           tap's transaction: `receiptWindow === null` gets
-       *                           `received_for_review` instead, which promises nothing.
-       *                           It repeats the caution above it — nothing has been
-       *                           received or verified — because a customer who reads
-       *                           "send your receipt" as "you have paid" is the
-       *                           `PRBR-004` collapse in a customer's own head.
-       *   `receipt_received`      says the FILE arrived and a reviewer will look at it.
-       *                           It may say that, and `received_for_review`'s comment
-       *                           above is corrected in the catalogue to record why:
-       *                           5R makes "your receipt was received" true and leaves
-       *                           "your payment was received" as false as it ever was.
-       *   `receipt_not_expected`  the refusal that keeps this from becoming
-       *                           `INCIDENT-FIN-001`. It names the remedy — open the
-       *                           invoice, tap the button — rather than consuming a file
-       *                           nobody asked for.
-       *   `receipt_expired`       distinct from the above BECAUSE the remedy differs:
-       *                           the customer did what they were asked and took too
-       *                           long, so it says to tap again.
-       *   `receipt_limit`         says the receipts already sent are what the reviewer
-       *                           sees, because a customer not told that sends more.
-       */
       'bot.payment.receipt_expired',
       'bot.payment.receipt_limit',
       'bot.payment.receipt_not_expected',
       'bot.payment.receipt_prompt',
       'bot.payment.receipt_received',
-      /*
-       * The answer to the new button below, and the wording is the load-bearing part.
-       *
-       * Its Persian used to read «رسید شما دریافت شد» — "your receipt has been
-       * received" — for a key with no producer at all. Both halves were untrue: this
-       * product accepts no receipt (owner revision 17) and nothing has been received.
-       * 4H rewrote it to say what IS true — the customer's claim is recorded and a
-       * person will check it — which is the distinction `PRBR-004` records the legacy
-       * system as unable to make.
-       */
       'bot.payment.received_for_review',
-      /*
-       * The button that produces them, and since the Payment UX addendum it names both
-       * halves of what one tap does: «✅ پرداخت را انجام دادم | ارسال رسید».
-       *
-       * `bot.payment.manual_instructions` used to end «سپس رسید را ارسال نمایید»
-       * with no surface to send one to. 5A made the instruction name this button, and 5R
-       * is what makes the second half of its label true.
-       */
       'bot.payment.sent_button',
       'bot.payment.transfer_instructions',
-      /*
-       * WP10 P2: paying from the wallet while a transfer the customer vouched for waits.
-       * Says the review decides the order and nothing was debited; promises no flow.
-       */
       'bot.payment.transfer_under_review',
       'bot.payment.unconfigured',
       'bot.payment.wallet_button',
       'bot.payment.window_too_short',
-      /*
-       * Payment File 02 §9: withdrawing a transfer the customer sent a receipt for. About
-       * the PAYMENT, so it is true of a top-up; it promises only the review's answer.
-       */
       'bot.payment.withdraw_under_review',
-      /*
-       * WP9's three referral keys, reviewed against this case's rule. `button` is drawn on
-       * the wallet only while the program is running (a flag AND a rate), and opens
-       * `invite`, which names a /start link this head attributes on registration.
-       * `unconfigured` is the one answer when the program is not running, which leads
-       * nowhere because there is nowhere to lead.
-       */
       'bot.referral.button',
-      'bot.referral.invite',
+      'bot.referral.gift_button',
+      'bot.referral.gift_claimed',
+      'bot.referral.gift_disabled',
+      'bot.referral.gift_nothing',
+      'bot.referral.share_button',
       'bot.referral.unconfigured',
-      /*
-       * 5F's generic refusal. It is in this inventory because it IS customer-facing,
-       * and it promises nothing: it says the request cannot be completed now and that
-       * nothing was charged. Both are true of every cause that reaches it — a stopped
-       * installation, an absent row, a funds refusal without its figure — and all three
-       * roll back before the reply is built.
-       */
       'bot.request_unavailable',
-      'bot.service.action_confirm_button',
       'bot.service.action_in_progress',
       'bot.service.action_not_allowed',
-      'bot.service.action_quote',
       'bot.service.action_requested',
       'bot.service.action_unavailable',
-      'bot.service.add_time_button',
       'bot.service.add_traffic_button',
       'bot.service.addon_choice',
       'bot.service.addon_option',
+      'bot.service.back_to_list_button',
+      'bot.service.back_to_menu_button',
       'bot.service.capability_unsupported',
-      'bot.service.detail',
+      'bot.service.connected_ack',
+      'bot.service.link_button',
+      'bot.service.list',
       'bot.service.list_empty',
-      'bot.service.list_heading',
-      'bot.service.list_more',
+      'bot.service.list_item_button',
+      'bot.service.next_page_button',
       'bot.service.not_found',
-      /*
-       * 4H's follow-up to `bot.order.settled`, and the one key here that is sent as a
-       * SECOND message rather than as a turn's answer.
-       *
-       * `docs/phase4h-audit.md` §5: a customer who had paid saw the settled message and
-       * then nothing at all until the subscription link arrived. Reviewed against this
-       * case's own rule — it instructs the customer to do nothing and promises a
-       * follow-up rather than a duration, because the duration depends on a panel.
-       *
-       * It is sent only for `NEW_SERVICE`. `followUpForSettlement` is the rule and has
-       * its own cases below; a renewal creates nothing and is told nothing.
-       */
+      'bot.service.note_button',
+      'bot.service.note_cleared',
+      'bot.service.note_invalid',
+      'bot.service.note_prompt',
+      'bot.service.note_saved',
+      'bot.service.page_button',
+      'bot.service.prev_page_button',
       'bot.service.provisioning',
+      'bot.service.refresh_button',
+      'bot.service.refresh_requested',
+      'bot.service.refresh_too_soon',
       'bot.service.renew_button',
-      'bot.service.resend_button',
+      'bot.service.renew_choose',
+      'bot.service.renew_option_button',
+      'bot.service.renew_unavailable',
       'bot.service.resume_button',
-      /*
-       * WP6-C's four, reviewed against this case's rule. The button is drawn only when
-       * the server has just offered a rotation; the ask names the cooldown and promises
-       * a new link — which the delivery lane sends — and says NOTHING about the old one,
-       * whose invalidation is unproven; the cooldown refusal names the instant the
-       * server gave. None of them promises a flow this head lacks.
-       */
       'bot.service.rotate_ask',
       'bot.service.rotate_button',
       'bot.service.rotate_confirm_button',
       'bot.service.rotate_cooldown',
+      'bot.service.search_button',
+      'bot.service.search_invalid',
+      'bot.service.search_label_button',
+      'bot.service.search_none',
+      'bot.service.search_prompt',
+      'bot.service.search_results',
       'bot.service.suspend_button',
       'bot.service.terminate_button',
       'bot.service.terminate_confirm',
       'bot.service.terminate_confirm_button',
+      'bot.service.tutorial_button',
       'bot.start.welcome',
       'bot.start.welcome_back',
-      /*
-       * WP6-A's three, reviewed against this case's rule. `bot.trial.button` is drawn
-       * only when the server has just decided this customer can take a trial;
-       * `bot.trial.issued` says the service is being created and promises only the link
-       * the ordinary delivery lane then sends; `bot.trial.unavailable` is the one
-       * sentence for every refusal. None of them promises a flow this head lacks.
-       */
+      'bot.support.contact',
+      'bot.support.contact_button',
+      'bot.support.unconfigured',
       'bot.trial.button',
       'bot.trial.issued',
       'bot.trial.unavailable',
+      'bot.tutorial.android',
+      'bot.tutorial.android_button',
+      'bot.tutorial.choose',
+      'bot.tutorial.ios',
+      'bot.tutorial.ios_button',
+      'bot.tutorial.linux',
+      'bot.tutorial.linux_button',
+      'bot.tutorial.macos',
+      'bot.tutorial.macos_button',
+      'bot.tutorial.windows',
+      'bot.tutorial.windows_button',
       'bot.unknown_command',
-      /*
-       * Five joined with the username step. Reviewed, one at a time:
-       *
-       *   `bot.username.choose`        asks which mode, and is sent ONLY when the panel
-       *                                offers both. One button is a tap that teaches
-       *                                nothing, so a single-mode panel skips it.
-       *   `bot.username.custom_button` opens the typing window, and the window is what
-       *                                makes the next ordinary message mean something.
-       *                                Nothing opens one the customer did not ask for.
-       *   `bot.username.random_button` has the installation draw the name instead.
-       *   `bot.username.instructions`  states the WHOLE rule before they type — length,
-       *                                the character set, letter-and-digit, and that
-       *                                case is not distinguished. It is why the refusal
-       *                                below names no clause.
-       *   `bot.username.invalid`       refuses without saying which rule was broken. The
-       *                                rule was shown in full, so naming the clause adds
-       *                                nothing they did not have and turns each attempt
-       *                                into a probe of the validator.
-       *   `bot.username.taken`         says the name is gone AND that no money moved,
-       *                                which is a fact rather than a reassurance: it is
-       *                                raised before any debit and before a transfer is
-       *                                requested.
-       *
-       * None instructs a customer to do something that can only answer
-       * `bot.unknown_command`, and none claims an effect that did not happen. A refusal
-       * leaves the window OPEN, so "send another" is true when it is said.
-       */
       'bot.username.automatic_button',
       'bot.username.choose',
       'bot.username.custom_button',
@@ -896,34 +746,19 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.username.stale',
       'bot.username.taken',
       'bot.username.unavailable',
-      'bot.wallet.balance',
       'bot.wallet.insufficient',
-      /*
-       * 5B's four. Reviewed against this case's own rule — none of them instructs a
-       * customer to do something no surface answers:
-       *
-       *   `bot.wallet.topup_button`      sits under the balance, and only when a top-up
-       *                                  could actually be performed: at least one preset
-       *                                  amount in the selling currency AND an enabled
-       *                                  account to transfer to.
-       *   `bot.wallet.topup_choose`      the prompt above the preset amounts. The buttons
-       *                                  ARE the amounts, read when the tap arrives, so a
-       *                                  customer scrolling back to an old balance gets
-       *                                  today's presets rather than that day's.
-       *   `bot.wallet.topup_refused`     the chosen amount cannot be used — no longer
-       *                                  offered, or below the configured minimum. One
-       *                                  sentence for both because the action is the
-       *                                  same: choose another. The codes stay distinct.
-       *   `bot.wallet.topup_unavailable` nothing can fund a top-up: no preset, or no
-       *                                  enabled account. It does not name the missing
-       *                                  configuration, which is an operator's business.
-       *
-       * `bot.wallet.topup_credited` is deliberately NOT here: it is the notification
-       * lane's, sent by the dispatcher when an operator confirms the transfer, and this
-       * case is about what the interactive surface can produce.
-       */
+      'bot.wallet.topup_above_maximum',
+      'bot.wallet.topup_amount_invalid',
+      'bot.wallet.topup_amount_prompt',
+      'bot.wallet.topup_below_minimum',
       'bot.wallet.topup_button',
-      'bot.wallet.topup_choose',
+      'bot.wallet.topup_close_button',
+      'bot.wallet.topup_closed',
+      'bot.wallet.topup_expired',
+      'bot.wallet.topup_method_button',
+      'bot.wallet.topup_method_gift_button',
+      'bot.wallet.topup_method_prompt',
+      'bot.wallet.topup_none_available',
       'bot.wallet.topup_refused',
       'bot.wallet.topup_unavailable',
     ]);

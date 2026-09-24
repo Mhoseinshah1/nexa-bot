@@ -5337,6 +5337,24 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.faq.page',
+    description:
+      'One message of the FAQ screen: the parts are composed in application code from ' +
+      '`bot.faq.heading`, `bot.faq.item` and `bot.faq.footer`, split at item boundaries, ' +
+      'and each part is sent through this wrapper — the way `bot.admin.receipt` carries ' +
+      'rendered sections. Nothing rendered is persisted.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'content',
+        type: 'STRING',
+        description: 'The rendered part, whole.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
     key: 'bot.support.contact_button',
     description:
       'Opens the tenant’s first support account in Telegram. A URL button, drawn only when `support.accounts` names one.',

@@ -1,6 +1,7 @@
 import {
   UNLIMITED_TRAFFIC_BYTES,
   type Money,
+  type PaymentGatewayProvider,
   type ProviderLastSeen,
   type ScopeContext,
   type ServiceState,
@@ -92,6 +93,11 @@ const STATE_KEYS: Readonly<Record<ServiceState, TemplateKey>> = {
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** One key per route this installation can operate; grows with `PAYMENT_GATEWAY_PROVIDERS`. */
+const ROUTE_NAME_KEYS: Readonly<Record<PaymentGatewayProvider, TemplateKey>> = {
+  MANUAL_TRANSFER: 'bot.payment.route_name_manual_transfer',
+};
 
 export class CustomerScreenComposer {
   constructor(private readonly templates: Pick<TemplateResolver, 'render'>) {}
@@ -224,6 +230,18 @@ export class CustomerScreenComposer {
           : {}),
       },
     };
+  }
+
+  /**
+   * A payment route's name as the customer sees it: the operator's display name, else
+   * the product's own name for the route from the catalogue.
+   */
+  async routeName(
+    scope: ScopeContext,
+    route: { readonly provider: PaymentGatewayProvider; readonly displayName: string | null },
+  ): Promise<string> {
+    if (route.displayName !== null) return route.displayName;
+    return this.templates.render(scope, ROUTE_NAME_KEYS[route.provider], {});
   }
 
   async referralScreen(scope: ScopeContext, facts: ReferralScreenFacts): Promise<ComposedScreen> {

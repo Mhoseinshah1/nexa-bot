@@ -5,6 +5,7 @@ import {
   MAIN_MENU_BUTTONS,
   MAX_REQUESTS_PER_PROBE,
   OPERATION_LEASE_SECONDS_MIN,
+  faqNumberMarker,
 } from '@nexa/contracts';
 import type {
   AuditWriter,
@@ -247,6 +248,14 @@ import {
 import { ProvisionerLoop } from './modules/commerce/provisioning/application/provisioner-loop.js';
 import { DeliveryService } from './modules/commerce/provisioning/application/delivery.service.js';
 import { PngQrCodeEncoder } from './infrastructure/qr/qr-png.js';
+import { CustomerCaptureService } from './modules/commerce/customers/application/customer-capture.service.js';
+import { DrizzleCustomerCaptureRepository } from './modules/commerce/customers/infrastructure/drizzle-customer-capture.repository.js';
+import { DrizzleCustomerCountersReader } from './modules/commerce/customers/infrastructure/drizzle-customer-counters.reader.js';
+import { CustomerScreenComposer } from './modules/commerce/messaging/application/customer-screens.js';
+import { TELEGRAM_MESSAGE_MAX } from './modules/commerce/messaging/application/message-split.js';
+import { WalletTopupFlowService } from './modules/commerce/payments/application/wallet-topup-flow.service.js';
+import { parseCustomerAmount } from './modules/commerce/payments/domain/customer-amount.js';
+import { composeFaqScreen } from './modules/control/support/application/faq-screen.js';
 import { CustomerNotificationService } from './modules/commerce/messaging/application/customer-notification.service.js';
 import {
   CustomerNotificationLoop,
@@ -1335,10 +1344,13 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     guard,
     clock,
   });
+  const discountCodeCaptureRepository = new DrizzleDiscountCodeCaptureRepository(database.db);
+  const customerCaptureRepository = new DrizzleCustomerCaptureRepository(database.db);
   const orderService = new OrderService({
     pricing: pricingService,
     resellers: resellerService,
-    discountCodes: new DrizzleDiscountCodeCaptureRepository(database.db),
+    discountCodes: discountCodeCaptureRepository,
+    captures: customerCaptureRepository,
     panelSales: panelSalesGate,
     categories: productCategoryRepository,
     usernames: usernameLane,
@@ -2187,6 +2199,83 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     settings: settingsResolver,
   });
 
+  /*
+   * The customer UX completion's application services (docs/customer-ux-completion-
+   * audit.md). The capture service closes the ORDER windows when it opens, through the
+   * two lanes that own them; `OrderService` closes captures when it opens its own. One
+   * open prompt per customer, across three tables.
+   */
+  const customerCaptureService = new CustomerCaptureService({
+    captures: customerCaptureRepository,
+    windows: {
+      closeOpenFor: async (scope, botInstanceId, customerId, at, tx) => {
+        // The lane types its transaction; the capture port carries it opaquely, as
+        // every other repository port does.
+        const scoped = tx as TransactionScope;
+        const usernameWindow = await usernameLane.openWindowFor(
+          scope,
+          botInstanceId,
+          customerId,
+          scoped,
+        );
+        if (usernameWindow !== null) {
+          await usernameLane.closeWindow(scope, usernameWindow.id, 'SUPERSEDED', at, scoped);
+        }
+        const discountWindow = await discountCodeCaptureRepository.findOpen(
+          scope,
+          botInstanceId,
+          customerId,
+          tx,
+        );
+        if (discountWindow !== null) {
+          await discountCodeCaptureRepository.close(scope, discountWindow.id, 'SUPERSEDED', at, tx);
+        }
+      },
+    },
+    customers: customerRepository,
+    guard,
+    uow,
+    audit,
+    opsLog: opsLogWriter,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
+  const customerScreens = new CustomerScreenComposer(templateResolver);
+  const customerCounters = new DrizzleCustomerCountersReader(database.db);
+  /**
+   * The FAQ screen, rendered into message parts HERE — application code holds the
+   * resolver, the surface does not — and split at item boundaries by `composeFaqScreen`.
+   */
+  const supportScreenParts = async (
+    scope: TenantContext,
+  ): Promise<{ readonly parts: readonly string[]; readonly supportUrl: string | null }> => {
+    const screen = await supportScreenReader.screenFor(scope);
+    if (screen.faqs.length === 0) return { parts: [], supportUrl: screen.supportUrl };
+    const heading = await templateResolver.render(scope, 'bot.faq.heading', {});
+    const footer = await templateResolver.render(scope, 'bot.faq.footer', {});
+    const items = new Map<string, string>();
+    for (const [index, faq] of screen.faqs.entries()) {
+      const number = faqNumberMarker(index + 1);
+      items.set(
+        number,
+        await templateResolver.render(scope, 'bot.faq.item', {
+          number,
+          question: faq.question,
+          answer: faq.answer,
+        }),
+      );
+    }
+    const parts = composeFaqScreen(
+      screen.faqs,
+      { heading, footer, item: (number) => items.get(number) ?? '' },
+      TELEGRAM_MESSAGE_MAX,
+    );
+    return { parts, supportUrl: screen.supportUrl };
+  };
+
   const paymentAccountService = new PaymentAccountService({
     repository: paymentAccountRepository,
     guard,
@@ -2508,6 +2597,15 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // Read-only, both: "can this panel do X" and "is there anywhere to send this".
     panels: panelOperability,
     contacts: customerContacts,
+  });
+
+  const walletTopupFlow = new WalletTopupFlowService({
+    captures: customerCaptureService,
+    routes: paymentGatewayService,
+    payments: paymentService,
+    parseAmount: parseCustomerAmount,
+    settings: settingsResolver,
+    uow,
   });
 
   const deliveryService = new DeliveryService({
@@ -3288,6 +3386,20 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       receiptBlocks: receiptBlockCaptureService,
       receiptRejects: receiptRejectCaptureService,
       telegramAdmins,
+      // The customer UX completion's seams. Each re-reads its facts on the tap.
+      captures: customerCaptureService,
+      topup: walletTopupFlow,
+      screens: customerScreens,
+      counters: customerCounters,
+      routes: paymentGatewayService,
+      support: { partsFor: supportScreenParts },
+      productDisplay: {
+        displayFor: async (scope, productId) => {
+          const product = await productRepository.findById(scope, productId);
+          return product === null ? null : product.display;
+        },
+      },
+      resellers: resellerService,
       /*
        * The one write the turn makes after its Telegram send, and the transaction
        * it needs, kept OUT of the surface.

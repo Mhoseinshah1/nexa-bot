@@ -154,27 +154,49 @@ export class WalletTopupFlowService {
     const currency = await this.deps.settings.valueOf<CurrencyCode>(scope, 'sales.currency');
     const parsed = this.deps.parseAmount(input.text, currency);
     if (!parsed.ok) return { outcome: 'INVALID' };
+    return this.recordAmount(scope, { ...input, amount: parsed.amount }, capture);
+  }
+
+  /**
+   * A figure already in minor units — a preset button — recorded on the capture after
+   * the same bounds the typed path applies. One rule for both entries.
+   */
+  async recordAmount(
+    scope: TenantContext,
+    input: { readonly customerId: UserId; readonly captureId: string; readonly amount: Money },
+    known?: CustomerCaptureRecord,
+  ): Promise<TopupAmountResult> {
+    const capture =
+      known ??
+      (await this.deps.captures.findOwnedOpen(scope, input.customerId, input.captureId));
+    if (
+      capture === null ||
+      capture.purpose !== 'TOPUP_AMOUNT' ||
+      capture.state !== 'AWAITING_TEXT'
+    ) {
+      return { outcome: 'GONE' };
+    }
     const { minimum, maximum } = await this.bounds(scope);
-    if (minimum !== null && parsed.amount.amountMinor < minimum.amountMinor) {
+    if (minimum !== null && input.amount.amountMinor < minimum.amountMinor) {
       return { outcome: 'BELOW_MINIMUM', minimum };
     }
-    if (maximum !== null && parsed.amount.amountMinor > maximum.amountMinor) {
+    if (maximum !== null && input.amount.amountMinor > maximum.amountMinor) {
       return { outcome: 'ABOVE_MAXIMUM', maximum };
     }
     const recorded = await this.deps.uow.run(scope, (tx) =>
-      this.deps.captures.recordAmount(scope, capture.id, parsed.amount, tx),
+      this.deps.captures.recordAmount(scope, capture.id, input.amount, tx),
     );
     if (!recorded) return { outcome: 'GONE' };
     const routes = await this.deps.routes.routesFor(
       scope,
       input.customerId,
       'WALLET_TOPUP',
-      parsed.amount,
+      input.amount,
     );
     return {
       outcome: 'RECORDED',
-      capture: { ...capture, state: 'AMOUNT_RECORDED', amount: parsed.amount },
-      amount: parsed.amount,
+      capture: { ...capture, state: 'AMOUNT_RECORDED', amount: input.amount },
+      amount: input.amount,
       routes,
     };
   }

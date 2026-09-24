@@ -16,8 +16,18 @@ import {
   uuidV7Schema,
   USAGE_REMINDER_PERCENT_MAX,
   USAGE_REMINDER_PERCENT_MIN,
+  CONNECTION_GUIDE_PLATFORMS,
+  SERVICE_NOTE_CLEAR_TOKEN,
+  SERVICE_NOTE_MAX_LENGTH,
+  SERVICE_SEARCH_MAX_LENGTH,
+  connectionGuidePlatformSchema,
+  paymentGatewayProviderSchema,
 } from '@nexa/contracts';
 import type {
+  ConnectionGuidePlatform,
+  PaymentGatewayProvider,
+  PaymentPurpose,
+  ProviderLastSeen,
   ActorContext,
   BotInstanceId,
   Clock,
@@ -89,6 +99,20 @@ import type { WalletService } from '../../modules/commerce/wallet/application/wa
 import { ProvisioningService } from '../../modules/commerce/provisioning/application/provisioning.service.js';
 import type { CustomerServiceOperation } from '../../modules/commerce/provisioning/application/provisioning.service.js';
 import type { DeliveryService } from '../../modules/commerce/provisioning/application/delivery.service.js';
+import {
+  CONNECTED_CALLBACK_PREFIX,
+  SUPPORT_CALLBACK_DATA,
+  TUTORIAL_CALLBACK_DATA,
+} from '../../modules/commerce/provisioning/application/delivery.service.js';
+import type { CustomerCaptureService } from '../../modules/commerce/customers/application/customer-capture.service.js';
+import type { CustomerCaptureRecord } from '../../modules/commerce/customers/application/customer-capture-ports.js';
+import type { CustomerCountersReader } from '../../modules/commerce/customers/application/customer-counters-ports.js';
+import type {
+  TopupRoute,
+  WalletTopupFlowService,
+} from '../../modules/commerce/payments/application/wallet-topup-flow.service.js';
+import type { CustomerScreenComposer } from '../../modules/commerce/messaging/application/customer-screens.js';
+import type { ResellerService } from '../../modules/commerce/resellers/application/reseller.service.js';
 import type {
   ServiceCursor,
   ServiceRecord,
@@ -198,6 +222,22 @@ export const BOT_INTENTS = [
    */
   'DISCOUNT_CODE_ENTER',
   'DISCOUNT_CODE_REMOVE',
+  /*
+   * The customer UX completion (docs/customer-ux-completion-audit.md). Every one is a
+   * callback that names an id or nothing; the screens they open re-read every fact.
+   */
+  'MAIN_MENU',
+  'TUTORIAL',
+  'TUTORIAL_PLATFORM',
+  'SERVICE_CONNECTED',
+  'SUPPORT',
+  'TOPUP_ROUTE',
+  'TOPUP_CLOSE',
+  'SERVICES_SEARCH',
+  'SERVICE_REFRESH',
+  'SERVICE_NOTE',
+  'SERVICE_RENEW_QUOTE',
+  'REFERRAL_GIFT',
   'HELP',
   'RECEIPT_UPLOAD',
   /*
@@ -722,6 +762,23 @@ export const USERNAME_AUTOMATIC_CALLBACK_PREFIX = 'Z:';
  */
 export const DISCOUNT_CODE_ENTER_CALLBACK_PREFIX = 'dc:';
 export const DISCOUNT_CODE_REMOVE_CALLBACK_PREFIX = 'dx:';
+/*
+ * The customer UX completion's callbacks. Two letters each so none is a prefix of an
+ * existing one-letter route; the delivery card's three (`tu:`, `ok:`, `sp:`) are
+ * declared beside the composer that draws them and imported here.
+ */
+export const MAIN_MENU_CALLBACK_DATA = 'mm:';
+export const TUTORIAL_PLATFORM_CALLBACK_PREFIX = 'to:';
+/** `tp:<capture uuid>.<provider>` — a capture the customer owns and a member of a closed enum. */
+export const TOPUP_ROUTE_CALLBACK_PREFIX = 'tp:';
+export const TOPUP_CLOSE_CALLBACK_PREFIX = 'tx:';
+/** `sl:<page number>` — a position, clamped server-side; never an identifier. */
+export const SERVICES_LIST_PAGE_CALLBACK_PREFIX = 'sl:';
+export const SERVICES_SEARCH_CALLBACK_DATA = 'ss:';
+export const SERVICE_REFRESH_CALLBACK_PREFIX = 'rs:';
+export const SERVICE_NOTE_CALLBACK_PREFIX = 'nt:';
+export const SERVICE_RENEW_QUOTE_CALLBACK_PREFIX = 'nr:';
+export const REFERRAL_GIFT_CALLBACK_DATA = 'rg:';
 
 /**
  * The management panel's prefixes (Phase 5T), deliberately UPPERCASE.
@@ -1987,6 +2044,77 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
       }
       return { intent: 'CATEGORY', targetId: category.data, page, callbackQueryId: id };
     }
+    /*
+     * The customer UX completion's two-letter routes, before the one-letter ones for
+     * the reason the catalogue's are: none shadows another today, and placing them
+     * first keeps that true if a one-letter prefix is ever added that would.
+     */
+    if (data === MAIN_MENU_CALLBACK_DATA) {
+      return { intent: 'MAIN_MENU', targetId: null, callbackQueryId: id };
+    }
+    if (data === TUTORIAL_CALLBACK_DATA) {
+      return { intent: 'TUTORIAL', targetId: null, callbackQueryId: id };
+    }
+    if (data.startsWith(TUTORIAL_PLATFORM_CALLBACK_PREFIX)) {
+      const platform = connectionGuidePlatformSchema.safeParse(
+        data.slice(TUTORIAL_PLATFORM_CALLBACK_PREFIX.length),
+      );
+      if (!platform.success) return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      return { intent: 'TUTORIAL_PLATFORM', targetId: platform.data, callbackQueryId: id };
+    }
+    if (data.startsWith(CONNECTED_CALLBACK_PREFIX)) {
+      return callbackCommand('SERVICE_CONNECTED', data.slice(CONNECTED_CALLBACK_PREFIX.length), id);
+    }
+    if (data === SUPPORT_CALLBACK_DATA) {
+      return { intent: 'SUPPORT', targetId: null, callbackQueryId: id };
+    }
+    if (data.startsWith(TOPUP_ROUTE_CALLBACK_PREFIX)) {
+      const [rawId, rawProvider, ...rest] = data
+        .slice(TOPUP_ROUTE_CALLBACK_PREFIX.length)
+        .split('.');
+      const capture = uuidV7Schema.safeParse(rawId);
+      const provider = paymentGatewayProviderSchema.safeParse(rawProvider);
+      if (rest.length > 0 || !capture.success || !provider.success) {
+        return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      }
+      return {
+        intent: 'TOPUP_ROUTE',
+        targetId: capture.data,
+        secondaryId: provider.data,
+        callbackQueryId: id,
+      };
+    }
+    if (data.startsWith(TOPUP_CLOSE_CALLBACK_PREFIX)) {
+      return callbackCommand('TOPUP_CLOSE', data.slice(TOPUP_CLOSE_CALLBACK_PREFIX.length), id);
+    }
+    if (data.startsWith(SERVICES_LIST_PAGE_CALLBACK_PREFIX)) {
+      const page = parseCatalogPage(data.slice(SERVICES_LIST_PAGE_CALLBACK_PREFIX.length));
+      if (page === null) return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      return { intent: 'SERVICES_PAGE', targetId: null, page, callbackQueryId: id };
+    }
+    if (data === SERVICES_SEARCH_CALLBACK_DATA) {
+      return { intent: 'SERVICES_SEARCH', targetId: null, callbackQueryId: id };
+    }
+    if (data.startsWith(SERVICE_REFRESH_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'SERVICE_REFRESH',
+        data.slice(SERVICE_REFRESH_CALLBACK_PREFIX.length),
+        id,
+      );
+    }
+    if (data.startsWith(SERVICE_NOTE_CALLBACK_PREFIX)) {
+      return callbackCommand('SERVICE_NOTE', data.slice(SERVICE_NOTE_CALLBACK_PREFIX.length), id);
+    }
+    if (data.startsWith(SERVICE_RENEW_QUOTE_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'SERVICE_RENEW_QUOTE',
+        data.slice(SERVICE_RENEW_QUOTE_CALLBACK_PREFIX.length),
+        id,
+      );
+    }
+    if (data === REFERRAL_GIFT_CALLBACK_DATA) {
+      return { intent: 'REFERRAL_GIFT', targetId: null, callbackQueryId: id };
+    }
     if (data.startsWith(ORDER_CALLBACK_PREFIX)) {
       return callbackCommand('ORDER', data.slice(ORDER_CALLBACK_PREFIX.length), id);
     }
@@ -3063,6 +3191,79 @@ export interface BotRuntimeDeps {
    * same guard the Web Admin uses; nothing here is authorized by having the port.
    */
   readonly telegramAdmins?: TelegramAdminPort;
+  /*
+   * The customer UX completion (docs/customer-ux-completion-audit.md). Each is an
+   * application service; the surface renders nothing itself.
+   */
+  readonly captures: CustomerCaptureService;
+  readonly topup: WalletTopupFlowService;
+  readonly screens: CustomerScreenComposer;
+  readonly counters: CustomerCountersReader;
+  /** The payment routes per purpose; the external chooser is drawn only from a real route. */
+  readonly routes: PaymentRouteSource;
+  readonly support: SupportScreenSource;
+  readonly productDisplay: ProductDisplaySource;
+  readonly resellers?: Pick<ResellerService, 'standing'>;
+  readonly referralGifts?: ReferralGiftSource;
+  readonly media?: TenantMediaSource;
+}
+
+export interface PaymentRouteSource {
+  routesFor(
+    scope: TenantContext,
+    customerId: UserId,
+    purpose: PaymentPurpose,
+    amount: Money | null,
+  ): Promise<readonly TopupRoute[]>;
+}
+
+/** The FAQ/support screen, already rendered into message parts (application code renders). */
+export interface SupportScreenSource {
+  partsFor(
+    scope: TenantContext,
+  ): Promise<{ readonly parts: readonly string[]; readonly supportUrl: string | null }>;
+}
+
+export interface ProductDisplaySource {
+  displayFor(
+    scope: TenantContext,
+    productId: ProductId,
+  ): Promise<{
+    readonly displayLocations: readonly string[];
+    readonly displayFeatures: readonly string[];
+    readonly serviceLocationLabel: string | null;
+  } | null>;
+}
+
+export interface ReferralGiftSource {
+  terms(scope: TenantContext): Promise<{
+    readonly active: boolean;
+    readonly total: Money;
+    readonly referrerPercent: number;
+    readonly referredPercent: number;
+  }>;
+  stats(
+    scope: TenantContext,
+    customerId: UserId,
+  ): Promise<{
+    readonly referralCount: number;
+    readonly referredPurchaseCount: number;
+    readonly referredPurchaseTotal: Money;
+    readonly commissionReceivedTotal: Money;
+  }>;
+  claim(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: UserId,
+    input: { readonly idempotencyKey: string },
+  ): Promise<{ readonly credited: Money; readonly claimedCount: number }>;
+}
+
+export interface TenantMediaSource {
+  bytesFor(
+    scope: TenantContext,
+    purpose: 'REFERRAL_BANNER',
+  ): Promise<{ readonly bytes: Uint8Array; readonly mimeType: 'image/png' | 'image/jpeg' } | null>;
 }
 
 /**
@@ -3257,7 +3458,23 @@ export interface PendingReply {
    * effort and not the turn's outcome, like `followUpKey`.
    */
   readonly attachments?: readonly ReplyMedia[];
+  /**
+   * Messages sent BEFORE the reply, in order, each without buttons: the referral
+   * banner ahead of its text, the earlier pages of a long FAQ ahead of the last one
+   * that carries the keyboard. A lead that does not deliver stops the turn there, so
+   * the customer never sees a keyboard without the text it belongs to.
+   */
+  readonly lead?: readonly LeadMessage[];
 }
+
+export type LeadMessage =
+  | { readonly kind: 'TEXT'; readonly key: TemplateKey; readonly values: TemplateValues }
+  | {
+      readonly kind: 'PHOTO_BYTES';
+      readonly bytes: Uint8Array;
+      readonly mimeType: 'image/png' | 'image/jpeg';
+      readonly fileName: string;
+    };
 
 /** One file this installation already holds, and the bot that holds it. */
 interface ReplyMedia {
@@ -3560,6 +3777,11 @@ export const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
    * The configuration sentence, because that is what it is.
    */
   [COMMERCE_ERROR_CODES.PRODUCT_CURRENCY_UNSUPPORTED]: 'bot.service.action_unavailable',
+  // The customer UX completion's refusals. The ones that carry a figure (a bound, a
+  // maximum) are answered by their handlers, which have the figure.
+  [COMMERCE_ERROR_CODES.SERVICE_SYNC_TOO_SOON]: 'bot.service.refresh_too_soon',
+  [COMMERCE_ERROR_CODES.REFERRAL_GIFT_DISABLED]: 'bot.referral.gift_disabled',
+  [COMMERCE_ERROR_CODES.CAPTURE_NOT_OPEN]: 'bot.wallet.topup_expired',
 };
 
 /**
@@ -3892,6 +4114,38 @@ export class BotRuntime {
      * reply as its caption, and falls back to text only on a definite refusal — see
      * `PendingReply.media` for why not on the other two outcomes.
      */
+    for (const lead of reply.lead ?? []) {
+      const led =
+        lead.kind === 'TEXT'
+          ? await this.deps.messenger.send(scope, {
+              chatId,
+              templateKey: lead.key,
+              values: lead.values,
+              botInstanceId: input.botInstanceId,
+            })
+          : await this.deps.messenger.sendFile(scope, {
+              chatId,
+              botInstanceId: input.botInstanceId,
+              kind: 'PHOTO',
+              source: {
+                kind: 'BYTES',
+                bytes: lead.bytes,
+                fileName: lead.fileName,
+                mimeType: lead.mimeType,
+              },
+            });
+      if (led.outcome !== 'DELIVERED') {
+        await this.stopSpinner(scope, command, input.botInstanceId);
+        return {
+          intent,
+          arrival,
+          customerId: customer.id,
+          replyKey: reply.key,
+          orderId: reply.orderId,
+          sent: led.outcome,
+        };
+      }
+    }
     let sent =
       reply.media === undefined
         ? await asText()
@@ -7533,6 +7787,14 @@ export class BotRuntime {
       const amount =
         text === undefined ? null : await this.adminCaptureText(scope, actor, text, input);
       if (amount !== null) return amount;
+      /*
+       * The customer's own text window next (customer UX completion §N): an amount, a
+       * search term or a note, whichever prompt they saw last. A window that is not
+       * open answers NO_WINDOW and the message goes on to the order windows untouched.
+       */
+      const captured =
+        text === undefined ? null : await this.capturedText(scope, actor, customer, text, input);
+      if (captured !== null) return captured;
       if (text !== undefined) {
         return this.typedUsername(
           scope,
@@ -7545,12 +7807,94 @@ export class BotRuntime {
       }
     }
     if (command.intent === 'WALLET') return this.walletBalance(scope, actor, customer);
-    if (command.intent === 'TOPUP_MENU') return this.topupMenu(scope);
+    if (
+      command.intent === 'MAIN_MENU' ||
+      command.intent === 'HELP' ||
+      command.intent === 'SUPPORT'
+    ) {
+      if (command.intent !== 'MAIN_MENU') return this.supportScreen(scope);
+      return {
+        key: 'bot.start.welcome_back',
+        values: {},
+        buttons: [],
+        orderId: null,
+        keyboard: (await this.isAdmin(scope, actor, input)) ? 'MAIN_MENU_ADMIN' : 'MAIN_MENU',
+      };
+    }
+    if (command.intent === 'TUTORIAL') return tutorialChoice();
+    if (command.intent === 'TUTORIAL_PLATFORM' && command.targetId !== null) {
+      return tutorialFor(command.targetId as ConnectionGuidePlatform);
+    }
+    if (command.intent === 'SERVICE_CONNECTED' && command.targetId !== null) {
+      // Acknowledged, and NOTHING is written: the customer told us a fact about their
+      // own device, and a row saying so would be a claim this installation cannot check.
+      const owned = await this.ownedService(scope, customer, command.targetId);
+      return {
+        key: owned === null ? 'bot.service.not_found' : 'bot.service.connected_ack',
+        values: {},
+        buttons: [mainMenuButton()],
+        orderId: null,
+      };
+    }
+    if (command.intent === 'TOPUP_MENU') {
+      return this.topupBegin(scope, actor, customer, input.botInstanceId, input.idempotencyKey);
+    }
+    if (
+      command.intent === 'TOPUP_ROUTE' &&
+      command.targetId !== null &&
+      command.secondaryId != null
+    ) {
+      return this.topupRoute(
+        scope,
+        actor,
+        customer,
+        command.targetId,
+        command.secondaryId as PaymentGatewayProvider,
+      );
+    }
+    if (command.intent === 'TOPUP_CLOSE' && command.targetId !== null) {
+      return this.topupClose(scope, actor, customer, command.targetId);
+    }
+    if (command.intent === 'SERVICES_SEARCH') {
+      return this.servicesSearchBegin(
+        scope,
+        actor,
+        customer,
+        input.botInstanceId,
+        input.idempotencyKey,
+      );
+    }
+    if (command.intent === 'SERVICE_REFRESH' && command.targetId !== null) {
+      return this.serviceRefresh(scope, actor, customer, command.targetId, input.idempotencyKey);
+    }
+    if (command.intent === 'SERVICE_NOTE' && command.targetId !== null) {
+      return this.serviceNoteBegin(
+        scope,
+        actor,
+        customer,
+        command.targetId,
+        input.botInstanceId,
+        input.idempotencyKey,
+      );
+    }
+    if (command.intent === 'SERVICE_RENEW_QUOTE' && command.targetId !== null) {
+      return this.commercialQuote(scope, actor, customer, command.targetId, 'RENEW', null, input);
+    }
+    if (command.intent === 'REFERRAL_GIFT') {
+      return this.referralGift(scope, actor, customer, input.idempotencyKey);
+    }
     if (command.intent === 'REFERRAL_INVITE') {
       return this.referralInvite(scope, actor, customer, input.botInstanceId, input.idempotencyKey);
     }
     if (command.intent === 'TOPUP_PICK' && command.targetId !== null) {
-      return this.topupPick(scope, actor, command.targetId, customer, input.idempotencyKey);
+      return this.topupPick(
+        scope,
+        actor,
+        command.targetId,
+        customer,
+        input.idempotencyKey,
+        input.botInstanceId,
+      );
     }
     if (command.intent === 'PAY_WALLET' && command.targetId !== null) {
       return this.walletPayment(scope, actor, command.targetId, customer, input.idempotencyKey);
@@ -7601,7 +7945,7 @@ export class BotRuntime {
       return this.cancelOrder(scope, actor, command.targetId, customer, input.idempotencyKey);
     }
     if (command.intent === 'SERVICE_RENEW' && command.targetId !== null) {
-      return this.commercialQuote(scope, actor, customer, command.targetId, 'RENEW', null, input);
+      return this.renewMenu(scope, actor, customer, command.targetId);
     }
     if (command.intent === 'SERVICE_ADD_TRAFFIC' && command.targetId !== null) {
       return this.addonChoice(scope, actor, customer, command.targetId, 'ADD_TRAFFIC');
@@ -7642,9 +7986,11 @@ export class BotRuntime {
     if (command.intent === 'SERVICE_ACTION_CONFIRM' && command.targetId !== null) {
       return this.commercialConfirm(scope, actor, customer, command.targetId, input);
     }
-    if (command.intent === 'SERVICES') return this.services(scope, customer, null);
+    if (command.intent === 'SERVICES') return this.services(scope, customer, 1);
     if (command.intent === 'SERVICES_PAGE') {
-      return this.services(scope, customer, command.cursor ?? null);
+      // A keyset token from a message older than the paged list lands on page 1: the
+      // token names a position in an ordering this list no longer uses.
+      return this.services(scope, customer, command.page ?? 1);
     }
     if (command.intent === 'SERVICE' && command.targetId !== null) {
       return this.serviceDetail(scope, actor, customer, command.targetId);
@@ -7759,68 +8105,33 @@ export class BotRuntime {
   private async services(
     scope: TenantContext,
     customer: CustomerRecord,
-    cursor: ServiceCursor | null,
+    pageNumber: number,
   ): Promise<PendingReply> {
-    const page = await this.deps.services.listForCustomer(
-      scope,
-      customer.id,
-      SERVICES_PAGE_SIZE,
-      cursor,
-    );
-    if (page.items.length === 0) {
-      /*
-       * An empty PAGE is the empty answer, cursor or not.
-       *
-       * Reachable with a cursor: a customer pages forward and the last of their
-       * services is terminated and swept between the render and the tap. Saying they
-       * have none is truthful about what this page holds and is the answer they get for
-       * having none at all — the alternative, a "nothing further" sentence, is a second
-       * key for a state the customer cannot act on differently.
-       */
-      return { key: 'bot.service.list_empty', values: {}, buttons: [], orderId: null };
+    const page = await this.deps.services.pageForCustomer(scope, customer.id, pageNumber);
+    if (page.total === 0) {
+      return {
+        key: 'bot.service.list_empty',
+        values: {},
+        buttons: [mainMenuButton()],
+        orderId: null,
+      };
     }
-    const buttons: CustomerButton[] = [];
-    for (const service of page.items) {
-      /*
-       * The label is the plan as it was SOLD, from the order's frozen snapshot.
-       *
-       * A service whose order snapshot cannot be read is skipped rather than labelled
-       * with its id or its state: a button a customer cannot identify is a button they
-       * cannot safely tap, and the id is not a name. Unreachable through any path in
-       * this release — the composite foreign key requires the order — and skipped
-       * rather than defaulted because every default available here is a claim about
-       * what somebody bought.
-       */
-      const title = await this.deps.purchaseTitle(scope, service.orderId);
-      if (title === null) continue;
-      buttons.push({
-        label: { kind: 'TEXT', text: title },
-        data: `${SERVICE_CALLBACK_PREFIX}${service.id}`,
-      });
-    }
-    if (buttons.length === 0) {
-      return { key: 'bot.service.list_empty', values: {}, buttons: [], orderId: null };
-    }
-    /*
-     * The NEXT page, when the repository says there is one.
-     *
-     * Phase 6A, and what it replaces is the defect this handler shipped with: the page
-     * carried a `nextCursor` and this surface dropped it, so a customer with more than
-     * twenty services saw twenty and was told nothing. Twenty is above any list the
-     * research shows, which is why it went unnoticed and not why it was acceptable.
-     *
-     * The token is appended only when it ENCODES. A cursor this codec cannot carry
-     * would otherwise become a button whose `callback_data` is a bare prefix, and the
-     * honest answer to that is the same as having no further page: a list that ends.
-     */
-    const token = page.nextCursor === null ? null : encodeKeysetToken(page.nextCursor);
-    if (token !== null) {
-      buttons.push({
-        label: { kind: 'TEMPLATE', key: 'bot.service.list_more' },
-        data: `${SERVICES_PAGE_CALLBACK_PREFIX}${token}`,
-      });
-    }
-    return { key: 'bot.service.list_heading', values: {}, buttons, orderId: null };
+    const buttons: CustomerButton[] = page.items.map((service) => ({
+      // The REAL username on the panel, as the approved list shows it; never the title.
+      label: {
+        kind: 'TEMPLATE' as const,
+        key: 'bot.service.list_item_button' as const,
+        values: { username: service.providerUsername },
+      },
+      data: `${SERVICE_CALLBACK_PREFIX}${service.id}`,
+    }));
+    buttons.push(...servicesListControls(page.page, page.pages));
+    return {
+      key: 'bot.service.list',
+      values: { page: page.page, pages: page.pages, total: page.total },
+      buttons,
+      orderId: null,
+    };
   }
 
   /**
@@ -7852,124 +8163,97 @@ export class BotRuntime {
     }
 
     /*
-     * The resend button is offered only when a resend would do something.
-     *
-     * `ProvisioningService.isDeliverable` is the authority — a live state AND a
-     * subscription URL — and drawing the button otherwise would offer a customer an
-     * action that answers with a refusal. Not drawing it is NOT the security control:
-     * `redeliver` checks ownership against the row and `deliver` refuses a service with
-     * no configuration, and both still run if somebody taps an older message.
+     * Every button below is a server-side decision re-decided on the tap; drawing one is
+     * never the authorization. Rows: refresh alone; link beside rotate; note beside
+     * add-traffic; renew beside the on/off switch; the terminate ask; back to the list.
      */
-    const buttons: CustomerButton[] = ProvisioningService.isDeliverable(service)
-      ? [
-          {
-            label: { kind: 'TEMPLATE', key: 'bot.service.resend_button' },
-            data: `${SERVICE_RESEND_CALLBACK_PREFIX}${service.id}`,
-          },
-        ]
-      : [];
-
-    /*
-     * The management buttons, offered only where tapping one would do something.
-     *
-     * `customerActionsFor` answers with both conditions applied: the service must be in
-     * a state the operation is legal from, and the PANEL must declare the capability.
-     * A 3X-UI-backed service gets an empty list, because this release cannot disable,
-     * re-enable or delete a client there — and a product that draws a button it cannot
-     * honour is the legacy defect this codebase keeps naming.
-     *
-     * Not drawing the button is not the control. `requestFromCustomer` re-checks
-     * ownership, the state and the capability when the tap arrives, so a customer
-     * scrolling back to an older message is refused rather than served.
-     */
-    for (const action of await this.deps.services.customerActionsFor(scope, service)) {
-      if (action === 'SUSPEND') {
-        buttons.push({
-          label: { kind: 'TEMPLATE', key: 'bot.service.suspend_button' },
-          data: `${SERVICE_SUSPEND_CALLBACK_PREFIX}${service.id}`,
-        });
-      }
-      if (action === 'RESUME') {
-        buttons.push({
-          label: { kind: 'TEMPLATE', key: 'bot.service.resume_button' },
-          data: `${SERVICE_RESUME_CALLBACK_PREFIX}${service.id}`,
-        });
-      }
-      if (action === 'TERMINATE') {
-        /*
-         * The terminate button opens a QUESTION and carries the ask prefix.
-         *
-         * `SERVICE_TERMINATE_CALLBACK_PREFIX` is never written here, and that is the
-         * confirmation step made structural rather than remembered: the only place the
-         * destructive callback is produced is the confirmation screen below, so there
-         * is no message anywhere in this product whose single tap ends a service.
-         */
-        buttons.push({
-          label: { kind: 'TEMPLATE', key: 'bot.service.terminate_button' },
-          data: `${SERVICE_TERMINATE_ASK_CALLBACK_PREFIX}${service.id}`,
-        });
-      }
+    const buttons: CustomerButton[] = [];
+    if (await this.deps.services.customerSyncOffered(scope, service)) {
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.service.refresh_button' },
+        data: `${SERVICE_REFRESH_CALLBACK_PREFIX}${service.id}`,
+        row: 0,
+      });
     }
-
-    /*
-     * The rotation button (WP6-C), drawn on the same terms: the flag, an ACTIVE service
-     * and a panel that can rotate. It opens a QUESTION and carries the ask prefix; the
-     * confirming prefix is written only by that question's screen.
-     */
-    if ((await this.deps.services.customerRotationFor(scope, service)).offered) {
+    if (ProvisioningService.isDeliverable(service)) {
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.service.link_button' },
+        data: `${SERVICE_RESEND_CALLBACK_PREFIX}${service.id}`,
+        row: 1,
+      });
+    }
+    const rotation = await this.deps.services.customerRotationFor(scope, service);
+    if (rotation.offered) {
       buttons.push({
         label: { kind: 'TEMPLATE', key: 'bot.service.rotate_button' },
         data: `${SERVICE_ROTATE_ASK_CALLBACK_PREFIX}${service.id}`,
+        row: 1,
       });
     }
-
-    /*
-     * The commercial buttons, offered on the same terms as the management ones: the
-     * state must allow it, the panel must declare the capability, AND there must be
-     * something configured to sell. `availableFor` applies all three — a renewal whose
-     * plan has been withdrawn, or an extra-traffic button with no package behind it, is
-     * a button whose tap is a refusal.
-     *
-     * Each opens a QUOTE and buys nothing. There is no callback anywhere in this surface
-     * that takes a customer's money in one tap, which is the same structural rule the
-     * terminate confirmation follows.
-     */
-    for (const action of await this.deps.commercial.availableFor(scope, actor, service)) {
-      if (action === 'RENEW') {
-        buttons.push({
-          label: { kind: 'TEMPLATE', key: 'bot.service.renew_button' },
-          data: `${SERVICE_RENEW_CALLBACK_PREFIX}${service.id}`,
-        });
-      }
-      if (action === 'ADD_TRAFFIC') {
-        buttons.push({
-          label: { kind: 'TEMPLATE', key: 'bot.service.add_traffic_button' },
-          data: `${SERVICE_ADD_TRAFFIC_CALLBACK_PREFIX}${service.id}`,
-        });
-      }
-      if (action === 'ADD_TIME') {
-        buttons.push({
-          label: { kind: 'TEMPLATE', key: 'bot.service.add_time_button' },
-          data: `${SERVICE_ADD_TIME_CALLBACK_PREFIX}${service.id}`,
-        });
-      }
+    buttons.push({
+      label: { kind: 'TEMPLATE', key: 'bot.service.note_button' },
+      data: `${SERVICE_NOTE_CALLBACK_PREFIX}${service.id}`,
+      row: 2,
+    });
+    const commercial = await this.deps.commercial.availableFor(scope, actor, service);
+    if (commercial.includes('ADD_TRAFFIC')) {
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.service.add_traffic_button' },
+        data: `${SERVICE_ADD_TRAFFIC_CALLBACK_PREFIX}${service.id}`,
+        row: 2,
+      });
     }
+    if (commercial.includes('RENEW') || commercial.includes('ADD_TIME')) {
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.service.renew_button' },
+        data: `${SERVICE_RENEW_CALLBACK_PREFIX}${service.id}`,
+        row: 3,
+      });
+    }
+    const actions = await this.deps.services.customerActionsFor(scope, service);
+    if (actions.includes('SUSPEND')) {
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.service.suspend_button' },
+        data: `${SERVICE_SUSPEND_CALLBACK_PREFIX}${service.id}`,
+        row: 3,
+      });
+    }
+    if (actions.includes('RESUME')) {
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.service.resume_button' },
+        data: `${SERVICE_RESUME_CALLBACK_PREFIX}${service.id}`,
+        row: 3,
+      });
+    }
+    if (actions.includes('TERMINATE')) {
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.service.terminate_button' },
+        data: `${SERVICE_TERMINATE_ASK_CALLBACK_PREFIX}${service.id}`,
+        row: 4,
+      });
+    }
+    buttons.push({
+      label: { kind: 'TEMPLATE', key: 'bot.service.back_to_list_button' },
+      data: `${SERVICES_LIST_PAGE_CALLBACK_PREFIX}1`,
+      row: 5,
+    });
 
-    return {
-      key: 'bot.service.detail',
-      values: {
-        productTitle: title,
-        // Localised by the surface, per the placeholder's own description. The state is
-        // a closed vocabulary, so this is a lookup and not a string a tenant can edit.
-        state: service.state,
-        usedTrafficBytes: service.trafficUsedBytes,
-        totalTrafficBytes: service.trafficLimitBytes,
-        ...(service.expiresAt === null ? {} : { expiresAt: service.expiresAt }),
-        ...(service.usageSyncedAt === null ? {} : { syncedAt: service.usageSyncedAt }),
-      },
-      buttons,
-      orderId: null,
-    };
+    const display = await this.deps.productDisplay.displayFor(scope, service.productId);
+    const card = await this.deps.screens.serviceCard(scope, {
+      state: service.state,
+      serviceUsername: service.providerUsername,
+      serviceLocation: display?.serviceLocationLabel ?? null,
+      productName: title,
+      trafficLimitBytes: service.trafficLimitBytes,
+      trafficUsedBytes: service.trafficUsedBytes,
+      usageSyncedAt: service.usageSyncedAt,
+      expiresAt: service.expiresAt,
+      now: this.deps.clock.now(),
+      lastSeen: lastSeenOf(service),
+      note: service.customerNote,
+      rotateOffered: rotation.offered,
+    });
+    return { key: card.key, values: card.values, buttons, orderId: null };
   }
 
   /**
@@ -8027,22 +8311,23 @@ export class BotRuntime {
        * for nothing, which is the one way to be wrong that money cannot be taken back
        * from.
        */
-      buttons: offer.addons
-        .filter((addon): addon is typeof addon & { price: Money } => addon.price !== null)
-        .map((addon) => ({
-          label: {
-            kind: 'TEMPLATE' as const,
-            key: 'bot.service.addon_option' as const,
-            values: {
-              // A MONEY value, rendered by the catalogue with its currency. A bare
-              // number is the legacy defect where one template said تومان and its twin
-              // ریال for the same figure, a factor of ten apart.
-              title: addon.title,
-              price: addon.price,
+      buttons: [
+        ...offer.addons
+          .filter((addon): addon is typeof addon & { price: Money } => addon.price !== null)
+          .map((addon) => ({
+            label: {
+              kind: 'TEMPLATE' as const,
+              key: 'bot.service.addon_option' as const,
+              // The VALUES the key declares. Before the customer UX completion they were
+              // put on a label that carried none, so the resolver threw and the screen
+              // never sent; the label type carries values now and the messenger renders
+              // them. A MONEY value, so the currency is the catalogue's, never typed.
+              values: { title: addon.title, price: addon.price },
             },
-          },
-          data: `${prefix}${encodeIdPair(serviceId, addon.id)}`,
-        })),
+            data: `${prefix}${encodeIdPair(serviceId, addon.id)}`,
+          })),
+        backToServiceButton(serviceId),
+      ],
       orderId: null,
     };
   }
@@ -8068,38 +8353,19 @@ export class BotRuntime {
     input: { readonly idempotencyKey: string },
   ): Promise<PendingReply> {
     try {
+      const service = await this.ownedService(scope, customer, serviceId);
+      if (service === null) {
+        return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
+      }
       const { order } = await this.deps.commercial.draft(scope, actor, customer.id, {
         serviceId,
         kind,
         ...(addonId === null ? {} : { addonId }),
         idempotencyKey: `${input.idempotencyKey}:${kind.toLowerCase()}`,
       });
-      return {
-        key: 'bot.service.action_quote',
-        values: {
-          // The order's own line snapshot, which is what was quoted — the plan's title
-          // for a renewal, the package's for a quantity purchase.
-          productTitle: order.line.title,
-          total: order.totals.total,
-          /*
-           * WHAT is being bought, beside what it costs, and from the same frozen line.
-           *
-           * A title is free text an operator wrote: «بسته ویژه» encodes no allowance at
-           * all. This screen is the one the customer answers, so it is where the figures
-           * have to be — exactly as `bot.order.summary` carries them for a product, and
-           * for the same reason a product's catalogue button does not.
-           */
-          trafficBytes: order.line.specification.trafficBytes,
-          durationDays: order.line.specification.durationDays,
-        },
-        buttons: [
-          {
-            label: { kind: 'TEMPLATE', key: 'bot.service.action_confirm_button' },
-            data: `${SERVICE_ACTION_CONFIRM_CALLBACK_PREFIX}${order.id}`,
-          },
-        ],
-        orderId: order.id,
-      };
+      // The same pre-invoice and the same payment buttons as a new purchase (§H5, §H6):
+      // one payment UX, and the username shown is the service's own.
+      return this.preinvoice(scope, actor, order, customer, service.providerUsername);
     } catch (error) {
       return refusal(error);
     }
@@ -8365,6 +8631,459 @@ export class BotRuntime {
     return { key: 'bot.service.action_requested', values: {}, buttons: [], orderId: null };
   }
 
+  /**
+   * A plain message offered to the customer's own text window, if one is open: a top-up
+   * amount, a search term or a note, by the window's PURPOSE. Null means no window read
+   * it and the message goes on to the order windows.
+   */
+  private async capturedText(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    text: string,
+    input: { readonly idempotencyKey: string; readonly botInstanceId: BotInstanceId },
+  ): Promise<PendingReply | null> {
+    const read = await this.deps.captures.readText(scope, actor, {
+      idempotencyKey: `${input.idempotencyKey}:capture-text`,
+      botInstanceId: input.botInstanceId,
+      customerId: customer.id,
+      text,
+    });
+    if (read.outcome !== 'READ') return null;
+    const { capture } = read;
+    if (capture.purpose === 'TOPUP_AMOUNT') {
+      const result = await this.deps.topup.recordAmountText(scope, {
+        customerId: customer.id,
+        captureId: capture.id,
+        text,
+      });
+      return this.topupAmountReply(scope, result, capture.id);
+    }
+    if (capture.purpose === 'SERVICE_SEARCH') {
+      const query = text.trim();
+      if (query.length === 0 || Array.from(query).length > SERVICE_SEARCH_MAX_LENGTH) {
+        return {
+          key: 'bot.service.search_invalid',
+          values: {},
+          buttons: [backToListButton()],
+          orderId: null,
+        };
+      }
+      const found = await this.deps.services.searchForCustomer(scope, customer.id, query);
+      if (found.length === 0) {
+        return {
+          key: 'bot.service.search_none',
+          values: {},
+          buttons: [backToListButton()],
+          orderId: null,
+        };
+      }
+      return {
+        key: 'bot.service.search_results',
+        values: { query: query.toLowerCase() },
+        buttons: [
+          ...found.map((service) => ({
+            label: {
+              kind: 'TEMPLATE' as const,
+              key: 'bot.service.list_item_button' as const,
+              values: { username: service.providerUsername },
+            },
+            data: `${SERVICE_CALLBACK_PREFIX}${service.id}`,
+          })),
+          backToListButton(),
+        ],
+        orderId: null,
+      };
+    }
+    // SERVICE_NOTE: the window names the service; the write re-checks ownership.
+    if (capture.subjectId === null) return null;
+    try {
+      const cleared = text.trim() === SERVICE_NOTE_CLEAR_TOKEN;
+      const saved = await this.deps.services.setCustomerNote(
+        scope,
+        actor,
+        customer.id,
+        capture.subjectId,
+        cleared ? null : text,
+      );
+      return {
+        key: saved.note === null ? 'bot.service.note_cleared' : 'bot.service.note_saved',
+        values: {},
+        buttons: [backToServiceButton(capture.subjectId)],
+        orderId: null,
+      };
+    } catch (error) {
+      if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.CAPTURE_INPUT_INVALID) {
+        return {
+          key: 'bot.service.note_invalid',
+          values: { max: SERVICE_NOTE_MAX_LENGTH },
+          buttons: [backToServiceButton(capture.subjectId)],
+          orderId: null,
+        };
+      }
+      if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND) {
+        return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
+      }
+      return refusal(error);
+    }
+  }
+
+  /** The answer to a recorded (or refused) top-up amount: the route chooser, or why not. */
+  private async topupAmountReply(
+    scope: TenantContext,
+    result: Awaited<ReturnType<WalletTopupFlowService['recordAmountText']>>,
+    captureId: string,
+  ): Promise<PendingReply> {
+    const close = {
+      label: { kind: 'TEMPLATE' as const, key: 'bot.wallet.topup_close_button' as const },
+      data: `${TOPUP_CLOSE_CALLBACK_PREFIX}${captureId}`,
+    };
+    if (result.outcome === 'GONE') {
+      return { key: 'bot.wallet.topup_expired', values: {}, buttons: [], orderId: null };
+    }
+    if (result.outcome === 'INVALID') {
+      return {
+        key: 'bot.wallet.topup_amount_invalid',
+        values: {},
+        buttons: [close],
+        orderId: null,
+      };
+    }
+    if (result.outcome === 'BELOW_MINIMUM') {
+      return {
+        key: 'bot.wallet.topup_below_minimum',
+        values: { minimum: result.minimum },
+        buttons: [close],
+        orderId: null,
+      };
+    }
+    if (result.outcome === 'ABOVE_MAXIMUM') {
+      return {
+        key: 'bot.wallet.topup_above_maximum',
+        values: { maximum: result.maximum },
+        buttons: [close],
+        orderId: null,
+      };
+    }
+    return this.topupChooser(scope, captureId, result.routes);
+  }
+
+  /**
+   * «💳 روش پرداخت خود را انتخاب نمایید»: one button per route the amount may be paid
+   * through, in the operator's order, with the route's gift when it has one. The buttons
+   * carry the capture id and the provider — identifiers, never the amount.
+   */
+  private async topupChooser(
+    scope: TenantContext,
+    captureId: string,
+    routes: readonly TopupRoute[],
+  ): Promise<PendingReply> {
+    const close = {
+      label: { kind: 'TEMPLATE' as const, key: 'bot.wallet.topup_close_button' as const },
+      data: `${TOPUP_CLOSE_CALLBACK_PREFIX}${captureId}`,
+    };
+    if (routes.length === 0) {
+      return {
+        key: 'bot.wallet.topup_none_available',
+        values: {},
+        buttons: [close],
+        orderId: null,
+      };
+    }
+    const buttons: CustomerButton[] = [];
+    for (const route of routes) {
+      const name = await this.deps.screens.routeName(scope, route);
+      buttons.push({
+        label:
+          route.topupCashbackPercent > 0
+            ? {
+                kind: 'TEMPLATE',
+                key: 'bot.wallet.topup_method_gift_button',
+                values: { name, percent: route.topupCashbackPercent },
+              }
+            : { kind: 'TEMPLATE', key: 'bot.wallet.topup_method_button', values: { name } },
+        data: `${TOPUP_ROUTE_CALLBACK_PREFIX}${captureId}.${route.provider}`,
+      });
+    }
+    buttons.push(close);
+    return { key: 'bot.wallet.topup_method_prompt', values: {}, buttons, orderId: null };
+  }
+
+  private async topupRoute(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    captureId: string,
+    provider: PaymentGatewayProvider,
+  ): Promise<PendingReply> {
+    try {
+      const chosen = await this.deps.topup.choose(scope, actor, {
+        customerId: customer.id,
+        captureId,
+        provider,
+      });
+      if (chosen.outcome === 'GONE') {
+        return { key: 'bot.wallet.topup_expired', values: {}, buttons: [], orderId: null };
+      }
+      if (chosen.outcome === 'NOT_OFFERED') {
+        return this.topupChooser(scope, captureId, chosen.routes);
+      }
+      return this.transferInstruction(scope, chosen.instruction, null);
+    } catch (error) {
+      return refusal(error);
+    }
+  }
+
+  private async topupClose(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    captureId: string,
+  ): Promise<PendingReply> {
+    await this.deps.topup.close(scope, actor, { customerId: customer.id, captureId });
+    return {
+      key: 'bot.wallet.topup_closed',
+      values: {},
+      buttons: [mainMenuButton()],
+      orderId: null,
+    };
+  }
+
+  private async servicesSearchBegin(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    botInstanceId: BotInstanceId,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    await this.deps.captures.open(scope, actor, {
+      idempotencyKey: `${idempotencyKey}:search-open`,
+      botInstanceId,
+      customerId: customer.id,
+      purpose: 'SERVICE_SEARCH',
+      subjectId: null,
+    });
+    return {
+      key: 'bot.service.search_prompt',
+      values: {},
+      buttons: [backToListButton()],
+      orderId: null,
+    };
+  }
+
+  private async serviceRefresh(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    serviceId: string,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    try {
+      await this.deps.services.requestSyncFromCustomer(scope, actor, customer.id, serviceId, {
+        idempotencyKey: `${idempotencyKey}:refresh`,
+      });
+      return {
+        key: 'bot.service.refresh_requested',
+        values: {},
+        buttons: [backToServiceButton(serviceId)],
+        orderId: null,
+      };
+    } catch (error) {
+      const code = (error as { code?: unknown } | null)?.code;
+      if (code === COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND) {
+        return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
+      }
+      if (
+        code === COMMERCE_ERROR_CODES.ORDER_STATE_INVALID ||
+        code === COMMERCE_ERROR_CODES.PANEL_NOT_OPERABLE
+      ) {
+        return {
+          key: 'bot.service.capability_unsupported',
+          values: {},
+          buttons: [backToServiceButton(serviceId)],
+          orderId: null,
+        };
+      }
+      return refusal(error);
+    }
+  }
+
+  private async serviceNoteBegin(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    serviceId: string,
+    botInstanceId: BotInstanceId,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    const service = await this.ownedService(scope, customer, serviceId);
+    if (service === null) {
+      return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
+    }
+    await this.deps.captures.open(scope, actor, {
+      idempotencyKey: `${idempotencyKey}:note-open`,
+      botInstanceId,
+      customerId: customer.id,
+      purpose: 'SERVICE_NOTE',
+      subjectId: service.id,
+    });
+    return {
+      key: 'bot.service.note_prompt',
+      values: { max: SERVICE_NOTE_MAX_LENGTH },
+      buttons: [backToServiceButton(service.id)],
+      orderId: null,
+    };
+  }
+
+  /**
+   * «💊 تمدید سرویس»: the renewal (the product re-priced at its current terms) and the
+   * add-time packages, on one screen. Each option is re-decided by the quote it opens.
+   */
+  private async renewMenu(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    serviceId: string,
+  ): Promise<PendingReply> {
+    const service = await this.ownedService(scope, customer, serviceId);
+    if (service === null) {
+      return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
+    }
+    const offered = await this.deps.commercial.availableFor(scope, actor, service);
+    const buttons: CustomerButton[] = [];
+    if (offered.includes('RENEW')) {
+      const renewal = await this.offerOrNull(scope, actor, customer, service.id, 'RENEW');
+      const product = renewal?.product ?? null;
+      if (product !== null && product.price !== null) {
+        buttons.push({
+          label: {
+            kind: 'TEMPLATE',
+            key: 'bot.service.renew_option_button',
+            values: { title: product.title, price: product.price },
+          },
+          data: `${SERVICE_RENEW_QUOTE_CALLBACK_PREFIX}${service.id}`,
+        });
+      }
+    }
+    if (offered.includes('ADD_TIME')) {
+      const packages = await this.offerOrNull(scope, actor, customer, service.id, 'ADD_TIME');
+      for (const addon of packages?.addons ?? []) {
+        if (addon.price === null) continue;
+        buttons.push({
+          label: {
+            kind: 'TEMPLATE',
+            key: 'bot.service.addon_option',
+            values: { title: addon.title, price: addon.price },
+          },
+          data: `${SERVICE_BUY_TIME_CALLBACK_PREFIX}${encodeIdPair(service.id, addon.id)}`,
+        });
+      }
+    }
+    if (buttons.length === 0) {
+      return {
+        key: 'bot.service.renew_unavailable',
+        values: {},
+        buttons: [backToServiceButton(service.id)],
+        orderId: null,
+      };
+    }
+    buttons.push(backToServiceButton(service.id));
+    return { key: 'bot.service.renew_choose', values: {}, buttons, orderId: null };
+  }
+
+  /** `commercial.offer`, with "nothing offered" as null rather than a throw: the menu decides. */
+  private async offerOrNull(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    serviceId: string,
+    kind: 'RENEW' | 'ADD_TIME',
+  ): Promise<Awaited<ReturnType<CommercialActionService['offer']>> | null> {
+    try {
+      return await this.deps.commercial.offer(scope, actor, customer.id, serviceId, kind);
+    } catch (error) {
+      if (isNexaError(error) && error.code in REFUSAL_REPLIES) return null;
+      throw error;
+    }
+  }
+
+  private async referralGift(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    if (this.deps.referralGifts === undefined) {
+      return { key: 'bot.referral.gift_disabled', values: {}, buttons: [], orderId: null };
+    }
+    try {
+      const claimed = await this.deps.referralGifts.claim(scope, actor, customer.id, {
+        idempotencyKey: `${idempotencyKey}:signup-gift`,
+      });
+      if (claimed.claimedCount === 0 || claimed.credited.amountMinor === 0n) {
+        return {
+          key: 'bot.referral.gift_nothing',
+          values: {},
+          buttons: [mainMenuButton()],
+          orderId: null,
+        };
+      }
+      return {
+        key: 'bot.referral.gift_claimed',
+        values: { amount: claimed.credited },
+        buttons: [mainMenuButton()],
+        orderId: null,
+      };
+    } catch (error) {
+      return refusal(error);
+    }
+  }
+
+  /**
+   * The FAQ/support screen (§J): the tenant's active entries in parts split at item
+   * boundaries, the earlier parts as leads and the last carrying the keyboard; with no
+   * active entry, the contact action alone. The contact button opens the FIRST configured
+   * support account and is not drawn when none is configured.
+   */
+  private async supportScreen(scope: TenantContext): Promise<PendingReply> {
+    const screen = await this.deps.support.partsFor(scope);
+    const buttons: CustomerButton[] = [
+      ...(screen.supportUrl === null
+        ? []
+        : [
+            {
+              label: { kind: 'TEMPLATE' as const, key: 'bot.support.contact_button' as const },
+              url: screen.supportUrl,
+            },
+          ]),
+      mainMenuButton(),
+    ];
+    if (screen.parts.length === 0) {
+      return {
+        key: screen.supportUrl === null ? 'bot.support.unconfigured' : 'bot.support.contact',
+        values: {},
+        buttons,
+        orderId: null,
+      };
+    }
+    const last = screen.parts[screen.parts.length - 1] as string;
+    return {
+      key: 'bot.faq.page',
+      values: { content: last },
+      buttons,
+      orderId: null,
+      ...(screen.parts.length === 1
+        ? {}
+        : {
+            lead: screen.parts.slice(0, -1).map((content) => ({
+              kind: 'TEXT' as const,
+              key: 'bot.faq.page' as const,
+              values: { content },
+            })),
+          }),
+    };
+  }
+
   /** One of the customer's own services, or null. Never anybody else's, never a throw. */
   private async ownedService(
     scope: TenantContext,
@@ -8581,64 +9300,48 @@ export class BotRuntime {
    * is optional, so a body that renders it simply does not, and a body a tenant
    * overrode before this step existed is unaffected.
    */
-  private orderSummary(order: OrderRecord, username: string | null): PendingReply {
+  private async preinvoice(
+    scope: TenantContext,
+    actor: ActorContext,
+    order: OrderRecord,
+    customer: CustomerRecord,
+    username: string | null,
+  ): Promise<PendingReply> {
     const discounted = order.totals.discount.amountMinor > 0n;
     const cashback = order.totals.quote.cashback;
-    /*
-     * The variant is chosen from the QUOTE, never from what the customer did: an
-     * automatic rule discounts a draft nobody typed a code into, and a total the customer
-     * cannot reconcile with the list price reads as a mistake. Four keys because the
-     * renderer has no conditional lines — a missing value renders as its token.
-     */
-    const key =
-      discounted && cashback !== undefined
-        ? 'bot.order.summary_discounted_cashback'
-        : discounted
-          ? 'bot.order.summary_discounted'
-          : cashback !== undefined
-            ? 'bot.order.summary_cashback'
-            : 'bot.order.summary';
-    const buttons: CustomerButton[] = [
-      {
-        label: { kind: 'TEMPLATE', key: 'bot.order.confirm_button' },
-        data: `${CONFIRM_CALLBACK_PREFIX}${order.id}`,
-      },
-    ];
-    /*
-     * The code buttons, on a new-purchase DRAFT only (P7): a commercial order's evidence
-     * row is written with its draft and cannot follow a code entered afterwards, and a
-     * confirmed order's price is frozen. The server refuses both anyway — this is not
-     * the check, only the absence of a button that could not work.
-     */
-    if (order.state === 'DRAFT' && order.purpose === 'NEW_SERVICE') {
-      buttons.push(
-        order.discountCode === null
-          ? {
-              label: { kind: 'TEMPLATE', key: 'bot.discount.enter_button' },
-              data: `${DISCOUNT_CODE_ENTER_CALLBACK_PREFIX}${order.id}`,
-            }
-          : {
-              label: { kind: 'TEMPLATE', key: 'bot.discount.remove_button' },
-              data: `${DISCOUNT_CODE_REMOVE_CALLBACK_PREFIX}${order.id}`,
-            },
-      );
-    }
+    const commercial = order.purpose !== 'NEW_SERVICE';
+    // Marketing display data for the plan being bought or renewed; a package has none.
+    const display =
+      order.purpose === 'ADD_TRAFFIC' || order.purpose === 'ADD_TIME'
+        ? null
+        : await this.deps.productDisplay.displayFor(scope, order.line.productId);
+    const balance = await this.deps.wallet.balanceForCustomer(scope, actor, customer.id);
+    const screen = await this.deps.screens.preinvoice(scope, {
+      serviceUsername: username,
+      productName: order.line.title,
+      durationDays: order.purpose === 'ADD_TRAFFIC' ? null : order.line.specification.durationDays,
+      total: order.totals.total,
+      trafficBytes: commercial ? null : order.line.specification.trafficBytes,
+      addedTrafficBytes:
+        order.purpose === 'ADD_TRAFFIC' ? order.line.specification.trafficBytes : null,
+      discount: discounted
+        ? { subtotal: order.totals.subtotal, discount: order.totals.discount }
+        : null,
+      cashback: cashback === undefined ? null : cashback.amount,
+      locations: display?.displayLocations ?? [],
+      features: display?.displayFeatures ?? [],
+      walletBalance: money(balance.amountMinor, balance.currency),
+    });
+    const external = (
+      await this.deps.routes.routesFor(scope, customer.id, 'SERVICE_PURCHASE', order.totals.total)
+    ).some((route) => route.descriptor.settlesVia === 'GATEWAY');
     return {
-      key,
-      // From the ORDER's own snapshot, not from the product and not from the callback
-      // data. `templates.ts` says so in terms: "Every figure in it comes from the price
-      // quote, never from callback data."
-      values: {
-        productTitle: order.line.title,
-        total: order.totals.total,
-        durationDays: order.line.specification.durationDays,
-        trafficBytes: order.line.specification.trafficBytes,
-        // The CANONICAL form the allocator returned, never what the customer typed.
-        ...(username === null ? {} : { username }),
-        ...(discounted ? { subtotal: order.totals.subtotal, discount: order.totals.discount } : {}),
-        ...(cashback === undefined ? {} : { cashback: cashback.amount }),
-      },
-      buttons,
+      key: screen.key,
+      values: screen.values,
+      buttons: preinvoiceButtons(order, {
+        manual: await this.deps.payments.manualTransferOffered(scope),
+        external,
+      }),
       orderId: order.id,
     };
   }
@@ -8659,7 +9362,7 @@ export class BotRuntime {
       customerId: customer.id,
       orderId: order.id,
     });
-    return this.orderSummary(order, step.reservation?.username ?? null);
+    return this.preinvoice(scope, actor, order, customer, step.reservation?.username ?? null);
   }
 
   /** Opens the code window for one draft and asks for the code. */
@@ -8761,8 +9464,10 @@ export class BotRuntime {
       customerId: customer.id,
       orderId: order.id,
     });
-    if (step.reservation !== null) return this.orderSummary(order, step.reservation.username);
-    if (step.modes.length === 0) return this.orderSummary(order, null);
+    if (step.reservation !== null) {
+      return this.preinvoice(scope, actor, order, customer, step.reservation.username);
+    }
+    if (step.modes.length === 0) return this.preinvoice(scope, actor, order, customer, null);
     /*
      * ONE mode is not a question, whichever mode it is.
      *
@@ -8823,7 +9528,7 @@ export class BotRuntime {
         customerId: customer.id,
         orderId,
       });
-      return this.orderSummary(order, reservation.username);
+      return this.preinvoice(scope, actor, order, customer, reservation.username);
     } catch (error) {
       return refusal(error);
     }
@@ -8891,7 +9596,7 @@ export class BotRuntime {
         customerId: customer.id,
         orderId: result.reservation.orderId,
       });
-      return this.orderSummary(order, result.reservation.username);
+      return this.preinvoice(scope, actor, order, customer, result.reservation.username);
     } catch (error) {
       /*
        * Every refusal through the shared table, and NOTHING about the window.
@@ -8990,27 +9695,31 @@ export class BotRuntime {
     customer: CustomerRecord,
   ): Promise<PendingReply> {
     const balance = await this.deps.wallet.balanceForCustomer(scope, actor, customer.id);
-    /*
-     * The top-up button is drawn only when a top-up could actually be performed: at
-     * least one preset amount in the selling currency, AND an enabled account to
-     * transfer to. `paymentButtons` applies the same rule to the manual-transfer button
-     * and for the same reason — a button that leads to a refusal is worse than no button.
-     *
-     * Both reads can be a moment stale, which is why the service checks again inside the
-     * transaction. This decides what to DRAW; that decides what may happen.
-     */
-    const offered = await this.deps.payments.topupPresets(scope);
-    const fundable = offered.length > 0 && (await this.deps.payments.manualTransferOffered(scope));
-    /*
-     * The invite button, drawn only while the referral program is running (WP9 F12) — the
-     * wallet is where the legacy bot showed a referral count. Drawn from the same terms the
-     * tap is answered from, so a button can lead to `unconfigured` only when the program
-     * stopped in between.
-     */
+    const counters = await this.deps.counters.counters(scope, customer.id);
     const referring = (await this.deps.referrals?.terms(scope))?.active === true;
+    const referralCount =
+      this.deps.referralGifts === undefined
+        ? 0
+        : (await this.deps.referralGifts.stats(scope, customer.id)).referralCount;
+    const reseller =
+      this.deps.resellers === undefined
+        ? null
+        : await this.deps.resellers.standing(scope, customer.id, undefined);
+    const fundable =
+      (await this.deps.routes.routesFor(scope, customer.id, 'WALLET_TOPUP', null)).length > 0;
+    const summary = await this.deps.screens.walletSummary(scope, {
+      telegramId: customer.telegramUserId,
+      displayName: displayNameOf(customer),
+      registeredAt: customer.createdAt,
+      balance: money(balance.amountMinor, balance.currency),
+      serviceCount: counters.services,
+      paidInvoiceCount: counters.paidInvoices,
+      referralCount,
+      group: reseller === null ? 'CUSTOMER' : 'RESELLER',
+    });
     return {
-      key: 'bot.wallet.balance',
-      values: { balance: money(balance.amountMinor, balance.currency) },
+      key: summary.key,
+      values: summary.values,
       buttons: [
         ...(fundable
           ? [
@@ -9028,6 +9737,7 @@ export class BotRuntime {
               },
             ]
           : []),
+        mainMenuButton(),
       ],
       orderId: null,
     };
@@ -9048,10 +9758,14 @@ export class BotRuntime {
     const unconfigured: PendingReply = {
       key: 'bot.referral.unconfigured',
       values: {},
-      buttons: [],
+      buttons: [mainMenuButton()],
       orderId: null,
     };
-    if (this.deps.referrals === undefined) return unconfigured;
+    if (this.deps.referrals === undefined || this.deps.referralGifts === undefined) {
+      return unconfigured;
+    }
+    const terms = await this.deps.referrals.terms(scope);
+    if (!terms.active || terms.percent === null) return unconfigured;
     const invite = await this.deps.referrals.invite(scope, actor, {
       // Suffixed, as every other write that shares a turn with `resolveFromUpdate` is:
       // the bare key was consumed there.
@@ -9060,15 +9774,61 @@ export class BotRuntime {
       botInstanceId,
     });
     if (invite.outcome !== 'READY') return unconfigured;
+    const gift = await this.deps.referralGifts.terms(scope);
+    const stats = await this.deps.referralGifts.stats(scope, customer.id);
+    const screen = await this.deps.screens.referralScreen(scope, {
+      commissionPercent: terms.percent,
+      referralLink: invite.link,
+      gift: gift.active
+        ? {
+            total: gift.total,
+            referrerPercent: gift.referrerPercent,
+            referredPercent: gift.referredPercent,
+          }
+        : null,
+      referralCount: stats.referralCount,
+      referredPurchaseCount: stats.referredPurchaseCount,
+      referredPurchaseTotal: stats.referredPurchaseTotal,
+      commissionReceivedTotal: stats.commissionReceivedTotal,
+    });
+    const banner =
+      this.deps.media === undefined
+        ? null
+        : await this.deps.media.bytesFor(scope, 'REFERRAL_BANNER');
     return {
-      key: 'bot.referral.invite',
-      values: {
-        referralCode: invite.code,
-        referralLink: invite.link,
-        referredCount: invite.referredCount,
-      },
-      buttons: [],
+      key: screen.key,
+      values: screen.values,
+      buttons: [
+        {
+          label: { kind: 'TEMPLATE', key: 'bot.referral.share_button' },
+          // Telegram's own share sheet, with the customer's link as the payload.
+          url: `https://t.me/share/url?url=${encodeURIComponent(invite.link)}`,
+        },
+        ...(gift.active
+          ? [
+              {
+                label: { kind: 'TEMPLATE' as const, key: 'bot.referral.gift_button' as const },
+                data: REFERRAL_GIFT_CALLBACK_DATA,
+              },
+            ]
+          : []),
+        mainMenuButton(),
+      ],
       orderId: null,
+      // The banner FIRST, as a bare photo, then the text with the buttons: one
+      // arrangement whatever the caption bound, and the text is never cut.
+      ...(banner === null
+        ? {}
+        : {
+            lead: [
+              {
+                kind: 'PHOTO_BYTES' as const,
+                bytes: banner.bytes,
+                mimeType: banner.mimeType,
+                fileName: banner.mimeType === 'image/png' ? 'banner.png' : 'banner.jpg',
+              },
+            ],
+          }),
     };
   }
 
@@ -9081,24 +9841,46 @@ export class BotRuntime {
    * so a customer who taps a button that has since become unfundable is told the same
    * thing either way.
    */
-  private async topupMenu(scope: TenantContext): Promise<PendingReply> {
-    const presets = await this.deps.payments.topupPresets(scope);
-    if (presets.length === 0 || !(await this.deps.payments.manualTransferOffered(scope))) {
-      return { key: 'bot.wallet.topup_unavailable', values: {}, buttons: [], orderId: null };
+  private async topupBegin(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    botInstanceId: BotInstanceId,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    const offered = await this.deps.routes.routesFor(scope, customer.id, 'WALLET_TOPUP', null);
+    if (offered.length === 0) {
+      return {
+        key: 'bot.wallet.topup_unavailable',
+        values: {},
+        buttons: [mainMenuButton()],
+        orderId: null,
+      };
     }
+    const begun = await this.deps.topup.begin(scope, actor, {
+      customerId: customer.id,
+      botInstanceId,
+      idempotencyKey: `${idempotencyKey}:topup-begin`,
+    });
+    // The presets, when configured, are shortcuts that record the figure on the same
+    // capture the typed path uses; they are not a second flow.
+    const presets = await this.deps.payments.topupPresets(scope);
     return {
-      key: 'bot.wallet.topup_choose',
-      values: {},
-      /*
-       * The label is the AMOUNT and nothing else, formatted by the messenger from the
-       * money value — so the digits a customer reads on a button and the digits in the
-       * invoice that follows come from one formatter. A surface may not import the
-       * catalogue to format money itself; `check:boundaries` enforces that.
-       */
-      buttons: presets.map((preset) => ({
-        label: { kind: 'AMOUNT' as const, amount: preset },
-        data: `${TOPUP_PICK_CALLBACK_PREFIX}${preset.amountMinor.toString()}`,
-      })),
+      key: 'bot.wallet.topup_amount_prompt',
+      values: {
+        ...(begun.minimum === null ? {} : { minimum: begun.minimum }),
+        ...(begun.maximum === null ? {} : { maximum: begun.maximum }),
+      },
+      buttons: [
+        ...presets.map((preset) => ({
+          label: { kind: 'AMOUNT' as const, amount: preset },
+          data: `${TOPUP_PICK_CALLBACK_PREFIX}${preset.amountMinor.toString()}`,
+        })),
+        {
+          label: { kind: 'TEMPLATE', key: 'bot.wallet.topup_close_button' },
+          data: `${TOPUP_CLOSE_CALLBACK_PREFIX}${begun.capture.id}`,
+        },
+      ],
       orderId: null,
     };
   }
@@ -9117,19 +9899,24 @@ export class BotRuntime {
     amountMinor: string,
     customer: CustomerRecord,
     idempotencyKey: string,
+    botInstanceId: BotInstanceId,
   ): Promise<PendingReply> {
-    try {
-      const instruction = await this.deps.payments.requestWalletTopup(scope, actor, customer.id, {
-        // Suffixed within the update's own key, the shape every other callback here uses:
-        // a REDELIVERED update recomputes the same suffix, which is what makes the replay
-        // answer with the payment it already created rather than a second one.
-        idempotencyKey: `${idempotencyKey}:topup`,
-        amountMinor: BigInt(amountMinor),
-      });
-      return this.transferInstruction(scope, instruction, null);
-    } catch (error) {
-      return refusal(error);
+    const presets = await this.deps.payments.topupPresets(scope);
+    const preset = presets.find((candidate) => candidate.amountMinor.toString() === amountMinor);
+    if (preset === undefined) {
+      return { key: 'bot.wallet.topup_refused', values: {}, buttons: [], orderId: null };
     }
+    const begun = await this.deps.topup.begin(scope, actor, {
+      customerId: customer.id,
+      botInstanceId,
+      idempotencyKey: `${idempotencyKey}:topup-pick`,
+    });
+    const result = await this.deps.topup.recordAmount(scope, {
+      customerId: customer.id,
+      captureId: begun.capture.id,
+      amount: preset,
+    });
+    return this.topupAmountReply(scope, result, begun.capture.id);
   }
 
   /**
@@ -9153,6 +9940,38 @@ export class BotRuntime {
     idempotencyKey: string,
   ): Promise<PendingReply> {
     try {
+      /*
+       * From the pre-invoice a DRAFT is paid in one tap: the balance is read FIRST, and a
+       * shortfall answers without confirming anything — a reservation held for money
+       * that is not there is a slot nobody can buy until it lapses. Then the confirm
+       * (which reserves and redeems) and the settlement, each under its own key, each
+       * exactly-once on replay.
+       */
+      const before = await this.deps.orders.orderForCustomer(scope, actor, {
+        customerId: customer.id,
+        orderId,
+      });
+      if (before.state === 'DRAFT') {
+        const balance = await this.deps.wallet.balanceForCustomer(scope, actor, customer.id);
+        if (
+          balance.currency !== before.totals.total.currency ||
+          balance.amountMinor < before.totals.total.amountMinor
+        ) {
+          const shortfall = money(
+            balance.currency === before.totals.total.currency
+              ? before.totals.total.amountMinor - balance.amountMinor
+              : before.totals.total.amountMinor,
+            before.totals.total.currency,
+          );
+          return {
+            key: 'bot.wallet.insufficient',
+            values: { shortfall },
+            buttons: [topupButton(), mainMenuButton()],
+            orderId,
+          };
+        }
+        await this.confirmDraft(scope, actor, before, customer, idempotencyKey);
+      }
       const { order } = await this.deps.payments.settleFromWallet(scope, actor, customer.id, {
         // Suffixed within the update's own key, the shape `draft` and `confirm` use: the
         // bare key was consumed by `resolveFromUpdate`, and presenting it again with a
@@ -9169,28 +9988,6 @@ export class BotRuntime {
         ...followUpForSettlement(order.purpose),
       };
     } catch (error) {
-      /*
-       * Insufficient funds is answered HERE rather than through `REFUSAL_REPLIES`,
-       * because the reply needs the shortfall and that map carries no values.
-       *
-       * The shortfall comes from the ERROR's detail, which the service computed from the
-       * ledger inside its transaction — not recomputed here, which would be a second
-       * statement of the same subtraction reading a balance from a different moment.
-       *
-       * What is deliberately NOT offered: a top-up for the difference. That would need a
-       * standalone top-up with an authoritative amount, and `docs/phase4c-audit.md`
-       * records why there is none — combining a shortfall with a configured minimum is a
-       * financial product rule no contract states. The customer is told what is missing
-       * and left to act on it.
-       */
-      /*
-       * A transfer the customer SAID they sent is waiting for review (WP10 P2), so the
-       * wallet was not debited. Answered here rather than through `REFUSAL_REPLIES`,
-       * whose entry for this code answers a CANCELLATION — "this order cannot be
-       * cancelled" — and would tell a customer who tapped pay about something they did
-       * not do. One code, two commands, two sentences; the one this command owes is
-       * that the review decides the order and nothing was taken from the wallet.
-       */
       if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.ORDER_TRANSFER_UNDER_REVIEW) {
         return { key: 'bot.payment.transfer_under_review', values: {}, buttons: [], orderId };
       }
@@ -9200,13 +9997,38 @@ export class BotRuntime {
           return {
             key: 'bot.wallet.insufficient',
             values: { shortfall },
-            buttons: [],
+            buttons: [topupButton(), mainMenuButton()],
             orderId,
           };
         }
       }
       return refusal(error);
     }
+  }
+
+  /**
+   * DRAFT → AWAITING_PAYMENT through the lane that owns the order's purpose: a new
+   * service through `OrderService.confirm`, a renewal or a package through
+   * `CommercialActionService.confirm`. Both are exactly-once under the update's key.
+   */
+  private async confirmDraft(
+    scope: TenantContext,
+    actor: ActorContext,
+    order: OrderRecord,
+    customer: CustomerRecord,
+    idempotencyKey: string,
+  ): Promise<OrderRecord> {
+    if (order.purpose === 'NEW_SERVICE') {
+      return this.deps.orders.confirm(scope, actor, {
+        idempotencyKey: `${idempotencyKey}:confirm`,
+        customerId: customer.id,
+        orderId: order.id,
+      });
+    }
+    return this.deps.commercial.confirm(scope, actor, customer.id, {
+      orderId: order.id,
+      idempotencyKey: `${idempotencyKey}:action_confirm`,
+    });
   }
 
   /**
@@ -9236,6 +10058,13 @@ export class BotRuntime {
     idempotencyKey: string,
   ): Promise<PendingReply> {
     try {
+      const before = await this.deps.orders.orderForCustomer(scope, actor, {
+        customerId: customer.id,
+        orderId,
+      });
+      if (before.state === 'DRAFT') {
+        await this.confirmDraft(scope, actor, before, customer, idempotencyKey);
+      }
       const instruction = await this.deps.payments.requestManualTransfer(
         scope,
         actor,
@@ -9708,6 +10537,190 @@ export type { CustomerRecord };
  * Each button carries the ORDER ID and nothing else. There is no amount in a callback
  * and no place to put one.
  */
+/**
+ * The pre-invoice's buttons (§D), in the approved order: wallet; the external gateway
+ * ONLY when a real external route allows the purchase (none exists in this release, so
+ * it is never drawn); manual when card-to-card is offered; the discount code on a new
+ * order still in DRAFT; back to the main menu. A cancel is not here: a DRAFT expires on
+ * its own, and the cancel button lives on the awaiting-payment message.
+ */
+function preinvoiceButtons(
+  order: OrderRecord,
+  offered: { readonly manual: boolean; readonly external: boolean },
+): readonly CustomerButton[] {
+  return [
+    {
+      label: { kind: 'TEMPLATE', key: 'bot.payment.wallet_button' },
+      data: `${WALLET_PAY_CALLBACK_PREFIX}${order.id}`,
+    },
+    ...(offered.external
+      ? [
+          {
+            label: { kind: 'TEMPLATE' as const, key: 'bot.payment.gateway_button' as const },
+            data: `${GATEWAY_PAY_CALLBACK_PREFIX}${order.id}`,
+          },
+        ]
+      : []),
+    ...(offered.manual
+      ? [
+          {
+            label: { kind: 'TEMPLATE' as const, key: 'bot.payment.manual_button' as const },
+            data: `${MANUAL_PAY_CALLBACK_PREFIX}${order.id}`,
+          },
+        ]
+      : []),
+    ...(order.state === 'DRAFT' && order.purpose === 'NEW_SERVICE'
+      ? [
+          order.discountCode === null
+            ? {
+                label: { kind: 'TEMPLATE' as const, key: 'bot.discount.enter_button' as const },
+                data: `${DISCOUNT_CODE_ENTER_CALLBACK_PREFIX}${order.id}`,
+              }
+            : {
+                label: { kind: 'TEMPLATE' as const, key: 'bot.discount.remove_button' as const },
+                data: `${DISCOUNT_CODE_REMOVE_CALLBACK_PREFIX}${order.id}`,
+              },
+        ]
+      : []),
+    mainMenuButton(),
+  ];
+}
+
+function mainMenuButton(): CustomerButton {
+  return {
+    label: { kind: 'TEMPLATE', key: 'bot.menu.main_button' },
+    data: MAIN_MENU_CALLBACK_DATA,
+  };
+}
+
+function topupButton(): CustomerButton {
+  return {
+    label: { kind: 'TEMPLATE', key: 'bot.wallet.topup_button' },
+    data: TOPUP_MENU_CALLBACK_PREFIX,
+  };
+}
+
+function backToListButton(): CustomerButton {
+  return {
+    label: { kind: 'TEMPLATE', key: 'bot.service.back_to_list_button' },
+    data: `${SERVICES_LIST_PAGE_CALLBACK_PREFIX}1`,
+  };
+}
+
+function backToServiceButton(serviceId: string): CustomerButton {
+  return {
+    label: { kind: 'TEMPLATE', key: 'bot.service.back_to_list_button' },
+    data: `${SERVICE_CALLBACK_PREFIX}${serviceId}`,
+  };
+}
+
+/**
+ * The list's bottom controls (§G): the search pair, the pager, back to the menu. The
+ * page indicator is a real button — a tap re-renders the page — and the arrows appear
+ * only where there is a page to go to.
+ */
+function servicesListControls(page: number, pages: number): readonly CustomerButton[] {
+  const controls: CustomerButton[] = [
+    {
+      label: { kind: 'TEMPLATE', key: 'bot.service.search_label_button' },
+      data: SERVICES_SEARCH_CALLBACK_DATA,
+      row: 100,
+    },
+    {
+      label: { kind: 'TEMPLATE', key: 'bot.service.search_button' },
+      data: SERVICES_SEARCH_CALLBACK_DATA,
+      row: 100,
+    },
+  ];
+  if (page > 1) {
+    controls.push({
+      label: { kind: 'TEMPLATE', key: 'bot.service.prev_page_button' },
+      data: `${SERVICES_LIST_PAGE_CALLBACK_PREFIX}${page - 1}`,
+      row: 101,
+    });
+  }
+  controls.push({
+    label: { kind: 'TEMPLATE', key: 'bot.service.page_button', values: { page, pages } },
+    data: `${SERVICES_LIST_PAGE_CALLBACK_PREFIX}${page}`,
+    row: 101,
+  });
+  if (page < pages) {
+    controls.push({
+      label: { kind: 'TEMPLATE', key: 'bot.service.next_page_button' },
+      data: `${SERVICES_LIST_PAGE_CALLBACK_PREFIX}${page + 1}`,
+      row: 101,
+    });
+  }
+  controls.push({
+    label: { kind: 'TEMPLATE', key: 'bot.service.back_to_menu_button' },
+    data: MAIN_MENU_CALLBACK_DATA,
+    row: 102,
+  });
+  return controls;
+}
+
+/** The stored last-seen columns as the tri-state the composer renders. NULL is UNSUPPORTED. */
+function lastSeenOf(service: ServiceRecord): ProviderLastSeen {
+  if (service.lastSeenState === 'AT' && service.lastSeenAt !== null) {
+    return { kind: 'AT', at: service.lastSeenAt };
+  }
+  if (service.lastSeenState === 'NEVER') return { kind: 'NEVER' };
+  return { kind: 'UNSUPPORTED' };
+}
+
+/** First and last name, else the username, else the numeric id — never blank. */
+function displayNameOf(customer: CustomerRecord): string {
+  const name = [customer.firstName, customer.lastName]
+    .filter((part): part is string => typeof part === 'string' && part.trim().length > 0)
+    .join(' ')
+    .trim();
+  if (name.length > 0) return name;
+  if (customer.username !== null && customer.username.trim().length > 0) return customer.username;
+  return customer.telegramUserId;
+}
+
+const TUTORIAL_KEYS: Readonly<
+  Record<ConnectionGuidePlatform, { button: TemplateKey; body: TemplateKey }>
+> = {
+  ANDROID: { button: 'bot.tutorial.android_button', body: 'bot.tutorial.android' },
+  IOS: { button: 'bot.tutorial.ios_button', body: 'bot.tutorial.ios' },
+  WINDOWS: { button: 'bot.tutorial.windows_button', body: 'bot.tutorial.windows' },
+  MACOS: { button: 'bot.tutorial.macos_button', body: 'bot.tutorial.macos' },
+  LINUX: { button: 'bot.tutorial.linux_button', body: 'bot.tutorial.linux' },
+};
+
+/** «📚 مشاهده آموزش استفاده»: the platform choice. Needs no id; the guides are tenant text. */
+function tutorialChoice(): PendingReply {
+  return {
+    key: 'bot.tutorial.choose',
+    values: {},
+    buttons: [
+      ...CONNECTION_GUIDE_PLATFORMS.map((platform, index) => ({
+        label: { kind: 'TEMPLATE' as const, key: TUTORIAL_KEYS[platform].button },
+        data: `${TUTORIAL_PLATFORM_CALLBACK_PREFIX}${platform}`,
+        row: Math.floor(index / 2),
+      })),
+      mainMenuButton(),
+    ],
+    orderId: null,
+  };
+}
+
+function tutorialFor(platform: ConnectionGuidePlatform): PendingReply {
+  return {
+    key: TUTORIAL_KEYS[platform].body,
+    values: {},
+    buttons: [
+      {
+        label: { kind: 'TEMPLATE', key: 'bot.service.tutorial_button' },
+        data: TUTORIAL_CALLBACK_DATA,
+      },
+      mainMenuButton(),
+    ],
+    orderId: null,
+  };
+}
+
 function paymentButtons(orderId: string, manualAvailable: boolean): readonly CustomerButton[] {
   return [
     {

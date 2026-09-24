@@ -25,6 +25,7 @@ import {
   type TenantContext,
   type UnitOfWork,
   type UserId,
+  type BotInstanceId,
 } from '@nexa/contracts';
 import { productIdSchema } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
@@ -41,6 +42,7 @@ import type { OutboxWriter } from '../../../platform/eventing/infrastructure/out
 import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { CustomerRepository } from '../../customers/application/ports.js';
+import type { CustomerCaptureRepository } from '../../customers/application/customer-capture-ports.js';
 import type {
   OrderUsernameLane,
   UsernameChoice,
@@ -178,6 +180,13 @@ export interface OrderServiceDeps {
   readonly resellers: Pick<ResellerService, 'standing' | 'assertEntitled'>;
   /** The window in which a plain message is a discount code (WP8 P11). */
   readonly discountCodes: DiscountCodeCaptureRepository;
+  /**
+   * The customer's generic text window (customer UX completion §N): opening a
+   * username or discount window closes it, as opening it closes these, so the most
+   * recent prompt is the only reader across all three tables. Optional only for the
+   * fixtures that build this service without one.
+   */
+  readonly captures?: Pick<CustomerCaptureRepository, 'closeOpen'>;
   readonly clock: Clock;
   readonly ids: IdGenerator;
 }
@@ -662,8 +671,15 @@ export class OrderService {
         }
         this.assertNameable(order);
         // One window per customer and bot across BOTH kinds (WP8 P11): a plain message is
-        // offered to one question, never to two.
+        // offered to one question, never to two. And the generic text window (§N).
         await this.supersedeDiscountCodeWindow(scope, input.botInstanceId, customerId, tx);
+        await this.deps.captures?.closeOpen(
+          scope,
+          input.botInstanceId as BotInstanceId,
+          customerId,
+          this.deps.clock.now(),
+          tx,
+        );
         /*
          * The PANEL's modes, not the ones the button was drawn from.
          *
@@ -917,6 +933,13 @@ export class OrderService {
         if (usernameWindow !== null) {
           await this.deps.usernames.closeWindow(scope, usernameWindow.id, 'SUPERSEDED', now, tx);
         }
+        await this.deps.captures?.closeOpen(
+          scope,
+          input.botInstanceId as BotInstanceId,
+          customerId,
+          now,
+          tx,
+        );
         const window = await this.deps.discountCodes.open(
           scope,
           {

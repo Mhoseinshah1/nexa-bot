@@ -815,6 +815,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'به دلیل قابل پیش‌بینی نبودن وضعیت نت کشور، امکان دادن تضمین نیست فقط می‌تونیم تضمین کنیم که تمام تلاشمون رو برای ارائه سرویس هر چه بهتر انجام بدیم.',
   'bot.faq.default_9_question': 'امکان بازگشت وجه دارید؟',
   'bot.faq.default_9_answer': 'امکان بازگشت وجه در صورت حل نشدن مشکل از سمت ما وجود دارد.',
+  'bot.faq.page': '{content}',
   'bot.support.contact_button': '📨 ارسال پیام به پشتیبانی',
   'bot.support.contact': 'برای ارتباط با پشتیبانی روی دکمهٔ زیر بزنید.',
   'bot.support.unconfigured': 'در حال حاضر راه ارتباطی با پشتیبانی تنظیم نشده است.',
