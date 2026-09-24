@@ -694,7 +694,16 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
 
   if (route.path === '/referrals') {
     return {
-      element: <ReferralsPage route={route} denied={!may('referrals.view')} />,
+      element: (
+        <ReferralsPage
+          route={route}
+          denied={!may('referrals.view')}
+          // The banner is tenant configuration: read under `settings.view`, written under
+          // `settings.edit`, both charged by `TenantMediaService` on their own.
+          mayViewBanner={may('settings.view')}
+          mayEditBanner={may('settings.edit')}
+        />
+      ),
       crumbs: [{ label: t('web.referrals_title') }],
       title: t('web.referrals_title'),
     };
