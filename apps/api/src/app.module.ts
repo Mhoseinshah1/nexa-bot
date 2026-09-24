@@ -19,6 +19,7 @@ import { WalletController } from './surfaces/web/wallet.controller.js';
 import { PaymentsController } from './surfaces/web/payments.controller.js';
 import { PaymentAccountsController } from './surfaces/web/payment-accounts.controller.js';
 import { PaymentGatewaysController } from './surfaces/web/payment-gateways.controller.js';
+import { SupportFaqController } from './surfaces/web/support-faq.controller.js';
 import { RefundsController } from './surfaces/web/refunds.controller.js';
 import { ServicesController } from './surfaces/web/services.controller.js';
 import { PanelsController } from './surfaces/web/panels.controller.js';
@@ -75,6 +76,7 @@ export class AppModule implements NestModule {
         PaymentsController as never,
         PaymentAccountsController as never,
         PaymentGatewaysController as never,
+        SupportFaqController as never,
         RefundsController as never,
         ServicesController as never,
         PanelsController as never,

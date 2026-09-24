@@ -158,6 +158,12 @@ import {
 import { PaymentAccountService } from './modules/commerce/payments/application/payment-account.service.js';
 import { PaymentGatewayService } from './modules/commerce/payments/application/payment-gateway.service.js';
 import type { PaymentGatewayRepository } from './modules/commerce/payments/application/gateway-ports.js';
+import { DrizzleSupportFaqRepository } from './modules/control/support/infrastructure/drizzle-support-faq.repository.js';
+import { SupportFaqService } from './modules/control/support/application/support-faq.service.js';
+import {
+  SupportFaqSeeder,
+  SupportScreenReader,
+} from './modules/control/support/application/support-screen.reader.js';
 import type { CustomerContactReader } from './modules/commerce/provisioning/application/ports.js';
 import { ReceiptService } from './modules/commerce/payments/application/receipt.service.js';
 import { TelegramReceiptFiles } from './modules/commerce/payments/infrastructure/telegram-receipt-files.js';
@@ -549,6 +555,10 @@ export interface Container {
   readonly featureFlagResolver: FeatureFlagResolver;
   readonly templatesService: TemplateManagementService;
   readonly templateResolver: TemplateResolver;
+  /** The tenant's FAQ as the operator maintains it (customer UX completion §J). */
+  readonly supportFaqs: SupportFaqService;
+  /** The customer's support screen: active FAQ in order, and the first support account's URL. */
+  readonly supportScreen: SupportScreenReader;
   /** Exposed for the tests that drive the resolver against a substituted catalogue. */
   readonly templateRepository: DrizzleTemplateRepository;
   readonly notifications: NotificationService;
@@ -2143,6 +2153,40 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    */
   const paymentDestinationRenderer = new PaymentDestinationRenderer(templateResolver);
 
+  /*
+   * The support FAQ (customer UX completion §J). Built after the template resolver
+   * because the seeder renders the nine defaults through it — a tenant override of
+   * `bot.faq.default_<n>_*` is the tenant's default. Two objects over one repository:
+   * the operator's service, and the customer's reader that charges no permission.
+   */
+  const supportFaqRepository = new DrizzleSupportFaqRepository(database.db);
+  const supportFaqSeeder = new SupportFaqSeeder({
+    repository: supportFaqRepository,
+    uow,
+    templates: templateResolver,
+    scopeActivity: tenants,
+    ids,
+    clock,
+  });
+  const supportFaqService = new SupportFaqService({
+    repository: supportFaqRepository,
+    seeder: supportFaqSeeder,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    ids,
+    clock,
+  });
+  const supportScreenReader = new SupportScreenReader({
+    repository: supportFaqRepository,
+    seeder: supportFaqSeeder,
+    settings: settingsResolver,
+  });
+
   const paymentAccountService = new PaymentAccountService({
     repository: paymentAccountRepository,
     guard,
@@ -3346,6 +3390,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     featureFlagResolver,
     templatesService,
     templateResolver,
+    supportFaqs: supportFaqService,
+    supportScreen: supportScreenReader,
     templateRepository,
     notifications,
     notificationRepository,

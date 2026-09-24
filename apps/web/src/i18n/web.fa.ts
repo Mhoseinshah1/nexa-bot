@@ -1143,6 +1143,46 @@ export const WEB_FA = {
   'web.payment_gateways_empty': 'هنوز روش پرداختی ثبت نشده است.',
   'web.payment_gateways_empty_hint':
     'در نصب سالم این فهرست خالی نمی‌ماند. اگر خالی است، سرویس را یک بار راه‌اندازی مجدد کنید تا روش‌های این نسخه ساخته شوند.',
+  // Support (customer UX completion §J) — the FAQ the bot answers with, and a
+  // pointer at the settings page, where the support DESTINATION already lives.
+  'web.nav_support': 'پشتیبانی',
+  'web.support_title': 'پشتیبانی',
+  'web.support_subtitle':
+    'سوالات متداولی که ربات به مشتری نشان می‌دهد، به همان ترتیب، و راه ارتباط با پشتیبانی.',
+  'web.support_faq_hint':
+    'فقط پرسش‌های فعال به مشتری نشان داده می‌شوند، به ترتیب عدد «ترتیب». بار اول نه پرسش پیش‌فرض ساخته می‌شود؛ از آن پس فهرست مال شماست و خودبه‌خود پر نمی‌شود.',
+  'web.support_destination_title': 'راه ارتباط با پشتیبانی',
+  'web.support_destination_note':
+    'دکمهٔ «ارسال پیام به پشتیبانی» به نخستین حساب فهرست «حساب‌های پشتیبانی» می‌رود. آن فهرست در صفحهٔ تنظیمات ویرایش می‌شود، نه این‌جا؛ اگر خالی باشد به مشتری گفته می‌شود راه ارتباطی تنظیم نشده است.',
+  'web.support_destination_link': 'رفتن به تنظیمات',
+  'web.support_faq_order': 'ترتیب',
+  'web.support_faq_question': 'پرسش',
+  'web.support_faq_answer': 'پاسخ',
+  'web.support_faq_status': 'وضعیت',
+  'web.support_faq_active': 'فعال',
+  'web.support_faq_inactive': 'غیرفعال',
+  'web.support_faq_updated': 'آخرین تغییر',
+  'web.support_faq_actions': 'عملیات',
+  'web.support_faq_edit': 'ویرایش',
+  'web.support_faq_activate': 'فعال کردن',
+  'web.support_faq_deactivate': 'غیرفعال کردن',
+  'web.support_faq_new': 'افزودن پرسش',
+  'web.support_faq_creating': 'پرسش تازه',
+  'web.support_faq_editing': 'ویرایش پرسش',
+  'web.support_faq_form_hint':
+    'پرسش تا ۳۰۰ و پاسخ تا ۲۰۰۰ نویسه. متن همان‌طور که نوشته می‌شود به مشتری نشان داده می‌شود.',
+  'web.support_faq_sort_hint': 'عدد کوچک‌تر بالاتر نشان داده می‌شود. پیش‌فرض‌ها ۱۰ تا ۹۰ هستند.',
+  'web.support_faq_sort_invalid': 'ترتیب باید عددی صحیح از ۰ تا ۱۰۰٬۰۰۰ باشد.',
+  'web.support_faq_text_required': 'پرسش و پاسخ هر دو لازم‌اند.',
+  'web.support_faq_save': 'ذخیره',
+  'web.support_faq_cancel': 'انصراف',
+  'web.support_faq_saved': 'پرسش ذخیره شد.',
+  'web.support_faq_status_done': 'وضعیت پرسش تغییر کرد.',
+  'web.support_faq_conflict':
+    'این پرسش پس از خواندن شما تغییر کرده است. نسخهٔ تازه را بگیرید و تغییر خود را دوباره اعمال کنید.',
+  'web.support_faq_limit': 'سقف تعداد پرسش‌ها پر شده است. یکی را غیرفعال یا ویرایش کنید.',
+  'web.support_faq_empty': 'هنوز پرسشی ثبت نشده است.',
+  'web.support_faq_empty_hint': 'با «افزودن پرسش» نخستین پرسش را بسازید.',
   'web.payment_resolution': 'نتیجهٔ بدون دریافت وجه',
   'web.payment_destination': 'مقصد واریز اعلام‌شده',
   'web.payment_destination_label': 'عنوان حساب',

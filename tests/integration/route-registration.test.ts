@@ -197,6 +197,11 @@ describe('dynamic route registration', () => {
       ['POST', `admins/${id}/telegram`],
       ['POST', `settings/sales.currency`],
       ['POST', `features/telegram.webhook`],
+      // Customer UX completion §J: the FAQ editor.
+      ['GET', 'support/faqs'],
+      ['POST', 'support/faqs'],
+      ['POST', `support/faqs/${id}`],
+      ['POST', `support/faqs/${id}/status`],
       ['GET', `templates/bot.start.greeting`],
       ['GET', `templates/bot.start.greeting/revisions`],
       ['POST', `templates/bot.start.greeting`],
