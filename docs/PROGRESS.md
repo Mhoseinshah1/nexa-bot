@@ -834,6 +834,58 @@ provider-neutral and the question goes to the owner at 5D. `OQ-5C-01` is the one
 question 5C leaves: whether a route's bounds and eligibility should apply to an ORDER
 payment as well as a top-up.
 
+## Customer Telegram UX completion — done
+
+The customer's side of the bot, brought to the screens the owner approved:
+`docs/customer-ux-completion-audit.md` is the audit that preceded the code and
+`docs/customer-ux-completion-falsification.md` the mutation record that followed it.
+
+### What exists
+
+- **The delivery card** is ONE photo: a QR of the exact subscription URL the panel
+  produced, the approved card as its caption, and three buttons — the connection guide
+  (a platform chooser), «وصل شدم», which writes nothing, and «مشکل دارم», which opens
+  support. The URL is never logged; `subscription` joined the redaction fragments.
+- **Product display metadata** — locations, features, a location label — is text a
+  customer reads on the pre-invoice and the card. It is never routing: provisioning
+  reads `panel_id` and nothing else.
+- **The pre-invoice** replaces the order summary. Its buttons are the payment routes
+  the tenant allows for a purchase — wallet, the card-to-card route, a gateway only
+  when one exists — the discount code, and the way back. The wallet button confirms and
+  settles in one tap; a short balance names the shortfall, offers the top-up and
+  confirms nothing.
+- **The wallet page** is the approved account summary from the customer's own rows:
+  balance from the ledger, counts of services and paid invoices, referrals, the group.
+- **A typed top-up**: an amount typed into a ten-minute capture window, checked against
+  `wallet.topup.minimum`, `wallet.topup.maximum` and the route's bounds, then a chooser
+  of the routes allowed for a top-up with the gift percentage on the button. A route is
+  allowed per purpose (`allow_service_purchase`, `allow_wallet_topup`).
+- **My services** is a numbered pager over the customer's accounts, labelled by their
+  real panel usernames, with a search by prefix that stays inside the customer's rows.
+- **The service card** with its buttons gated by what the panel can do: refresh (a
+  customer-requested `SYNC_USAGE`, rate-limited), link, rotate, a private note, extra
+  traffic, renew (a chooser over the renewal and add-time packages), the on/off switch,
+  and the two-tap terminate. A terminal failure of a customer-requested operation is
+  announced once, like a success.
+- **The referral screen** with the optional banner, the commission, the signup gift
+  block and the statistics; the gift is split by configured shares, claimed by each side
+  once, and only after the referred customer's first purchase is fulfilled.
+- **Support and FAQ**: nine seeded Persian entries per tenant, editable in the Web
+  Admin, rendered under the approved heading and footer, with the tenant's own support
+  handle as the contact button.
+- **Web Admin** pages for all of it: product display fields, route purposes, the FAQ
+  editor, the referral banner and gift settings.
+
+### Deliberately absent
+
+No payment fee, no invented gateway provider, no fake provider success. A `PAID`
+order still has two outcomes and no third. `PAID_UNFULFILLED` did not come back with
+the renew chooser: an option that cannot be honoured is not drawn, and a tap on a stale
+one is refused with a reason.
+
 ## Phases 6–8
 
-Not started. Scope in `docs/architecture.md`.
+Phase 6 is done — 6A the service lifecycle on every surface, 6B capacity, eligibility
+and the enable gate, 6C the per-panel username policy — each with its own record under
+`docs/`. Phase 7 is not started; its scope is in `docs/architecture.md`, and `CLAUDE.md`
+says not to begin it without an explicit instruction.
