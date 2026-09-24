@@ -833,6 +833,14 @@ export interface ProductWriteInput {
   priceCurrency: CurrencyCode | null;
   /** Required by the contract; `null` files the product under no category. */
   categoryId: string | null;
+  /**
+   * Customer-facing display data (customer UX completion §C), in the operator's order.
+   * Always sent: the write replaces the whole product, so a form that omitted them
+   * would clear lists it never showed.
+   */
+  displayLocations: string[];
+  displayFeatures: string[];
+  serviceLocationLabel: string | null;
   idempotencyKey: string;
 }
 

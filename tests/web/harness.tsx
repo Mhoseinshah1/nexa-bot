@@ -164,6 +164,11 @@ export function product(overrides: Record<string, unknown> = {}): Record<string,
     deviceLimit: 2,
     priceAmount: '250000',
     priceCurrency: 'IRT',
+    // The display data (customer UX completion §C): empty by default, which is what
+    // every product written before the fields existed carries.
+    displayLocations: [],
+    displayFeatures: [],
+    serviceLocationLabel: null,
     createdAt: '2026-02-01T08:00:00.000Z',
     updatedAt: '2026-09-10T12:30:00.000Z',
     ...overrides,

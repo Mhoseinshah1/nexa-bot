@@ -1428,6 +1428,35 @@ export const WEB_FA = {
   'web.product_problem_traffic': 'حجم باید عددی صحیح به بایت باشد.',
   'web.product_problem_devices': 'سقف دستگاه باید عددی صحیح و بزرگ‌تر از صفر باشد یا خالی بماند.',
   'web.product_problem_price': 'قیمت باید عددی صحیح و بزرگ‌تر از صفر باشد یا خالی بماند.',
+  /*
+   * Product display metadata (customer UX completion §C). Marketing copy the
+   * pre-invoice and the cards render in the operator's order; the panel field, not
+   * any of this, decides where a purchase is delivered — and the hints say so where
+   * the operator is typing, because a location list that LOOKS like routing is one
+   * somebody will one day edit expecting it to route.
+   */
+  'web.product_display_locations': 'لوکیشن‌ها',
+  'web.product_display_locations_hint':
+    'به همین ترتیب در پیش‌فاکتور نمایش داده می‌شود؛ هر خط یک لوکیشن، حداکثر ۳۰ خط و هر خط تا ۶۰ نویسه. فقط برای نمایش است: سرویس روی پنلِ انتخاب‌شده در بالا ساخته می‌شود، نه بر اساس این متن.',
+  'web.product_display_locations_empty':
+    'لوکیشنی نوشته نشده است؛ این بخش در پیش‌فاکتور نمایش داده نمی‌شود.',
+  'web.product_display_add_location': 'افزودن لوکیشن',
+  'web.product_display_location_n': 'لوکیشن',
+  'web.product_display_features': 'ویژگی‌ها',
+  'web.product_display_features_hint':
+    'به همین ترتیب در پیش‌فاکتور نمایش داده می‌شود؛ هر خط یک ویژگی، حداکثر ۳۰ خط و هر خط تا ۲۰۰ نویسه.',
+  'web.product_display_features_empty':
+    'ویژگی‌ای نوشته نشده است؛ این بخش در پیش‌فاکتور نمایش داده نمی‌شود.',
+  'web.product_display_add_feature': 'افزودن ویژگی',
+  'web.product_display_feature_n': 'ویژگی',
+  'web.product_display_location_label': 'برچسب لوکیشن سرویس',
+  'web.product_display_location_label_hint':
+    'برچسب کوتاهی که کارت تحویل و کارت سرویس به‌عنوان لوکیشن سرویس نشان می‌دهند، تا ۶۰ نویسه. خالی یعنی نمایش داده نمی‌شود.',
+  'web.product_display_problem_locations':
+    'هر لوکیشن باید یک خط غیرخالی و حداکثر ۶۰ نویسه باشد و بیش از ۳۰ لوکیشن مجاز نیست.',
+  'web.product_display_problem_features':
+    'هر ویژگی باید یک خط غیرخالی و حداکثر ۲۰۰ نویسه باشد و بیش از ۳۰ ویژگی مجاز نیست.',
+  'web.product_display_problem_label': 'برچسب لوکیشن سرویس باید یک خط و حداکثر ۶۰ نویسه باشد.',
   'web.products_scope_title': 'آنچه در این نسخه نیست',
   'web.products_scope_body':
     'فهرست قیمت جداگانه برای نمایندگان در این نسخه وجود ندارد. قیمت هر محصول همان عددی است که اینجا وارد می‌کنید؛ نماینده با نرخ سطح خود (یا نرخ اختصاصی‌اش) از همین قیمت خرید می‌کند، و تخفیف‌ها و کش‌بک قاعده‌هایی جدا هستند که در صفحهٔ «تخفیف‌ها و کش‌بک» روی قیمت اعمال می‌شوند.',

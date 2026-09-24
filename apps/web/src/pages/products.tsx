@@ -6,6 +6,10 @@ import {
   MAX_DEVICE_LIMIT,
   MAX_DURATION_DAYS,
   PRODUCT_DESCRIPTION_MAX_LENGTH,
+  PRODUCT_DISPLAY_FEATURE_MAX_LENGTH,
+  PRODUCT_DISPLAY_LIST_MAX_ITEMS,
+  PRODUCT_DISPLAY_LOCATION_MAX_LENGTH,
+  PRODUCT_SERVICE_LOCATION_LABEL_MAX_LENGTH,
   PRODUCT_SORT_MAX,
   PRODUCT_SORT_MIN,
   PRODUCT_TITLE_MAX_LENGTH,
@@ -45,6 +49,7 @@ import {
   Empty,
   Field,
   KV,
+  ListEditor,
   Ltr,
   Money,
   PageHead,
@@ -201,6 +206,20 @@ function CatalogueBadge({
 
 function Dash() {
   return <span className="faint">—</span>;
+}
+
+/** An ordered display list, numbered as the pre-invoice orders it; a dash when empty. */
+function DisplayList({ lines }: { lines: readonly string[] }) {
+  if (lines.length === 0) return <Dash />;
+  return (
+    <ol className="display-list">
+      {lines.map((line, index) => (
+        // Position IS the identity of a line in an ordered list; two equal lines are
+        // two entries, and the operator sees them as such.
+        <li key={`${String(index)}:${line}`}>{line}</li>
+      ))}
+    </ol>
+  );
 }
 
 /** A traffic allowance, or the word for "no limit". Zero is a sentinel, not a quantity. */
@@ -570,6 +589,14 @@ interface FormState {
   priceCurrency: CurrencyCode;
   /** The category id, or empty for none. See the field's own comment in `ProductForm`. */
   categoryId: string;
+  /**
+   * The customer-facing display data (customer UX completion §C), one line per entry,
+   * in the order the operator arranged. Marketing copy: the panel field above decides
+   * where a purchase lands, and nothing typed here changes that.
+   */
+  displayLocations: readonly string[];
+  displayFeatures: readonly string[];
+  serviceLocationLabel: string;
 }
 
 const BLANK: FormState = {
@@ -584,6 +611,9 @@ const BLANK: FormState = {
   priceAmount: '',
   priceCurrency: 'IRT',
   categoryId: '',
+  displayLocations: [],
+  displayFeatures: [],
+  serviceLocationLabel: '',
 };
 
 function stateOf(row: ProductSummaryResponse): FormState {
@@ -599,7 +629,28 @@ function stateOf(row: ProductSummaryResponse): FormState {
     priceAmount: row.priceAmount ?? '',
     priceCurrency: row.priceCurrency ?? 'IRT',
     categoryId: row.categoryId ?? '',
+    displayLocations: row.displayLocations,
+    displayFeatures: row.displayFeatures,
+    serviceLocationLabel: row.serviceLocationLabel ?? '',
   };
+}
+
+/**
+ * A display list as the contract bounds it, or null when a line fails.
+ *
+ * Each line is TRIMMED and must survive trimming: a row the operator added and left
+ * empty is reported rather than silently dropped, because a form that quietly removes
+ * a row teaches nobody that it did. No line breaks — each entry renders as one line of
+ * a Telegram message — and no more than the list bound, which is what keeps the
+ * pre-invoice under the message cap.
+ */
+function displayListOf(lines: readonly string[], maxLength: number): string[] | null {
+  if (lines.length > PRODUCT_DISPLAY_LIST_MAX_ITEMS) return null;
+  const trimmed = lines.map((line) => line.trim());
+  const valid = trimmed.every(
+    (line) => line !== '' && line.length <= maxLength && !/[\r\n]/u.test(line),
+  );
+  return valid ? trimmed : null;
 }
 
 /**
@@ -654,6 +705,18 @@ export function bodyFrom(
     return { problem: 'web.product_problem_price' };
   }
 
+  const displayLocations = displayListOf(
+    state.displayLocations,
+    PRODUCT_DISPLAY_LOCATION_MAX_LENGTH,
+  );
+  if (displayLocations === null) return { problem: 'web.product_display_problem_locations' };
+  const displayFeatures = displayListOf(state.displayFeatures, PRODUCT_DISPLAY_FEATURE_MAX_LENGTH);
+  if (displayFeatures === null) return { problem: 'web.product_display_problem_features' };
+  const label = state.serviceLocationLabel.trim();
+  if (label.length > PRODUCT_SERVICE_LOCATION_LABEL_MAX_LENGTH || /[\r\n]/u.test(label)) {
+    return { problem: 'web.product_display_problem_label' };
+  }
+
   return {
     body: {
       title,
@@ -677,6 +740,11 @@ export function bodyFrom(
        * whole product.
        */
       categoryId: state.categoryId.trim() === '' ? null : state.categoryId.trim(),
+      // In the operator's order, which is the order the pre-invoice renders.
+      displayLocations,
+      displayFeatures,
+      // Empty is ABSENT: the schema refuses a blank label, and null is what "no label" is.
+      serviceLocationLabel: label === '' ? null : label,
     },
   };
 }
@@ -967,6 +1035,82 @@ function ProductForm({
         </select>
       </Field>
 
+      {/*
+        The display lists (customer UX completion §C), as ORDERED editors.
+
+        Ordered because the order is data: the pre-invoice renders these lines as the
+        operator arranged them, so the editor has to be able to move a row, not only
+        add and remove one. `ListEditor` is the same control the support handles and
+        channels use, position-keyed for the same reason. Nothing here is routing — the
+        panel field above is — and the hint says so where the operator is typing.
+      */}
+      <Field
+        label={t('web.product_display_locations')}
+        hint={t('web.product_display_locations_hint')}
+      >
+        <ListEditor
+          items={state.displayLocations}
+          onChange={(next) => set('displayLocations', next)}
+          addLabel={t('web.product_display_add_location')}
+          emptyHint={t('web.product_display_locations_empty')}
+          onAdd={() => ''}
+          renderRow={(item, index, update) => (
+            <>
+              <label className="visually-hidden" htmlFor={`product-location-${mode}-${index}`}>
+                {`${t('web.product_display_location_n')} ${formatNumber(index + 1)}`}
+              </label>
+              <input
+                id={`product-location-${mode}-${index}`}
+                className="input"
+                value={item}
+                maxLength={PRODUCT_DISPLAY_LOCATION_MAX_LENGTH}
+                onChange={(event) => update(event.target.value)}
+              />
+            </>
+          )}
+        />
+      </Field>
+
+      <Field
+        label={t('web.product_display_features')}
+        hint={t('web.product_display_features_hint')}
+      >
+        <ListEditor
+          items={state.displayFeatures}
+          onChange={(next) => set('displayFeatures', next)}
+          addLabel={t('web.product_display_add_feature')}
+          emptyHint={t('web.product_display_features_empty')}
+          onAdd={() => ''}
+          renderRow={(item, index, update) => (
+            <>
+              <label className="visually-hidden" htmlFor={`product-feature-${mode}-${index}`}>
+                {`${t('web.product_display_feature_n')} ${formatNumber(index + 1)}`}
+              </label>
+              <input
+                id={`product-feature-${mode}-${index}`}
+                className="input"
+                value={item}
+                maxLength={PRODUCT_DISPLAY_FEATURE_MAX_LENGTH}
+                onChange={(event) => update(event.target.value)}
+              />
+            </>
+          )}
+        />
+      </Field>
+
+      <Field
+        label={t('web.product_display_location_label')}
+        hint={t('web.product_display_location_label_hint')}
+        htmlFor={`product-location-label-${mode}`}
+      >
+        <input
+          id={`product-location-label-${mode}`}
+          value={state.serviceLocationLabel}
+          maxLength={PRODUCT_SERVICE_LOCATION_LABEL_MAX_LENGTH}
+          onChange={(event) => set('serviceLocationLabel', event.target.value)}
+        />
+      </Field>
+
       <Field
         label={t('web.product_sort_order')}
         hint={t('web.product_sort_hint')}
@@ -1165,6 +1309,27 @@ export function ProductDetailPage({
                       <Dash key="pa" />
                     ) : (
                       <Copyable key="pa" value={row.panelId} />
+                    ),
+                  ],
+                  /*
+                   * The display data, shown as the ordered lists they are. An empty list
+                   * is a dash rather than an empty section, which is also what the
+                   * pre-invoice does with it.
+                   */
+                  [
+                    t('web.product_display_locations'),
+                    <DisplayList key="dloc" lines={row.displayLocations} />,
+                  ],
+                  [
+                    t('web.product_display_features'),
+                    <DisplayList key="dfeat" lines={row.displayFeatures} />,
+                  ],
+                  [
+                    t('web.product_display_location_label'),
+                    row.serviceLocationLabel === null ? (
+                      <Dash key="dlabel" />
+                    ) : (
+                      <span key="dlabel">{row.serviceLocationLabel}</span>
                     ),
                   ],
                   [t('web.product_created_at'), formatTimestamp(row.createdAt)],
