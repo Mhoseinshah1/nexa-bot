@@ -6,6 +6,7 @@ import {
   RECEIPT_PUSH_FAILED_CODE,
   receiptPushConditionKey,
 } from '../../apps/api/src/modules/commerce/payments/application/receipt-review-push.service';
+import { DrizzleReceiptReviewFactsReader } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-receipt-review-facts.reader';
 import { createAdmin, tenantA, tenantB } from './harness';
 import {
   BOT_A,
@@ -554,10 +555,51 @@ describe('the administrators’ receipt push', () => {
       expect(caption).toContain(String(reference)); // tracking code
       expect(caption).toContain('یادداشت مشتری'); // the customer's note
       expect(caption).not.toContain('file-caption'); // never a file id
+      // The order's frozen volume and duration (1 byte, 30 days), typed through their labels.
+      expect(caption).toMatch(/حجم محصول: 1\n/u);
+      expect(caption).toMatch(/مدت محصول: 30\n/u);
     }
     // The owner holds users.view: the balance. The reviewer does not: a dash in its place.
     expect(owner).toMatch(/موجودی فعلی کاربر: 0 تومان/u);
     expect(plain).toMatch(/موجودی فعلی کاربر: —/u);
+  });
+
+  it('reads an add-on’s unbought amount as unknown, never as the line’s zero', async () => {
+    const payment = await signalledTransfer(f, 'addon-facts');
+    const order = (
+      await rows<{ order_id: string }>(f, sql`SELECT order_id FROM payments WHERE id = ${payment}`)
+    )[0]?.order_id as never;
+    const db = f.ctx.container.database.db;
+    const reader = new DrizzleReceiptReviewFactsReader(db);
+    expect(await reader.factsFor(tenantA, order)).toMatchObject({
+      purpose: 'NEW_SERVICE',
+      durationDays: 30,
+      trafficBytes: 1n,
+    });
+    // Reshape the frozen line into each add-on as `CommercialActionService` writes it: the
+    // bought amount, and ZERO in the other (`orders_quantity_line_check`). The snapshot is
+    // frozen by a trigger, so the reshaping is done the only way it can be, in one transaction.
+    const reshape = (purpose: string, days: number, bytes: bigint) =>
+      db.transaction(async (tx) => {
+        await tx.execute(sql`ALTER TABLE orders DISABLE TRIGGER orders_snapshot_frozen`);
+        await tx.execute(sql`
+          UPDATE orders SET purpose = ${purpose}, line_duration_days = ${days},
+                 line_traffic_bytes = ${bytes}
+           WHERE id = ${order}`);
+        await tx.execute(sql`ALTER TABLE orders ENABLE TRIGGER orders_snapshot_frozen`);
+      });
+    await reshape('ADD_TRAFFIC', 0, 1_073_741_824n);
+    expect(await reader.factsFor(tenantA, order)).toMatchObject({
+      purpose: 'ADD_TRAFFIC',
+      durationDays: null,
+      trafficBytes: 1_073_741_824n,
+    });
+    await reshape('ADD_TIME', 15, 0n);
+    expect(await reader.factsFor(tenantA, order)).toMatchObject({
+      purpose: 'ADD_TIME',
+      durationDays: 15,
+      trafficBytes: null,
+    });
   });
 
   it('names the service username the order reserved', async () => {

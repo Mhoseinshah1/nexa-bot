@@ -7,6 +7,7 @@ import {
   type TemplateKey,
   type UserId,
 } from '@nexa/contracts';
+import { createTranslator } from '@nexa/i18n';
 import { ReceiptReviewCaption } from '../../apps/api/src/modules/commerce/payments/application/receipt-review-caption';
 import type { PaymentRecord } from '../../apps/api/src/modules/commerce/payments/application/ports';
 import { normaliseCaptureReason } from '../../apps/api/src/modules/commerce/payments/application/receipt-reason-capture.service';
@@ -54,19 +55,32 @@ function builder(granted: readonly string[]) {
               trafficBytes: null,
               serviceUsername: null,
             }
-          : {
-              purpose: 'RENEW',
-              productTitle: 'پلن ویژه',
-              durationDays: 30,
-              trafficBytes: 5n,
-              serviceUsername: 'zahra01',
-            },
+          : orderId === 'order-new'
+            ? {
+                purpose: 'NEW_SERVICE',
+                productTitle: 'پلن پایه',
+                durationDays: 30,
+                trafficBytes: 53_687_091_200n,
+                serviceUsername: 'zahra01',
+              }
+            : {
+                purpose: 'RENEW',
+                productTitle: 'پلن ویژه',
+                durationDays: 30,
+                trafficBytes: 5n,
+                serviceUsername: 'zahra01',
+              },
     },
     balances: { balanceOf: async () => ({ amountMinor: 70_000n }) },
     guard: { has: async (_s, _a, permission) => granted.includes(permission) },
     labels: {
       render: async (_scope, key, values) => {
         rendered.push(key);
+        // The volume and duration labels render through the real catalogue, so what a
+        // reviewer reads for them is the catalogue's own typed output.
+        if (key === 'bot.admin.receipt_duration' || key === 'bot.admin.receipt_traffic') {
+          return translator.translate(key, values);
+        }
         return values['balance'] === undefined
           ? `label:${key}`
           : `balance:${String(values['balance'] && 'set')}`;
@@ -75,6 +89,8 @@ function builder(granted: readonly string[]) {
   });
   return { caption, rendered };
 }
+
+const translator = createTranslator();
 
 const customer = {
   telegramUserId: '750900',
@@ -93,8 +109,8 @@ describe('the reviewer’s caption (File 01 §4)', () => {
     expect(values).toMatchObject({
       operation: 'label:bot.admin.operation_renew',
       order: 'پلن ویژه',
-      durationDays: 30,
-      trafficBytes: 5n,
+      durationDays: '30',
+      trafficBytes: '5',
       serviceUsername: 'zahra01',
       name: 'زهرا احمدی',
       customer: '750900',
@@ -117,6 +133,32 @@ describe('the reviewer’s caption (File 01 §4)', () => {
       name: '—',
       note: '—',
     });
+  });
+
+  it('shows a wallet top-up’s volume and duration as a dash, never an invented 0', async () => {
+    const { caption, rendered } = builder([]);
+    const values = await caption.valuesFor({} as never, viewer, paymentOf(null), null, []);
+    expect(values['durationDays']).toBe('—');
+    expect(values['trafficBytes']).toBe('—');
+    // Neither label is asked to type a value the payment does not have.
+    expect(rendered).not.toContain('bot.admin.receipt_duration');
+    expect(rendered).not.toContain('bot.admin.receipt_traffic');
+  });
+
+  it('types a new service’s volume and duration through their catalogue labels', async () => {
+    const { caption, rendered } = builder([]);
+    const values = await caption.valuesFor({} as never, viewer, paymentOf('order-new'), null, []);
+    expect(values).toMatchObject({
+      operation: 'label:bot.admin.operation_new_service',
+      durationDays: translator.translate('bot.admin.receipt_duration', { durationDays: 30 }),
+      trafficBytes: translator.translate('bot.admin.receipt_traffic', {
+        trafficBytes: 53_687_091_200n,
+      }),
+    });
+    expect(values['durationDays']).toBe('30');
+    expect(values['trafficBytes']).toBe('53687091200');
+    expect(rendered).toContain('bot.admin.receipt_duration');
+    expect(rendered).toContain('bot.admin.receipt_traffic');
   });
 
   it('shows the balance only to a viewer holding users.view, and reads nothing else for it', async () => {

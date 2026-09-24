@@ -106,11 +106,17 @@ export class DrizzleReceiptReviewFactsReader implements ReceiptReviewFactsReader
       serviceUsername = acted?.username ?? null;
     }
 
+    /*
+     * An add-on's line carries ZERO in the amount it did not buy (`orders_quantity_line_check`,
+     * `CommercialActionService`): "none was bought", not a fact about the service. The caption
+     * shows that as a dash, so it is null here. A service line's zero means unlimited and is
+     * the order's own frozen value, so it is passed through.
+     */
     return {
       purpose,
       productTitle: order.title,
-      durationDays: order.durationDays,
-      trafficBytes: order.trafficBytes,
+      durationDays: purpose === 'ADD_TRAFFIC' ? null : order.durationDays,
+      trafficBytes: purpose === 'ADD_TIME' ? null : order.trafficBytes,
       serviceUsername,
     };
   }

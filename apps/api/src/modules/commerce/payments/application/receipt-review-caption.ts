@@ -41,7 +41,10 @@ export function reviewNoteOf(caption: string | null): string {
     : `${points.slice(0, RECEIPT_REVIEW_NOTE_MAX - 1).join('')}…`;
 }
 
-/** The order-side facts, from the order's frozen snapshot. Null for a wallet top-up. */
+/**
+ * The order-side facts, from the order's frozen snapshot. Null for a wallet top-up, and null
+ * for the amount an add-on did not buy — never a zero standing in for "none".
+ */
 export interface ReceiptReviewFacts {
   readonly purpose: OrderPurpose | null;
   readonly productTitle: string | null;
@@ -143,6 +146,21 @@ export class ReceiptReviewCaption {
       });
     }
 
+    // A value the payment has is typed through its label; one it has not is a dash. Never a
+    // 0: a wallet top-up has no volume or duration, and "0 days" also reads as unlimited.
+    const durationDays =
+      facts.durationDays === null
+        ? REVIEW_NONE
+        : await this.deps.labels.render(scope, 'bot.admin.receipt_duration', {
+            durationDays: facts.durationDays,
+          });
+    const trafficBytes =
+      facts.trafficBytes === null
+        ? REVIEW_NONE
+        : await this.deps.labels.render(scope, 'bot.admin.receipt_traffic', {
+            trafficBytes: facts.trafficBytes,
+          });
+
     return {
       reference: payment.reference,
       total: payment.amount,
@@ -155,8 +173,8 @@ export class ReceiptReviewCaption {
       operation,
       order: facts.productTitle ?? REVIEW_NONE,
       serviceUsername: facts.serviceUsername ?? REVIEW_NONE,
-      durationDays: facts.durationDays ?? 0,
-      trafficBytes: facts.trafficBytes ?? 0n,
+      durationDays,
+      trafficBytes,
       balance,
       // The customer's note: the first one they wrote, on whichever receipt carried it. A
       // second note on a later receipt is not repeated; the file it came with follows.
