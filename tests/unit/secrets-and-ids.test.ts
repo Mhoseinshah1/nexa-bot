@@ -315,6 +315,23 @@ describe('redaction', () => {
     });
   });
 
+  it('redacts a subscription URL and reference by key, wherever they sit', () => {
+    // Customer UX completion §A14: a subscription URL is a bearer capability, and
+    // nothing legitimately writes one into a log, an audit row or an operational
+    // event. The key rule covers the whole family so no call site has to remember.
+    expect(
+      redactSecrets({
+        serviceId: 'svc-1',
+        subscriptionUrl: 'https://panel.example/sub/0123456789abcdef',
+        nested: { subscription_ref: '0123456789abcdef', SubscriptionLink: 'x' },
+      }),
+    ).toEqual({
+      serviceId: 'svc-1',
+      subscriptionUrl: '[redacted]',
+      nested: { subscription_ref: '[redacted]', SubscriptionLink: '[redacted]' },
+    });
+  });
+
   it('traverses arrays', () => {
     // A credential inside a list is still a credential. The previous
     // implementation copied arrays verbatim, so a list of bot instances wrote
