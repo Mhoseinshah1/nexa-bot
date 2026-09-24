@@ -118,6 +118,17 @@ import {
 } from './provider.js';
 import { isStorableInstant } from './time.js';
 import {
+  SUPPORT_FAQ_STATUSES,
+  TENANT_MEDIA_MAX_BYTES,
+  TENANT_MEDIA_PURPOSES,
+  productDisplayFeaturesSchema,
+  productDisplayLocationsSchema,
+  productServiceLocationLabelSchema,
+  supportFaqInputSchema,
+  supportFaqStatusSchema,
+  tenantMediaMimeTypeSchema,
+} from './customer-ux.js';
+import {
   BACKUP_DELIVERY_STATES,
   BACKUP_RUN_STATES,
   BACKUP_STAGES,
@@ -1875,6 +1886,13 @@ export const productSummarySchema = z
     deviceLimit: z.number().int().nullable(),
     priceAmount: z.string().nullable(),
     priceCurrency: z.enum(CURRENCY_CODES).nullable(),
+    /*
+     * Customer-facing display data (customer UX completion §C). Marketing copy for the
+     * pre-invoice and the cards; the provisioner never reads it.
+     */
+    displayLocations: z.array(z.string()),
+    displayFeatures: z.array(z.string()),
+    serviceLocationLabel: z.string().nullable(),
     createdAt: z.iso.datetime(),
     updatedAt: z.iso.datetime(),
   })
@@ -1940,6 +1958,15 @@ export const productWriteSchema = z
      * NEW customers browse and nothing about what past ones bought.
      */
     categoryId: z.string().uuid().nullable(),
+    /*
+     * OPTIONAL with empty defaults so a client on the previous release, which sends
+     * none of the three, still writes a product; an update from such a client clears
+     * display data it never showed, which is the honest reading of a form that has no
+     * field for it.
+     */
+    displayLocations: productDisplayLocationsSchema.optional().default([]),
+    displayFeatures: productDisplayFeaturesSchema.optional().default([]),
+    serviceLocationLabel: productServiceLocationLabelSchema.optional().default(null),
   })
   .refine((p) => (p.priceAmount === null) === (p.priceCurrency === null), {
     message: 'A price is an amount and a currency, or it is absent.',
@@ -3752,6 +3779,9 @@ export const paymentGatewaySchema = z.object({
    * changing it here changes only top-ups created afterwards.
    */
   topupCashbackPercent: z.number().int(),
+  /** Per purpose (customer UX completion §D/§F): what the route may be offered FOR. */
+  allowServicePurchase: z.boolean(),
+  allowWalletTopup: z.boolean(),
   /*
    * The descriptor's two facts — `settlesVia` and `requiresCredentials` — are NOT here.
    *
@@ -3821,6 +3851,9 @@ export const updatePaymentGatewayRequestSchema = z.object({
   sortOrder: z.number().int().min(PAYMENT_GATEWAY_SORT_MIN).max(PAYMENT_GATEWAY_SORT_MAX),
   /** The top-up gift, 0–100 (D5). Required, like every other field this form renders. */
   topupCashbackPercent: topupCashbackPercentSchema,
+  /** Optional on the wire for the previous release's client; `paymentGatewayConfigSchema` defaults both to true. */
+  allowServicePurchase: z.boolean().optional(),
+  allowWalletTopup: z.boolean().optional(),
 });
 export type UpdatePaymentGatewayRequest = z.infer<typeof updatePaymentGatewayRequestSchema>;
 
@@ -3841,6 +3874,91 @@ export const PAYMENT_GATEWAY_ROUTES = {
   list: '/payment-gateways',
   update: (provider: string) => `/payment-gateways/${encodeURIComponent(provider)}`,
   status: (provider: string) => `/payment-gateways/${encodeURIComponent(provider)}/status`,
+} as const;
+
+// --- Support FAQ and tenant media (customer UX completion §J, §I) --------------
+
+export const supportFaqSchema = z.object({
+  id: z.string(),
+  question: z.string(),
+  answer: z.string(),
+  status: z.enum(SUPPORT_FAQ_STATUSES),
+  sortOrder: z.number().int(),
+  version: z.number().int(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+export type SupportFaqResponse = z.infer<typeof supportFaqSchema>;
+
+export const supportFaqListSchema = z.object({ items: z.array(supportFaqSchema) });
+export type SupportFaqListResponse = z.infer<typeof supportFaqListSchema>;
+
+export const createSupportFaqRequestSchema = supportFaqInputSchema.extend({
+  idempotencyKey: z.string().min(8).max(255),
+});
+export type CreateSupportFaqRequest = z.infer<typeof createSupportFaqRequestSchema>;
+
+/** `expectedVersion` is required: the FAQ editor is a control-plane editor and keeps that convention. */
+export const updateSupportFaqRequestSchema = supportFaqInputSchema.extend({
+  idempotencyKey: z.string().min(8).max(255),
+  expectedVersion: z.number().int().min(1),
+});
+export type UpdateSupportFaqRequest = z.infer<typeof updateSupportFaqRequestSchema>;
+
+export const setSupportFaqStatusRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  status: supportFaqStatusSchema,
+  expectedVersion: z.number().int().min(1),
+});
+export type SetSupportFaqStatusRequest = z.infer<typeof setSupportFaqStatusRequestSchema>;
+
+export const SUPPORT_FAQ_ROUTES = {
+  list: '/support/faqs',
+  create: '/support/faqs',
+  update: (id: string) => `/support/faqs/${encodeURIComponent(id)}`,
+  status: (id: string) => `/support/faqs/${encodeURIComponent(id)}/status`,
+} as const;
+
+/** What the Web Admin sees of a media slot: never the bytes, which are served to Telegram only. */
+export const tenantMediaSchema = z.object({
+  purpose: z.enum(TENANT_MEDIA_PURPOSES),
+  mimeType: tenantMediaMimeTypeSchema,
+  byteLength: z.number().int(),
+  sha256: z.string(),
+  version: z.number().int(),
+  updatedAt: z.iso.datetime(),
+});
+export type TenantMediaResponse = z.infer<typeof tenantMediaSchema>;
+
+export const tenantMediaStateSchema = z.object({ media: tenantMediaSchema.nullable() });
+export type TenantMediaStateResponse = z.infer<typeof tenantMediaStateSchema>;
+
+/*
+ * Base64 in JSON, bounded at the schema by the DECODED size: a bound on the encoded
+ * string alone would let a padded payload through. The service decodes and re-checks
+ * the bytes against the declared type before storing.
+ */
+export const uploadTenantMediaRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  mimeType: tenantMediaMimeTypeSchema,
+  contentBase64: z
+    .string()
+    .regex(/^[A-Za-z0-9+/]+={0,2}$/u)
+    .refine((value) => Math.floor((value.length * 3) / 4) <= TENANT_MEDIA_MAX_BYTES + 3, {
+      message: `at most ${TENANT_MEDIA_MAX_BYTES} bytes`,
+    }),
+});
+export type UploadTenantMediaRequest = z.infer<typeof uploadTenantMediaRequestSchema>;
+
+export const clearTenantMediaRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+});
+export type ClearTenantMediaRequest = z.infer<typeof clearTenantMediaRequestSchema>;
+
+export const TENANT_MEDIA_ROUTES = {
+  detail: (purpose: string) => `/media/${encodeURIComponent(purpose)}`,
+  upload: (purpose: string) => `/media/${encodeURIComponent(purpose)}`,
+  clear: (purpose: string) => `/media/${encodeURIComponent(purpose)}/clear`,
 } as const;
 
 // --- Services ----------------------------------------------------------------
