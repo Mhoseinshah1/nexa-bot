@@ -1,6 +1,11 @@
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AdminId, DomainEvent, PaymentId } from '@nexa/contracts';
+import {
+  RECEIPT_REVIEW_PUSH_MAX_ATTEMPTS,
+  type AdminId,
+  type DomainEvent,
+  type PaymentId,
+} from '@nexa/contracts';
 import type { TransactionScope } from '../../apps/api/src/infrastructure/persistence/unit-of-work';
 import {
   RECEIPT_PUSH_FAILED_CODE,
@@ -338,6 +343,34 @@ describe('the administrators’ receipt push', () => {
     expect((await stateOf(payment, f.ownerId))?.state).toBe('DELIVERED');
   });
 
+  it('pushes nothing to an administrator who may decide a receipt but not see its file, at fan-out or at send', async () => {
+    // `receipts.review` implies `payments.view`, not `receipts.view`: the pull item refuses
+    // this administrator the file, and the push is the file.
+    const blind = await bindNewAdmin(f, 'blind', TG.third, ['payments.view', 'receipts.review']);
+    const payment = await pendingWithReceipt(f, 'blind');
+    await relay();
+    const fannedOut = (await pushes(payment)).map((row) => row.admin_id);
+    expect(fannedOut).not.toContain(blind);
+    expect(fannedOut.sort()).toEqual([f.ownerId, reviewer].sort());
+
+    // Eligible at the fan-out, and the evidence read withdrawn before the send.
+    await f.ctx.container.database.db.execute(sql`
+      DELETE FROM role_permissions
+       WHERE permission_key = 'receipts.view'
+         AND role_id IN (SELECT role_id FROM admin_roles WHERE admin_id = ${reviewer})`);
+    f.sent = [];
+
+    await deliver();
+
+    expect(await stateOf(payment, reviewer)).toMatchObject({
+      state: 'SUPERSEDED',
+      last_error_code: 'push.admin_no_authority',
+    });
+    expect(filesTo(TG.reviewer)).toEqual([]);
+    expect(filesTo(TG.third)).toEqual([]);
+    expect((await stateOf(payment, f.ownerId))?.state).toBe('DELIVERED');
+  });
+
   it('sends to the chat the administrator is bound to AT SEND, not at fan-out', async () => {
     const payment = await pendingWithReceipt(f, 'rebound');
     await relay();
@@ -437,6 +470,104 @@ describe('the administrators’ receipt push', () => {
     });
     expect(filesTo(TG.reviewer)).toEqual([]);
     expect(filesTo(TG.owner)).toHaveLength(1);
+  });
+
+  /** The push lane's operational log, refusing the failure condition's code until restored. */
+  function refuseConditionWrites() {
+    const opsLog = (
+      f.ctx.container.receiptReviewPush as unknown as {
+        deps: { opsLog: { record: (...args: unknown[]) => Promise<unknown> } };
+      }
+    ).deps.opsLog;
+    const original = opsLog.record.bind(opsLog);
+    return vi.spyOn(opsLog, 'record').mockImplementation(async (...args: unknown[]) => {
+      const event = args[1] as { code: string };
+      if (event.code === RECEIPT_PUSH_FAILED_CODE) throw new Error('operational log unavailable');
+      return original(...args);
+    });
+  }
+
+  it('an UNKNOWN push and its condition commit together: a condition that cannot be written leaves no terminal row behind it', async () => {
+    f.behaviour.set(TG.reviewer, 'SERVER_ERROR');
+    const payment = await pendingWithReceipt(f, 'atomic-unknown');
+    await relay();
+    f.sent = [];
+    const spy = refuseConditionWrites();
+
+    const report = await deliver();
+
+    expect(report.errored).toBe(1);
+    // Never terminal and unreported: the transition rolled back with its condition.
+    expect((await stateOf(payment, reviewer))?.state).not.toBe('UNKNOWN');
+    expect(await events(RECEIPT_PUSH_FAILED_CODE)).toEqual([]);
+    expect(filesTo(TG.reviewer)).toHaveLength(1);
+    spy.mockRestore();
+
+    // The send had started, so nothing re-sends it: the reaper settles it UNKNOWN — and
+    // this time the condition is written with it.
+    f.behaviour.set(TG.reviewer, 'OK');
+    await f.ctx.container.database.db.execute(sql`
+      UPDATE receipt_review_pushes
+         SET send_started_at = now() - interval '10 minutes',
+             next_attempt_at = now() - interval '5 minutes'
+       WHERE admin_id = ${reviewer}`);
+    const again = await deliver();
+
+    expect(again.reaped).toBe(1);
+    expect(await stateOf(payment, reviewer)).toMatchObject({
+      state: 'UNKNOWN',
+      last_error_code: 'push.send_stranded',
+    });
+    expect(filesTo(TG.reviewer)).toHaveLength(1);
+    const opened = await events(RECEIPT_PUSH_FAILED_CODE);
+    expect(opened.map((one) => one.dedupe_key)).toEqual([receiptPushConditionKey(reviewer)]);
+  });
+
+  it('a reaped send and its condition commit together: a condition that cannot be written leaves the row to be reaped again', async () => {
+    const payment = await pendingWithReceipt(f, 'atomic-reap');
+    await relay();
+    await f.ctx.container.database.db.execute(sql`
+      UPDATE receipt_review_pushes
+         SET send_started_at = now() - interval '10 minutes',
+             next_attempt_at = now() - interval '5 minutes'
+       WHERE admin_id = ${reviewer}`);
+    f.sent = [];
+    const spy = refuseConditionWrites();
+
+    await expect(deliver()).rejects.toThrow('operational log unavailable');
+    expect((await stateOf(payment, reviewer))?.state).not.toBe('UNKNOWN');
+    expect(await events(RECEIPT_PUSH_FAILED_CODE)).toEqual([]);
+    spy.mockRestore();
+
+    const report = await deliver();
+
+    expect(report.reaped).toBe(1);
+    expect(await stateOf(payment, reviewer)).toMatchObject({
+      state: 'UNKNOWN',
+      last_error_code: 'push.send_stranded',
+    });
+    expect(filesTo(TG.reviewer)).toEqual([]);
+    expect((await events(RECEIPT_PUSH_FAILED_CODE)).map((one) => one.dedupe_key)).toEqual([
+      receiptPushConditionKey(reviewer),
+    ]);
+  });
+
+  it('a push FAILED by exhaustion and its condition commit together', async () => {
+    f.behaviour.set(TG.reviewer, 'REFUSED');
+    const payment = await pendingWithReceipt(f, 'atomic-failed');
+    await relay();
+    // One refusal short of the ceiling, so the next refusal is the one that exhausts it.
+    await f.ctx.container.database.db.execute(sql`
+      UPDATE receipt_review_pushes SET attempts = ${RECEIPT_REVIEW_PUSH_MAX_ATTEMPTS - 1}
+       WHERE admin_id = ${reviewer}`);
+    const spy = refuseConditionWrites();
+
+    const report = await deliver();
+
+    expect(report.errored).toBe(1);
+    expect((await stateOf(payment, reviewer))?.state).not.toBe('FAILED');
+    expect(await events(RECEIPT_PUSH_FAILED_CODE)).toEqual([]);
+    spy.mockRestore();
   });
 
   it('a 429 waits Telegram’s own retry_after and spends no attempt', async () => {

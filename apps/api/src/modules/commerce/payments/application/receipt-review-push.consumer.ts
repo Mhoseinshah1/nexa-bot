@@ -19,6 +19,17 @@ import type { ReceiptReviewPushRepository } from './receipt-review-push-ports.js
 
 /** The permission that decides who is pushed a receipt: the one that decides it. */
 export const RECEIPT_PUSH_PERMISSION: PermissionKey = 'receipts.review';
+/**
+ * And the one that reads the FILE. `PERMISSION_REQUIRES` makes `receipts.review` imply
+ * `payments.view`, not `receipts.view`, so a role may hold the decision without the evidence;
+ * the pull item refuses that administrator the file (`reviewItem`), and the push must too.
+ */
+export const RECEIPT_PUSH_VIEW_PERMISSION: PermissionKey = 'receipts.view';
+
+/** Whether a resolved authority may be pushed a receipt: both keys, never one. */
+export function mayBePushedReceipts(permissions: ReadonlySet<PermissionKey>): boolean {
+  return permissions.has(RECEIPT_PUSH_PERMISSION) && permissions.has(RECEIPT_PUSH_VIEW_PERMISSION);
+}
 
 /**
  * Who is told a receipt arrived: the fan-out half of the administrators' receipt push
@@ -30,7 +41,8 @@ export const RECEIPT_PUSH_PERMISSION: PermissionKey = 'receipts.review';
  * in here); the send is the push lane's.
  *
  * WHO is decided now, from the rows as they stand: every administrator of THIS tenant with a
- * Telegram binding whose resolved authority holds `receipts.review` — the resolver gives a
+ * Telegram binding whose resolved authority holds `receipts.review` AND `receipts.view` (the
+ * file is the message) — the resolver gives a
  * disabled administrator nothing, and roles, grants, denials and expired overrides are its
  * rule, not a copy of it here. The push lane asks again immediately before each send.
  *
@@ -56,6 +68,7 @@ export class ReceiptReviewPushConsumer implements EventConsumer {
         ): Promise<
           readonly {
             readonly admin: { readonly id: string; readonly telegramUserId: string | null };
+            readonly permissions: ReadonlySet<PermissionKey>;
           }[]
         >;
       };
@@ -93,6 +106,7 @@ export class ReceiptReviewPushConsumer implements EventConsumer {
     for (const reviewer of reviewers) {
       /* istanbul ignore next -- `listTelegramBound` selects only bound rows. */
       if (reviewer.admin.telegramUserId === null) continue;
+      if (!mayBePushedReceipts(reviewer.permissions)) continue;
       await this.deps.pushes.enqueue(
         scope,
         {

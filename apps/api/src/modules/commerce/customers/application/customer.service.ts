@@ -505,10 +505,12 @@ export class CustomerService {
     // Before the hash, so a re-cased id cannot produce a second idempotency record for
     // the same command against the same row.
     const customerId = this.customerId(input.customerId);
+    // Code points, as PostgreSQL's `length` and the receipt's reason capture count them: a
+    // UTF-16 slice kept 250 of a confirmed 500 emoji and could cut one in half.
     const reason =
       input.reason === null || input.reason.trim() === ''
         ? null
-        : input.reason.trim().slice(0, CUSTOMER_BLOCK_REASON_MAX_LENGTH);
+        : Array.from(input.reason.trim()).slice(0, CUSTOMER_BLOCK_REASON_MAX_LENGTH).join('');
     // The context joins the hash only when there is one, so every key written before it
     // existed still replays as itself.
     const requestHash = hashRequest(

@@ -122,9 +122,15 @@ export type ReasonConfirmResult<TOutcome> =
   | { readonly outcome: 'CLOSED'; readonly reason: AdminAmountCaptureCloseReason }
   | { readonly outcome: 'GONE' };
 
+/**
+ * `CONFIRMED` says the reason was confirmed — NOT that the action took effect: the capture closes
+ * before the action runs, and an action refused, lost to another decision or interrupted leaves
+ * it CONFIRMED with nothing done. So it carries the payment, and the caller reports what the
+ * customer or the payment IS rather than what the capture implies.
+ */
 export type ReasonCancelResult =
   | { readonly outcome: 'CANCELLED' }
-  | { readonly outcome: 'CONFIRMED' }
+  | { readonly outcome: 'CONFIRMED'; readonly paymentId: PaymentId }
   | { readonly outcome: 'GONE' };
 
 /**
@@ -413,13 +419,17 @@ export class ReceiptReasonCaptureService<TOutcome> {
       await this.deps.captures.lockForAdmin(scope, found.botInstanceId, adminId, tx);
       const capture = await this.deps.captures.findById(scope, captureId, tx);
       if (capture === null) return { outcome: 'GONE' } as const;
-      if (capture.closeReason === 'CONFIRMED') return { outcome: 'CONFIRMED' } as const;
+      const confirmed = {
+        outcome: 'CONFIRMED',
+        paymentId: capture.paymentId,
+      } as const;
+      if (capture.closeReason === 'CONFIRMED') return confirmed;
       if (
         capture.closeReason === null &&
         !(await this.deps.captures.close(scope, capture.id, 'CANCELLED', this.deps.clock.now(), tx))
       ) {
         const standing = await this.deps.captures.findById(scope, captureId, tx);
-        if (standing?.closeReason === 'CONFIRMED') return { outcome: 'CONFIRMED' } as const;
+        if (standing?.closeReason === 'CONFIRMED') return confirmed;
       }
       await rememberOnce(
         this.deps.idempotency,

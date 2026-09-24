@@ -55,9 +55,9 @@ import type {
   ReceiptBlockCaptureService,
   ReceiptRejectCaptureService,
 } from '../../modules/commerce/payments/application/receipt-reason-policies.js';
+import type { ReasonAskResult } from '../../modules/commerce/payments/application/receipt-reason-capture.service.js';
 import {
   RECEIPT_REVIEW_NOTE_MAX,
-  REVIEW_NONE,
   reviewNoteOf,
 } from '../../modules/commerce/payments/application/receipt-review-caption.js';
 import { ADMIN_CAPTURE_REASON_MAX_LENGTH } from '@nexa/contracts';
@@ -3272,9 +3272,6 @@ interface ReplyMedia {
  */
 export { RECEIPT_REVIEW_NOTE_MAX, reviewNoteOf };
 
-/** A dash for a fact there is none of, the caption module's own. */
-const NONE = REVIEW_NONE;
-
 /**
  * A refusal the customer can be told about.
  *
@@ -4134,6 +4131,7 @@ export class BotRuntime {
                 command.intent,
                 command.targetId,
                 input,
+                permissions,
               );
         case 'ADMIN_CREDIT':
           return command.targetId === null
@@ -4819,29 +4817,30 @@ export class BotRuntime {
     ): PendingReply => ({ key, values, buttons, orderId: null });
     const who = (customer: CustomerRecord | null, fallback: string): string =>
       customer?.telegramUserId ?? fallback;
+    const askReply = (asked: ReasonAskResult): PendingReply => {
+      if (asked.outcome === 'GONE') return reply('bot.admin.receipt_gone');
+      return reply(
+        'bot.admin.block_ask',
+        { customer: who(asked.customer, asked.payment.customerId) },
+        [
+          {
+            label: { kind: 'TEMPLATE', key: 'bot.admin.block_yes_button' },
+            data: `${ADMIN_BLOCK_OPEN_CALLBACK_PREFIX}${asked.payment.id}`,
+            row: 0,
+          },
+          {
+            label: { kind: 'TEMPLATE', key: 'bot.admin.block_cancel_button' },
+            // Nothing is open yet, so there is nothing to cancel: the receipt again.
+            data: `${ADMIN_RECEIPT_CALLBACK_PREFIX}${asked.payment.id}`,
+            row: 0,
+          },
+        ],
+      );
+    };
 
     switch (intent) {
-      case 'ADMIN_BLOCK_ASK': {
-        const asked = await blocks.ask(scope, actor, targetId);
-        if (asked.outcome === 'GONE') return reply('bot.admin.receipt_gone');
-        return reply(
-          'bot.admin.block_ask',
-          { customer: who(asked.customer, asked.payment.customerId) },
-          [
-            {
-              label: { kind: 'TEMPLATE', key: 'bot.admin.block_yes_button' },
-              data: `${ADMIN_BLOCK_OPEN_CALLBACK_PREFIX}${asked.payment.id}`,
-              row: 0,
-            },
-            {
-              label: { kind: 'TEMPLATE', key: 'bot.admin.block_cancel_button' },
-              // Nothing is open yet, so there is nothing to cancel: the receipt again.
-              data: `${ADMIN_RECEIPT_CALLBACK_PREFIX}${asked.payment.id}`,
-              row: 0,
-            },
-          ],
-        );
-      }
+      case 'ADMIN_BLOCK_ASK':
+        return askReply(await blocks.ask(scope, actor, targetId));
       case 'ADMIN_BLOCK_OPEN': {
         const opened = await blocks.open(scope, actor, {
           idempotencyKey: `${input.idempotencyKey}:block-open`,
@@ -4878,14 +4877,21 @@ export class BotRuntime {
           idempotencyKey: `${input.idempotencyKey}:block-cancel`,
           captureId: targetId,
         });
-        return reply(
-          cancelled.outcome === 'CANCELLED'
-            ? 'bot.admin.block_cancelled'
-            : cancelled.outcome === 'CONFIRMED'
-              ? 'bot.admin.blocked_from_receipt'
-              : 'bot.admin.receipt_gone',
-          cancelled.outcome === 'CONFIRMED' ? { customer: NONE } : {},
-        );
+        if (cancelled.outcome === 'CANCELLED') return reply('bot.admin.block_cancelled');
+        if (cancelled.outcome === 'GONE') return reply('bot.admin.receipt_gone');
+        /*
+         * A CONFIRMED reason is not a block: the block runs after the capture closes, and one
+         * refused or interrupted leaves the capture confirmed and the customer untouched. So
+         * the customer's own row answers — blocked, or the question again, never "blocked"
+         * for a customer who is not.
+         */
+        const standing = await blocks.ask(scope, actor, cancelled.paymentId);
+        if (standing.outcome === 'ASK' && standing.customer?.status === 'BLOCKED') {
+          return reply('bot.admin.blocked_from_receipt', {
+            customer: who(standing.customer, standing.payment.customerId),
+          });
+        }
+        return askReply(standing);
       }
       default:
         return null;
@@ -5100,6 +5106,7 @@ export class BotRuntime {
     intent: BotIntent,
     targetId: string,
     input: { readonly idempotencyKey: string; readonly botInstanceId: BotInstanceId },
+    permissions: ReadonlySet<PermissionKey>,
   ): Promise<PendingReply | null> {
     const rejects = this.deps.receiptRejects;
     if (rejects === undefined) return null;
@@ -5152,13 +5159,12 @@ export class BotRuntime {
           idempotencyKey: `${input.idempotencyKey}:reject-cancel`,
           captureId: targetId,
         });
-        return reply(
-          cancelled.outcome === 'CANCELLED'
-            ? 'bot.admin.reject_cancelled'
-            : cancelled.outcome === 'CONFIRMED'
-              ? 'bot.admin.rejected'
-              : 'bot.admin.receipt_gone',
-        );
+        if (cancelled.outcome === 'CANCELLED') return reply('bot.admin.reject_cancelled');
+        if (cancelled.outcome === 'GONE') return reply('bot.admin.receipt_gone');
+        // A CONFIRMED reason is not a rejection: one that lost to another decision, or never
+        // ran, left the capture confirmed. The payment answers — the receipt again while it
+        // is pending, else WHICH decision it received.
+        return this.adminReceipt(scope, actor, cancelled.paymentId, permissions);
       }
       default:
         return null;

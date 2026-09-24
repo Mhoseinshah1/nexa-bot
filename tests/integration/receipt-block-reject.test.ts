@@ -777,6 +777,117 @@ describe('Block User and the rejection reason, from the receipt message', () => 
     }, 30_000);
   });
 
+  // =========================================================================
+  // What a reason's confirmation does NOT prove, and a reason kept whole
+  // =========================================================================
+
+  describe('a confirmed reason is not a completed action, and the reason is kept whole', () => {
+    it('refuses the rejection to an administrator who may decide but not see the receipt', async () => {
+      const payment = await pendingWithReceipt(f, 'r-noview');
+      const blind = await bindNewAdmin(f, 'blind', TG.third, ['payments.view', 'receipts.review']);
+      const blindActor: ActorContext = { ...f.owner, id: blind, label: 'blind' };
+
+      // The surface gives this administrator no receipt screen at all; the service is the
+      // rule, and refuses both steps a crafted callback could reach.
+      await expect(
+        f.ctx.container.receiptRejectCaptures.open(tenantA, blindActor, {
+          idempotencyKey: 'r-noview-open',
+          botInstanceId: SEED_IDS.botA1 as BotInstanceId,
+          paymentId: payment,
+        }),
+      ).rejects.toMatchObject({ code: 'platform.permission_denied' });
+      expect(await openCaptures()).toEqual([]);
+      expect(await paymentState(f, payment)).toBe('PENDING');
+    });
+
+    it('stores the whole confirmed block reason, counted in code points', async () => {
+      const payment = await pendingWithReceipt(f, 'b-emoji');
+      const reason = '😀'.repeat(500);
+      const captureId = await blockUpTo(payment, TG.owner, reason);
+      expect((await tap(f, `xc:${captureId}`, TG.owner)).replyKey).toBe(
+        'bot.admin.blocked_from_receipt',
+      );
+      expect((await customerStatus(f, f.customer)).blocked_reason).toBe(reason);
+    });
+
+    it('bounds a block reason in code points and never cuts a character in half', async () => {
+      const other = await customerNamed(f, '750901', 'other_emoji');
+      await f.ctx.container.customers.blockWithOutcome(tenantA, f.owner, {
+        idempotencyKey: 'b-emoji-bound',
+        customerId: other,
+        reason: `a${'😀'.repeat(500)}`,
+      });
+      const stored = (await customerStatus(f, other)).blocked_reason ?? '';
+      expect(stored).toBe(`a${'😀'.repeat(499)}`);
+      expect(Array.from(stored)).toHaveLength(500);
+      expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u.test(stored)).toBe(false);
+    });
+
+    it('a Cancel after a confirmed block that never ran says what the customer IS, and the confirm still blocks', async () => {
+      const payment = await pendingWithReceipt(f, 'b-confirmed-unrun');
+      const captureId = await blockUpTo(payment, TG.owner, 'بدون اجرا');
+      // The process died between closing the capture and blocking: CONFIRMED, nothing done.
+      await db().execute(sql`
+        UPDATE admin_amount_captures SET closed_at = now(), close_reason = 'CONFIRMED'
+         WHERE id = ${captureId}`);
+
+      expect((await tap(f, `xd:${captureId}`, TG.owner)).replyKey).toBe('bot.admin.block_ask');
+      expect((await customerStatus(f, f.customer)).status).toBe('ACTIVE');
+
+      // The confirm is the retry, under the capture's own key...
+      expect((await tap(f, `xc:${captureId}`, TG.owner)).replyKey).toBe(
+        'bot.admin.blocked_from_receipt',
+      );
+      expect(await customerStatus(f, f.customer)).toEqual({
+        status: 'BLOCKED',
+        blocked_reason: 'بدون اجرا',
+      });
+      // ...and after it, Cancel names the block that happened, and whose it was.
+      expect((await tap(f, `xd:${captureId}`, TG.owner)).replyKey).toBe(
+        'bot.admin.blocked_from_receipt',
+      );
+      expect(lastText(f)).toContain(TG.customer);
+      expect(await audits('customer.block')).toHaveLength(1);
+    });
+
+    it('a Cancel after a rejection that lost to an approval says approved, never rejected', async () => {
+      const payment = await pendingWithReceipt(f, 'r-lost');
+      const captureId = await rejectUpTo(payment, TG.reviewer, 'دیر رسید');
+      await f.ctx.container.payments.confirmManualTransfer(tenantA, f.owner, payment, {
+        idempotencyKey: 'r-lost-approve',
+        note: 'approve',
+      });
+      // The confirm closes the capture and the reject loses the conditional edge.
+      expect((await tap(f, `xe:${captureId}`, TG.reviewer)).replyKey).toBe(
+        'bot.admin.receipt_gone',
+      );
+
+      expect((await tap(f, `xf:${captureId}`, TG.reviewer)).replyKey).toBe(
+        'bot.admin.receipt_already_approved',
+      );
+      expect(await paymentState(f, payment)).not.toBe('FAILED');
+      expect(await notices('PAYMENT_REJECTED')).toBe(0);
+    });
+
+    it('a Cancel after a confirmed rejection that never ran shows the receipt still pending, and the confirm still rejects', async () => {
+      const payment = await pendingWithReceipt(f, 'r-confirmed-unrun');
+      const captureId = await rejectUpTo(payment, TG.reviewer, 'بدون اجرا');
+      await db().execute(sql`
+        UPDATE admin_amount_captures SET closed_at = now(), close_reason = 'CONFIRMED'
+         WHERE id = ${captureId}`);
+
+      expect((await tap(f, `xf:${captureId}`, TG.reviewer)).replyKey).toBe('bot.admin.receipt');
+      expect(await paymentState(f, payment)).toBe('PENDING');
+
+      expect((await tap(f, `xe:${captureId}`, TG.reviewer)).replyKey).toBe('bot.admin.rejected');
+      expect(await paymentState(f, payment)).toBe('FAILED');
+      expect((await tap(f, `xf:${captureId}`, TG.reviewer)).replyKey).toBe(
+        'bot.admin.receipt_already_rejected',
+      );
+      expect(await notices('PAYMENT_REJECTED')).toBe(1);
+    });
+  });
+
   // -------------------------------------------------------------------------
   // Race helpers
   // -------------------------------------------------------------------------

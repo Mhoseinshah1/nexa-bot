@@ -18,6 +18,12 @@ export const RECEIPT_BLOCK_PERMISSION: PermissionKey = 'users.block';
 export const RECEIPT_BLOCK_VIEW_PERMISSION: PermissionKey = 'receipts.view';
 /** A rejection's permission: the decision's own. */
 export const RECEIPT_REJECT_PERMISSION: PermissionKey = 'receipts.review';
+/**
+ * And the receipt read the one-tap rejection charged before it (`reviewItem`), which approve
+ * still charges: `receipts.review` does not imply it, and a rejection is a decision about
+ * evidence its maker must be allowed to see.
+ */
+export const RECEIPT_REJECT_VIEW_PERMISSION: PermissionKey = 'receipts.view';
 
 export function receiptBlockCaptureKey(captureId: string): string {
   return `receipt-block-capture:${captureId}`;
@@ -88,7 +94,7 @@ export function receiptRejectCaptures(
     purpose: 'RECEIPT_REJECT_REASON',
     action: 'payment.reject',
     permission: RECEIPT_REJECT_PERMISSION,
-    viewPermission: RECEIPT_REJECT_PERMISSION,
+    viewPermission: RECEIPT_REJECT_VIEW_PERMISSION,
     admits: (payment) => payment.method === 'MANUAL_TRANSFER' && payment.state === 'PENDING',
     keyFor: receiptRejectCaptureKey,
     act: (scope, actor, input) =>

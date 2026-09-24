@@ -19,7 +19,7 @@ import type {
 import type { CustomerRepository } from '../../customers/application/ports.js';
 import type { PaymentRepository } from './ports.js';
 import type { PaymentReceiptRepository } from './receipt-ports.js';
-import { RECEIPT_PUSH_PERMISSION } from './receipt-review-push.consumer.js';
+import { RECEIPT_PUSH_PERMISSION, mayBePushedReceipts } from './receipt-review-push.consumer.js';
 import type { ReceiptReviewCaption } from './receipt-review-caption.js';
 import type {
   ReceiptReviewPushRecord,
@@ -141,13 +141,14 @@ export class ReceiptReviewPushService {
     if (!(await this.deps.scopeIsActive(scope))) return report(0);
 
     const now = this.deps.clock.now();
-    const reaped = await this.deps.uow.run(scope, async (tx) =>
-      this.deps.pushes.reapStranded(scope, now, limit, tx),
-    );
+    // Reaped and reported in ONE transaction: a row made terminal here is never claimed again,
+    // so a condition recorded after it could be lost for good.
+    const reaped = await this.deps.uow.run(scope, async (tx) => {
+      const rows = await this.deps.pushes.reapStranded(scope, now, limit, tx);
+      for (const row of rows) await this.openCondition(scope, row, 'push.send_stranded', tx);
+      return rows;
+    });
     counts['reaped'] = reaped.length;
-    for (const row of reaped) {
-      await this.openCondition(scope, row, 'push.send_stranded');
-    }
 
     const claimed = await this.deps.pushes.claimDue(
       scope,
@@ -175,8 +176,9 @@ export class ReceiptReviewPushService {
       }
       /*
        * WHO, again, now: a fan-out is a moment and a send is later. An administrator
-       * disabled, unbound or stripped of `receipts.review` in between is not sent a
-       * receipt with a customer's details on it. The chat is the binding current NOW.
+       * disabled, unbound or stripped of `receipts.review` — or of `receipts.view`, which is
+       * what reads the file this message IS — in between is not sent a receipt with a
+       * customer's details on it. The chat is the binding current NOW.
        */
       const reviewer = await this.deps.reviewers.reviewerById(
         scope,
@@ -184,7 +186,7 @@ export class ReceiptReviewPushService {
         RECEIPT_PUSH_PERMISSION,
         this.deps.correlationId(),
       );
-      if (reviewer === null) {
+      if (reviewer === null || !mayBePushedReceipts(reviewer.permissions)) {
         return this.resolve(scope, row, 'SUPERSEDED', 'push.admin_no_authority');
       }
       const receipt = await this.deps.receipts.findById(scope, row.receiptId);
@@ -273,8 +275,8 @@ export class ReceiptReviewPushService {
         null,
         'push.outcome_unknown',
         at,
+        'push.outcome_unknown',
       );
-      if (moved) await this.openCondition(scope, row, 'push.outcome_unknown');
       return moved ? 'unknown' : 'lost';
     }
     const exhausted = row.attempts + 1 >= RECEIPT_REVIEW_PUSH_MAX_ATTEMPTS;
@@ -286,8 +288,8 @@ export class ReceiptReviewPushService {
       exhausted ? null : new Date(at.getTime() + RECEIPT_PUSH_BACKOFF_MS),
       'push.refused',
       at,
+      exhausted ? 'push.refused' : null,
     );
-    if (moved && exhausted) await this.openCondition(scope, row, 'push.refused');
     return moved ? (exhausted ? 'failed' : 'pending') : 'lost';
   }
 
@@ -297,8 +299,16 @@ export class ReceiptReviewPushService {
     to: ReceiptReviewPushState,
     code: string,
   ): Promise<string> {
-    const moved = await this.write(scope, row, to, false, null, code, this.deps.clock.now());
-    if (moved && to === 'FAILED') await this.openCondition(scope, row, code);
+    const moved = await this.write(
+      scope,
+      row,
+      to,
+      false,
+      null,
+      code,
+      this.deps.clock.now(),
+      to === 'FAILED' ? code : null,
+    );
     return moved ? (to === 'FAILED' ? 'failed' : 'superseded') : 'lost';
   }
 
@@ -310,10 +320,25 @@ export class ReceiptReviewPushService {
     nextAttemptAt: Date | null,
     lastErrorCode: string | null,
     at: Date,
+    /**
+     * The operational condition this transition opens, in the SAME transaction: FAILED and
+     * UNKNOWN are terminal and never claimed again, so a condition recorded after the commit
+     * would be lost for good by one failed write. Only when the transition happened.
+     */
+    opens: string | null = null,
   ): Promise<boolean> {
-    return this.deps.uow.run(scope, async (tx) =>
-      this.deps.pushes.record(scope, row.id, to, { spend, nextAttemptAt, lastErrorCode }, at, tx),
-    );
+    return this.deps.uow.run(scope, async (tx) => {
+      const moved = await this.deps.pushes.record(
+        scope,
+        row.id,
+        to,
+        { spend, nextAttemptAt, lastErrorCode },
+        at,
+        tx,
+      );
+      if (moved && opens !== null) await this.openCondition(scope, row, opens, tx);
+      return moved;
+    });
   }
 
   /**
@@ -325,21 +350,26 @@ export class ReceiptReviewPushService {
     scope: TenantContext,
     row: ReceiptReviewPushRecord,
     reason: string,
+    tx: TransactionScope,
   ): Promise<void> {
-    await this.deps.opsLog.record(scope, {
-      code: RECEIPT_PUSH_FAILED_CODE,
-      severity: 'ERROR',
-      message:
-        'A receipt could not be pushed to an administrator in Telegram; it is still in the review queue.',
-      dedupeKey: receiptPushConditionKey(row.adminId),
-      context: {
-        adminId: row.adminId,
-        paymentId: row.paymentId,
-        receiptId: row.receiptId,
-        botInstanceId: row.botInstanceId,
-        reason,
+    await this.deps.opsLog.record(
+      scope,
+      {
+        code: RECEIPT_PUSH_FAILED_CODE,
+        severity: 'ERROR',
+        message:
+          'A receipt could not be pushed to an administrator in Telegram; it is still in the review queue.',
+        dedupeKey: receiptPushConditionKey(row.adminId),
+        context: {
+          adminId: row.adminId,
+          paymentId: row.paymentId,
+          receiptId: row.receiptId,
+          botInstanceId: row.botInstanceId,
+          reason,
+        },
       },
-    });
+      tx,
+    );
   }
 
   private async closeCondition(scope: TenantContext, row: ReceiptReviewPushRecord): Promise<void> {
