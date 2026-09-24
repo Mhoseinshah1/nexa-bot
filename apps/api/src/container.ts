@@ -55,7 +55,10 @@ import { blocksReadiness } from './modules/platform/system/application/readiness
 import { createLogger, newCorrelationId } from './infrastructure/logging/logger.js';
 import { createDatabase, type DatabaseHandle } from './infrastructure/persistence/database.js';
 import { createRedis, type RedisHandle } from './infrastructure/redis/redis.js';
-import { DrizzleUnitOfWork } from './infrastructure/persistence/unit-of-work.js';
+import {
+  DrizzleUnitOfWork,
+  type TransactionScope,
+} from './infrastructure/persistence/unit-of-work.js';
 
 import {
   DrizzleBotInstanceRepository,

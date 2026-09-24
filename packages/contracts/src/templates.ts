@@ -4342,7 +4342,9 @@ export const TEMPLATES = [
       },
       {
         token: 'days',
-        type: 'DURATION_DAYS',
+        // A NUMBER: a count of days LEFT, whose unit the body writes and whose zero is
+        // zero. DURATION_DAYS would render 0 as «نامحدود» and double the unit.
+        type: 'NUMBER',
         description:
           'Whole days left when the reminder was raised, from the snapshot on the ' +
           'service_reminders row rather than re-read at send time.',
@@ -4380,7 +4382,9 @@ export const TEMPLATES = [
       },
       {
         token: 'days',
-        type: 'DURATION_DAYS',
+        // A NUMBER: a count of days LEFT, whose unit the body writes and whose zero is
+        // zero. DURATION_DAYS would render 0 as «نامحدود» and double the unit.
+        type: 'NUMBER',
         description:
           'Whole days left when the reminder was raised, from the snapshot on the ' +
           'service_reminders row rather than re-read at send time.',

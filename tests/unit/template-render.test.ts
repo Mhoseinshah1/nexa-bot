@@ -162,13 +162,11 @@ describe('the catalogue under the rule', () => {
     expect(rendered).toBe('انقضا: 1405/07/02 22:00');
   });
 
-  it('names the catalogue lines that type the unit a DURATION_DAYS value now carries', () => {
+  it('no catalogue line writes the unit a DURATION_DAYS value already carries', () => {
     // `formatDurationDays` appends «روز», so a body that ALSO writes «روز» after the
-    // token shows it twice. The two reminder keys do, because their `days` is a count
-    // of days remaining that the contract types as a duration; the fix is theirs — a
-    // retyped token in `packages/contracts/src/templates.ts` or a reworded line in
-    // `catalogue.fa.ts` — and this pin fails the moment either lands, so the entry
-    // here is deleted with it rather than outliving it.
+    // token would show it twice. The two expiry reminders used to: their `days` is a
+    // count of days LEFT, retyped NUMBER in the contract (a zero there is zero, not
+    // «نامحدود»), so the unit stays in their lines and nowhere else.
     const doubled: string[] = [];
     for (const key of TEMPLATE_KEYS) {
       for (const placeholder of templateDefinition(key).placeholders) {
@@ -177,7 +175,7 @@ describe('the catalogue under the rule', () => {
           doubled.push(key);
       }
     }
-    expect(doubled).toEqual(['bot.service.expiry_first', 'bot.service.expiry_second']);
+    expect(doubled).toEqual([]);
   });
 });
 
