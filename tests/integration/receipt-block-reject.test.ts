@@ -620,7 +620,7 @@ describe('Block User and the rejection reason, from the receipt message', () => 
   // =========================================================================
 
   describe('a block racing each disposition', () => {
-    it('credit holds the customer row; the block waits on it; both commit, one credit', async () => {
+    it('credit holds the customer row, the block waits on it, and both commit with one credit', async () => {
       const payment = await pendingWithReceipt(f, 'x-credit-first');
       const captureId = await blockUpTo(payment, TG.owner, 'مسابقه با واریز');
       const held = holdLockCustomer();
@@ -651,7 +651,7 @@ describe('Block User and the rejection reason, from the receipt message', () => 
       vi.restoreAllMocks();
     }, 30_000);
 
-    it('the block holds the customer row; the credit waits on it; both commit, one credit', async () => {
+    it('the block holds the customer row, the credit waits on it, and both commit with one credit', async () => {
       const payment = await pendingWithReceipt(f, 'x-block-first-credit');
       const captureId = await blockUpTo(payment, TG.owner, 'بلاک اول');
       const held = holdCustomerSetStatus();
@@ -682,7 +682,7 @@ describe('Block User and the rejection reason, from the receipt message', () => 
       vi.restoreAllMocks();
     }, 30_000);
 
-    it('an approval holds the customer row in settlement; the block waits; both commit, one settlement', async () => {
+    it('an approval holds the customer row in settlement, the block waits, and both commit with one settlement', async () => {
       const payment = await pendingWithReceipt(f, 'x-approve-first');
       const captureId = await blockUpTo(payment, TG.owner, 'مسابقه با تأیید');
       const held = holdLockCustomer();
@@ -714,7 +714,7 @@ describe('Block User and the rejection reason, from the receipt message', () => 
       vi.restoreAllMocks();
     }, 30_000);
 
-    it('the block holds the customer row; the approval waits in settlement; both commit, one settlement', async () => {
+    it('the block holds the customer row, the approval waits in settlement, and both commit with one settlement', async () => {
       const payment = await pendingWithReceipt(f, 'x-block-first-approve');
       const captureId = await blockUpTo(payment, TG.owner, 'بلاک پیش از تأیید');
       const held = holdCustomerSetStatus();

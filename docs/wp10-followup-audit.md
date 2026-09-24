@@ -10,6 +10,17 @@
 This document was written before any production code. It audits `main` at `8ef2340`. Line
 numbers refer to that commit.
 
+**Owner corrections, received after approval and built in the same package** (§11 records
+what was built and where it differs from the plan below):
+
+- **OQ-WP10F-01 is in scope and built.** The Telegram reject takes a MANDATORY reason (File 01
+  §7), and the customer's `PAYMENT_REJECTED` message includes it.
+- **OQ-WP10F-02 is in scope and built.** A blocked customer is shown their own stored reason
+  (File 01 §9).
+- **OQ-WP10F-03 stays open**, recorded in `docs/open-questions.md`.
+- **The push states are `DELIVERED`, `UNKNOWN` and `FAILED`** (with `PENDING` and
+  `SUPERSEDED`), not `SENT` and `UNCONFIRMED`. An ambiguous send is never recorded as delivered.
+
 **Authorities.**
 
 - The owner's follow-up requirements.
@@ -140,7 +151,7 @@ payload `{ paymentId, receiptId }`. Adding it is a contract change in its own co
 
 - **Identity:** `UNIQUE (tenant_id, receipt_id, admin_id)`.
 - **Composite foreign keys:** to `payments`, `payment_receipts` (`payment_receipts_tenant_id_key`, `schema.ts:4081`) and `admins` (`admins_tenant_id_key`, `656`), plus `bot_instance_id` copied from the receipt.
-- **States:** `PENDING | SENT | UNCONFIRMED | FAILED | SUPERSEDED`.
+- **States:** `PENDING | DELIVERED | UNKNOWN | FAILED | SUPERSEDED` (renamed by the owner's correction).
 - **Bookkeeping:** `attempts`, `next_attempt_at`, `send_started_at`, `resolved_at`, `chat_id` (stamped at send, as history) and `last_error_code` (a machine code).
 - **CHECKs:** `(state <> 'PENDING') = (resolved_at IS NOT NULL)`, and a partial due index `WHERE state = 'PENDING'`.
 
@@ -155,24 +166,24 @@ payload `{ paymentId, receiptId }`. Adding it is a contract change in its own co
 5. Stamp `send_started_at` and commit.
 6. Call `sendFile` outside any transaction.
 7. Record the outcome:
-   - `DELIVERED` → `SENT`.
+   - `DELIVERED` → `DELIVERED`.
    - `RATE_LIMITED` → stays `PENDING`, due at Telegram's `retry_after`, and does **not** spend an attempt.
    - `REFUSED` → the PAY-37 text fallback once. If that is also refused, back off; after the attempt ceiling, `FAILED`.
-   - `UNKNOWN` → `UNCONFIRMED`, terminal, and **never re-sent**.
-8. A reaper moves any row whose `send_started_at` outlived the lease to `UNCONFIRMED`. It is never re-sent.
+   - `UNKNOWN` → `UNKNOWN`, terminal, **never re-sent**, never recorded as delivered.
+8. A reaper moves any row whose `send_started_at` outlived the lease to `UNKNOWN`. It is never re-sent.
 
 ### How each owner condition is met
 
-| Owner condition             | Mechanism                                                                                                                                                                                                                                                                                                                                                                                                            |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Duplicate Telegram update   | Replayed by the receipt's idempotency key: no receipt row, so no event.                                                                                                                                                                                                                                                                                                                                              |
-| Outbox retry                | `processed_messages`, plus the unique key.                                                                                                                                                                                                                                                                                                                                                                           |
-| Worker retry or restart     | `send_started_at`, plus the reaper to `UNCONFIRMED`. Never re-sent.                                                                                                                                                                                                                                                                                                                                                  |
-| Two worker replicas         | `FOR UPDATE SKIP LOCKED` claim.                                                                                                                                                                                                                                                                                                                                                                                      |
-| One administrator's failure | Rows are independent. A 429 defers only that row.                                                                                                                                                                                                                                                                                                                                                                    |
-| Observability               | Per-row state and `last_error_code`. `FAILED` and `UNCONFIRMED` also open a per-administrator operational condition (`payments.receipt_push_failed`, dedupe `receipt-push:<adminId>`). `SENT` to that administrator resolves it (`payments.receipt_push_ok`). Both are new codes, and both are contract changes. They reach the log group through the existing projector (`operational-event-projector.ts:130-176`). |
+| Owner condition             | Mechanism                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Duplicate Telegram update   | Replayed by the receipt's idempotency key: no receipt row, so no event.                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Outbox retry                | `processed_messages`, plus the unique key.                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Worker retry or restart     | `send_started_at`, plus the reaper to `UNKNOWN`. Never re-sent.                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Two worker replicas         | `FOR UPDATE SKIP LOCKED` claim.                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| One administrator's failure | Rows are independent. A 429 defers only that row.                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Observability               | Per-row state and `last_error_code`. `FAILED` and `UNKNOWN` also open a per-administrator operational condition (`payments.receipt_push_failed`, dedupe `payments.receipt_push_failed:<adminId>`). `DELIVERED` to that administrator resolves it (`payments.receipt_push_ok`). Both are new codes, declared beside their producer as `telegram.customer_send_failed` is. They reach the log group through the existing projector (`operational-event-projector.ts:130-176`). |
 
-**What the pull queue is for.** It remains: `adminReceipts` and `adminReceipt` are unchanged. It is also the recovery for every lost push (`UNCONFIRMED`, `FAILED` or `SUPERSEDED`). That is what makes "never resend an UNKNOWN" affordable.
+**What the pull queue is for.** It remains: `adminReceipts` and `adminReceipt` are unchanged. It is also the recovery for every lost push (`UNKNOWN`, `FAILED` or `SUPERSEDED`). That is what makes "never resend an UNKNOWN" affordable.
 
 **The 5T poke is retired.** Its producer is removed: `notifyReviewersOf`, the `notifyReviewers` dependency and the call in `submitReceipt`. Otherwise every receipt would reach each administrator as two messages. The kind `RECEIPT_AWAITING_REVIEW` and its template stay declared, because PENDING operator-lane rows may outlive the release. That follows the "widened enum is reader-compatible" convention.
 
@@ -322,15 +333,22 @@ The caption is built in ONE application function, used by both the pull item and
 - A role change, disable or unbind is either seen at fan-out, or caught by the send-time re-resolution (`SUPERSEDED`).
 - The push never blocks, and is never blocked by, administrator management. It never touches payments beyond a read, so it cannot delay a disposition.
 
-## 8. Out-of-scope gaps found (recorded, not built)
+## 8. Gaps found beyond the four items
 
-These are not among the four items. Each needs an owner decision.
+The audit recorded three File 01 gaps outside the four items. The owner ruled on each:
 
-- **OQ-WP10F-01 — File 01 §7, the reject reason.** File 01 makes the reject reason mandatory and says it is sent to the customer. Today the Telegram reject is one tap with the fixed note `'Rejected in the Telegram management panel.'` (`bot-runtime.ts:4718-4722`). The customer receives `PAYMENT_REJECTED`, which carries no values. Sending a reason would need a customer-lane payload, which ADR-0030 §1 refuses. A reject-reason capture could reuse §4's generalised capture. The customer half is an ADR question.
-- **OQ-WP10F-02 — File 01 §9, showing the reason to the customer.** File 01 shows the customer `{block_reason}` in its sample text. `bot.blocked` deliberately has no placeholder (`templates.ts:359-366`, `schema.ts:2581-2588`: "a reason shown to the person it is about is a reason an operator will stop writing honestly"). This is a direct conflict with a recorded design decision.
-- **OQ-WP10F-03 — File 01 §9's mandatory reason on every block.** The customers-section Telegram block has no confirmation and writes a fixed reason (`bot-runtime.ts:6059-6083`, whose comment says the surface "will not grow" a prompt). The Web reason is optional. This package makes the reason mandatory on the **receipt** path only.
-- **Pre-existing: the idempotency namespace.** `CustomerService.setStatus` hard-codes the idempotency namespace `'WEB'` (`customer.service.ts:488`, `589`) while also serving Telegram. `docs/conventions.md` requires keys namespaced per surface. The receipt path's keys are capture-derived UUIDs, so they cannot collide, but the rule is broken for the customers section.
-- **Pre-existing: a design-document inaccuracy.** `payments-file02-design.md` D3 says no admin push exists, but the 5T poke did. This package corrects D3's sentence when it retires the poke.
+- **OQ-WP10F-01 — File 01 §7, the reject reason. BUILT** (§11).
+  - Before: the Telegram reject was one tap with the fixed note `'Rejected in the Telegram management panel.'` (`bot-runtime.ts:4718-4722`), and `PAYMENT_REJECTED` carried no values.
+  - Now: the reject button opens a reason capture, and the confirm rejects with the reason.
+  - The customer lane READS the reason from the payment's `resolution_note`, so there is no producer payload and ADR-0030 §1 stands.
+- **OQ-WP10F-02 — File 01 §9, the reason shown to the customer. BUILT** (§11).
+  - This reverses the recorded decision that `bot.blocked` carries no reason (`templates.ts:359-366`), on the owner's instruction.
+- **OQ-WP10F-03 — File 01 §9's mandatory reason on every block. OPEN**, in `docs/open-questions.md`.
+  - The customers-section block keeps its one tap and its fixed surface note.
+  - The Web block reason stays optional.
+  - Only the receipt path requires a reason.
+- **Pre-existing: the idempotency namespace.** `CustomerService.setStatus` hard-codes the idempotency namespace `'WEB'` (`customer.service.ts:488`, `589`) while also serving Telegram. `docs/conventions.md` requires keys namespaced per surface. The receipt path's keys are capture-derived UUIDs, so they cannot collide, but the rule is broken for the customers section. It is recorded in `docs/open-questions.md`.
+- **Pre-existing: a design-document inaccuracy.** `payments-file02-design.md` D3 says no admin push exists, but the 5T poke did. D3 is corrected.
 - **File 01 §11** (expiration per method) and **§20–21** (the fee) are overridden by File 02 §4 and §9. They remain out of scope.
 
 ## 9. Migrations needed
@@ -388,12 +406,12 @@ The rows continue as **PAY-68…**.
   - a payment decided before the send gets `SUPERSEDED`;
   - the chat id is the binding current at send.
 - **P5.** Outcomes:
-  - `UNKNOWN` → `UNCONFIRMED`, and a second pass sends nothing;
-  - a row stranded with `send_started_at` → `UNCONFIRMED` via the reaper;
+  - `UNKNOWN` stays `UNKNOWN` (never `DELIVERED`), and a second pass sends nothing;
+  - a row stranded with `send_started_at` → `UNKNOWN` via the reaper;
   - a 429 → retried at `retry_after` with no attempt spent;
   - `REFUSED` → text fallback, then backoff, then `FAILED`.
-- **P6.** One administrator's refusal does not delay another's `SENT`.
-- **P7.** `FAILED` or `UNCONFIRMED` opens `payments.receipt_push_failed` for that administrator, and the next `SENT` resolves it.
+- **P6.** One administrator's refusal does not delay another's `DELIVERED`.
+- **P7.** `FAILED` or `UNKNOWN` opens `payments.receipt_push_failed` for that administrator, and the next `DELIVERED` resolves it.
 - **P8.** The push goes through the receipt's bot (a two-bot tenant).
 - **P9.** It is ONE `sendPhoto`/`sendDocument` with the caption and this administrator's buttons:
   - credit only with `users.wallet.credit`;
@@ -451,7 +469,7 @@ The rows continue as **PAY-68…**.
 | F-P4  | The send-time authority re-check removed                         | P4           |
 | F-P5  | The send-time payment-PENDING check removed                      | P4           |
 | F-P6  | `UNKNOWN` mapped to retry                                        | P5           |
-| F-P7  | The reaper resends instead of `UNCONFIRMED`                      | P5           |
+| F-P7  | The reaper resends instead of `UNKNOWN`                          | P5           |
 | F-P8  | A 429 spends an attempt                                          | P5           |
 | F-P9  | The tenant-active check removed                                  | P2 / P4      |
 | F-P10 | Buttons built from all permissions instead of the recipient's    | P9           |
@@ -468,3 +486,60 @@ The rows continue as **PAY-68…**.
 | F-D1  | `receiptDisposition` ignores `receipt_credits`                   | D1           |
 | F-D2  | Stale taps answered with `receipt_gone`                          | D4           |
 | F-D3  | Web list renders state only                                      | D3           |
+
+## 11. As built
+
+What the implementation does, where it differs from the plan above, and why.
+
+**Push (§3).** Built as designed, with the owner's state names.
+
+- **Decision 1.** One event, `PaymentReceiptSubmitted`, written in `ReceiptService.submit` only for a filed row.
+- **Fan-out.** The consumer `payments.receipt-review-push` fans out through `TelegramAdminService.reviewers`.
+- **The lane.** Rows go into `receipt_review_pushes`, migration `0116`.
+- **Sending.** `ReceiptReviewPushService` re-resolves the payment and the administrator (`TelegramAdminService.reviewerById`, which is new) immediately before each send. It sends through `CustomerMessenger.sendFile`, and falls back to text on `REFUSED`.
+- **Outcomes.** `DELIVERED` only on a definite 2xx. `UNKNOWN` for a timeout, a 5xx, an unreadable 2xx or a stranded send; it is never re-sent and never recorded as delivered. `RATE_LIMITED` spends no attempt. `FAILED` after 3 refusals.
+- **Where it runs.** `ReceiptReviewPushLoop` runs in the worker every 10 s and is health-checked.
+- **The poke.** The 5T producer is removed.
+- **Where the codes live.** The two operational codes are declared beside their producer (`receipt-review-push.service.ts`), as `telegram.customer_send_failed` is. The audit called them contract changes, but no contract registry of these codes exists; only the management-page lists live in contracts.
+
+**Block User (§4).** Built as designed, with one structural refinement.
+
+- The capture mechanics are ONE generic service, `ReceiptReasonCaptureService`, with two policies (`receipt-reason-policies.ts`): Block User and the rejection reason. Two copies of the INCIDENT-FIN-001 mechanics would drift.
+- Block uses the path `CustomerService.blockWithOutcome`. It is the same path as `block`, and additionally returns whether this command changed the customer, so the reply can say "already blocked" truthfully.
+- The audit carries `before`/`after.blockedReason` and `after.context {source, paymentId, captureId}`.
+
+**Rejection reason (OQ-WP10F-01, File 01 §7).**
+
+- **The flow.** `E:` opens a `RECEIPT_REJECT_REASON` capture (migration `0117`, which also carries the block purpose). The reason is typed and restated. `xe:` confirms and calls `PaymentService.rejectManualTransfer` under `receipt-reject-capture:<captureId>`.
+- **Mandatory in the service too.** `rejectManualTransfer` itself now refuses an empty or over-long reason (`REJECT_REASON_REQUIRED`), so no caller can reject without one.
+- **Where the reason lives.** It is stored in `payments.resolution_note`, the column the contract already documents as "why it was rejected, in the operator's own words". A structured field would duplicate it.
+- **What the customer sees.** `bot.payment.rejected` has an OPTIONAL `{reason}`, which the lane reads through `PaymentRepository.rejectionReasonFor`. It shows a dash for a rejection recorded before the reason was mandatory, including the old fixed surface note.
+- **No one-tap reject remains.**
+
+**Blocked customer's reason (OQ-WP10F-02, File 01 §9).**
+
+- **The new key.** `bot.blocked_with_reason` is a key of its own with a required `{reason}`. A block with no reason keeps `bot.blocked` as a whole sentence, and every existing override of `bot.blocked` keeps working. A placeholder on `bot.blocked` would have rendered an empty "reason" line for reason-less blocks.
+- **Where the reason is read.** `blockedReply` reads THIS turn's resolved customer row only.
+- **What is never shown.** The customers section's fixed note, `'Blocked from the Telegram management panel.'`, is never shown as a reason. That section is otherwise unchanged (OQ-WP10F-03).
+- **Web copy.** The Web block hint now says the reason is shown to the customer.
+
+**Disposition (§5).** Built as designed.
+
+- One SQL expression (`receiptDispositionSql`) feeds the list column, the `disposition` filter and Telegram's already-resolved answers.
+- The Web list has a disposition column and a filter.
+- The Web detail has a disposition row beside the existing credit card.
+- A stale Telegram tap answers `bot.admin.receipt_already_{approved,rejected,credited}`.
+
+**Caption (§6).** Built as designed, through ONE builder, `ReceiptReviewCaption`, shared by the pull item and the push. One difference: a top-up renders duration and traffic as `0`, because those placeholders are typed `DURATION_DAYS`/`BYTES`.
+
+**Tests.**
+
+| File                                             | Count | What it covers                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------------------------------------ | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `tests/integration/receipt-review-push.test.ts`  | 18    | Push rows P1–P11.                                                                                                                                                                                                                                                                                                                                                                    |
+| `tests/integration/receipt-block-reject.test.ts` | 26    | Block, the blocked customer's reason, the rejection reason, the reason-bearing reject races, and the five produced block-vs-disposition races. It holds the plan's R1–R4. R5 is NOT a separate test: a block capture on another tenant's payment is refused by the tenant-scoped payment read, but no test pins it. The tenant case that IS pinned is the blocked customer's reason. |
+| `tests/integration/wallet-payments-http.test.ts` | 1 new | The disposition on the Web list, detail and filter.                                                                                                                                                                                                                                                                                                                                  |
+| `tests/unit/receipt-review-caption.test.ts`      | 8     | Caption, buttons, reason bound, blocked reply.                                                                                                                                                                                                                                                                                                                                       |
+| `tests/web/payments.test.tsx`                    | 2 new | The Web list and detail.                                                                                                                                                                                                                                                                                                                                                             |
+
+The falsification rows are PAY-68…PAY-102 in `docs/wp10-falsification.md`.

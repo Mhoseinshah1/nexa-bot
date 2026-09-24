@@ -379,7 +379,7 @@ describe('the administrators’ receipt push', () => {
   // Failure: never loses the receipt, never re-sends an UNKNOWN, isolated, observable
   // =========================================================================
 
-  it('an UNKNOWN send stays UNKNOWN — never DELIVERED, never re-sent; the other administrator still gets theirs; the receipt stands; the failure is observable', async () => {
+  it('an UNKNOWN send stays UNKNOWN — never DELIVERED, never re-sent — while the other administrator still gets theirs, the receipt stands and the failure is observable', async () => {
     f.behaviour.set(TG.reviewer, 'SERVER_ERROR');
     const payment = await pendingWithReceipt(f, 'unknown');
     await relay();
@@ -474,7 +474,7 @@ describe('the administrators’ receipt push', () => {
     expect((await stateOf(payment, reviewer))?.state).toBe('DELIVERED');
   });
 
-  it('refused on every attempt is FAILED and opens the condition; the next DELIVERED to that administrator closes it', async () => {
+  it('refused on every attempt is FAILED and opens the condition, and the next DELIVERED to that administrator closes it', async () => {
     f.behaviour.set(TG.reviewer, 'REFUSED');
     const payment = await pendingWithReceipt(f, 'refused');
     await relay();

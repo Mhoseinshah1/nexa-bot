@@ -2228,7 +2228,9 @@ payment window plus ten minutes, and an automatic amount-mismatch outcome
 Telegram Stars only as an example, and Stars are not Toman, so it also needs an exchange
 rule the owner has not given (`OQ-5D-01`). File 02 refers to a File 01 that was not
 supplied; it may name the gateways, the Telegram receipt message layout and whether admins
-are pushed a message when a receipt arrives.
+are pushed a message when a receipt arrives. (File 01 has since been supplied. It settles the
+receipt message and the admin push, which the WP10 follow-up builds
+(`docs/wp10-followup-audit.md`, ADR-0031). It names no gateway, so this question stands.)
 
 UNRESOLVED. The gateway machinery is built with its first provider, against that
 provider's real sandbox, per `CLAUDE.md`'s provider rule. Until then no external gateway can
@@ -2239,5 +2241,34 @@ be enabled.
 Not captured: the reviewer reads them from the image, and asking for them adds turns to the
 Telegram flow. The customer's own caption is stored and shown to the reviewer
 (`docs/payments-file02-design.md` D3).
+
+UNRESOLVED.
+
+## OQ-WP10F-03 — a mandatory reason on EVERY block (File 01 §9)
+
+File 01 §9 makes a block's reason mandatory. The WP10 follow-up requires one on the receipt
+message's Block User path only (`docs/wp10-followup-audit.md` §4):
+
+- **The customers section of the Telegram panel** still blocks on one tap, with no confirmation,
+  and stores a fixed sentence about the surface. The customer is never shown that sentence as
+  a reason.
+- **The Web Admin's** block reason is still optional.
+
+Making every block ask for a reason is a customers-section UX change. The owner kept it out of
+the follow-up.
+
+UNRESOLVED.
+
+## OQ-WP10F-04 — `CustomerService` block keys share the WEB namespace
+
+`CustomerService.setStatus` records its idempotency key under the `'WEB'` namespace, whatever
+the surface. The Telegram customers section and the receipt's Block User call it too.
+`docs/conventions.md` requires keys namespaced per surface.
+
+The receipt path's keys are derived from capture ids (UUIDv7), so they cannot collide with a
+Web key. The customers section's keys are Telegram update keys, which could. The fix is a
+namespace parameter on the command.
+
+It is pre-existing, found by the WP10 follow-up audit, and not changed there.
 
 UNRESOLVED.
