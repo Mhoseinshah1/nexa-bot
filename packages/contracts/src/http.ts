@@ -23,7 +23,7 @@ import {
   paymentGatewayStatusSchema,
   topupCashbackPercentSchema,
 } from './payment-gateways.js';
-import { PAYMENT_RECEIPT_KINDS } from './payment-receipts.js';
+import { PAYMENT_RECEIPT_KINDS, RECEIPT_DISPOSITIONS } from './payment-receipts.js';
 import { CUSTOMER_STATUSES, telegramUserIdSchema } from './customer.js';
 import {
   CASHBACK_PERCENT_MAX,
@@ -3312,6 +3312,12 @@ export const paymentSummarySchema = z.object({
   /** Who paid, as Telegram knows them: the id and, when they have one, the username. */
   customerTelegramUserId: z.string().nullable().default(null),
   customerUsername: z.string().nullable().default(null),
+  /**
+   * How a receipt left review, derived on the server (WP10 follow-up §5). A receipt
+   * credited to the wallet is FAILED by state and `CREDITED_TO_WALLET` here, which is what
+   * keeps it from reading as a rejection. Defaulted on parse, like the D7 fields.
+   */
+  receiptDisposition: z.enum(RECEIPT_DISPOSITIONS).nullable().default(null),
 });
 export type PaymentSummaryResponse = z.infer<typeof paymentSummarySchema>;
 
@@ -3378,6 +3384,8 @@ export const paymentListQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(PAYMENT_PAGE_MAX).optional(),
   cursor: z.string().min(1).max(255).optional(),
   state: z.enum(PAYMENT_STATES).optional(),
+  /** Only payments whose receipt left review this way (WP10 follow-up §5). */
+  disposition: z.enum(RECEIPT_DISPOSITIONS).optional(),
   method: z.enum(PAYMENT_METHODS).optional(),
   /* Ids, validated HERE: these reach `uuid` columns. See `orderListQuerySchema`. */
   customerId: uuidV7Schema.optional(),
