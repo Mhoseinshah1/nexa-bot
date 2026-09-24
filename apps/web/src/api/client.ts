@@ -16,13 +16,18 @@ import {
   type ResellerTierWriteRequest,
   type ResellerUpdateRequest,
   REFERRAL_ROUTES,
+  TENANT_MEDIA_ROUTES,
   customerReferralResponseSchema,
   referralCommissionListResponseSchema,
   referralListResponseSchema,
+  tenantMediaStateSchema,
   type CustomerReferralResponse,
   type ReferralCommissionListResponse,
   type ReferralCommissionState,
   type ReferralListResponse,
+  type TenantMediaMimeType,
+  type TenantMediaPurpose,
+  type TenantMediaStateResponse,
   CASHBACK_RULE_ROUTES,
   DISCOUNT_ROUTES,
   PRICE_PREVIEW_ROUTE,
@@ -2027,4 +2032,31 @@ export function updateReseller(
 ): Promise<ResellerResponse> {
   const { customerId, ...body } = input;
   return post(RESELLER_ROUTES.update(customerId), body, resellerResponseSchema);
+}
+
+// ---------------------------------------------------------------------------
+// Tenant media (customer UX §I): the referral banner's metadata, never its bytes
+// ---------------------------------------------------------------------------
+
+export function fetchTenantMedia(purpose: TenantMediaPurpose): Promise<TenantMediaStateResponse> {
+  return authedGet(TENANT_MEDIA_ROUTES.detail(purpose), tenantMediaStateSchema);
+}
+
+/** Replaces the slot. The bytes travel as base64 in JSON, bounded by the schema on both sides. */
+export function uploadTenantMedia(input: {
+  purpose: TenantMediaPurpose;
+  idempotencyKey: string;
+  mimeType: TenantMediaMimeType;
+  contentBase64: string;
+}): Promise<TenantMediaStateResponse> {
+  const { purpose, ...body } = input;
+  return post(TENANT_MEDIA_ROUTES.upload(purpose), body, tenantMediaStateSchema);
+}
+
+export function clearTenantMedia(input: {
+  purpose: TenantMediaPurpose;
+  idempotencyKey: string;
+}): Promise<TenantMediaStateResponse> {
+  const { purpose, ...body } = input;
+  return post(TENANT_MEDIA_ROUTES.clear(purpose), body, tenantMediaStateSchema);
 }

@@ -115,6 +115,12 @@ import { DrizzleSettingRepository } from './modules/control/settings/infrastruct
 import { SettingsResolver } from './modules/control/settings/application/settings-resolver.js';
 import { SettingsService } from './modules/control/settings/application/settings.service.js';
 import { ReminderThresholdsGuard } from './modules/control/settings/application/reminder-thresholds.guard.js';
+import { SignupGiftTermsGuard } from './modules/control/settings/application/signup-gift-terms.guard.js';
+import { SignupGiftActivationGuard } from './modules/control/features/application/signup-gift-activation.guard.js';
+import { TenantMediaService } from './modules/control/media/application/tenant-media.service.js';
+import { DrizzleTenantMediaRepository } from './modules/control/media/infrastructure/drizzle-tenant-media.repository.js';
+import { ReferralSignupGiftService } from './modules/commerce/referrals/application/referral-signup-gift.service.js';
+import { DrizzleReferralSignupGiftRepository } from './modules/commerce/referrals/infrastructure/drizzle-referral-signup-gift.repository.js';
 import { CONTROL_ERROR_CODES, SERVICE_REMINDER_DEFAULTS, isNexaError } from '@nexa/contracts';
 import { DrizzleFeatureFlagRepository } from './modules/control/features/infrastructure/drizzle-feature-flags.repository.js';
 import {
@@ -468,6 +474,8 @@ export interface Container {
   readonly referralCommissions: ReferralCommissionService;
   /** WP9: the operator's read-only view of attributions and commissions. */
   readonly referralsRead: ReferralReadService;
+  readonly referralSignupGifts: ReferralSignupGiftService;
+  readonly tenantMedia: TenantMediaService;
   /** WP9-B: a reseller's standing, entitlements, pricing layer, credit and purchase record. */
   readonly resellers: ResellerService;
   /** WP9-B: reseller tiers, grants and resellers, as an operator manages them. */
@@ -1610,6 +1618,42 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
   });
+  /*
+   * The signup gift (customer UX §I): one credit per side of a referral, from the terms
+   * in settings, independent of the commission lane above.
+   */
+  const referralSignupGiftService = new ReferralSignupGiftService({
+    gifts: new DrizzleReferralSignupGiftRepository(database.db),
+    referrals: referralRepository,
+    customers: customerRepository,
+    wallet: walletRepository,
+    settings: settingsResolver,
+    features: featureFlagResolver,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    uow,
+    idempotency,
+    outbox,
+    clock,
+    ids,
+  });
+
+  /* The tenant's media slots (customer UX §I): the referral banner, bytes in the database. */
+  const tenantMediaService = new TenantMediaService({
+    repository: new DrizzleTenantMediaRepository(database.db),
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    uow,
+    idempotency,
+    clock,
+  });
+
   const refundService = new RefundService({
     cashback: cashbackService,
     referrals: referralCommissionService,
@@ -2053,6 +2097,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       // One per reminder threshold. The five have to agree with one another, and no
       // per-key schema can say so — see `ReminderThresholdsGuard`.
       ...ReminderThresholdsGuard.all(settingsResolver),
+      // The signup gift's three terms have to make a whole while the gift is on.
+      ...SignupGiftTermsGuard.all(settingsResolver, featureFlagResolver),
     ],
   );
 
@@ -2124,6 +2170,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     opsLogWriter,
     // For the mutation-time session-revocation check.
     sessions,
+    // The vetoes over a flag turning on: the signup gift needs coherent terms first.
+    [new SignupGiftActivationGuard(settingsResolver)],
   );
 
   const serviceReminderSweep = new ServiceReminderService({
@@ -3336,6 +3384,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     referrals: referralProgram,
     referralCommissions: referralCommissionService,
     referralsRead: referralReadService,
+    referralSignupGifts: referralSignupGiftService,
+    tenantMedia: tenantMediaService,
     resellers: resellerService,
     resellersAdmin: resellerAdminService,
     commercialActions: commercialActionService,
