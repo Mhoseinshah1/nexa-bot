@@ -36,9 +36,11 @@ The push has three parts:
 - **The consumer.** `payments.receipt-review-push` fans the event out, inside the relay's
   transaction.
   - It re-reads the payment. A decided payment gets no push.
-  - It lists the tenant's bound administrators whose resolved authority holds `receipts.review`,
-    through `TelegramAdminService.reviewers`. The resolver gives a disabled administrator
-    nothing.
+  - It lists the tenant's bound administrators whose resolved authority holds `receipts.review`
+    AND `receipts.view`, through `TelegramAdminService.reviewers`. The resolver gives a disabled
+    administrator nothing. `receipts.review` implies `payments.view`, not `receipts.view`, and
+    the message IS the receipt file, which the pull item refuses without `receipts.view`. Both
+    keys are asked again at send.
   - It inserts one `receipt_review_pushes` row per (receipt, administrator) with
     `ON CONFLICT DO NOTHING`.
 - **The dispatcher.** `ReceiptReviewPushService` runs in the worker. For each claimed row, in
@@ -100,7 +102,9 @@ The pull queue is the recovery for every push this lane does not deliver. That i
 ### 4. Observability
 
 `FAILED` and `UNKNOWN` open the operational condition `payments.receipt_push_failed`, deduped
-per administrator. The next `DELIVERED` to that administrator closes it with
+per administrator, in the SAME transaction as the transition that makes the row terminal. A
+terminal row is never claimed again, so a condition written after the commit could be lost for
+good by one failed write. The next `DELIVERED` to that administrator closes it with
 `payments.receipt_push_ok`. The condition's context carries ids and a machine code, never the
 customer's caption. The row's own `last_error_code` says why each push is where it is.
 

@@ -161,7 +161,7 @@ payload `{ paymentId, receiptId }`. Adding it is a contract change in its own co
 
 1. If the scope is inactive, release the claim.
 2. If the payment is no longer a PENDING `MANUAL_TRANSFER`, mark the row `SUPERSEDED('payment.decided')`.
-3. Re-resolve the administrator: still ACTIVE, still bound, still holding `receipts.review`. If not, mark the row `SUPERSEDED('admin.no_authority')`. The chat id is read here, from the **current** binding. This is the delivery-time resolution the owner asked for.
+3. Re-resolve the administrator: still ACTIVE, still bound, still holding `receipts.review` and `receipts.view` (added by the Codex review, §11). If not, mark the row `SUPERSEDED('admin.no_authority')`. The chat id is read here, from the **current** binding. This is the delivery-time resolution the owner asked for.
 4. Build the caption and the buttons for **this** administrator's permission set (§6, §4).
 5. Stamp `send_started_at` and commit.
 6. Call `sendFile` outside any transaction.
@@ -550,3 +550,14 @@ The facts reader also reports an add-on's unbought amount as unknown. That amoun
 | `tests/web/payments.test.tsx`                    | 2 new | The Web list and detail.                                                                                                                                                                                                                                                                                                                                                             |
 
 The falsification rows are PAY-68…PAY-104 in `docs/wp10-falsification.md`.
+
+### The one Codex review
+
+The review raised five findings. Four were confirmed against the code and fixed in `798b4d4`, with the falsification rows PAY-105…PAY-113 in `docs/wp10-falsification.md`:
+
+- **The push needs `receipts.view` as well as `receipts.review`.** This holds at the fan-out and again at send. The rejection's capture charges `receipts.view` again, as the one-tap rejection did through `reviewItem`.
+- **A block reason is bounded in code points in `CustomerService`,** as the capture counts it. A UTF-16 slice kept 250 of 500 confirmed emoji and could split a surrogate pair.
+- **A Cancel on a CONFIRMED reason capture reports the actual state:** the customer's row for a block, and the payment for a rejection. A capture closes before its action runs, so CONFIRMED proves the reason, not the action.
+- **An UNKNOWN, FAILED or reaped push opens its operational condition in the transaction that makes it terminal.**
+
+The fifth finding was declined. It said a crafted reject callback can reject a pending transfer that has no receipt. `main`'s one-tap path had the same admission (`reviewItem` never required a receipt), and approve still does.
