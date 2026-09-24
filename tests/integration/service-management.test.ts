@@ -302,7 +302,7 @@ describe('a customer manages the service they bought', () => {
       tapUpdate(`s:${service.id}`),
     );
 
-    expect(result.replyKey).toBe('bot.service.detail');
+    expect(result.replyKey).toBe('bot.service.card');
     const body = lastMessage();
     expect(body, 'pause is offered').toContain(`u:${service.id}`);
     expect(body, 'resume is not, because the service is not suspended').not.toContain(
@@ -358,7 +358,7 @@ describe('a customer manages the service they bought', () => {
       systemActor('bot'),
       tapUpdate(`s:${service.id}`),
     );
-    expect(detail.replyKey).toBe('bot.service.detail');
+    expect(detail.replyKey).toBe('bot.service.card');
     expect(lastMessage(), 'resume is offered').toContain(`e:${service.id}`);
     expect(lastMessage(), 'pause is not, because it is already paused').not.toContain(
       `u:${service.id}`,
@@ -433,9 +433,13 @@ describe('a customer manages the service they bought', () => {
     await ctx.container.provisionerLoop.tick();
 
     await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`s:${service.id}`));
-    const body = lastMessage();
+    // Whole callbacks, not substrings: the card's note button is `nt:<id>`.
+    const drawn = [...lastMessage().matchAll(/callback_data\\?":\\?"([^"\\]+)/gu)].map(
+      (match) => match[1],
+    );
+    expect(drawn.length).toBeGreaterThan(0);
     for (const prefix of ['u:', 'e:', 't:', 'k:']) {
-      expect(body, `${prefix} must not be offered for a terminated service`).not.toContain(
+      expect(drawn, `${prefix} must not be offered for a terminated service`).not.toContain(
         `${prefix}${service.id}`,
       );
     }
@@ -1875,7 +1879,7 @@ describe('a customer manages the service they bought', () => {
       tapUpdate(`a:${encodeIdPair(service.id, addon)}`),
     );
 
-    expect(quoted.replyKey).toBe('bot.service.action_quote');
+    expect(quoted.replyKey).toBe('bot.order.preinvoice');
     // The amount the order was written with, on the screen carrying the confirm button — in a
     // unit, never the stored integer (pre-release §3). 10^10 bytes is 9.3 GiB under the
     // project's binary rule, the same figure the Web Admin shows for it.
@@ -1889,7 +1893,9 @@ describe('a customer manages the service they bought', () => {
      * commercial refusal map, so `refusal` rethrew it and the customer who tapped a
      * renewal drawn before the operator disabled the panel got NO reply at all — not a
      * refusal, nothing. 4E answers the same code inside `serviceAction`, which the
-     * commercial handlers never pass through.
+     * commercial handlers never pass through. The renew button opens a chooser now, and
+     * a panel that cannot be operated offers no option on it — the answer is that
+     * nothing is available, still an answer.
      */
     const service = await activeService('stale-button');
     await ctx.container.database.db.execute(
@@ -1904,7 +1910,7 @@ describe('a customer manages the service they bought', () => {
     );
 
     expect(tapped.intent).toBe('SERVICE_RENEW');
-    expect(tapped.replyKey).toBe('bot.service.capability_unsupported');
+    expect(tapped.replyKey).toBe('bot.service.renew_unavailable');
   });
 
   it('refuses a package of the wrong kind on the extra-traffic path', async () => {

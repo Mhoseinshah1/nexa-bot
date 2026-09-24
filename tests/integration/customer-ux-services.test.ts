@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   EMPTY_PRODUCT_DISPLAY,
+  OPERATION_MAX_ATTEMPTS,
   money,
   type ActorContext,
   type BotInstanceId,
@@ -575,7 +576,10 @@ describe('a customer looks after the services they bought', () => {
       panel.forget(service.username);
       await handle(tap(`rs:${service.id}`));
       await ctx.container.database.db.execute(
-        sql`UPDATE provisioning_operations SET next_attempt_at = now() - interval '1 hour', attempts = 99`,
+        // One attempt left: `claimDue` claims `attempts < OPERATION_MAX_ATTEMPTS` only, so
+        // a count at or above the bound is never run at all, and this failure is terminal.
+        sql`UPDATE provisioning_operations
+               SET next_attempt_at = now() - interval '1 hour', attempts = ${OPERATION_MAX_ATTEMPTS - 1}`,
       );
       await ctx.container.provisionerLoop.tick();
       const row = await services.findById(tenantA, service.id);
@@ -621,7 +625,8 @@ describe('a customer looks after the services they bought', () => {
       expect(messages(), 'no separate text: the card fit the caption').toHaveLength(0);
       const raw = photos[0]?.raw ?? '';
       expect(raw).toContain('name="photo"; filename="subscription.png"');
-      expect(raw).toContain('\u0089PNG');
+      // The PNG signature past its first byte: 0x89 is not UTF-8 and decodes to U+FFFD.
+      expect(raw).toContain('PNG\r\n\u001a\n');
       expect(raw).toContain('✅ سرویس با موفقیت ایجاد شد');
       expect(raw).toContain(`👤 نام کاربری سرویس: ${service?.providerUsername ?? ''}`);
       expect(raw).toContain('🌿 نام سرویس: پلن deliver');

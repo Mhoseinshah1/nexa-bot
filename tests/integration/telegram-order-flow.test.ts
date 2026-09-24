@@ -524,17 +524,21 @@ describe('the customer purchase flow over Telegram', () => {
     expect(text).toContain(formatMoney(money(250_000n, 'IRT')));
     // The plan's 53687091200 bytes as the customer reads them, never the stored integer
     // (pre-release hardening §3).
-    expect(text).toContain('حجم: 50 گیگابایت');
+    expect(text).toContain('حجم اکانت: 50 گیگابایت');
     expect(text).not.toContain('53687091200');
 
-    // Two buttons, both naming the ORDER rather than the product: confirm, and — on a
-    // new-purchase draft, the one order a code can reach (WP8 P7) — enter a code.
+    // The payment buttons name the ORDER rather than the product — wallet, then the
+    // card-to-card route the seed allows — and, on a new-purchase draft, the one order a
+    // code can reach (WP8 P7), enter a code; then the way back to the menu.
     const buttons = buttonsOf(lastMessage());
-    expect(buttons).toHaveLength(2);
-    expect(buttons[0]?.text).toBe(CATALOGUE_FA['bot.order.confirm_button']);
-    expect(buttons[0]?.callback_data).toBe(`c:${String(rows[0]?.['id'])}`);
-    expect(buttons[1]?.text).toBe(CATALOGUE_FA['bot.discount.enter_button']);
-    expect(buttons[1]?.callback_data).toBe(`dc:${String(rows[0]?.['id'])}`);
+    expect(buttons).toHaveLength(4);
+    expect(buttons[0]?.text).toBe(CATALOGUE_FA['bot.payment.wallet_button']);
+    expect(buttons[0]?.callback_data).toBe(`w:${String(rows[0]?.['id'])}`);
+    expect(buttons[1]?.text).toBe(CATALOGUE_FA['bot.payment.manual_button']);
+    expect(buttons[1]?.callback_data).toBe(`m:${String(rows[0]?.['id'])}`);
+    expect(buttons[2]?.text).toBe(CATALOGUE_FA['bot.discount.enter_button']);
+    expect(buttons[2]?.callback_data).toBe(`dc:${String(rows[0]?.['id'])}`);
+    expect(buttons[3]?.callback_data).toBe('mm:');
 
     // Nothing about payment, because nothing can take one.
     expect(text).not.toContain(CATALOGUE_FA['bot.order.awaiting_payment']);
@@ -587,8 +591,10 @@ describe('the customer purchase flow over Telegram', () => {
     const orderId = String((await orders())[0]?.['id']);
     await tap(`Z:${orderId}`);
     expect(buttonsOf(lastMessage()).map((b) => b.callback_data)).toEqual([
-      `c:${orderId}`,
+      `w:${orderId}`,
+      `m:${orderId}`,
       `dc:${orderId}`,
+      'mm:',
     ]);
 
     // Before the window, a code is just a message nobody asked for.
@@ -605,12 +611,14 @@ describe('the customer purchase flow over Telegram', () => {
     await command('spring');
     const text = String(lastMessage()?.body['text']);
     // Labelled lines, not bare figures: «250,000 تومان» contains «50,000 تومان».
-    expect(text).toContain(`مبلغ: ${formatMoney(money(250_000n, 'IRT'))}`);
+    expect(text).toContain(`قیمت پیش از تخفیف: ${formatMoney(money(250_000n, 'IRT'))}`);
     expect(text).toContain(`تخفیف: ${formatMoney(money(50_000n, 'IRT'))}`);
-    expect(text).toContain(`مبلغ قابل پرداخت: ${formatMoney(money(200_000n, 'IRT'))}`);
+    expect(text).toContain(`قیمت: ${formatMoney(money(200_000n, 'IRT'))}`);
     expect(buttonsOf(lastMessage()).map((b) => b.callback_data)).toEqual([
-      `c:${orderId}`,
+      `w:${orderId}`,
+      `m:${orderId}`,
       `dx:${orderId}`,
+      'mm:',
     ]);
     expect((await orders())[0]?.['total_amount']).toBe(200_000n);
 
@@ -621,8 +629,10 @@ describe('the customer purchase flow over Telegram', () => {
     await tap(`dx:${orderId}`);
     expect(String(lastMessage()?.body['text'])).not.toContain('تخفیف');
     expect(buttonsOf(lastMessage()).map((b) => b.callback_data)).toEqual([
-      `c:${orderId}`,
+      `w:${orderId}`,
+      `m:${orderId}`,
       `dc:${orderId}`,
+      'mm:',
     ]);
     expect((await orders())[0]?.['total_amount']).toBe(250_000n);
   });
@@ -660,9 +670,10 @@ describe('the customer purchase flow over Telegram', () => {
     await tap(`Z:${orderId}`);
     const text = String(lastMessage()?.body['text']);
     expect(text, 'the list price the customer can reconcile').toContain(
-      `مبلغ: ${formatMoney(money(250_000n, 'IRT'))}`,
+      `قیمت پیش از تخفیف: ${formatMoney(money(250_000n, 'IRT'))}`,
     );
     expect(text).toContain(`تخفیف: ${formatMoney(money(50_000n, 'IRT'))}`);
+    expect(text).toContain(`قیمت: ${formatMoney(money(200_000n, 'IRT'))}`);
 
     await api.container.database.db.execute(
       sql`UPDATE discounts SET status = 'INACTIVE' WHERE id = ${id}`,

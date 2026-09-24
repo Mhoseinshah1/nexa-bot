@@ -128,6 +128,10 @@ describe('a customer pays through the approved screens', () => {
     firstName: string,
     lastName: string | null,
   ): Promise<UserId> {
+    registered.set(telegramUserId, {
+      first_name: firstName,
+      ...(lastName === null ? {} : { last_name: lastName }),
+    });
     const resolved = await ctx.container.customers.resolveFromUpdate(
       tenantA,
       systemActor(`resolve-${telegramUserId}`),
@@ -188,6 +192,16 @@ describe('a customer pays through the approved screens', () => {
         DO UPDATE SET value = ${JSON.stringify(value)}::jsonb, version = setting_values.version + 1`);
   }
 
+  /*
+   * The `from` of every update carries the name the customer registered with. The
+   * resolver refreshes a customer's name from each update — Nexa's rule, a name follows
+   * Telegram — so a fixture that sent `x` here would rename the customer it is testing.
+   */
+  const registered = new Map<string, { first_name: string; last_name?: string }>();
+  const fromOf = (telegramUserId: string) => ({
+    id: Number(telegramUserId),
+    ...(registered.get(telegramUserId) ?? { first_name: 'x' }),
+  });
   const customerUpdate = (payload: Record<string, unknown>, telegramUserId = MARYAM) => {
     updateSeq += 1;
     return {
@@ -195,7 +209,7 @@ describe('a customer pays through the approved screens', () => {
       botInstanceId: BOT_A,
       update: { update_id: updateSeq, ...payload },
       telegramUserId,
-      from: { id: Number(telegramUserId), first_name: 'x' },
+      from: fromOf(telegramUserId),
     };
   };
   const tap = (data: string, telegramUserId = MARYAM) =>
@@ -203,7 +217,7 @@ describe('a customer pays through the approved screens', () => {
       {
         callback_query: {
           id: `cbq-${String(updateSeq)}`,
-          from: { id: Number(telegramUserId), is_bot: false, first_name: 'x' },
+          from: { ...fromOf(telegramUserId), is_bot: false },
           data,
           message: {
             message_id: updateSeq,
@@ -222,7 +236,7 @@ describe('a customer pays through the approved screens', () => {
           message_id: updateSeq,
           date: 0,
           chat: { id: Number(telegramUserId), type: 'private' },
-          from: { id: Number(telegramUserId), is_bot: false, first_name: 'x' },
+          from: { ...fromOf(telegramUserId), is_bot: false },
           text: value,
         },
       },
@@ -321,7 +335,9 @@ describe('a customer pays through the approved screens', () => {
         ),
         displayFeatures: Array.from(
           { length: 30 },
-          (_, i) => `✅ ویژگی شمارهٔ ${String(i + 1)} ${'—'.repeat(120)}`,
+          // Each section fits a message on its own, so the cut falls BETWEEN sections;
+          // a section wider than the bound would be cut line by line into a third part.
+          (_, i) => `✅ ویژگی شمارهٔ ${String(i + 1)} ${'—'.repeat(100)}`,
         ),
         serviceLocationLabel: null,
       });
@@ -541,7 +557,9 @@ describe('a customer pays through the approved screens', () => {
       expect(stray.replyKey).toBe('bot.unknown_command');
       await handle(tap('o:'));
       await ctx.container.database.db.execute(
-        sql`UPDATE customer_text_captures SET expires_at = now() - interval '1 minute'`,
+        // Both stamps move: the row's CHECK keeps a deadline after its opening.
+        sql`UPDATE customer_text_captures
+               SET opened_at = now() - interval '11 minutes', expires_at = now() - interval '1 minute'`,
       );
       const late = await handle(text('50000'));
       expect(late.replyKey).toBe('bot.unknown_command');
@@ -551,7 +569,7 @@ describe('a customer pays through the approved screens', () => {
       expect((rows.rows[0] as { close_reason: string }).close_reason).toBe('EXPIRED');
     });
 
-    it('the principal and the gift are separate entries, once, and a receipt credit earns no gift', async () => {
+    it('the principal and the gift are separate entries, written once across a repeated confirmation', async () => {
       await ctx.container.database.db.execute(
         sql`UPDATE payment_gateways SET topup_cashback_percent = 10 WHERE tenant_id = ${tenantA.tenantId}`,
       );

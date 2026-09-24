@@ -1873,17 +1873,6 @@ function adminServiceRotateCommand(data: string, id: string | null): BotCommand 
 }
 
 /**
- * How many services one `/services` answer shows.
- *
- * A BOUND, not a page, and stated for the same reason `CATALOG_PAGE_SIZE` is: a customer
- * with more than twenty services sees twenty and is told nothing about the rest. How a
- * customer reaches a long list over Telegram is a product decision with no evidence
- * behind it in `docs/research/`, and `docs/open-questions.md` carries it rather than
- * this file guessing.
- */
-export const SERVICES_PAGE_SIZE = 20;
-
-/**
  * How many products one `/catalog` answer shows.
  *
  * A BOUND, not a page. `listCatalog` reports `hasMore` and this surface drops it on the

@@ -25,7 +25,7 @@ import {
   type TenantContext,
   type UserId,
 } from '@nexa/contracts';
-import { CATALOGUE_FA, createTranslator } from '@nexa/i18n';
+import { CATALOGUE_FA } from '@nexa/i18n';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import type { Container } from '../../apps/api/src/container';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
@@ -1912,7 +1912,7 @@ describe('the referral surfaces: HTTP for the operator, Telegram for the custome
       ).toEqual([]);
     });
 
-    it('answers the rf: tap with bot.referral.invite — link, code and referred count — and with unconfigured while inactive', async () => {
+    it('answers the rf: tap with bot.referral.screen — link and referred count — and with unconfigured while inactive', async () => {
       await command('/start', REFERRER_TELEGRAM_ID);
       const referrer = await customerIdOf(REFERRER_TELEGRAM_ID);
 
@@ -1923,21 +1923,24 @@ describe('the referral surfaces: HTTP for the operator, Telegram for the custome
 
       await f.program();
       const code = referralCodeFor(referrer);
-      const invite = (referredCount: number) =>
-        createTranslator().translate('bot.referral.invite', {
-          referralCode: code,
-          referralLink: `https://t.me/${BOT_A_USERNAME}?start=ref-${code}`,
-          referredCount,
-        });
+      const link = `🔗 https://t.me/${BOT_A_USERNAME}?start=ref-${code}`;
+      const screen = (referredCount: number) => {
+        const text = String(lastMessage()?.body['text']);
+        expect(text.startsWith(CATALOGUE_FA['bot.referral.screen'].slice(0, 30))).toBe(true);
+        expect(text).toContain(link);
+        expect(text).toContain(`• زیرمجموعه‌ها: ${String(referredCount)} نفر`);
+        // The gift block is a whole paragraph and goes with the flag: no literal token.
+        expect(text).not.toContain('{');
+      };
 
       sent = [];
       await tap('rf:', REFERRER_TELEGRAM_ID);
-      expect(lastMessage()?.body['text']).toBe(invite(0));
+      screen(0);
 
       await command(`/start ref-${code}`, REFEREE_TELEGRAM_ID);
       sent = [];
       await tap('rf:', REFERRER_TELEGRAM_ID);
-      expect(lastMessage()?.body['text']).toBe(invite(1));
+      screen(1);
     });
   });
 });
