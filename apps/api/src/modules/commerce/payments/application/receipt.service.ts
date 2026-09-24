@@ -12,6 +12,8 @@ import {
   type PaymentId,
   type PaymentReceiptId,
   type PermissionKey,
+  type ReceiptDisposition,
+  type TemplateValues,
   type TenantContext,
   type UnitOfWork,
   type UserId,
@@ -26,8 +28,11 @@ import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzl
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
+import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import type { CustomerRecord, CustomerRepository } from '../../customers/application/ports.js';
 import type { PaymentRecord, PaymentRepository } from './ports.js';
+import type { ReceiptCreditRecord, ReceiptCreditRepository } from './receipt-credit-ports.js';
+import type { ReceiptReviewCaption } from './receipt-review-caption.js';
 import type {
   InboundReceiptFile,
   PaymentReceiptRecord,
@@ -101,7 +106,20 @@ export interface ReceiptServiceDeps {
    * addendum's own words — *"settlement still requires the existing authorized
    * operator confirmation"* — are enforced by this type as much as by the permission.
    */
-  readonly payments: Pick<PaymentRepository, 'findById' | 'findByIdForUpdate'>;
+  readonly payments: Pick<
+    PaymentRepository,
+    'findById' | 'findByIdForUpdate' | 'receiptDispositions'
+  >;
+  /** The credit-to-wallet disposition's row, READ, for the already-resolved answer (§5). */
+  readonly credits: Pick<ReceiptCreditRepository, 'findByPayment'>;
+  /**
+   * Where a filed receipt announces itself (WP10 follow-up §3, ADR-0031): one
+   * `PaymentReceiptSubmitted`, in the SAME transaction as the row, so the administrators'
+   * push is exactly as durable as the receipt and never part of what filing it can fail on.
+   */
+  readonly outbox: Pick<OutboxWriter, 'write'>;
+  /** The reviewer's caption values — the one builder the pull item and the push share. */
+  readonly caption: ReceiptReviewCaption;
   /** Read to refuse a BLOCKED customer inside the transaction that would write the row. */
   readonly customers: CustomerRepository;
   readonly guard: PermissionGuard;
@@ -350,6 +368,22 @@ export class ReceiptService {
           );
         }
 
+        /*
+         * The push to the administrators, as an EVENT and nothing more (WP10 follow-up §3).
+         *
+         * Only for a row this call wrote — a redelivered update filed nothing and announces
+         * nothing. Who is told, and the send, are the consumer's and the push lane's: both
+         * run after this commits, so neither can cost the customer their receipt.
+         */
+        if (filed !== null) {
+          await this.deps.outbox.write(tx, actor, {
+            eventType: 'PaymentReceiptSubmitted',
+            aggregateType: 'Payment',
+            aggregateId: open.paymentId,
+            payload: { paymentId: open.paymentId, receiptId: filed.id },
+          });
+        }
+
         const answer: ReceiptReplay = {
           paymentId: open.paymentId,
           filed: filed !== null,
@@ -428,6 +462,8 @@ export class ReceiptService {
     readonly payment: PaymentRecord;
     readonly customer: CustomerRecord | null;
     readonly receipts: readonly PaymentReceiptRecord[];
+    /** `bot.admin.receipt`'s values for THIS reviewer (File 01 §4). */
+    readonly caption: TemplateValues;
   } | null> {
     await this.deps.guard.check(scope, actor, RECEIPT_VIEW_PERMISSION);
     const payment = await this.deps.payments.findById(scope, paymentId);
@@ -436,7 +472,34 @@ export class ReceiptService {
     }
     const receipts = await this.deps.receipts.listForPayment(scope, paymentId);
     const customer = await this.deps.customers.findById(scope, payment.customerId);
-    return { payment, customer, receipts };
+    const caption = await this.deps.caption.valuesFor(scope, actor, payment, customer, receipts);
+    return { payment, customer, receipts, caption };
+  }
+
+  /**
+   * How a receipt left review, for a reviewer whose button is stale (WP10 follow-up §5).
+   *
+   * `null` when the payment is unknown, still pending, or was not decided as a receipt. The
+   * credit's own row rides along for `CREDITED_TO_WALLET`, so the answer can name the amount
+   * rather than leave a FAILED payment to be read as a rejection.
+   */
+  async dispositionOf(
+    scope: TenantContext,
+    actor: ActorContext,
+    paymentId: PaymentId,
+  ): Promise<{
+    readonly disposition: ReceiptDisposition;
+    readonly credit: ReceiptCreditRecord | null;
+  } | null> {
+    await this.deps.guard.check(scope, actor, RECEIPT_VIEW_PERMISSION);
+    const found = await this.deps.payments.receiptDispositions(scope, [paymentId]);
+    const disposition = found.get(paymentId) ?? null;
+    if (disposition === null) return null;
+    const credit =
+      disposition === 'CREDITED_TO_WALLET'
+        ? await this.deps.credits.findByPayment(scope, paymentId)
+        : null;
+    return { disposition, credit };
   }
 
   async listForPayment(

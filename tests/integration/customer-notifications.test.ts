@@ -21,6 +21,7 @@ import type {
   CustomerSendResult,
 } from '../../apps/api/src/modules/commerce/messaging/application/ports';
 import { DrizzleCustomerRepository } from '../../apps/api/src/modules/commerce/customers/infrastructure/drizzle-customer.repository';
+import { DrizzlePaymentRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-payment.repository';
 import { DrizzleWalletRepository } from '../../apps/api/src/modules/commerce/wallet/infrastructure/drizzle-wallet.repository';
 import { DrizzleNotificationSubjectReader } from '../../apps/api/src/modules/commerce/messaging/infrastructure/drizzle-notification-subject.reader';
 import { createTestContext, SEED_IDS, tenantA, tenantB, type TestContext } from './harness';
@@ -103,6 +104,7 @@ describe('the customer notification lane', () => {
       // so a test cannot assert a figure the production query would not produce.
       refundFigures: new DrizzleWalletRepository(ctx.container.database.db),
       paymentCredits: new DrizzleWalletRepository(ctx.container.database.db),
+      rejectionReasons: new DrizzlePaymentRepository(ctx.container.database.db),
       notifications: repo,
       /*
        * The REAL reader, over the real table.

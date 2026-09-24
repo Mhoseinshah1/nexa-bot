@@ -52,6 +52,16 @@ import type { InboundReceiptFile } from '../../modules/commerce/payments/applica
 import type { ReceiptService } from '../../modules/commerce/payments/application/receipt.service.js';
 import type { ReceiptCreditCaptureService } from '../../modules/commerce/payments/application/receipt-credit-capture.service.js';
 import type {
+  ReceiptBlockCaptureService,
+  ReceiptRejectCaptureService,
+} from '../../modules/commerce/payments/application/receipt-reason-policies.js';
+import {
+  RECEIPT_REVIEW_NOTE_MAX,
+  REVIEW_NONE,
+  reviewNoteOf,
+} from '../../modules/commerce/payments/application/receipt-review-caption.js';
+import { ADMIN_CAPTURE_REASON_MAX_LENGTH } from '@nexa/contracts';
+import type {
   CustomerButton,
   CustomerSendOutcome,
   CustomerMessenger,
@@ -215,6 +225,24 @@ export const BOT_INTENTS = [
   'ADMIN_CREDIT',
   'ADMIN_CREDIT_CONFIRM',
   'ADMIN_CREDIT_CANCEL',
+  /*
+   * WP10 follow-up — Block User from the receipt (File 01 §9). `ADMIN_BLOCK_ASK` writes
+   * nothing; `ADMIN_BLOCK_OPEN` opens the reason capture; the reason arrives as ordinary text,
+   * offered only to its own administrator's open capture; `ADMIN_BLOCK_CONFIRM` is the only
+   * callback that blocks, and names the CAPTURE; `ADMIN_BLOCK_CANCEL` abandons it. None of
+   * them decides anything about the payment.
+   */
+  'ADMIN_BLOCK_ASK',
+  'ADMIN_BLOCK_OPEN',
+  'ADMIN_BLOCK_CONFIRM',
+  'ADMIN_BLOCK_CANCEL',
+  /*
+   * File 01 §7 — the rejection's mandatory reason. `ADMIN_REJECT` (the reject button) now
+   * OPENS a reason capture and rejects nothing; `ADMIN_REJECT_CONFIRM` is the only callback
+   * that rejects, and names the CAPTURE; `ADMIN_REJECT_CANCEL` abandons it.
+   */
+  'ADMIN_REJECT_CONFIRM',
+  'ADMIN_REJECT_CANCEL',
   'ADMIN_SECTION',
   /*
    * WP1 — one administrator, and the one write this surface may make about them.
@@ -897,7 +925,30 @@ export const ADMIN_CREDIT_CALLBACK_PREFIX = 'wa:';
 /** The one credit-to-wallet callback that moves money. Produced by the confirmation alone. */
 export const ADMIN_CREDIT_CONFIRM_CALLBACK_PREFIX = 'wb:';
 export const ADMIN_CREDIT_CANCEL_CALLBACK_PREFIX = 'wc:';
+/*
+ * Block User's four callbacks (WP10 follow-up §4). `x` then a letter, for the reason the
+ * credit's are `w` then a letter: `x:` is taken, and `xa:` neither begins nor is begun by it.
+ * `xa:` and `xb:` name a PAYMENT; `xc:` and `xd:` name a CAPTURE. 39 bytes at most.
+ */
+export const ADMIN_BLOCK_ASK_CALLBACK_PREFIX = 'xa:';
+export const ADMIN_BLOCK_OPEN_CALLBACK_PREFIX = 'xb:';
+/** The one Block User callback that blocks. Produced by the restating confirmation alone. */
+export const ADMIN_BLOCK_CONFIRM_CALLBACK_PREFIX = 'xc:';
+export const ADMIN_BLOCK_CANCEL_CALLBACK_PREFIX = 'xd:';
+/** The one rejecting callback. Produced by the confirmation that restates the reason alone. */
+export const ADMIN_REJECT_CONFIRM_CALLBACK_PREFIX = 'xe:';
+export const ADMIN_REJECT_CANCEL_CALLBACK_PREFIX = 'xf:';
 export const ADMIN_REVOKE_CALLBACK_PREFIX = 'G:';
+
+/** Block User's prefixes, as a table so a prefix cannot point at the wrong intent. */
+const ADMIN_BLOCK_CALLBACKS: readonly (readonly [string, BotIntent])[] = [
+  [ADMIN_BLOCK_ASK_CALLBACK_PREFIX, 'ADMIN_BLOCK_ASK'],
+  [ADMIN_BLOCK_OPEN_CALLBACK_PREFIX, 'ADMIN_BLOCK_OPEN'],
+  [ADMIN_BLOCK_CONFIRM_CALLBACK_PREFIX, 'ADMIN_BLOCK_CONFIRM'],
+  [ADMIN_BLOCK_CANCEL_CALLBACK_PREFIX, 'ADMIN_BLOCK_CANCEL'],
+  [ADMIN_REJECT_CONFIRM_CALLBACK_PREFIX, 'ADMIN_REJECT_CONFIRM'],
+  [ADMIN_REJECT_CANCEL_CALLBACK_PREFIX, 'ADMIN_REJECT_CANCEL'],
+];
 /*
  * The services section, Phase 6A. One prefix per action, which is the pattern the
  * CUSTOMER half already uses for its own service actions and the reason the registry
@@ -2338,6 +2389,9 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
         id,
       );
     }
+    for (const [prefix, intent] of ADMIN_BLOCK_CALLBACKS) {
+      if (data.startsWith(prefix)) return callbackCommand(intent, data.slice(prefix.length), id);
+    }
     if (data.startsWith(ADMIN_APPROVE_CALLBACK_PREFIX)) {
       return callbackCommand('ADMIN_APPROVE', data.slice(ADMIN_APPROVE_CALLBACK_PREFIX.length), id);
     }
@@ -2827,7 +2881,10 @@ export interface BotRuntimeDeps {
    * addendum's own words — *"settlement still requires the existing authorized operator
    * confirmation"* — are a dependency here rather than only a permission.
    */
-  readonly receipts: Pick<ReceiptService, 'submit' | 'reviewQueue' | 'reviewItem'>;
+  readonly receipts: Pick<
+    ReceiptService,
+    'submit' | 'reviewQueue' | 'reviewItem' | 'dispositionOf'
+  >;
   /**
    * The reviewer's amount capture for the credit-to-wallet disposition (Payment File 02
    * §12). Optional only so the customer-side unit fixtures need not build it; without it
@@ -2837,6 +2894,23 @@ export interface BotRuntimeDeps {
   readonly receiptCredits?: Pick<
     ReceiptCreditCaptureService,
     'open' | 'submitAmount' | 'confirm' | 'cancel'
+  >;
+  /**
+   * Block User from the receipt message (WP10 follow-up §4). Optional for the reason
+   * `receiptCredits` is; without it the block button is not drawn. It blocks only through
+   * `CustomerService` and holds nothing that decides a payment.
+   */
+  readonly receiptBlocks?: Pick<
+    ReceiptBlockCaptureService,
+    'ask' | 'open' | 'submitReason' | 'confirm' | 'cancel'
+  >;
+  /**
+   * The rejection's mandatory reason (File 01 §7). The reject button opens its capture; there
+   * is no one-tap rejection. Without it the reject button answers as any unknown admin tap.
+   */
+  readonly receiptRejects?: Pick<
+    ReceiptRejectCaptureService,
+    'open' | 'submitReason' | 'confirm' | 'cancel'
   >;
   readonly wallet: WalletService;
   readonly services: ProvisioningService;
@@ -2989,18 +3063,6 @@ export interface BotRuntimeDeps {
    * same guard the Web Admin uses; nothing here is authorized by having the port.
    */
   readonly telegramAdmins?: TelegramAdminPort;
-  /**
-   * Tells the administrators who may decide a receipt that one is waiting.
-   *
-   * A narrow function for `queueRateLimitedFact`'s reason: the notification lane takes
-   * a transaction and a surface must not open one, so the composition root owns the
-   * unit of work and this hands over the two values only the turn knows.
-   *
-   * Returns nothing and must not throw. The receipt is already filed and the customer
-   * has already been answered; a failure to poke a reviewer changes neither, and the
-   * queue in the panel is the durable record either way.
-   */
-  readonly notifyReviewers?: (scope: TenantContext, paymentId: PaymentId) => Promise<void>;
 }
 
 /**
@@ -3204,32 +3266,14 @@ interface ReplyMedia {
   readonly fileId: string;
 }
 
-/**
- * How much of the customer's own receipt caption a reviewer's caption carries.
- *
- * Telegram refuses a media caption over 1,024 characters (`TELEGRAM_CAPTION_MAX`), and a
- * customer's caption alone may be that long (`RECEIPT_CAPTION_MAX_LENGTH`). Six hundred
- * code points leaves the facts above it room under any sane rendering; the transport still
- * cuts a plain-text caption that ends up over the bound, so a tenant override that
- * lengthened the body cannot turn the review into a refused send.
+/*
+ * The reviewer's caption is built by ONE application function the pull item and the push
+ * share (`receipt-review-caption.ts`); these are re-exported for the tests that pin them.
  */
-export const RECEIPT_REVIEW_NOTE_MAX = 600;
+export { RECEIPT_REVIEW_NOTE_MAX, reviewNoteOf };
 
-/** A dash for a fact there is none of, for the reason `UNCAPPED` is one. */
-const NONE = UNCAPPED;
-
-/**
- * The customer's receipt caption as a reviewer's caption carries it: bounded to
- * `RECEIPT_REVIEW_NOTE_MAX` code points with an ellipsis, or a dash when there is none.
- * Code points, so an emoji is never split into half a surrogate pair.
- */
-export function reviewNoteOf(caption: string | null): string {
-  if (caption === null || caption.trim() === '') return NONE;
-  const points = Array.from(caption);
-  return points.length <= RECEIPT_REVIEW_NOTE_MAX
-    ? caption
-    : `${points.slice(0, RECEIPT_REVIEW_NOTE_MAX - 1).join('')}\u2026`;
-}
+/** A dash for a fact there is none of, the caption module's own. */
+const NONE = REVIEW_NONE;
 
 /**
  * A refusal the customer can be told about.
@@ -3565,6 +3609,96 @@ export function withdrawalRefusal(error: unknown): PendingReply {
   return refusal(error);
 }
 
+/**
+ * The decisions a receipt's message carries, for ONE administrator — the builder the pull item
+ * and the administrators' push both use, so the two messages cannot offer different buttons.
+ *
+ * Each button is drawn only for the key its path charges, and each key gates its own:
+ *
+ *   - approve and reject: `receipts.review` (`receipts.view` opens the item, and the seeded
+ *     observer holds it without the review key);
+ *   - credit to wallet: `receipts.review` AND `users.wallet.credit`, both of which the credit
+ *     charges;
+ *   - block the customer: `users.block`, INDEPENDENT of `receipts.review` — it is the customers
+ *     section's permission, and a support administrator who may block but not decide money
+ *     gets that one button and no other.
+ *
+ * Advertising only: every tap is charged again by the path behind it.
+ */
+export function receiptReviewButtons(
+  paymentId: string,
+  permissions: ReadonlySet<PermissionKey>,
+  available: { readonly credit: boolean; readonly block: boolean },
+): CustomerButton[] {
+  const buttons: CustomerButton[] = [];
+  if (permissions.has(RECEIPTS_REVIEW_PERMISSION)) {
+    buttons.push(
+      {
+        label: { kind: 'TEMPLATE', key: 'bot.admin.approve_button' },
+        data: `${ADMIN_APPROVE_CALLBACK_PREFIX}${paymentId}`,
+        row: 0,
+      },
+      {
+        label: { kind: 'TEMPLATE', key: 'bot.admin.reject_button' },
+        data: `${ADMIN_REJECT_CALLBACK_PREFIX}${paymentId}`,
+        row: 0,
+      },
+    );
+    if (available.credit && permissions.has(WALLET_CREDIT_PERMISSION)) {
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.admin.credit_button' },
+        data: `${ADMIN_CREDIT_CALLBACK_PREFIX}${paymentId}`,
+        row: 1,
+      });
+    }
+  }
+  if (available.block && permissions.has(CUSTOMERS_BLOCK_PERMISSION)) {
+    buttons.push({
+      label: { kind: 'TEMPLATE', key: 'bot.admin.block_button' },
+      data: `${ADMIN_BLOCK_ASK_CALLBACK_PREFIX}${paymentId}`,
+      row: 1,
+    });
+  }
+  return buttons;
+}
+
+/**
+ * The sentence the Telegram customers section stored as a block's "reason" before a reason
+ * was ever shown to the customer (WP2). It names the surface, not a reason, and it is in
+ * English; it is never rendered to a customer as one.
+ */
+const PRE_REASON_BLOCK_NOTE = 'Blocked from the Telegram management panel.';
+
+/**
+ * What a blocked customer is told (File 01 §9, the owner's correction to WP10): the account is
+ * blocked, WHY — the reason stored on THIS customer's own row, and nothing else of the block's
+ * record — and to contact support. A block with no reason keeps `bot.blocked`, a whole sentence
+ * with no empty "reason" line in it.
+ */
+export function blockedReply(customer: Pick<CustomerRecord, 'blockedReason'>): PendingReply {
+  const reason = customer.blockedReason?.trim() ?? '';
+  if (reason === '' || reason === PRE_REASON_BLOCK_NOTE) {
+    return { key: 'bot.blocked', values: {}, buttons: [], orderId: null };
+  }
+  return { key: 'bot.blocked_with_reason', values: { reason }, buttons: [], orderId: null };
+}
+
+/** The rejection capture's cancel button. */
+function rejectCancelButton(captureId: string): CustomerButton {
+  return {
+    label: { kind: 'TEMPLATE', key: 'bot.admin.reject_cancel_button' },
+    data: `${ADMIN_REJECT_CANCEL_CALLBACK_PREFIX}${captureId}`,
+  };
+}
+
+/** Block User's cancel button. */
+function blockCancelButton(captureId: string): CustomerButton {
+  return {
+    label: { kind: 'TEMPLATE', key: 'bot.admin.block_cancel_button' },
+    data: `${ADMIN_BLOCK_CANCEL_CALLBACK_PREFIX}${captureId}`,
+  };
+}
+
 /** The capture's cancel button. */
 function creditCancelButton(captureId: string): CustomerButton {
   return {
@@ -3685,12 +3819,8 @@ export class BotRuntime {
      * falls back to the same `bot.blocked` as before. Authority is not granted here: every
      * admin action re-checks its own permission inside its own transaction.
      */
-    const blocked: PendingReply = {
-      key: 'bot.blocked' as TemplateKey,
-      values: {},
-      buttons: [],
-      orderId: null,
-    };
+    // File 01 §9: the reason stored on THIS customer's own row, read as this turn resolved it.
+    const blocked: PendingReply = blockedReply(customer);
     /*
      * A blocked customer's plain message still reaches their amount capture when they are
      * an administrator with one open — the same exemption the admin intents have, for the
@@ -3698,7 +3828,7 @@ export class BotRuntime {
      */
     const blockedAdminText =
       arrival === 'BLOCKED' && command.intent === 'USERNAME_TEXT' && command.args?.[0] !== undefined
-        ? await this.adminCreditAmount(scope, actor, command.args[0], input)
+        ? await this.adminCaptureText(scope, actor, command.args[0], input)
         : null;
     const reply =
       arrival === 'BLOCKED'
@@ -3990,15 +4120,20 @@ export class BotRuntime {
             ? null
             : await this.adminReceipt(scope, adminActor, command.targetId, permissions);
         case 'ADMIN_APPROVE':
-        case 'ADMIN_REJECT':
           return command.targetId === null
             ? null
-            : await this.adminDecide(
+            : await this.adminApprove(scope, adminActor, command.targetId, input.idempotencyKey);
+        case 'ADMIN_REJECT':
+        case 'ADMIN_REJECT_CONFIRM':
+        case 'ADMIN_REJECT_CANCEL':
+          return command.targetId === null
+            ? null
+            : await this.adminRejectTurn(
                 scope,
                 adminActor,
+                command.intent,
                 command.targetId,
-                command.intent === 'ADMIN_APPROVE',
-                input.idempotencyKey,
+                input,
               );
         case 'ADMIN_CREDIT':
           return command.targetId === null
@@ -4023,6 +4158,13 @@ export class BotRuntime {
                 command.targetId,
                 input.idempotencyKey,
               );
+        case 'ADMIN_BLOCK_ASK':
+        case 'ADMIN_BLOCK_OPEN':
+        case 'ADMIN_BLOCK_CONFIRM':
+        case 'ADMIN_BLOCK_CANCEL':
+          return command.targetId === null
+            ? null
+            : await this.adminBlockTurn(scope, adminActor, command.intent, command.targetId, input);
         case 'ADMIN_SERVICES':
           return await this.adminServices(scope, adminActor, permissions);
         case 'ADMIN_SERVICES_BROWSE':
@@ -4423,97 +4565,67 @@ export class BotRuntime {
     permissions: ReadonlySet<PermissionKey>,
   ): Promise<PendingReply> {
     const item = await this.deps.receipts.reviewItem(scope, actor, paymentId as PaymentId);
-    if (item === null) {
-      return { key: 'bot.admin.receipt_gone', values: {}, buttons: [], orderId: null };
-    }
+    if (item === null) return this.decidedReply(scope, actor, paymentId);
 
-    const [first, ...rest] = item.receipts.map(
-      (receipt): ReplyMedia & { readonly caption: string | null } => ({
-        // The bot that RECEIVED the upload, from the row. A `file_id` is scoped to that
-        // bot, and the wrong token answers "file not found" for a receipt that exists —
-        // which is why the column is on `payment_receipts` at all.
-        botInstanceId: receipt.botInstanceId,
-        kind: receipt.kind === 'PHOTO' ? 'PHOTO' : 'DOCUMENT',
-        fileId: receipt.fileId,
-        caption: receipt.caption,
-      }),
-    );
-    const orderTitle =
-      item.payment.orderId === null
-        ? null
-        : await this.deps.purchaseTitle(scope, item.payment.orderId);
-    const username = item.customer?.username ?? null;
+    const [first, ...rest] = item.receipts.map((receipt): ReplyMedia => ({
+      // The bot that RECEIVED the upload, from the row. A `file_id` is scoped to that
+      // bot, and the wrong token answers "file not found" for a receipt that exists —
+      // which is why the column is on `payment_receipts` at all.
+      botInstanceId: receipt.botInstanceId,
+      kind: receipt.kind === 'PHOTO' ? 'PHOTO' : 'DOCUMENT',
+      fileId: receipt.fileId,
+    }));
 
     return {
       key: 'bot.admin.receipt',
-      values: {
-        reference: item.payment.reference,
-        total: item.payment.amount,
-        // The customer's Telegram id, which is the identity this installation holds for
-        // them, and the username beside it when they have one — a name is chosen by the
-        // person it names, so it is shown and never relied on.
-        customer: item.customer?.telegramUserId ?? item.payment.customerId,
-        username: username === null ? NONE : `@${username}`,
-        order: orderTitle ?? NONE,
-        // The customer's note: the first one they wrote, on whichever receipt carried it.
-        // A second note on a later receipt is not repeated; the file it came with follows.
-        note: reviewNoteOf(item.receipts.find((one) => one.caption !== null)?.caption ?? null),
-      },
+      // The ONE caption builder the push shares (File 01 §4): what this reviewer may see.
+      values: item.caption,
       buttons: this.receiptDecisionButtons(item.payment.id, permissions),
       orderId: null,
-      ...(first === undefined
-        ? {}
-        : {
-            media: { botInstanceId: first.botInstanceId, kind: first.kind, fileId: first.fileId },
-            attachments: rest.map(({ botInstanceId, kind, fileId }) => ({
-              botInstanceId,
-              kind,
-              fileId,
-            })),
-          }),
+      ...(first === undefined ? {} : { media: first, attachments: rest }),
     };
   }
 
   /**
-   * The decisions a receipt's message carries, for THIS administrator.
-   *
-   * Approve and reject for `receipts.review`: `receipts.view` opens the item and the seeded
-   * observer holds it without the review key, and drawing decisions for them produced two
-   * buttons whose every tap failed the guard. The guard still runs on the tap; this is the
-   * surface not promising what the tap will refuse.
+   * What a stale button is told when the payment is no longer pending (WP10 follow-up §5):
+   * WHICH way the receipt was decided — a credited FAILED payment named as credited, with its
+   * amount, and never read as a rejection. `receipt_gone` for everything that is not a
+   * receipt disposition. Nothing moves here.
    */
+  private async decidedReply(
+    scope: TenantContext,
+    actor: ActorContext,
+    paymentId: string,
+  ): Promise<PendingReply> {
+    const found = await this.deps.receipts.dispositionOf(scope, actor, paymentId as PaymentId);
+    const reply = (key: TemplateKey, values: TemplateValues = {}): PendingReply => ({
+      key,
+      values,
+      buttons: [],
+      orderId: null,
+    });
+    if (found === null) return reply('bot.admin.receipt_gone');
+    switch (found.disposition) {
+      case 'APPROVED':
+        return reply('bot.admin.receipt_already_approved');
+      case 'REJECTED':
+        return reply('bot.admin.receipt_already_rejected');
+      case 'CREDITED_TO_WALLET':
+        return found.credit === null
+          ? reply('bot.admin.receipt_gone')
+          : reply('bot.admin.receipt_already_credited', { amount: found.credit.amount });
+    }
+  }
+
+  /** The decisions a receipt's message carries, for THIS administrator. */
   private receiptDecisionButtons(
     paymentId: string,
     permissions: ReadonlySet<PermissionKey>,
   ): CustomerButton[] {
-    if (!permissions.has(RECEIPTS_REVIEW_PERMISSION)) return [];
-    const decisions: CustomerButton[] = [
-      {
-        label: { kind: 'TEMPLATE', key: 'bot.admin.approve_button' },
-        data: `${ADMIN_APPROVE_CALLBACK_PREFIX}${paymentId}`,
-        row: 0,
-      },
-      {
-        label: { kind: 'TEMPLATE', key: 'bot.admin.reject_button' },
-        data: `${ADMIN_REJECT_CALLBACK_PREFIX}${paymentId}`,
-        row: 0,
-      },
-    ];
-    /*
-     * Credit to wallet only for an administrator holding BOTH keys the credit charges:
-     * the seeded `receipt_reviewer` holds `receipts.review` without `users.wallet.credit`,
-     * and a button whose every tap is refused is the surface promising what it will not
-     * do. Advertising only — `ReceiptCreditCaptureService` and `creditToWallet` charge
-     * both again on every tap.
-     */
-    if (permissions.has(WALLET_CREDIT_PERMISSION) && this.deps.receiptCredits !== undefined) {
-      decisions.push({
-        label: { kind: 'TEMPLATE', key: 'bot.admin.credit_button' },
-        data: `${ADMIN_CREDIT_CALLBACK_PREFIX}${paymentId}`,
-        row: 1,
-      });
-    }
-    return decisions;
+    return receiptReviewButtons(paymentId, permissions, {
+      credit: this.deps.receiptCredits !== undefined,
+      block: this.deps.receiptBlocks !== undefined,
+    });
   }
 
   /**
@@ -4538,9 +4650,7 @@ export class BotRuntime {
         botInstanceId,
         paymentId,
       });
-      if (opened.outcome === 'GONE') {
-        return { key: 'bot.admin.receipt_gone', values: {}, buttons: [], orderId: null };
-      }
+      if (opened.outcome === 'GONE') return this.decidedReply(scope, actor, paymentId);
       return {
         key: 'bot.admin.credit_amount_prompt',
         values: {
@@ -4552,6 +4662,13 @@ export class BotRuntime {
         orderId: null,
       };
     } catch (error) {
+      if (
+        isNexaError(error) &&
+        error.code === COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID &&
+        error.details['reason'] !== 'NO_RECEIPT'
+      ) {
+        return this.decidedReply(scope, actor, paymentId);
+      }
       return creditRefusal(error);
     }
   }
@@ -4680,31 +4797,263 @@ export class BotRuntime {
   }
 
   /**
-   * Approve or reject, through the SAME application methods the Web Admin calls.
-   *
-   * `confirmManualTransfer` and `rejectManualTransfer` — no parallel settlement, no
-   * second ledger write, no second notification. Everything that makes a decision safe
-   * lives in there: the permission, the conditional state transition, the wallet credit
-   * keyed on the payment, the customer's notification, the audit row.
-   *
-   * A duplicate tap is safe TWICE OVER. The idempotency key is the update's, so
-   * Telegram's redelivery of one tap is a replay; and two different taps race a
-   * conditional UPDATE that only one can win, after which the loser reads a payment
-   * that is no longer pending and is told so rather than settling anything again.
+   * Block User from the receipt (WP10 follow-up §4): ask → yes (open the reason capture) →
+   * the reason, as text → a confirmation restating it → the block. Every step is
+   * `ReceiptBlockCaptureService`, which charges `users.block` itself and blocks only through
+   * `CustomerService`; a denial reaches `adminTurn`'s one refusal. Nothing here touches the
+   * payment: the receipt stays in the queue for any reviewer to decide.
    */
-  private async adminDecide(
+  private async adminBlockTurn(
+    scope: TenantContext,
+    actor: ActorContext,
+    intent: BotIntent,
+    targetId: string,
+    input: { readonly idempotencyKey: string; readonly botInstanceId: BotInstanceId },
+  ): Promise<PendingReply | null> {
+    const blocks = this.deps.receiptBlocks;
+    if (blocks === undefined) return null;
+    const reply = (
+      key: TemplateKey,
+      values: TemplateValues = {},
+      buttons: CustomerButton[] = [],
+    ): PendingReply => ({ key, values, buttons, orderId: null });
+    const who = (customer: CustomerRecord | null, fallback: string): string =>
+      customer?.telegramUserId ?? fallback;
+
+    switch (intent) {
+      case 'ADMIN_BLOCK_ASK': {
+        const asked = await blocks.ask(scope, actor, targetId);
+        if (asked.outcome === 'GONE') return reply('bot.admin.receipt_gone');
+        return reply(
+          'bot.admin.block_ask',
+          { customer: who(asked.customer, asked.payment.customerId) },
+          [
+            {
+              label: { kind: 'TEMPLATE', key: 'bot.admin.block_yes_button' },
+              data: `${ADMIN_BLOCK_OPEN_CALLBACK_PREFIX}${asked.payment.id}`,
+              row: 0,
+            },
+            {
+              label: { kind: 'TEMPLATE', key: 'bot.admin.block_cancel_button' },
+              // Nothing is open yet, so there is nothing to cancel: the receipt again.
+              data: `${ADMIN_RECEIPT_CALLBACK_PREFIX}${asked.payment.id}`,
+              row: 0,
+            },
+          ],
+        );
+      }
+      case 'ADMIN_BLOCK_OPEN': {
+        const opened = await blocks.open(scope, actor, {
+          idempotencyKey: `${input.idempotencyKey}:block-open`,
+          botInstanceId: input.botInstanceId,
+          paymentId: targetId,
+        });
+        if (opened.outcome === 'GONE') return reply('bot.admin.receipt_gone');
+        return reply(
+          'bot.admin.block_reason_prompt',
+          {
+            customer: who(opened.customer, opened.payment.customerId),
+            minutes: Math.round(ADMIN_AMOUNT_CAPTURE_TTL_MS / 60_000),
+          },
+          [blockCancelButton(opened.capture.id)],
+        );
+      }
+      case 'ADMIN_BLOCK_CONFIRM': {
+        const done = await blocks.confirm(scope, actor, { captureId: targetId });
+        if (done.outcome === 'DONE') {
+          return reply(
+            done.result.changed ? 'bot.admin.blocked_from_receipt' : 'bot.admin.block_already',
+            { customer: done.result.customer.telegramUserId },
+          );
+        }
+        if (done.outcome === 'CLOSED') {
+          return reply(
+            done.reason === 'CANCELLED' ? 'bot.admin.block_cancelled' : 'bot.admin.block_expired',
+          );
+        }
+        return reply('bot.admin.receipt_gone');
+      }
+      case 'ADMIN_BLOCK_CANCEL': {
+        const cancelled = await blocks.cancel(scope, actor, {
+          idempotencyKey: `${input.idempotencyKey}:block-cancel`,
+          captureId: targetId,
+        });
+        return reply(
+          cancelled.outcome === 'CANCELLED'
+            ? 'bot.admin.block_cancelled'
+            : cancelled.outcome === 'CONFIRMED'
+              ? 'bot.admin.blocked_from_receipt'
+              : 'bot.admin.receipt_gone',
+          cancelled.outcome === 'CONFIRMED' ? { customer: NONE } : {},
+        );
+      }
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * An administrator's plain message, offered to their ONE open prompt: the credit's amount
+   * capture, or Block User's reason capture. The two cannot both be open — one partial unique
+   * index covers both purposes — so at most one of them answers; `null` for everything else,
+   * and the message then routes exactly as it did before either existed.
+   */
+  private async adminCaptureText(
+    scope: TenantContext,
+    actor: ActorContext,
+    text: string,
+    input: {
+      readonly idempotencyKey: string;
+      readonly botInstanceId: BotInstanceId;
+      readonly telegramUserId: string;
+    },
+  ): Promise<PendingReply | null> {
+    const amount = await this.adminCreditAmount(scope, actor, text, input);
+    if (amount !== null) return amount;
+    const blockReason = await this.adminBlockReason(scope, actor, text, input);
+    if (blockReason !== null) return blockReason;
+    return this.adminRejectReason(scope, actor, text, input);
+  }
+
+  /** The typed rejection reason, recorded and restated; nothing is rejected until the confirm. */
+  private async adminRejectReason(
+    scope: TenantContext,
+    actor: ActorContext,
+    text: string,
+    input: {
+      readonly idempotencyKey: string;
+      readonly botInstanceId: BotInstanceId;
+      readonly telegramUserId: string;
+    },
+  ): Promise<PendingReply | null> {
+    const rejects = this.deps.receiptRejects;
+    const admins = this.deps.telegramAdmins;
+    if (rejects === undefined || admins === undefined) return null;
+    const identity = await admins.resolve(scope, input.telegramUserId, actor.correlationId);
+    if (identity === null) return null;
+    try {
+      const result = await rejects.submitReason(scope, identity.actor, {
+        idempotencyKey: `${input.idempotencyKey}:reject-reason`,
+        botInstanceId: input.botInstanceId,
+        text,
+      });
+      switch (result.outcome) {
+        case 'NO_CAPTURE':
+          return null;
+        case 'INVALID':
+          return {
+            key: 'bot.admin.reject_reason_invalid',
+            values: { max: ADMIN_CAPTURE_REASON_MAX_LENGTH },
+            buttons: [],
+            orderId: null,
+          };
+        case 'EXPIRED':
+          return { key: 'bot.admin.reject_expired', values: {}, buttons: [], orderId: null };
+        case 'GONE':
+          return { key: 'bot.admin.receipt_gone', values: {}, buttons: [], orderId: null };
+        case 'ENTERED':
+          return {
+            key: 'bot.admin.reject_confirm',
+            values: { reference: result.payment.reference, reason: result.reason },
+            buttons: [
+              {
+                label: { kind: 'TEMPLATE', key: 'bot.admin.reject_confirm_button' },
+                data: `${ADMIN_REJECT_CONFIRM_CALLBACK_PREFIX}${result.capture.id}`,
+                row: 0,
+              },
+              { ...rejectCancelButton(result.capture.id), row: 0 },
+            ],
+            orderId: null,
+          };
+      }
+    } catch {
+      return { key: 'bot.admin.refused', values: {}, buttons: [], orderId: null };
+    }
+  }
+
+  /** The typed reason, recorded and restated; nothing is blocked until the confirm. */
+  private async adminBlockReason(
+    scope: TenantContext,
+    actor: ActorContext,
+    text: string,
+    input: {
+      readonly idempotencyKey: string;
+      readonly botInstanceId: BotInstanceId;
+      readonly telegramUserId: string;
+    },
+  ): Promise<PendingReply | null> {
+    const blocks = this.deps.receiptBlocks;
+    const admins = this.deps.telegramAdmins;
+    if (blocks === undefined || admins === undefined) return null;
+    const identity = await admins.resolve(scope, input.telegramUserId, actor.correlationId);
+    if (identity === null) return null;
+    try {
+      const result = await blocks.submitReason(scope, identity.actor, {
+        idempotencyKey: `${input.idempotencyKey}:block-reason`,
+        botInstanceId: input.botInstanceId,
+        text,
+      });
+      switch (result.outcome) {
+        case 'NO_CAPTURE':
+          return null;
+        case 'INVALID':
+          return {
+            key: 'bot.admin.block_reason_invalid',
+            values: { max: ADMIN_CAPTURE_REASON_MAX_LENGTH },
+            buttons: [],
+            orderId: null,
+          };
+        case 'EXPIRED':
+          return { key: 'bot.admin.block_expired', values: {}, buttons: [], orderId: null };
+        case 'GONE':
+          return { key: 'bot.admin.receipt_gone', values: {}, buttons: [], orderId: null };
+        case 'ENTERED':
+          return {
+            key: 'bot.admin.block_confirm',
+            values: {
+              customer: result.customer?.telegramUserId ?? result.payment.customerId,
+              reason: result.reason,
+            },
+            buttons: [
+              {
+                label: { kind: 'TEMPLATE', key: 'bot.admin.block_confirm_button' },
+                data: `${ADMIN_BLOCK_CONFIRM_CALLBACK_PREFIX}${result.capture.id}`,
+                row: 0,
+              },
+              { ...blockCancelButton(result.capture.id), row: 0 },
+            ],
+            orderId: null,
+          };
+      }
+    } catch {
+      return { key: 'bot.admin.refused', values: {}, buttons: [], orderId: null };
+    }
+  }
+
+  /**
+   * Approve, through the SAME application method the Web Admin called.
+   *
+   * `confirmManualTransfer` — no parallel settlement, no second ledger write, no second
+   * notification. Everything that makes a decision safe lives in there: the permission, the
+   * conditional state transition, the wallet credit keyed on the payment, the customer's
+   * notification, the audit row.
+   *
+   * A duplicate tap is safe TWICE OVER. The idempotency key is the update's, so Telegram's
+   * redelivery of one tap is a replay; and two different taps race a conditional UPDATE that
+   * only one can win, after which the loser is told WHICH decision won (WP10 follow-up §5).
+   *
+   * Rejection is NOT here any more: File 01 §7 makes its reason mandatory, so the reject
+   * button opens a reason capture (`adminRejectTurn`) and there is no one-tap rejection.
+   */
+  private async adminApprove(
     scope: TenantContext,
     actor: ActorContext,
     paymentId: string,
-    approve: boolean,
     idempotencyKey: string,
   ): Promise<PendingReply> {
     const item = await this.deps.receipts.reviewItem(scope, actor, paymentId as PaymentId);
-    if (item === null) {
-      return { key: 'bot.admin.receipt_gone', values: {}, buttons: [], orderId: null };
-    }
-
-    if (approve) {
+    if (item === null) return this.decidedReply(scope, actor, paymentId);
+    try {
       await this.deps.payments.confirmManualTransfer(scope, actor, paymentId, {
         idempotencyKey: `${idempotencyKey}:admin-approve`,
         // An ASCII note, and an audit field rather than customer-facing text: it says
@@ -4713,13 +5062,107 @@ export class BotRuntime {
         note: 'Approved in the Telegram management panel.',
       });
       return { key: 'bot.admin.approved', values: {}, buttons: [], orderId: null };
+    } catch (error) {
+      return this.lostDecision(scope, actor, paymentId, error);
     }
+  }
 
-    await this.deps.payments.rejectManualTransfer(scope, actor, paymentId, {
-      idempotencyKey: `${idempotencyKey}:admin-reject`,
-      note: 'Rejected in the Telegram management panel.',
+  /**
+   * A decision that lost the conditional UPDATE to another between our read and its write:
+   * told WHICH decision won, not a generic refusal. Nothing moved — the service's own
+   * transaction refused. Every other error is `adminTurn`'s one refusal.
+   */
+  private async lostDecision(
+    scope: TenantContext,
+    actor: ActorContext,
+    paymentId: string,
+    error: unknown,
+  ): Promise<PendingReply> {
+    if (
+      isNexaError(error) &&
+      error.code === COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID &&
+      error.details['reason'] !== 'NO_RECEIPT'
+    ) {
+      return this.decidedReply(scope, actor, paymentId);
+    }
+    throw error;
+  }
+
+  /**
+   * The rejection, with its MANDATORY reason (File 01 §7): the reject button opens this
+   * administrator's reason capture; the reason arrives as text and is restated; the confirm
+   * rejects through `rejectManualTransfer` — the one conditional PENDING→FAILED edge approve
+   * and credit race on — and the customer's `PAYMENT_REJECTED` sentence carries the reason.
+   */
+  private async adminRejectTurn(
+    scope: TenantContext,
+    actor: ActorContext,
+    intent: BotIntent,
+    targetId: string,
+    input: { readonly idempotencyKey: string; readonly botInstanceId: BotInstanceId },
+  ): Promise<PendingReply | null> {
+    const rejects = this.deps.receiptRejects;
+    if (rejects === undefined) return null;
+    const reply = (key: TemplateKey, values: TemplateValues = {}): PendingReply => ({
+      key,
+      values,
+      buttons: [],
+      orderId: null,
     });
-    return { key: 'bot.admin.rejected', values: {}, buttons: [], orderId: null };
+    switch (intent) {
+      case 'ADMIN_REJECT': {
+        const opened = await rejects.open(scope, actor, {
+          idempotencyKey: `${input.idempotencyKey}:reject-open`,
+          botInstanceId: input.botInstanceId,
+          paymentId: targetId,
+        });
+        if (opened.outcome === 'GONE') return this.decidedReply(scope, actor, targetId);
+        return {
+          key: 'bot.admin.reject_reason_prompt',
+          values: {
+            reference: opened.payment.reference,
+            minutes: Math.round(ADMIN_AMOUNT_CAPTURE_TTL_MS / 60_000),
+          },
+          buttons: [rejectCancelButton(opened.capture.id)],
+          orderId: null,
+        };
+      }
+      case 'ADMIN_REJECT_CONFIRM': {
+        try {
+          const done = await rejects.confirm(scope, actor, { captureId: targetId });
+          if (done.outcome === 'DONE') return reply('bot.admin.rejected');
+          if (done.outcome === 'CLOSED') {
+            return reply(
+              done.reason === 'CANCELLED'
+                ? 'bot.admin.reject_cancelled'
+                : 'bot.admin.reject_expired',
+            );
+          }
+          return reply('bot.admin.receipt_gone');
+        } catch (error) {
+          // Another decision won between the reason and the confirm; nothing was rejected.
+          if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID) {
+            return reply('bot.admin.receipt_gone');
+          }
+          throw error;
+        }
+      }
+      case 'ADMIN_REJECT_CANCEL': {
+        const cancelled = await rejects.cancel(scope, actor, {
+          idempotencyKey: `${input.idempotencyKey}:reject-cancel`,
+          captureId: targetId,
+        });
+        return reply(
+          cancelled.outcome === 'CANCELLED'
+            ? 'bot.admin.reject_cancelled'
+            : cancelled.outcome === 'CONFIRMED'
+              ? 'bot.admin.rejected'
+              : 'bot.admin.receipt_gone',
+        );
+      }
+      default:
+        return null;
+    }
   }
 
   /**
@@ -6054,7 +6497,9 @@ export class BotRuntime {
    * does not leave a "block" button on the screen.
    *
    * The reason recorded is this surface's own sentence and not operator text, because
-   * this surface has no prompt to collect operator text with and will not grow one.
+   * this surface has no prompt to collect operator text with (OQ-WP10F-03; the receipt's
+   * Block User is the path that collects a mandatory reason). Since File 01 §9 a stored reason
+   * is shown to the customer, and `blockedReply` recognises this sentence and never shows it.
    */
   private async adminCustomerStatus(
     scope: TenantContext,
@@ -6067,7 +6512,9 @@ export class BotRuntime {
     const input = {
       idempotencyKey,
       customerId,
-      reason: blocking ? 'Blocked from the Telegram management panel.' : null,
+      // Unchanged (OQ-WP10F-03 stays out of scope): a fixed note about the surface, which
+      // `blockedReply` recognises and never shows the customer as a reason.
+      reason: blocking ? PRE_REASON_BLOCK_NOTE : null,
     };
     const updated = blocking
       ? await this.deps.customers.block(scope, actor, input)
@@ -7063,7 +7510,7 @@ export class BotRuntime {
        * that answers returns here and one that does not falls through untouched.
        */
       const amount =
-        text === undefined ? null : await this.adminCreditAmount(scope, actor, text, input);
+        text === undefined ? null : await this.adminCaptureText(scope, actor, text, input);
       if (amount !== null) return amount;
       if (text !== undefined) {
         return this.typedUsername(
@@ -9059,37 +9506,17 @@ export class BotRuntime {
     idempotencyKey: string,
   ): Promise<PendingReply> {
     try {
-      const result = await this.deps.receipts.submit(scope, actor, customer.id, {
+      await this.deps.receipts.submit(scope, actor, customer.id, {
         idempotencyKey: `${idempotencyKey}:receipt`,
         botInstanceId,
         file,
       });
       /*
-       * The reviewers are poked AFTER the receipt is filed, and only for a NEW row
-       * (Phase 5T).
-       *
-       * `filed === false` is Telegram redelivering an update whose file is already on
-       * the payment, and a second poke for one receipt is a reviewer opening the queue
-       * to find what they already saw. The lane's dedupe key makes that harmless; not
-       * sending it makes it absent.
-       *
-       * The poke cannot fail this turn, and that is enforced in TWO places rather than
-       * asserted once. The composition root catches and logs, because it owns the
-       * transaction; this `catch` is the surface's own guarantee, because the call sits
-       * inside the try whose handler is `refusal` — and `refusal` RETHROWS anything it
-       * has no reply for. Without it a database error while telling reviewers would
-       * have cost the customer the acknowledgement for a receipt already committed, and
-       * Telegram's redelivery answers `filed: false`, which skips the poke for ever.
+       * No poke from here (WP10 follow-up §3). Filing the receipt wrote a
+       * `PaymentReceiptSubmitted` event in the same transaction, and the administrators'
+       * push is that event's consumer and its own lane — durable with the receipt, never
+       * able to cost the customer this answer, and not lost by a crash after the commit.
        */
-      if (result.filed) {
-        try {
-          await this.deps.notifyReviewers?.(scope, result.paymentId);
-        } catch {
-          // Deliberately not rethrown and deliberately not reported from here: the
-          // container logs it, the queue in the panel is the durable record, and the
-          // customer's answer is about their receipt rather than about our plumbing.
-        }
-      }
       return { key: 'bot.payment.receipt_received', values: {}, buttons: [], orderId: null };
     } catch (error) {
       return refusal(error);

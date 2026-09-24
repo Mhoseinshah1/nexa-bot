@@ -133,6 +133,18 @@ export interface CustomerServiceDeps {
  * image, and both come from a write path that silently decides a state it was not
  * asked about.
  */
+/**
+ * Where a status change was asked from, when a surface can say (WP10 follow-up §4).
+ *
+ * The receipt message's Block User names the payment it was taken from and the capture that
+ * read its reason, so the audit row answers "blocked from WHICH receipt". Ids only.
+ */
+export interface CustomerStatusContext {
+  readonly source: 'RECEIPT_REVIEW';
+  readonly paymentId: string;
+  readonly captureId: string;
+}
+
 export class CustomerService {
   constructor(private readonly deps: CustomerServiceDeps) {}
 
@@ -418,13 +430,37 @@ export class CustomerService {
       readonly idempotencyKey: string;
       readonly customerId: string;
       readonly reason: string | null;
+      readonly context?: CustomerStatusContext;
     },
   ): Promise<CustomerRecord> {
+    return (await this.blockWithOutcome(scope, actor, input)).customer;
+  }
+
+  /**
+   * Block, and say whether THIS command changed the customer (WP10 follow-up §4).
+   *
+   * The same path as `block`, not a second one: the receipt message's Block User asks it so
+   * it can answer "already blocked" truthfully — the conditional UPDATE is what knows, and a
+   * status read beforehand would misreport a replay of its own block as somebody else's.
+   * `context` names the receipt the block was taken from; it is carried in the audit row and
+   * the request hash, and the `CustomerBlocked` event is unchanged.
+   */
+  async blockWithOutcome(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly idempotencyKey: string;
+      readonly customerId: string;
+      readonly reason: string | null;
+      readonly context?: CustomerStatusContext;
+    },
+  ): Promise<{ readonly customer: CustomerRecord; readonly changed: boolean }> {
     return this.setStatus(scope, actor, {
       idempotencyKey: input.idempotencyKey,
       customerId: input.customerId,
       to: 'BLOCKED',
       reason: input.reason,
+      ...(input.context === undefined ? {} : { context: input.context }),
     });
   }
 
@@ -438,12 +474,14 @@ export class CustomerService {
       readonly reason: string | null;
     },
   ): Promise<CustomerRecord> {
-    return this.setStatus(scope, actor, {
-      idempotencyKey: input.idempotencyKey,
-      customerId: input.customerId,
-      to: 'ACTIVE',
-      reason: input.reason,
-    });
+    return (
+      await this.setStatus(scope, actor, {
+        idempotencyKey: input.idempotencyKey,
+        customerId: input.customerId,
+        to: 'ACTIVE',
+        reason: input.reason,
+      })
+    ).customer;
   }
 
   /**
@@ -461,8 +499,9 @@ export class CustomerService {
       readonly customerId: string;
       readonly to: CustomerStatus;
       readonly reason: string | null;
+      readonly context?: CustomerStatusContext;
     },
-  ): Promise<CustomerRecord> {
+  ): Promise<{ readonly customer: CustomerRecord; readonly changed: boolean }> {
     // Before the hash, so a re-cased id cannot produce a second idempotency record for
     // the same command against the same row.
     const customerId = this.customerId(input.customerId);
@@ -470,7 +509,13 @@ export class CustomerService {
       input.reason === null || input.reason.trim() === ''
         ? null
         : input.reason.trim().slice(0, CUSTOMER_BLOCK_REASON_MAX_LENGTH);
-    const requestHash = hashRequest({ customerId, to: input.to, reason });
+    // The context joins the hash only when there is one, so every key written before it
+    // existed still replays as itself.
+    const requestHash = hashRequest(
+      input.context === undefined
+        ? { customerId, to: input.to, reason }
+        : { customerId, to: input.to, reason, context: input.context },
+    );
 
     /*
      * Authorize the replay under the COMMAND's permission, not under `users.view`.
@@ -483,7 +528,7 @@ export class CustomerService {
      */
     await this.deps.guard.check(scope, actor, CUSTOMER_BLOCK_PERMISSION);
 
-    const replay = await this.deps.idempotency.find<{ customerId: string }>(
+    const replay = await this.deps.idempotency.find<{ customerId: string; changed?: boolean }>(
       scope,
       'WEB',
       input.idempotencyKey,
@@ -494,7 +539,11 @@ export class CustomerService {
         scope,
         replay.result.customerId as UserId,
       );
-      if (replayed !== null) return replayed;
+      // `changed` is what the FIRST call did; a record from before it was remembered did
+      // change something, or it would not have been the call it replays.
+      if (replayed !== null) {
+        return { customer: replayed, changed: replay.result.changed ?? true };
+      }
       // The idempotency row outlived its customer, which a restore can produce.
       // Falling through redoes a command that is idempotent by construction; the
       // conditional UPDATE below finds no row and the caller gets a 404, which is
@@ -566,8 +615,15 @@ export class CustomerService {
             action: input.to === 'BLOCKED' ? 'customer.block' : 'customer.unblock',
             entityType: 'Customer',
             entityId: after.id,
-            before: { status: before.status },
-            after: { status: after.status, changed },
+            before: { status: before.status, blockedReason: before.blockedReason },
+            after: {
+              status: after.status,
+              changed,
+              blockedReason: after.blockedReason,
+              // Where the command came from, when a surface said: the receipt it was taken
+              // from (WP10 follow-up §4). Ids only — the payment is linked, not copied.
+              ...(input.context === undefined ? {} : { context: input.context }),
+            },
             result: 'SUCCESS',
             ...(reason === null ? {} : { reason }),
           },
@@ -589,11 +645,11 @@ export class CustomerService {
           'WEB',
           input.idempotencyKey,
           requestHash,
-          { customerId: after.id },
+          { customerId: after.id, changed },
           tx,
         );
 
-        return after;
+        return { customer: after, changed };
       },
     );
   }

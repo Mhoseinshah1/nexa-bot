@@ -1,4 +1,5 @@
 import {
+  ADMIN_CAPTURE_REASON_MAX_LENGTH,
   COMMERCE_ERROR_CODES,
   PAYMENT_RECEIPT_MAX_PER_PAYMENT,
   PAYMENT_WINDOW_MINUTES_MIN,
@@ -29,6 +30,7 @@ import {
   type OrderId,
   type PaymentDestinationSnapshot,
   type PaymentId,
+  type ReceiptDisposition,
   type PaymentMethod,
   type PermissionKey,
   type ReceiptCaptureId,
@@ -305,6 +307,11 @@ export interface ManualConfirmation {
  */
 export interface ManualRejection {
   readonly idempotencyKey: string;
+  /**
+   * WHY, and it is MANDATORY (File 01 §7, the owner's correction to the WP10 follow-up): the
+   * customer's `PAYMENT_REJECTED` sentence reads it back from `resolution_note`. Trimmed, one
+   * to `ADMIN_CAPTURE_REASON_MAX_LENGTH` characters; anything else is refused before any write.
+   */
   readonly note: string;
 }
 
@@ -487,6 +494,22 @@ export class PaymentService {
     return this.deps.repository.customerIdentities(
       scope,
       payments.map((payment) => payment.customerId),
+    );
+  }
+
+  /**
+   * How each payment's receipt left review, derived (WP10 follow-up §5). Charged like every
+   * other read of a payment, and one query for a page.
+   */
+  async receiptDispositions(
+    scope: TenantContext,
+    actor: ActorContext,
+    payments: readonly PaymentRecord[],
+  ): Promise<ReadonlyMap<PaymentId, ReceiptDisposition>> {
+    await this.deps.guard.check(scope, actor, PAYMENT_VIEW_PERMISSION);
+    return this.deps.repository.receiptDispositions(
+      scope,
+      payments.map((payment) => payment.id),
     );
   }
 
@@ -2121,9 +2144,23 @@ export class PaymentService {
     const denial = { action: 'payment.reject', entityType: 'Payment', entityId: paymentId };
     await this.authorize(scope, actor, PAYMENT_REVIEW_PERMISSION, denial);
 
+    /*
+     * The reason is mandatory HERE, not only in the Telegram capture that collects it: this
+     * is the one path that rejects, and a caller that skipped the capture must not produce a
+     * rejection the customer is told nothing about.
+     */
+    const note = input.note.trim();
+    if (note === '' || Array.from(note).length > ADMIN_CAPTURE_REASON_MAX_LENGTH) {
+      throw errors.validation(
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        'A rejection needs a reason.',
+        { reason: 'REJECT_REASON_REQUIRED' },
+      );
+    }
+
     // The decision is part of the identity — see `confirmManualTransfer`, where the
     // same line carries the reasoning and the other half of this pair.
-    const requestHash = hashRequest({ paymentId, note: input.note, decision: 'REJECT' });
+    const requestHash = hashRequest({ paymentId, note, decision: 'REJECT' });
     const replayed = await this.deps.idempotency.find<{ paymentId: string }>(
       scope,
       OPERATOR_NAMESPACE,
@@ -2197,7 +2234,7 @@ export class PaymentService {
           'FAILED',
           {
             resolvedByAdminId: adminIdOf(actor),
-            resolutionNote: input.note,
+            resolutionNote: note,
             resolvedAt: now,
           },
           now,

@@ -223,6 +223,37 @@ export class TelegramAdminService {
   }
 
   /**
+   * ONE administrator, if they may decide a receipt AND could be told about one in Telegram
+   * RIGHT NOW (WP10 follow-up §3).
+   *
+   * The receipt push asks this immediately before each send, because a fan-out is a moment
+   * and a send is later: an administrator disabled, unbound or stripped of the permission in
+   * between must not receive a receipt with a customer's details on it. The same two halves
+   * as `reviewers` — the binding, and the permission from the same resolver, which gives a
+   * non-ACTIVE administrator nothing — and the chat is the binding current NOW.
+   */
+  async reviewerById(
+    scope: TenantContext,
+    adminId: AdminId,
+    permission: PermissionKey,
+    correlationId: CorrelationId,
+    tx?: unknown,
+  ): Promise<(TelegramAdminIdentity & { readonly chatId: string }) | null> {
+    const admin = await this.deps.admins.findById(scope, adminId, tx);
+    if (admin === null || admin.telegramUserId === null) return null;
+    const actor: ActorContext = {
+      type: 'TELEGRAM_ADMIN',
+      id: admin.id,
+      label: admin.username,
+      surface: 'TELEGRAM',
+      correlationId,
+    };
+    const permissions = await this.deps.permissions.resolve(scope, actor, tx);
+    if (!permissions.has(permission)) return null;
+    return { admin, actor, permissions, chatId: admin.telegramUserId };
+  }
+
+  /**
    * Binds a Telegram account to the administrator with this username.
    *
    * The username is how a person names an administrator, and the id is how Telegram

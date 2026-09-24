@@ -1,5 +1,6 @@
 import type {
   AdminAmountCaptureCloseReason,
+  AdminCapturePurpose,
   BotInstanceId,
   PaymentId,
   TenantContext,
@@ -17,7 +18,11 @@ export interface AdminAmountCaptureRecord {
   readonly botInstanceId: BotInstanceId;
   readonly adminId: string;
   readonly paymentId: PaymentId;
+  /** What the capture reads: the credit's amount, or a block's or rejection's reason. */
+  readonly purpose: AdminCapturePurpose;
   readonly amountMinor: bigint | null;
+  /** The block's or rejection's reason, trimmed, once typed. Null for a credit capture. */
+  readonly reason: string | null;
   readonly openedAt: Date;
   readonly expiresAt: Date;
   readonly closedAt: Date | null;
@@ -47,11 +52,29 @@ export interface AdminAmountCaptureRepository {
       readonly botInstanceId: BotInstanceId;
       readonly adminId: string;
       readonly paymentId: PaymentId;
+      /** Defaults to the credit's amount, the purpose every existing caller opens. */
+      readonly purpose?: AdminCapturePurpose;
       readonly openedAt: Date;
       readonly expiresAt: Date;
     },
     tx: unknown,
   ): Promise<AdminAmountCaptureRecord>;
+
+  /**
+   * This administrator's open reason capture OF THIS PURPOSE on this bot that has not read its
+   * reason yet. Keyed by purpose, as `findAwaitingAmount` is: a message is offered to exactly
+   * the prompt that asked for it.
+   */
+  findAwaitingReason(
+    scope: TenantContext,
+    botInstanceId: BotInstanceId,
+    adminId: string,
+    purpose: 'RECEIPT_BLOCK_REASON' | 'RECEIPT_REJECT_REASON',
+    tx?: unknown,
+  ): Promise<AdminAmountCaptureRecord | null>;
+
+  /** Sets the reason ONCE, on an open reason capture that has none. */
+  recordReason(scope: TenantContext, id: string, reason: string, tx: unknown): Promise<boolean>;
 
   /**
    * The open capture still WAITING for an amount, for this administrator on this bot.

@@ -4,6 +4,7 @@ import { DrizzleCustomerRepository } from '../../apps/api/src/modules/commerce/c
 import { CustomerNotificationService } from '../../apps/api/src/modules/commerce/messaging/application/customer-notification.service';
 import type { CustomerMessage } from '../../apps/api/src/modules/commerce/messaging/application/ports';
 import { DrizzleServiceReminderSnapshotReader } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service-reminder.repository';
+import { DrizzlePaymentRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-payment.repository';
 import { DrizzleWalletRepository } from '../../apps/api/src/modules/commerce/wallet/infrastructure/drizzle-wallet.repository';
 import type { TestContext } from './harness';
 
@@ -23,6 +24,8 @@ export function capturingLane(ctx: TestContext) {
     notifications: ctx.container.customerNotifications,
     refundFigures: wallet,
     paymentCredits: wallet,
+    // The rejection's reason (File 01 §7): the production reader over the real payment row.
+    rejectionReasons: new DrizzlePaymentRepository(ctx.container.database.db),
     reminderSnapshots: new DrizzleServiceReminderSnapshotReader(ctx.container.database.db),
     contacts: {
       contactFor: async (scope, customerId, tx) => {

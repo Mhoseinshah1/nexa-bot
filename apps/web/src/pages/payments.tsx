@@ -4,6 +4,7 @@ import {
   COMMERCE_ERROR_CODES,
   PAYMENT_METHODS,
   PAYMENT_STATES,
+  RECEIPT_DISPOSITIONS,
   uuidV7Schema,
   type RefundChannel,
   type RefundResponse,
@@ -13,6 +14,7 @@ import {
   type PaymentReceiptView,
   type PaymentState,
   type PaymentSummaryResponse,
+  type ReceiptDisposition,
 } from '@nexa/contracts';
 import {
   ApiError,
@@ -160,6 +162,30 @@ function StateBadge({ value }: { value: PaymentState }) {
   return <Badge tone={STATE_TONES[value]}>{t(STATE_LABELS[value])}</Badge>;
 }
 
+/**
+ * How a card-to-card receipt left review (WP10 follow-up §5), derived by the server.
+ *
+ * The point is the credited one: a receipt credited to the wallet is FAILED by state, and a
+ * state badge alone reads exactly like a rejection. `ok` for the credit because money DID
+ * reach the customer; the state badge beside it still says the order was not paid by it.
+ */
+const DISPOSITION_LABELS: Readonly<Record<ReceiptDisposition, WebKey>> = {
+  APPROVED: 'web.payment_disposition_approved',
+  REJECTED: 'web.payment_disposition_rejected',
+  CREDITED_TO_WALLET: 'web.payment_disposition_credited',
+};
+
+const DISPOSITION_TONES: Readonly<Record<ReceiptDisposition, Tone>> = {
+  APPROVED: 'ok',
+  REJECTED: 'danger',
+  CREDITED_TO_WALLET: 'ok',
+};
+
+function DispositionBadge({ value }: { value: ReceiptDisposition | null }) {
+  if (value === null) return <Dash />;
+  return <Badge tone={DISPOSITION_TONES[value]}>{t(DISPOSITION_LABELS[value])}</Badge>;
+}
+
 function Dash() {
   return <span className="faint">—</span>;
 }
@@ -217,6 +243,7 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
   const cursor = route.query.get('cursor');
   const state = route.query.get('state');
   const method = route.query.get('method');
+  const disposition = route.query.get('disposition');
   const appliedCustomer = route.query.get('customerId') ?? '';
   const appliedOrder = route.query.get('orderId') ?? '';
   const appliedReference = route.query.get('reference') ?? '';
@@ -245,12 +272,22 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
   }
 
   const payments = useQuery({
-    queryKey: ['payments', cursor, state, method, appliedCustomer, appliedOrder, appliedReference],
+    queryKey: [
+      'payments',
+      cursor,
+      state,
+      method,
+      disposition,
+      appliedCustomer,
+      appliedOrder,
+      appliedReference,
+    ],
     queryFn: () =>
       fetchPayments({
         ...(cursor === null ? {} : { cursor }),
         ...(state === null ? {} : { state: state as PaymentState }),
         ...(method === null ? {} : { method: method as PaymentMethod }),
+        ...(disposition === null ? {} : { disposition: disposition as ReceiptDisposition }),
         ...(appliedCustomer === '' ? {} : { customerId: appliedCustomer }),
         ...(appliedOrder === '' ? {} : { orderId: appliedOrder }),
         ...(appliedReference === '' ? {} : { reference: appliedReference }),
@@ -299,6 +336,16 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
       key: 'state',
       header: t('web.payment_state'),
       render: (row) => <StateBadge value={row.state} />,
+    },
+    {
+      /*
+       * How the receipt left review, beside the state rather than instead of it: the state
+       * is the payment's, this is the receipt's. A credited receipt reads "credited to
+       * wallet" here, never a bare FAILED (WP10 follow-up §5).
+       */
+      key: 'disposition',
+      header: t('web.payment_disposition'),
+      render: (row) => <DispositionBadge value={row.receiptDisposition} />,
     },
     {
       key: 'method',
@@ -422,6 +469,22 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
             items={[
               { id: 'ALL', label: t('web.payments_filter_all') },
               ...PAYMENT_METHODS.map((one) => ({ id: one, label: t(METHOD_LABELS[one]) })),
+            ]}
+          />
+          <Pills
+            value={disposition ?? 'ALL'}
+            onChange={(next) =>
+              setQueries(route, [
+                ['disposition', next === 'ALL' ? null : next],
+                ['cursor', null],
+              ])
+            }
+            items={[
+              { id: 'ALL', label: t('web.payments_filter_all') },
+              ...RECEIPT_DISPOSITIONS.map((one) => ({
+                id: one,
+                label: t(DISPOSITION_LABELS[one]),
+              })),
             ]}
           />
           {/*
@@ -1134,6 +1197,10 @@ export function PaymentDetailPage({
                 items={[
                   [t('web.payment_id'), <Copyable key="id" value={row.id} />],
                   [t('web.payment_state'), <StateBadge key="s" value={row.state} />],
+                  [
+                    t('web.payment_disposition'),
+                    <DispositionBadge key="d" value={row.receiptDisposition} />,
+                  ],
                   [t('web.payment_method'), t(METHOD_LABELS[row.method])],
                   [
                     t('web.payment_gateway'),

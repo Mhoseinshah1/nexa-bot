@@ -22,6 +22,7 @@ import {
   type PaymentResponse,
   type PaymentSummaryResponse,
   type ReceiptCreditView,
+  type ReceiptDisposition,
   type RefundId,
   type TenantContext,
   type UserId,
@@ -83,6 +84,7 @@ export class PaymentsController {
       ...(query.customerId === undefined ? {} : { customerId: query.customerId }),
       ...(query.orderId === undefined ? {} : { orderId: query.orderId }),
       ...(query.reference === undefined ? {} : { reference: query.reference }),
+      ...(query.disposition === undefined ? {} : { disposition: query.disposition }),
     });
     const result = await this.container.payments.list(scope, actor, {
       ...(page.limit === undefined ? {} : { limit: page.limit }),
@@ -93,15 +95,24 @@ export class PaymentsController {
         ...(page.customerId === undefined ? {} : { customerId: page.customerId as UserId }),
         ...(page.orderId === undefined ? {} : { orderId: page.orderId as OrderId }),
         ...(page.reference === undefined ? {} : { reference: page.reference }),
+        ...(page.disposition === undefined ? {} : { disposition: page.disposition }),
       },
     });
     // Who paid, as Telegram knows them — one read for the page (D7).
     const identities = await this.container.payments.customerIdentities(scope, actor, result.items);
+    // How each receipt left review (WP10 follow-up §5): a credited FAILED is not a rejection.
+    const dispositions = await this.container.payments.receiptDispositions(
+      scope,
+      actor,
+      result.items,
+    );
     return {
       // The LIST omits `evidenceNote`: it is an operator's own text about somebody's
       // bank transfer, and it is returned only on the detail, behind the same
       // permission. A list is the thing most likely to end up on a shared screen.
-      payments: result.items.map((record) => toSummary(record, identities.get(record.customerId))),
+      payments: result.items.map((record) =>
+        toSummary(record, identities.get(record.customerId), dispositions.get(record.id) ?? null),
+      ),
       nextCursor: result.nextCursor === null ? null : encodeKeysetCursor(result.nextCursor),
     };
   }
@@ -116,8 +127,15 @@ export class PaymentsController {
       this.container.receiptDispositions.creditFor(scope, actor, id),
     ]);
     const identities = await this.container.payments.customerIdentities(scope, actor, [payment]);
+    const dispositions = await this.container.payments.receiptDispositions(scope, actor, [payment]);
     return {
-      payment: toDetail(payment, destination, credit, identities.get(payment.customerId)),
+      payment: toDetail(
+        payment,
+        destination,
+        credit,
+        identities.get(payment.customerId),
+        dispositions.get(payment.id) ?? null,
+      ),
     };
   }
 
@@ -262,6 +280,7 @@ function compensationCursorFrom(raw: string): CompensationCursor {
 function toSummary(
   record: PaymentRecord,
   identity: PaymentCustomerIdentity | undefined,
+  receiptDisposition: ReceiptDisposition | null,
 ): PaymentSummaryResponse {
   return {
     id: record.id,
@@ -288,6 +307,7 @@ function toSummary(
     externalReference: record.externalReference,
     customerTelegramUserId: identity?.telegramUserId ?? null,
     customerUsername: identity?.username ?? null,
+    receiptDisposition,
   };
 }
 
@@ -314,9 +334,10 @@ function toDetail(
   destination: PaymentDestinationRecord | null,
   credit: ReceiptCreditRecord | null,
   identity: PaymentCustomerIdentity | undefined,
+  receiptDisposition: ReceiptDisposition | null,
 ): PaymentDetailResponse {
   return {
-    ...toSummary(record, identity),
+    ...toSummary(record, identity, receiptDisposition),
     evidenceNote: record.evidenceNote,
     resolutionNote: record.resolutionNote,
     destination: destination === null ? null : toDestinationView(destination),

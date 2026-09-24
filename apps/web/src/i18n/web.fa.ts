@@ -846,7 +846,7 @@ export const WEB_FA = {
   'web.user_unblock': 'رفع مسدودی',
   'web.user_block_reason_label': 'دلیل (اختیاری)',
   'web.user_block_reason_hint':
-    'این یادداشت برای اپراتور است و هرگز به مشتری نشان داده نمی‌شود. با رفع مسدودی پاک می‌شود.',
+    'این دلیل در پیام مسدودی به خود مشتری نشان داده می‌شود؛ آن را برای او بنویسید. با رفع مسدودی پاک می‌شود.',
   'web.user_blocked_banner_title': 'این مشتری مسدود است',
   'web.user_blocked_banner_body':
     'ربات به پیام‌های او فقط با متن «مسدود» پاسخ می‌دهد و /start این مسدودی را برنمی‌دارد.',
@@ -994,6 +994,10 @@ export const WEB_FA = {
   'web.payment_topup_gift_hint':
     'درصدی که هنگام ایجاد این شارژ از درگاه آن ثبت شد. تغییر بعدی تنظیمات درگاه آن را عوض نمی‌کند.',
   'web.payment_receipt_credit': 'واریز رسید به کیف پول',
+  'web.payment_disposition': 'نتیجهٔ رسید',
+  'web.payment_disposition_approved': 'تأیید شد',
+  'web.payment_disposition_rejected': 'رد شد',
+  'web.payment_disposition_credited': 'واریز به کیف پول',
   'web.payment_receipt_credit_hint':
     'این رسید در تلگرام به‌جای تأیید یا رد، با مبلغی که مدیر وارد کرد به کیف پول مشتری واریز شد. این واریز پرداخت سفارش حساب نمی‌شود.',
   'web.payment_receipt_credit_amount': 'مبلغ واریزشده',
