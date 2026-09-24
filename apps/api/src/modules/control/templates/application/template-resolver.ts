@@ -8,7 +8,7 @@ import {
   type TemplateValues,
 } from '@nexa/contracts';
 import type { FeatureFlagResolver } from '../../features/application/feature-flags.service.js';
-import type { TemplateCatalogue, TemplateRepository } from './ports.js';
+import type { TemplateCatalogue, TemplateRepository, TenantPresentationReader } from './ports.js';
 
 /**
  * The locales this product ships.
@@ -58,6 +58,7 @@ export class TemplateResolver {
     private readonly templates: TemplateRepository,
     private readonly features: FeatureFlagResolver,
     private readonly catalogue: TemplateCatalogue,
+    private readonly presentation: TenantPresentationReader,
   ) {}
 
   async resolve(
@@ -123,6 +124,10 @@ export class TemplateResolver {
     }
 
     const resolved = await this.resolve(scope, key, locale, tx);
-    return this.catalogue.render(definition, resolved.body, values, locale);
+    // The tenant's zone and calendar, resolved HERE so every DATETIME in the message
+    // is shown the same way, and so a caller cannot render one for a tenant with a
+    // presentation that belongs to another.
+    const presentation = await this.presentation.presentationFor(scope, tx);
+    return this.catalogue.render(definition, resolved.body, values, locale, presentation);
   }
 }

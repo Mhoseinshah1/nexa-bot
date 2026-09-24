@@ -1,6 +1,6 @@
 import { type TemplateDefinition, type TemplateKey, type TemplateValues } from '@nexa/contracts';
 import { CATALOGUE_FA, LOCALES, renderTemplateBody, type Locale } from '@nexa/i18n';
-import type { TemplateCatalogue } from '../application/ports.js';
+import type { TemplateCatalogue, TemplatePresentation } from '../application/ports.js';
 
 const CATALOGUES: Readonly<Record<Locale, Readonly<Record<TemplateKey, string>>>> = {
   fa: CATALOGUE_FA,
@@ -29,7 +29,8 @@ export class I18nTemplateCatalogue implements TemplateCatalogue {
     body: string,
     values: TemplateValues,
     locale: string,
+    presentation: TemplatePresentation,
   ): string {
-    return renderTemplateBody(definition, body, values, locale as Locale);
+    return renderTemplateBody(definition, body, values, locale as Locale, presentation);
   }
 }

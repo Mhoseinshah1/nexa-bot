@@ -441,14 +441,27 @@ describe('control plane, third review round', () => {
       });
     });
 
-    it('leaves an unsupplied placeholder in the body and reports it', async () => {
+    it('renders an unsupplied OPTIONAL placeholder as absent and reports it', async () => {
+      // `occurrences` is optional, so the preview shows what a customer would read —
+      // the token gone, the line kept because its other placeholders have values —
+      // and `unresolved` is how the administrator learns which field was empty.
       const result = await ctx.container.templatesService.preview(tenantA, owner, {
         key: 'ops.notification.operational_event',
         body: '{severity}: {code} — {message} — {occurrences} بار',
         values: sample,
       });
-      expect(result.rendered).toContain('{occurrences}');
+      expect(result.rendered).toBe('ERROR: panel.unreachable — The panel did not answer. —  بار');
       expect(result.unresolved).toContain('occurrences');
+    });
+
+    it('leaves an unsupplied REQUIRED placeholder in the body and reports it', async () => {
+      const result = await ctx.container.templatesService.preview(tenantA, owner, {
+        key: 'ops.notification.operational_event',
+        body: '{severity}: {code} — {message}',
+        values: { severity: 'ERROR', code: 'panel.unreachable' },
+      });
+      expect(result.rendered).toBe('ERROR: panel.unreachable — {message}');
+      expect(result.unresolved).toEqual(['message']);
     });
   });
 
