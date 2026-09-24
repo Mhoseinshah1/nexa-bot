@@ -3,6 +3,7 @@ import type { ProductCategoryId } from '@nexa/contracts';
 import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  EMPTY_PRODUCT_DISPLAY,
   money,
   type ActorContext,
   type BotInstanceId,
@@ -231,6 +232,7 @@ describe('a provisioned service announces itself', () => {
         categoryId: SEED_IDS.categoryA as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: 2 },
         price: money(250_000n, 'IRT'),
+        display: EMPTY_PRODUCT_DISPLAY,
       },
       now: ctx.container.clock.now(),
     });
@@ -281,6 +283,7 @@ describe('a provisioned service announces itself', () => {
         categoryId: SEED_IDS.categoryA as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: 2 },
         price: money(250_000n, 'IRT'),
+        display: EMPTY_PRODUCT_DISPLAY,
       },
       now: ctx.container.clock.now(),
     });

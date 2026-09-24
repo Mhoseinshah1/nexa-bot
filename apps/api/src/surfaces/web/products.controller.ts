@@ -207,6 +207,16 @@ function draftFrom(command: ProductWriteRequest): ProductDraft {
       command.priceAmount === null || command.priceCurrency === null
         ? null
         : money(BigInt(command.priceAmount), command.priceCurrency),
+    /*
+     * The schema has already bounded and trimmed these and defaulted them for a client
+     * on the previous release, so an old-style body arrives here as the empty display —
+     * which is what such a client's form shows, and therefore the honest write.
+     */
+    display: {
+      displayLocations: command.displayLocations,
+      displayFeatures: command.displayFeatures,
+      serviceLocationLabel: command.serviceLocationLabel,
+    },
   };
 }
 
@@ -242,6 +252,10 @@ function toSummary(record: ProductRecord): ProductSummaryResponse {
     deviceLimit: record.specification.deviceLimit,
     priceAmount: record.price === null ? null : record.price.amountMinor.toString(),
     priceCurrency: record.price === null ? null : record.price.currency,
+    // In the order the operator wrote them. The projection copies, never sorts.
+    displayLocations: [...record.display.displayLocations],
+    displayFeatures: [...record.display.displayFeatures],
+    serviceLocationLabel: record.display.serviceLocationLabel,
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
   };

@@ -106,6 +106,8 @@ describe('the gateway form’s top-up gift', () => {
     },
     sortOrder: 0,
     topupCashbackPercent: 5,
+    allowServicePurchase: true,
+    allowWalletTopup: true,
     createdAt: '2026-09-10T12:30:00.000Z',
     updatedAt: '2026-09-10T12:30:00.000Z',
   };
@@ -150,5 +152,89 @@ describe('the gateway form’s top-up gift', () => {
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'ذخیره' })).toBeDisabled();
     expect(api.calls.some((call) => call.method === 'POST')).toBe(false);
+  });
+});
+
+/**
+ * The two purpose switches (customer UX completion §D/§F, §L). Both travel on every
+ * save, as the form shows them — the server defaults an ABSENT switch to on, so a form
+ * that omitted one would silently turn a route back on.
+ */
+describe('the gateway form’s purpose switches', () => {
+  const GATEWAY = {
+    provider: 'MANUAL_TRANSFER',
+    status: 'ACTIVE',
+    displayName: null,
+    instructions: null,
+    minAmountMinor: '0',
+    maxAmountMinor: '0',
+    currency: 'IRT',
+    eligibility: {
+      activateAfterPayments: 0,
+      deactivateAfterPayments: 0,
+      activateAfterAccountDays: 0,
+    },
+    sortOrder: 0,
+    topupCashbackPercent: 0,
+    allowServicePurchase: true,
+    allowWalletTopup: false,
+    createdAt: '2026-09-10T12:30:00.000Z',
+    updatedAt: '2026-09-10T12:30:00.000Z',
+  };
+
+  const open = async () => {
+    const api = stubApi([
+      { url: '/payment-gateways', body: { gateways: [GATEWAY] } },
+      { url: '/payment-gateways/MANUAL_TRANSFER', body: { gateway: GATEWAY } },
+    ]);
+    renderPage(<PaymentGatewaysPage denied={false} mayEdit />);
+    // The table names the one purpose the route is on for, and not the other.
+    const cell = await screen.findByText('خرید سرویس');
+    expect(cell.textContent).not.toContain('شارژ کیف پول');
+    fireEvent.click(screen.getByRole('button', { name: 'ویرایش' }));
+    return {
+      api,
+      purchase: await screen.findByRole('switch', { name: 'خرید سرویس' }),
+      topup: screen.getByRole('switch', { name: 'شارژ کیف پول' }),
+    };
+  };
+
+  it('opens with the route’s switches and sends both flags as shown', async () => {
+    const { api, purchase, topup } = await open();
+    expect(purchase).toHaveAttribute('aria-checked', 'true');
+    expect(topup).toHaveAttribute('aria-checked', 'false');
+
+    // Purchase off, top-up on: the reverse of what the route holds.
+    fireEvent.click(purchase);
+    fireEvent.click(topup);
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
+
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
+    });
+    const body = api.calls.find((call) => call.method === 'POST')?.body as Record<string, unknown>;
+    expect(body['allowServicePurchase']).toBe(false);
+    expect(body['allowWalletTopup']).toBe(true);
+  });
+
+  it('sends both flags untouched when the operator changes something else', async () => {
+    const { api } = await open();
+    fireEvent.change(screen.getByLabelText('ترتیب نمایش'), { target: { value: '3' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
+
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
+    });
+    const body = api.calls.find((call) => call.method === 'POST')?.body as Record<string, unknown>;
+    expect(body['allowServicePurchase']).toBe(true);
+    expect(body['allowWalletTopup']).toBe(false);
+    expect(body['sortOrder']).toBe(3);
+  });
+
+  it('says in amber when a route is on for nothing', async () => {
+    const off = { ...GATEWAY, allowServicePurchase: false, allowWalletTopup: false };
+    stubApi([{ url: '/payment-gateways', body: { gateways: [off] } }]);
+    renderPage(<PaymentGatewaysPage denied={false} mayEdit />);
+    expect(await screen.findByText('برای هیچ کاری')).toBeInTheDocument();
   });
 });

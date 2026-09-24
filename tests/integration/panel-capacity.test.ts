@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import type { ProductCategoryId } from '@nexa/contracts';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  EMPTY_PRODUCT_DISPLAY,
   money,
   PANEL_UNHEALTHY_AFTER_FAILURES,
   PRODUCT_PAGE_MAX,
@@ -134,6 +135,7 @@ describe('panel capacity and sales eligibility', () => {
         categoryId: SEED_IDS.categoryA as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 0n, deviceLimit: 1 },
         price: money(120_000n, 'IRT'),
+        display: EMPTY_PRODUCT_DISPLAY,
       },
       now: ctx.container.clock.now(),
     });
@@ -777,6 +779,7 @@ describe('panel capacity and sales eligibility', () => {
         categoryId: SEED_IDS.categoryB as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 0n, deviceLimit: 1 },
         price: money(120_000n, 'IRT'),
+        display: EMPTY_PRODUCT_DISPLAY,
       },
       now: ctx.container.clock.now(),
     });

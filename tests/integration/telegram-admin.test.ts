@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  EMPTY_PRODUCT_DISPLAY,
   isNexaError,
   money,
   type ActorContext,
@@ -966,6 +967,7 @@ describe('the Telegram management panel', () => {
         categoryId: SEED_IDS.categoryA as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: 2 },
         price: money(250_000n, 'IRT'),
+        display: EMPTY_PRODUCT_DISPLAY,
       } satisfies ProductDraft,
       now: ctx.container.clock.now(),
     });

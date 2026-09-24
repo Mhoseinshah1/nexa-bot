@@ -3,6 +3,7 @@ import type { ProductCategoryId } from '@nexa/contracts';
 import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  EMPTY_PRODUCT_DISPLAY,
   money,
   type ActorContext,
   type BotInstanceId,
@@ -195,6 +196,7 @@ describe('a customer manages the service they bought', () => {
          */
         specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: null },
         price: money(250_000n, 'IRT'),
+        display: EMPTY_PRODUCT_DISPLAY,
       },
       now: ctx.container.clock.now(),
     });

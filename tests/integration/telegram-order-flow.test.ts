@@ -2,7 +2,12 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { ProductCategoryId } from '@nexa/contracts';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { TELEGRAM_SECRET_TOKEN_HEADER, money, type ProductId } from '@nexa/contracts';
+import {
+  EMPTY_PRODUCT_DISPLAY,
+  TELEGRAM_SECRET_TOKEN_HEADER,
+  money,
+  type ProductId,
+} from '@nexa/contracts';
 import { CATALOGUE_FA, formatMoney } from '@nexa/i18n';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
@@ -201,6 +206,7 @@ describe('the customer purchase flow over Telegram', () => {
     categoryId: seededCategoryFor(scope) as ProductCategoryId,
     specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: 2 },
     price: money(250_000n, 'IRT'),
+    display: EMPTY_PRODUCT_DISPLAY,
     ...overrides,
   });
 

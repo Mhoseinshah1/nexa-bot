@@ -38,6 +38,8 @@ const COLUMNS = {
   activateAfterAccountDays: paymentGateways.activateAfterAccountDays,
   sortOrder: paymentGateways.sortOrder,
   topupCashbackPercent: paymentGateways.topupCashbackPercent,
+  allowServicePurchase: paymentGateways.allowServicePurchase,
+  allowWalletTopup: paymentGateways.allowWalletTopup,
   createdAt: paymentGateways.createdAt,
   updatedAt: paymentGateways.updatedAt,
 } as const;
@@ -56,6 +58,8 @@ interface Row {
   readonly activateAfterAccountDays: number;
   readonly sortOrder: number;
   readonly topupCashbackPercent: number;
+  readonly allowServicePurchase: boolean;
+  readonly allowWalletTopup: boolean;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -81,6 +85,8 @@ function toRecord(row: Row): PaymentGatewayRecord {
     activateAfterAccountDays: row.activateAfterAccountDays,
     sortOrder: row.sortOrder,
     topupCashbackPercent: row.topupCashbackPercent,
+    allowServicePurchase: row.allowServicePurchase,
+    allowWalletTopup: row.allowWalletTopup,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -174,6 +180,11 @@ export class DrizzlePaymentGatewayRepository implements PaymentGatewayRepository
           // denomination it was provisioned under: the first real bound an operator
           // types will be in it.
           boundsCurrency: currency,
+          // Offered for BOTH purposes, stated rather than left to the column defaults:
+          // this is the state every route upgraded by 0119 is in, and a tenant
+          // provisioned after it must be indistinguishable from one upgraded into it.
+          allowServicePurchase: true,
+          allowWalletTopup: true,
           createdAt: now,
           updatedAt: now,
         })),
@@ -206,6 +217,8 @@ export class DrizzlePaymentGatewayRepository implements PaymentGatewayRepository
         activateAfterAccountDays: config.eligibility.activateAfterAccountDays,
         sortOrder: config.sortOrder,
         topupCashbackPercent: config.topupCashbackPercent,
+        allowServicePurchase: config.allowServicePurchase,
+        allowWalletTopup: config.allowWalletTopup,
         updatedAt: now,
       })
       .where(and(eq(paymentGateways.tenantId, tenantId), eq(paymentGateways.provider, provider)))

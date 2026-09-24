@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import type { ProductCategoryId } from '@nexa/contracts';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  EMPTY_PRODUCT_DISPLAY,
   COMMERCE_ERROR_CODES,
   PLATFORM_ERROR_CODES,
   money,
@@ -131,6 +132,7 @@ describe('a submitted receipt and its three dispositions', () => {
         categoryId: SEED_IDS.categoryA as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: 2 },
         price: money(250_000n, 'IRT'),
+        display: EMPTY_PRODUCT_DISPLAY,
       },
       now: ctx.container.clock.now(),
     });
@@ -397,6 +399,7 @@ describe('a submitted receipt and its three dispositions', () => {
           categoryId: SEED_IDS.categoryA as ProductCategoryId,
           specification: { durationDays: 30, trafficBytes: 1_073_741_824n, deviceLimit: 1 },
           price: money(250_000n, 'IRT'),
+          display: EMPTY_PRODUCT_DISPLAY,
         },
         now: ctx.container.clock.now(),
       });
@@ -726,6 +729,8 @@ describe('a submitted receipt and its three dispositions', () => {
           },
           sortOrder: 0,
           topupCashbackPercent: 10,
+          allowServicePurchase: true,
+          allowWalletTopup: true,
         },
       });
       await ctx.container.database.db.execute(sql`

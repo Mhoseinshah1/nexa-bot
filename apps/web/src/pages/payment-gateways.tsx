@@ -22,6 +22,7 @@ import {
   Ltr,
   PageHead,
   StateSwitch,
+  Switch,
   useToast,
   type Column,
 } from '../ui/kit';
@@ -65,6 +66,13 @@ const EMPTY_FORM = {
   activateAfterAccountDays: '0',
   sortOrder: '0',
   topupCashbackPercent: '0',
+  /*
+   * The two purpose switches (customer UX completion §D/§F). ON by default, which is
+   * the state every route starts in; the form shows both so an operator who switches
+   * one off can see the other is still on.
+   */
+  allowServicePurchase: true,
+  allowWalletTopup: true,
 };
 
 type FormState = typeof EMPTY_FORM;
@@ -80,6 +88,8 @@ function formOf(gateway: PaymentGatewayView): FormState {
     activateAfterAccountDays: String(gateway.eligibility.activateAfterAccountDays),
     sortOrder: String(gateway.sortOrder),
     topupCashbackPercent: String(gateway.topupCashbackPercent),
+    allowServicePurchase: gateway.allowServicePurchase,
+    allowWalletTopup: gateway.allowWalletTopup,
   };
 }
 
@@ -244,6 +254,14 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
          * only top-ups created after the save.
          */
         topupCashbackPercent: gift,
+        /*
+         * Both switches, always, as the form shows them. The server defaults an ABSENT
+         * switch to on for the previous release's client; a form that has the switch
+         * and omitted it would silently turn a route back on for a purpose the
+         * operator just switched off.
+         */
+        allowServicePurchase: form.allowServicePurchase,
+        allowWalletTopup: form.allowWalletTopup,
       };
       /*
        * The key is bound to the whole payload AND to which route is being written, so
@@ -347,6 +365,26 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
       header: t('web.payment_gateway_topup_gift'),
       render: (row) =>
         row.topupCashbackPercent === 0 ? '—' : <Ltr>{`${String(row.topupCashbackPercent)}%`}</Ltr>,
+    },
+    {
+      key: 'purposes',
+      header: t('web.gateway_allow_column'),
+      /*
+       * Which purposes the route is on for. A route ACTIVE with both switches off is
+       * offered for nothing, and that is said in amber rather than shown as an empty
+       * cell an operator would read as "no restriction".
+       */
+      render: (row) => {
+        const on = [
+          row.allowServicePurchase ? t('web.gateway_allow_service_purchase') : null,
+          row.allowWalletTopup ? t('web.gateway_allow_wallet_topup') : null,
+        ].filter((label): label is string => label !== null);
+        return on.length === 0 ? (
+          <Badge tone="warn">{t('web.gateway_allow_none')}</Badge>
+        ) : (
+          on.join(' · ')
+        );
+      },
     },
     {
       key: 'updated',
@@ -526,6 +564,25 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
               maxLength={4}
               onChange={(event) => setForm({ ...form, topupCashbackPercent: event.target.value })}
             />
+          </Field>
+
+          <Field label={t('web.gateway_allow_column')} hint={t('web.gateway_allow_hint')}>
+            <div className="toolbar">
+              <Switch
+                checked={form.allowServicePurchase}
+                onChange={(next) => setForm({ ...form, allowServicePurchase: next })}
+                label={t('web.gateway_allow_service_purchase')}
+              />
+              <span>{t('web.gateway_allow_service_purchase')}</span>
+            </div>
+            <div className="toolbar">
+              <Switch
+                checked={form.allowWalletTopup}
+                onChange={(next) => setForm({ ...form, allowWalletTopup: next })}
+                label={t('web.gateway_allow_wallet_topup')}
+              />
+              <span>{t('web.gateway_allow_wallet_topup')}</span>
+            </div>
           </Field>
 
           <Field label={t('web.payment_gateway_sort')} htmlFor="pg-sort">

@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  EMPTY_PRODUCT_DISPLAY,
   API_PREFIX,
   AUTH_ROUTES,
   CASHBACK_RULE_ROUTES,
@@ -174,6 +175,7 @@ describe('pricing HTTP surface', () => {
         categoryId: SEED_IDS.categoryA as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: 2 },
         price: money(price, 'IRT'),
+        display: EMPTY_PRODUCT_DISPLAY,
       },
       now: api.container.clock.now(),
     });

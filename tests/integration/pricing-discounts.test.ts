@@ -1,6 +1,7 @@
 import { sql, type SQL } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  EMPTY_PRODUCT_DISPLAY,
   money,
   type ActorContext,
   type BotInstanceId,
@@ -155,6 +156,7 @@ describe('discounts reach the order, and confirmation keeps its word', () => {
           : SEED_IDS.categoryB) as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: 2 },
         price: money(price, 'IRT'),
+        display: EMPTY_PRODUCT_DISPLAY,
       },
       now: ctx.container.clock.now(),
     });

@@ -2,6 +2,7 @@ import { createServer, type Server } from 'node:http';
 import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  EMPTY_PRODUCT_DISPLAY,
   money,
   UNLIMITED_TRAFFIC_BYTES,
   type ActorContext,
@@ -145,6 +146,7 @@ describe('a RickPanel NEW_SERVICE', () => {
         // No device limit: the RickPanel descriptor does not declare LIMIT_DEVICES.
         specification: { durationDays: 30, trafficBytes, deviceLimit: null },
         price: money(250_000n, 'IRT'),
+        display: EMPTY_PRODUCT_DISPLAY,
       },
       now: ctx.container.clock.now(),
     });

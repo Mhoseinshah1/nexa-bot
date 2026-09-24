@@ -1,6 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import { sql } from 'drizzle-orm';
 import {
+  EMPTY_PRODUCT_DISPLAY,
   money,
   type ActorContext,
   type AdminId,
@@ -220,6 +221,7 @@ export async function signalledTransfer(f: ReceiptFixture, key: string): Promise
       categoryId: SEED_IDS.categoryA as ProductCategoryId,
       specification: { durationDays: 30, trafficBytes: 1n, deviceLimit: null },
       price: money(250_000n, 'IRT'),
+      display: EMPTY_PRODUCT_DISPLAY,
     },
     now: c.clock.now(),
   });

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  EMPTY_PRODUCT_DISPLAY,
   COMMERCE_ERROR_CODES,
   PLATFORM_ERROR_CODES,
   isNexaError,
@@ -106,6 +107,7 @@ describe('trial overrides and the global reset', () => {
         categoryId: SEED_IDS.categoryA as ProductCategoryId,
         specification: { durationDays: 1, trafficBytes: 1_073_741_824n, deviceLimit: null },
         price: null,
+        display: EMPTY_PRODUCT_DISPLAY,
       },
       now: ctx.container.clock.now(),
     });

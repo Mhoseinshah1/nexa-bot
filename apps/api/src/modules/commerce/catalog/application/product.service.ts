@@ -826,6 +826,15 @@ function serialisableDraft(draft: ProductDraft): Record<string, unknown> {
     deviceLimit: draft.specification.deviceLimit,
     priceAmount: draft.price === null ? null : draft.price.amountMinor.toString(),
     priceCurrency: draft.price === null ? null : draft.price.currency,
+    /*
+     * The display data too, ORDER INCLUDED: the hash is over a JSON array, so two edits
+     * that differ only in which location is listed first are two commands. Without these
+     * a key reused with only the marketing copy changed would replay the earlier product
+     * — the categoryId defect above, on three more fields.
+     */
+    displayLocations: draft.display.displayLocations,
+    displayFeatures: draft.display.displayFeatures,
+    serviceLocationLabel: draft.display.serviceLocationLabel,
   };
 }
 
@@ -854,5 +863,10 @@ function auditView(product: ProductRecord): Record<string, unknown> {
     deviceLimit: product.specification.deviceLimit,
     priceAmount: product.price === null ? null : product.price.amountMinor.toString(),
     priceCurrency: product.price === null ? null : product.price.currency,
+    // Customer-facing copy is a mutable field like any other, and a pair that omitted it
+    // would record a rewritten location list as a change of nothing.
+    displayLocations: product.display.displayLocations,
+    displayFeatures: product.display.displayFeatures,
+    serviceLocationLabel: product.display.serviceLocationLabel,
   };
 }

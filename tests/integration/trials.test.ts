@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  EMPTY_PRODUCT_DISPLAY,
   type ActorContext,
   type BotInstanceId,
   type CorrelationId,
@@ -130,6 +131,7 @@ describe('a free trial', () => {
         categoryId: SEED_IDS.categoryA as ProductCategoryId,
         specification: { durationDays: 1, trafficBytes: 1_073_741_824n, deviceLimit: null },
         price: null,
+        display: EMPTY_PRODUCT_DISPLAY,
       },
       now: ctx.container.clock.now(),
     });
@@ -337,6 +339,7 @@ describe('a free trial', () => {
         categoryId: SEED_IDS.categoryA as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 107_374_182_400n, deviceLimit: null },
         price: null,
+        display: EMPTY_PRODUCT_DISPLAY,
       },
       ctx.container.clock.now(),
     );

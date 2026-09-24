@@ -317,6 +317,10 @@ describe('the parity field this release does not store', () => {
       buttonColour: 'GREEN',
     });
     expect(Object.keys(parsed).sort()).toEqual([
+      // The two purpose switches (customer UX completion §D/§F), defaulted ON for a
+      // body that does not send them — the state every existing route is in.
+      'allowServicePurchase',
+      'allowWalletTopup',
       'displayName',
       'eligibility',
       'instructions',
@@ -326,5 +330,7 @@ describe('the parity field this release does not store', () => {
       'topupCashbackPercent',
     ]);
     expect(parsed.topupCashbackPercent).toBe(0);
+    expect(parsed.allowServicePurchase).toBe(true);
+    expect(parsed.allowWalletTopup).toBe(true);
   });
 });

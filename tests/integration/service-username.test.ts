@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import {
+  EMPTY_PRODUCT_DISPLAY,
   DEFAULT_USERNAME_PATTERN,
   RANDOM_STRATEGY_LENGTH,
   isNewProviderUsername,
@@ -166,6 +167,7 @@ describe('the name a service is sold under', () => {
     categoryId: seededCategoryFor(scope) as ProductCategoryId,
     specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: 2 },
     price: money(250_000n, 'IRT'),
+    display: EMPTY_PRODUCT_DISPLAY,
   });
 
   /** A DRAFT order, which is the only state in which a name may be chosen. */
