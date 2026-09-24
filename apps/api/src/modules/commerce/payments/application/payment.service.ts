@@ -295,6 +295,14 @@ export interface ManualTransferInstruction {
 export interface ManualConfirmation {
   readonly idempotencyKey: string;
   readonly note: string;
+  /**
+   * Set by every RECEIPT-REVIEW caller: the transfer must carry a stored receipt, checked
+   * inside the transaction. A forged callback naming a pending transfer the customer never
+   * sent evidence for is refused `PAYMENT_STATE_INVALID` (`reason: NO_RECEIPT`) and the
+   * transfer stays an ordinary pending one. Receipts are append-only
+   * (`payment_receipts_no_delete`), so a receipt seen here cannot vanish before the commit.
+   */
+  readonly requireReceipt?: true;
 }
 
 /**
@@ -313,6 +321,8 @@ export interface ManualRejection {
    * to `ADMIN_CAPTURE_REASON_MAX_LENGTH` characters; anything else is refused before any write.
    */
   readonly note: string;
+  /** As `ManualConfirmation.requireReceipt`: a receipt-review rejection needs a stored receipt. */
+  readonly requireReceipt?: true;
 }
 
 /**
@@ -1655,6 +1665,25 @@ export class PaymentService {
   }
 
   /**
+   * The receipt-review surfaces' invariant: a decision made FROM a receipt needs a receipt.
+   * The same refusal `ReceiptDispositionService.creditToWallet` gives a transfer with none.
+   */
+  private async assertReceiptIfRequired(
+    scope: TenantContext,
+    payment: PaymentRecord,
+    required: true | undefined,
+    tx: TransactionScope,
+  ): Promise<void> {
+    if (required !== true) return;
+    if ((await this.deps.receipts.countForPayment(scope, payment.id, tx)) > 0) return;
+    throw errors.conflict(
+      COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID,
+      'This transfer carries no receipt to review.',
+      { state: payment.state, reason: 'NO_RECEIPT' },
+    );
+  }
+
+  /**
    * An operator confirming that an out-of-band transfer arrived.
    *
    * The confirmation carries a NOTE and nothing else. It cannot restate the amount —
@@ -1739,6 +1768,7 @@ export class PaymentService {
             { state: payment.state },
           );
         }
+        await this.assertReceiptIfRequired(scope, payment, input.requireReceipt, tx);
         /*
          * NO ORDER means a wallet top-up, and 5B is the phase that answers what it
          * settles: nothing. It credits.
@@ -2227,6 +2257,7 @@ export class PaymentService {
             'This payment can no longer be rejected.',
           );
         }
+        await this.assertReceiptIfRequired(scope, payment, input.requireReceipt, tx);
 
         const moved = await this.deps.repository.resolve(
           scope,

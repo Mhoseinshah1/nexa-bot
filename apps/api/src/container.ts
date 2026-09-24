@@ -2361,6 +2361,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const reasonCaptureDeps = {
     captures: new DrizzleAdminAmountCaptureRepository(database.db),
     payments: paymentRepository,
+    receipts: paymentReceiptRepository,
     customers: customerRepository,
     guard,
     uow,

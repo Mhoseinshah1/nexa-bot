@@ -452,7 +452,8 @@ export class ReceiptService {
    *
    * `null` when the payment is no longer PENDING, which is what makes a stale inline
    * button say so instead of doing something: the message that drew it stays in the
-   * chat for ever, and the state it described is not the state now.
+   * chat for ever, and the state it described is not the state now. `null` too when the
+   * transfer carries no stored receipt — the approve path is admitted only through here.
    */
   async reviewItem(
     scope: TenantContext,
@@ -471,6 +472,9 @@ export class ReceiptService {
       return null;
     }
     const receipts = await this.deps.receipts.listForPayment(scope, paymentId);
+    // No receipt, no review item: a pending transfer the customer sent no evidence for is not
+    // something a reviewer decides from here, however its id reached this call.
+    if (receipts.length === 0) return null;
     const customer = await this.deps.customers.findById(scope, payment.customerId);
     const caption = await this.deps.caption.valuesFor(scope, actor, payment, customer, receipts);
     return { payment, customer, receipts, caption };

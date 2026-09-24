@@ -5066,6 +5066,8 @@ export class BotRuntime {
         // through which surface the decision was taken, which is exactly what a
         // reviewer reading the payment later wants to know.
         note: 'Approved in the Telegram management panel.',
+        // A receipt-review decision: the service refuses a transfer with no stored receipt.
+        requireReceipt: true,
       });
       return { key: 'bot.admin.approved', values: {}, buttons: [], orderId: null };
     } catch (error) {

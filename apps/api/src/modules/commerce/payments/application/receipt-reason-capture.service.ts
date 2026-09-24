@@ -31,6 +31,7 @@ import type { ScopeActivityReader } from '../../../platform/system/application/r
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { CustomerRecord, CustomerRepository } from '../../customers/application/ports.js';
 import type { PaymentRecord, PaymentRepository } from './ports.js';
+import type { PaymentReceiptRepository } from './receipt-ports.js';
 import type {
   AdminAmountCaptureRecord,
   AdminAmountCaptureRepository,
@@ -82,6 +83,11 @@ export interface ReceiptReasonCaptureDeps {
   readonly captures: AdminAmountCaptureRepository;
   /** The payment READ alone, never locked: a reason capture waits on no disposition. */
   readonly payments: Pick<PaymentRepository, 'findById'>;
+  /**
+   * Whether the payment carries a stored receipt. Both purposes are RECEIPT-originated, so a
+   * transfer with none admits neither: a forged callback naming it answers `GONE`.
+   */
+  readonly receipts: Pick<PaymentReceiptRepository, 'countForPayment'>;
   readonly customers: Pick<CustomerRepository, 'findById'>;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
@@ -201,7 +207,9 @@ export class ReceiptReasonCaptureService<TOutcome> {
     return this.mutate(scope, actor, denial, async (tx) => {
       await this.deps.captures.lockForAdmin(scope, input.botInstanceId, adminId, tx);
       const payment = await this.deps.payments.findById(scope, paymentId, tx);
-      if (payment === null || !this.policy.admits(payment)) return { outcome: 'GONE' } as const;
+      if (payment === null || !(await this.admitted(scope, payment, tx))) {
+        return { outcome: 'GONE' } as const;
+      }
       const now = this.deps.clock.now();
       // Opening closes any other open prompt of this administrator on this bot — a credit's
       // amount capture included — in this transaction: one prompt, never two.
@@ -300,7 +308,7 @@ export class ReceiptReasonCaptureService<TOutcome> {
         return { outcome: 'EXPIRED' } as const;
       }
       const payment = await this.deps.payments.findById(scope, capture.paymentId, tx);
-      if (payment === null || !this.policy.admits(payment)) {
+      if (payment === null || !(await this.admitted(scope, payment, tx))) {
         await this.deps.captures.close(scope, capture.id, 'SUPERSEDED', now, tx);
         return { outcome: 'GONE' } as const;
       }
@@ -476,9 +484,22 @@ export class ReceiptReasonCaptureService<TOutcome> {
     paymentId: PaymentId,
   ): Promise<ReasonSubject | null> {
     const payment = await this.deps.payments.findById(scope, paymentId);
-    if (payment === null || !this.policy.admits(payment)) return null;
+    if (payment === null || !(await this.admitted(scope, payment))) return null;
     const customer = await this.deps.customers.findById(scope, payment.customerId);
     return { payment, customer };
+  }
+
+  /**
+   * The policy's own admission AND a stored receipt. Receipts are append-only
+   * (`payment_receipts_no_delete`), so one seen here is still there when the action runs.
+   */
+  private async admitted(
+    scope: TenantContext,
+    payment: PaymentRecord,
+    tx?: TransactionScope,
+  ): Promise<boolean> {
+    if (!this.policy.admits(payment)) return false;
+    return (await this.deps.receipts.countForPayment(scope, payment.id, tx)) > 0;
   }
 
   private adminIdOf(actor: ActorContext): string {
