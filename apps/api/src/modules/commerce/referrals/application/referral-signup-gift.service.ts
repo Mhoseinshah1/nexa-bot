@@ -268,10 +268,14 @@ export class ReferralSignupGiftService {
           // The snapshotted currency is the gift's; a total changed to another currency
           // since the first claim does not change what the second side is owed.
           const amount = side === 'REFEREE' ? gift.refereeAmount : gift.referrerAmount;
-          const claimedAt = side === 'REFEREE' ? gift.refereeClaimedAt : gift.referrerClaimedAt;
           // `wallet_entries` requires a positive amount, and a stamp requires an entry: a
           // zero share is neither paid nor stamped, and `claimableFor` never offers it.
-          if (claimedAt !== null || amount <= 0n) continue;
+          // Whether the side is ALREADY claimed is decided by `claimSide`'s conditional
+          // UPDATE alone — not re-read here first. A read before the write is the copy
+          // that masks the write's predicate: with both present, reverting either left
+          // the suite green, so neither could be told from the other (falsification
+          // record, UX-06).
+          if (amount <= 0n) continue;
 
           const entryId = this.deps.ids.uuid();
           const stamped = await this.deps.gifts.claimSide(
