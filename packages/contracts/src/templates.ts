@@ -1192,6 +1192,142 @@ export const TEMPLATES = [
         required: false,
         repeatable: false,
       },
+      /*
+       * WP10 follow-up (File 01 \u00a74, `docs/wp10-followup-audit.md` \u00a76). OPTIONAL for the
+       * reason the three above are: an installation may hold an override written before
+       * they existed. The runtime supplies every one on every render, with a dash where
+       * there is no source \u2014 nothing here is invented.
+       */
+      {
+        token: 'operation',
+        type: 'STRING',
+        description:
+          'What the payment is for, as a catalogue label: a new service, a renewal, extra ' +
+          'traffic, extra time, or a wallet top-up.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'name',
+        type: 'STRING',
+        description:
+          'The customer\u2019s Telegram display name (first and last), or a dash. Chosen by the ' +
+          'person it names, so shown and never relied on.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'serviceUsername',
+        type: 'STRING',
+        description:
+          'The account name on the panel: the name the order reserved for a new service, the ' +
+          'existing service\u2019s for a renewal or an add-on, or a dash when none exists yet.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'durationDays',
+        type: 'DURATION_DAYS',
+        description: 'The order\u2019s frozen duration in days. 0 for a wallet top-up.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'trafficBytes',
+        type: 'BYTES',
+        description: 'The order\u2019s frozen traffic allowance. 0 for a wallet top-up.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'balance',
+        type: 'STRING',
+        description:
+          'The customer\u2019s current wallet balance, rendered through ' +
+          '`bot.admin.receipt_balance`, for a reviewer who holds `users.view` (the key the ' +
+          'wallet read charges); a dash for everyone else. Read when the message is rendered.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.receipt_balance',
+    description:
+      'The balance as it appears inside `bot.admin.receipt`. Its own key so the amount is ' +
+      'formatted by the one money renderer and a tenant may reword it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'balance',
+        type: 'MONEY',
+        description: 'The customer\u2019s wallet balance in the payment\u2019s currency.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.operation_new_service',
+    description: 'The operation label inside `bot.admin.receipt` for a new service.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.operation_renew',
+    description:
+      'The operation label inside `bot.admin.receipt` for a renewal of an existing service.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.operation_add_traffic',
+    description:
+      'The operation label inside `bot.admin.receipt` for extra traffic on an existing service.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.operation_add_time',
+    description:
+      'The operation label inside `bot.admin.receipt` for extra time on an existing service.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.operation_topup',
+    description: 'The operation label inside `bot.admin.receipt` for a wallet top-up.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.receipt_already_approved',
+    description:
+      'A tap on a receipt\u2019s button after the payment was APPROVED. Says which way it was ' +
+      'decided; nothing moved (WP10 follow-up \u00a75).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.receipt_already_rejected',
+    description: 'A tap on a receipt\u2019s button after the payment was REJECTED. Nothing moved.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.receipt_already_credited',
+    description:
+      'A tap on a receipt\u2019s button after it was CREDITED TO THE WALLET: names the amount ' +
+      'the reviewer credited, so a FAILED payment is not read as a rejection. Nothing moved.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'amount',
+        type: 'MONEY',
+        description: 'The amount the credit put on the wallet.',
+        required: true,
+        repeatable: false,
+      },
     ],
   },
   {
@@ -1395,6 +1531,163 @@ export const TEMPLATES = [
       'The transfer is in a currency this installation no longer sells in, so crediting it ' +
       'would leave a balance no order can be paid from. Nothing moved; the reviewer may still ' +
       'approve or reject.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  /*
+   * WP10 follow-up \u2014 Block User from the receipt message (File 01 \u00a79,
+   * `docs/wp10-followup-audit.md` \u00a74). Block \u2192 confirmation \u2192 mandatory reason \u2192 a
+   * commit that restates it. It blocks the CUSTOMER through the customers section\u2019s own
+   * path and decides nothing about the payment.
+   */
+  {
+    key: 'bot.admin.block_button',
+    description:
+      'The fourth button on a receipt: block the customer who sent it. Drawn only for ' +
+      '`users.block`; the block path charges it again on every tap.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.block_ask',
+    description:
+      'The confirmation before anything is written: names the customer and says that blocking ' +
+      'does NOT approve, reject or credit the receipt, which stays in the queue.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'customer',
+        type: 'STRING',
+        description: 'The customer\u2019s numeric Telegram id.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.block_yes_button',
+    description: 'Confirms the intention to block and asks for the reason. Writes no block.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.block_cancel_button',
+    description: 'Abandons the block. Nothing about the customer changes.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.block_reason_prompt',
+    description:
+      'Asks for the mandatory reason. Only this administrator\u2019s next plain message, for a ' +
+      'few minutes, is read as it; a command is still a command.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'customer',
+        type: 'STRING',
+        description: 'The customer\u2019s numeric Telegram id.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'minutes',
+        type: 'NUMBER',
+        description: 'How long the reason is waited for.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.block_reason_invalid',
+    description:
+      'The message is not a usable reason (empty, or longer than the bound). The capture stays ' +
+      'open for the next one; nothing was written.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'max',
+        type: 'NUMBER',
+        description: 'The longest reason accepted, in characters.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.block_confirm',
+    description:
+      'Restates the customer and the reason before the block is written, so a message read ' +
+      'as the reason by mistake is visible before it changes anybody. The reason is operator ' +
+      'text, rendered as text.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'customer',
+        type: 'STRING',
+        description: 'The customer\u2019s numeric Telegram id.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'reason',
+        type: 'STRING',
+        description: 'The reason as it will be stored.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.block_confirm_button',
+    description: 'Writes the block. Carries the capture id and nothing else.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.blocked_from_receipt',
+    description:
+      'The customer is blocked. Says the receipt is NOT decided by it and is still awaiting ' +
+      'approve, reject or credit.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'customer',
+        type: 'STRING',
+        description: 'The customer\u2019s numeric Telegram id.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.block_already',
+    description:
+      'The customer was already blocked. The stored reason is left as it was; the receipt is ' +
+      'still awaiting a decision.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'customer',
+        type: 'STRING',
+        description: 'The customer\u2019s numeric Telegram id.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.block_cancelled',
+    description: 'The block was abandoned. Nothing about the customer changed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.block_expired',
+    description:
+      'The reason capture closed before it was used \u2014 its window passed, or another prompt ' +
+      'was opened since. Nothing was written; start again from the receipt.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
