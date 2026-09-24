@@ -6,15 +6,24 @@ import type {
   TemplateValues,
   TenantContext,
 } from '@nexa/contracts';
-import { ADMIN_MENU_BUTTON, MAIN_MENU_ROWS, templateDefinition } from '@nexa/contracts';
+import { ADMIN_MENU_BUTTON, MAIN_MENU_ROWS, errors, templateDefinition } from '@nexa/contracts';
 import { CATALOGUE_FA, formatMoney } from '@nexa/i18n';
 import {
   callbackAnswerBody,
   fileMessageBody,
+  fileUploadBody,
   telegramSend,
   textMessageBody,
   type TelegramButton,
+  type TelegramRequest,
+  type TelegramSendOutcome,
 } from '../../../../infrastructure/telegram/send-message.js';
+import {
+  splitMessageBody,
+  TELEGRAM_CAPTION_MAX,
+  TELEGRAM_MESSAGE_MAX,
+  worstOutcome,
+} from '../application/message-split.js';
 import type {
   CustomerButton,
   CustomerButtonLabel,
@@ -89,6 +98,40 @@ function rowOf(button: { readonly row?: CustomerButtonRow }): { row?: number } {
 
 /** Why a reply did not certainly reach the customer. Context, never a code. */
 type SendFailureReason = 'NO_BOT' | 'UNCERTAIN' | 'REFUSED';
+
+/** What the customer is told about a send, and what the operator's log is told. */
+interface ClassifiedOutcome {
+  readonly sent: CustomerSendResult;
+  readonly errorCode: string | null;
+}
+
+/**
+ * A URL button's link: `https://` or `tg://`, and the ORIGINAL string, unchanged.
+ *
+ * Refused rather than sent: an `http://` link to a subscription is the credential over
+ * plaintext, and a scheme Telegram does not open is a button that does nothing when
+ * tapped — which no test asserting "the button is there" would catch. The string is
+ * returned as given rather than as `URL.href`, because the parser normalises — a
+ * trailing slash, percent-encoding, case in the host — and a subscription URL that
+ * arrives at the client one byte different from the one in the message is two
+ * subscriptions.
+ */
+function validatedButtonUrl(url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw errors.validation('messaging.button_url_invalid', 'A URL button needs a valid URL.');
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'tg:') {
+    throw errors.validation(
+      'messaging.button_url_scheme',
+      'A URL button opens https:// or tg:// and nothing else.',
+      { scheme: parsed.protocol },
+    );
+  }
+  return url;
+}
 
 /**
  * What this needs in order to turn a template key into bytes on the wire.
@@ -194,62 +237,105 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
         : message.keyboard === 'MAIN_MENU_ADMIN'
           ? [...customerRows, [CATALOGUE_FA[ADMIN_MENU_BUTTON.label]]]
           : customerRows;
-    const result = await telegramSend({
-      token,
-      apiBaseUrl: this.apiBaseUrl,
-      timeoutMs: this.timeoutMs,
-      body: textMessageBody({
-        chatId: message.chatId,
-        text,
-        html,
-        buttons,
-        ...(keyboard === undefined ? {} : { keyboard }),
-      }),
-    });
-
-    if (result.outcome === 'SUCCEEDED') {
-      await this.recordRecovery(scope, message.botInstanceId);
-      return { outcome: 'DELIVERED' };
+    /*
+     * A body over Telegram's bound goes as SEVERAL messages, in order, cut by
+     * `splitMessageBody` — between paragraphs, then lines, then characters. Telegram
+     * refuses a long message outright rather than cutting it, so before this a long
+     * list of services was a 400 and a customer with no answer at all.
+     *
+     * The buttons and the keyboard ride on the LAST part only. A keyboard under the
+     * first of three parts is a keyboard under a message the customer has not finished
+     * reading, and the same keyboard under every part is three ways to tap one thing.
+     *
+     * The sequence STOPS at the first part that did not certainly arrive, and the
+     * answer is the WORST outcome seen (`worstOutcome`). Sending part three after part
+     * two is UNKNOWN gives a customer the end of a message whose middle may be missing,
+     * and sending anything after a 429 is a request Telegram has just said it would
+     * refuse. A body within the bound — including an empty one, which Telegram refuses
+     * and which is reported as it always was — is one part and takes the same path.
+     */
+    const parts =
+      text.length <= TELEGRAM_MESSAGE_MAX ? [text] : splitMessageBody(text, TELEGRAM_MESSAGE_MAX);
+    const sequence = parts.length === 0 ? [text] : parts;
+    let worst: ClassifiedOutcome = { sent: { outcome: 'DELIVERED' }, errorCode: null };
+    for (const [index, part] of sequence.entries()) {
+      const last = index === sequence.length - 1;
+      const answer = this.classify(
+        await telegramSend({
+          token,
+          apiBaseUrl: this.apiBaseUrl,
+          timeoutMs: this.timeoutMs,
+          body: textMessageBody({
+            chatId: message.chatId,
+            text: part,
+            html,
+            ...(last ? { buttons, ...(keyboard === undefined ? {} : { keyboard }) } : {}),
+          }),
+        }),
+      );
+      if (worstOutcome(worst.sent.outcome, answer.sent.outcome) !== worst.sent.outcome) {
+        worst = answer;
+      }
+      if (answer.sent.outcome !== 'DELIVERED') break;
     }
 
+    if (worst.sent.outcome === 'DELIVERED') {
+      await this.recordRecovery(scope, message.botInstanceId);
+      return worst.sent;
+    }
     /*
-     * A RATE LIMIT is its own answer, and separating it is the fix ADR 0030 §2 decides.
-     *
-     * `telegramSend` groups a 429 with a timeout and a 5xx as `FAILED_RETRYABLE`, and
-     * this file used to collapse all three into `UNKNOWN`. For a timeout and a 5xx that
-     * is right: Telegram may have processed the request. For a 429 it is not — the
-     * request was DECLINED, nothing was sent, and the response says when to return.
-     *
-     * The consequence of the old grouping is measured in `docs/phase4h-audit.md` §6b:
-     * `UNKNOWN` becomes `UNCONFIRMED`, which the delivery sweep never re-claims, so one
-     * rate limit withheld a paid customer's subscription link until a person noticed.
-     *
-     * NOT recorded as a failure condition. A rate limit is this installation being
-     * asked to slow down, not a bot whose replies are going nowhere, and opening the
-     * operator condition for it would cry wolf on every busy minute.
+     * A rate limit is NOT recorded as a failure condition. It is this installation
+     * being asked to slow down, not a bot whose replies are going nowhere, and opening
+     * the operator condition for it would cry wolf on every busy minute. `classify`
+     * carries the rest of the argument.
      */
+    if (worst.sent.outcome === 'RATE_LIMITED') return worst.sent;
+    await this.recordFailure(
+      scope,
+      message,
+      worst.sent.outcome === 'UNKNOWN' ? 'UNCERTAIN' : 'REFUSED',
+      worst.errorCode,
+    );
+    return worst.sent;
+  }
+
+  /**
+   * ONE reading of the transport's answer, for `send` and `sendFile` alike.
+   *
+   * A RATE LIMIT is its own answer, and separating it is the fix ADR 0030 §2 decides.
+   * `telegramSend` groups a 429 with a timeout and a 5xx as `FAILED_RETRYABLE`, and this
+   * file used to collapse all three into `UNKNOWN`. For a timeout and a 5xx that is
+   * right: Telegram may have processed the request. For a 429 it is not — the request
+   * was DECLINED, nothing was sent, and the response says when to return. The
+   * consequence of the old grouping is measured in `docs/phase4h-audit.md` §6b: `UNKNOWN`
+   * becomes `UNCONFIRMED`, which the delivery sweep never re-claims, so one rate limit
+   * withheld a paid customer's subscription link until a person noticed.
+   *
+   * The 429 is recognised by its CODE, not by the presence of `retry_after`. Telegram may
+   * omit that number, and `sendFile` used to read its absence as UNKNOWN — a declined
+   * upload filed as one that may have arrived. The container promises the receipt push
+   * "one 429 classification"; this is it.
+   *
+   * A retryable failure that is not a 429 is UNCERTAIN, not REFUSED. Every one of those
+   * means Telegram may have delivered the message: for a queue that is a reason to try
+   * again, for a customer reply it is a reason NOT to, because the customer would see it
+   * twice. The distinction is preserved in the outcome and in the event's context.
+   */
+  private classify(result: TelegramSendOutcome): ClassifiedOutcome {
+    if (result.outcome === 'SUCCEEDED') return { sent: { outcome: 'DELIVERED' }, errorCode: null };
     if (result.outcome === 'FAILED_RETRYABLE' && result.errorCode === 'telegram.rate_limited') {
       return {
-        outcome: 'RATE_LIMITED',
-        ...(result.retryAfterMs === undefined ? {} : { retryAfterMs: result.retryAfterMs }),
+        sent: {
+          outcome: 'RATE_LIMITED',
+          ...(result.retryAfterMs === undefined ? {} : { retryAfterMs: result.retryAfterMs }),
+        },
+        errorCode: result.errorCode,
       };
     }
-
-    /*
-     * A retryable failure is UNCERTAIN, not REFUSED.
-     *
-     * `telegramSend` calls a timeout, a 5xx and an unreadable 2xx retryable, and every
-     * one of those means Telegram may have delivered the message. For a queue that is a
-     * reason to try again; for a customer reply it is a reason NOT to, because the
-     * customer would see it twice. So the distinction is preserved — in the returned
-     * outcome and in the event's context — and the decision is "tell an operator",
-     * which is what the event is.
-     *
-     * The 429 that used to be in that list is handled above and never reaches here.
-     */
-    const unknown = result.outcome === 'FAILED_RETRYABLE';
-    await this.recordFailure(scope, message, unknown ? 'UNCERTAIN' : 'REFUSED', result.errorCode);
-    return { outcome: unknown ? 'UNKNOWN' : 'REFUSED' };
+    return {
+      sent: { outcome: result.outcome === 'FAILED_RETRYABLE' ? 'UNKNOWN' : 'REFUSED' },
+      errorCode: result.errorCode,
+    };
   }
 
   /**
@@ -291,35 +377,60 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     const html =
       message.caption !== undefined &&
       templateDefinition(message.caption.templateKey).format === 'TELEGRAM_HTML';
+    /*
+     * An HTML caption over Telegram's bound is refused HERE, with a reason, before a
+     * request is spent. It cannot be cut: a cut can split a tag or an entity, and the
+     * parse error that produces is the same 400 as the length. A plain-text caption is
+     * still cut with a visible ellipsis by `boundCaption` in the body builders, which
+     * the receipt review's note was sized around. The caller decides the arrangement —
+     * typically the file bare and the text as its own message, which `send` will split.
+     */
+    if (caption !== undefined && html && caption.length > TELEGRAM_CAPTION_MAX) {
+      return { outcome: 'REFUSED', reason: 'CAPTION_OVER_BOUND' };
+    }
     const buttons = await this.labelButtons(scope, message.buttons ?? []);
 
-    const result = await telegramSend({
-      token,
-      apiBaseUrl: this.apiBaseUrl,
-      timeoutMs: this.timeoutMs,
-      method: message.kind === 'PHOTO' ? 'sendPhoto' : 'sendDocument',
-      body: fileMessageBody({
-        chatId: message.chatId,
-        kind: message.kind,
-        fileId: message.fileId,
-        ...(caption === undefined ? {} : { caption, html }),
-        buttons,
-      }),
-    });
+    const method = message.kind === 'PHOTO' ? 'sendPhoto' : 'sendDocument';
+    const content = {
+      chatId: message.chatId,
+      kind: message.kind,
+      ...(caption === undefined ? {} : { caption, html }),
+      buttons,
+    };
+    /*
+     * The two sources are two request shapes and ONE transport call. A `file_id` is a
+     * JSON body exactly as before; bytes go up as multipart, and `telegramSend` gives
+     * both the same timeout, the same redirect refusal and the same outcome taxonomy.
+     */
+    const request: TelegramRequest =
+      message.source.kind === 'FILE_ID'
+        ? {
+            token,
+            apiBaseUrl: this.apiBaseUrl,
+            timeoutMs: this.timeoutMs,
+            method,
+            body: fileMessageBody({ ...content, fileId: message.source.fileId }),
+          }
+        : {
+            token,
+            apiBaseUrl: this.apiBaseUrl,
+            timeoutMs: this.timeoutMs,
+            method,
+            multipart: fileUploadBody({
+              ...content,
+              bytes: message.source.bytes,
+              fileName: message.source.fileName,
+              mimeType: message.source.mimeType,
+            }),
+          };
 
     /*
-     * The outcomes are kept apart exactly as `send` keeps them, and NOTHING here opens
+     * The outcomes are read by the same `classify` as `send`, and NOTHING here opens
      * the send-failure condition: this is evidence beside a message that already
      * arrived, and a failed re-send must not make an operator's "the bot is not
      * replying" alarm fire for a bot that is replying.
      */
-    if (result.outcome === 'SUCCEEDED') return { outcome: 'DELIVERED' };
-    if (result.outcome === 'FAILED_RETRYABLE') {
-      return result.retryAfterMs === undefined
-        ? { outcome: 'UNKNOWN' }
-        : { outcome: 'RATE_LIMITED', retryAfterMs: result.retryAfterMs };
-    }
-    return { outcome: 'REFUSED' };
+    return this.classify(await telegramSend(request)).sent;
   }
 
   private async recordFailure(
@@ -389,15 +500,18 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
       const text = await this.labelText(scope, button.label);
       /*
        * The union is discriminated by the field that IS the difference, not by a `kind`
-       * tag beside it. A copy button carries a string for the clipboard and no route; a
-       * callback button carries a route and nothing to copy. There is no third case, and
-       * a tag would be a third thing to keep in step with the two that decide it.
+       * tag beside it. A URL button carries a link the client opens; a copy button
+       * carries a string for the clipboard; a callback button carries a route. Each has
+       * exactly one of the three, and a tag would be a fourth thing to keep in step
+       * with the three that decide it.
        */
-      labelled.push(
-        'copyText' in button
-          ? { text, copyText: button.copyText, ...rowOf(button) }
-          : { text, data: button.data, ...rowOf(button) },
-      );
+      if ('url' in button) {
+        labelled.push({ text, url: validatedButtonUrl(button.url), ...rowOf(button) });
+      } else if ('copyText' in button) {
+        labelled.push({ text, copyText: button.copyText, ...rowOf(button) });
+      } else {
+        labelled.push({ text, data: button.data, ...rowOf(button) });
+      }
     }
     return labelled;
   }

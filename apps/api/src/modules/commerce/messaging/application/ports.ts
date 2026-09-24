@@ -84,7 +84,22 @@ export interface CustomerCopyButton {
   readonly row?: CustomerButtonRow;
 }
 
-export type CustomerButton = CustomerCallbackButton | CustomerCopyButton;
+/**
+ * One inline-keyboard button that OPENS a link.
+ *
+ * Telegram's URL button: the client opens `url` and nothing reaches this installation,
+ * so like the copy button it has no route and cannot be given a destructive prefix.
+ * The messenger admits `https://` and `tg://` and refuses anything else with a
+ * validation error: an `http://` link to a subscription is the credential over
+ * plaintext, and a scheme Telegram does not open is a button that does nothing.
+ */
+export interface CustomerUrlButton {
+  readonly label: CustomerButtonLabel;
+  readonly url: string;
+  readonly row?: CustomerButtonRow;
+}
+
+export type CustomerButton = CustomerCallbackButton | CustomerCopyButton | CustomerUrlButton;
 
 /**
  * One message to one customer.
@@ -163,7 +178,19 @@ export interface CustomerFileMessage {
   readonly chatId: string;
   readonly botInstanceId: BotInstanceId;
   readonly kind: 'PHOTO' | 'DOCUMENT';
-  readonly fileId: string;
+  /**
+   * Where the bytes come from.
+   *
+   * `FILE_ID` is a file Telegram already holds for this bot — a receipt a customer
+   * uploaded — and nothing is downloaded or re-uploaded to send it on. `BYTES` is a file
+   * this installation rendered itself, a subscription QR code, and goes up as a
+   * multipart upload. A union rather than two optional fields so a message cannot name
+   * both, or neither.
+   *
+   * `mimeType` is closed to the two raster types `sendPhoto` accepts. A document of an
+   * arbitrary type is not something this product sends a customer.
+   */
+  readonly source: CustomerFileSource;
   /**
    * The caption, as a template key and its values — never text, for the reason
    * `CustomerMessage` gives: rendering happens where the tenant's overrides live, and the
@@ -177,6 +204,15 @@ export interface CustomerFileMessage {
   /** An inline keyboard on the file, with `CustomerMessage.buttons`' rules. */
   readonly buttons?: readonly CustomerButton[];
 }
+
+export type CustomerFileSource =
+  | { readonly kind: 'FILE_ID'; readonly fileId: string }
+  | {
+      readonly kind: 'BYTES';
+      readonly bytes: Uint8Array;
+      readonly fileName: string;
+      readonly mimeType: 'image/png' | 'image/jpeg';
+    };
 
 /**
  * Whether a customer-facing send landed.
@@ -212,7 +248,26 @@ export type CustomerSendOutcome = 'DELIVERED' | 'REFUSED' | 'UNKNOWN' | 'RATE_LI
 export interface CustomerSendResult {
   readonly outcome: CustomerSendOutcome;
   readonly retryAfterMs?: number;
+  /**
+   * Why the MESSENGER refused, when it did so without asking Telegram.
+   *
+   * Present only with `REFUSED`, and only for a refusal decided here. A caller that
+   * arranged a caption Telegram would not take is told so before a request is spent,
+   * and can choose another arrangement — the file bare and the text beside it — rather
+   * than reading a 400 that names neither the field nor the bound.
+   */
+  readonly reason?: CustomerSendRefusal;
 }
+
+/**
+ * The one local refusal today: an HTML caption over `TELEGRAM_CAPTION_MAX`.
+ *
+ * A plain-text caption is cut with a visible ellipsis instead (`boundCaption`), which
+ * the receipt review relies on; an HTML one cannot be cut without risking a split tag,
+ * and Telegram's answer to that is the same 400 as to a long one — so it is refused
+ * whole, and the caller decides what to send instead.
+ */
+export type CustomerSendRefusal = 'CAPTION_OVER_BOUND';
 
 export interface CustomerMessenger {
   /**
@@ -227,12 +282,16 @@ export interface CustomerMessenger {
   send(scope: TenantContext, message: CustomerMessage): Promise<CustomerSendResult>;
 
   /**
-   * Sends a file this installation already holds, by `file_id`.
+   * Sends a file: one Telegram already holds, by `file_id`, or bytes this installation
+   * rendered, as an upload. With an optional caption template and inline keyboard.
    *
    * Same contract as `send`: it does not throw for a send failure, because a receipt
    * that could not be re-sent must not roll back or fail the turn that was showing it.
    * The reviewer's screen still carries the facts and the two decisions; the media is
    * the evidence beside them.
+   *
+   * A caption the messenger can tell Telegram would refuse is answered `REFUSED` with
+   * a `reason`, without a request — see `CustomerSendRefusal`.
    */
   sendFile(scope: TenantContext, message: CustomerFileMessage): Promise<CustomerSendResult>;
 

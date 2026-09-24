@@ -212,7 +212,7 @@ export class ReceiptReviewPushService {
         chatId: reviewer.chatId,
         botInstanceId: row.botInstanceId,
         kind: receipt.kind === 'PHOTO' ? 'PHOTO' : 'DOCUMENT',
-        fileId: receipt.fileId,
+        source: { kind: 'FILE_ID', fileId: receipt.fileId },
         caption: { templateKey: 'bot.admin.receipt', values },
         buttons,
       });
