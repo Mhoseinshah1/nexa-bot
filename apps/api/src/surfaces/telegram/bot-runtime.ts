@@ -3899,13 +3899,18 @@ export class BotRuntime {
             chatId,
             botInstanceId: reply.media.botInstanceId,
             kind: reply.media.kind,
-            fileId: reply.media.fileId,
+            source: { kind: 'FILE_ID', fileId: reply.media.fileId },
             caption: { templateKey: reply.key, values: reply.values },
             ...(reply.buttons.length === 0 ? {} : { buttons: reply.buttons }),
           });
     if (reply.media !== undefined && sent.outcome === 'REFUSED') sent = await asText();
     for (const attachment of reply.attachments ?? []) {
-      await this.deps.messenger.sendFile(scope, { chatId, ...attachment });
+      await this.deps.messenger.sendFile(scope, {
+        chatId,
+        botInstanceId: attachment.botInstanceId,
+        kind: attachment.kind,
+        source: { kind: 'FILE_ID', fileId: attachment.fileId },
+      });
     }
 
     /*

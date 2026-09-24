@@ -1,4 +1,13 @@
+import { TELEGRAM_CAPTION_MAX } from '../../modules/commerce/messaging/application/message-split.js';
 import { assertOutsideTransaction } from '../transaction-boundary.js';
+import { encodeMultipart, type MultipartFilePart } from './multipart.js';
+
+/*
+ * The caption bound is DECLARED beside the message bound in the messaging application
+ * layer, where the splitter that honours the other one lives, and re-exported here for
+ * the transport's own `boundCaption`. One declaration; see `message-split.ts` for why.
+ */
+export { TELEGRAM_CAPTION_MAX };
 
 /**
  * The ONE `sendMessage` call this installation makes.
@@ -51,7 +60,41 @@ export interface TelegramSendRequest {
   readonly method?: string;
 }
 
-export async function telegramSend(request: TelegramSendRequest): Promise<TelegramSendOutcome> {
+/**
+ * A request that carries a FILE, as `multipart/form-data`, rather than a JSON body.
+ *
+ * Its own type rather than a second optional field on `TelegramSendRequest`: every
+ * existing caller spreads `Omit<TelegramSendRequest, 'body' | 'method'>` and adds a
+ * body, and a union member with `body?: undefined` would have made that spread
+ * un-typeable. `'multipart' in request` is the discriminator, and the JSON request
+ * never has the key.
+ *
+ * `method` is one of the two media methods and nothing else. The bootstrap's calls
+ * and `sendMessage` have no file to carry, and a type that let them would be a type
+ * that let a surface pass an arbitrary method with bytes attached.
+ */
+export interface TelegramUploadRequest {
+  readonly token: string;
+  readonly apiBaseUrl: string;
+  readonly timeoutMs: number;
+  readonly method: 'sendPhoto' | 'sendDocument';
+  readonly multipart: TelegramMultipartBody;
+}
+
+/** The text fields and the one file of an upload, before encoding. */
+export interface TelegramMultipartBody {
+  /**
+   * Already strings. Telegram reads a multipart field as text, so an object such as
+   * `reply_markup` is JSON-serialised by the body builder, not by the transport — the
+   * transport must not know which fields are objects.
+   */
+  readonly fields: Readonly<Record<string, string>>;
+  readonly file: MultipartFilePart;
+}
+
+export type TelegramRequest = TelegramSendRequest | TelegramUploadRequest;
+
+export async function telegramSend(request: TelegramRequest): Promise<TelegramSendOutcome> {
   // The caller commits before calling, always. A send inside a transaction could be
   // rolled back after Telegram had already delivered — and the customer would have a
   // message about a purchase that does not exist.
@@ -88,16 +131,28 @@ type TelegramCallOutcome =
   | { readonly outcome: 'SUCCEEDED'; readonly result: unknown }
   | Exclude<TelegramSendOutcome, { outcome: 'SUCCEEDED' }>;
 
-async function telegramCall(request: TelegramSendRequest): Promise<TelegramCallOutcome> {
+async function telegramCall(request: TelegramRequest): Promise<TelegramCallOutcome> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), request.timeoutMs);
   try {
+    /*
+     * The body is decided here and nowhere else, so the JSON path is exactly what it
+     * was before uploads existed — same header, same serialisation — and the upload
+     * path inherits everything below it: the abort timer, `redirect: 'error'`, the
+     * retryable/permanent taxonomy and the never-throw contract. NOTHING about the
+     * body is logged or quoted in an error on either path: a caption is a customer's
+     * text and the bytes are their subscription code.
+     */
+    const wire =
+      'multipart' in request
+        ? encodeMultipart(request.multipart.fields, request.multipart.file)
+        : { contentType: 'application/json', body: JSON.stringify(request.body) };
     const response = await fetch(
       `${request.apiBaseUrl}/bot${request.token}/${request.method ?? 'sendMessage'}`,
       {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(request.body),
+        headers: { 'content-type': wire.contentType },
+        body: wire.body,
         signal: controller.signal,
         redirect: 'error',
       },
@@ -168,14 +223,20 @@ async function telegramCall(request: TelegramSendRequest): Promise<TelegramCallO
 /**
  * One labelled inline-keyboard button, on its way to the wire.
  *
- * `data` and `copyText` are mutually exclusive and one of them is required. Expressed as
- * a union rather than as two optional fields, so a caller cannot construct a button that
- * is neither — which Telegram renders as a rectangle that does nothing when tapped, and
- * which no test asserting "the button is there" would catch.
+ * `data`, `copyText` and `url` are mutually exclusive and one of them is required.
+ * Expressed as a union rather than as three optional fields, so a caller cannot
+ * construct a button that is none of them — which Telegram renders as a rectangle that
+ * does nothing when tapped, and which no test asserting "the button is there" would
+ * catch.
+ *
+ * `url` is Telegram's own URL button: the client opens it and no update reaches this
+ * installation. The scheme is validated by the messenger, which is where the URL is
+ * chosen; the transport carries what it is given.
  */
 export type TelegramButton = { readonly text: string; readonly row?: number } & (
-  | { readonly data: string; readonly copyText?: undefined }
-  | { readonly copyText: string; readonly data?: undefined }
+  | { readonly data: string; readonly copyText?: undefined; readonly url?: undefined }
+  | { readonly copyText: string; readonly data?: undefined; readonly url?: undefined }
+  | { readonly url: string; readonly data?: undefined; readonly copyText?: undefined }
 );
 
 /** Telegram caps a `CopyTextButton`'s payload at 256 characters. */
@@ -204,9 +265,11 @@ export function telegramButtonMarkup(
     }
     const key = button.row === undefined ? `self:${index}` : `row:${button.row}`;
     const cell =
-      button.copyText === undefined
-        ? { text: button.text, callback_data: button.data }
-        : { text: button.text, copy_text: { text: button.copyText } };
+      button.url !== undefined
+        ? { text: button.text, url: button.url }
+        : button.copyText !== undefined
+          ? { text: button.text, copy_text: { text: button.copyText } }
+          : { text: button.text, callback_data: button.data };
     const existing = rows.get(key);
     if (existing === undefined) rows.set(key, [cell]);
     else existing.push(cell);
@@ -277,14 +340,6 @@ export function textMessageBody(input: {
 }
 
 /**
- * Telegram's bound on a media CAPTION: 1,024 characters after entity parsing.
- *
- * Four times shorter than a message, and a caption over it is not truncated by Telegram
- * but REFUSED — the whole send fails with a 400, image and buttons with it.
- */
-export const TELEGRAM_CAPTION_MAX = 1024;
-
-/**
  * A plain-text caption cut to `TELEGRAM_CAPTION_MAX`, ending in an ellipsis when cut.
  *
  * Measured in UTF-16 code units, which is never fewer than the characters Telegram
@@ -320,18 +375,66 @@ export function fileMessageBody(input: {
   readonly html?: boolean;
   readonly buttons?: readonly TelegramButton[];
 }): Record<string, unknown> {
-  const body: Record<string, unknown> = {
+  return {
     chat_id: input.chatId,
     ...(input.kind === 'PHOTO' ? { photo: input.fileId } : { document: input.fileId }),
+    ...captionAndKeyboardFields(input),
   };
+}
+
+/**
+ * The caption and keyboard of a media message, shared by the `file_id` body and the
+ * upload body so the two cannot bound a caption or group a keyboard differently.
+ */
+function captionAndKeyboardFields(input: {
+  readonly caption?: string;
+  readonly html?: boolean;
+  readonly buttons?: readonly TelegramButton[];
+}): Record<string, unknown> {
+  const fields: Record<string, unknown> = {};
   if (input.caption !== undefined && input.caption.length > 0) {
-    body.caption = input.html === true ? input.caption : boundCaption(input.caption);
-    if (input.html === true) body.parse_mode = 'HTML';
+    fields.caption = input.html === true ? input.caption : boundCaption(input.caption);
+    if (input.html === true) fields.parse_mode = 'HTML';
   }
   if (input.buttons !== undefined && input.buttons.length > 0) {
-    body.reply_markup = { inline_keyboard: telegramButtonMarkup(input.buttons) };
+    fields.reply_markup = { inline_keyboard: telegramButtonMarkup(input.buttons) };
   }
-  return body;
+  return fields;
+}
+
+/**
+ * The upload of a `sendPhoto` or `sendDocument` from BYTES this installation holds — a
+ * subscription QR code it has just rendered — with the same caption and keyboard rules
+ * as `fileMessageBody`.
+ *
+ * Every field but the file is a string here, because that is how a multipart part
+ * travels: Telegram parses `reply_markup` from JSON text in a form field exactly as it
+ * does from a JSON body. The serialisation happens in this builder and not in the
+ * transport, which must not know which fields are objects.
+ */
+export function fileUploadBody(input: {
+  readonly chatId: string;
+  readonly kind: 'PHOTO' | 'DOCUMENT';
+  readonly bytes: Uint8Array;
+  readonly fileName: string;
+  readonly mimeType: string;
+  readonly caption?: string;
+  readonly html?: boolean;
+  readonly buttons?: readonly TelegramButton[];
+}): TelegramMultipartBody {
+  const fields: Record<string, string> = { chat_id: input.chatId };
+  for (const [name, value] of Object.entries(captionAndKeyboardFields(input))) {
+    fields[name] = typeof value === 'string' ? value : JSON.stringify(value);
+  }
+  return {
+    fields,
+    file: {
+      field: input.kind === 'PHOTO' ? 'photo' : 'document',
+      fileName: input.fileName,
+      mimeType: input.mimeType,
+      bytes: input.bytes,
+    },
+  };
 }
 
 /**

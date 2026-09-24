@@ -1006,3 +1006,21 @@ export interface PurchaseSnapshotReader {
     tx?: unknown,
   ): Promise<ProductSpecification | null>;
 }
+
+/**
+ * Turns a string into a scannable image, for the one string a customer scans.
+ *
+ * The encoder is called with the EXACT subscription URL and nothing else: no label, no
+ * prefix, no wrapping scheme, no query parameter this installation invented. A client
+ * that scans the code imports whatever the code says, so a byte added here is a byte in
+ * every customer's subscription — and one that a URL pasted from the same message would
+ * not carry, which makes the two ways of importing the same service disagree.
+ *
+ * A port rather than a direct import of the PNG encoder because the caller is in the
+ * application layer and the encoder is infrastructure, and because a test of the caller
+ * should be able to assert what was encoded without decoding a PNG to find out.
+ */
+export interface QrCodeEncoder {
+  /** A PNG. Throws a validation error for empty text or text too long to encode. */
+  encode(text: string): Uint8Array;
+}
