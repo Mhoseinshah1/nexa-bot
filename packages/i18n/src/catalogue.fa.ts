@@ -217,6 +217,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.receipt':
     'پرداخت جدید برای بررسی\n\nنوع عملیات: {operation}\nنام کاربری سرویس: {serviceUsername}\nنام محصول: {order}\nحجم محصول: {trafficBytes}\nمدت محصول: {durationDays}\n\nنام اکانت کاربر: {name}\nشناسه عددی کاربر: {customer}\nیوزرنیم تلگرام: {username}\nموجودی فعلی کاربر: {balance}\n\nمبلغ پرداختی: {total}\nکد پیگیری پرداخت: {reference}\n\nتوضیحات کاربر: {note}',
   'bot.admin.receipt_balance': '{balance}',
+  'bot.admin.receipt_duration': '{durationDays}',
+  'bot.admin.receipt_traffic': '{trafficBytes}',
   'bot.admin.operation_new_service': 'خرید سرویس جدید',
   'bot.admin.operation_renew': 'تمدید سرویس',
   'bot.admin.operation_add_traffic': 'افزایش حجم سرویس',

@@ -1245,17 +1245,26 @@ export const TEMPLATES = [
         required: false,
         repeatable: false,
       },
+      /*
+       * STRING, pre-rendered, for the reason `balance` is: a wallet top-up and an add-on that
+       * carries no such amount have NO duration or volume, and a typed 0 would state one —
+       * "0 days", which the catalogue also uses for "unlimited". A dash says there is none.
+       */
       {
         token: 'durationDays',
-        type: 'DURATION_DAYS',
-        description: 'The order\u2019s frozen duration in days. 0 for a wallet top-up.',
+        type: 'STRING',
+        description:
+          'The order\u2019s frozen duration, rendered through `bot.admin.receipt_duration`, or a ' +
+          'dash when the payment has none (a wallet top-up, or an add-on carrying only traffic).',
         required: false,
         repeatable: false,
       },
       {
         token: 'trafficBytes',
-        type: 'BYTES',
-        description: 'The order\u2019s frozen traffic allowance. 0 for a wallet top-up.',
+        type: 'STRING',
+        description:
+          'The order\u2019s frozen traffic allowance, rendered through `bot.admin.receipt_traffic`, ' +
+          'or a dash when the payment has none (a wallet top-up, or an add-on carrying only time).',
         required: false,
         repeatable: false,
       },
@@ -1282,6 +1291,40 @@ export const TEMPLATES = [
         token: 'balance',
         type: 'MONEY',
         description: 'The customer\u2019s wallet balance in the payment\u2019s currency.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.receipt_duration',
+    description:
+      'The duration as it appears inside `bot.admin.receipt`, when the order froze one. Its own ' +
+      'key so a known duration is typed and a tenant may word its unit; an unknown one is a ' +
+      'dash and never reaches this key.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'durationDays',
+        type: 'DURATION_DAYS',
+        description: 'The order\u2019s frozen duration in days.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.receipt_traffic',
+    description:
+      'The traffic allowance as it appears inside `bot.admin.receipt`, when the order froze ' +
+      'one. Its own key so a known volume is typed and a tenant may word its unit; an unknown ' +
+      'one is a dash and never reaches this key.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'trafficBytes',
+        type: 'BYTES',
+        description: 'The order\u2019s frozen traffic allowance in bytes.',
         required: true,
         repeatable: false,
       },
