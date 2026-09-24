@@ -2,6 +2,7 @@ import type {
   Money,
   OrderId,
   PaymentEvidenceKind,
+  PaymentGatewayProvider,
   PaymentId,
   PaymentMethod,
   PaymentResolvedState,
@@ -60,6 +61,16 @@ export interface PaymentRecord {
    */
   readonly customerSignalledAt: Date | null;
   readonly expiresAt: Date | null;
+  /**
+   * The route the payment was offered through, snapshotted at creation (D5, D7). Null
+   * for a wallet settlement and for a payment created before the column existed.
+   */
+  readonly gatewayProvider: PaymentGatewayProvider | null;
+  /**
+   * The top-up gift this payment promised, snapshotted from its route at creation (D5).
+   * Null for anything that is not a top-up; frozen after insert by 0114.
+   */
+  readonly topupCashbackPercent: number | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -81,6 +92,13 @@ export interface PaymentDraft {
   readonly amount: Money;
   readonly reference: string;
   readonly expiresAt: Date | null;
+  /** The route snapshot (D5). Null for a wallet settlement. */
+  readonly gatewayProvider: PaymentGatewayProvider | null;
+  /**
+   * The gift a TOP-UP promises, from its route's `topup_cashback_percent`; null for every
+   * other payment. Written once, here, and frozen by 0114 afterwards.
+   */
+  readonly topupCashbackPercent: number | null;
   readonly now: Date;
 }
 
@@ -281,6 +299,11 @@ export interface PaymentRepository {
    * It takes a REQUIRED transaction. This is a durable write and ADR-0028's quiesce
    * gate lives in `DrizzleUnitOfWork.run`; an optional handle here would make it
    * possible to expire a customer's payment in a database that is being replaced.
+   *
+   * **A manual transfer that carries a receipt is never a candidate** (Payment File 02
+   * §9, D1): a submitted receipt has no timer and leaves review only through a
+   * reviewer's decision. The predicate is in the candidate SELECT and again in the
+   * UPDATE, for the reason the UPDATE re-checks every other predicate.
    */
   expireDue(
     scope: TenantContext,
@@ -377,4 +400,23 @@ export interface PaymentRepository {
     orderId: OrderId,
     tx: unknown,
   ): Promise<PaymentRecord | null>;
+
+  /**
+   * Who a page of payments' customers are on Telegram (Payment File 02 §21, D7).
+   *
+   * One query for the page rather than one per row, for the Web Admin's list. A READ of
+   * the customer row, never stored on the payment: a username changes, and the list
+   * must show the one the customer has now.
+   */
+  customerIdentities(
+    scope: TenantContext,
+    customerIds: readonly UserId[],
+    tx?: unknown,
+  ): Promise<ReadonlyMap<UserId, PaymentCustomerIdentity>>;
+}
+
+/** A customer as Telegram knows them, for the payment list. */
+export interface PaymentCustomerIdentity {
+  readonly telegramUserId: string;
+  readonly username: string | null;
 }

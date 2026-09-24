@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  COMMERCE_ERROR_CODES,
   PAYMENT_METHODS,
   PAYMENT_STATES,
   uuidV7Schema,
@@ -14,15 +15,15 @@ import {
   type PaymentSummaryResponse,
 } from '@nexa/contracts';
 import {
+  ApiError,
   completeRefund,
-  confirmPayment,
   failRefund,
+  fetchOrder,
   fetchPayment,
   fetchPaymentReceipts,
   fetchPaymentReceiptBytes,
   fetchPayments,
   fetchRefunds,
-  rejectPayment,
   requestRefund,
 } from '../api/client';
 import { formatMoneyText, formatTimestamp, splitBytes } from '../format';
@@ -54,11 +55,13 @@ import {
 /**
  * Payments — the money, and where it came from.
  *
- * This page has exactly ONE write: confirming that an out-of-band transfer arrived.
- * There is no create, no fail, no cancel, no retry and no refund, and each absence is
- * deliberate rather than unfinished. A payment is created by a CUSTOMER choosing how to
- * pay; `payments.retry` is a frozen permission for a gateway that does not ship; and a
- * retry button with nothing behind it is the legacy silent-success pattern.
+ * The one write here is a REFUND. Card-to-card review — approve, reject, or credit to the
+ * wallet — is performed in Telegram only (Payment File 02 §10, D3), and this page shows
+ * what it decided and never offers to decide it. There is no create, no fail, no cancel
+ * and no retry, and each absence is deliberate rather than unfinished. A payment is
+ * created by a CUSTOMER choosing how to pay; `payments.retry` is a frozen permission for
+ * a gateway that does not ship; and a retry button with nothing behind it is the legacy
+ * silent-success pattern.
  *
  * **PAID means the money arrived and nothing else.** Nothing on this page says a
  * service was created, is being prepared or is on its way, because nothing in this
@@ -125,6 +128,22 @@ const REFUND_CHANNEL_LABELS: Readonly<Record<RefundChannel, WebKey>> = {
 };
 
 /**
+ * A refund refusal, naming P3's delivery reason when — and only when — the SERVER named
+ * it. `REFUND_NOT_PERMITTED` carries its reason as a detail; any other reason keeps the
+ * server's own message, which names what to change.
+ */
+function refundMessageFor(error: unknown): string {
+  if (
+    error instanceof ApiError &&
+    error.code === COMMERCE_ERROR_CODES.REFUND_NOT_PERMITTED &&
+    error.details?.['reason'] === 'DELIVERY_IN_PROGRESS'
+  ) {
+    return t('web.refund_delivery_in_progress');
+  }
+  return messageFor(error);
+}
+
+/**
  * Digits only, as a decimal STRING of minor units.
  *
  * Never parsed to a number: JSON has no bigint and a `number` is the float the money
@@ -143,6 +162,44 @@ function StateBadge({ value }: { value: PaymentState }) {
 
 function Dash() {
   return <span className="faint">—</span>;
+}
+
+/**
+ * Who paid, as Telegram knows them: the numeric id, and the username when they have one
+ * (Payment File 02 §21). The id is the identity; a username is chosen by the person it
+ * names, so it is shown beside the id and never instead of it.
+ */
+export function TelegramIdentity({
+  telegramUserId,
+  username,
+}: {
+  telegramUserId: string | null;
+  username: string | null;
+}) {
+  if (telegramUserId === null) return <Dash />;
+  return (
+    <span className="nowrap">
+      <Ltr>{telegramUserId}</Ltr>
+      {username !== null && (
+        <>
+          {' '}
+          <span className="muted small">
+            <Ltr>{`@${username}`}</Ltr>
+          </span>
+        </>
+      )}
+    </span>
+  );
+}
+
+/** The route a payment was offered through, by name, or a dash for a wallet settlement. */
+function GatewayName({ provider }: { provider: string | null }) {
+  if (provider === null) return <Dash />;
+  return provider === 'MANUAL_TRANSFER' ? (
+    <>{t('web.payment_gateway_provider_manual_transfer')}</>
+  ) : (
+    <Ltr>{provider}</Ltr>
+  );
 }
 
 /** A full id, or the field's own error. The same guard `/orders` uses on its filters. */
@@ -221,6 +278,15 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
 
   const columns: readonly Column<PaymentSummaryResponse>[] = [
     {
+      /*
+       * The payment's own id (§21), shortened on the list and copyable whole, because it
+       * is what the audit log, the ledger and a support conversation name.
+       */
+      key: 'id',
+      header: t('web.payment_id'),
+      render: (row) => <Copyable value={row.id} display={row.id.slice(0, 8)} />,
+    },
+    {
       key: 'reference',
       header: t('web.payment_reference'),
       render: (row) => (
@@ -240,6 +306,11 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
       render: (row) => t(METHOD_LABELS[row.method]),
     },
     {
+      key: 'gateway',
+      header: t('web.payment_gateway'),
+      render: (row) => <GatewayName provider={row.gatewayProvider} />,
+    },
+    {
       key: 'amount',
       header: t('web.payment_amount'),
       render: (row) => <Money value={{ amountMinor: row.amount, currency: row.currency }} />,
@@ -251,6 +322,16 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
         <a href={`/users/${encodeURIComponent(row.customerId)}`} onClick={onLink}>
           <Ltr>{row.customerId.slice(0, 8)}</Ltr>
         </a>
+      ),
+    },
+    {
+      key: 'telegram',
+      header: t('web.payment_telegram'),
+      render: (row) => (
+        <TelegramIdentity
+          telegramUserId={row.customerTelegramUserId}
+          username={row.customerUsername}
+        />
       ),
     },
     {
@@ -291,9 +372,20 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
         ),
     },
     {
+      key: 'external',
+      header: t('web.payment_external_reference'),
+      render: (row) =>
+        row.externalReference === null ? <Dash /> : <Ltr>{row.externalReference}</Ltr>,
+    },
+    {
       key: 'created',
       header: t('web.payment_created_at'),
       render: (row) => <span className="nowrap">{formatTimestamp(row.createdAt)}</span>,
+    },
+    {
+      key: 'updated',
+      header: t('web.payment_updated_at'),
+      render: (row) => <span className="nowrap">{formatTimestamp(row.updatedAt)}</span>,
     },
   ];
 
@@ -579,7 +671,20 @@ function ReceiptRow({ paymentId, receipt }: { paymentId: string; receipt: Paymen
  * installation has no bank API, and a screen that reported otherwise would be the
  * silent success the whole lifecycle exists to refuse.
  */
-function RefundsCard({ paymentId, mayIssue }: { paymentId: string; mayIssue: boolean }) {
+function RefundsCard({
+  paymentId,
+  orderId,
+  mayIssue,
+  mayViewOrders,
+}: {
+  paymentId: string;
+  /** The order this payment settled, or null for a top-up. */
+  orderId: string | null;
+  mayIssue: boolean;
+  /** `orders.view`: whether the order's own state may be read to say it is REFUNDED. */
+  mayViewOrders: boolean;
+}) {
+  const onLink = useLinkHandler();
   const notify = useToast();
   const queries = useQueryClient();
   const request = useSubmissionKey();
@@ -599,6 +704,22 @@ function RefundsCard({ paymentId, mayIssue }: { paymentId: string; mayIssue: boo
   const data = refunds.data;
   const rows = data?.refunds ?? [];
 
+  /*
+   * The ORDER, read rather than inferred (WP10 P3).
+   *
+   * A refund whose completed total reaches the payment moves the order PAID -> REFUNDED in
+   * the same transaction. Whether that happened is the order's own state, and this reads
+   * it — summing the rows above to decide it would be this tab's second opinion about
+   * money, and it would be wrong for an order the automatic lane refunded. Without
+   * `orders.view` nothing is said about the order at all.
+   */
+  const order = useQuery({
+    queryKey: ['order', orderId],
+    queryFn: () => fetchOrder(orderId ?? ''),
+    enabled: mayViewOrders && orderId !== null,
+  });
+  const orderRefunded = order.data?.order.state === 'REFUNDED';
+
   const refresh = (response: RefundResponse) => {
     void response;
     void queries.invalidateQueries({ queryKey: ['refunds', paymentId] });
@@ -611,6 +732,12 @@ function RefundsCard({ paymentId, mayIssue }: { paymentId: string; mayIssue: boo
      * wrong in the direction that matters.
      */
     void queries.invalidateQueries({ queryKey: ['wallet'] });
+    /*
+     * And the ORDER: the refund that completes the payment moves it to REFUNDED in the
+     * same transaction (WP10 P3), so a cached order would still say PAID.
+     */
+    void queries.invalidateQueries({ queryKey: ['order'] });
+    void queries.invalidateQueries({ queryKey: ['orders'] });
   };
 
   const issue = useMutation({
@@ -634,7 +761,17 @@ function RefundsCard({ paymentId, mayIssue }: { paymentId: string; mayIssue: boo
      * A 5xx may have committed. A fresh key on the retry would be a SECOND refund of
      * somebody's money — the one failure mode on this card that cannot be undone.
      */
-    onError: (error) => request.settleOn(error),
+    onError: (error) => {
+      request.settleOn(error);
+      /*
+       * A refusal means the figures on this card were stale — the delivery started, or
+       * another operator refunded — so they are re-read, and `refundable` becomes the
+       * server's answer again rather than the one the form was drawn from.
+       */
+      if (error instanceof ApiError) {
+        void queries.invalidateQueries({ queryKey: ['refunds', paymentId] });
+      }
+    },
   });
 
   const complete = useMutation({
@@ -769,6 +906,21 @@ function RefundsCard({ paymentId, mayIssue }: { paymentId: string; mayIssue: boo
             */}
             {!data.refundable && <Banner tone="info">{t('web.refund_unavailable')}</Banner>}
 
+            {/*
+              What a full refund did and did NOT do (WP10 P3). The order's state is the
+              server's; the sentence about the service is the design — a refund never
+              suspends or terminates one, and the operator's own service action is the
+              way to do either. Linked to the order, which is where its service is shown.
+            */}
+            {orderRefunded && orderId !== null && (
+              <Banner tone="info" title={t('web.refund_order_refunded_title')}>
+                <p>{t('web.refund_order_refunded_body')}</p>
+                <a href={`/orders/${encodeURIComponent(orderId)}`} onClick={onLink}>
+                  {t('web.refund_order_link')}
+                </a>
+              </Banner>
+            )}
+
             {rows.length === 0 ? (
               <Empty title={t('web.refunds_empty')} />
             ) : (
@@ -825,9 +977,6 @@ function RefundsCard({ paymentId, mayIssue }: { paymentId: string; mayIssue: boo
                         {t('web.refund_request')}
                       </button>
                     </div>
-                    {issue.error !== null && (
-                      <Banner tone="danger">{messageFor(issue.error)}</Banner>
-                    )}
                   </>
                 ) : (
                   // No disabled button: a disabled control and this sentence make the
@@ -836,6 +985,14 @@ function RefundsCard({ paymentId, mayIssue }: { paymentId: string; mayIssue: boo
                 )}
               </>
             )}
+
+            {/*
+              OUTSIDE the form, on purpose. A refusal re-reads the ledger, and for
+              DELIVERY_IN_PROGRESS the server then answers `refundable: false` — which
+              hides the form. A banner inside it would vanish with it, taking the one
+              sentence that said why.
+            */}
+            {issue.error !== null && <Banner tone="danger">{refundMessageFor(issue.error)}</Banner>}
 
             {/*
               The manual channel's second step, and the reason `AWAITING_EXTERNAL`
@@ -910,7 +1067,7 @@ function RefundsCard({ paymentId, mayIssue }: { paymentId: string; mayIssue: boo
                       </button>
                     </div>
                     {complete.error !== null && (
-                      <Banner tone="danger">{messageFor(complete.error)}</Banner>
+                      <Banner tone="danger">{refundMessageFor(complete.error)}</Banner>
                     )}
                     {abandon.error !== null && (
                       <Banner tone="danger">{messageFor(abandon.error)}</Banner>
@@ -928,90 +1085,34 @@ function RefundsCard({ paymentId, mayIssue }: { paymentId: string; mayIssue: boo
 
 export function PaymentDetailPage({
   id,
-  mayReview,
   mayViewReceipts,
   mayViewRefunds,
   mayIssueRefunds,
+  mayViewOrders = false,
   denied,
 }: {
   id: string;
-  mayReview: boolean;
-  /** `receipts.view`, separate from `mayReview`: reading evidence is not deciding. */
+  /** `receipts.view`: reading evidence. Deciding it is Telegram's (Payment File 02 §10). */
   mayViewReceipts: boolean;
   /** `refunds.view`. Reading a refund history is not the same right as making one. */
   mayViewRefunds: boolean;
   /** `refunds.issue`. The CRITICAL half: it moves money. */
   mayIssueRefunds: boolean;
+  /**
+   * `orders.view`, for the one sentence the refund card says about the ORDER after a
+   * full refund. Optional and false by default: without it the card says nothing about
+   * an order it may not read.
+   */
+  mayViewOrders?: boolean;
   denied: boolean;
 }) {
   const onLink = useLinkHandler();
-  const notify = useToast();
-  const queries = useQueryClient();
-  const submission = useSubmissionKey();
-  /*
-   * A SECOND submission key, not a shared one.
-   *
-   * The two decisions are different commands with different payloads, and one key
-   * would make a rejection typed after an approval failed look to the idempotency
-   * store like a replay of that approval with a mismatched payload.
-   */
-  const rejection = useSubmissionKey();
-  const [note, setNote] = useState('');
-  const [reason, setReason] = useState('');
-
   const payment = useQuery({
     queryKey: ['payment', id],
     queryFn: () => fetchPayment(id),
     enabled: !denied,
   });
   const row = payment.data?.payment;
-
-  const confirm = useMutation({
-    mutationFn: () =>
-      confirmPayment({
-        id,
-        // Bound to the note, so editing it and pressing again is a new command
-        // rather than a replay the store refuses as a payload mismatch.
-        idempotencyKey: submission.current({ id, note }),
-        evidenceNote: note.trim(),
-      }),
-    onSuccess: (response) => {
-      submission.settle();
-      notify({ tone: 'ok', message: t('web.payment_confirm_done') });
-      setNote('');
-      queries.setQueryData(['payment', id], response);
-      void queries.invalidateQueries({ queryKey: ['payments'] });
-      // The ORDER changed too: a confirmation settles it in the same transaction.
-      void queries.invalidateQueries({ queryKey: ['orders'] });
-      void queries.invalidateQueries({ queryKey: ['order'] });
-    },
-    // A 5xx may have committed, and a fresh key on the retry would be a second
-    // confirmation of somebody's money.
-    onError: (error) => submission.settleOn(error),
-  });
-
-  const reject = useMutation({
-    mutationFn: () =>
-      rejectPayment({
-        id,
-        idempotencyKey: rejection.current({ id, reason }),
-        resolutionNote: reason.trim(),
-      }),
-    onSuccess: (response) => {
-      rejection.settle();
-      notify({ tone: 'ok', message: t('web.payment_reject_done') });
-      setReason('');
-      queries.setQueryData(['payment', id], response);
-      void queries.invalidateQueries({ queryKey: ['payments'] });
-      /*
-       * The payments list only. The ORDER is deliberately NOT invalidated, because a
-       * rejection does not touch it: it stays awaiting payment until its own deadline
-       * so the customer can pay another way. Invalidating it would be this page
-       * implying a change that did not happen.
-       */
-    },
-    onError: (error) => rejection.settleOn(error),
-  });
 
   return (
     <>
@@ -1031,8 +1132,13 @@ export function PaymentDetailPage({
             <Card title={t('web.payment_detail')}>
               <KV
                 items={[
+                  [t('web.payment_id'), <Copyable key="id" value={row.id} />],
                   [t('web.payment_state'), <StateBadge key="s" value={row.state} />],
                   [t('web.payment_method'), t(METHOD_LABELS[row.method])],
+                  [
+                    t('web.payment_gateway'),
+                    <GatewayName key="g" provider={row.gatewayProvider} />,
+                  ],
                   [
                     t('web.payment_amount'),
                     <Money key="a" value={{ amountMinor: row.amount, currency: row.currency }} />,
@@ -1047,6 +1153,14 @@ export function PaymentDetailPage({
                     >
                       <Ltr>{row.customerId}</Ltr>
                     </a>,
+                  ],
+                  [
+                    t('web.payment_telegram'),
+                    <TelegramIdentity
+                      key="tg"
+                      telegramUserId={row.customerTelegramUserId}
+                      username={row.customerUsername}
+                    />,
                   ],
                   [
                     t('web.payment_order'),
@@ -1065,7 +1179,16 @@ export function PaymentDetailPage({
                       </a>
                     ),
                   ],
+                  [
+                    t('web.payment_external_reference'),
+                    row.externalReference === null ? (
+                      <Dash key="x" />
+                    ) : (
+                      <Copyable key="x" value={row.externalReference} />
+                    ),
+                  ],
                   [t('web.payment_created_at'), formatTimestamp(row.createdAt)],
+                  [t('web.payment_updated_at'), formatTimestamp(row.updatedAt)],
                   [
                     t('web.payment_expires_at'),
                     row.expiresAt === null ? <Dash key="e" /> : formatTimestamp(row.expiresAt),
@@ -1089,6 +1212,59 @@ export function PaymentDetailPage({
                 <p className="muted small">{t('web.payment_customer_signalled_hint')}</p>
               )}
             </Card>
+
+            {/*
+              The top-up gift this payment promised (Payment File 02 §17, D5): the
+              percentage SNAPSHOTTED from its route when it was created. Null for anything
+              that is not a top-up, which is why the card is absent rather than dashed.
+            */}
+            {row.topupCashbackPercent !== null && (
+              <Card title={t('web.payment_topup_gift')}>
+                <p className="strong">
+                  <Ltr>{`${String(row.topupCashbackPercent)}%`}</Ltr>
+                </p>
+                <p className="muted small">{t('web.payment_topup_gift_hint')}</p>
+              </Card>
+            )}
+
+            {/*
+              The receipt's credit-to-wallet disposition, when that is how it was decided
+              (Payment File 02 §12, D2). READ-ONLY: it was decided in Telegram, and this
+              page shows what, by whom and when — never a control to make or undo one.
+              The amount is the reviewer's, which may differ from the payment's own; that
+              difference is the reason the disposition exists.
+            */}
+            {row.receiptCredit !== null && (
+              <Card title={t('web.payment_receipt_credit')}>
+                <KV
+                  items={[
+                    [
+                      t('web.payment_receipt_credit_amount'),
+                      <Money
+                        key="ca"
+                        value={{
+                          amountMinor: row.receiptCredit.amountMinor,
+                          currency: row.receiptCredit.currency,
+                        }}
+                      />,
+                    ],
+                    [
+                      t('web.payment_receipt_credit_admin'),
+                      <Copyable key="cw" value={row.receiptCredit.decidedByAdminId} />,
+                    ],
+                    [
+                      t('web.payment_receipt_credit_at'),
+                      formatTimestamp(row.receiptCredit.decidedAt),
+                    ],
+                    [
+                      t('web.payment_receipt_credit_note'),
+                      row.receiptCredit.note === null ? <Dash key="cn" /> : row.receiptCredit.note,
+                    ],
+                  ]}
+                />
+                <p className="muted small">{t('web.payment_receipt_credit_hint')}</p>
+              </Card>
+            )}
 
             {/*
               What a confirmation RESTS on, and who made it.
@@ -1181,7 +1357,14 @@ export function PaymentDetailPage({
               then what is left to decide. Hidden entirely without `refunds.view` — a
               refund history is financial evidence about a customer.
             */}
-            {mayViewRefunds && <RefundsCard paymentId={id} mayIssue={mayIssueRefunds} />}
+            {mayViewRefunds && (
+              <RefundsCard
+                paymentId={id}
+                orderId={row.orderId}
+                mayIssue={mayIssueRefunds}
+                mayViewOrders={mayViewOrders}
+              />
+            )}
 
             {/*
               How it ended WITHOUT money, when it did.
@@ -1215,91 +1398,14 @@ export function PaymentDetailPage({
             )}
 
             {/*
-              The ONE write, and only where it can legally apply: a PENDING
-              MANUAL_TRANSFER. A wallet payment is confirmed by its own debit in the
-              same transaction and has nothing for an operator to approve; every other
-              state has no `CONFIRM` edge in `PAYMENT_MACHINE`.
+              Card-to-card review is Telegram's alone (Payment File 02 §10, D3): approve,
+              reject and credit-to-wallet are decided there, and this page shows what was
+              decided and offers none of them. A PENDING transfer says where to go
+              rather than drawing a control the server has no route for.
             */}
             {row.state === 'PENDING' && row.method === 'MANUAL_TRANSFER' && (
               <Card title={t('web.payment_confirm_title')}>
-                <p className="muted">{t('web.payment_confirm_hint')}</p>
-                {mayReview ? (
-                  <>
-                    <Field label={t('web.payment_confirm_note')} htmlFor="payment-note">
-                      <input
-                        id="payment-note"
-                        value={note}
-                        maxLength={500}
-                        onChange={(event) => setNote(event.target.value)}
-                      />
-                    </Field>
-                    <div className="toolbar">
-                      <button
-                        type="button"
-                        className="btn primary sm"
-                        /*
-                         * Either decision in flight disables BOTH controls.
-                         *
-                         * The two commands race the same PENDING row with different
-                         * idempotency keys, so an operator who clicks confirm and then
-                         * reject before the first returns gets whichever request the
-                         * database serves second — and one of the two outcomes cannot be
-                         * undone. The conditional UPDATE keeps the DATA consistent; it
-                         * cannot make the result the one the operator meant.
-                         */
-                        disabled={confirm.isPending || reject.isPending || note.trim() === ''}
-                        onClick={() => confirm.mutate()}
-                      >
-                        {t('web.payment_confirm')}
-                      </button>
-                    </div>
-                    {confirm.error !== null && (
-                      <Banner tone="danger">{messageFor(confirm.error)}</Banner>
-                    )}
-                  </>
-                ) : (
-                  // No disabled button. A disabled control and this sentence make the
-                  // same claim, and only one of them names the permission.
-                  <Banner tone="info">{t('web.payment_confirm_denied')}</Banner>
-                )}
-              </Card>
-            )}
-
-            {/*
-              The other half of the same decision, in its own card.
-              `receipts.review` has read "Approve or reject a receipt" since the
-              permission catalogue was frozen and only the approve half existed until
-              4G. Same permission, same states — a PENDING MANUAL_TRANSFER — and a
-              REASON rather than an evidence note, because the two answer different
-              questions and `payments.resolution_note` is a different column.
-
-              Separate from the confirm card on purpose: one card with two buttons is a
-              card where the wrong one is a mis-click away, and this one is not
-              reversible. `PAYMENT_MACHINE` has no edge out of FAILED.
-            */}
-            {row.state === 'PENDING' && row.method === 'MANUAL_TRANSFER' && mayReview && (
-              <Card title={t('web.payment_reject_title')}>
-                <p className="muted">{t('web.payment_reject_hint')}</p>
-                <Field label={t('web.payment_reject_note')} htmlFor="payment-reason">
-                  <input
-                    id="payment-reason"
-                    value={reason}
-                    maxLength={500}
-                    onChange={(event) => setReason(event.target.value)}
-                  />
-                </Field>
-                <div className="toolbar">
-                  <button
-                    type="button"
-                    className="btn danger sm"
-                    // Both, for the reason the confirm button carries.
-                    disabled={reject.isPending || confirm.isPending || reason.trim() === ''}
-                    onClick={() => reject.mutate()}
-                  >
-                    {t('web.payment_reject')}
-                  </button>
-                </div>
-                {reject.error !== null && <Banner tone="danger">{messageFor(reject.error)}</Banner>}
+                <p className="muted">{t('web.payment_review_in_telegram')}</p>
               </Card>
             )}
 

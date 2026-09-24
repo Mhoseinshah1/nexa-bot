@@ -3,6 +3,8 @@ import {
   isIdempotentMutation,
   isMutatingOperation,
   OPERATION_MAX_ATTEMPTS,
+  OPERATION_STATES,
+  OPERATION_TERMINAL_STATES,
   OPERATION_TYPES,
   TARGETED_OPERATION_TYPES,
   COMMERCE_ERROR_CODES,
@@ -419,6 +421,33 @@ export class DrizzleOperationRepository implements OperationRepository {
       .limit(1);
     const row = rows[0];
     return row === undefined ? null : toRecord(row);
+  }
+
+  async hasUnresolvedForOrder(
+    scope: TenantContext,
+    orderId: string,
+    type: OperationType,
+    tx?: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const unresolved = OPERATION_STATES.filter(
+      (state) => !(OPERATION_TERMINAL_STATES as readonly string[]).includes(state),
+    );
+    const rows = await this.exec(tx)
+      .select({ id: provisioningOperations.id })
+      .from(provisioningOperations)
+      .where(
+        and(
+          eq(provisioningOperations.tenantId, tenantId),
+          eq(provisioningOperations.orderId, orderId),
+          eq(provisioningOperations.type, type),
+          // DERIVED from the contract's terminal list, so a state added later counts as
+          // unresolved until somebody decides otherwise — the direction that holds money.
+          inArray(provisioningOperations.state, unresolved),
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
   }
 
   async listForService(

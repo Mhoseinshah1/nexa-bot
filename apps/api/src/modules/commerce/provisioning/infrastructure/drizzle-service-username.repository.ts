@@ -3,6 +3,7 @@ import { errors, PANEL_ERROR_CODES, type ProviderType } from '@nexa/contracts';
 import type { ServiceUsernameMode, TenantContext } from '@nexa/contracts';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import {
+  orders,
   serviceUsernameReservations,
   services,
 } from '../../../../infrastructure/persistence/schema.js';
@@ -235,6 +236,17 @@ export class DrizzleServiceUsernameRepository
            WHERE r.tenant_id = ${scope.tenantId}
              AND r.funded_at IS NULL
              AND r.expires_at < ${now}
+             /*
+              * Not while its order is still AWAITING_PAYMENT (Payment File 02 §9, D1).
+              * A transfer with a receipt keeps its order open past every deadline until
+              * a reviewer decides it, and a late approval must provision under the name
+              * the customer chose — on a CUSTOM-only panel there is no other. The order
+              * sweep releases the hold when the order actually closes.
+              */
+             AND NOT EXISTS (SELECT 1 FROM ${orders} AS o
+                              WHERE o.tenant_id = r.tenant_id
+                                AND o.id = r.order_id
+                                AND o.state = 'AWAITING_PAYMENT')
            ORDER BY r.expires_at
            LIMIT ${limit}
              FOR UPDATE SKIP LOCKED)`,

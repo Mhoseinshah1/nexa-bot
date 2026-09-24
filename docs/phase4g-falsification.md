@@ -68,8 +68,12 @@ belong with.
 | ------ | ----------------------------------------------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ------ |
 | F4G-21 | A PENDING payment past its own deadline is closed, never reissued | the staleness comparison → `false`                  | `payments.test.ts` › closes a stale reference instead of handing it back, and issues a live one | KILLED |
 | F4G-22 | The seeded `receipt_reviewer` can read the payment it reviews     | `payments.view` removed from the seed               | `payments.test.ts` › is reachable by the seeded receipt_reviewer role, end to end               | KILLED |
-| F4G-23 | Either decision in flight disables BOTH controls                  | `reject.isPending` removed from the confirm button  | `payments.test.tsx` › disables the confirmation while a rejection is in flight, the mirror case | KILLED |
 | F4G-24 | A shutdown waits for an expiry pass already in its transaction    | the `while (this.running)` wait removed from `stop` | `payment-expiry-loop.test.ts` › waits for a pass already in flight before it reports stopped    | KILLED |
+
+**F4G-23 and F4G-13 are withdrawn.** Payment File 02 §10 made the Web Admin read-only for
+card-to-card (`docs/payments-file02-design.md` D3): the confirm and reject cards, and the
+tests that pinned them, are gone. What follows is kept as the record of how F4G-23 was
+first falsified.
 
 **F4G-23 survived its first mutation, and the fix was a test rather than a
 label.** The first version of the test clicked confirm and asserted reject was
@@ -80,11 +84,10 @@ and the mutation died against it; the row cites that one.
 
 ## The surfaces
 
-| #      | Rule                                                                 | Mutation                                                        | Named test                                                                                                   | Result |
-| ------ | -------------------------------------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ------ |
-| F4G-10 | `x:` routes to the withdrawal, and nothing else does                 | the `CANCEL_PAY_CALLBACK_PREFIX` branch deleted from `intentOf` | `telegram-payment-flow.test.ts` › offers a way out with the instructions, and withdrawing closes the payment | KILLED |
-| F4G-12 | A refused payment answers with the PAYMENT's key, not the order's    | `'bot.payment.not_pending'` → `'bot.order.unavailable'`         | `bot-runtime.test.ts` › sends no copy that promises a flow this head does not have                           | KILLED |
-| F4G-13 | The reject card is drawn only for an operator holding the permission | the `&& mayReview` removed from the card's condition            | `payments.test.tsx` › offers no rejection to an operator without receipts.review                             | KILLED |
+| #      | Rule                                                              | Mutation                                                        | Named test                                                                                                   | Result |
+| ------ | ----------------------------------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ------ |
+| F4G-10 | `x:` routes to the withdrawal, and nothing else does              | the `CANCEL_PAY_CALLBACK_PREFIX` branch deleted from `intentOf` | `telegram-payment-flow.test.ts` › offers a way out with the instructions, and withdrawing closes the payment | KILLED |
+| F4G-12 | A refused payment answers with the PAYMENT's key, not the order's | `'bot.payment.not_pending'` → `'bot.order.unavailable'`         | `bot-runtime.test.ts` › sends no copy that promises a flow this head does not have                           | KILLED |
 
 ## Run by hand, because the harness cannot reach what they test
 

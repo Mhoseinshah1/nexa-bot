@@ -22,6 +22,7 @@ import {
   tenantB,
   type TestContext,
 } from './harness';
+import { capturingLane } from './notification-capture';
 
 /**
  * Wallet top-up: a payment that buys nothing, and the one credit it produces.
@@ -208,6 +209,41 @@ describe('a customer topping up their wallet', () => {
     expect(await count('provisioning_operations')).toBe(0);
   });
 
+  it('announces the TOPUP_RECEIPT credit with one WalletEntryRecorded, and not again for a second operator', async () => {
+    /*
+     * WP10 P4 (D4). Every other ledger writer emits `WalletEntryRecorded` in its
+     * transaction; the top-up credit did not. It does now, and only for the movement it
+     * WROTE — a second operator's confirmation re-reads the entry and is not a second one.
+     */
+    const { payment } = await topup(500_000n, 'c1e');
+    await confirm(payment.id, 'c1e-confirm');
+    await ctx.container.payments.confirmManualTransfer(
+      tenantA,
+      adminActorFor(
+        await createAdmin(ctx.container, tenantA, {
+          username: 'finance-topup-event',
+          roleKeys: ['finance'],
+        }),
+      ),
+      payment.id,
+      { idempotencyKey: 'c1e-second', note: 'seen twice' },
+    );
+
+    const entries = (await ctx.container.database.db.execute(
+      sql`SELECT id FROM wallet_entries WHERE reason = 'TOPUP_RECEIPT'` as never,
+    )) as unknown as { rows: { id: string }[] };
+    expect(entries.rows).toHaveLength(1);
+    const entry = entries.rows[0];
+    const events = (await ctx.container.database.db.execute(
+      sql`SELECT payload->>'entryId' AS entry, payload->>'reason' AS reason,
+                 payload->>'amountMinor' AS amount, payload->>'currency' AS currency
+            FROM outbox_messages WHERE event_type = 'WalletEntryRecorded'` as never,
+    )) as unknown as { rows: Record<string, string>[] };
+    expect(events.rows).toEqual([
+      { entry: entry?.id, reason: 'TOPUP_RECEIPT', amount: '500000', currency: 'IRT' },
+    ]);
+  });
+
   it('credits once for a redelivered confirmation', async () => {
     const { payment } = await topup(500_000n, 'c2');
     await confirm(payment.id, 'c2-confirm');
@@ -354,6 +390,7 @@ describe('a customer topping up their wallet', () => {
         fileSize: 102_400n,
         fileName: null,
         telegramMessageId: 42n,
+        caption: null,
       },
     });
 
@@ -363,6 +400,18 @@ describe('a customer topping up their wallet', () => {
     expect(filed.paymentId).toBe(payment.id);
     expect((await paymentRow(payment.id)).state).toBe('PENDING');
     expect(await ledgerRows()).toHaveLength(0);
+
+    /*
+     * And the receipt has no timer (Payment File 02 §9, D1): past its own deadline the
+     * top-up is not closed as stale when the customer taps top-up again. It is handed
+     * back — it is under review, and one open top-up per customer is the index's rule.
+     */
+    await ctx.container.database.db.execute(
+      sql`UPDATE payments SET expires_at = now() - interval '1 minute' WHERE id = ${payment.id}`,
+    );
+    const again = await topup(500_000n, 'r1-again');
+    expect(again.payment.id).toBe(payment.id);
+    expect((await paymentRow(payment.id)).state).toBe('PENDING');
   });
 
   it('lets a customer withdraw their own pending top-up', async () => {
@@ -458,6 +507,8 @@ describe('a customer topping up their wallet', () => {
           amount: money(500_000n, 'IRT'),
           reference: 'held-open-topup',
           expiresAt: new Date(now.getTime() + 60 * 60 * 1000),
+          gatewayProvider: 'MANUAL_TRANSFER',
+          topupCashbackPercent: 0,
           now,
         },
         tx,
@@ -865,4 +916,297 @@ describe('a customer topping up their wallet', () => {
     expect(outcome.ok, `expected ${code}`).toBe(false);
     expect(outcome.ok || !isNexaError(outcome.error) ? null : outcome.error.code).toBe(code);
   }
+
+  // =========================================================================
+  // The top-up gift (Payment File 02 §17–§18, `docs/payments-file02-design.md` D5)
+  // =========================================================================
+
+  describe('the top-up gift', () => {
+    /** The route's gift, set the way an operator sets it: through the service. */
+    const giftPercent = (percent: number, k: string) =>
+      ctx.container.paymentGateways.configure(tenantA, ownerA, {
+        idempotencyKey: `gift-${k}`,
+        provider: 'MANUAL_TRANSFER',
+        config: {
+          displayName: null,
+          instructions: null,
+          minAmountMinor: 0n,
+          maxAmountMinor: 0n,
+          eligibility: {
+            activateAfterPayments: 0,
+            deactivateAfterPayments: 0,
+            activateAfterAccountDays: 0,
+          },
+          sortOrder: 0,
+          topupCashbackPercent: percent,
+        },
+      });
+
+    const entries = async (reason: string) =>
+      (
+        (await ctx.container.database.db.execute(
+          sql`SELECT amount::text AS amount, reference, payment_id FROM wallet_entries
+               WHERE reason = ${reason} ORDER BY created_at, id` as never,
+        )) as unknown as { rows: { amount: string; reference: string; payment_id: string }[] }
+      ).rows;
+
+    const ledgerEvents = async () =>
+      (
+        (await ctx.container.database.db.execute(
+          sql`SELECT payload->>'reason' AS reason, payload->>'amountMinor' AS amount
+                FROM outbox_messages WHERE event_type = 'WalletEntryRecorded'
+               ORDER BY created_at, id` as never,
+        )) as unknown as { rows: { reason: string; amount: string }[] }
+      ).rows;
+
+    it('credits the principal and a SEPARATE 10% gift, and tells the customer each once', async () => {
+      await giftPercent(10, 'g1');
+      const { payment } = await topup(500_000n, 'g1');
+      expect(payment).toMatchObject({
+        gatewayProvider: 'MANUAL_TRANSFER',
+        topupCashbackPercent: 10,
+      });
+
+      await confirm(payment.id, 'g1-confirm');
+
+      // Two entries, never one of 550 000: the principal and the gift are two facts.
+      expect(await entries('TOPUP_RECEIPT')).toEqual([
+        { amount: '500000', reference: `${payment.id}:topup`, payment_id: payment.id },
+      ]);
+      expect(await entries('CASHBACK_TOPUP')).toEqual([
+        { amount: '50000', reference: `${payment.id}:topup-cashback`, payment_id: payment.id },
+      ]);
+      expect((await ctx.container.wallet.balance(tenantA, ownerA, customerA)).amountMinor).toBe(
+        550_000n,
+      );
+      expect(await notifications()).toEqual([
+        { kind: 'WALLET_TOPUP_CREDITED', subject_id: payment.id },
+        { kind: 'WALLET_TOPUP_GIFT_CREDITED', subject_id: payment.id },
+      ]);
+      expect(await ledgerEvents()).toEqual([
+        { reason: 'TOPUP_RECEIPT', amount: '500000' },
+        { reason: 'CASHBACK_TOPUP', amount: '50000' },
+      ]);
+    });
+
+    it('tells the customer the principal and the gift as two sentences, each naming its own amount (§18)', async () => {
+      await giftPercent(10, 'g-say');
+      const { payment } = await topup(500_000n, 'g-say');
+      await confirm(payment.id, 'g-say-confirm');
+
+      const lane = capturingLane(ctx);
+      const report = await lane.sweep(tenantA);
+
+      expect(report.delivered).toBe(2);
+      // The figures come from the payment's OWN two ledger entries — the principal from
+      // TOPUP_RECEIPT and the gift from CASHBACK_TOPUP — never one from the other.
+      expect(lane.sends.map((one) => [one.templateKey, one.values])).toEqual([
+        ['bot.wallet.topup_credited', { amount: money(500_000n, 'IRT') }],
+        ['bot.wallet.topup_gift_credited', { amount: money(50_000n, 'IRT') }],
+      ]);
+      const [principal, gift] = lane.rendered();
+      expect(principal).toContain('✅ مبلغ 500,000 تومان به کیف پول شما اضافه شد.');
+      expect(gift).toContain('🎁 مبلغ 50,000 تومان نیز بابت هدیهٔ شارژ به کیف پول شما واریز شد.');
+    });
+
+    it('gives nothing, and says nothing, at 0%', async () => {
+      const { payment } = await topup(500_000n, 'g2');
+      expect(payment.topupCashbackPercent, 'the default route offers no gift').toBe(0);
+
+      await confirm(payment.id, 'g2-confirm');
+
+      expect(await entries('CASHBACK_TOPUP')).toEqual([]);
+      expect(await notifications()).toEqual([
+        { kind: 'WALLET_TOPUP_CREDITED', subject_id: payment.id },
+      ]);
+    });
+
+    it('rounds the gift DOWN, and writes none when it rounds to nothing', async () => {
+      await setPresets([
+        { amountMinor: '999999', currency: 'IRT' },
+        { amountMinor: '9', currency: 'IRT' },
+      ]);
+      await giftPercent(10, 'g3');
+      const big = await topup(999_999n, 'g3-big');
+      await confirm(big.payment.id, 'g3-big-confirm');
+      expect(await entries('CASHBACK_TOPUP')).toMatchObject([{ amount: '99999' }]);
+
+      const small = await topup(9n, 'g3-small');
+      await confirm(small.payment.id, 'g3-small-confirm');
+      // 10% of 9 is 0.9: nothing, and no sentence about nothing.
+      expect(await entries('CASHBACK_TOPUP')).toHaveLength(1);
+      const gifts = (await notifications()).filter(
+        (one) => one.kind === 'WALLET_TOPUP_GIFT_CREDITED',
+      );
+      expect(gifts).toEqual([{ kind: 'WALLET_TOPUP_GIFT_CREDITED', subject_id: big.payment.id }]);
+    });
+
+    it('keeps the percentage a top-up was created under, whatever the route says later', async () => {
+      await giftPercent(10, 'g4');
+      const { payment } = await topup(500_000n, 'g4');
+      // An operator raises the gift while the transfer is in flight.
+      await giftPercent(50, 'g4-raised');
+
+      await confirm(payment.id, 'g4-confirm');
+      expect(await entries('CASHBACK_TOPUP')).toMatchObject([{ amount: '50000' }]);
+
+      // The NEXT top-up is created under the new terms.
+      const next = await topup(500_000n, 'g4-next');
+      expect(next.payment.topupCashbackPercent).toBe(50);
+    });
+
+    it('refuses to rewrite a payment’s route snapshot, in the database, in any state', async () => {
+      await giftPercent(10, 'g5');
+      const { payment } = await topup(500_000n, 'g5');
+      for (const statement of [
+        sql`UPDATE payments SET topup_cashback_percent = 90 WHERE id = ${payment.id}`,
+        sql`UPDATE payments SET topup_cashback_percent = NULL WHERE id = ${payment.id}`,
+        sql`UPDATE payments SET gateway_provider = NULL WHERE id = ${payment.id}`,
+      ]) {
+        const refused = await ctx.container.database.db.execute(statement as never).then(
+          () => null,
+          (error: unknown) => error as { cause?: { message?: string } },
+        );
+        expect(refused?.cause?.message ?? '', 'a PENDING top-up’s promise moved').toMatch(
+          /fixed when it is created/u,
+        );
+      }
+      await confirm(payment.id, 'g5-confirm');
+      const confirmed = await ctx.container.database.db
+        .execute(
+          sql`UPDATE payments SET topup_cashback_percent = 0 WHERE id = ${payment.id}` as never,
+        )
+        .then(
+          () => null,
+          (error: unknown) => error as { cause?: { message?: string } },
+        );
+      expect(confirmed?.cause?.message ?? '').toMatch(/fixed when it is created/u);
+    });
+
+    it('writes one gift for a replayed and a second operator’s confirmation', async () => {
+      await giftPercent(10, 'g6');
+      const { payment } = await topup(500_000n, 'g6');
+      await confirm(payment.id, 'g6-confirm');
+      await confirm(payment.id, 'g6-confirm');
+      await ctx.container.payments.confirmManualTransfer(
+        tenantA,
+        adminActorFor(
+          await createAdmin(ctx.container, tenantA, {
+            username: 'finance-g6',
+            roleKeys: ['finance'],
+          }),
+        ),
+        payment.id,
+        { idempotencyKey: 'g6-second', note: 'seen twice' },
+      );
+
+      expect(await entries('CASHBACK_TOPUP')).toHaveLength(1);
+      expect(
+        (await notifications()).filter((one) => one.kind === 'WALLET_TOPUP_GIFT_CREDITED'),
+      ).toHaveLength(1);
+    });
+
+    it('writes one gift when two confirmations race, the loser held on the payment row', async () => {
+      await giftPercent(10, 'g7');
+      const { payment } = await topup(500_000n, 'g7');
+      const repository = (
+        ctx.container.payments as unknown as {
+          deps: { repository: PaymentRepository };
+        }
+      ).deps.repository;
+      const original = repository.confirm.bind(repository);
+      let entered!: () => void;
+      const inside = new Promise<void>((resolve) => (entered = resolve));
+      let open!: () => void;
+      const gate = new Promise<void>((resolve) => (open = resolve));
+      let calls = 0;
+      vi.spyOn(repository, 'confirm').mockImplementation(async (...args) => {
+        const moved = await original(...args);
+        calls += 1;
+        if (calls === 1) {
+          entered();
+          await gate;
+        }
+        return moved;
+      });
+
+      const first = outcomeOf(confirm(payment.id, 'g7-first'));
+      await inside;
+      const second = outcomeOf(
+        ctx.container.payments.confirmManualTransfer(
+          tenantA,
+          adminActorFor(
+            await createAdmin(ctx.container, tenantA, {
+              username: 'finance-g7',
+              roleKeys: ['finance'],
+            }),
+          ),
+          payment.id,
+          { idempotencyKey: 'g7-second', note: 'raced' },
+        ),
+      );
+      const deadline = Date.now() + 5_000;
+      for (;;) {
+        const waiting = (await ctx.container.database.db.execute(
+          sql`SELECT query FROM pg_stat_activity
+               WHERE datname = current_database() AND wait_event_type = 'Lock'
+                 AND pid <> pg_backend_pid()` as never,
+        )) as unknown as { rows: { query: string }[] };
+        if (waiting.rows.length >= 1) {
+          expect(waiting.rows[0]?.query.toLowerCase()).toContain('update "payments"');
+          break;
+        }
+        if (Date.now() > deadline) throw new Error('the second confirmation never waited');
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      open();
+
+      const [a, b] = await Promise.all([first, second]);
+      expect(a.ok && b.ok, 'both are answered with the confirmed payment').toBe(true);
+      expect(await entries('TOPUP_RECEIPT')).toHaveLength(1);
+      expect(await entries('CASHBACK_TOPUP')).toHaveLength(1);
+      expect(
+        (await notifications()).filter((one) => one.kind === 'WALLET_TOPUP_GIFT_CREDITED'),
+      ).toHaveLength(1);
+      vi.restoreAllMocks();
+    }, 30_000);
+
+    it('refuses a second gift for one payment, and a gift that names no payment, in the database', async () => {
+      await giftPercent(10, 'g8');
+      const { payment } = await topup(500_000n, 'g8');
+      await confirm(payment.id, 'g8-confirm');
+      const walletRepository = new DrizzleWalletRepository(ctx.container.database.db);
+      const refusal = async (draft: Parameters<typeof walletRepository.append>[1]) => {
+        const error = await walletRepository.append(tenantA, draft).then(
+          () => null,
+          (caught: unknown) => caught as { cause?: { message?: string } },
+        );
+        return error?.cause?.message ?? '';
+      };
+      expect(
+        await refusal({
+          id: ctx.container.ids.uuid(),
+          customerId: customerA,
+          direction: 'CREDIT',
+          reason: 'CASHBACK_TOPUP',
+          amount: money(1n, 'IRT'),
+          reference: 'another-gift',
+          paymentId: payment.id as PaymentId,
+          now: ctx.container.clock.now(),
+        }),
+      ).toMatch(/wallet_entries_topup_cashback_payment_key/u);
+      expect(
+        await refusal({
+          id: ctx.container.ids.uuid(),
+          customerId: customerA,
+          direction: 'CREDIT',
+          reason: 'CASHBACK_TOPUP',
+          amount: money(1n, 'IRT'),
+          reference: 'orphan-gift',
+          now: ctx.container.clock.now(),
+        }),
+      ).toMatch(/wallet_entries_topup_cashback_payment_check/u);
+      expect(await entries('CASHBACK_TOPUP')).toHaveLength(1);
+    });
+  });
 });

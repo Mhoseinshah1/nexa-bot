@@ -1,6 +1,11 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { PaymentGatewayView, SalesCurrencyCode } from '@nexa/contracts';
+import {
+  PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MAX,
+  PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MIN,
+  type PaymentGatewayView,
+  type SalesCurrencyCode,
+} from '@nexa/contracts';
 import { fetchPaymentGateways, setPaymentGatewayStatus, updatePaymentGateway } from '../api/client';
 import { formatMoneyText, formatTimestamp } from '../format';
 import { useSubmissionKey } from '../submission-key';
@@ -14,6 +19,7 @@ import {
   DataTable,
   Empty,
   Field,
+  Ltr,
   PageHead,
   StateSwitch,
   useToast,
@@ -58,6 +64,7 @@ const EMPTY_FORM = {
   deactivateAfterPayments: '0',
   activateAfterAccountDays: '0',
   sortOrder: '0',
+  topupCashbackPercent: '0',
 };
 
 type FormState = typeof EMPTY_FORM;
@@ -72,6 +79,7 @@ function formOf(gateway: PaymentGatewayView): FormState {
     deactivateAfterPayments: String(gateway.eligibility.deactivateAfterPayments),
     activateAfterAccountDays: String(gateway.eligibility.activateAfterAccountDays),
     sortOrder: String(gateway.sortOrder),
+    topupCashbackPercent: String(gateway.topupCashbackPercent),
   };
 }
 
@@ -132,6 +140,28 @@ function counted(value: string): number {
  * Empty still means "no bound" and travels as `'0'`, unchanged.
  */
 const GROUPING = /[\s,\u066C\u2009\u202F']/gu;
+
+/**
+ * The top-up gift as the whole percentage the route stores (Payment File 02 §17, D5), or
+ * `null` when what was typed is not one: an integer from 0 to 100, in Latin, Persian or
+ * Arabic-Indic digits, an optional trailing `%`. Refused rather than clamped or rounded —
+ * `minorOf`'s rule: a stored figure that differs from the one on screen is the
+ * write-only-setting failure, and this one decides how much money a customer is given.
+ */
+export function percentOf(value: string): number | null {
+  const latin = value
+    .trim()
+    .replace(/[%\u066A]$/u, '')
+    .trim()
+    .replace(/[\u06F0-\u06F9]/gu, (d) => String(d.charCodeAt(0) - 0x06f0))
+    .replace(/[\u0660-\u0669]/gu, (d) => String(d.charCodeAt(0) - 0x0660));
+  if (!/^[0-9]{1,3}$/u.test(latin)) return null;
+  const parsed = Number(latin);
+  return parsed >= PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MIN &&
+    parsed <= PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MAX
+    ? parsed
+    : null;
+}
 
 export function minorOf(value: string): string | null {
   const latin = value
@@ -194,6 +224,8 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
       if (min === null || max === null) {
         throw new Error(t('web.payment_gateway_amount_invalid'));
       }
+      const gift = percentOf(form.topupCashbackPercent);
+      if (gift === null) throw new Error(t('web.payment_gateway_topup_invalid'));
       const body = {
         provider: editing,
         displayName: form.displayName.trim() === '' ? null : form.displayName.trim(),
@@ -206,6 +238,12 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
           activateAfterAccountDays: counted(form.activateAfterAccountDays),
         },
         sortOrder: counted(form.sortOrder),
+        /*
+         * The route's top-up gift (Payment File 02 §17, D5), as the operator typed it and
+         * `percentOf` accepted it. Each top-up snapshots it when created, so this changes
+         * only top-ups created after the save.
+         */
+        topupCashbackPercent: gift,
       };
       /*
        * The key is bound to the whole payload AND to which route is being written, so
@@ -303,6 +341,12 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
         ].filter((part): part is string => part !== null);
         return parts.length === 0 ? '—' : parts.join(' · ');
       },
+    },
+    {
+      key: 'gift',
+      header: t('web.payment_gateway_topup_gift'),
+      render: (row) =>
+        row.topupCashbackPercent === 0 ? '—' : <Ltr>{`${String(row.topupCashbackPercent)}%`}</Ltr>,
     },
     {
       key: 'updated',
@@ -467,6 +511,23 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
             />
           </Field>
 
+          <Field
+            label={t('web.payment_gateway_topup_gift')}
+            htmlFor="pg-topup-gift"
+            hint={t('web.payment_gateway_topup_gift_hint')}
+            {...(percentOf(form.topupCashbackPercent) === null
+              ? { error: t('web.payment_gateway_topup_invalid') }
+              : {})}
+          >
+            <input
+              id="pg-topup-gift"
+              value={form.topupCashbackPercent}
+              inputMode="numeric"
+              maxLength={4}
+              onChange={(event) => setForm({ ...form, topupCashbackPercent: event.target.value })}
+            />
+          </Field>
+
           <Field label={t('web.payment_gateway_sort')} htmlFor="pg-sort">
             <input
               id="pg-sort"
@@ -480,7 +541,7 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
             <button
               type="button"
               className="btn primary sm"
-              disabled={busy}
+              disabled={busy || percentOf(form.topupCashbackPercent) === null}
               onClick={() => save.mutate()}
             >
               {t('web.payment_gateway_save')}

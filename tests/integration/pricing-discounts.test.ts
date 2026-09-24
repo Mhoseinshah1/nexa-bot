@@ -315,11 +315,43 @@ describe('discounts reach the order, and confirmation keeps its word', () => {
     expect(odd.totals.total.amountMinor).toBe(670n);
   });
 
-  it('clamps a fixed amount larger than the price to the price', async () => {
+  it('clamps a fixed amount larger than the price to one unit below it (D4)', async () => {
     await rule({ type: 'FIXED_AMOUNT', value: 999_999n, currency: 'IRT' });
     const order = await draft(customerA, await product(10_000n));
-    expect(order.totals.total.amountMinor).toBe(0n);
-    expect(order.totals.discount.amountMinor).toBe(10_000n);
+    // Not 0: a zero total confirmed and could not be settled (Payment File 02 §14).
+    expect(order.totals.total.amountMinor).toBe(1n);
+    expect(order.totals.discount.amountMinor).toBe(9_999n);
+  });
+
+  it('keeps a 100% automatic discount payable: one unit, confirmed AND settled (D4)', async () => {
+    /*
+     * The second reproduction of `docs/wp10-payments-audit.md` D5, now a regression
+     * (Payment File 02 §14, `docs/payments-file02-design.md` D4). A 100% rule priced the
+     * order at 0, which confirmed and then aborted at `payments_amount_check`. The engine
+     * floors the total at one minor unit; the order confirms and the ONE settlement path
+     * takes it — there is no zero-total payment flow.
+     */
+    await rule({ value: 100n });
+    const order = await confirm(customerA, await draft(customerA, await product(10_000n)));
+    expect(order.state).toBe('AWAITING_PAYMENT');
+    expect(order.totals.total.amountMinor, 'never zero').toBe(1n);
+    expect(order.totals.discount.amountMinor).toBe(9_999n);
+
+    await ctx.container.wallet.adjust(tenantA, owner, customerA, {
+      idempotencyKey: key(),
+      direction: 'CREDIT',
+      amountMinor: 1n,
+      currency: 'IRT',
+      note: 'یک واحد',
+    });
+    const { payment, order: paid } = await ctx.container.payments.settleFromWallet(
+      tenantA,
+      customerActor(key()),
+      customerA,
+      { idempotencyKey: key(), orderId: order.id },
+    );
+    expect(paid.state).toBe('PAID');
+    expect(payment.amount.amountMinor).toBe(1n);
   });
 
   it('respects the window: not before it starts, not from the moment it ends', async () => {

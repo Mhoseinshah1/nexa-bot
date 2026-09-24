@@ -81,6 +81,37 @@ export const RECEIPT_CAPTURE_CLOSE_REASONS = ['RECEIVED', 'SUPERSEDED', 'EXPIRED
 export type ReceiptCaptureCloseReason = (typeof RECEIPT_CAPTURE_CLOSE_REASONS)[number];
 
 /**
+ * Why an administrator's amount capture is no longer open (Payment File 02 §12, D3).
+ *
+ * The credit-to-wallet disposition asks a reviewer to TYPE an amount, which is the shape
+ * INCIDENT-FIN-001 is about: a prompt that outlives its question swallows an unrelated
+ * message. `admin_amount_captures` is `receipt_captures`' answer applied to that prompt —
+ * one row, one administrator, one payment, one bot, a short deadline — and this is how it
+ * ends:
+ *
+ * - `CONFIRMED` — the reviewer confirmed the stated amount, and the credit was asked for
+ *   under a key derived from the capture, so a second confirm is the same credit.
+ * - `CANCELLED` — the reviewer abandoned it. Nothing moved.
+ * - `SUPERSEDED` — they opened another capture, or the payment was decided another way
+ *   while it was open.
+ * - `EXPIRED` — the deadline passed. Stamped when a late message or tap finds it.
+ */
+export const ADMIN_AMOUNT_CAPTURE_CLOSE_REASONS = [
+  'CONFIRMED',
+  'CANCELLED',
+  'SUPERSEDED',
+  'EXPIRED',
+] as const;
+export type AdminAmountCaptureCloseReason = (typeof ADMIN_AMOUNT_CAPTURE_CLOSE_REASONS)[number];
+
+/**
+ * How long an amount capture stays open: five minutes, SHORTER than the customer windows'
+ * ten, because it is a person at a desk answering one question about money, and an open
+ * capture is the one thing that lets their ordinary message be read as an amount.
+ */
+export const ADMIN_AMOUNT_CAPTURE_TTL_MS = 5 * 60 * 1000;
+
+/**
  * The largest receipt this installation will download from Telegram.
  *
  * A BOUND on what one reviewer's click can pull into the API process, not a limit on
@@ -95,6 +126,34 @@ export type ReceiptCaptureCloseReason = (typeof RECEIPT_CAPTURE_CLOSE_REASONS)[n
  * received — because a declared size is a claim and the stream is the fact.
  */
 export const PAYMENT_RECEIPT_MAX_BYTES = 20 * 1024 * 1024;
+
+/**
+ * The bound on the customer's own caption stored beside a receipt (Payment File 02 §10,
+ * `docs/payments-file02-design.md` D3).
+ *
+ * Telegram's own limit on a media caption, so a caption Telegram delivered always fits.
+ * Stored trimmed; an empty caption is stored as no caption. It is customer text: it is
+ * rendered into the reviewer's caption and nowhere else, and never logged.
+ */
+export const RECEIPT_CAPTION_MAX_LENGTH = 1024;
+
+/**
+ * A receipt caption as it is stored: trimmed, empty as null, and bounded to
+ * `RECEIPT_CAPTION_MAX_LENGTH` CODE POINTS.
+ *
+ * Code points rather than `String.length`, because `payment_receipts_caption_check`
+ * measures with PostgreSQL's `length`, which counts characters, and slicing UTF-16 units
+ * could split a surrogate pair. Anything that is not a string is no caption.
+ */
+export function normalizeReceiptCaption(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (trimmed === '') return null;
+  const points = Array.from(trimmed);
+  return points.length <= RECEIPT_CAPTION_MAX_LENGTH
+    ? trimmed
+    : points.slice(0, RECEIPT_CAPTION_MAX_LENGTH).join('').trimEnd();
+}
 
 /**
  * One receipt, as a reviewer sees it listed.

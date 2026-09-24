@@ -2112,4 +2112,126 @@ describe('a customer manages the service they bought', () => {
     const balanceAfter = await ctx.container.wallet.balance(tenantA, owner, customerA);
     expect(balanceAfter.amountMinor).toBe(balanceBefore.amountMinor);
   });
+
+  // =========================================================================
+  // Renewal cashback (Payment File 02 §16, `docs/payments-file02-design.md` D6)
+  // =========================================================================
+
+  /*
+   * The WP8 engine already does what §16 asks; these are the tests that were missing.
+   * A rule for `RENEW` promises its cashback at confirmation, and the promise is earned
+   * only when the RENEW operation — the operation the order was BOUGHT as — SUCCEEDED:
+   * payment alone is not enough. Each case drives the real renewal, against the fake
+   * Marzban, through the provisioner.
+   */
+  async function renewalCashbackRule(key: string): Promise<void> {
+    const created = await ctx.container.cashbackRules.create(tenantA, owner, {
+      idempotencyKey: `${key}-rule`,
+      write: {
+        label: 'کش‌بک تمدید',
+        percent: 10,
+        appliesTo: ['RENEW'],
+        productId: null,
+        categoryId: null,
+        startsAt: null,
+        endsAt: null,
+      },
+    });
+    await ctx.container.cashbackRules.activate(tenantA, owner, {
+      idempotencyKey: `${key}-rule-on`,
+      ruleId: created.id,
+    });
+  }
+
+  const cashbackOf = async (orderId: string) =>
+    (
+      (await ctx.container.database.db.execute(
+        sql`SELECT state, amount::text AS amount FROM order_cashback WHERE order_id = ${orderId}` as never,
+      )) as unknown as { rows: { state: string; amount: string }[] }
+    ).rows[0];
+
+  const cashbackEntries = async (orderId: string) =>
+    (
+      (await ctx.container.database.db.execute(
+        sql`SELECT amount::text AS amount, reason, reference FROM wallet_entries
+             WHERE order_id = ${orderId} AND reason LIKE 'CASHBACK_%' ORDER BY created_at` as never,
+      )) as unknown as { rows: { amount: string; reason: string; reference: string }[] }
+    ).rows;
+
+  it('earns renewal cashback only after the RENEW succeeded, as a separate entry, once (D6)', async () => {
+    const service = await activeService('renew-cashback');
+    await renewalCashbackRule('renew-cashback');
+    await fund('renew-cashback');
+
+    const orderId = await buy(service.id, 'RENEW', null, 'renew-cashback');
+    // Promised at confirmation, on the renewal's own total: 10% of 250 000.
+    expect(await cashbackOf(orderId)).toEqual({ state: 'PENDING', amount: '25000' });
+    // PAID is not delivered: the RENEW is still only planned.
+    expect((await operationOf(service.id, 'RENEW'))?.state).toBe('PLANNED');
+    await ctx.container.cashback.settleDue(tenantA, 50);
+    expect(await cashbackOf(orderId), 'payment alone earns nothing').toEqual({
+      state: 'PENDING',
+      amount: '25000',
+    });
+    expect(await cashbackEntries(orderId)).toEqual([]);
+
+    await ctx.container.provisionerLoop.tick();
+    expect((await operationOf(service.id, 'RENEW'))?.state).toBe('SUCCEEDED');
+    await ctx.container.cashback.settleDue(tenantA, 50);
+
+    expect((await cashbackOf(orderId))?.state).toBe('EARNED');
+    // Its OWN entry, never folded into the renewal's debit.
+    expect(await cashbackEntries(orderId)).toEqual([
+      { amount: '25000', reason: 'CASHBACK_PURCHASE', reference: `${orderId}:cashback` },
+    ]);
+
+    // A replay of the sweep, and of the earner itself, earns nothing more.
+    expect(await ctx.container.cashback.settleDue(tenantA, 50)).toBe(0);
+    expect(await ctx.container.cashback.settle(tenantA, orderId)).toBe(false);
+    expect(await cashbackEntries(orderId)).toHaveLength(1);
+  });
+
+  it('earns nothing while the RENEW outcome is UNKNOWN (D6)', async () => {
+    const service = await activeService('renew-cashback-unknown');
+    await renewalCashbackRule('renew-cashback-unknown');
+    await fund('renew-cashback-unknown');
+    const orderId = await buy(service.id, 'RENEW', null, 'renew-cashback-unknown');
+
+    // The answer was lost: the renewal may have been applied, and nobody knows yet.
+    await ctx.container.database.db.execute(sql`
+      UPDATE provisioning_operations
+         SET state = 'UNKNOWN', claimed_by = NULL, lease_until = NULL
+       WHERE order_id = ${orderId} AND type = 'RENEW'`);
+
+    expect(await ctx.container.cashback.settleDue(tenantA, 50)).toBe(0);
+    expect(await cashbackOf(orderId)).toEqual({ state: 'PENDING', amount: '25000' });
+    expect(await cashbackEntries(orderId)).toEqual([]);
+  });
+
+  it('voids the renewal cashback when the RENEW FAILED and the order was refunded (D6)', async () => {
+    const service = await activeService('renew-cashback-failed');
+    await renewalCashbackRule('renew-cashback-failed');
+    const { orderId, paymentId } = await buyByTransfer(
+      service.id,
+      'RENEW',
+      'renew-cashback-failed',
+    );
+    await ctx.container.payments.confirmManualTransfer(tenantA, owner, paymentId, {
+      idempotencyKey: 'renew-cashback-failed-confirm',
+      note: 'کارت به کارت',
+    });
+    expect(await cashbackOf(orderId)).toEqual({ state: 'PENDING', amount: '25000' });
+
+    panel.behaviour = 'bad-credentials';
+    await ctx.container.provisionerLoop.tick();
+    expect((await operationOf(service.id, 'RENEW'))?.state).toBe('FAILED');
+    await ctx.container.cashback.settleDue(tenantA, 50);
+
+    expect((await cashbackOf(orderId))?.state, 'a refunded renewal earns nothing').toBe('VOID');
+    expect(await cashbackEntries(orderId)).toEqual([]);
+    const order = (await ctx.container.database.db.execute(
+      sql`SELECT state FROM orders WHERE id = ${orderId}` as never,
+    )) as unknown as { rows: { state: string }[] };
+    expect(order.rows[0]?.state).toBe('REFUNDED');
+  });
 });

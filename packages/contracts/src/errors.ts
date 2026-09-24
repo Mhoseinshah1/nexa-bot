@@ -763,6 +763,14 @@ export const COMMERCE_ERROR_CODES = {
    * of something FAILED, CANCELLED, EXPIRED or UNKNOWN — states from which the machine
    * has no `CONFIRM` edge, and the last of which is an absence of an outcome rather
    * than one.
+   *
+   * It is also the answer the LOSER of a receipt's three dispositions gets (Payment File
+   * 02 §11, D2): approve, reject and credit-to-wallet each take the payment from PENDING
+   * through one conditional UPDATE, so the second of any two is told the payment was
+   * already resolved, with the standing `state` — and, when a credit won,
+   * `disposition: 'CREDITED_TO_WALLET'` — in the details. Nothing of the loser's commits.
+   * A credit asked of a transfer that carries no receipt is refused here too, with
+   * `reason: 'NO_RECEIPT'`.
    */
   PAYMENT_STATE_INVALID: 'commerce.payment_state_invalid',
   /**
@@ -1012,6 +1020,16 @@ export const COMMERCE_ERROR_CODES = {
    *
    * It is deliberately NOT a permission failure and not a not-found. Both would hide a
    * live order from the person who placed it.
+   *
+   * WP10 P2 gives it a second producer, for the same fact: `settleFromWallet` refuses to
+   * debit a wallet for an order whose transfer the customer has said they sent. A wallet
+   * payment and an open transfer cannot both settle one order, and only a reviewer may
+   * decide the transfer — so nothing is debited, and the customer is told to wait for
+   * the review rather than to top up.
+   *
+   * Payment File 02 §9 (D1) gives it a third: `withdrawPending` refuses to withdraw a
+   * transfer the customer sent a receipt for. A submitted receipt has no timer and leaves
+   * review only through a reviewer's decision.
    */
   ORDER_TRANSFER_UNDER_REVIEW: 'commerce.order_transfer_under_review',
 
@@ -1082,6 +1100,10 @@ export const COMMERCE_ERROR_CODES = {
    * refund channel this release can perform (`GATEWAY`, per `REFUND_METHOD_SUPPORT`), or
    * it is already refunded in full. None of the three is something a different amount
    * would fix, which is what distinguishes this from `REFUND_EXCEEDS_REFUNDABLE`.
+   *
+   * The `reason` detail is a `REFUND_REFUSAL_REASONS` member. WP10 P3 adds
+   * `DELIVERY_IN_PROGRESS`: the order's purchase operation is not terminal, and the
+   * refund waits until what the customer holds is known.
    */
   REFUND_NOT_PERMITTED: 'commerce.refund_not_permitted',
   /**

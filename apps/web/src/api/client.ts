@@ -57,6 +57,9 @@ import {
   type TrialResetResponse,
   IDENTITY_ERROR_CODES,
   PAYMENT_ROUTES,
+  COMPENSATION_ROUTES,
+  compensationListResponseSchema,
+  type CompensationListResponse,
   SERVICE_ROUTES,
   serviceListResponseSchema,
   serviceActionResponseSchema,
@@ -1165,6 +1168,24 @@ export function actOnService(input: {
   return post(SERVICE_ACTION_PATHS[input.action](input.id), body, serviceActionResponseSchema);
 }
 
+/**
+ * The compensation list (Payment File 02 §21, D7): every automatic wallet refund of an
+ * order that could not be delivered. Read-only — a compensation is automatic, and there
+ * is no route that makes or changes one. Keyset-paged by the server's opaque cursor.
+ */
+export function fetchCompensations(
+  query: { limit?: number; cursor?: string } = {},
+): Promise<CompensationListResponse> {
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${COMPENSATION_ROUTES.list}?${suffix}` : COMPENSATION_ROUTES.list,
+    compensationListResponseSchema,
+  );
+}
+
 export function fetchPayment(id: string): Promise<PaymentResponse> {
   return authedGet(PAYMENT_ROUTES.detail(id), paymentResponseSchema);
 }
@@ -1314,6 +1335,8 @@ export function updatePaymentGateway(input: {
     activateAfterAccountDays: number;
   };
   sortOrder: number;
+  /** The top-up gift, 0–100 (D5). Required by the route, like every field of this form. */
+  topupCashbackPercent: number;
 }): Promise<PaymentGatewayResponse> {
   const { provider, ...body } = input;
   return post(PAYMENT_GATEWAY_ROUTES.update(provider), body, paymentGatewayResponseSchema);
@@ -1327,31 +1350,6 @@ export function setPaymentGatewayStatus(input: {
 }): Promise<PaymentGatewayResponse> {
   const { provider, ...body } = input;
   return post(PAYMENT_GATEWAY_ROUTES.status(provider), body, paymentGatewayResponseSchema);
-}
-
-export function confirmPayment(input: {
-  id: string;
-  idempotencyKey: string;
-  evidenceNote: string;
-}): Promise<PaymentResponse> {
-  const { id, ...body } = input;
-  return post(PAYMENT_ROUTES.confirm(id), body, paymentResponseSchema);
-}
-
-/**
- * Rejecting a receipt: the other half of `receipts.review`.
- *
- * A NOTE and nothing else, exactly as the confirmation. There is no amount, no state
- * and no un-reject: `PAYMENT_MACHINE` has no edge out of FAILED, migration 0052 freezes
- * the row, and a confirmed payment is reversed by a refund rather than by an edit.
- */
-export function rejectPayment(input: {
-  id: string;
-  idempotencyKey: string;
-  resolutionNote: string;
-}): Promise<PaymentResponse> {
-  const { id, ...body } = input;
-  return post(PAYMENT_ROUTES.reject(id), body, paymentResponseSchema);
 }
 
 export function fetchPanels(

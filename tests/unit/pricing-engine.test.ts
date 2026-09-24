@@ -300,15 +300,18 @@ describe('precedence and stacking', () => {
       rule({ id: id(1), priority: 9, stackable: true, value: 100n }),
       rule({ id: id(2), priority: 5, stackable: true, value: 10n }),
     ]);
-    expect(result.totals.total.amountMinor).toBe(0n);
+    // A 100% rule leaves ONE payable unit (D4), and the next finds nothing it may take.
+    expect(result.totals.total.amountMinor).toBe(1n);
     expect(applied(result)).toEqual([id(1)]);
   });
 
-  it('never goes below zero, and rounds a percentage up for the customer', () => {
+  it('never goes below one minor unit, and rounds a percentage up for the customer', () => {
+    // Payment File 02 §14 (D4): a commercial total of 0 cannot be settled, so the floor
+    // is one unit — this pinned 0 until then.
     expect(
       price(10n, [rule({ type: 'FIXED_AMOUNT', value: 999n, currency: 'IRT' })]).totals.total
         .amountMinor,
-    ).toBe(0n);
+    ).toBe(1n);
     // 33% of 1 001 = 330.33 → 331 off.
     expect(price(1_001n, [rule({ value: 33n })]).totals.discount.amountMinor).toBe(331n);
   });

@@ -372,11 +372,12 @@ describe('cashback is earned once, at delivery, and a refund takes its share bac
     expect(order.totals.quote.cashback?.amount.amountMinor).toBe(12_000n);
   });
 
-  it('promises nothing on an order a discount made free', async () => {
+  it('promises nothing on an order a 100% discount brought down to its one-unit floor', async () => {
     await discountRule({ value: 100n });
     await cashbackRule();
     const order = await confirmed(100_000n);
-    expect(order.totals.total.amountMinor).toBe(0n);
+    // Not free since Payment File 02 D4: one payable unit, and 10% of it rounds to nothing.
+    expect(order.totals.total.amountMinor).toBe(1n);
     expect(order.totals.quote.cashback).toBeUndefined();
     expect(await promise(order.id)).toBeUndefined();
   });
@@ -604,8 +605,14 @@ describe('cashback is earned once, at delivery, and a refund takes its share bac
     await cashbackRule();
     const order = await confirmed(100_000n);
     const paymentId = await paidFromWallet(order);
-    await refund(paymentId, 40_000n);
+    /*
+     * Delivered FIRST, then refunded, then noticed. The refund used to come before the
+     * delivery here; WP10 P3 refuses an operator's refund while the purchase operation is
+     * undecided, so "before delivery was noticed" now means what the title says — the
+     * account exists, and the earner has not yet swept it.
+     */
     await deliver(order.id);
+    await refund(paymentId, 40_000n);
     await ctx.container.cashback.settleDue(tenantA, 50);
     // 60% of the payment stands, so 60% of the promise is earned and nothing is reversed.
     expect((await promise(order.id))?.earned_amount).toBe('6000');

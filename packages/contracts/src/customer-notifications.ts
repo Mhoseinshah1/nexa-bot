@@ -149,6 +149,43 @@ export const CUSTOMER_NOTIFICATION_KINDS = [
    * none. `docs/wp6-audit.md` A4.
    */
   'TRIAL_NOT_DELIVERED',
+  /*
+   * ## WP10 and Payment File 02: money facts (`docs/payments-file02-design.md`)
+   *
+   * Each about an entity with an id and none carrying a payload, which is what this
+   * list admits.
+   */
+  /**
+   * A reviewer credited an amount to the wallet as a receipt's final disposition (D2).
+   * `payments.id` is the subject.
+   *
+   * Its own sentence rather than `WALLET_TOPUP_CREDITED`: the customer must learn that
+   * the transfer was not taken as payment of anything, and that what the reviewer judged
+   * arrived is in the wallet to spend. A top-up sentence would not tell them that the
+   * ORDER, when there is one, is still unpaid.
+   */
+  'RECEIPT_CREDITED_TO_WALLET',
+  /**
+   * A top-up earned its gateway's gift, credited as its own ledger entry (D5).
+   * `payments.id` is the subject — the top-up's payment, so one gift per top-up is also
+   * one sentence per top-up, by `customer_notifications_subject_key`.
+   *
+   * Sent beside `WALLET_TOPUP_CREDITED`, never instead of it: the principal and the gift
+   * are two facts and two entries, and Payment File 02 §18 asks for two messages. A top-up
+   * at 0% earns nothing and is sent nothing here.
+   */
+  'WALLET_TOPUP_GIFT_CREDITED',
+  /**
+   * An operator's refund is COMPLETE: the money is back on the wallet, or has been sent
+   * back out of band. `refunds.id` is the subject — the one kind in this list whose
+   * subject is a refund row, and the reason it is one row per refund: a payment refunded
+   * in three parts is three facts, each told once.
+   *
+   * Not sent for `AWAITING_EXTERNAL`, which is a promise and not yet a fact, and not sent
+   * by the automatic refund, which tells the customer `ORDER_REFUNDED_TO_WALLET` about
+   * the ORDER in the same transaction. P3.
+   */
+  'REFUND_COMPLETED',
 ] as const;
 export type CustomerNotificationKind = (typeof CUSTOMER_NOTIFICATION_KINDS)[number];
 export const customerNotificationKindSchema = z.enum(CUSTOMER_NOTIFICATION_KINDS);
@@ -233,6 +270,16 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
    * a new trial is a new order.
    */
   TRIAL_NOT_DELIVERED: false,
+  /*
+   * All three `false`, and each for the reason every money fact above is: they are
+   * terminal. A ledger entry is append-only, a FAILED payment is frozen, and a COMPLETED
+   * refund cannot be failed. A late copy of any of these sentences is still true — and
+   * `true` would send the dispatcher to a reader that reads `services` and nothing else,
+   * which would SUPERSEDE the message unsent.
+   */
+  RECEIPT_CREDITED_TO_WALLET: false,
+  WALLET_TOPUP_GIFT_CREDITED: false,
+  REFUND_COMPLETED: false,
 };
 
 /**
@@ -279,6 +326,13 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
   SERVICE_USAGE_SECOND: 'bot.service.usage_second',
   SERVICE_USAGE_FINAL: 'bot.service.usage_final',
   TRIAL_NOT_DELIVERED: 'bot.trial.not_delivered',
+  /*
+   * None with a placeholder: the lane carries no payload, and the figures are on the
+   * wallet page, derived from the ledger.
+   */
+  RECEIPT_CREDITED_TO_WALLET: 'bot.payment.receipt_credited_to_wallet',
+  WALLET_TOPUP_GIFT_CREDITED: 'bot.wallet.topup_gift_credited',
+  REFUND_COMPLETED: 'bot.refund.completed',
 };
 
 /**

@@ -297,6 +297,7 @@ export const WEB_FA = {
   'web.nav_orders': 'سفارش‌ها',
   'web.nav_products': 'محصولات',
   'web.nav_payments': 'پرداخت‌ها و کیف پول',
+  'web.nav_compensations': 'جبران‌های خودکار',
   'web.nav_discounts': 'تخفیف‌ها و کش‌بک',
   'web.nav_referrals': 'معرفی و پورسانت',
   'web.nav_resellers': 'نمایندگان',
@@ -980,6 +981,42 @@ export const WEB_FA = {
   'web.payment_reviewer': 'تأییدکننده',
   'web.payment_confirmed_at': 'زمان تأیید',
   'web.payment_created_at': 'زمان ثبت',
+  /*
+   * Payment File 02 §21 (D7): the diagnostics an operator reconciles against, on the list
+   * and the detail. Read-only — card-to-card is decided in Telegram (§10).
+   */
+  'web.payment_id': 'شناسهٔ پرداخت',
+  'web.payment_telegram': 'تلگرام مشتری',
+  'web.payment_gateway': 'درگاه',
+  'web.payment_external_reference': 'شناسهٔ پیگیری بیرونی',
+  'web.payment_updated_at': 'آخرین تغییر',
+  'web.payment_topup_gift': 'هدیهٔ شارژ این پرداخت',
+  'web.payment_topup_gift_hint':
+    'درصدی که هنگام ایجاد این شارژ از درگاه آن ثبت شد. تغییر بعدی تنظیمات درگاه آن را عوض نمی‌کند.',
+  'web.payment_receipt_credit': 'واریز رسید به کیف پول',
+  'web.payment_receipt_credit_hint':
+    'این رسید در تلگرام به‌جای تأیید یا رد، با مبلغی که مدیر وارد کرد به کیف پول مشتری واریز شد. این واریز پرداخت سفارش حساب نمی‌شود.',
+  'web.payment_receipt_credit_amount': 'مبلغ واریزشده',
+  'web.payment_receipt_credit_admin': 'مدیر تصمیم‌گیرنده',
+  'web.payment_receipt_credit_at': 'زمان واریز',
+  'web.payment_receipt_credit_note': 'یادداشت مدیر',
+  /*
+   * The compensation list (§21, D7): automatic wallet refunds of undeliverable orders.
+   * No timeline and no action — a compensation is automatic.
+   */
+  'web.compensations_title': 'جبران‌های خودکار',
+  'web.compensations_intro':
+    'سفارش‌هایی که پول آن‌ها رسید ولی تحویلشان ممکن نشد، و مبلغی که به‌طور خودکار به کیف پول مشتری بازگشت.',
+  'web.compensations_empty': 'هنوز جبرانی ثبت نشده است.',
+  'web.compensation_payment': 'پرداخت',
+  'web.compensation_order': 'سفارش',
+  'web.compensation_customer': 'مشتری',
+  'web.compensation_principal': 'مبلغ اصلی',
+  'web.compensation_credited': 'واریز به کیف پول',
+  'web.compensation_reason': 'دلیل',
+  'web.compensation_reason_undeliverable': 'تحویل‌نشدنی',
+  'web.compensation_state': 'وضعیت',
+  'web.compensation_time': 'زمان',
   'web.payment_expires_at': 'اعتبار تا',
   /*
    * The customer's CLAIM, and the copy never lets it read as evidence.
@@ -1000,13 +1037,13 @@ export const WEB_FA = {
   'web.payments_filter_all': 'همه',
   'web.payments_filter_invalid_id': 'شناسه معتبر نیست.',
   'web.payments_search_apply': 'جست‌وجو',
-  'web.payment_confirm_title': 'تأیید دریافت وجه',
-  'web.payment_confirm_hint':
-    'با تأیید، سفارش مربوط به این پرداخت پرداخت‌شده می‌شود. مبلغ و ارز قابل تغییر نیستند.',
-  'web.payment_confirm_note': 'یادداشت بررسی',
-  'web.payment_confirm': 'تأیید دریافت',
-  'web.payment_confirm_done': 'پرداخت تأیید شد و سفارش پرداخت‌شده است.',
-  'web.payment_confirm_denied': 'برای تأیید پرداخت دسترسی receipts.review لازم است.',
+  'web.payment_confirm_title': 'بررسی رسید',
+  /*
+   * Payment File 02 §10: card-to-card review is Telegram's alone. The Web Admin says
+   * where the decision is taken rather than drawing a control it has no route for.
+   */
+  'web.payment_review_in_telegram':
+    'این کارت‌به‌کارت در انتظار بررسی است. تأیید، رد یا واریز به کیف پول فقط از پنل مدیریت تلگرام انجام می‌شود و این صفحه تنها نتیجه را نمایش می‌دهد.',
   // Payment accounts — the destination an out-of-band transfer is told to go to.
   // The screen that replaces editing a message template to change a card number.
   'web.nav_payment_accounts': 'حساب‌های دریافت',
@@ -1068,6 +1105,10 @@ export const WEB_FA = {
   'web.payment_gateway_max': 'حداکثر مبلغ',
   'web.payment_gateway_amount_hint': 'مبلغ‌ها به ریال. عدد صفر یعنی بدون محدودیت.',
   'web.payment_gateway_sort': 'ترتیب نمایش',
+  'web.payment_gateway_topup_gift': 'هدیهٔ شارژ (درصد)',
+  'web.payment_gateway_topup_gift_hint':
+    'درصدی از مبلغ هر شارژ کیف پول از این درگاه که جداگانه به‌عنوان هدیه به کیف پول مشتری واریز می‌شود؛ ۰ یعنی بدون هدیه. هر شارژ درصد زمان ایجاد خود را نگه می‌دارد، پس تغییر آن فقط بر شارژهای بعدی اثر دارد.',
+  'web.payment_gateway_topup_invalid': 'درصد هدیهٔ شارژ باید عددی صحیح از ۰ تا ۱۰۰ باشد.',
   'web.payment_gateway_unbounded': 'بدون محدودیت',
   'web.payment_gateway_instructions': 'راهنمای مشتری',
   'web.payment_gateway_instructions_hint':
@@ -1098,14 +1139,6 @@ export const WEB_FA = {
   'web.payment_gateways_empty': 'هنوز روش پرداختی ثبت نشده است.',
   'web.payment_gateways_empty_hint':
     'در نصب سالم این فهرست خالی نمی‌ماند. اگر خالی است، سرویس را یک بار راه‌اندازی مجدد کنید تا روش‌های این نسخه ساخته شوند.',
-  'web.payment_reject_title': 'رد رسید',
-  // Says the two things an operator has to know before pressing it: the order is NOT
-  // cancelled, and the decision cannot be undone.
-  'web.payment_reject_hint':
-    'با رد این رسید، پرداخت بسته می‌شود و سفارش تا پایان مهلت خود باز می‌ماند تا مشتری بتواند با روش دیگری پرداخت کند. این تصمیم برگشت‌پذیر نیست.',
-  'web.payment_reject_note': 'دلیل رد',
-  'web.payment_reject': 'رد رسید',
-  'web.payment_reject_done': 'رسید رد شد. سفارش همچنان در انتظار پرداخت است.',
   'web.payment_resolution': 'نتیجهٔ بدون دریافت وجه',
   'web.payment_destination': 'مقصد واریز اعلام‌شده',
   'web.payment_destination_label': 'عنوان حساب',
@@ -1170,7 +1203,25 @@ export const WEB_FA = {
    * روش that has no channel in this release.
    */
   'web.refund_unavailable':
-    'این پرداخت قابل بازگشت نیست. یا هنوز تأیید نشده است، یا روش پرداخت آن در این نسخه مسیر بازگشتی ندارد.',
+    'در حال حاضر این پرداخت قابل بازگشت نیست. یا هنوز تأیید نشده است، یا روش پرداخت آن در این نسخه مسیر بازگشتی ندارد، یا مبلغ آن پیش‌تر به کیف پول مشتری رفته است، یا ساخت سرویس سفارش آن هنوز به نتیجهٔ قطعی نرسیده است. مورد آخر با پایان ساخت خودبه‌خود برطرف می‌شود.',
+  /*
+   * WP10 P3, said when the SERVER named it. A refund of an order payment is refused
+   * while the order's purchase is planned, in flight or UNKNOWN: money given back for
+   * an account the customer may be holding is the ambiguity the money rules forbid.
+   * The one refusal that clears on its own, and the copy says so.
+   */
+  'web.refund_delivery_in_progress':
+    'تا وقتی ساخت سرویس این سفارش به نتیجهٔ قطعی نرسیده، بازگشت وجه ممکن نیست؛ ممکن است سرویس برای مشتری ساخته شده باشد. اگر ساخت ناموفق شود، مبلغ به‌طور خودکار بازگردانده می‌شود. پس از پایان ساخت دوباره تلاش کنید.',
+  /*
+   * WP10 P3, after the order's refunds reached its full amount. The two claims are the
+   * two the data supports: the ORDER says REFUNDED (read from the order, never inferred
+   * from the rows here), and a refund never acts on a service — suspending or
+   * terminating one is the operator's own, explicit service action.
+   */
+  'web.refund_order_refunded_title': 'سفارش این پرداخت بازگشت خورده است',
+  'web.refund_order_refunded_body':
+    'بازگشت وجه هیچ سرویسی را تعلیق یا حذف نمی‌کند. اگر این سفارش سرویسی ساخته باشد، آن سرویس به همان حال قبلی مانده است؛ برای تعلیق یا حذف آن از اقدام‌های صفحهٔ سرویس استفاده کنید.',
+  'web.refund_order_link': 'مشاهدهٔ سفارش و سرویس آن',
   'web.refund_amount': 'مبلغ',
   'web.refund_state': 'وضعیت',
   'web.refund_state_requested': 'ثبت‌شده',
@@ -1427,8 +1478,15 @@ export const WEB_FA = {
   'web.order_service_empty_hint':
     'تا وقتی پول سفارش تسویه نشده باشد، سرویسی ساخته نمی‌شود. اگر سفارش تسویه شده و اینجا خالی است، یا سفارش از نوع خرید سرویس جدید نبوده، یا هنگام تسویه هیچ پنل واجد شرایطی برای تحویل آن نبوده و سفارش در همان لحظه بازگشت خورده است. وضعیت سفارش در بالای همین صفحه می‌گوید کدام‌یک.',
   'web.order_refunded_banner_title': 'این سفارش بازگشت خورده است',
+  /*
+   * REWRITTEN for WP10 P3. It said the order was refunded because its service could not
+   * be created — true of the automatic lane, and false since an operator's refunds that
+   * reach the payment's full amount also move the order to REFUNDED, after delivery.
+   * Both causes are named, because this banner reads only the order's state and that
+   * state does not say which of the two produced it.
+   */
   'web.order_refunded_banner_body':
-    'ساخت سرویس این سفارش ممکن نشد و مبلغ آن به‌طور خودکار بازگردانده شد. اگر پیش از این بخشی از همان پرداخت به‌صورت دستی بازگردانده شده باشد، تنها باقیماندهٔ آن به کیف پول مشتری واریز می‌شود و اگر تمام آن پیش‌تر بازگردانده شده باشد، واریزی به کیف پول انجام نمی‌شود. مبلغ و مقصد دقیق هر بازپرداخت در تاریخچهٔ بازپرداخت‌های همان پرداخت و در دفتر کیف پول مشتری ثبت شده است.',
+    'پول این سفارش بازگردانده شده است: یا به‌طور خودکار، چون ساخت سرویس آن ممکن نشد، یا با بازگشت‌های وجهی که اپراتور ثبت کرده است. در حالت خودکار، اگر پیش از آن بخشی از همان پرداخت به‌صورت دستی بازگردانده شده باشد، تنها باقیماندهٔ آن به کیف پول مشتری واریز می‌شود. بازگشت وجه هیچ سرویسی را تعلیق یا حذف نمی‌کند. مبلغ و مقصد دقیق هر بازپرداخت در تاریخچهٔ بازپرداخت‌های همان پرداخت و در دفتر کیف پول مشتری ثبت شده است.',
   'web.order_confirmed_at': 'تأییدشده در',
   'web.order_customer': 'مشتری',
   'web.order_product': 'محصول',

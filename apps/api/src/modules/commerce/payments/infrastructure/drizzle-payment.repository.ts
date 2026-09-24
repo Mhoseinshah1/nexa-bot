@@ -4,6 +4,7 @@ import {
   desc,
   eq,
   getTableColumns,
+  inArray,
   isNotNull,
   isNull,
   lte,
@@ -15,6 +16,7 @@ import type {
   CurrencyCode,
   OrderId,
   PaymentEvidenceKind,
+  PaymentGatewayProvider,
   PaymentId,
   PaymentMethod,
   PaymentResolvedState,
@@ -27,9 +29,14 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
-import { payments } from '../../../../infrastructure/persistence/schema.js';
+import {
+  customers,
+  paymentReceipts,
+  payments,
+} from '../../../../infrastructure/persistence/schema.js';
 import type {
   PaymentConfirmation,
+  PaymentCustomerIdentity,
   PaymentCursor,
   PaymentDraft,
   PaymentPage,
@@ -79,6 +86,9 @@ export class DrizzlePaymentRepository implements PaymentRepository {
         currency: draft.amount.currency,
         reference: draft.reference,
         expiresAt: draft.expiresAt,
+        // The route snapshot (D5), written here once and frozen by 0114 afterwards.
+        gatewayProvider: draft.gatewayProvider,
+        topupCashbackPercent: draft.topupCashbackPercent,
         createdAt: draft.now,
         updatedAt: draft.now,
       })
@@ -444,6 +454,7 @@ export class DrizzlePaymentRepository implements PaymentRepository {
           eq(payments.state, 'PENDING'),
           isNotNull(payments.expiresAt),
           lte(payments.expiresAt, now),
+          noReceiptFiled(),
         ),
       )
       .orderBy(asc(payments.expiresAt), asc(payments.id))
@@ -475,6 +486,15 @@ export class DrizzlePaymentRepository implements PaymentRepository {
           eq(payments.state, 'PENDING'),
           isNotNull(payments.expiresAt),
           lte(payments.expiresAt, now),
+          /*
+           * Restated HERE, as every predicate above is, so the UPDATE never depends on
+           * the sub-select alone. Today it is redundant, and the falsification record
+           * says so (PAY-01u survives): the candidates are locked `FOR UPDATE SKIP
+           * LOCKED` by this same statement, and `ReceiptService.submit` files a receipt
+           * under that row lock, so no receipt can land between the two. It is kept for
+           * the day the candidate query stops taking the lock.
+           */
+          noReceiptFiled(),
           sql`${payments.id} IN ${due}`,
         ),
       )
@@ -509,6 +529,47 @@ export class DrizzlePaymentRepository implements PaymentRepository {
       .limit(1);
     return row === undefined ? null : toRecord(row as Row);
   }
+
+  async customerIdentities(
+    scope: TenantContext,
+    customerIds: readonly UserId[],
+    tx?: unknown,
+  ): Promise<ReadonlyMap<UserId, PaymentCustomerIdentity>> {
+    const tenantId = requireTenantId(scope);
+    const identities = new Map<UserId, PaymentCustomerIdentity>();
+    if (customerIds.length === 0) return identities;
+    const rows = await this.exec(tx)
+      .select({
+        id: customers.id,
+        telegramUserId: customers.telegramUserId,
+        username: customers.username,
+      })
+      .from(customers)
+      .where(
+        and(eq(customers.tenantId, tenantId), inArray(customers.id, [...new Set(customerIds)])),
+      );
+    for (const row of rows) {
+      identities.set(row.id as UserId, {
+        telegramUserId: row.telegramUserId,
+        username: row.username,
+      });
+    }
+    return identities;
+  }
+}
+
+/**
+ * No receipt is on file for this payment — the one condition under which a PENDING
+ * transfer may still expire (Payment File 02 §9, D1).
+ *
+ * A submitted receipt has no timer: it stays reviewable until a reviewer approves,
+ * rejects or credits it. Tenant-scoped as well as keyed by the payment, because every
+ * read here is; `payment_receipts_payment_idx` leads with both.
+ */
+function noReceiptFiled(): SQL {
+  return sql`NOT EXISTS (SELECT 1 FROM ${paymentReceipts}
+                  WHERE ${paymentReceipts.tenantId} = ${payments.tenantId}
+                    AND ${paymentReceipts.paymentId} = ${payments.id})`;
 }
 
 type Row = {
@@ -530,6 +591,8 @@ type Row = {
   resolutionNote: string | null;
   customerSignalledAt: Date | null;
   expiresAt: Date | null;
+  gatewayProvider: string | null;
+  topupCashbackPercent: number | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -554,6 +617,9 @@ function toRecord(row: Row): PaymentRecord {
     resolutionNote: row.resolutionNote,
     customerSignalledAt: row.customerSignalledAt,
     expiresAt: row.expiresAt,
+    // `payments_gateway_provider_check` is built from the contract enum.
+    gatewayProvider: row.gatewayProvider as PaymentGatewayProvider | null,
+    topupCashbackPercent: row.topupCashbackPercent,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

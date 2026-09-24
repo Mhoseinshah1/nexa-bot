@@ -164,6 +164,18 @@ export interface CustomerFileMessage {
   readonly botInstanceId: BotInstanceId;
   readonly kind: 'PHOTO' | 'DOCUMENT';
   readonly fileId: string;
+  /**
+   * The caption, as a template key and its values — never text, for the reason
+   * `CustomerMessage` gives: rendering happens where the tenant's overrides live, and the
+   * format (and so the escaping) is the key's.
+   *
+   * Payment File 02 §10: the reviewer's receipt is ONE message, so the facts travel on the
+   * image rather than in a second message beside it. Absent means a bare file, which is
+   * what every further receipt of the same payment is.
+   */
+  readonly caption?: { readonly templateKey: TemplateKey; readonly values: TemplateValues };
+  /** An inline keyboard on the file, with `CustomerMessage.buttons`' rules. */
+  readonly buttons?: readonly CustomerButton[];
 }
 
 /**

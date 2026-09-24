@@ -196,6 +196,29 @@ describe('a provisioned service announces itself', () => {
   });
 
   /** A settled order, which is what plans a provisioning operation. */
+  /**
+   * The order's first create, ended without an account and left for an operator.
+   *
+   * A fixture for a state `retireExhausted` or an operator's abandon produces: the
+   * PROVISION operation is terminal, the service still PENDING_PROVISION and the order
+   * still PAID. It is what lets an operator's refund in under WP10 P3, which refuses one
+   * while the purchase operation is undecided.
+   */
+  async function firstCreateEnded(orderId: OrderId): Promise<void> {
+    await ctx.container.database.db.execute(sql`
+      UPDATE provisioning_operations
+         SET state = 'FAILED', completed_at = now(), claimed_by = NULL, lease_until = NULL
+       WHERE tenant_id = ${tenantA.tenantId} AND order_id = ${orderId} AND type = 'PROVISION'`);
+  }
+
+  /** The operator's retry of that service, which plans a fresh create. */
+  async function retryAfterRefund(orderId: OrderId, key: string): Promise<void> {
+    const service = await services.findByOrderId(tenantA, orderId);
+    await ctx.container.provisioning.retryProvisioning(tenantA, owner, service?.id ?? '', {
+      idempotencyKey: key,
+    });
+  }
+
   async function paidOrder(key: string): Promise<OrderId> {
     const product = await products.create(tenantA, {
       id: ctx.container.ids.uuid() as ProductId,
@@ -976,17 +999,24 @@ describe('a provisioned service announces itself', () => {
      * The order is the correctness and it is asserted as one: the partial goes in
      * FIRST, while the order is still PAID and deliverable, and the create fails
      * afterwards.
+     *
+     * WP10 P3 refuses an operator's refund while the purchase operation is undecided,
+     * so the partial can no longer go in while the first create is merely PLANNED. The
+     * state is still reachable, and this reaches it the way production does: the first
+     * create ended, the operator refunded part, and then retried the provisioning.
      */
     const orderId = await paidOrder('partial-then-failed');
     const paymentRow = (await ctx.container.database.db.execute(
       sql`SELECT id FROM payments WHERE order_id = ${orderId}` as never,
     )) as unknown as { rows: { id: string }[] };
+    await firstCreateEnded(orderId);
     await ctx.container.refunds.request(tenantA, owner, {
       idempotencyKey: 'partial-refund',
       paymentId: paymentRow.rows[0]?.id ?? '',
       amountMinor: 100_000n,
       reason: 'GOODWILL',
     });
+    await retryAfterRefund(orderId, 'retry-partial');
 
     // And now it cannot be delivered at all.
     await ctx.container.panels.setCredentials(tenantA, owner, panelId, {
@@ -1038,6 +1068,8 @@ describe('a provisioned service announces itself', () => {
      * above asserts and this one must not contradict.
      */
     const { orderId, paymentId } = await transferPaidOrder('unsent-then-failed');
+    // Reached through the operator's retry, for the reason the case above gives (P3).
+    await firstCreateEnded(orderId);
     const unsent = await ctx.container.refunds.request(tenantA, owner, {
       idempotencyKey: 'unsent-refund',
       paymentId,
@@ -1047,6 +1079,7 @@ describe('a provisioned service announces itself', () => {
     expect(unsent.state, 'the operator has recorded an intention, not a transfer').toBe(
       'AWAITING_EXTERNAL',
     );
+    await retryAfterRefund(orderId, 'retry-unsent');
 
     // And now the account cannot be created at all.
     await ctx.container.panels.setCredentials(tenantA, owner, panelId, {

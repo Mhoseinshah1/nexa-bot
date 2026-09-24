@@ -70,10 +70,15 @@ import {
   PAYMENT_GATEWAY_STATUSES,
   PAYMENT_RECEIPT_KINDS,
   RECEIPT_CAPTURE_CLOSE_REASONS,
+  ADMIN_AMOUNT_CAPTURE_CLOSE_REASONS,
   PAYMENT_STATES,
   PAYMENT_METHODS,
   PAYMENT_EVIDENCE_KINDS,
   PAYMENT_RESOLVED_STATES,
+  PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MAX,
+  PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MIN,
+  RECEIPT_CAPTION_MAX_LENGTH,
+  RECEIPT_CREDIT_NOTE_MAX_LENGTH,
   LEDGER_DIRECTIONS,
   LEDGER_REASONS,
   SERVICE_DELIVERY_STATES,
@@ -3246,6 +3251,25 @@ export const payments = pgTable(
      */
     customerSignalledAt: timestamptz('customer_signalled_at'),
     expiresAt: timestamptz('expires_at'),
+    /**
+     * The route the payment was offered through, snapshotted when it was created
+     * (Payment File 02 §21, `docs/payments-file02-design.md` D5 and D7).
+     *
+     * Nullable: a wallet settlement goes through no route, and every payment created
+     * before this column existed has none recorded. Frozen after insert by
+     * `nexa_payments_confirmation_guard` (0114), in every state.
+     */
+    gatewayProvider: text('gateway_provider'),
+    /**
+     * The top-up gift this payment PROMISED, snapshotted from its route's
+     * `topup_cashback_percent` when it was created (D5).
+     *
+     * Null for an order payment — an order earns no top-up gift — and for a payment
+     * created before this column existed; `0` for a top-up through a route that offered
+     * none. Frozen after insert, so an operator changing the route's percentage later
+     * cannot change a promise already made: Payment File 02 §17's snapshot rule.
+     */
+    topupCashbackPercent: integer('topup_cashback_percent'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -3390,6 +3414,14 @@ export const payments = pgTable(
     check(
       'payments_customer_signal_check',
       sql`customer_signalled_at IS NULL OR method = 'MANUAL_TRANSFER'`,
+    ),
+    check(
+      'payments_gateway_provider_check',
+      nullableEnumCheck('gateway_provider', PAYMENT_GATEWAY_PROVIDERS),
+    ),
+    check(
+      'payments_topup_cashback_percent_check',
+      sql`topup_cashback_percent IS NULL OR topup_cashback_percent BETWEEN ${sql.raw(String(PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MIN))} AND ${sql.raw(String(PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MAX))}`,
     ),
     unique('payments_tenant_id_key').on(table.tenantId, table.id),
   ],
@@ -3596,6 +3628,13 @@ export const paymentGateways = pgTable(
     deactivateAfterPayments: integer('deactivate_after_payments').notNull().default(0),
     activateAfterAccountDays: integer('activate_after_account_days').notNull().default(0),
     sortOrder: integer('sort_order').notNull().default(0),
+    /**
+     * The top-up gift this route promises, a whole percentage of a top-up's principal
+     * (Payment File 02 §17, D5). `0` is no gift and the default, so every existing route
+     * keeps promising nothing until an operator says otherwise. A top-up snapshots it
+     * onto `payments.topup_cashback_percent` when it is created.
+     */
+    topupCashbackPercent: integer('topup_cashback_percent').notNull().default(0),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -3656,6 +3695,10 @@ export const paymentGateways = pgTable(
       sql`instructions IS NULL OR length(instructions) BETWEEN 1 AND 1000`,
     ),
     check('payment_gateways_sort_order_check', sql`sort_order BETWEEN 0 AND 100000`),
+    check(
+      'payment_gateways_topup_cashback_percent_check',
+      sql`topup_cashback_percent BETWEEN ${sql.raw(String(PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MIN))} AND ${sql.raw(String(PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MAX))}`,
+    ),
   ],
 );
 
@@ -3883,6 +3926,81 @@ export const receiptCaptures = pgTable(
 );
 
 /**
+ * The window in which ONE administrator's next plain message is read as an amount to credit
+ * from ONE receipt (Payment File 02 §12, `docs/payments-file02-design.md` D3).
+ *
+ * `receipt_captures`, turned round to face the reviewer. `INCIDENT-FIN-001` is an ADMIN
+ * prompt that swallowed a typed navigation string and overwrote a production setting, and
+ * credit-to-wallet genuinely needs a typed amount, so the prompt is a ROW with the four
+ * properties that one lacked, all of them here rather than in a docstring:
+ *
+ * 1. it names ONE administrator, ONE bot and ONE payment, so there is no "current prompt"
+ *    another person's message, or a message about another payment, can land in;
+ * 2. it reads ONE amount: once `amount_minor` is set it no longer reads messages, so a
+ *    second number typed after the confirmation was drawn cannot change what the button
+ *    confirms — to change the figure, the reviewer cancels and starts again;
+ * 3. the amount moves nothing by itself: a separate confirm, carrying this row's id,
+ *    calls `ReceiptDispositionService.creditToWallet` under a key derived from the id;
+ * 4. it EXPIRES, and the CHECK refuses a window that outlives its own opening.
+ *
+ * One open capture per administrator per bot is a partial unique index. Opening another
+ * closes the first as SUPERSEDED in the same transaction.
+ */
+export const adminAmountCaptures = pgTable(
+  'admin_amount_captures',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    /** WHICH bot the administrator is talking to, for `receipt_captures`' reason. */
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    adminId: uuid('admin_id').notNull(),
+    paymentId: uuid('payment_id').notNull(),
+    /**
+     * The amount the administrator typed, in minor units of the PAYMENT's currency. Null
+     * until they have typed one; set once. Not money on its own — nothing is credited
+     * until the confirm, and the credit's own row carries its currency.
+     */
+    amountMinor: bigint('amount_minor', { mode: 'bigint' }),
+    openedAt: timestamptz('opened_at').notNull().defaultNow(),
+    expiresAt: timestamptz('expires_at').notNull(),
+    closedAt: timestamptz('closed_at'),
+    closeReason: text('close_reason'),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.adminId],
+      foreignColumns: [admins.tenantId, admins.id],
+      name: 'admin_amount_captures_admin_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.paymentId],
+      foreignColumns: [payments.tenantId, payments.id],
+      name: 'admin_amount_captures_payment_fk',
+    }),
+    /** ONE open capture per administrator per bot, decided by the database. */
+    uniqueIndex('admin_amount_captures_open_key')
+      .on(table.tenantId, table.botInstanceId, table.adminId)
+      .where(sql`closed_at IS NULL`),
+    check(
+      'admin_amount_captures_close_reason_check',
+      nullableEnumCheck('close_reason', ADMIN_AMOUNT_CAPTURE_CLOSE_REASONS),
+    ),
+    check('admin_amount_captures_closed_check', sql`(closed_at IS NULL) = (close_reason IS NULL)`),
+    check('admin_amount_captures_expiry_check', sql`expires_at > opened_at`),
+    check('admin_amount_captures_amount_check', sql`amount_minor IS NULL OR amount_minor > 0`),
+    /** A confirmation confirms an amount: there is no CONFIRMED row without one. */
+    check(
+      'admin_amount_captures_confirmed_check',
+      sql`close_reason IS DISTINCT FROM 'CONFIRMED' OR amount_minor IS NOT NULL`,
+    ),
+  ],
+);
+
+/**
  * One receipt a customer sent, bound to exactly one payment.
  *
  * The BINDING lives here; the bytes live at Telegram. This installation stores the two
@@ -3920,6 +4038,12 @@ export const paymentReceipts = pgTable(
     fileName: text('file_name'),
     /** Which message carried it, so an operator can find it in the chat if they must. */
     telegramMessageId: bigint('telegram_message_id', { mode: 'bigint' }),
+    /**
+     * The caption the customer sent with the file, trimmed, or NULL for none (Payment
+     * File 02 §10, D3). CUSTOMER text: rendered into the reviewer's Telegram caption and
+     * nowhere else, never logged, and never returned to a browser.
+     */
+    caption: text('caption'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
   },
   (table) => [
@@ -3950,6 +4074,10 @@ export const paymentReceipts = pgTable(
     index('payment_receipts_payment_idx').on(table.tenantId, table.paymentId, table.createdAt),
     check('payment_receipts_kind_check', enumCheck('kind', PAYMENT_RECEIPT_KINDS)),
     check('payment_receipts_size_check', sql`file_size IS NULL OR file_size > 0`),
+    check(
+      'payment_receipts_caption_check',
+      sql`caption IS NULL OR length(caption) BETWEEN 1 AND ${sql.raw(String(RECEIPT_CAPTION_MAX_LENGTH))}`,
+    ),
     unique('payment_receipts_tenant_id_key').on(table.tenantId, table.id),
   ],
 );
@@ -4116,7 +4244,105 @@ export const walletEntries = pgTable(
     uniqueIndex('wallet_entries_topup_payment_key')
       .on(table.tenantId, table.paymentId)
       .where(sql`reason = 'TOPUP_RECEIPT'`),
+    /**
+     * A receipt credit names the payment whose receipt it disposed of (Payment File 02
+     * §12, D2). The top-up rule above, for the second reason whose whole meaning is a
+     * payment.
+     */
+    check(
+      'wallet_entries_receipt_credit_payment_check',
+      sql`reason <> 'RECEIPT_CREDIT' OR payment_id IS NOT NULL`,
+    ),
+    /**
+     * ONE receipt credit per payment, decided by the database — invariant 8 of Payment
+     * File 02 §23, held here on its own and again by `receipt_credits`' primary key. Two
+     * reviewers crediting together, a retry, and a writer that forgot the disposition row
+     * all name the same payment. `<paymentId>:receipt-credit` gives the same guarantee
+     * through the reference key; this is the one a change to the reference cannot remove.
+     */
+    uniqueIndex('wallet_entries_receipt_credit_payment_key')
+      .on(table.tenantId, table.paymentId)
+      .where(sql`reason = 'RECEIPT_CREDIT'`),
+    /**
+     * A top-up gift names the top-up that earned it (D5), and there is ONE per payment:
+     * invariant 11. A replayed confirmation, a racing one and a future gateway callback
+     * all name the same payment, so all but one conflict here.
+     */
+    check(
+      'wallet_entries_topup_cashback_payment_check',
+      sql`reason <> 'CASHBACK_TOPUP' OR payment_id IS NOT NULL`,
+    ),
+    uniqueIndex('wallet_entries_topup_cashback_payment_key')
+      .on(table.tenantId, table.paymentId)
+      .where(sql`reason = 'CASHBACK_TOPUP'`),
     unique('wallet_entries_tenant_id_key').on(table.tenantId, table.id),
+  ],
+);
+
+/**
+ * A card-to-card receipt's credit-to-wallet disposition (Payment File 02 §12,
+ * `docs/payments-file02-design.md` D2).
+ *
+ * One of a receipt's three mutually exclusive final dispositions — approve, reject, or
+ * this — and the only one that needs its own row: approve and reject are the payment's
+ * own CONFIRMED and FAILED. A credit moves the payment `PENDING -> FAILED` through the
+ * same conditional UPDATE a rejection uses, and this row records what that FAILED
+ * meant: the reviewer judged `amount` arrived and put exactly that on the wallet under
+ * `RECEIPT_CREDIT`.
+ *
+ * Keyed by `(tenant_id, payment_id)`: at most one per payment, which is invariant 8, and
+ * held again on its own by `wallet_entries_receipt_credit_payment_key` on the money.
+ *
+ * Append-only (0114): no UPDATE and no DELETE. The same migration refuses a row whose
+ * payment is not a FAILED manual transfer, or whose entry is not that payment's
+ * `RECEIPT_CREDIT` CREDIT of the same amount and currency — facts about other tables a
+ * CHECK cannot read.
+ */
+export const receiptCredits = pgTable(
+  'receipt_credits',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    paymentId: uuid('payment_id').notNull(),
+    /**
+     * What was credited: the reviewer's figure, in the PAYMENT's currency. Stored rather
+     * than joined, for the rule `refunds` states — never an amount without its currency,
+     * readable on its own — and checked against the ledger entry by 0114.
+     */
+    amount: bigint('amount', { mode: 'bigint' }).notNull(),
+    currency: text('currency').notNull(),
+    /** The `RECEIPT_CREDIT` ledger entry this disposition wrote. */
+    walletEntryId: uuid('wallet_entry_id').notNull(),
+    /** The reviewer. NOT NULL: a decision about somebody's money with nobody named is not one. */
+    decidedByAdminId: uuid('decided_by_admin_id')
+      .notNull()
+      .references(() => admins.id),
+    decidedAt: timestamptz('decided_at').notNull(),
+    /** The reviewer's own words, bounded. Never customer text. */
+    note: text('note'),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.tenantId, table.paymentId],
+      name: 'receipt_credits_pkey',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.paymentId],
+      foreignColumns: [payments.tenantId, payments.id],
+      name: 'receipt_credits_payment_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.walletEntryId],
+      foreignColumns: [walletEntries.tenantId, walletEntries.id],
+      name: 'receipt_credits_entry_fk',
+    }),
+    check('receipt_credits_amount_check', sql`amount > 0`),
+    check('receipt_credits_currency_check', enumCheck('currency', CURRENCY_CODES)),
+    check(
+      'receipt_credits_note_check',
+      sql`note IS NULL OR length(btrim(note)) BETWEEN 1 AND ${sql.raw(String(RECEIPT_CREDIT_NOTE_MAX_LENGTH))}`,
+    ),
   ],
 );
 

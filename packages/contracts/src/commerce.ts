@@ -353,14 +353,29 @@ export interface OrderTotals {
 }
 
 /**
- * A total is never negative, and that is a domain rule rather than a column type.
+ * A commercial total is never below ONE minor unit, and that is a domain rule rather
+ * than a column type.
  *
  * A discount larger than a subtotal is a configuration mistake, and the harmless
  * reading of it — "the customer is owed money" — is the expensive one: it would mint a
- * credit out of a promo code. So the discount is CLAMPED to the subtotal and the clamp
- * is visible in the quote trace.
+ * credit out of a promo code. So the discount is CLAMPED and the clamp is visible in the
+ * quote trace.
+ *
+ * The clamp is `subtotal − 1`, not `subtotal` (Payment File 02 §14,
+ * `docs/payments-file02-design.md` D4, `docs/wp10-payments-audit.md` D5/P13). A total of
+ * zero confirmed and then could not be settled — `payments_amount_check` refuses a
+ * payment of `0` — so a 100% discount, or a 99% reseller price under a 50% promotion,
+ * left the customer holding an order nothing could pay for. There is no zero-total
+ * payment flow, and File 02 forbids inventing one; the floor keeps the one settlement
+ * path and costs the customer one minor unit. It is the floor the reseller reduction
+ * already uses (`resellerReductionMinor` caps at `subtotal − 1`), in the one place every
+ * caller — quote, confirmation, commercial actions — prices through.
+ *
+ * A subtotal of one or less has nothing to take off. Trials are untouched: they are
+ * GRANT orders outside pricing and never reach this function.
  */
 export function clampDiscount(subtotalMinor: bigint, discountMinor: bigint): bigint {
   if (discountMinor <= 0n) return 0n;
-  return discountMinor > subtotalMinor ? subtotalMinor : discountMinor;
+  const ceiling = subtotalMinor > 1n ? subtotalMinor - 1n : 0n;
+  return discountMinor > ceiling ? ceiling : discountMinor;
 }

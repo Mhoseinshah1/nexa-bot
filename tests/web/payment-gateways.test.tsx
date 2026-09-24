@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { NAV, navPermitted } from '../../apps/web/src/app';
-import { minorOf } from '../../apps/web/src/pages/payment-gateways';
+import { minorOf, PaymentGatewaysPage, percentOf } from '../../apps/web/src/pages/payment-gateways';
+import { renderPage, stubApi } from './harness';
 
 /**
  * Two rules the Codex review of the payment batch found broken on this screen.
@@ -63,5 +65,90 @@ describe('payment navigation permissions', () => {
     expect(navPermitted(entry(id), [view, edit])).toBe(true);
     expect(navPermitted(entry(id), [edit])).toBe(false);
     expect(navPermitted(entry(id), [])).toBe(false);
+  });
+});
+
+/**
+ * The route's top-up gift (Payment File 02 §17, D5), edited on the gateway form.
+ *
+ * `percentOf` has `minorOf`'s rule: a figure is accepted as typed or refused, never
+ * clamped or rounded, because this one decides how much money a customer is given.
+ */
+describe('percentOf', () => {
+  it('reads a whole percentage from 0 to 100, in any digits, with an optional %', () => {
+    expect(percentOf('0')).toBe(0);
+    expect(percentOf('10')).toBe(10);
+    expect(percentOf(' 100 ')).toBe(100);
+    expect(percentOf('۱۵')).toBe(15);
+    expect(percentOf('١٢')).toBe(12);
+    expect(percentOf('10%')).toBe(10);
+    expect(percentOf('۱۰٪')).toBe(10);
+  });
+
+  it.each(['', '101', '-1', '10.5', '1e1', 'ten', '1000', '10%%'])('refuses %j', (value) => {
+    expect(percentOf(value)).toBeNull();
+  });
+});
+
+describe('the gateway form’s top-up gift', () => {
+  const GATEWAY = {
+    provider: 'MANUAL_TRANSFER',
+    status: 'ACTIVE',
+    displayName: null,
+    instructions: null,
+    minAmountMinor: '0',
+    maxAmountMinor: '0',
+    currency: 'IRT',
+    eligibility: {
+      activateAfterPayments: 0,
+      deactivateAfterPayments: 0,
+      activateAfterAccountDays: 0,
+    },
+    sortOrder: 0,
+    topupCashbackPercent: 5,
+    createdAt: '2026-09-10T12:30:00.000Z',
+    updatedAt: '2026-09-10T12:30:00.000Z',
+  };
+
+  const open = async () => {
+    const api = stubApi([
+      { url: '/payment-gateways', body: { gateways: [GATEWAY] } },
+      { url: '/payment-gateways/MANUAL_TRANSFER', body: { gateway: GATEWAY } },
+    ]);
+    const view = renderPage(<PaymentGatewaysPage denied={false} mayEdit />);
+    // The table shows the route's gift before anything is opened.
+    expect(await screen.findByText('5%')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'ویرایش' }));
+    return {
+      api,
+      view,
+      input: (await screen.findByLabelText('هدیهٔ شارژ (درصد)')) as HTMLInputElement,
+    };
+  };
+
+  it('opens with the route’s gift, explains it, and saves the percentage as typed', async () => {
+    const { api, view, input } = await open();
+    expect(input.value).toBe('5');
+    expect(view.container.textContent).toContain('به‌عنوان هدیه به کیف پول مشتری واریز می‌شود');
+
+    fireEvent.change(input, { target: { value: '۱۲' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
+
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
+    });
+    const saved = api.calls.find((call) => call.method === 'POST');
+    expect((saved?.body as { topupCashbackPercent?: unknown }).topupCashbackPercent).toBe(12);
+  });
+
+  it('refuses a figure outside 0–100 at the field, and will not save it', async () => {
+    const { api, input } = await open();
+    fireEvent.change(input, { target: { value: '150' } });
+
+    expect(
+      await screen.findByText('درصد هدیهٔ شارژ باید عددی صحیح از ۰ تا ۱۰۰ باشد.'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'ذخیره' })).toBeDisabled();
+    expect(api.calls.some((call) => call.method === 'POST')).toBe(false);
   });
 });

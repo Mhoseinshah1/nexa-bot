@@ -21,6 +21,7 @@ import {
   PAYMENT_GATEWAY_THRESHOLD_MAX,
   paymentGatewayProviderSchema,
   paymentGatewayStatusSchema,
+  topupCashbackPercentSchema,
 } from './payment-gateways.js';
 import { PAYMENT_RECEIPT_KINDS } from './payment-receipts.js';
 import { CUSTOMER_STATUSES, telegramUserIdSchema } from './customer.js';
@@ -3213,6 +3214,26 @@ export const walletAdjustRequestSchema = z.object({
 export type WalletAdjustRequest = z.infer<typeof walletAdjustRequestSchema>;
 
 /**
+ * A receipt's credit-to-wallet disposition, as the Web Admin's payment detail renders it
+ * (Payment File 02 §12, `docs/payments-file02-design.md` D2). READ-ONLY: the Web Admin
+ * has no card-to-card mutation (§10), and this is what it shows of one taken in Telegram.
+ *
+ * The amount is what the reviewer entered, which is what the `RECEIPT_CREDIT` entry
+ * holds — it may differ from the payment's own amount, and that difference is the reason
+ * the disposition exists. A decimal STRING of minor units with its currency beside it.
+ */
+export const receiptCreditViewSchema = z.object({
+  amountMinor: z.string(),
+  currency: z.enum(CURRENCY_CODES),
+  walletEntryId: z.string(),
+  decidedByAdminId: z.string(),
+  decidedAt: z.iso.datetime(),
+  /** The reviewer's own note, detail only, like a rejection's. */
+  note: z.string().nullable(),
+});
+export type ReceiptCreditView = z.infer<typeof receiptCreditViewSchema>;
+
+/**
  * One payment, as the Web Admin renders it.
  *
  * `orderId` nullable is the whole model on the wire: a payment that names an
@@ -3274,6 +3295,23 @@ export const paymentSummarySchema = z.object({
   expiresAt: z.iso.datetime().nullable(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
+  /*
+   * Payment File 02 §21 (D7): the diagnostics an operator reconciles against.
+   *
+   * Defaulted on PARSE rather than required, so a reader holding a response from the
+   * previous release — which never sent them — reads "not known" rather than failing.
+   * The server always sends all four.
+   */
+  /**
+   * The route the payment was offered through, snapshotted when it was created. Null for
+   * a wallet settlement and for a payment created before the column existed.
+   */
+  gatewayProvider: paymentGatewayProviderSchema.nullable().default(null),
+  /** The gateway's or bank's own reference, when one was recorded. */
+  externalReference: z.string().nullable().default(null),
+  /** Who paid, as Telegram knows them: the id and, when they have one, the username. */
+  customerTelegramUserId: z.string().nullable().default(null),
+  customerUsername: z.string().nullable().default(null),
 });
 export type PaymentSummaryResponse = z.infer<typeof paymentSummarySchema>;
 
@@ -3321,6 +3359,18 @@ export const paymentDetailSchema = paymentSummarySchema.extend({
    * here need no permission beyond `payments.view`, because none of them is the number.
    */
   destination: paymentDestinationViewSchema.nullable(),
+  /**
+   * The receipt's credit-to-wallet disposition, when that is how it was decided (D2).
+   * Null for every other payment. Defaulted for the reason the summary's D7 fields are.
+   */
+  receiptCredit: receiptCreditViewSchema.nullable().default(null),
+  /**
+   * The top-up gift this payment promised, as the whole percentage snapshotted from its
+   * route when it was created (D5). Null for an order payment, a wallet settlement and a
+   * payment created before the column existed; `0` for a top-up through a route that
+   * offered none.
+   */
+  topupCashbackPercent: z.number().int().nullable().default(null),
 });
 export type PaymentDetailResponse = z.infer<typeof paymentDetailSchema>;
 
@@ -3346,49 +3396,6 @@ export type PaymentListResponse = z.infer<typeof paymentListResponseSchema>;
 export const paymentResponseSchema = z.object({ payment: paymentDetailSchema });
 export type PaymentResponse = z.infer<typeof paymentResponseSchema>;
 
-/**
- * An operator confirming that money arrived.
- *
- * The note is REQUIRED, and that is the point of the whole endpoint: the legacy
- * receipt review records neither the reviewer nor the time (`UNK-PR-010`), so
- * "was this approved by a human, and on what basis" is unanswerable there. Here
- * the reviewer is taken from the session, the time from the `Clock`, and the
- * basis from this field — and migration 0035 freezes all three the moment the
- * payment is confirmed.
- *
- * The amount is NOT a parameter. A confirmation asserts that the payment's own
- * recorded amount arrived; an editable amount at confirmation time is the legacy
- * unknown `UNK-PR-004` and a way to settle a large order with a small transfer.
- */
-export const confirmPaymentRequestSchema = z.object({
-  idempotencyKey: z.string().min(8).max(255),
-  evidenceNote: z.string().trim().min(1).max(500),
-});
-export type ConfirmPaymentRequest = z.infer<typeof confirmPaymentRequestSchema>;
-
-/**
- * An operator recording that the money did NOT arrive.
- *
- * The other half of `receipts.review`, which has read *"Approve or reject a receipt"*
- * since the permission catalogue was frozen and has had only the approve half behind it
- * until now. The note is REQUIRED for the same reason it is required on a confirmation:
- * a decision about somebody's money with no recorded basis is the legacy receipt review,
- * which records neither reviewer nor reason.
- *
- * There is no `reason` ENUM beside it. A closed list here would be this schema inventing
- * a taxonomy of why transfers fail, and the operator is the one who just looked at the
- * bank statement.
- *
- * It takes no amount and no state, and there is no matching "unreject": a rejection is
- * legal only from PENDING, and a payment that was CONFIRMED is reversed by a refund
- * rather than by an edit (`OQ-4C-02`).
- */
-export const rejectPaymentRequestSchema = z.object({
-  idempotencyKey: z.string().min(8).max(255),
-  resolutionNote: z.string().trim().min(1).max(500),
-});
-export type RejectPaymentRequest = z.infer<typeof rejectPaymentRequestSchema>;
-
 export const WALLET_ROUTES = {
   balance: (customerId: string) => `/users/${encodeURIComponent(customerId)}/wallet`,
   entries: (customerId: string) => `/users/${encodeURIComponent(customerId)}/wallet/entries`,
@@ -3398,8 +3405,12 @@ export const WALLET_ROUTES = {
 export const PAYMENT_ROUTES = {
   list: '/payments',
   detail: (id: string) => `/payments/${encodeURIComponent(id)}`,
-  confirm: (id: string) => `/payments/${encodeURIComponent(id)}/confirm`,
-  reject: (id: string) => `/payments/${encodeURIComponent(id)}/reject`,
+  /*
+   * There is no confirm and no reject here, and that is Payment File 02 §10: card-to-card
+   * review is performed only in Telegram, and the Web Admin is read-only for it. The two
+   * routes this contract used to name are removed rather than hidden, so a client cannot
+   * reach a mutation no surface offers (D3). The Telegram surface calls the same service.
+   */
   /** What a customer sent against one payment, under `receipts.view`. */
   receipts: (id: string) => `/payments/${encodeURIComponent(id)}/receipts`,
   /**
@@ -3616,6 +3627,55 @@ export type RefundListResponse = z.infer<typeof refundListResponseSchema>;
 export const refundResponseSchema = z.object({ refund: refundSchema });
 export type RefundResponse = z.infer<typeof refundResponseSchema>;
 
+/**
+ * One compensation: a refund this installation made AUTOMATICALLY, to the customer's
+ * wallet, because what they paid for could not be delivered (Payment File 02 §13 and
+ * §21, `docs/payments-file02-design.md` D7).
+ *
+ * A read of `refunds` with reason `UNDELIVERABLE` and channel `WALLET_CREDIT` joined to
+ * the payment and the customer — not a second record. `principalMinor` is the payment's
+ * own amount and `creditedMinor` the refund's; the two are equal for every compensation
+ * `RefundService.refundUndeliverable` writes, and both are shown because §21 asks for
+ * both and a difference would be the thing an operator needs to see.
+ */
+export const compensationSchema = z.object({
+  refundId: z.string(),
+  paymentId: z.string(),
+  orderId: z.string().nullable(),
+  customerId: z.string(),
+  customerTelegramUserId: z.string().nullable(),
+  customerUsername: z.string().nullable(),
+  principalMinor: z.string(),
+  creditedMinor: z.string(),
+  currency: z.enum(CURRENCY_CODES),
+  reason: z.string(),
+  state: refundStateSchema,
+  createdAt: z.iso.datetime(),
+  completedAt: z.iso.datetime().nullable(),
+});
+export type CompensationView = z.infer<typeof compensationSchema>;
+
+export const COMPENSATION_PAGE_DEFAULT = 25;
+export const COMPENSATION_PAGE_MAX = 100;
+
+/** Keyset paging over `(created_at, id)`, newest-last, the shape every list here uses. */
+export const compensationListQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(COMPENSATION_PAGE_MAX).optional(),
+  cursor: z.string().min(1).max(255).optional(),
+});
+export type CompensationListQuery = z.infer<typeof compensationListQuerySchema>;
+
+export const compensationListResponseSchema = z.object({
+  compensations: z.array(compensationSchema),
+  nextCursor: z.string().nullable(),
+});
+export type CompensationListResponse = z.infer<typeof compensationListResponseSchema>;
+
+/** Read-only, under `payments.view`. There is no write: a compensation is automatic. */
+export const COMPENSATION_ROUTES = {
+  list: '/compensations',
+} as const;
+
 export const REFUND_ROUTES = {
   /** Every refund against one payment, plus what is left to refund. */
   list: (paymentId: string) => `/payments/${encodeURIComponent(paymentId)}/refunds`,
@@ -3678,6 +3738,12 @@ export const paymentGatewaySchema = z.object({
     activateAfterAccountDays: z.number().int(),
   }),
   sortOrder: z.number().int(),
+  /**
+   * The top-up gift this route promises, a whole percentage of a top-up's principal
+   * (Payment File 02 §17, D5). `0` is no gift. Each top-up SNAPSHOTS it when created, so
+   * changing it here changes only top-ups created afterwards.
+   */
+  topupCashbackPercent: z.number().int(),
   /*
    * The descriptor's two facts — `settlesVia` and `requiresCredentials` — are NOT here.
    *
@@ -3745,6 +3811,8 @@ export const updatePaymentGatewayRequestSchema = z.object({
     activateAfterAccountDays: z.number().int().min(0).max(PAYMENT_GATEWAY_THRESHOLD_MAX),
   }),
   sortOrder: z.number().int().min(PAYMENT_GATEWAY_SORT_MIN).max(PAYMENT_GATEWAY_SORT_MAX),
+  /** The top-up gift, 0–100 (D5). Required, like every other field this form renders. */
+  topupCashbackPercent: topupCashbackPercentSchema,
 });
 export type UpdatePaymentGatewayRequest = z.infer<typeof updatePaymentGatewayRequestSchema>;
 

@@ -2,9 +2,13 @@ import {
   AUTOMATIC_REFUND_CHANNEL,
   AUTOMATIC_REFUND_REASON,
   COMMERCE_ERROR_CODES,
+  COMPENSATION_PAGE_DEFAULT,
+  COMPENSATION_PAGE_MAX,
+  ORDER_MACHINE,
   REFUND_METHOD_SUPPORT,
   errors,
   money,
+  nextState,
   paymentIdSchema,
   refundIdSchema,
   refundFitsWithin,
@@ -17,13 +21,19 @@ import {
   type IdempotencyStore,
   type Money,
   type OperationalEventRecorder,
+  type OrderId,
+  type OrderPurpose,
   type PaymentId,
   type PermissionKey,
   type RefundChannel,
   type RefundId,
+  type RefundRefusalReason,
   type TenantContext,
   type UnitOfWork,
 } from '@nexa/contracts';
+import type { CustomerNotifier } from '../../messaging/application/customer-notifier.js';
+import type { OrderRepository } from '../../orders/application/ports.js';
+import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import type { CashbackService } from '../../pricing/application/cashback.service.js';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import {
@@ -37,7 +47,12 @@ import type { ScopeActivityReader } from '../../../platform/system/application/r
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { WalletRepository } from '../../wallet/application/ports.js';
 import type { PaymentRecord, PaymentRepository } from './ports.js';
-import type { RefundRecord, RefundRepository } from './refund-ports.js';
+import type {
+  CompensationCursor,
+  CompensationPage,
+  RefundRecord,
+  RefundRepository,
+} from './refund-ports.js';
 
 /**
  * A path segment turned into an identifier, or a 404.
@@ -65,6 +80,12 @@ function parseIdentifier<T>(
 
 export const REFUND_VIEW_PERMISSION = 'refunds.view' satisfies PermissionKey;
 export const REFUND_ISSUE_PERMISSION = 'refunds.issue' satisfies PermissionKey;
+/**
+ * Reading the compensation list (D7) is reading PAYMENTS: Payment File 02 §21 lists it
+ * beside the payment list, and the rows are what the payments did — not a refund an
+ * operator issued, which `refunds.view` is for.
+ */
+export const COMPENSATION_VIEW_PERMISSION = 'payments.view' satisfies PermissionKey;
 
 export interface RefundServiceDeps {
   readonly repository: RefundRepository;
@@ -100,6 +121,28 @@ export interface RefundServiceDeps {
       tx: TransactionScope,
     ): Promise<void>;
   };
+  /**
+   * The ORDER an order payment settled, and the one edge an operator's refund takes on
+   * it (`docs/wp10-payments-audit.md` P3): its read, and `PAID -> REFUNDED`.
+   * Narrowed so this module cannot become a second place orders are managed from.
+   */
+  readonly orders: Pick<OrderRepository, 'findById' | 'transition'>;
+  /**
+   * Whether the order's PURCHASE operation — the one of the type `PURCHASED_AS` names
+   * for its purpose — is still undecided: planned, in flight, or UNKNOWN. A refund
+   * waits for it (P3). A read, bound in the container to the operation repository.
+   */
+  readonly deliveries: {
+    purchaseInProgress(
+      scope: TenantContext,
+      order: { readonly id: OrderId; readonly purpose: OrderPurpose },
+      tx?: unknown,
+    ): Promise<boolean>;
+  };
+  /** `WalletEntryRecorded` for every REFUND credit, and `OrderRefunded` (P3, P4). */
+  readonly outbox: OutboxWriter;
+  /** `REFUND_COMPLETED`, in the transaction that completes the refund (P3). */
+  readonly notifier: CustomerNotifier;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly audit: AuditWriter;
@@ -171,6 +214,24 @@ export const SUPERSEDED_BY_AUTOMATIC_REFUND =
 export class RefundService {
   constructor(private readonly deps: RefundServiceDeps) {}
 
+  /**
+   * The compensation list (Payment File 02 §21, D7): every automatic refund of an order
+   * that could not be delivered, credited to the wallet. Keyset-paged, read-only, under
+   * `payments.view`.
+   */
+  async compensations(
+    scope: TenantContext,
+    actor: ActorContext,
+    query: { readonly limit?: number; readonly cursor?: CompensationCursor },
+  ): Promise<CompensationPage> {
+    await this.deps.guard.check(scope, actor, COMPENSATION_VIEW_PERMISSION);
+    const limit = Math.min(
+      Math.max(query.limit ?? COMPENSATION_PAGE_DEFAULT, 1),
+      COMPENSATION_PAGE_MAX,
+    );
+    return this.deps.repository.listCompensations(scope, limit, query.cursor ?? null);
+  }
+
   /** A payment's refunds, with what is left to refund. Charges `refunds.view`. */
   async ledgerFor(
     scope: TenantContext,
@@ -195,7 +256,7 @@ export class RefundService {
       paid: payment.amount,
       consumedMinor,
       refundableMinor: refundableMinor(payment.amount.amountMinor, consumedMinor),
-      refundable: this.refundabilityOf(payment) === null,
+      refundable: (await this.refusalFor(scope, payment)) === null,
     };
   }
 
@@ -272,7 +333,7 @@ export class RefundService {
         }
 
         const payment = await this.requirePayment(scope, paymentId, tx);
-        const unrefundable = this.refundabilityOf(payment);
+        const unrefundable = await this.refusalFor(scope, payment, tx);
         if (unrefundable !== null) {
           throw errors.conflict(
             COMMERCE_ERROR_CODES.REFUND_NOT_PERMITTED,
@@ -294,7 +355,7 @@ export class RefundService {
           throw errors.conflict(
             COMMERCE_ERROR_CODES.REFUND_NOT_PERMITTED,
             'This payment has refunds in another currency.',
-            { reason: 'CURRENCY_MISMATCH' },
+            { reason: 'CURRENCY_MISMATCH' satisfies RefundRefusalReason },
           );
         }
 
@@ -353,6 +414,8 @@ export class RefundService {
           // wallet refund the credit is always at least the reversal (P9).
           await this.deps.cashback.reverseForRefund(scope, actor, created, now, tx);
           await this.deps.referrals.reverseForRefund(scope, actor, created, now, tx);
+          // Born COMPLETED, so its consequences are this transaction's (P3).
+          await this.completed(scope, actor, created, payment, now, tx);
         }
 
         await this.deps.audit.record(
@@ -420,6 +483,25 @@ export class RefundService {
       denial,
       async (tx) => {
         await this.assertScopeActive(scope, tx);
+
+        /*
+         * The payment, then the refund row: the order `request` takes them in.
+         *
+         * The PAYMENT lock is new with P3 and it is not decoration. Whether this
+         * completion finishes the payment is a SUM over its refunds, and two operators
+         * completing the last two parts of one payment at once would each read the other
+         * as still AWAITING_EXTERNAL, each conclude the payment was not yet whole, and
+         * leave a fully refunded order PAID. Under the payment's lock the second sees the
+         * first's COMPLETED row and moves the order. The refund's payment is read unlocked
+         * to find it; `refunds.payment_id` is frozen (0073), so that read cannot be stale.
+         */
+        const unlocked = await this.deps.repository.findById(scope, refundId, tx);
+        if (unlocked === null) {
+          throw errors.notFound(COMMERCE_ERROR_CODES.REFUND_NOT_FOUND, 'Unknown refund.');
+        }
+        if (!(await this.deps.repository.lockPayment(scope, unlocked.paymentId, tx))) {
+          throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
+        }
         const before = await this.requireRefundForUpdate(scope, refundId, tx);
 
         // Already there. Answered with the refund, and NO audit row — an audit entry for
@@ -461,6 +543,14 @@ export class RefundService {
         // The money has now actually gone back, so the cashback it bought goes back too.
         await this.deps.cashback.reverseForRefund(scope, actor, after, now, tx);
         await this.deps.referrals.reverseForRefund(scope, actor, after, now, tx);
+        await this.completed(
+          scope,
+          actor,
+          after,
+          await this.requirePayment(scope, after.paymentId, tx),
+          now,
+          tx,
+        );
 
         await this.deps.audit.record(
           scope,
@@ -595,7 +685,7 @@ export class RefundService {
     if (!present) {
       throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
     }
-    await this.deps.wallet.append(
+    const { entry, inserted } = await this.deps.wallet.append(
       scope,
       {
         id: this.deps.ids.uuid(),
@@ -612,6 +702,128 @@ export class RefundService {
       },
       tx,
     );
+    /*
+     * The ledger write announces itself (P4, D4), on BOTH lanes that reach here — an
+     * operator's wallet refund and the automatic one — because it is one credit path.
+     * Only when this transaction wrote the entry: a re-read is not a second movement.
+     */
+    if (inserted) {
+      await this.deps.outbox.write(tx, actor, {
+        eventType: 'WalletEntryRecorded',
+        aggregateType: 'Wallet',
+        aggregateId: entry.customerId,
+        payload: {
+          customerId: entry.customerId,
+          entryId: entry.id,
+          direction: entry.direction,
+          reason: entry.reason,
+          amountMinor: entry.amount.amountMinor.toString(),
+          currency: entry.amount.currency,
+        },
+      });
+    }
+  }
+
+  /**
+   * What an OPERATOR's refund reaching `COMPLETED` does, in that transaction (P3).
+   *
+   * Two things, and deliberately nothing to the service — suspending or terminating it
+   * is the operator's own explicit action, and the Web Admin says the service is still
+   * active rather than acting on it silently.
+   *
+   * 1. The customer is told, once per completed refund: `REFUND_COMPLETED`, subject the
+   *    refund row. A partial refund is a fact too, and a refund still AWAITING an
+   *    external transfer is not one yet, which is why this runs only on completion.
+   * 2. When the payment's COMPLETED refunds now come to its full amount, the order moves
+   *    `PAID -> REFUNDED`, as a conditional UPDATE naming its `from`, and `OrderRefunded`
+   *    is written beside it. A partial refund leaves the order PAID. Summed from the
+   *    rows under the payment's lock, which every caller holds.
+   *
+   * NOT called by `refundUndeliverable`: that lane has already moved the order to
+   * REFUNDED before it asks for the money, and tells the customer
+   * `ORDER_REFUNDED_TO_WALLET` about the order itself — a second transition and a
+   * second sentence would each be the same fact told twice.
+   *
+   * The order is NOT locked ahead of this, deliberately. Its UPDATE takes the row's
+   * `FOR NO KEY UPDATE` lock, which a ledger insert naming the order (its foreign key's
+   * `FOR KEY SHARE`) does not wait on — and the cashback and referral earners insert
+   * exactly such an entry while holding the customer's lock this transaction is about
+   * to take. A `FOR UPDATE` on the order first closed that cycle and PostgreSQL aborted
+   * a completion with `40P01` (the mid-credit races in `cashback.test.ts` and
+   * `referrals.test.ts`). Nothing else can move this order meanwhile: P3 refuses a
+   * refund while its purchase operation is undecided, so the automatic refund — the
+   * only other writer of `PAID -> REFUNDED` — has nothing left to discover.
+   */
+  private async completed(
+    scope: TenantContext,
+    actor: ActorContext,
+    refund: RefundRecord,
+    payment: PaymentRecord,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<void> {
+    await this.deps.notifier.notify(
+      scope,
+      refund.customerId,
+      'REFUND_COMPLETED',
+      refund.id,
+      now,
+      tx,
+    );
+
+    if (payment.orderId === null) return;
+    const refunded = (await this.deps.repository.listForPayment(scope, payment.id, tx))
+      .filter((row) => row.state === 'COMPLETED')
+      .reduce((total, row) => total + row.amount.amountMinor, 0n);
+    if (refunded < payment.amount.amountMinor) return;
+
+    const to = nextState(ORDER_MACHINE, 'PAID', 'REFUND');
+    /* istanbul ignore next -- the edge is frozen; this is the assertion that says so. */
+    if (to === null) throw new Error('ORDER_MACHINE no longer allows REFUND from PAID.');
+    const moved = await this.deps.orders.transition(
+      scope,
+      payment.orderId,
+      'PAID',
+      to,
+      { refundedAt: now },
+      now,
+      tx,
+    );
+    // Not PAID any more — already REFUNDED by the other lane. One transition, one event.
+    if (!moved) return;
+
+    await this.deps.audit.record(
+      scope,
+      actor,
+      {
+        action: 'order.refund',
+        entityType: 'Order',
+        entityId: payment.orderId,
+        before: { state: 'PAID' },
+        after: {
+          state: to,
+          paymentId: payment.id,
+          refundedMinor: refunded.toString(),
+          currency: payment.amount.currency,
+          // Said because it is the surprising part: nothing was done to the service.
+          serviceLeftUntouched: true,
+        },
+        result: 'SUCCESS',
+      },
+      tx,
+    );
+    await this.deps.outbox.write(tx, actor, {
+      eventType: 'OrderRefunded',
+      aggregateType: 'Order',
+      aggregateId: payment.orderId,
+      payload: {
+        customerId: payment.customerId,
+        amountMinor: refunded.toString(),
+        currency: payment.amount.currency,
+        // An operator's words stay on the refund row; the event carries no free text.
+        reason: null,
+      },
+    });
   }
 
   /**
@@ -781,7 +993,32 @@ export class RefundService {
    * for the detail rather than thrown, so both the read path (which renders
    * `refundable: false`) and the write path (which refuses) use one decision.
    */
-  private refundabilityOf(payment: PaymentRecord): string | null {
+  private async refusalFor(
+    scope: TenantContext,
+    payment: PaymentRecord,
+    tx?: TransactionScope,
+  ): Promise<RefundRefusalReason | null> {
+    const fixed = this.refundabilityOf(payment);
+    if (fixed !== null || payment.orderId === null) return fixed;
+    /*
+     * DELIVERY_IN_PROGRESS (P3): the order's purchase operation is not terminal. Planned
+     * or in flight, it may yet create the account; UNKNOWN, it may already have. Money
+     * given back for an account the customer may be holding is the ambiguity the money
+     * rules forbid — the rule that UNKNOWN is never refunded, applied to an operator.
+     * A create that FAILED is answered by the automatic refund, not here.
+     *
+     * Asked of the ORDER, and after the three facts above, which are the more
+     * fundamental refusals. Transient, unlike them: it clears when the operation ends.
+     */
+    const order = await this.deps.orders.findById(scope, payment.orderId, tx);
+    if (order === null) return null;
+    if (await this.deps.deliveries.purchaseInProgress(scope, order, tx)) {
+      return 'DELIVERY_IN_PROGRESS';
+    }
+    return null;
+  }
+
+  private refundabilityOf(payment: PaymentRecord): RefundRefusalReason | null {
     if (payment.state !== 'CONFIRMED') return 'PAYMENT_NOT_SETTLED';
     /*
      * A wallet TOP-UP is not refundable through this service, and the reason is where its

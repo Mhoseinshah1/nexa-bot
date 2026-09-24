@@ -1,5 +1,6 @@
-import { and, asc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, sql, type SQL } from 'drizzle-orm';
 import {
+  AUTOMATIC_REFUND_REASON,
   REFUND_CONSUMING_STATES,
   money,
   type CurrencyCode,
@@ -16,8 +17,10 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
-import { payments, refunds } from '../../../../infrastructure/persistence/schema.js';
+import { customers, payments, refunds } from '../../../../infrastructure/persistence/schema.js';
 import type {
+  CompensationCursor,
+  CompensationPage,
   RefundConsumption,
   RefundDraft,
   RefundRecord,
@@ -104,6 +107,84 @@ export class DrizzleRefundRepository implements RefundRepository {
   }
 
   /** Oldest first — a history reads forwards, and the sum below does not care. */
+  async listCompensations(
+    scope: TenantContext,
+    limit: number,
+    cursor: CompensationCursor | null,
+    tx?: unknown,
+  ): Promise<CompensationPage> {
+    const tenantId = requireTenantId(scope);
+    const conditions: SQL[] = [
+      eq(refunds.tenantId, tenantId),
+      // The automatic lane's marks: its reason and its channel (§13's compensation) — and
+      // NO requesting administrator. An operator's reason is free text and may read
+      // `UNDELIVERABLE` too; `requested_by_admin_id IS NULL` is what the schema itself
+      // uses to identify the automatic lane (Codex, PR #70).
+      eq(refunds.reason, AUTOMATIC_REFUND_REASON),
+      eq(refunds.channel, 'WALLET_CREDIT'),
+      isNull(refunds.requestedByAdminId),
+    ];
+    if (cursor !== null) {
+      conditions.push(
+        sql`(${refunds.createdAt}, ${refunds.id}) > (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`,
+      );
+    }
+    const rows = await this.exec(tx)
+      .select({
+        refundId: refunds.id,
+        paymentId: refunds.paymentId,
+        orderId: refunds.orderId,
+        customerId: refunds.customerId,
+        telegramUserId: customers.telegramUserId,
+        username: customers.username,
+        principal: payments.amount,
+        principalCurrency: payments.currency,
+        credited: refunds.amount,
+        currency: refunds.currency,
+        reason: refunds.reason,
+        state: refunds.state,
+        createdAt: refunds.createdAt,
+        completedAt: refunds.completedAt,
+        createdAtText: sql<string>`to_char(${refunds.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+      })
+      .from(refunds)
+      // Tenant-scoped joins on both sides, the way every composite key here is.
+      .innerJoin(
+        payments,
+        and(eq(payments.tenantId, refunds.tenantId), eq(payments.id, refunds.paymentId)),
+      )
+      .leftJoin(
+        customers,
+        and(eq(customers.tenantId, refunds.tenantId), eq(customers.id, refunds.customerId)),
+      )
+      .where(and(...conditions))
+      .orderBy(asc(refunds.createdAt), asc(refunds.id))
+      .limit(limit + 1);
+
+    const page = rows.slice(0, limit);
+    const last = page[page.length - 1];
+    return {
+      items: page.map((row) => ({
+        refundId: row.refundId as RefundId,
+        paymentId: row.paymentId as PaymentId,
+        orderId: row.orderId as OrderId | null,
+        customerId: row.customerId as UserId,
+        customerTelegramUserId: row.telegramUserId,
+        customerUsername: row.username,
+        principal: money(row.principal, row.principalCurrency as CurrencyCode),
+        credited: money(row.credited, row.currency as CurrencyCode),
+        reason: row.reason,
+        state: row.state as RefundState,
+        createdAt: row.createdAt,
+        completedAt: row.completedAt,
+      })),
+      nextCursor:
+        rows.length > limit && last !== undefined
+          ? { createdAt: last.createdAtText, id: last.refundId as RefundId }
+          : null,
+    };
+  }
+
   async listForPayment(
     scope: TenantContext,
     paymentId: PaymentId,
@@ -231,7 +312,17 @@ export class DrizzleRefundRepository implements RefundRepository {
       .from(payments)
       .where(and(eq(payments.tenantId, tenantId), eq(payments.id, paymentId)))
       .limit(1)
-      .for('update');
+      /*
+       * `NO KEY UPDATE`, not `UPDATE` — it serialises every refund writer of this
+       * payment exactly as before (the two modes conflict with themselves and with each
+       * other), and it does NOT conflict with the `FOR KEY SHARE` a foreign-key check
+       * takes. That difference is a deadlock: the cashback and referral earners hold the
+       * CUSTOMER's lock and then insert a ledger entry naming this payment, whose FK
+       * check waited on a `FOR UPDATE` here while this transaction waited on the
+       * customer. WP10 P3 made `complete` take this lock, and the mid-credit races in
+       * `cashback.test.ts` and `referrals.test.ts` aborted with `40P01` until it changed.
+       */
+      .for('no key update');
     return rows.length === 1;
   }
 

@@ -194,9 +194,13 @@ C02 are the mutations that state it, one per caller.
 | C02  | A wallet settlement locks it too                                 | `lockCustomer` removed from `settleFromWallet`     | `financial-concurrency.test.ts` › will not let an admin debit and a purchase both take the last of the money    | KILLED |
 | H02  | A malformed amount is a 400, not an exception out of `safeParse` | the `superRefine` early `return` removed           | `wallet-payments-http.test.ts` › refuses an amount of zero, a negative, one past the ceiling and a bad currency | KILLED |
 | W01w | The wallet card draws no control that could set a balance        | a «صفر کردن موجودی» button added to the toolbar    | `users.test.tsx` › draws NO control that could set a balance or remove an entry                                 | KILLED |
-| W02w | A confirmation sends a note and NOTHING else                     | an `amount` added to the request body              | `payments.test.tsx` › sends a NOTE and nothing else when confirming                                             | KILLED |
 | W03w | `/payments` resolves to the real page, not the placeholder       | the `/payments` route removed from `resolve`       | `payments.test.tsx` › resolves to the real page, not the planned placeholder                                    | KILLED |
 | W04w | The order page shows WHEN the money arrived                      | `order_settled_at` → `order_expires_at`            | `products-and-orders.test.tsx` › shows when the money arrived, and claims nothing beyond it                     | KILLED |
+
+**W02w is withdrawn**, and R8w below with it: Payment File 02 §10 made the Web Admin
+read-only for card-to-card (`docs/payments-file02-design.md` D3), so the confirmation this
+page sent — and the review affordance the route derived — no longer exist, and neither do
+the tests that pinned them. `payments.test.tsx` now asserts the page draws no decision.
 
 **H01 is bounded, not untested**, and the bound is checked rather than assumed:
 `PAYMENT_AMOUNT_MAX_MINOR` is 1,000,000,000,000 and 2^53 is 9,007,199,254,740,992,
@@ -265,7 +269,8 @@ verification against the code; six changed a production rule and are falsified h
 | R5  | The history lists the movements the balance is computed from, and no others  | the currency predicate removed from `list`                 | `wallet.test.ts` › lists the movements the balance is computed from, and no others                               | KILLED |
 | R6  | A paid customer is told about the ORDER, not that their service is unbuyable | `bot.order.not_awaiting_payment` → `bot.order.unavailable` | `telegram-payment-flow.test.ts` › refuses a second settlement of an order already PAID                           | KILLED |
 | R7w | The route derives debit from `users.wallet.debit`                            | `mayDebit={may('users.view')}`                             | `users.test.tsx` › derives debit from users.wallet.debit, not from a permission that merely reads                | KILLED |
-| R8w | The route derives review from `receipts.review`                              | `mayReview={may('payments.view')}`                         | `payments.test.tsx` › derives the review affordance from receipts.review, not from payments.view                 | KILLED |
+
+R8w (the route derived review from `receipts.review`) is withdrawn with W02w above.
 
 **R5 first reported KILLED and was not.** Chasing it found a defect in the harness, and
 the harness defect is the more serious of the two.

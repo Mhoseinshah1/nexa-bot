@@ -61,7 +61,52 @@ export interface RefundConsumption {
   readonly count: number;
 }
 
+/**
+ * One compensation: a refund this installation made automatically, to the wallet,
+ * because what was bought could not be delivered (Payment File 02 §21, D7). A READ of
+ * `refunds` joined to the payment and the customer — never a record of its own.
+ */
+export interface CompensationRecord {
+  readonly refundId: RefundId;
+  readonly paymentId: PaymentId;
+  readonly orderId: OrderId | null;
+  readonly customerId: UserId;
+  readonly customerTelegramUserId: string | null;
+  readonly customerUsername: string | null;
+  /** The payment's own amount: what the customer paid. */
+  readonly principal: Money;
+  /** The refund's amount: what went back to the wallet. */
+  readonly credited: Money;
+  readonly reason: string;
+  readonly state: RefundState;
+  readonly createdAt: Date;
+  readonly completedAt: Date | null;
+}
+
+/** `(createdAt, id)` of the refund row, both immutable — the keyset every list uses. */
+export interface CompensationCursor {
+  /** PostgreSQL's own microsecond text, never a `Date`. See `CustomerCursor`. */
+  readonly createdAt: string;
+  readonly id: RefundId;
+}
+
+export interface CompensationPage {
+  readonly items: readonly CompensationRecord[];
+  readonly nextCursor: CompensationCursor | null;
+}
+
 export interface RefundRepository {
+  /**
+   * The compensation list (D7): refunds with reason `UNDELIVERABLE` and channel
+   * `WALLET_CREDIT`, oldest first, keyset-paged on the refund's `(created_at, id)`.
+   */
+  listCompensations(
+    scope: TenantContext,
+    limit: number,
+    cursor: CompensationCursor | null,
+    tx?: unknown,
+  ): Promise<CompensationPage>;
+
   /**
    * How many CONFIRMED payments in this currency still have refundable money.
    *

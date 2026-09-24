@@ -94,6 +94,23 @@ export interface NotificationSweepReport {
   readonly lost: number;
 }
 
+/** The ledger reasons a payment's credit sentence can name. */
+export type PaymentCreditReason = 'TOPUP_RECEIPT' | 'CASHBACK_TOPUP' | 'RECEIPT_CREDIT';
+
+/**
+ * The three kinds whose subject is a PAYMENT and whose sentence names what it credited
+ * (Payment File 02 §18), and the ledger entry each one reads. A kind is here or it
+ * renders with no figure, and each maps to exactly one reason: a top-up's sentence must
+ * never be able to read its gift, nor a receipt credit a top-up's principal.
+ */
+export const PAYMENT_CREDIT_FIGURES: Readonly<
+  Partial<Record<CustomerNotificationKind, PaymentCreditReason>>
+> = {
+  WALLET_TOPUP_CREDITED: 'TOPUP_RECEIPT',
+  WALLET_TOPUP_GIFT_CREDITED: 'CASHBACK_TOPUP',
+  RECEIPT_CREDITED_TO_WALLET: 'RECEIPT_CREDIT',
+};
+
 /**
  * The six kinds whose message carries figures, as a set, derived from the contract.
  *
@@ -142,6 +159,19 @@ export interface CustomerNotificationDeps {
       scope: TenantContext,
       orderId: string,
     ) => Promise<{ readonly amount: Money; readonly balanceAfter: Money } | null>;
+  };
+  /**
+   * What one payment's credit put on the wallet, read off the ledger (Payment File 02
+   * §18). `refundFigures`' shape for the three kinds whose subject is a PAYMENT: the
+   * principal of a top-up, its gift, and a reviewer's receipt credit. A reader, not a
+   * payload (ADR 0030 §1).
+   */
+  readonly paymentCredits: {
+    creditedForPayment: (
+      scope: TenantContext,
+      paymentId: string,
+      reason: PaymentCreditReason,
+    ) => Promise<Money | null>;
   };
   readonly uow: UnitOfWork<TransactionScope>;
   readonly clock: Clock;
@@ -268,6 +298,21 @@ export class CustomerNotificationService {
       const refund = await this.deps.refundFigures.refundedForOrder(scope, row.subjectId);
       if (refund === null) return null;
       return { refundAmount: refund.amount, walletBalance: refund.balanceAfter };
+    }
+    /*
+     * The three payment credits (Payment File 02 §18): the principal, the gift, the
+     * receipt credit — each from its OWN ledger entry for the payment the row names.
+     * `null`, and so no message, when the ledger holds none, for the refund's reason
+     * above: a sentence naming an amount must not be sent without one.
+     */
+    const creditReason = PAYMENT_CREDIT_FIGURES[row.kind];
+    if (creditReason !== undefined) {
+      const amount = await this.deps.paymentCredits.creditedForPayment(
+        scope,
+        row.subjectId,
+        creditReason,
+      );
+      return amount === null ? null : { amount };
     }
     if (!REMINDER_NOTIFICATION_KINDS.has(row.kind)) return {};
     const snapshot = await this.deps.reminderSnapshots.snapshotOf(scope, row.subjectId);

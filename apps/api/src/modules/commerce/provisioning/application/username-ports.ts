@@ -143,6 +143,10 @@ export interface ServiceUsernameRepository {
    * Bounded, and `funded_at IS NULL` again: a funded hold past its deadline belongs to
    * an order that took money, and a deadline says nothing about the account on a panel.
    * Returns how many rows went.
+   *
+   * Never a hold whose order is still `AWAITING_PAYMENT` (Payment File 02 §9, D1): a
+   * receipted transfer keeps its order open past every deadline, and the order-expiry
+   * path releases the hold when the order actually closes.
    */
   sweepExpiredHolds(
     scope: TenantContext,

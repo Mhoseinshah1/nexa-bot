@@ -22,8 +22,15 @@ import {
   clampDiscount,
   normaliseDiscountCode,
   templateDefinition,
+  COMMERCE_ERROR_CODES,
+  NexaError,
 } from '@nexa/contracts';
-import { MAIN_MENU_BUTTONS, MAIN_MENU_ROWS } from '@nexa/contracts';
+import {
+  MAIN_MENU_BUTTONS,
+  MAIN_MENU_ROWS,
+  RECEIPT_CAPTION_MAX_LENGTH,
+  normalizeReceiptCaption,
+} from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
 import {
   BOT_INTENTS,
@@ -57,6 +64,13 @@ import {
   SERVICE_ACTION_CONFIRM_CALLBACK_PREFIX,
   encodeIdPair,
   WALLET_PAY_CALLBACK_PREFIX,
+  ADMIN_CREDIT_CALLBACK_PREFIX,
+  ADMIN_CREDIT_CONFIRM_CALLBACK_PREFIX,
+  ADMIN_CREDIT_CANCEL_CALLBACK_PREFIX,
+  RECEIPT_REVIEW_NOTE_MAX,
+  creditRefusal,
+  reviewNoteOf,
+  withdrawalRefusal,
 } from '../../apps/api/src/surfaces/telegram/bot-runtime.js';
 import { telegramUserIdOf } from '../../apps/api/src/surfaces/telegram/webhook.controller.js';
 
@@ -752,9 +766,19 @@ describe('profile metadata, normalised before it is ever stored', () => {
        */
       'bot.payment.sent_button',
       'bot.payment.transfer_instructions',
+      /*
+       * WP10 P2: paying from the wallet while a transfer the customer vouched for waits.
+       * Says the review decides the order and nothing was debited; promises no flow.
+       */
+      'bot.payment.transfer_under_review',
       'bot.payment.unconfigured',
       'bot.payment.wallet_button',
       'bot.payment.window_too_short',
+      /*
+       * Payment File 02 §9: withdrawing a transfer the customer sent a receipt for. About
+       * the PAYMENT, so it is true of a top-up; it promises only the review's answer.
+       */
+      'bot.payment.withdraw_under_review',
       /*
        * WP9's three referral keys, reviewed against this case's rule. `button` is drawn on
        * the wallet only while the program is running (a flag AND a rate), and opens
@@ -973,6 +997,23 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.admin.category_show_button',
       'bot.admin.category_up_button',
       'bot.admin.category_usage',
+      /*
+       * Payment File 02 §12's eleven, the credit-to-wallet disposition. Reviewed against
+       * the same rule: the button is drawn only for BOTH keys the credit charges, the
+       * prompt reads one message from one administrator for five minutes, and nothing
+       * moves until `credit_confirm` has stated the exact amount and been confirmed.
+       */
+      'bot.admin.credit_amount_invalid',
+      'bot.admin.credit_amount_prompt',
+      'bot.admin.credit_button',
+      'bot.admin.credit_cancel_button',
+      'bot.admin.credit_cancelled',
+      'bot.admin.credit_confirm',
+      'bot.admin.credit_confirm_button',
+      'bot.admin.credit_currency',
+      'bot.admin.credit_expired',
+      'bot.admin.credit_no_receipt',
+      'bot.admin.credited',
       /*
        * WP2's eleven, the customers section. Reviewed against the same rule, and
        * against the one that matters most for a screen about a PERSON: not one of
@@ -1267,10 +1308,17 @@ describe('the financial rules, as integer arithmetic', () => {
     expect(discountAmountMinor('PERCENTAGE', 1000n, 0n)).toBe(0n);
   });
 
-  it('clamps a discount to the subtotal, so a promo code cannot mint a credit', () => {
-    expect(clampDiscount(1000n, 1500n)).toBe(1000n);
+  it('clamps a discount one unit below the subtotal, so no commercial total reaches zero', () => {
+    // Payment File 02 §14 (D4): a total of 0 confirmed and could not be settled, so the
+    // clamp leaves one payable minor unit — and a promo code still cannot mint a credit.
+    expect(clampDiscount(1000n, 1500n)).toBe(999n);
+    expect(clampDiscount(1000n, 1000n)).toBe(999n);
+    expect(clampDiscount(1000n, 999n)).toBe(999n);
     expect(clampDiscount(1000n, 400n)).toBe(400n);
     expect(clampDiscount(1000n, -5n)).toBe(0n);
+    // Nothing to take off a subtotal of one, or of nothing.
+    expect(clampDiscount(1n, 1n)).toBe(0n);
+    expect(clampDiscount(0n, 5n)).toBe(0n);
   });
 
   it('refuses an overdraft unless a credit limit was configured, and zero is the default', () => {
@@ -1630,6 +1678,33 @@ describe('a refusal the customer can actually be told', () => {
  * bytes and pixels compares 5 KB against 1920 and picks the thumbnail — the operator
  * then opens a receipt they cannot read, which is a failure nothing else reports.
  */
+describe('the customer’s caption on a receipt (D3)', () => {
+  const sent = (message: Record<string, unknown>) =>
+    intentOf({ message: { message_id: 9, chat: { id: 5, type: 'private' }, ...message } }).file;
+  const photo = [{ file_id: 'full', file_unique_id: 'u-full', width: 800, height: 600 }];
+
+  it('carries a photo’s or a document’s caption, trimmed, and none as null', () => {
+    expect(sent({ photo, caption: '  از کارت همسرم  ' })?.caption).toBe('از کارت همسرم');
+    expect(
+      sent({ document: { file_id: 'd', file_unique_id: 'u-d' }, caption: 'رسید' })?.caption,
+    ).toBe('رسید');
+    expect(sent({ photo })?.caption).toBeNull();
+    expect(sent({ photo, caption: '   ' })?.caption).toBeNull();
+    expect(sent({ photo, caption: 42 })?.caption).toBeNull();
+  });
+
+  it('bounds it to 1024 characters, counted as the database counts them', () => {
+    // A code point outside the BMP is TWO UTF-16 units; slicing units could split it.
+    const long = '😀'.repeat(1_500);
+    const caption = sent({ photo, caption: long })?.caption ?? '';
+    expect(Array.from(caption)).toHaveLength(RECEIPT_CAPTION_MAX_LENGTH);
+    expect(caption).toBe('😀'.repeat(RECEIPT_CAPTION_MAX_LENGTH));
+    expect(normalizeReceiptCaption('x'.repeat(RECEIPT_CAPTION_MAX_LENGTH))).toHaveLength(
+      RECEIPT_CAPTION_MAX_LENGTH,
+    );
+  });
+});
+
 describe('choosing a photo size', () => {
   const photo = (over: Record<string, unknown>) => ({
     message: {
@@ -1782,5 +1857,117 @@ describe('the Telegram Admin categories section, at the boundary', () => {
         ).toBe(false);
       }
     }
+  });
+});
+
+/**
+ * Payment File 02 §12 in Telegram, at the boundary: the three credit-to-wallet callbacks,
+ * the reviewer's caption note, and the sentences a refused credit and a refused withdrawal
+ * are answered with.
+ */
+describe('the credit-to-wallet disposition, at the boundary', () => {
+  const payment = '0191f4a0-2d3c-7c2b-9a41-6f2b0c7e51aa';
+  const capture = '0191f4a0-2d3c-7c2b-9a41-6f2b0c7e51cc';
+  const tap = (data: string) => intentOf({ callback_query: { id: 'cbq', data } });
+
+  it('routes the open, the confirm and the cancel to their own intents, each naming one id', () => {
+    expect(tap(`${ADMIN_CREDIT_CALLBACK_PREFIX}${payment}`)).toMatchObject({
+      intent: 'ADMIN_CREDIT',
+      targetId: payment,
+    });
+    expect(tap(`${ADMIN_CREDIT_CONFIRM_CALLBACK_PREFIX}${capture}`)).toMatchObject({
+      intent: 'ADMIN_CREDIT_CONFIRM',
+      targetId: capture,
+    });
+    expect(tap(`${ADMIN_CREDIT_CANCEL_CALLBACK_PREFIX}${capture}`)).toMatchObject({
+      intent: 'ADMIN_CREDIT_CANCEL',
+      targetId: capture,
+    });
+    // The customer's own wallet payment is untouched by the two-character prefixes.
+    expect(tap(`${WALLET_PAY_CALLBACK_PREFIX}${payment}`).intent).toBe('PAY_WALLET');
+  });
+
+  it.each([
+    ['a v4 id', `wb:0191f4a0-2d3c-4c2b-9a41-6f2b0c7e51cc`],
+    ['no id', 'wb:'],
+    ['an amount smuggled beside the capture', `wb:${capture}.250000`],
+    ['an amount in place of the payment', 'wa:250000'],
+  ])('refuses %s as UNSUPPORTED', (_label, data) => {
+    expect(tap(data).intent).toBe('UNSUPPORTED');
+  });
+
+  it('fits every credit callback inside Telegram’s 64 bytes', () => {
+    for (const data of [
+      `${ADMIN_CREDIT_CALLBACK_PREFIX}${payment}`,
+      `${ADMIN_CREDIT_CONFIRM_CALLBACK_PREFIX}${capture}`,
+      `${ADMIN_CREDIT_CANCEL_CALLBACK_PREFIX}${capture}`,
+    ]) {
+      expect(Buffer.byteLength(data, 'utf8')).toBeLessThanOrEqual(64);
+    }
+  });
+
+  it('reads a typed amount as ordinary text, which only a waiting capture may claim', () => {
+    expect(intentOf({ message: { text: '۲۵۰٬۰۰۰' } })).toMatchObject({
+      intent: 'USERNAME_TEXT',
+      args: ['۲۵۰٬۰۰۰'],
+    });
+    // A command typed while a capture is open is still the command.
+    expect(intentOf({ message: { text: '/start' } }).intent).toBe('START');
+  });
+
+  it('carries the customer’s note into the caption bounded, and a dash for none', () => {
+    expect(reviewNoteOf(null)).toBe('—');
+    expect(reviewNoteOf('   ')).toBe('—');
+    expect(reviewNoteOf('از کارت همسرم')).toBe('از کارت همسرم');
+    const long = '😀'.repeat(RECEIPT_REVIEW_NOTE_MAX + 10);
+    const note = reviewNoteOf(long);
+    expect(Array.from(note)).toHaveLength(RECEIPT_REVIEW_NOTE_MAX);
+    expect(note.endsWith('…')).toBe(true);
+  });
+
+  const nexa = (code: string, details: Record<string, unknown> = {}) =>
+    new NexaError({ kind: 'CONFLICT', code, message: 'x', details });
+
+  it('answers the credit’s refusals about the payment, and rethrows everything else', () => {
+    expect(creditRefusal(nexa(COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID)).key).toBe(
+      'bot.admin.receipt_gone',
+    );
+    expect(
+      creditRefusal(
+        nexa(COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID, { disposition: 'CREDITED_TO_WALLET' }),
+      ).key,
+    ).toBe('bot.admin.receipt_gone');
+    expect(
+      creditRefusal(nexa(COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID, { reason: 'NO_RECEIPT' })).key,
+    ).toBe('bot.admin.credit_no_receipt');
+    expect(creditRefusal(nexa(COMMERCE_ERROR_CODES.WALLET_CURRENCY_UNSUPPORTED)).key).toBe(
+      'bot.admin.credit_currency',
+    );
+    expect(creditRefusal(nexa(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND)).key).toBe(
+      'bot.admin.receipt_gone',
+    );
+    // A permission denial is not a fact about the payment: `adminTurn` answers it as the
+    // one refusal, and this must not pre-empt it.
+    const denied = new NexaError({
+      kind: 'PERMISSION_DENIED',
+      code: 'platform.permission_denied',
+      message: 'no',
+    });
+    expect(() => creditRefusal(denied)).toThrow(denied);
+  });
+
+  it('answers a refused withdrawal of a receipted transfer about the PAYMENT', () => {
+    expect(withdrawalRefusal(nexa(COMMERCE_ERROR_CODES.ORDER_TRANSFER_UNDER_REVIEW)).key).toBe(
+      'bot.payment.withdraw_under_review',
+    );
+    // The shared table's order sentence speaks of cancelling an order — which a wallet
+    // top-up has not got — and so is not the answer here.
+    expect(REFUSAL_REPLIES[COMMERCE_ERROR_CODES.ORDER_TRANSFER_UNDER_REVIEW]).toBe(
+      'bot.order.transfer_under_review',
+    );
+    // Every other refusal still goes through the shared table.
+    expect(withdrawalRefusal(nexa(COMMERCE_ERROR_CODES.PAYMENT_METHOD_UNAVAILABLE)).key).toBe(
+      REFUSAL_REPLIES[COMMERCE_ERROR_CODES.PAYMENT_METHOD_UNAVAILABLE],
+    );
   });
 });

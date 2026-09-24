@@ -1,0 +1,252 @@
+# WP10 and Payment File 02 — payments falsification record
+
+Two passes over one package. The first is WP10 §10-A's; the rules it held that Payment
+File 02 keeps (D8: P2, P3 and P4) are below as they were recorded. The second is Payment
+File 02's own (`docs/payments-file02-design.md`), at the end.
+
+## Withdrawn with the late-review lane
+
+Payment File 02 §9 (D1) removed the §10-A late-review lane — a submitted receipt no longer
+expires, so there is no expired transfer to decide late — and its rows went with it:
+WP10-01 to WP10-12 and WP10-24 (`LateTransferService`, its decision table, its ledger key
+and the expiry sentence), and WP10S-01 to WP10S-05 and WP10S-09 to WP10S-18 (its Web card
+and its Telegram lane). The code and the tests they cited no longer exist. Their numbers
+are not reused.
+
+## §10-A — the rules that stand (P2, P3, P4)
+
+Each rule below was reverted alone, in a separate worktree (`wp10/mut`, removed afterwards)
+against its own database (`nexa_wp10_mut`). Only the named tests were run, with vitest's
+`-t` anchored on each title, and the tree was restored before the next mutation.
+`docs/wp10-payments-audit.md` P2–P4 is the design these rows hold.
+
+The driver ran every named test on the unmutated tree first and counted a mutation only
+after that run passed with every named test executed. It then ran the same tests against
+the mutation and required vitest's JSON report to list at least one of them FAILED. A run
+that executed no tests did not count. Every failure was read. Most died on an assertion;
+the exceptions are explained below the table. No mutation in this record touched
+`packages/contracts`.
+
+| #       | rule                                                                 | mutation                                                                       | tests that die                                                                                                                                                                                                                    | result |
+| ------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| WP10-13 | a wallet payment is refused while a signalled transfer waits         | the `hasClaimedPendingForOrder` refusal in `settleFromWallet` made unreachable | `payments.test.ts` › refuses with ORDER_TRANSFER_UNDER_REVIEW while a signalled transfer waits, and debits nothing; `financial-concurrency.test.ts` › keeps a signal that took the transfer first, and refuses the wallet payment | KILLED |
+| WP10-14 | a wallet payment withdraws the order's unsignalled transfers         | `cancelPendingForOrder` in `settleFromWallet` replaced by an empty list        | `payments.test.ts` › withdraws an unsignalled pending transfer and settles from the wallet                                                                                                                                        | KILLED |
+| WP10-15 | no operator refund while the purchase operation is undecided         | the `purchaseInProgress` refusal in `refusalFor` made unreachable              | `refunds.test.ts` › refuses a refund while the purchase operation is planned or UNKNOWN, and allows it once delivered                                                                                                             | KILLED |
+| WP10-16 | an UNKNOWN purchase operation is undecided                           | `hasUnresolvedForOrder` counts only PLANNED and IN_FLIGHT                      | `refunds.test.ts` › refuses a refund while the purchase operation is planned or UNKNOWN, and allows it once delivered                                                                                                             | KILLED |
+| WP10-17 | the refund that completes the payment moves the order REFUNDED       | the full-amount comparison in `completed` made always to return                | `refunds.test.ts` › moves the order REFUNDED at once when a wallet refund returns the whole payment; › moves the order REFUNDED with one OrderRefunded when the last external refund completes                                    | KILLED |
+| WP10-18 | a partial refund leaves the order PAID                               | the full-amount comparison in `completed` made never to return                 | `refunds.test.ts` › keeps the order PAID after a partial refund and tells the customer REFUND_COMPLETED; › moves the order REFUNDED with one OrderRefunded when the last external refund completes                                | KILLED |
+| WP10-19 | every completed refund tells the customer REFUND_COMPLETED           | the `REFUND_COMPLETED` enqueue removed from `completed`                        | `refunds.test.ts` › keeps the order PAID after a partial refund and tells the customer REFUND_COMPLETED                                                                                                                           | KILLED |
+| WP10-20 | a refund AWAITING_EXTERNAL tells nobody and moves nothing            | `completed` called for every requested refund, not only one born COMPLETED     | `refunds.test.ts` › moves the order REFUNDED with one OrderRefunded when the last external refund completes                                                                                                                       | KILLED |
+| WP10-21 | the automatic refund does not run an operator refund's consequences  | `completed` called from `refundUndeliverable` after its credit                 | `automatic-refund.test.ts` › neither re-transitions nor re-announces: no REFUND_COMPLETED, one OrderRefunded, one ledger event                                                                                                    | KILLED |
+| WP10-22 | a TOPUP_RECEIPT credit emits WalletEntryRecorded                     | the emission in `confirmAndCredit` made unreachable                            | `wallet-topup.test.ts` › announces the TOPUP_RECEIPT credit with one WalletEntryRecorded, and not again for a second operator                                                                                                     | KILLED |
+| WP10-23 | a REFUND credit emits WalletEntryRecorded, on both refund lanes      | the emission in `creditWallet` made unreachable                                | `refunds.test.ts` › emits WalletEntryRecorded for a REFUND credit, once; `automatic-refund.test.ts` › neither re-transitions nor re-announces: no REFUND_COMPLETED, one OrderRefunded, one ledger event                           | KILLED |
+| WP10-25 | a refund's payment lock does not wait on a foreign-key check         | `lockPayment` back to `FOR UPDATE` from `FOR NO KEY UPDATE`                    | `cashback.test.ts` › never misses a reversal when a refund completes while the earner is mid-credit; `referrals.test.ts` › never misses a reversal when a refund completes while the earner holds the referrer’s lock mid-credit  | KILLED |
+| WP10-26 | a wallet payment takes the transfer's row before the customer's lock | `lockCustomer` taken again ahead of the P2 block                               | `financial-concurrency.test.ts` › keeps a signal that took the transfer first, and refuses the wallet payment                                                                                                                     | KILLED |
+
+**WP10-25 and WP10-26 die on `40P01`.** Both are lock-order rules, and what each prevents
+is a deadlock. WP10-25: a completion holding the payment `FOR UPDATE` and waiting for the
+customer, beside an earner holding the customer and inserting a ledger entry whose FK check
+waits for the payment. WP10-26: a wallet payment holding the customer and waiting for the
+transfer's row, beside a signal holding that row and inserting a receipt window whose FK
+check waits for the customer. The two race tests fail with `deadlock detected`.
+
+**WP10-14 is cited against one test only.** Its race twin in `financial-concurrency.test.ts`
+also fails under the mutation, but because the held method is never called and the
+interleaving never forms — a harness failure, not a verdict — so it is not cited.
+
+**What these rows do not cover:**
+
+- **Two completions of the last two parts of one payment at once.** `complete` now takes
+  the payment's lock before the refund row so that the second sees the first's COMPLETED
+  row and moves the order. No produced race pins it yet; the sum itself is WP10-17/18.
+- **The Telegram mapping of `ORDER_TRANSFER_UNDER_REVIEW` on the wallet-pay path** to
+  `bot.payment.transfer_under_review` is pinned by `bot-runtime.test.ts`'s sendable-key
+  list, not by a mutation here.
+
+## The §10-A surfaces that stand — the Web Admin's refund card
+
+The same procedure, for the operator surface of P3: each rule reverted alone in a
+separate worktree (removed afterwards), only the named tests run with vitest's `-t`
+anchored on each title, the named tests first run green on the unmutated tree, a mutation
+counted only when vitest's JSON report listed a named test FAILED, and the file restored
+with `git checkout` before the next. The web rows need no database. Every failure was
+read, and every one died on an assertion. No mutation touched `packages/contracts`. The
+file they cite was `payments-late-review.test.tsx`, renamed when the lane's cases left it.
+
+| #        | rule                                                   | mutation                                                         | tests that die                                                                                               | result |
+| -------- | ------------------------------------------------------ | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ------ |
+| WP10S-06 | a refund refused for `DELIVERY_IN_PROGRESS` says so    | `refundMessageFor` on the request error replaced by `messageFor` | `payments-refund-consequences.test.tsx` › names DELIVERY_IN_PROGRESS when the server refuses a refund for it | KILLED |
+| WP10S-07 | "the order is REFUNDED" is read from the order's state | `orderRefunded` made true for any order that loaded              | `payments-refund-consequences.test.tsx` › says nothing about the order while it is still PAID                | KILLED |
+| WP10S-08 | the refund card reads no order without `orders.view`   | `mayViewOrders` dropped from the order query's `enabled`         | `payments-refund-consequences.test.tsx` › neither asks for nor describes the order without orders.view       | KILLED |
+
+**What these rows do not cover:** the order page's rewritten REFUNDED banner is copy,
+pinned by `products-and-orders.test.tsx`'s existing wording checks, not by a mutation here.
+
+## Payment File 02
+
+Each rule of `docs/payments-file02-design.md` below was reverted alone in a separate
+worktree (`/home/user/nexa-wp10-mut`, detached at `f79fb59`, removed afterwards) against
+its own database (`nexa_wp10_mut`, dropped afterwards). The driver ran the named tests on
+the unmutated tree first and counted a mutation only after that run passed with every
+named test executed; it then applied the mutation, ran the same tests with vitest's `-t`
+anchored on each title, and required vitest's JSON report to list at least one of them
+FAILED. A source mutation was restored with `git checkout`; a database mutation (a
+dropped index, constraint or trigger, or a replaced function) was restored by re-creating
+the object from its migration text, after a `TRUNCATE` of the tables the mutated schema
+had let a test fill. PAY-30 is the one mutation in `packages/contracts`; the package was
+rebuilt after it was applied and again after it was restored. Every failure was read.
+Most died on an assertion; the exceptions are below the table. PAY-35's test was written after `f79fb59` and copied into the
+worktree for its run.
+
+| #       | rule                                                                        | mutation                                                                                  | tests that die                                                                                                                                                                                                                                                       | result                |
+| ------- | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
+| PAY-01  | D1: the expiry sweep never expires a transfer with a receipt                | `noReceiptFiled()` made `TRUE OR NOT EXISTS …` in `expireDue`                             | `receipt-dispositions.test.ts` › keeps a receipted transfer and its order open through the sweep                                                                                                                                                                     | KILLED                |
+| PAY-01u | D1: the sweep's UPDATE restates the no-receipt predicate                    | the UPDATE's own `noReceiptFiled()` removed, the candidate SELECT's kept                  | `receipt-dispositions.test.ts` › keeps a receipted transfer and its order open through the sweep                                                                                                                                                                     | SURVIVED (equivalent) |
+| PAY-02  | D1: the username sweep keeps the hold of an order awaiting payment          | the sweep's `NOT EXISTS (… o.state = 'AWAITING_PAYMENT')` made `TRUE OR NOT EXISTS`       | `receipt-dispositions.test.ts` › keeps the username hold, and a late approval provisions under that very name                                                                                                                                                        | KILLED                |
+| PAY-03  | D1: a customer cannot withdraw a transfer they sent a receipt for           | `withdrawPending`'s receipt-count threshold raised from `> 0` to `> 99`                   | `receipt-dispositions.test.ts` › refuses the customer’s withdrawal of a transfer they sent a receipt for                                                                                                                                                             | KILLED                |
+| PAY-04  | D1: an order's stale transfer is reissued only if it has no receipt         | the receipt count dropped from `requestManualTransfer`'s stale test                       | `receipt-dispositions.test.ts` › hands the receipted transfer back to a customer who asks to pay by transfer again                                                                                                                                                   | KILLED                |
+| PAY-05  | D1: a top-up's stale transfer is reissued only if it has no receipt         | the receipt count dropped from `requestWalletTopup`'s stale test                          | `wallet-topup.test.ts` › takes a receipt against a top-up, through the flow an order uses                                                                                                                                                                            | KILLED                |
+| PAY-06  | D2: credit-to-wallet takes the payment's row lock                           | `findByIdForUpdate` replaced by `findById` in `creditToWallet`                            | `receipt-dispositions.test.ts` › races approve against credit: the approval wins, nothing is credited; › races reject against credit: the rejection wins, nothing is credited; › races credit against credit: one credit, the second is told it was already credited | KILLED                |
+| PAY-07  | D2: only a transfer with a receipt can be credited                          | the no-receipt refusal made unreachable (`=== 0` to `< 0`)                                | `receipt-dispositions.test.ts` › refuses a transfer with no receipt, a wallet payment, and an amount out of bounds                                                                                                                                                   | KILLED                |
+| PAY-08  | D2: credit-to-wallet also needs `users.wallet.credit`                       | the wallet permission replaced by `receipts.review`                                       | `receipt-dispositions.test.ts` › refuses a reviewer without users.wallet.credit, who can still approve                                                                                                                                                               | KILLED                |
+| PAY-09  | D2: credit-to-wallet needs `receipts.review`                                | the review permission replaced by `users.wallet.credit`                                   | `receipt-dispositions.test.ts` › refuses an operator who may credit wallets but not review receipts                                                                                                                                                                  | KILLED                |
+| PAY-10  | D2: the amount is part of the idempotency hash                              | `amountMinor` removed from the hashed request                                             | `receipt-dispositions.test.ts` › answers a replay with the first result, and refuses a different amount under the key                                                                                                                                                | KILLED                |
+| PAY-11  | D2: the wallet is credited the amount the reviewer entered                  | the credited amount replaced by `payment.amount`                                          | `receipt-dispositions.test.ts` › credits exactly the entered amount, fails the payment, and leaves the order open                                                                                                                                                    | KILLED                |
+| PAY-12  | D2: the customer is told `RECEIPT_CREDITED_TO_WALLET`                       | the enqueued kind replaced by `PAYMENT_REJECTED`                                          | `receipt-dispositions.test.ts` › credits exactly the entered amount, fails the payment, and leaves the order open                                                                                                                                                    | KILLED                |
+| PAY-13  | D2: a stopped scope decides nothing, checked inside the transaction         | `assertScopeActive` removed from `creditToWallet`                                         | `receipt-dispositions.test.ts` › cannot reach another tenant’s payment, and decides nothing for a stopped tenant                                                                                                                                                     | KILLED                |
+| PAY-14  | D2: a credited payment cannot then be rejected                              | the `receiptCredits.findByPayment` refusal in `rejectManualTransfer` made unreachable     | `receipt-dispositions.test.ts` › refuses a rejection and an approval after a credit, as already resolved                                                                                                                                                             | KILLED                |
+| PAY-15  | D2: only a PENDING transfer can be credited                                 | `payment.state !== 'PENDING'` removed from the credit's state test                        | `receipt-dispositions.test.ts` › refuses a credit after an approval and after a rejection                                                                                                                                                                            | KILLED                |
+| PAY-16  | D2 (database): one `RECEIPT_CREDIT` entry per payment                       | `wallet_entries_receipt_credit_payment_key` dropped                                       | `receipt-dispositions.test.ts` › refuses a second RECEIPT_CREDIT ledger entry for one payment, under any reference                                                                                                                                                   | KILLED                |
+| PAY-17  | D2 (database): a `RECEIPT_CREDIT` entry names its payment                   | `wallet_entries_receipt_credit_payment_check` dropped                                     | `receipt-dispositions.test.ts` › refuses a RECEIPT_CREDIT that names no payment                                                                                                                                                                                      | KILLED                |
+| PAY-18  | D2 (database): a disposition is append-only                                 | `receipt_credits_no_update` and `receipt_credits_no_delete` dropped                       | `receipt-dispositions.test.ts` › refuses UPDATE and DELETE on a disposition, and a second one for the payment                                                                                                                                                        | KILLED                |
+| PAY-19  | D2 (database): at most one disposition per payment                          | `receipt_credits_pkey` dropped                                                            | `receipt-dispositions.test.ts` › refuses UPDATE and DELETE on a disposition, and a second one for the payment                                                                                                                                                        | KILLED                |
+| PAY-20  | D2 (database): a disposition matches a FAILED transfer and its ledger entry | `receipt_credits_guard` dropped                                                           | `receipt-dispositions.test.ts` › refuses a disposition on a payment that is not a FAILED transfer, or of another amount                                                                                                                                              | KILLED                |
+| PAY-21  | D2 (database): a payment is never deleted                                   | `payments_no_delete` dropped                                                              | `receipt-dispositions.test.ts` › refuses to delete a payment                                                                                                                                                                                                         | KILLED                |
+| PAY-22  | D5 (database): the route snapshot is fixed when the payment is created      | `nexa_payments_confirmation_guard` replaced by its 0058 body, without the snapshot clause | `wallet-topup.test.ts` › refuses to rewrite a payment’s route snapshot, in the database, in any state                                                                                                                                                                | KILLED                |
+| PAY-23  | D5: a confirmed top-up writes a separate gift entry                         | the gift block made unreachable                                                           | `wallet-topup.test.ts` › credits the principal and a SEPARATE 10% gift, and tells the customer each once                                                                                                                                                             | KILLED                |
+| PAY-24  | D5: the gift percent is the gateway's at creation                           | the snapshot written at creation forced to `0`                                            | `wallet-topup.test.ts` › credits the principal and a SEPARATE 10% gift, and tells the customer each once                                                                                                                                                             | KILLED                |
+| PAY-25  | D5: only the confirmation that inserted the principal computes a gift       | the `inserted` gate on `giftMinor` replaced by `true`                                     | `wallet-topup.test.ts` › writes one gift for a replayed and a second operator’s confirmation; › writes one gift when two confirmations race, the loser held on the payment row                                                                                       | SURVIVED (defence)    |
+| PAY-26  | D5: the customer is told of the gift                                        | the `WALLET_TOPUP_GIFT_CREDITED` enqueue made unreachable                                 | `wallet-topup.test.ts` › credits the principal and a SEPARATE 10% gift, and tells the customer each once                                                                                                                                                             | KILLED                |
+| PAY-27  | D5: a gift that rounds to nothing is not written                            | `giftMinor > 0n` made `>= 0n`                                                             | `wallet-topup.test.ts` › gives nothing, and says nothing, at 0%; › rounds the gift DOWN, and writes none when it rounds to nothing                                                                                                                                   | KILLED                |
+| PAY-28  | D5 (database): one gift per payment                                         | `wallet_entries_topup_cashback_payment_key` dropped                                       | `wallet-topup.test.ts` › refuses a second gift for one payment, and a gift that names no payment, in the database                                                                                                                                                    | KILLED                |
+| PAY-29  | D5 (database): a gift names its payment                                     | `wallet_entries_topup_cashback_payment_check` dropped                                     | `wallet-topup.test.ts` › refuses a second gift for one payment, and a gift that names no payment, in the database                                                                                                                                                    | KILLED                |
+| PAY-30  | D4: a commercial total never falls below one minor unit                     | `clampDiscount`'s ceiling put back to the subtotal (`packages/contracts`, rebuilt)        | `pricing-discounts.test.ts` › keeps a 100% automatic discount payable: one unit, confirmed AND settled (D4); `resellers.test.ts` › keeps a 99% reseller price under a 50% promotion payable: confirmed AND settled (D4)                                              | KILLED                |
+| PAY-31  | D7: the compensation list is the automatic refunds of undeliverable orders  | the `AUTOMATIC_REFUND_REASON` filter removed from `listCompensations`                     | `wallet-payments-http.test.ts` › lists the compensations: automatic wallet refunds of undeliverable orders, paged                                                                                                                                                    | KILLED                |
+| PAY-32  | D7: the compensation list is read under `payments.view`                     | `COMPENSATION_VIEW_PERMISSION` replaced by `refunds.view`                                 | `wallet-payments-http.test.ts` › lists the compensations: automatic wallet refunds of undeliverable orders, paged                                                                                                                                                    | KILLED                |
+| PAY-33  | D7: the diagnostics show the customer's Telegram id                         | `customerTelegramUserId` forced to `null` in the controller's summary                     | `wallet-payments-http.test.ts` › shows the payment id, Telegram id and username, gateway, external reference and times                                                                                                                                               | KILLED                |
+| PAY-34  | D3: no HTTP route confirms or rejects a card-to-card payment                | a `POST payments/:id/confirm` handler added back to the payments controller               | `route-registration.test.ts` › registers no card-to-card mutation, and routes every payment read; `wallet-payments-http.test.ts` › offers no way to confirm or reject a card-to-card payment over HTTP, even to the owner                                            | KILLED                |
+| PAY-35  | D3 (database): a stored caption is 1 to 1024 characters                     | `payment_receipts_caption_check` dropped                                                  | `payment-receipts.test.ts` › keeps the customer’s caption with the receipt, and the database bounds it (D3)                                                                                                                                                          | KILLED                |
+
+**The two survivors, and why each is recorded rather than fixed:**
+
+- **PAY-01u is an equivalent mutant today.** The sweep's candidate SELECT already applies
+  `noReceiptFiled()` and takes each candidate `FOR UPDATE SKIP LOCKED`, and a receipt is
+  filed under the payment's row lock, so no receipt can land between the SELECT and the
+  UPDATE. The UPDATE's copy is kept for the day the candidate query stops taking the lock;
+  the comment beside it says so. No test can tell the two apart while that holds.
+- **PAY-25 survives because two other mechanisms hold the same rule.** A confirmation
+  that did not insert the principal would compute a gift, but the gift's reference is
+  derived from the payment (`topupCashbackReference`) and
+  `wallet_entries_topup_cashback_payment_key` allows one per payment, so the append
+  returns the existing entry, `inserted` is false, and neither the outbox event nor the
+  notification is repeated. Both named tests stayed green: one gift, one notification.
+  The `inserted` gate is defence in depth; PAY-28 is what fails when the index goes.
+
+**Failures that were not an assertion:** PAY-27 died when the ledger's
+`wallet_entries_amount_check` (`amount > 0`) refused the zero gift the mutation tried to
+write, which aborted the confirmation the test awaited. PAY-32 died parsing the 403 body
+through the compensation list's response schema. In both the named test failed because the
+mutated rule no longer held.
+
+**What these rows do not cover:**
+
+- `withdrawPending`'s `findByIdForUpdate` has no produced race; PAY-03 pins the refusal,
+  not the lock.
+- D6, cashback earned on renewal, is an existing WP8 rule. Its three new tests in
+  `service-management.test.ts` were added as regressions and were not mutated here.
+- The receipt caption's normaliser (`normalizeReceiptCaption`: trim, empty to null, 1024
+  code points) is pinned by the unit tests in `bot-runtime.test.ts`, not by a mutation;
+  PAY-35 covers the column's bound.
+
+## Payment File 02 — the surfaces
+
+The Telegram review, the credit-to-wallet capture, the §18 notification amounts and the Web
+Admin diagnostics (`docs/payments-file02-design.md` §7). Each rule was reverted alone in a
+separate worktree (`/home/user/nexa-wp10-mut`, detached at `73e73f8`, removed afterwards)
+against its own database (`nexa_wp10_mut`, dropped afterwards), by the same driver as the
+section above: the named tests were run on the unmutated tree first and a mutation counted
+only after every one of them passed; the mutation was then applied as an exact string
+replacement, the same tests run with vitest's `-t` on their titles, vitest's JSON report
+required to list at least one of them FAILED, and the file restored with `git checkout` and
+compared byte for byte before the next. No mutation touched `packages/contracts`. Every
+failure was read; all but the six below died on an assertion.
+
+| #      | rule                                                                           | mutation                                                                          | tests that die                                                                                                                                  | result |
+| ------ | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| PAY-36 | D3: the review item is ONE message, the receipt with the caption and buttons   | the `media` field dropped from `adminReceipt`'s reply (facts sent as text)        | `telegram-admin-receipts.test.ts` › sends the first receipt as ONE photo: the facts as its caption, three decisions on it                       | KILLED |
+| PAY-37 | D3: a file Telegram refuses falls back to the same caption and buttons as text | the `REFUSED` fallback to `asText()` removed from `handle`                        | `telegram-admin-receipts.test.ts` › falls back to the same caption and buttons as text when Telegram refuses the file                           | KILLED |
+| PAY-38 | D3: the credit button is drawn only for `users.wallet.credit` too              | `permissions.has(WALLET_CREDIT_PERMISSION)` dropped from `receiptDecisionButtons` | `telegram-admin-receipts.test.ts` › draws no credit button for a reviewer without users.wallet.credit, and refuses the crafted tap              | KILLED |
+| PAY-39 | D3: opening a capture charges `users.wallet.credit`                            | the wallet `authorize` removed from `ReceiptCreditCaptureService.open`            | `telegram-admin-receipts.test.ts` › draws no credit button for a reviewer without users.wallet.credit, and refuses the crafted tap              | KILLED |
+| PAY-40 | D3: only the sender's OWN capture reads their message                          | `eq(adminId)` dropped from `findAwaitingAmount`                                   | `telegram-admin-receipts.test.ts` › is fed by nobody else: another administrator’s message, a customer’s, or a command                          | KILLED |
+| PAY-41 | D3: only the capture's administrator can confirm it                            | `found.adminId !== adminId` removed from `confirm`                                | `telegram-admin-receipts.test.ts` › is not confirmed by another administrator’s tap on its button                                               | KILLED |
+| PAY-42 | D3: a capture reads ONE amount                                                 | `isNull(amount_minor)` dropped from `findAwaitingAmount` and `recordAmount`       | `telegram-admin-receipts.test.ts` › reads ONE amount: a second number after the confirmation is not the capture’s                               | KILLED |
+| PAY-43 | D3: a typed amount after the deadline is refused                               | the expiry test in `submitAmount` made `false`                                    | `telegram-admin-receipts.test.ts` › expires: a late amount and a late confirm are both answered, and nothing moves                              | KILLED |
+| PAY-44 | D3: a confirm after the deadline credits nothing                               | the expiry test in `confirm` made `false`                                         | `telegram-admin-receipts.test.ts` › expires: a late amount and a late confirm are both answered, and nothing moves                              | KILLED |
+| PAY-45 | D3: the credit's key is derived from the capture                               | `receiptCreditCaptureKey` fed a fresh uuid per confirm                            | `telegram-admin-receipts.test.ts` › credits ONCE when the confirm is tapped twice, and says so both times                                       | KILLED |
+| PAY-46 | D3: an unreadable amount is answered, never swallowed                          | the `INVALID` outcome replaced by `NO_CAPTURE`                                    | `telegram-admin-receipts.test.ts` › answers an unreadable amount and keeps the capture open for the next one                                    | KILLED |
+| PAY-47 | D3: Persian and Arabic digits are read as digits                               | `toLatinDigits` made to match nothing                                             | `typed-amount.test.ts` › reads %j as %s                                                                                                         | KILLED |
+| PAY-48 | D3: thousands separators only where thousands are                              | the three-digit group check removed from `groupedDigits`                          | `typed-amount.test.ts` › refuses %s                                                                                                             | KILLED |
+| PAY-49 | §18: the top-up sentence names the PRINCIPAL                                   | `WALLET_TOPUP_CREDITED` mapped to `CASHBACK_TOPUP`                                | `wallet-topup.test.ts` › tells the customer the principal and the gift as two sentences, each naming its own amount (§18)                       | KILLED |
+| PAY-50 | §18: the receipt-credit sentence names the `RECEIPT_CREDIT` entry              | `RECEIPT_CREDITED_TO_WALLET` mapped to `TOPUP_RECEIPT`                            | `receipt-dispositions.test.ts` › tells the customer the amount the reviewer credited, from its RECEIPT_CREDIT entry (§18)                       | KILLED |
+| PAY-51 | §18: no ledger entry, no money sentence                                        | a null figure rendered as `{}` instead of withholding the row                     | `customer-notifications.test.ts` › delivers the refund-completed fact with no values, and never a money sentence with no ledger entry behind it | KILLED |
+| PAY-52 | §18: the figure is ONE reason's entries, not every credit of the payment       | `eq(reason)` dropped from `creditedForPayment`                                    | `wallet-topup.test.ts` › tells the customer the principal and the gift as two sentences, each naming its own amount (§18)                       | KILLED |
+| PAY-53 | D3: a plain caption is sent with no parse mode                                 | `fileMessageBody` sets `parse_mode: HTML` unconditionally                         | `telegram-admin-receipts.test.ts` › renders the customer’s note as text, never as markup or a template token                                    | KILLED |
+| PAY-54 | D3: a plain caption is cut to Telegram's 1,024                                 | `boundCaption` returns its input                                                  | `telegram-file-message.test.ts` › cuts a plain caption to Telegram’s bound, never splitting a surrogate pair                                    | KILLED |
+| PAY-55 | D3: the customer's note is bounded to 600 code points                          | `reviewNoteOf`'s bound made always true                                           | `bot-runtime.test.ts` › carries the customer’s note into the caption bounded, and a dash for none                                               | KILLED |
+| PAY-56 | §9: a receipted withdrawal is answered about the PAYMENT                       | `cancelPayment` back to the shared `refusal`                                      | `telegram-admin-receipts.test.ts` › answers a withdrawal of the receipted transfer with the sentence about the payment                          | KILLED |
+| PAY-57 | D3: a credit asked of a transfer with no receipt says so                       | the `NO_RECEIPT` branch of `creditRefusal` made unreachable                       | `bot-runtime.test.ts` › answers the credit’s refusals about the payment, and rethrows everything else                                           | KILLED |
+| PAY-58 | D5 (web): the gift is a whole 0–100, refused outside it                        | `percentOf`'s ceiling raised to 1000                                              | `payment-gateways.test.tsx` › refuses a figure outside 0–100 at the field, and will not save it                                                 | KILLED |
+| PAY-59 | D5 (web): the gift is saved as the operator typed it                           | the form sends the route's stored percent back instead                            | `payment-gateways.test.tsx` › opens with the route’s gift, explains it, and saves the percentage as typed                                       | KILLED |
+| PAY-60 | D7 (web): the compensation link is behind `payments.view`                      | the nav entry's permission changed to `refunds.view`                              | `compensations.test.tsx` › is reached under payments with payments.view, and asks nothing without it                                            | KILLED |
+| PAY-61 | D7 (web): the compensation page asks nothing without `payments.view`           | the route passes `denied={false}`                                                 | `compensations.test.tsx` › is reached under payments with payments.view, and asks nothing without it                                            | KILLED |
+| PAY-62 | D7 (web): the list shows the customer's Telegram id                            | the list column passes `telegramUserId={null}`                                    | `payments.test.tsx` › lists the payment id, the Telegram id and username, the gateway, the external reference and updated-at                    | KILLED |
+| PAY-63 | D2 (web): the detail shows a receipt's credit disposition                      | the disposition card guarded by `false &&`                                        | `payments.test.tsx` › shows a receipt’s credit-to-wallet disposition read-only: amount, admin, time and note                                    | KILLED |
+| PAY-64 | D5 (web): the detail shows a top-up's gift snapshot                            | the gift card guarded by `false &&`                                               | `payments.test.tsx` › shows the gift a top-up promised, and no gift card for an order payment                                                   | KILLED |
+
+**Failures that were not an assertion:** PAY-58 died when the field's refusal sentence was
+not on the page to be found, and PAY-62, PAY-63 and PAY-64 the same way — Testing Library's
+`getByText` throws rather than asserting — each because the mutated rule no longer drew what
+the test looks for. PAY-61 died inside a `waitFor` whose assertion never became true (the page
+fetched without `payments.view`). PAY-47 killed six of the twelve `reads %j as %s` cases: the
+six written in Persian or Arabic-Indic digits; the Latin ones passed, as they should.
+
+**What these rows do not cover:**
+
+- PAY-42 reverts ONE rule held by two predicates — `findAwaitingAmount` and `recordAmount`
+  both require no amount yet — and removes both. Either alone is an equivalent mutant: with
+  the first gone the second refuses the write and the message falls through as
+  `NO_CAPTURE`; with the second gone the first never offers the capture.
+- Two confirms racing in the same instant (`credits ONCE when two confirms race`) is a
+  regression, not a mutation target: its money guarantee is PAY-16's and PAY-19's (the
+  ledger index and the disposition's key), and the capture's own derived key is PAY-45.
+- The caption's optional placeholders and the dashes the runtime supplies for a top-up, a
+  customer with no username and a receipt with no note are pinned by the integration and
+  unit cases above, not by a separate mutation.
+
+## Payment File 02 — the one Codex review's fixes (PR #70)
+
+Each rule reverted alone in place against `nexa_wp10`, the named test watched to fail, and
+the file restored byte for byte.
+
+| #      | rule                                                                                 | mutation                                                                             | tests that die                                                                                                               | result |
+| ------ | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- | ------ |
+| PAY-65 | the compensation list shows the automatic lane only: `requested_by_admin_id IS NULL` | the predicate removed                                                                | `wallet-payments-http.test.ts` › lists the compensations: automatic wallet refunds of undeliverable orders, paged            | KILLED |
+| PAY-66 | a cancel racing a confirm that closed first reports the credit, not "nothing moved"  | the cancel's admin lock removed AND its conditional close's result ignored           | `telegram-admin-receipts.test.ts` › a confirm that closes first wins a racing cancel, and the cancel says so (Codex, PR #70) | KILLED |
+| PAY-67 | a confirm racing a cancel that closed first credits nothing                          | the cancel's admin lock removed AND the confirm's conditional close's result ignored | `telegram-admin-receipts.test.ts` › a cancel that closes first wins a racing confirm: nothing is credited (Codex, PR #70)    | KILLED |
+
+**Two guards, one rule.** The race is held twice over: the cancel takes the same admin lock
+the confirm takes, and each side acts only on a conditional close that actually happened.
+Reverting either guard ALONE leaves both tests green — the lock alone serialises the two, and
+the conditional close alone re-reads the winner — so each alone is an equivalent mutant, and
+PAY-66 and PAY-67 remove the lock together with one side's check. Measured: the lock alone
+removed, 2 of 2 pass.

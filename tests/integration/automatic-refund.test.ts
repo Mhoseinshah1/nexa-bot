@@ -687,6 +687,34 @@ describe('an order that cannot be delivered is refunded', () => {
     expect(paid.rows[0]?.n, 'one payment, not two').toBe(1);
   });
 
+  it('neither re-transitions nor re-announces: no REFUND_COMPLETED, one OrderRefunded, one ledger event', async () => {
+    /*
+     * WP10 P3 gave an OPERATOR's completed refund two consequences — `REFUND_COMPLETED`
+     * and, at the full amount, `PAID -> REFUNDED` with `OrderRefunded`. The automatic
+     * refund already has both of its own: it moves the order before it asks for the
+     * money and tells the customer `ORDER_REFUNDED_TO_WALLET` about the order. Running
+     * the operator's consequences here too would tell one fact twice. P4 is the one
+     * addition this lane shares: its REFUND credit now announces itself, once.
+     */
+    const order = await awaitingPayment(panelA);
+    const paymentId = await pendingTransfer(order);
+    await setStatus(panelA, 'DISABLED');
+    await confirmTransfer(paymentId);
+
+    await assertRefunded(order.id, { services: 0 });
+    expect(await customerNotices(order.id)).toEqual(['ORDER_REFUNDED_TO_WALLET']);
+    const completedNotices = (await ctx.container.database.db.execute(
+      sql`SELECT count(*)::int AS n FROM customer_notifications WHERE kind = 'REFUND_COMPLETED'` as never,
+    )) as unknown as { rows: { n: number }[] };
+    expect(completedNotices.rows[0]?.n, 'no operator sentence for an automatic refund').toBe(0);
+    expect(await outboxCount('OrderRefunded'), 'one event').toBe(1);
+    const ledgerEvents = (await ctx.container.database.db.execute(
+      sql`SELECT count(*)::int AS n FROM outbox_messages
+           WHERE event_type = 'WalletEntryRecorded' AND payload->>'reason' = 'REFUND'` as never,
+    )) as unknown as { rows: { n: number }[] };
+    expect(ledgerEvents.rows[0]?.n, 'the REFUND credit announces itself once').toBe(1);
+  });
+
   it('refuses a WALLET settlement instead, and debits nothing', async () => {
     /*
      * The asymmetry, asserted as a pair with the manual cases above, and asserted on

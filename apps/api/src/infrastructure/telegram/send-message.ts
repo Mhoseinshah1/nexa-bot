@@ -277,6 +277,64 @@ export function textMessageBody(input: {
 }
 
 /**
+ * Telegram's bound on a media CAPTION: 1,024 characters after entity parsing.
+ *
+ * Four times shorter than a message, and a caption over it is not truncated by Telegram
+ * but REFUSED — the whole send fails with a 400, image and buttons with it.
+ */
+export const TELEGRAM_CAPTION_MAX = 1024;
+
+/**
+ * A plain-text caption cut to `TELEGRAM_CAPTION_MAX`, ending in an ellipsis when cut.
+ *
+ * Measured in UTF-16 code units, which is never fewer than the characters Telegram
+ * counts, so a caption this returns is always inside the bound. A surrogate pair is never
+ * split: half an emoji is a malformed string, and Telegram refuses those too.
+ *
+ * PLAIN TEXT ONLY. Cutting an HTML caption could split a tag or an entity, and the parse
+ * error that produces is the refusal this exists to avoid; `fileMessageBody` does not call
+ * it for HTML.
+ */
+export function boundCaption(caption: string): string {
+  if (caption.length <= TELEGRAM_CAPTION_MAX) return caption;
+  let cut = TELEGRAM_CAPTION_MAX - 1;
+  const last = caption.charCodeAt(cut - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut -= 1;
+  return `${caption.slice(0, cut)}\u2026`;
+}
+
+/**
+ * The body of a `sendPhoto` or `sendDocument` by `file_id`, with an optional caption and
+ * an optional inline keyboard (Payment File 02 §10: the receipt, its context and its
+ * decisions as ONE message).
+ *
+ * The same keyboard rules as `textMessageBody`: absent when there are no buttons, never an
+ * empty `inline_keyboard`, and grouped by `telegramButtonMarkup`. A plain-text caption is
+ * bounded by `boundCaption`; an HTML one is sent as rendered.
+ */
+export function fileMessageBody(input: {
+  readonly chatId: string;
+  readonly kind: 'PHOTO' | 'DOCUMENT';
+  readonly fileId: string;
+  readonly caption?: string;
+  readonly html?: boolean;
+  readonly buttons?: readonly TelegramButton[];
+}): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    chat_id: input.chatId,
+    ...(input.kind === 'PHOTO' ? { photo: input.fileId } : { document: input.fileId }),
+  };
+  if (input.caption !== undefined && input.caption.length > 0) {
+    body.caption = input.html === true ? input.caption : boundCaption(input.caption);
+    if (input.html === true) body.parse_mode = 'HTML';
+  }
+  if (input.buttons !== undefined && input.buttons.length > 0) {
+    body.reply_markup = { inline_keyboard: telegramButtonMarkup(input.buttons) };
+  }
+  return body;
+}
+
+/**
  * The body of an `answerCallbackQuery` call.
  *
  * No `text`, deliberately. Telegram would show it as a toast, and every message this

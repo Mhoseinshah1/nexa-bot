@@ -22,12 +22,24 @@ export const LEDGER_REASONS = [
   'TOPUP_RECEIPT',
   'TOPUP_STARS',
   'TOPUP_CRYPTO',
+  // Payment File 02 §12 (D2): a reviewer crediting the amount they judged arrived with a
+  // card-to-card receipt to the customer's wallet, as that receipt's final disposition. A
+  // CREDIT and never a reversal: it reverses nothing. Its own reason rather than
+  // `TOPUP_RECEIPT`, which is a top-up the customer asked for and earns a gift, and rather
+  // than `ADMIN_CREDIT`, which has no payment behind it. It always names its payment, and
+  // there is one per payment, by `wallet_entries_receipt_credit_payment_key`.
+  // `docs/payments-file02-design.md` D2.
+  'RECEIPT_CREDIT',
   // Commerce
   'PURCHASE',
   'PURCHASE_REVERSAL',
   'REFUND',
   // Cashback — three distinct sources, never merged into one opaque bump
   'CASHBACK_GATEWAY',
+  // Payment File 02 §17 (D5): the top-up gift, a percentage of a top-up's principal
+  // snapshotted on the payment from the gateway it was offered through. A separate entry
+  // from the principal's `TOPUP_RECEIPT`, never folded into it, one per payment by
+  // `wallet_entries_topup_cashback_payment_key`.
   'CASHBACK_TOPUP',
   'CASHBACK_RENEWAL',
   // WP8: cashback on a DELIVERED order, of any paid purpose, and its reversal when the

@@ -165,6 +165,10 @@ import { ReceiptService } from './modules/commerce/payments/application/receipt.
 import { TelegramReceiptFiles } from './modules/commerce/payments/infrastructure/telegram-receipt-files.js';
 import { PaymentService } from './modules/commerce/payments/application/payment.service.js';
 import { RefundService } from './modules/commerce/payments/application/refund.service.js';
+import { ReceiptDispositionService } from './modules/commerce/payments/application/receipt-disposition.service.js';
+import { ReceiptCreditCaptureService } from './modules/commerce/payments/application/receipt-credit-capture.service.js';
+import { DrizzleAdminAmountCaptureRepository } from './modules/commerce/payments/infrastructure/drizzle-admin-amount-capture.repository.js';
+import { DrizzleReceiptCreditRepository } from './modules/commerce/payments/infrastructure/drizzle-receipt-credit.repository.js';
 import { DrizzleRefundRepository } from './modules/commerce/payments/infrastructure/drizzle-refund.repository.js';
 import { SalesCurrencyChangeGuard } from './modules/commerce/payments/application/sales-currency-change.guard.js';
 import { PaymentExpiryService } from './modules/commerce/payments/application/payment-expiry.service.js';
@@ -216,7 +220,10 @@ import { DrizzleOperationRepository } from './modules/commerce/provisioning/infr
 import { ProvisioningService } from './modules/commerce/provisioning/application/provisioning.service.js';
 import { ServiceAdminService } from './modules/commerce/provisioning/application/service-admin.service.js';
 import { decideOperability } from './modules/commerce/provisioning/application/panel-operability.js';
-import { ProvisionerService } from './modules/commerce/provisioning/application/provisioner.service.js';
+import {
+  PURCHASED_AS,
+  ProvisionerService,
+} from './modules/commerce/provisioning/application/provisioner.service.js';
 import { ProvisionerLoop } from './modules/commerce/provisioning/application/provisioner-loop.js';
 import { DeliveryService } from './modules/commerce/provisioning/application/delivery.service.js';
 import { CustomerNotificationService } from './modules/commerce/messaging/application/customer-notification.service.js';
@@ -454,6 +461,14 @@ export interface Container {
    * reversing one is a finance permission an operator can be granted on its own.
    */
   readonly refunds: RefundService;
+  /**
+   * A card-to-card receipt's credit-to-wallet disposition (Payment File 02 §12, D2),
+   * under `receipts.review` AND `users.wallet.credit`. Called by the Telegram review
+   * surface; the Web Admin only READS what it recorded.
+   */
+  readonly receiptDispositions: ReceiptDispositionService;
+  /** The Telegram half of the credit-to-wallet disposition: the reviewer's amount capture (D3). */
+  readonly receiptCreditCaptures: ReceiptCreditCaptureService;
   /**
    * The route repository, exposed for ONE caller: the boot-time reconcile.
    *
@@ -1551,6 +1566,22 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
      * consult what the wallet currently holds.
      */
     wallet: walletRepository,
+    /*
+     * The order's lock, read and one edge (P3): an operator's refund that completes the
+     * payment moves the order `PAID -> REFUNDED`.
+     */
+    orders: orderRepository,
+    /*
+     * Whether the operation that DELIVERS what the order bought is still undecided. The
+     * type comes from `PURCHASED_AS`, the table the cashback earner and the provisioner
+     * already share, so "the purchase operation" means one thing everywhere.
+     */
+    deliveries: {
+      purchaseInProgress: (scope, order, tx) =>
+        operationRepository.hasUnresolvedForOrder(scope, order.id, PURCHASED_AS[order.purpose], tx),
+    },
+    outbox,
+    notifier: customerNotifier,
     guard,
     uow,
     audit,
@@ -1589,6 +1620,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
   });
 
+  /** The append-only record of a receipt's credit-to-wallet disposition (D2). */
+  const receiptCreditRepository = new DrizzleReceiptCreditRepository(database.db);
+
   const paymentService = new PaymentService({
     resellers: resellerService,
     undeliverable: undeliverableOrders,
@@ -1622,6 +1656,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     receiptCaptures: receiptCaptureRepository,
     // The COUNT only. `PaymentServiceDeps` narrows it, so this module cannot file one.
     receipts: paymentReceiptRepository,
+    // The READ only: a rejection's loser is told a credit won (D2).
+    receiptCredits: receiptCreditRepository,
     /*
      * The READ alone, narrowed here rather than by the type.
      *
@@ -1646,6 +1682,51 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
     operationId: (key) => operationIdFor('payment', key),
+  });
+
+  /*
+   * A receipt's third disposition (D2). The payment's read, lock and `resolve` edge, the
+   * receipt COUNT, the ledger's `append` and `lockCustomer`, and its own table — narrowed
+   * by its dependency type, so it cannot confirm a payment or file a receipt.
+   */
+  const receiptDispositionService = new ReceiptDispositionService({
+    payments: paymentRepository,
+    receipts: paymentReceiptRepository,
+    credits: receiptCreditRepository,
+    wallet: walletRepository,
+    settings: settingsResolver,
+    notifier: customerNotifier,
+    outbox,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
+
+  /*
+   * The reviewer's amount capture (D3). It holds the payment READ, the receipt COUNT and
+   * the customer READ, and reaches money only through `creditToWallet` above.
+   */
+  const receiptCreditCaptureService = new ReceiptCreditCaptureService({
+    captures: new DrizzleAdminAmountCaptureRepository(database.db),
+    payments: paymentRepository,
+    receipts: paymentReceiptRepository,
+    customers: customerRepository,
+    dispositions: receiptDispositionService,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+    ids,
   });
 
   /*
@@ -2179,6 +2260,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
        * prevent, applied to the reading side.
        */
       refundFigures: walletRepository,
+      // The same repository, for the same reason: the three payment-credit sentences
+      // (Payment File 02 §18) read their figure from the entries the payment names.
+      paymentCredits: walletRepository,
       contacts: {
         contactFor: async (scope, customerId, tx) => {
           const customer = await customerRepository.findById(scope, customerId, tx);
@@ -3009,6 +3093,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     paymentAccounts: paymentAccountService,
     paymentGateways: paymentGatewayService,
     refunds: refundService,
+    receiptDispositions: receiptDispositionService,
+    receiptCreditCaptures: receiptCreditCaptureService,
     paymentGatewayProvisioning: paymentGatewayRepository,
     receipts: receiptService,
     receiptFiles,
@@ -3047,6 +3133,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       ]),
       destinations: paymentDestinationRenderer,
       receipts: receiptService,
+      receiptCredits: receiptCreditCaptureService,
       telegramAdmins,
       /*
        * The reviewers' poke, Phase 5T.

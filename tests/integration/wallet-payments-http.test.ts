@@ -5,6 +5,8 @@ import {
   API_PREFIX,
   AUTH_ROUTES,
   COMMERCE_ERROR_CODES,
+  COMPENSATION_ROUTES,
+  compensationListResponseSchema,
   paymentReceiptListResponseSchema,
   PAYMENT_ROUTES,
   PLATFORM_ERROR_CODES,
@@ -550,7 +552,13 @@ describe('wallet and payment HTTP surfaces', () => {
     expect(response.body).not.toMatch(/[0-9]{16}/u);
   });
 
-  it('confirms under receipts.review, settles the order, and records the reviewer', async () => {
+  /*
+   * Payment File 02 §10 (D3): card-to-card review is Telegram's, and the Web Admin is
+   * read-only for it. The two routes that used to confirm and reject are GONE — not
+   * refused by a permission, absent — so even the owner, who holds every key, reaches
+   * nothing, and the payment and its order are untouched.
+   */
+  it('offers no way to confirm or reject a card-to-card payment over HTTP, even to the owner', async () => {
     const order = await awaitingPayment(tenantA, customerA, panelA, 'http-pay-3');
     const pending = await api.container.payments
       .requestManualTransfer(tenantA, systemActor('http-pay-3'), customerA, {
@@ -559,70 +567,36 @@ describe('wallet and payment HTTP surfaces', () => {
       })
       .then((issued) => issued.payment);
 
-    // `viewer` holds `payments.view` and NOT `receipts.review`: the reader who can see a
-    // payment and must not be able to approve it.
-    const refused = await post(PAYMENT_ROUTES.confirm(pending.id), viewerCookie, {
-      idempotencyKey: 'http-confirm-0001',
-      evidenceNote: 'not mine to approve',
-    });
-    expect(refused.statusCode).toBe(403);
+    for (const [suffix, body] of [
+      ['confirm', { idempotencyKey: 'http-confirm-0002', evidenceNote: 'received' }],
+      ['reject', { idempotencyKey: 'http-reject-0002', resolutionNote: 'not received' }],
+      ['receipt-credit', { idempotencyKey: 'http-credit-0002', amountMinor: '250000' }],
+      ['late-credit', { idempotencyKey: 'http-late-0002' }],
+      ['late-dismiss', { idempotencyKey: 'http-late-0003', reason: 'NOT_RECEIVED' }],
+    ] as const) {
+      const url = `${PAYMENT_ROUTES.detail(pending.id)}/${suffix}`;
+      for (const cookie of [ownerCookie, financeCookie]) {
+        const response = await post(url, cookie, body);
+        expect(response.statusCode, `POST ${url} exists`).toBe(404);
+      }
+    }
 
-    const response = await post(PAYMENT_ROUTES.confirm(pending.id), financeCookie, {
-      idempotencyKey: 'http-confirm-0002',
-      evidenceNote: 'کارت به کارت، ۴ رقم آخر ۱۲۳۴',
-    });
-    expect(response.statusCode).toBe(201);
-    const parsed = paymentResponseSchema.parse(JSON.parse(response.body));
-    expect(parsed.payment.state).toBe('CONFIRMED');
-    expect(parsed.payment.evidenceKind).toBe('OPERATOR_REVIEW');
-    expect(parsed.payment.confirmedByAdminId).not.toBeNull();
-    expect(parsed.payment.confirmedAt).not.toBeNull();
-    // The amount is UNCHANGED by the confirmation, and there is no field to change it.
-    expect(parsed.payment.amount).toBe('250000');
-
+    const detail = paymentResponseSchema.parse(
+      JSON.parse((await get(PAYMENT_ROUTES.detail(pending.id), ownerCookie)).body),
+    );
+    expect(detail.payment.state).toBe('PENDING');
     const rows = (await api.container.database.db.execute(
-      sql`SELECT state, settled_at FROM orders WHERE id = ${order.id}` as never,
-    )) as unknown as { rows: { state: string; settled_at: string | null }[] };
-    expect(rows.rows[0]?.state).toBe('PAID');
-    expect(rows.rows[0]?.settled_at).not.toBeNull();
+      sql`SELECT state FROM orders WHERE id = ${order.id}` as never,
+    )) as unknown as { rows: { state: string }[] };
+    expect(rows.rows[0]?.state).toBe('AWAITING_PAYMENT');
   });
 
-  it('answers a repeated confirmation with the same payment, and settles once', async () => {
-    const order = await awaitingPayment(tenantA, customerA, panelA, 'http-pay-4');
-    const pending = await api.container.payments
-      .requestManualTransfer(tenantA, systemActor('http-pay-4'), customerA, {
-        idempotencyKey: 'http-manual-0004',
-        orderId: order.id,
-      })
-      .then((issued) => issued.payment);
-    const body = { idempotencyKey: 'http-confirm-0003', evidenceNote: 'received' };
-
-    const first = await post(PAYMENT_ROUTES.confirm(pending.id), financeCookie, body);
-    const again = await post(PAYMENT_ROUTES.confirm(pending.id), financeCookie, body);
-    expect(first.statusCode).toBe(201);
-    expect(again.statusCode).toBe(201);
-
-    const events = (await api.container.database.db.execute(
-      sql`SELECT count(*)::int AS n FROM outbox_messages WHERE event_type = 'OrderSettled'` as never,
-    )) as unknown as { rows: { n: number }[] };
-    expect(events.rows[0]?.n).toBe(1);
-  });
-
-  it('cannot confirm a payment in another tenant', async () => {
+  it('lists only this tenant’s payments', async () => {
     const customerB = await customer(tenantB, SEED_IDS.botB1 as BotInstanceId, '900402');
     const panelB = api.container.ids.uuid();
     await api.container.database.db.execute(sql`
       INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
       VALUES (${panelB}, ${tenantB.tenantId}, 'Panel B', 'sanaei', 'https://b.example.test', 'ACTIVE')`);
-    /*
-     * Made GENUINELY sellable, not left as a bare row.
-     *
-     * A panel with no credentials, no activation and no probe cannot create an
-     * account, and since this hotfix `decideEligibility` refuses to take money
-     * for one. A fixture that expects a sale therefore has to describe a panel
-     * that could deliver it; `makePanelSellable` writes the three things a sale
-     * now requires, using the production identity function so it cannot drift.
-     */
     await makePanelSellable(api.container, tenantB, panelB);
     const theirOrder = await awaitingPayment(tenantB, customerB, panelB, 'http-pay-5');
     const theirs = await api.container.payments
@@ -632,18 +606,13 @@ describe('wallet and payment HTTP surfaces', () => {
       })
       .then((issued) => issued.payment);
 
-    // The list does not show it and the confirmation does not find it.
     const list = paymentListResponseSchema.parse(
       JSON.parse((await get(PAYMENT_ROUTES.list, viewerCookie)).body),
     );
     expect(list.payments).toHaveLength(0);
-
-    const response = await post(PAYMENT_ROUTES.confirm(theirs.id), financeCookie, {
-      idempotencyKey: 'http-confirm-0004',
-      evidenceNote: 'not mine',
-    });
-    expect(response.statusCode).toBe(404);
-    expect(errorOf(response.body).code).toBe(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND);
+    const detail = await get(PAYMENT_ROUTES.detail(theirs.id), ownerCookie);
+    expect(detail.statusCode).toBe(404);
+    expect(errorOf(detail.body).code).toBe(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND);
   });
 
   /*
@@ -674,6 +643,221 @@ describe('wallet and payment HTTP surfaces', () => {
       expect(response.statusCode, `POST ${url} exists`).toBe(404);
     }
   });
+  // -------------------------------------------------------------------------
+  // Payment File 02 §21 (D7): the diagnostics, over HTTP
+  // -------------------------------------------------------------------------
+
+  describe('the payment diagnostics', () => {
+    it('shows the payment id, Telegram id and username, gateway, external reference and times', async () => {
+      await api.container.database.db.execute(
+        sql`UPDATE customers SET username = 'zahra_pays' WHERE id = ${customerA}`,
+      );
+      const order = await awaitingPayment(tenantA, customerA, panelA, 'http-d7-1');
+      const pending = await api.container.payments
+        .requestManualTransfer(tenantA, systemActor('http-d7-1'), customerA, {
+          idempotencyKey: 'http-d7-manual-1',
+          orderId: order.id,
+        })
+        .then((issued) => issued.payment);
+
+      const list = paymentListResponseSchema.parse(
+        JSON.parse((await get(PAYMENT_ROUTES.list, viewerCookie)).body),
+      );
+      expect(list.payments).toHaveLength(1);
+      expect(list.payments[0]).toMatchObject({
+        id: pending.id,
+        orderId: order.id,
+        customerId: customerA,
+        customerTelegramUserId: '900400',
+        customerUsername: 'zahra_pays',
+        gatewayProvider: 'MANUAL_TRANSFER',
+        externalReference: null,
+        amount: '250000',
+        state: 'PENDING',
+      });
+      expect(list.payments[0]?.createdAt).toMatch(/Z$/u);
+      expect(list.payments[0]?.updatedAt).toMatch(/Z$/u);
+
+      const detail = paymentResponseSchema.parse(
+        JSON.parse((await get(PAYMENT_ROUTES.detail(pending.id), viewerCookie)).body),
+      );
+      expect(detail.payment).toMatchObject({
+        customerTelegramUserId: '900400',
+        customerUsername: 'zahra_pays',
+        gatewayProvider: 'MANUAL_TRANSFER',
+        // An order payment promises no top-up gift, and was not credited to a wallet.
+        topupCashbackPercent: null,
+        receiptCredit: null,
+      });
+    });
+
+    it('shows a receipt’s credit-to-wallet disposition on the detail, read-only', async () => {
+      const order = await awaitingPayment(tenantA, customerA, panelA, 'http-d7-2');
+      const { payment } = await api.container.payments.requestManualTransfer(
+        tenantA,
+        systemActor('http-d7-2'),
+        customerA,
+        { idempotencyKey: 'http-d7-manual-2', orderId: order.id },
+      );
+      await api.container.payments.signalTransferSent(
+        tenantA,
+        systemActor('http-d7-2'),
+        customerA,
+        {
+          idempotencyKey: 'http-d7-signal-2',
+          paymentId: payment.id,
+          botInstanceId: SEED_IDS.botA1 as BotInstanceId,
+        },
+      );
+      await api.container.receipts.submit(tenantA, systemActor('http-d7-2'), customerA, {
+        idempotencyKey: 'http-d7-file-2',
+        botInstanceId: SEED_IDS.botA1 as BotInstanceId,
+        file: {
+          kind: 'PHOTO',
+          fileId: 'file-d7-2',
+          fileUniqueId: 'u-d7-2',
+          mimeType: null,
+          fileSize: 1_024n,
+          fileName: null,
+          telegramMessageId: 8n,
+          caption: 'واریز از کارت همسرم',
+        },
+      });
+      const finance = adminActorFor(
+        await createAdmin(api.container, tenantA, {
+          username: 'finance-d7',
+          roleKeys: ['finance'],
+        }),
+      );
+      await api.container.receiptDispositions.creditToWallet(tenantA, finance, {
+        idempotencyKey: 'http-d7-credit-2',
+        paymentId: payment.id,
+        amountMinor: 240_000n,
+        note: 'کمتر واریز شده',
+      });
+
+      const detail = paymentResponseSchema.parse(
+        JSON.parse((await get(PAYMENT_ROUTES.detail(payment.id), viewerCookie)).body),
+      );
+      expect(detail.payment.state).toBe('FAILED');
+      expect(detail.payment.receiptCredit).toMatchObject({
+        amountMinor: '240000',
+        currency: 'IRT',
+        decidedByAdminId: finance.id,
+        note: 'کمتر واریز شده',
+      });
+      // The customer's caption is for the reviewer's Telegram caption, never a browser.
+      const receipts = await get(PAYMENT_ROUTES.receipts(payment.id), financeCookie);
+      expect(receipts.body).not.toContain('همسرم');
+    });
+
+    it('lists the compensations: automatic wallet refunds of undeliverable orders, paged', async () => {
+      const refused = await get(COMPENSATION_ROUTES.list, technicalCookie);
+      expect(refused.statusCode).toBe(403);
+
+      const empty = compensationListResponseSchema.parse(
+        JSON.parse((await get(COMPENSATION_ROUTES.list, viewerCookie)).body),
+      );
+      expect(empty).toEqual({ compensations: [], nextCursor: null });
+
+      // Two transfers confirmed after their panel was switched off: the automatic lane
+      // refunds each to the wallet in the confirming transaction (§13).
+      const finance = adminActorFor(
+        await createAdmin(api.container, tenantA, {
+          username: 'finance-d7c',
+          roleKeys: ['finance'],
+        }),
+      );
+      const refunded: string[] = [];
+      for (const key of ['http-d7-c1', 'http-d7-c2']) {
+        await api.container.database.db.execute(
+          sql`UPDATE panels SET status = 'ACTIVE' WHERE id = ${panelA}`,
+        );
+        const order = await awaitingPayment(tenantA, customerA, panelA, key);
+        const { payment } = await api.container.payments.requestManualTransfer(
+          tenantA,
+          systemActor(key),
+          customerA,
+          { idempotencyKey: `${key}-manual`, orderId: order.id },
+        );
+        await api.container.database.db.execute(
+          sql`UPDATE panels SET status = 'DISABLED' WHERE id = ${panelA}`,
+        );
+        const confirmed = await api.container.payments.confirmManualTransfer(
+          tenantA,
+          finance,
+          payment.id,
+          { idempotencyKey: `${key}-confirm`, note: 'arrived' },
+        );
+        expect(confirmed.order?.state).toBe('REFUNDED');
+        refunded.push(payment.id);
+      }
+
+      // An OPERATOR's refund of a delivered wallet order, beside them: a refund, and not a
+      // compensation. Its reason is the operator's free text, and here it reads exactly
+      // like the automatic lane's — `UNDELIVERABLE`, on a `WALLET_CREDIT` refund — so only
+      // the missing requesting administrator can tell the two apart (Codex, PR #70).
+      await api.container.database.db.execute(
+        sql`UPDATE panels SET status = 'ACTIVE' WHERE id = ${panelA}`,
+      );
+      const owner = adminActorFor(
+        await createAdmin(api.container, tenantA, { username: 'owner-d7c', roleKeys: ['owner'] }),
+      );
+      await api.container.wallet.adjust(tenantA, owner, customerA, {
+        idempotencyKey: 'http-d7-fund',
+        direction: 'CREDIT',
+        amountMinor: 250_000n,
+        currency: 'IRT',
+        note: 'fixture',
+      });
+      const delivered = await awaitingPayment(tenantA, customerA, panelA, 'http-d7-c3');
+      const { payment: walletPayment } = await api.container.payments.settleFromWallet(
+        tenantA,
+        systemActor('http-d7-c3'),
+        customerA,
+        { idempotencyKey: 'http-d7-c3-settle', orderId: delivered.id },
+      );
+      await api.container.database.db.execute(sql`
+        UPDATE provisioning_operations
+           SET state = 'SUCCEEDED', completed_at = now(), claimed_by = NULL, lease_until = NULL
+         WHERE order_id = ${delivered.id}`);
+      await api.container.refunds.request(tenantA, owner, {
+        idempotencyKey: 'http-d7-c3-refund',
+        paymentId: walletPayment.id,
+        amountMinor: 50_000n,
+        reason: 'UNDELIVERABLE',
+      });
+
+      const first = compensationListResponseSchema.parse(
+        JSON.parse((await get(`${COMPENSATION_ROUTES.list}?limit=1`, viewerCookie)).body),
+      );
+      expect(first.compensations).toHaveLength(1);
+      expect(first.compensations[0]).toMatchObject({
+        paymentId: refunded[0],
+        customerId: customerA,
+        customerTelegramUserId: '900400',
+        principalMinor: '250000',
+        creditedMinor: '250000',
+        currency: 'IRT',
+        reason: 'UNDELIVERABLE',
+        state: 'COMPLETED',
+      });
+      expect(first.nextCursor).not.toBeNull();
+      const second = compensationListResponseSchema.parse(
+        JSON.parse(
+          (
+            await get(
+              `${COMPENSATION_ROUTES.list}?limit=1&cursor=${encodeURIComponent(first.nextCursor ?? '')}`,
+              viewerCookie,
+            )
+          ).body,
+        ),
+      );
+      expect(second.compensations.map((row) => row.paymentId)).toEqual([refunded[1]]);
+      expect(second.nextCursor).toBeNull();
+    });
+  });
+
   // -------------------------------------------------------------------------
   // Receipts, over HTTP
   // -------------------------------------------------------------------------
@@ -710,6 +894,7 @@ describe('wallet and payment HTTP surfaces', () => {
           fileSize: 1_024n,
           fileName: null,
           telegramMessageId: 7n,
+          caption: null,
         },
       });
       const rows = (await api.container.database.db.execute(

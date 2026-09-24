@@ -253,6 +253,7 @@ export class DrizzlePaymentReceiptRepository implements PaymentReceiptRepository
         fileSize: input.file.fileSize,
         fileName: input.file.fileName,
         telegramMessageId: input.file.telegramMessageId,
+        caption: input.file.caption,
         createdAt: input.now,
       })
       .onConflictDoNothing()
@@ -351,6 +352,7 @@ const RECEIPT_COLUMNS = {
   mimeType: paymentReceipts.mimeType,
   fileSize: paymentReceipts.fileSize,
   fileName: paymentReceipts.fileName,
+  caption: paymentReceipts.caption,
   createdAt: paymentReceipts.createdAt,
 } as const;
 
@@ -365,6 +367,7 @@ interface ReceiptRow {
   readonly mimeType: string | null;
   readonly fileSize: bigint | null;
   readonly fileName: string | null;
+  readonly caption: string | null;
   readonly createdAt: Date;
 }
 
@@ -381,6 +384,7 @@ function toReceipt(row: ReceiptRow): PaymentReceiptRecord {
     mimeType: row.mimeType,
     fileSize: row.fileSize,
     fileName: row.fileName,
+    caption: row.caption,
     createdAt: row.createdAt,
   };
 }

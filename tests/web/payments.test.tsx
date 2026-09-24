@@ -5,6 +5,8 @@ import { PaymentDetailPage, PaymentsPage } from '../../apps/web/src/pages/paymen
 import { resolve } from '../../apps/web/src/app';
 import { formatTimestamp } from '../../apps/web/src/format';
 import { renderPage, stubApi } from './harness';
+import { PAYMENT_ROUTES } from '@nexa/contracts';
+import * as client from '../../apps/web/src/api/client';
 
 /**
  * Payments, rendered against the shapes the server actually returns.
@@ -16,9 +18,9 @@ import { renderPage, stubApi } from './harness';
  *
  * The two things this file exists to defend, beyond rendering:
  *
- *   - the ONE write is a confirmation, and it carries a NOTE and nothing else. A case
- *     below enumerates the body the page actually sends and requires no amount, no
- *     currency and no customer in it.
+ *   - there is NO card-to-card write. Payment File 02 §10 puts review in Telegram only,
+ *     and the page says so for a pending transfer instead of drawing a control the
+ *     server has no route for (D3).
  *   - PAID means the money arrived. Several cases assert a PROHIBITION — that no string
  *     on the page claims a service was created, prepared or delivered — because a later
  *     phase adding such a claim is the failure this codebase is organised around.
@@ -249,12 +251,11 @@ describe('the payment list', () => {
 });
 
 describe('the payment detail', () => {
-  const render = (overrides: Record<string, unknown> = {}, mayReview = true) => {
+  const render = (overrides: Record<string, unknown> = {}) => {
     stubApi(detail(overrides));
     return renderPage(
       <PaymentDetailPage
         id={ROW_ID}
-        mayReview={mayReview}
         mayViewReceipts={false}
         mayViewRefunds={false}
         mayIssueRefunds={false}
@@ -279,72 +280,23 @@ describe('the payment detail', () => {
     expect(screen.getByText('زمان تأیید')).toBeInTheDocument();
   });
 
-  it('sends a NOTE and nothing else when confirming', async () => {
-    const api = stubApi([
-      ...detail(),
-      {
-        url: `/payments/${ROW_ID}/confirm`,
-        body: {
-          payment: {
-            ...payment({
-              state: 'CONFIRMED',
-              evidenceKind: 'OPERATOR_REVIEW',
-              confirmedAt: '2026-09-10T13:00:00.000Z',
-            }),
-            evidenceNote: 'received',
-          },
-        },
-      },
-    ]);
-    renderPage(
-      <PaymentDetailPage
-        id={ROW_ID}
-        mayReview
-        mayViewReceipts={false}
-        mayViewRefunds={false}
-        mayIssueRefunds={false}
-        denied={false}
-      />,
-    );
-    await screen.findByText('تأیید دریافت وجه');
-
-    fireEvent.change(screen.getByLabelText('یادداشت بررسی'), { target: { value: 'received' } });
-    fireEvent.click(screen.getByText('تأیید دریافت'));
-
-    await waitFor(() => {
-      expect(api.calls.some((call) => call.url.includes('/confirm'))).toBe(true);
-    });
-    const body = api.calls.find((one) => one.url.includes('/confirm'))?.body as Record<
-      string,
-      unknown
-    >;
-    expect(body['evidenceNote']).toBe('received');
-    expect(String(body['idempotencyKey']).length).toBeGreaterThanOrEqual(8);
+  it('draws no approve, reject or credit for a pending transfer, and says review is in Telegram', async () => {
     /*
-     * The whole invariant, enumerated.
-     *
-     * An operator able to restate the amount at approval time is an operator able to
-     * approve a different payment from the one the customer made. Three layers refuse
-     * it — the schema, the repository and a database trigger — and this is the one that
-     * proves the page never tries.
+     * Payment File 02 §10 (D3). The server has no route for any of the three, and a
+     * drawn control would be a button that answers 404. What the page owes the operator
+     * is where the decision IS taken.
      */
-    for (const forbidden of ['amount', 'currency', 'customerId', 'orderId', 'method', 'state']) {
-      expect(body, `the confirmation carries ${forbidden}`).not.toHaveProperty(forbidden);
+    const view = render({ state: 'PENDING', method: 'MANUAL_TRANSFER' });
+    await screen.findByText('بررسی رسید');
+    expect(view.container.textContent).toContain('فقط از پنل مدیریت تلگرام');
+    expect(view.container.querySelector('#payment-note')).toBeNull();
+    expect(view.container.querySelector('#payment-reason')).toBeNull();
+    for (const label of ['تأیید دریافت', 'رد رسید', 'واریز به کیف پول']) {
+      expect(screen.queryByRole('button', { name: label }), label).toBeNull();
     }
   });
 
-  it('names the permission instead of drawing a disabled button', async () => {
-    render({}, false);
-    await screen.findByText('تأیید دریافت وجه');
-
-    expect(screen.getByText(/receipts.review/u)).toBeInTheDocument();
-    expect(screen.queryByText('تأیید دریافت')).toBeNull();
-  });
-
-  it('offers no confirmation for a payment the machine cannot confirm', async () => {
-    // A CONFIRMED payment has no `CONFIRM` edge, and a WALLET payment was confirmed by
-    // its own debit in the same transaction — there is nothing for an operator to
-    // approve in either.
+  it('says nothing about review for a payment that is not a pending transfer', async () => {
     for (const overrides of [
       {
         state: 'CONFIRMED',
@@ -359,8 +311,8 @@ describe('the payment detail', () => {
       await screen.findAllByText('a1b2c3d4e5f60718:manual');
       expect(
         view.container.textContent,
-        `a confirmation form was drawn for ${JSON.stringify(overrides)}`,
-      ).not.toContain('تأیید دریافت وجه');
+        `a review notice was drawn for ${JSON.stringify(overrides)}`,
+      ).not.toContain('بررسی رسید');
       view.unmount();
     }
   });
@@ -404,185 +356,19 @@ describe('the payment detail', () => {
   });
 
   /*
-   * TWO controls now, and the list is still exhaustive.
-   *
-   * 4G gave `receipts.review` the reject half it has promised since the permission
-   * catalogue was frozen, so a rejection is no longer among the things this page must
-   * not offer. Everything else in the original list still is: there is no cancel here
-   * (a withdrawal is the CUSTOMER's act and arrives through the bot), no retry
-   * (`payments.retry` is a permission for a gateway that does not ship) and no refund
-   * (`refunds.issue` is CRITICAL and unimplemented — OQ-4C-02).
+   * NO controls, and the list is exhaustive: no confirm and no reject (Payment File 02
+   * §10 — review is Telegram's), no cancel (a withdrawal is the CUSTOMER's act and
+   * arrives through the bot), no retry (`payments.retry` is a permission for a gateway
+   * that does not ship). A refund is its own card, under its own permission, and is not
+   * drawn here with `refunds.view` off.
    */
-  it('draws no control that could cancel, retry or refund a payment', async () => {
+  it('draws no control that could confirm, reject, cancel, retry or refund a payment', async () => {
     const view = render();
     await screen.findAllByText('a1b2c3d4e5f60718:manual');
-    const labels = [...view.container.querySelectorAll('button')].map((b) => b.textContent?.trim());
-    for (const label of labels) {
-      expect(
-        label === 'تأیید دریافت' || label === 'رد رسید' || label === '',
-        `the payment page draws an unexpected control: ${String(label)}`,
-      ).toBe(true);
-    }
-  });
-
-  it('sends a REASON and nothing else when rejecting, and leaves the order alone', async () => {
-    const api = stubApi([
-      ...detail(payment({ state: 'PENDING', method: 'MANUAL_TRANSFER' })),
-      {
-        url: `/payments/${ROW_ID}/reject`,
-        body: {
-          payment: {
-            ...payment({
-              state: 'FAILED',
-              resolvedAt: '2026-09-10T13:05:00.000Z',
-              resolvedByAdminId: '019200ab-cdef-7012-8345-6789abcdef01',
-            }),
-            evidenceNote: null,
-            resolutionNote: 'هیچ واریزی با این کد پیدا نشد',
-          },
-        },
-      },
-    ]);
-    const view = renderPage(
-      <PaymentDetailPage
-        id={ROW_ID}
-        mayReview
-        mayViewReceipts={false}
-        mayViewRefunds={false}
-        mayIssueRefunds={false}
-        denied={false}
-      />,
-    );
-    await screen.findAllByText('a1b2c3d4e5f60718:manual');
-
-    const reason = view.container.querySelector('#payment-reason') as HTMLInputElement;
-    fireEvent.change(reason, { target: { value: 'هیچ واریزی با این کد پیدا نشد' } });
-    fireEvent.click(screen.getByRole('button', { name: 'رد رسید' }));
-
-    await waitFor(() => {
-      expect(api.calls.some((call) => call.url.endsWith('/reject'))).toBe(true);
-    });
-    const sent = api.calls.find((call) => call.url.endsWith('/reject'));
-    const body = (sent?.body ?? {}) as Record<string, unknown>;
-    // The reason and the key. No amount, no state, no order — the whole point of the
-    // endpoint's shape, asserted where a later convenience field would break it.
-    expect(Object.keys(body).sort()).toEqual(['idempotencyKey', 'resolutionNote']);
-    expect(body.resolutionNote).toBe('هیچ واریزی با این کد پیدا نشد');
-  });
-
-  it('disables BOTH decisions while either is in flight', async () => {
-    /*
-     * The two commands race the same PENDING row with different idempotency keys, so an
-     * operator who clicks confirm and then reject before the first returns gets whichever
-     * request the database serves second — and one of the two cannot be undone. The
-     * conditional UPDATE keeps the DATA consistent; it cannot make the outcome the one
-     * the operator meant.
-     *
-     * The confirm route is left unrouted deliberately, so the mutation stays pending for
-     * the length of the assertion rather than racing it.
-     */
-    stubApi(detail(payment({ state: 'PENDING', method: 'MANUAL_TRANSFER' })));
-    /*
-     * The confirmation is held OPEN rather than answered.
-     *
-     * An unrouted or errored POST settles immediately, so the pending window closes
-     * before an assertion can see it and the test would pass or fail on timing. A
-     * never-resolving response makes the window permanent, which is the state being
-     * asserted: not "the request finished" but "while it is in flight".
-     */
-    const answered = globalThis.fetch;
-    vi.stubGlobal('fetch', (input: unknown, init?: RequestInit) =>
-      String(input).endsWith('/confirm')
-        ? new Promise<Response>(() => {})
-        : (answered as typeof fetch)(input as RequestInfo, init),
-    );
-
-    const view = renderPage(
-      <PaymentDetailPage
-        id={ROW_ID}
-        mayReview
-        mayViewReceipts={false}
-        mayViewRefunds={false}
-        mayIssueRefunds={false}
-        denied={false}
-      />,
-    );
-    await screen.findAllByText('a1b2c3d4e5f60718:manual');
-
-    const note = view.container.querySelector('#payment-note') as HTMLInputElement;
-    const reason = view.container.querySelector('#payment-reason') as HTMLInputElement;
-    fireEvent.change(note, { target: { value: 'money arrived' } });
-    fireEvent.change(reason, { target: { value: 'no transfer arrived' } });
-
-    expect(screen.getByRole('button', { name: 'تأیید دریافت' })).not.toBeDisabled();
-    expect(screen.getByRole('button', { name: 'رد رسید' })).not.toBeDisabled();
-
-    fireEvent.click(screen.getByRole('button', { name: 'تأیید دریافت' }));
-
-    // Re-queried, not held: the buttons re-render when the mutation's state changes.
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'رد رسید' })).toBeDisabled();
-    });
-    expect(screen.getByRole('button', { name: 'تأیید دریافت' })).toBeDisabled();
-  });
-
-  it('disables the confirmation while a rejection is in flight, the mirror case', async () => {
-    /*
-     * The OTHER direction, and it needs its own test rather than a second assertion in
-     * the one above. Each button carries its own expression, so a test that only clicks
-     * confirm leaves the confirm button's mention of `reject.isPending` unexercised:
-     * removing it was measured to survive that test (F4G-23) and to die against this one.
-     */
-    stubApi(detail(payment({ state: 'PENDING', method: 'MANUAL_TRANSFER' })));
-    const answered = globalThis.fetch;
-    vi.stubGlobal('fetch', (input: unknown, init?: RequestInit) =>
-      String(input).endsWith('/reject')
-        ? new Promise<Response>(() => {})
-        : (answered as typeof fetch)(input as RequestInfo, init),
-    );
-
-    const view = renderPage(
-      <PaymentDetailPage
-        id={ROW_ID}
-        mayReview
-        mayViewReceipts={false}
-        mayViewRefunds={false}
-        mayIssueRefunds={false}
-        denied={false}
-      />,
-    );
-    await screen.findAllByText('a1b2c3d4e5f60718:manual');
-
-    const note = view.container.querySelector('#payment-note') as HTMLInputElement;
-    const reason = view.container.querySelector('#payment-reason') as HTMLInputElement;
-    fireEvent.change(note, { target: { value: 'money arrived' } });
-    fireEvent.change(reason, { target: { value: 'no transfer arrived' } });
-
-    fireEvent.click(screen.getByRole('button', { name: 'رد رسید' }));
-
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'تأیید دریافت' })).toBeDisabled();
-    });
-    expect(screen.getByRole('button', { name: 'رد رسید' })).toBeDisabled();
-  });
-
-  it('offers no rejection to an operator without receipts.review', async () => {
-    stubApi(detail(payment({ state: 'PENDING', method: 'MANUAL_TRANSFER' })));
-    const view = renderPage(
-      <PaymentDetailPage
-        id={ROW_ID}
-        mayReview={false}
-        mayViewReceipts={false}
-        mayViewRefunds={false}
-        mayIssueRefunds={false}
-        denied={false}
-      />,
-    );
-    await screen.findAllByText('a1b2c3d4e5f60718:manual');
-    // Not a disabled button and not a hidden one behind a visible card: the whole
-    // card is absent, so there is nothing to press and nothing to imply they could.
-    expect(view.container.querySelector('#payment-reason')).toBeNull();
-    expect(view.container.textContent).not.toContain('رد رسید');
+    const labels = [...view.container.querySelectorAll('button')]
+      .map((b) => b.textContent?.trim())
+      .filter((label) => label !== '');
+    expect(labels, 'the payment page draws a control').toEqual([]);
   });
 });
 
@@ -600,40 +386,24 @@ describe('the payments route', () => {
   });
 
   /*
-   * The ROUTE deriving each prop from a permission, not a page handed one directly.
-   *
-   * Every other permission case in this file and in `users.test.tsx` constructs the page
-   * with `mayReview={false}`, which proves the page honours the prop and says nothing
-   * about `app.tsx` computing it. `mayReview={may('payments.view')}` — every reader
-   * offered the approve form — left that whole suite green. This is the call site.
+   * The ROUTE, not a page handed props: even an operator holding `receipts.review` is
+   * offered no decision on the Web Admin (Payment File 02 §10, D3).
    */
-  it('derives the review affordance from receipts.review, not from payments.view', async () => {
-    stubApi(detail(payment({ state: 'PENDING', method: 'MANUAL_TRANSFER' })));
-    const reader = resolve({ path: `/payments/${ROW_ID}`, query: new URLSearchParams() }, [
-      'payments.view',
-    ]);
-    const readerView = renderPage(reader.element as ReactElement);
-    // The settled detail, so the assertion below is about a rendered page rather than a
-    // spinner that has not drawn the button yet either.
-    await waitFor(() => {
-      expect(readerView.container.textContent).toContain('a1b2c3d4e5f60718:manual');
-    });
-    expect(readerView.queryByText('تأیید دریافت')).toBeNull();
-    // Named, not merely absent: the reader is told which permission they lack.
-    expect(readerView.container.textContent).toContain('receipts.review');
-
-    cleanup();
-
+  it('offers no card-to-card decision even to receipts.review', async () => {
     stubApi(detail(payment({ state: 'PENDING', method: 'MANUAL_TRANSFER' })));
     const approver = resolve({ path: `/payments/${ROW_ID}`, query: new URLSearchParams() }, [
       'payments.view',
       'receipts.review',
+      'users.wallet.credit',
     ]);
-    renderPage(approver.element as ReactElement);
-    // The card title first, then the BUTTON — the reader above sees the title too, and
-    // asserting on it would not distinguish the two operators at all.
-    await screen.findByText('تأیید دریافت وجه');
-    expect(screen.getByText('تأیید دریافت')).toBeTruthy();
+    const view = renderPage(approver.element as ReactElement);
+    await screen.findByText('بررسی رسید');
+    expect(view.queryByText('تأیید دریافت')).toBeNull();
+    expect(view.queryByText('رد رسید')).toBeNull();
+    const labels = [...view.container.querySelectorAll('button')]
+      .map((b) => b.textContent?.trim())
+      .filter((label) => label !== '');
+    expect(labels, 'the payment page draws a control').toEqual([]);
   });
 
   it('refuses the page to an operator without payments.view', async () => {
@@ -667,7 +437,6 @@ describe('the frozen destination on a payment detail', () => {
     const { container } = renderPage(
       <PaymentDetailPage
         id={ROW_ID}
-        mayReview={false}
         mayViewReceipts={false}
         mayViewRefunds={false}
         mayIssueRefunds={false}
@@ -690,7 +459,6 @@ describe('the frozen destination on a payment detail', () => {
     const withCard = renderPage(
       <PaymentDetailPage
         id={ROW_ID}
-        mayReview={false}
         mayViewReceipts={false}
         mayViewRefunds={false}
         mayIssueRefunds={false}
@@ -710,7 +478,6 @@ describe('the frozen destination on a payment detail', () => {
     const without = renderPage(
       <PaymentDetailPage
         id={ROW_ID}
-        mayReview={false}
         mayViewReceipts={false}
         mayViewRefunds={false}
         mayIssueRefunds={false}
@@ -775,7 +542,6 @@ describe('the receipts an operator can read', () => {
     const view = renderPage(
       <PaymentDetailPage
         id={ROW_ID}
-        mayReview
         mayViewReceipts={false}
         mayViewRefunds={false}
         mayIssueRefunds={false}
@@ -788,10 +554,10 @@ describe('the receipts an operator can read', () => {
      * this case passed with the permission gate deleted. The reference exists only once
      * the detail has arrived, which is the render the card would have appeared in.
      */
-    // The CONFIRM FORM, which renders only once the detail has arrived and only for a
+    // The REVIEW NOTICE, which renders only once the detail has arrived and only for a
     // pending manual transfer. Waiting on the page heading instead asserts against a
     // skeleton, and this case passed with the permission gate deleted when it did.
-    await screen.findByText('تأیید دریافت وجه');
+    await screen.findByText('بررسی رسید');
 
     expect(view.container.textContent).not.toContain('رسیدهای ارسالی مشتری');
     // And it did not ASK either: a card that is not drawn must not still fetch a
@@ -804,7 +570,6 @@ describe('the receipts an operator can read', () => {
     const view = renderPage(
       <PaymentDetailPage
         id={ROW_ID}
-        mayReview
         mayViewReceipts
         mayViewRefunds={false}
         mayIssueRefunds={false}
@@ -826,7 +591,6 @@ describe('the receipts an operator can read', () => {
     const view = renderPage(
       <PaymentDetailPage
         id={ROW_ID}
-        mayReview
         mayViewReceipts
         mayViewRefunds={false}
         mayIssueRefunds={false}
@@ -856,7 +620,6 @@ describe('the receipts an operator can read', () => {
     const view = renderPage(
       <PaymentDetailPage
         id={ROW_ID}
-        mayReview
         mayViewReceipts
         mayViewRefunds={false}
         mayIssueRefunds={false}
@@ -877,7 +640,6 @@ describe('the receipts an operator can read', () => {
     const view = renderPage(
       <PaymentDetailPage
         id={ROW_ID}
-        mayReview
         mayViewReceipts
         mayViewRefunds={false}
         mayIssueRefunds={false}
@@ -919,7 +681,6 @@ describe('the receipts an operator can read', () => {
     const view = renderPage(
       <PaymentDetailPage
         id={ROW_ID}
-        mayReview
         mayViewReceipts
         mayViewRefunds={false}
         mayIssueRefunds={false}
@@ -946,7 +707,7 @@ describe('the receipts an operator can read', () => {
     await waitFor(() => {
       expect(view.container.textContent).toContain('a1b2c3d4e5f60718:manual');
     });
-    // Holding review without view draws the decision and not the evidence.
+    // Holding review without view draws no evidence — and, since D3, no decision either.
     expect(view.container.textContent).not.toContain('رسیدهای ارسالی مشتری');
     cleanup();
 
@@ -1018,7 +779,6 @@ describe('the refund card', () => {
     return renderPage(
       <PaymentDetailPage
         id={ROW_ID}
-        mayReview
         mayViewReceipts={false}
         mayViewRefunds
         mayIssueRefunds={mayIssue}
@@ -1095,7 +855,6 @@ describe('the refund card', () => {
     renderPage(
       <PaymentDetailPage
         id={ROW_ID}
-        mayReview
         mayViewReceipts={false}
         mayViewRefunds
         mayIssueRefunds
@@ -1152,5 +911,139 @@ describe('the refund card', () => {
     expect(view.container.textContent).toContain('بازگشت انجام شد');
     // Nothing left to answer, so the form that records an external transfer is absent.
     expect(view.container.textContent).not.toContain('پاسخ به بازگشت‌های در انتظار واریز');
+  });
+});
+
+/**
+ * Payment File 02 §21 (D7): the diagnostics an operator reconciles against, on the list
+ * and the detail — and §10 again: none of it is a control.
+ */
+describe('the payment diagnostics (§21)', () => {
+  const diagnosed = payment({
+    gatewayProvider: 'MANUAL_TRANSFER',
+    externalReference: 'BANK-778899',
+    customerTelegramUserId: '5550001234',
+    customerUsername: 'zahra_pay',
+    updatedAt: '2026-09-11T08:15:00.000Z',
+  });
+
+  it('lists the payment id, the Telegram id and username, the gateway, the external reference and updated-at', async () => {
+    stubApi(list([diagnosed]));
+    renderPage(<PaymentsPage route={LIST_ROUTE} denied={false} />);
+    await screen.findByText('a1b2c3d4e5f60718:manual');
+
+    const table = screen.getByRole('table');
+    const headers = within(table)
+      .getAllByRole('columnheader')
+      .map((cell) => cell.textContent);
+    for (const header of [
+      'شناسهٔ پرداخت',
+      'تلگرام مشتری',
+      'درگاه',
+      'شناسهٔ پیگیری بیرونی',
+      'آخرین تغییر',
+    ]) {
+      expect(headers, header).toContain(header);
+    }
+    expect(within(table).getByText(ROW_ID.slice(0, 8))).toBeInTheDocument();
+    expect(within(table).getByText('5550001234')).toBeInTheDocument();
+    expect(within(table).getByText('@zahra_pay')).toBeInTheDocument();
+    expect(within(table).getByText('BANK-778899')).toBeInTheDocument();
+    expect(within(table).getAllByText('کارت به کارت').length).toBeGreaterThan(0);
+    expect(table.textContent).toContain(formatTimestamp('2026-09-11T08:15:00.000Z'));
+  });
+
+  it('shows a dash, never a guess, for a payment with no gateway, reference or username', async () => {
+    stubApi(
+      list([
+        payment({
+          method: 'WALLET',
+          gatewayProvider: null,
+          externalReference: null,
+          customerTelegramUserId: '5550001234',
+          customerUsername: null,
+        }),
+      ]),
+    );
+    renderPage(<PaymentsPage route={LIST_ROUTE} denied={false} />);
+    await screen.findByText('a1b2c3d4e5f60718:manual');
+    const table = screen.getByRole('table');
+    expect(within(table).getByText('5550001234')).toBeInTheDocument();
+    expect(table.textContent).not.toContain('@');
+  });
+
+  const renderDetail = (overrides: Record<string, unknown>) => {
+    stubApi(detail({ ...diagnosed, ...overrides }));
+    return renderPage(
+      <PaymentDetailPage
+        id={ROW_ID}
+        mayViewReceipts={false}
+        mayViewRefunds={false}
+        mayIssueRefunds={false}
+        denied={false}
+      />,
+    );
+  };
+
+  it('shows a receipt’s credit-to-wallet disposition read-only: amount, admin, time and note', async () => {
+    const view = renderDetail({
+      state: 'FAILED',
+      resolvedAt: '2026-09-11T08:15:00.000Z',
+      resolvedByAdminId: '019200ab-cdef-7012-8345-6789abcdef01',
+      receiptCredit: {
+        amountMinor: '240000',
+        currency: 'IRT',
+        walletEntryId: '019260ab-cdef-7012-8345-6789abcdef01',
+        decidedByAdminId: '019200ab-cdef-7012-8345-6789abcdef01',
+        decidedAt: '2026-09-11T08:15:00.000Z',
+        note: 'ده هزار تومان کمتر رسید',
+      },
+    });
+    await screen.findByText('واریز رسید به کیف پول');
+    const card = screen.getByText('واریز رسید به کیف پول').closest('section') ?? view.container;
+    expect(card.textContent).toMatch(/۲۴۰٬۰۰۰|240,000/u);
+    expect(card.textContent).toContain('ده هزار تومان کمتر رسید');
+    expect(card.textContent).toContain(formatTimestamp('2026-09-11T08:15:00.000Z'));
+    expect(card.textContent).toContain('پرداخت سفارش حساب نمی‌شود');
+    // Read-only: the only buttons on the page are copy controls with no label.
+    const labels = [...view.container.querySelectorAll('button')]
+      .map((b) => b.textContent?.trim())
+      .filter((label) => label !== '');
+    expect(labels, 'the disposition card draws a control').toEqual([]);
+  });
+
+  it('shows the gift a top-up promised, and no gift card for an order payment', async () => {
+    const topup = renderDetail({ orderId: null, topupCashbackPercent: 10 });
+    await screen.findByText('هدیهٔ شارژ این پرداخت');
+    expect(topup.container.textContent).toContain('10%');
+    topup.unmount();
+
+    const order = renderDetail({ topupCashbackPercent: null });
+    await screen.findAllByText('a1b2c3d4e5f60718:manual');
+    expect(order.container.textContent).not.toContain('هدیهٔ شارژ این پرداخت');
+  });
+});
+
+/**
+ * §10 at the wire: the Web Admin has NO way to confirm, reject or credit a card-to-card
+ * payment. Not a hidden button — no contract route and no client function exists, so a
+ * page cannot grow one by accident without this failing.
+ */
+describe('no card-to-card mutation in the Web Admin (§10)', () => {
+  it('names no confirm, reject or credit route in the payment contract', () => {
+    expect(
+      Object.keys(PAYMENT_ROUTES).filter((key) =>
+        /confirm|reject|credit|approve|dismiss/iu.test(key),
+      ),
+    ).toEqual([]);
+  });
+
+  it('exports no client function that decides a payment', () => {
+    const deciding = Object.keys(client).filter((name) =>
+      /^(confirm|reject|approve|dismiss|credit).*payment|payment.*(confirm|reject|credit)|receipt.*credit|credit.*receipt/iu.test(
+        name,
+      ),
+    );
+    expect(deciding).toEqual([]);
   });
 });

@@ -28,6 +28,12 @@ export interface InboundReceiptFile {
   readonly fileSize: bigint | null;
   readonly fileName: string | null;
   readonly telegramMessageId: bigint | null;
+  /**
+   * The caption the customer sent with the file, already normalised by
+   * `normalizeReceiptCaption`: trimmed, bounded, and null for none (D3). Customer text —
+   * rendered only into the reviewer's caption, never logged.
+   */
+  readonly caption: string | null;
 }
 
 export interface PaymentReceiptRecord {
@@ -49,6 +55,8 @@ export interface PaymentReceiptRecord {
   readonly mimeType: string | null;
   readonly fileSize: bigint | null;
   readonly fileName: string | null;
+  /** The customer's own caption, or null. Never returned to a browser (D3). */
+  readonly caption: string | null;
   readonly createdAt: Date;
 }
 
