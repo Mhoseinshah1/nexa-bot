@@ -7,6 +7,7 @@ import {
   TELEGRAM_SECRET_TOKEN_HEADER,
   type ActorContext,
   type AdminId,
+  type BotInstanceId,
   type CorrelationId,
   type UserId,
 } from '@nexa/contracts';
@@ -425,12 +426,12 @@ describe('the customer Telegram turn', () => {
       {
         idempotencyKey: 'buttons-signal',
         paymentId: payment.id,
-        botInstanceId: BOT_A,
+        botInstanceId: BOT_A as BotInstanceId,
       },
     );
     await api.container.receipts.submit(tenantA, systemActor('buttons-file'), customerId, {
       idempotencyKey: 'buttons-file',
-      botInstanceId: BOT_A,
+      botInstanceId: BOT_A as BotInstanceId,
       file: receiptFile('buttons-file'),
     });
 

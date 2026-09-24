@@ -128,7 +128,9 @@ function renderValue(value: TemplateValue, locale: Locale, type: PlaceholderType
     (typeof value === 'bigint' || (typeof value === 'number' && Number.isSafeInteger(value)))
   ) {
     const bytes = BigInt(value);
-    return type === 'TRAFFIC_LIMIT' ? formatTrafficLimit(bytes, locale) : formatBytes(bytes, locale);
+    return type === 'TRAFFIC_LIMIT'
+      ? formatTrafficLimit(bytes, locale)
+      : formatBytes(bytes, locale);
   }
   return String(value);
 }
