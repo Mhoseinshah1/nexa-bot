@@ -109,7 +109,8 @@ describe('the reviewer’s caption (File 01 §4)', () => {
     expect(values).toMatchObject({
       operation: 'label:bot.admin.operation_renew',
       order: 'پلن ویژه',
-      durationDays: '30',
+      // A duration is shown in its unit, never as the stored integer (pre-release §4).
+      durationDays: '30 روز',
       // A byte figure is shown in a unit, never as the stored integer (pre-release §3).
       trafficBytes: '5 بایت',
       serviceUsername: 'zahra01',
@@ -156,7 +157,8 @@ describe('the reviewer’s caption (File 01 §4)', () => {
         trafficBytes: 53_687_091_200n,
       }),
     });
-    expect(values['durationDays']).toBe('30');
+    // The duration in its unit, never the bare figure (pre-release hardening §4).
+    expect(values['durationDays']).toBe('30 روز');
     // The frozen 53687091200 bytes, as a reviewer reads it — never the raw integer.
     expect(values['trafficBytes']).toBe('50 گیگابایت');
     expect(rendered).toContain('bot.admin.receipt_duration');

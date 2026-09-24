@@ -268,6 +268,7 @@ import { DrizzleNotificationSubjectReader } from './modules/commerce/messaging/i
 import { BotRuntime } from './surfaces/telegram/bot-runtime.js';
 import type { BotRuntimeDeps } from './surfaces/telegram/bot-runtime.js';
 import { I18nTemplateCatalogue } from './modules/control/templates/infrastructure/i18n-template-catalogue.js';
+import { CachedTenantPresentationReader } from './modules/control/templates/infrastructure/cached-tenant-presentation.reader.js';
 import { TemplateManagementService } from './modules/control/templates/application/template-management.service.js';
 import { DrizzleNotificationRepository } from './modules/control/notifications/infrastructure/drizzle-notification.repository.js';
 import { NotificationService } from './modules/control/notifications/application/notification.service.js';
@@ -2150,10 +2151,14 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
 
   const templateRepository = new DrizzleTemplateRepository(database.db);
   const templateCatalogue = new I18nTemplateCatalogue();
+  // One reader for the resolver and the preview, so both show a tenant's dates the
+  // same way and share one cache.
+  const templatePresentation = new CachedTenantPresentationReader(tenants, clock);
   const templateResolver = new TemplateResolver(
     templateRepository,
     featureFlagResolver,
     templateCatalogue,
+    templatePresentation,
   );
   /*
    * Composes the destination block behind the application layer.
@@ -2345,6 +2350,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     opsLogWriter,
     // For the mutation-time session-revocation check.
     sessions,
+    templatePresentation,
   );
 
   /**

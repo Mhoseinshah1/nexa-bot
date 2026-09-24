@@ -1,4 +1,5 @@
 import type {
+  Calendar,
   ScopeContext,
   TemplateDefinition,
   TemplateKey,
@@ -23,13 +24,41 @@ import type { Locale } from './template-resolver.js';
 export interface TemplateCatalogue {
   /** The built-in body for a key. Raw, with placeholders intact. */
   defaultBody(key: TemplateKey, locale: Locale): string;
-  /** Substitutes declared tokens. Escapes values for an HTML-format key. */
+  /**
+   * Substitutes declared tokens. Escapes values for an HTML-format key, and shows a
+   * `DATETIME` value in the tenant's zone and calendar.
+   */
   render(
     definition: TemplateDefinition,
     body: string,
     values: TemplateValues,
     locale: Locale,
+    presentation: TemplatePresentation,
   ): string;
+}
+
+/**
+ * How a tenant wants an instant shown — the display timezone and calendar the Time
+ * rule in `docs/conventions.md` puts on the tenant row.
+ *
+ * Declared here as well as in `@nexa/i18n`, structurally identical, because the
+ * application layer names what it needs and may not import the renderer package.
+ */
+export interface TemplatePresentation {
+  readonly timezone: string;
+  readonly calendar: Calendar;
+}
+
+/**
+ * Resolves the presentation a render in a scope should use.
+ *
+ * Read once per render, not once per value: the resolver asks, the catalogue is handed
+ * the answer. A `SystemContext` has no tenant and receives the product default. The
+ * implementation caches per tenant for a bounded time, so a tenant that changes its
+ * calendar sees the change within that bound, and a message is never wrong for longer.
+ */
+export interface TenantPresentationReader {
+  presentationFor(scope: ScopeContext, tx?: unknown): Promise<TemplatePresentation>;
 }
 
 /** A tenant's current override of one key. Absent means "uses the default". */
