@@ -3404,6 +3404,14 @@ export const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
   [COMMERCE_ERROR_CODES.TOPUP_NOT_OFFERED]: 'bot.wallet.topup_refused',
   [COMMERCE_ERROR_CODES.TOPUP_BELOW_MINIMUM]: 'bot.wallet.topup_refused',
   /*
+   * The typed top-up's ceiling (`wallet.topup.maximum`, customer UX completion §F),
+   * mapped to the same generic sentence for now so the code is never unanswered. The
+   * typed-amount flow that renders `bot.wallet.topup_above_maximum` with the figure
+   * reads the ceiling itself before the service is asked; this entry is the backstop
+   * for the transaction refusing what the prompt admitted a moment earlier.
+   */
+  [COMMERCE_ERROR_CODES.TOPUP_ABOVE_MAXIMUM]: 'bot.wallet.topup_refused',
+  /*
    * And the two the payment ROUTE can throw (Phase 5C), mapped to the same two
    * sentences rather than to new ones — because they are the same two facts.
    *

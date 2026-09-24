@@ -38,6 +38,8 @@ import {
   type TenantContext,
   type UnitOfWork,
   type UserId,
+  type PaymentGatewayProvider,
+  type PaymentPurpose,
 } from '@nexa/contracts';
 import type { ResellerService } from '../../resellers/application/reseller.service.js';
 import type { CustomerNotifier } from '../../messaging/application/customer-notifier.js';
@@ -55,6 +57,7 @@ import type {
   PaymentDestinationRecord,
   PaymentDestinationRepository,
 } from './account-ports.js';
+import type { PaymentGatewayRecord } from './gateway-ports.js';
 import type { OfferedGateway, PaymentGatewayService } from './payment-gateway.service.js';
 import type { PaymentReceiptRepository, ReceiptCaptureRepository } from './receipt-ports.js';
 import type { ReceiptCreditRepository } from './receipt-credit-ports.js';
@@ -138,7 +141,7 @@ export interface PaymentServiceDeps {
    */
   readonly gateways: Pick<
     PaymentGatewayService,
-    'offer' | 'assertAmountAccepted' | 'methodIsOffered'
+    'offer' | 'assertAmountAccepted' | 'methodIsOffered' | 'routesFor'
   >;
   /** Freezes that destination onto the payment, in the same transaction. */
   readonly destinations: PaymentDestinationRepository;
@@ -273,6 +276,22 @@ export interface WalletTopupIntent {
   readonly idempotencyKey: string;
   /** Minor units. Money is never a float and never a bare number in this codebase. */
   readonly amountMinor: bigint;
+}
+
+/**
+ * What a customer's TYPED top-up carries (customer UX completion §F): the figure they
+ * gave, already parsed into money by `parseCustomerAmount`, and the route they chose.
+ *
+ * The amount is `Money` rather than bare minor units because it did not come from
+ * configuration: it is the customer's own figure, and the currency it was parsed in has
+ * to travel with it so the service can refuse one in a denomination this installation
+ * does not sell in. The provider is a member of the closed catalogue; whether that
+ * route is offered for THIS top-up is re-decided inside the transaction.
+ */
+export interface WalletTopupTypedIntent {
+  readonly idempotencyKey: string;
+  readonly amount: Money;
+  readonly provider: PaymentGatewayProvider;
 }
 
 /**
@@ -868,8 +887,19 @@ export class PaymentService {
    * side in between — so `requestManualTransfer` refuses both cases again inside its
    * transaction. This decides whether to OFFER; that decides whether to ISSUE.
    */
-  async manualTransferOffered(scope: TenantContext): Promise<boolean> {
-    if (!(await this.deps.gateways.methodIsOffered(scope, 'MANUAL_TRANSFER'))) return false;
+  async manualTransferOffered(
+    scope: TenantContext,
+    /*
+     * What the route is being offered FOR (customer UX completion §D/§F). A purchase by
+     * default, because every caller before the switches existed was drawing a button
+     * for an order; a caller drawing a top-up control passes `WALLET_TOPUP` and is
+     * told about the route's other switch.
+     */
+    purpose: PaymentPurpose = 'SERVICE_PURCHASE',
+  ): Promise<boolean> {
+    if (!(await this.deps.gateways.methodIsOffered(scope, 'MANUAL_TRANSFER', undefined, purpose))) {
+      return false;
+    }
     return this.deps.accounts.hasEnabled(scope);
   }
 
@@ -1262,10 +1292,110 @@ export class PaymentService {
       method: 'MANUAL_TRANSFER',
       purpose: 'WALLET_TOPUP',
     });
+    return this.issueTopup(scope, actor, customerId, {
+      idempotencyKey: intent.idempotencyKey,
+      requestHash,
+      denial,
+      resolve: async (tx) => {
+        const amount = await this.offeredTopup(scope, intent.amountMinor, tx);
+        /*
+         * Its bounds bind TOGETHER with the installation-wide floor `offeredTopup`
+         * already applied, not after it — most-restrictive-wins on both sides, which is
+         * this product's answer to FBR-008's unresolved precedence.
+         */
+        const route = await this.topupGateway(scope, customerId, amount, tx);
+        return { amount, gateway: route.gateway };
+      },
+    });
+  }
+
+  /**
+   * A wallet top-up for an amount the customer TYPED, against a route they chose
+   * (customer UX completion §F).
+   *
+   * The second entry into the same transaction as `requestWalletTopup`, and the only
+   * things that differ are decided in `resolve`: the amount is checked against
+   * `wallet.topup.minimum` and the NEW `wallet.topup.maximum` rather than matched
+   * against the presets, and the route is the one NAMED, which must be among
+   * `routesFor(WALLET_TOPUP, amount)` for this customer — ACTIVE, switched on for
+   * top-ups, admitting the customer and admitting the amount — or the request is
+   * refused with `TOPUP_NOT_OFFERED`, exactly as a preset nobody offers is. The chooser
+   * re-decided the route before it drew the button; this decides it again inside the
+   * transaction, because the answer can change in between.
+   *
+   * The named route's `topupCashbackPercent` is snapshotted onto the payment as before.
+   * Everything else — the customer lock, the one-open-top-up rule, the destination
+   * snapshot, the events and the audit — is the shared body, not a copy of it.
+   */
+  async requestWalletTopupTyped(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: UserId,
+    intent: WalletTopupTypedIntent,
+  ): Promise<ManualTransferInstruction> {
+    const denial = {
+      action: 'payment.topup_request',
+      entityType: 'Customer',
+      entityId: customerId,
+    };
+    await this.authorize(scope, actor, PAYMENT_PLACE_PERMISSION, denial);
+
+    /*
+     * The currency and the provider are in the hash beside the amount, so the same key
+     * with a different figure, denomination or route is a different command and is
+     * refused as a payload mismatch rather than answered with the first payment. The
+     * `entry` field keeps a typed request and a preset request for the same figure from
+     * ever answering from each other's record.
+     */
+    const requestHash = hashRequest({
+      customerId,
+      amountMinor: intent.amount.amountMinor.toString(),
+      currency: intent.amount.currency,
+      provider: intent.provider,
+      method: 'MANUAL_TRANSFER',
+      purpose: 'WALLET_TOPUP',
+      entry: 'TYPED',
+    });
+    return this.issueTopup(scope, actor, customerId, {
+      idempotencyKey: intent.idempotencyKey,
+      requestHash,
+      denial,
+      resolve: async (tx) => {
+        const amount = await this.typedTopupAmount(scope, intent.amount, tx);
+        const gateway = await this.typedTopupRoute(scope, customerId, amount, intent.provider, tx);
+        return { amount, gateway };
+      },
+    });
+  }
+
+  /**
+   * The shared transaction behind the two top-up entries.
+   *
+   * ONE body, parameterised by how the amount and the route are decided, rather than
+   * two methods that agree today. Everything below the resolution is a rule about money
+   * — the customer lock taken first, one open top-up per customer, the stale-row close,
+   * the destination chosen inside the transaction, the snapshot of the route's promise
+   * — and a second copy is a second place for one of them to be dropped.
+   */
+  private async issueTopup(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: UserId,
+    command: {
+      readonly idempotencyKey: string;
+      readonly requestHash: string;
+      readonly denial: { action: string; entityType: string; entityId: string };
+      /** Decides the amount and the route, inside the issuing transaction. */
+      readonly resolve: (
+        tx: TransactionScope,
+      ) => Promise<{ readonly amount: Money; readonly gateway: PaymentGatewayRecord }>;
+    },
+  ): Promise<ManualTransferInstruction> {
+    const { requestHash, denial } = command;
     const replayed = await this.deps.idempotency.find<{ paymentId: string }>(
       scope,
       CUSTOMER_NAMESPACE,
-      intent.idempotencyKey,
+      command.idempotencyKey,
       requestHash,
     );
     if (replayed !== null) {
@@ -1279,7 +1409,7 @@ export class PaymentService {
     }
 
     const now = this.deps.clock.now();
-    const reference = this.referenceFor(intent.idempotencyKey, 'topup');
+    const reference = this.referenceFor(command.idempotencyKey, 'topup');
     const paymentId = this.deps.ids.uuid() as PaymentId;
 
     return runAuthorizedMutation(
@@ -1318,20 +1448,17 @@ export class PaymentService {
         }
         await this.assertCustomerMayPay(scope, customerId, tx);
 
-        const amount = await this.offeredTopup(scope, intent.amountMinor, tx);
         /*
-         * The ROUTE, resolved inside the transaction that issues the payment.
-         *
-         * Inside, not before, for the reason every other read here is inside: an
-         * operator can disable a route or move a threshold between a check and an
-         * insert, and a top-up issued against a route switched off a moment ago is a
-         * customer holding bank details this installation has stopped honouring.
-         *
-         * Its bounds bind TOGETHER with the installation-wide floor `offeredTopup`
-         * already applied, not after it — most-restrictive-wins on both sides, which is
-         * this product's answer to FBR-008's unresolved precedence.
+         * The AMOUNT and the ROUTE, decided by the entry that called — presets matched
+         * against configuration, or a typed figure checked against the installation's
+         * floor and ceiling and then against the routes offered for it — and decided
+         * INSIDE the transaction that issues the payment. Inside, not before, for the
+         * reason every other read here is inside: an operator can disable a route or
+         * move a threshold between a check and an insert, and a top-up issued against a
+         * route switched off a moment ago is a customer holding bank details this
+         * installation has stopped honouring.
          */
-        const route = await this.topupGateway(scope, customerId, amount, tx);
+        const { amount, gateway } = await command.resolve(tx);
         const windowMinutes = await this.paymentWindowMinutes(scope, tx);
 
         /*
@@ -1431,7 +1558,7 @@ export class PaymentService {
               // `confirmManualTransfer` dispatches on.
               orderId: null,
               method: 'MANUAL_TRANSFER',
-              // The matched PRESET, never the figure the request carried.
+              // What `resolve` decided, never the figure the request carried.
               amount,
               reference,
               expiresAt: deadline,
@@ -1442,8 +1569,8 @@ export class PaymentService {
                * read or waits for it; afterwards 0114 freezes both on the payment, and a
                * later change to the route changes only top-ups created after it.
                */
-              gatewayProvider: route.gateway.provider,
-              topupCashbackPercent: route.gateway.topupCashbackPercent,
+              gatewayProvider: gateway.provider,
+              topupCashbackPercent: gateway.topupCashbackPercent,
               now,
             },
             tx,
@@ -1496,7 +1623,7 @@ export class PaymentService {
           this.deps.idempotency,
           scope,
           CUSTOMER_NAMESPACE,
-          intent.idempotencyKey,
+          command.idempotencyKey,
           requestHash,
           { paymentId: payment.id },
           tx,
@@ -1580,23 +1707,152 @@ export class PaymentService {
       );
     }
 
+    await this.assertAboveTopupMinimum(scope, chosen, tx);
+    return chosen;
+  }
+
+  /**
+   * Refuses an amount below `wallet.topup.minimum`.
+   *
+   * The minimum is compared only in the SAME currency. A floor in another currency is
+   * not a floor this code can evaluate, and converting it would be the FX guess the
+   * whole money model refuses — so it fails closed. Shared by the preset entry, where a
+   * breach is a MISCONFIGURATION (a preset under the floor), and the typed entry, where
+   * it is the customer's figure and the refusal is theirs to act on.
+   */
+  private async assertAboveTopupMinimum(
+    scope: TenantContext,
+    amount: Money,
+    tx: TransactionScope,
+  ): Promise<void> {
     const minimum = await this.deps.settings.valueOf<MoneyWire>(scope, 'wallet.topup.minimum', tx);
     const floor = BigInt(minimum.amountMinor);
-    if (floor > 0n && minimum.currency !== chosen.currency) {
+    if (floor > 0n && minimum.currency !== amount.currency) {
       throw errors.conflict(
         COMMERCE_ERROR_CODES.TOPUP_UNAVAILABLE,
         'The configured minimum top-up is in another currency.',
         { reason: 'MINIMUM_CURRENCY_MISMATCH' },
       );
     }
-    if (floor > 0n && chosen.amountMinor < floor) {
+    if (floor > 0n && amount.amountMinor < floor) {
       throw errors.conflict(
         COMMERCE_ERROR_CODES.TOPUP_BELOW_MINIMUM,
         'That top-up amount is below the minimum this installation accepts.',
         { minimumMinor: minimum.amountMinor, currency: minimum.currency },
       );
     }
-    return chosen;
+  }
+
+  /**
+   * Refuses a TYPED amount above `wallet.topup.maximum` (customer UX completion §F).
+   *
+   * Zero is no ceiling. The ceiling exists because the amount is now typed rather than
+   * picked from presets, and a typed figure with a slipped digit is money a customer is
+   * asked to transfer; so it binds the typed entry only — a preset is the operator's
+   * own figure, and an operator who wants it lower edits the preset. The route's own
+   * `maxAmountMinor` and `MAX_MONEY_AMOUNT_MINOR` still apply on top, most-restrictive
+   * winning as everywhere on this path. A VALIDATION error, not a conflict: the figure
+   * is the customer's input and the reply tells them the ceiling.
+   */
+  private async assertBelowTopupMaximum(
+    scope: TenantContext,
+    amount: Money,
+    tx: TransactionScope,
+  ): Promise<void> {
+    const maximum = await this.deps.settings.valueOf<MoneyWire>(scope, 'wallet.topup.maximum', tx);
+    const ceiling = BigInt(maximum.amountMinor);
+    if (ceiling === 0n) return;
+    if (maximum.currency !== amount.currency) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.TOPUP_UNAVAILABLE,
+        'The configured maximum top-up is in another currency.',
+        { reason: 'MAXIMUM_CURRENCY_MISMATCH' },
+      );
+    }
+    if (amount.amountMinor > ceiling) {
+      throw errors.validation(
+        COMMERCE_ERROR_CODES.TOPUP_ABOVE_MAXIMUM,
+        'That top-up amount is above the maximum this installation accepts.',
+        { maximumMinor: maximum.amountMinor, currency: maximum.currency },
+      );
+    }
+  }
+
+  /**
+   * A typed top-up amount, admitted by the installation's own rules — or refused.
+   *
+   * In the currency this installation sells in, positive, at or above the floor, at or
+   * below the ceiling. The positivity check is not decoration: `parseCustomerAmount`
+   * refuses zero already, but this is the layer that issues the payment and
+   * `payments_amount_check` would otherwise meet it as a 500.
+   */
+  private async typedTopupAmount(
+    scope: TenantContext,
+    amount: Money,
+    tx: TransactionScope,
+  ): Promise<Money> {
+    const currency = await this.sellingCurrency(scope, tx);
+    if (amount.currency !== currency) {
+      throw errors.validation(
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        'A top-up is denominated in the currency this installation sells in.',
+        { expected: currency, received: amount.currency },
+      );
+    }
+    if (amount.amountMinor <= 0n) {
+      throw errors.validation(
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        'A top-up amount must be greater than zero.',
+      );
+    }
+    await this.assertAboveTopupMinimum(scope, amount, tx);
+    await this.assertBelowTopupMaximum(scope, amount, tx);
+    return amount;
+  }
+
+  /**
+   * The route a typed top-up NAMED, if it is among the routes offered for it.
+   *
+   * `routesFor` applies every rule the chooser applied when it drew the button —
+   * ACTIVE, switched on for top-ups, this customer's thresholds, this amount within the
+   * route's bounds — and the named provider must be in that list. A route that is not
+   * is refused with the same `TOPUP_NOT_OFFERED` a stale preset earns: a button that
+   * was drawn a moment ago and is no longer true.
+   *
+   * The body below issues a MANUAL transfer, so a route whose descriptor settles any
+   * other way is refused here rather than issued as one. Unreachable while every
+   * provider settles by `MANUAL_TRANSFER`, and asserted so that the day one does not,
+   * this is the branch that already refuses.
+   */
+  private async typedTopupRoute(
+    scope: TenantContext,
+    customerId: UserId,
+    amount: Money,
+    provider: PaymentGatewayProvider,
+    tx: TransactionScope,
+  ): Promise<PaymentGatewayRecord> {
+    const routes = await this.deps.gateways.routesFor(
+      scope,
+      customerId,
+      'WALLET_TOPUP',
+      amount,
+      tx,
+    );
+    const chosen = routes.find((route) => route.provider === provider);
+    if (chosen === undefined) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.TOPUP_NOT_OFFERED,
+        'That payment route is not offered for this top-up.',
+      );
+    }
+    if (chosen.descriptor.settlesVia !== 'MANUAL_TRANSFER') {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
+        'This payment route does not settle by transfer.',
+        { reason: 'SETTLEMENT_NOT_MANUAL' },
+      );
+    }
+    return chosen.gateway;
   }
 
   /**
