@@ -1077,10 +1077,25 @@ describe('profile metadata, normalised before it is ever stored', () => {
      * not an instruction to pay, and a test that banned the word would be a test whose
      * exception list eventually covered every case it was meant to check.
      */
+    /*
+     * The word rule stops at the buttons that GO to the menu. Since the Telegram
+     * bootstrap the main menu exists as a persistent keyboard, and the customer UX
+     * completion's approved defaults name it on the back buttons; a body that still
+     * points at a menu in PROSE (a greeting saying "use the menu") is the original
+     * defect and stays refused.
+     */
+    const menuButtons: ReadonlySet<TemplateKey> = new Set<TemplateKey>([
+      'bot.menu.main_button',
+      'bot.service.back_to_menu_button',
+    ]);
     for (const key of new Set([...reachable, ...sent])) {
       const body = CATALOGUE_FA[key];
       expect(body, `${key} has no body`).toBeTypeOf('string');
-      expect(body, `${key} points the customer at a menu that does not exist`).not.toContain('منو');
+      if (!menuButtons.has(key)) {
+        expect(body, `${key} points the customer at a menu that does not exist`).not.toContain(
+          'منو',
+        );
+      }
       for (const [, command] of body.matchAll(/(?:^|\s)(\/[a-z_]+)/g)) {
         expect(
           intentOf({ message: { text: command } }).intent,

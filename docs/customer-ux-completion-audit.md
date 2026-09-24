@@ -192,3 +192,16 @@ Named files: `tests/integration/customer-ux-payments.test.ts` (§O1, §O2, §O5)
 - **Terminate stays on the card**, below the approved buttons, capability-gated.
 - **Digits.** Dates use Latin digits in the Persian calendar, matching `formatMoney`.
 - **`bot.service.subscription`, `bot.order.summary*`, `bot.help`** stay in the catalogue (tenant overrides may exist); the surface no longer sends them.
+
+## §Z2 — settled while building
+
+Decisions the code forced after the audit above was written, recorded here rather than left implicit:
+
+- **A terminal FAILED customer request is announced.** `OperationOutcomeAnnouncer` answered only SUCCEEDED and ABANDONED; a customer whose SUSPEND, RENEW or usage read failed for good heard nothing. Since a customer can now ask for a `SYNC_USAGE`, a FAILED row with no retry scheduled is an outcome and is announced `SERVICE_ACTION_FAILED` (a FAILED with a retry pending is not, and is not stamped). Migration `0120_announce_historical_failures` stamps the FAILED rows that completed under the old rule as answered at their completion, so the sweep announces no history; `dueForAnnouncement` picks up terminal FAILED rows since.
+- **A zero gift share is neither paid nor stamped.** `referral_signup_gifts` requires an entry id beside a claim stamp and `wallet_entries` requires a positive amount, so a share of 0 is simply never claimable (`claimableFor` omits it) and `claim` skips it; the other side receives the whole total.
+- **"Fulfilled" for the referral statistics** is an order in state `PAID` whose `PURCHASED_AS[purpose]` operation `SUCCEEDED` — the same predicate the commission earner uses; there is no FULFILLED order state.
+- **`wallet.topup.maximum` binds the typed amount.** A preset is the operator's own figure and keeps the preset path's rules (`wallet.topup.minimum`, the route's bounds); the presets remain shortcuts onto the same capture and chooser.
+- **The renderer's line rule** drops a body line when every placeholder on it is a declared optional with no value, and collapses the blank run a dropped paragraph leaves — only when something was dropped, so untouched bodies render byte for byte. `DURATION_DAYS` renders through `formatDurationDays` («نامحدود» for 0, else «{n} روز»); the two expiry reminders' `days`, a count of days LEFT, is retyped NUMBER so its zero is zero.
+- **Dates** render in the tenant's calendar and timezone as `YYYY/MM/DD HH:mm` assembled from `Intl.formatToParts` — the separator is fixed by this code, not by ICU's CLDR data, which moves with Node upgrades.
+- **The top-up route buttons carry the capture id and the provider**, never the amount; `WalletTopupFlowService.choose` re-reads the capture the customer owns and re-decides the route before `requestWalletTopupTyped` issues the payment under `topup-capture:<captureId>`.
+- **`ok:` («وصل شدم») writes nothing** — no audit row, no operation, no ledger entry — because the customer's statement about their own device is not a fact this installation can check.
