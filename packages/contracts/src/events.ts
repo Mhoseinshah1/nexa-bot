@@ -102,6 +102,11 @@ export const EVENT_TYPES = [
   'OrderRefunded',
   'PaymentConfirmed',
   'PaymentOutcomeUnknown',
+  // A customer's card-to-card receipt was filed against a pending payment. What
+  // reacts to it is the administrators' receipt push (ADR-0031): the fan-out is a
+  // consumer of this event, so it is durable with the receipt and never part of the
+  // transaction that filed it. `docs/wp10-followup-audit.md` §3.
+  'PaymentReceiptSubmitted',
   'WalletEntryRecorded',
   'ServiceProvisioned',
   'ServiceStateChanged',
@@ -267,6 +272,15 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     method: z.string(),
     amountMinor: z.string(),
     currency: z.string(),
+  }),
+  /*
+   * The two ids and nothing else: no file id (bot-scoped, and what `getFile` takes),
+   * no customer caption (customer-supplied text, the Phase 4A hazard above). The
+   * consumer re-reads the rows it needs, under its own transaction.
+   */
+  PaymentReceiptSubmitted: z.object({
+    paymentId: z.string(),
+    receiptId: z.string(),
   }),
   WalletEntryRecorded: z.object({
     customerId: z.string(),

@@ -71,6 +71,9 @@ import {
   PAYMENT_RECEIPT_KINDS,
   RECEIPT_CAPTURE_CLOSE_REASONS,
   ADMIN_AMOUNT_CAPTURE_CLOSE_REASONS,
+  ADMIN_CAPTURE_PURPOSES,
+  ADMIN_CAPTURE_REASON_MAX_LENGTH,
+  RECEIPT_REVIEW_PUSH_STATES,
   PAYMENT_STATES,
   PAYMENT_METHODS,
   PAYMENT_EVIDENCE_KINDS,
@@ -2581,9 +2584,9 @@ export const customers = pgTable(
     /**
      * Why an operator blocked this customer.
      *
-     * An operator note, and it is never rendered to the customer — `bot.blocked`
-     * carries no placeholder. A reason shown to the person it is about is a reason an
-     * operator will stop writing honestly.
+     * SHOWN to the customer (File 01 §9, the owner's correction to WP10): the blocked
+     * reply is `bot.blocked_with_reason` with this, read from THIS row at render time, and
+     * `bot.blocked` when there is none. It is the only field of the block they are shown.
      */
     blockedReason: text('blocked_reason'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
@@ -3965,6 +3968,19 @@ export const adminAmountCaptures = pgTable(
      * until the confirm, and the credit's own row carries its currency.
      */
     amountMinor: bigint('amount_minor', { mode: 'bigint' }),
+    /**
+     * WHAT the capture reads (WP10 follow-up §4): the credit's amount, Block User's mandatory
+     * reason, or a rejection's mandatory reason (File 01 §7). One table for both, because the partial unique index below is
+     * what makes "one open prompt per administrator per bot" a database fact across both.
+     * Defaulted, so every row written before the column existed is a credit's.
+     */
+    purpose: text('purpose').notNull().default('RECEIPT_CREDIT_AMOUNT'),
+    /**
+     * The block's or the rejection's reason as the administrator typed it, trimmed. Set once,
+     * like `amount_minor`; null for a credit capture. It becomes the customer's
+     * `blocked_reason` or the payment's `resolution_note`, and the customer is shown it.
+     */
+    reason: text('reason'),
     openedAt: timestamptz('opened_at').notNull().defaultNow(),
     expiresAt: timestamptz('expires_at').notNull(),
     closedAt: timestamptz('closed_at'),
@@ -3992,10 +4008,27 @@ export const adminAmountCaptures = pgTable(
     check('admin_amount_captures_closed_check', sql`(closed_at IS NULL) = (close_reason IS NULL)`),
     check('admin_amount_captures_expiry_check', sql`expires_at > opened_at`),
     check('admin_amount_captures_amount_check', sql`amount_minor IS NULL OR amount_minor > 0`),
-    /** A confirmation confirms an amount: there is no CONFIRMED row without one. */
+    /**
+     * A confirmation confirms what the capture read: an amount for a credit, a reason for a
+     * block or a rejection. There is no CONFIRMED row without it — and for those two that is
+     * the database half of "the reason is mandatory".
+     */
     check(
       'admin_amount_captures_confirmed_check',
-      sql`close_reason IS DISTINCT FROM 'CONFIRMED' OR amount_minor IS NOT NULL`,
+      sql`close_reason IS DISTINCT FROM 'CONFIRMED'
+          OR (purpose = 'RECEIPT_CREDIT_AMOUNT' AND amount_minor IS NOT NULL)
+          OR (purpose IN ('RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON') AND reason IS NOT NULL)`,
+    ),
+    check('admin_amount_captures_purpose_check', enumCheck('purpose', ADMIN_CAPTURE_PURPOSES)),
+    /** Each purpose reads its own column and never the other's. */
+    check(
+      'admin_amount_captures_purpose_column_check',
+      sql`(purpose = 'RECEIPT_CREDIT_AMOUNT' AND reason IS NULL)
+          OR (purpose IN ('RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON') AND amount_minor IS NULL)`,
+    ),
+    check(
+      'admin_amount_captures_reason_check',
+      sql`reason IS NULL OR length(btrim(reason)) BETWEEN 1 AND ${sql.raw(String(ADMIN_CAPTURE_REASON_MAX_LENGTH))}`,
     ),
   ],
 );
@@ -4343,6 +4376,94 @@ export const receiptCredits = pgTable(
       'receipt_credits_note_check',
       sql`note IS NULL OR length(btrim(note)) BETWEEN 1 AND ${sql.raw(String(RECEIPT_CREDIT_NOTE_MAX_LENGTH))}`,
     ),
+  ],
+);
+
+/**
+ * One administrator's push of one card-to-card receipt (WP10 follow-up, ADR-0031).
+ *
+ * File 01 §3: a receipt is sent to the authorized administrators in Telegram, as ONE message
+ * — the file, the context in its caption, the decisions as its buttons. The pull queue stays;
+ * this is the push beside it, and the queue is where a lost push is recovered.
+ *
+ * A row per (receipt, administrator), written by the `PaymentReceiptSubmitted` consumer in the
+ * relay's transaction — never in the transaction that filed the receipt, so no failure here can
+ * roll a receipt back. The unique key is the idempotency of the whole lane: an outbox
+ * redelivery, a replayed consumer and two worker replicas all land on the row that exists.
+ *
+ * Neither the customer lane nor the operator lane: `customer_notifications` is one row per
+ * SUBJECT addressed to a customer, and `notifications` has no UNKNOWN outcome and re-sends a
+ * timeout — a second copy of a receipt with live buttons is the spam the owner forbade. So the
+ * customer lane's outcome table (ADR-0030 §2) is taken here, for an administrator.
+ */
+export const receiptReviewPushes = pgTable(
+  'receipt_review_pushes',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    paymentId: uuid('payment_id').notNull(),
+    receiptId: uuid('receipt_id').notNull(),
+    adminId: uuid('admin_id').notNull(),
+    /**
+     * The bot that RECEIVED the receipt, copied from its row: a `file_id` belongs to that
+     * bot, and the push must come from it.
+     */
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    state: text('state').notNull().default('PENDING'),
+    /** Definite refusals spent. A rate limit spends none. */
+    attempts: integer('attempts').notNull().default(0),
+    /** When the dispatcher may next try; also the claim's lease. Null means now. */
+    nextAttemptAt: timestamptz('next_attempt_at'),
+    /**
+     * Set just before the send and cleared by every recorded outcome, so a set value is a
+     * send whose process may have died after Telegram took it. The reaper turns such a row
+     * UNKNOWN — never recorded as delivered, and nothing re-sends it.
+     */
+    sendStartedAt: timestamptz('send_started_at'),
+    /** The chat actually addressed, stamped at send from the binding current THEN. */
+    chatId: text('chat_id'),
+    /** Why the row is not SENT, as a machine code. Never a sentence, never customer text. */
+    lastErrorCode: text('last_error_code'),
+    resolvedAt: timestamptz('resolved_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    /** One push per receipt per administrator, for ever. */
+    unique('receipt_review_pushes_receipt_admin_key').on(
+      table.tenantId,
+      table.receiptId,
+      table.adminId,
+    ),
+    foreignKey({
+      columns: [table.tenantId, table.paymentId],
+      foreignColumns: [payments.tenantId, payments.id],
+      name: 'receipt_review_pushes_payment_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.receiptId],
+      foreignColumns: [paymentReceipts.tenantId, paymentReceipts.id],
+      name: 'receipt_review_pushes_receipt_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.adminId],
+      foreignColumns: [admins.tenantId, admins.id],
+      name: 'receipt_review_pushes_admin_fk',
+    }),
+    /** The dispatcher's claim: queued rows, oldest first. */
+    index('receipt_review_pushes_due_idx')
+      .on(table.tenantId, table.nextAttemptAt)
+      .where(sql`state = 'PENDING'`),
+    check('receipt_review_pushes_state_check', enumCheck('state', RECEIPT_REVIEW_PUSH_STATES)),
+    check(
+      'receipt_review_pushes_resolved_check',
+      sql`(state <> 'PENDING') = (resolved_at IS NOT NULL)`,
+    ),
+    check('receipt_review_pushes_attempts_check', sql`attempts >= 0`),
   ],
 );
 

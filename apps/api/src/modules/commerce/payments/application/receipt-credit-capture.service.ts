@@ -349,7 +349,13 @@ export class ReceiptCreditCaptureService {
       if (found === null || found.adminId !== adminId) return { outcome: 'GONE' } as const;
       await this.deps.captures.lockForAdmin(scope, found.botInstanceId, adminId, tx);
       const capture = await this.deps.captures.findById(scope, captureId, tx);
-      if (capture === null || capture.amountMinor === null) return { outcome: 'GONE' } as const;
+      if (
+        capture === null ||
+        capture.purpose !== 'RECEIPT_CREDIT_AMOUNT' ||
+        capture.amountMinor === null
+      ) {
+        return { outcome: 'GONE' } as const;
+      }
 
       if (capture.closeReason === 'CONFIRMED') {
         return { outcome: 'CREDIT', capture, amountMinor: capture.amountMinor } as const;
@@ -413,7 +419,13 @@ export class ReceiptCreditCaptureService {
 
     return this.mutate(scope, actor, denial, async (tx) => {
       const found = await this.deps.captures.findById(scope, captureId, tx);
-      if (found === null || found.adminId !== adminId) return { outcome: 'GONE' } as const;
+      if (
+        found === null ||
+        found.adminId !== adminId ||
+        found.purpose !== 'RECEIPT_CREDIT_AMOUNT'
+      ) {
+        return { outcome: 'GONE' } as const;
+      }
       /*
        * The SAME admin lock the confirm button takes, and the capture re-read under it.
        *

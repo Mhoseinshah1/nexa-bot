@@ -7,6 +7,7 @@ import type {
   PaymentMethod,
   PaymentResolvedState,
   PaymentState,
+  ReceiptDisposition,
   TenantContext,
   UserId,
 } from '@nexa/contracts';
@@ -156,6 +157,11 @@ export interface PaymentSearch {
    * exact match a unique lookup within the tenant.
    */
   readonly reference?: string;
+  /**
+   * How the receipt left review (WP10 follow-up §5), by the SAME derivation the list and
+   * detail report — one SQL expression, so the filter and the column cannot disagree.
+   */
+  readonly disposition?: ReceiptDisposition;
 }
 
 export interface PaymentRepository {
@@ -413,6 +419,25 @@ export interface PaymentRepository {
     customerIds: readonly UserId[],
     tx?: unknown,
   ): Promise<ReadonlyMap<UserId, PaymentCustomerIdentity>>;
+
+  /**
+   * How each of these payments' receipts left review (WP10 follow-up §5), DERIVED:
+   * `CREDITED_TO_WALLET` when a `receipt_credits` row exists, `APPROVED` or `REJECTED` from
+   * the state and the deciding administrator, and absent for everything that is not a
+   * decided manual transfer holding a receipt. Read-only and unlocked.
+   */
+  receiptDispositions(
+    scope: TenantContext,
+    paymentIds: readonly PaymentId[],
+    tx?: unknown,
+  ): Promise<ReadonlyMap<PaymentId, ReceiptDisposition>>;
+
+  /**
+   * The reason an administrator REJECTED this payment (File 01 §7): its `resolution_note`,
+   * for a payment FAILED by an administrator and not credited to the wallet. Null for
+   * anything else, and for a rejection recorded before the reason was mandatory.
+   */
+  rejectionReasonFor(scope: TenantContext, paymentId: string, tx?: unknown): Promise<string | null>;
 }
 
 /** A customer as Telegram knows them, for the payment list. */

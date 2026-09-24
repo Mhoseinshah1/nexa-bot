@@ -1,6 +1,7 @@
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, isNull, ne, sql } from 'drizzle-orm';
 import type {
   AdminAmountCaptureCloseReason,
+  AdminCapturePurpose,
   BotInstanceId,
   PaymentId,
   TenantContext,
@@ -54,6 +55,7 @@ export class DrizzleAdminAmountCaptureRepository implements AdminAmountCaptureRe
       readonly botInstanceId: BotInstanceId;
       readonly adminId: string;
       readonly paymentId: PaymentId;
+      readonly purpose?: AdminCapturePurpose;
       readonly openedAt: Date;
       readonly expiresAt: Date;
     },
@@ -84,6 +86,7 @@ export class DrizzleAdminAmountCaptureRepository implements AdminAmountCaptureRe
         botInstanceId: input.botInstanceId,
         adminId: input.adminId,
         paymentId: input.paymentId,
+        purpose: input.purpose ?? 'RECEIPT_CREDIT_AMOUNT',
         openedAt: input.openedAt,
         expiresAt: input.expiresAt,
       })
@@ -108,11 +111,62 @@ export class DrizzleAdminAmountCaptureRepository implements AdminAmountCaptureRe
           eq(adminAmountCaptures.botInstanceId, botInstanceId),
           eq(adminAmountCaptures.adminId, adminId),
           isNull(adminAmountCaptures.closedAt),
+          // An amount is read only by a capture that asked for one: a block's reason
+          // capture has no amount either, and must never be parsed as one.
+          eq(adminAmountCaptures.purpose, 'RECEIPT_CREDIT_AMOUNT'),
           isNull(adminAmountCaptures.amountMinor),
         ),
       )
       .limit(1);
     return row === undefined ? null : toRecord(row);
+  }
+
+  async findAwaitingReason(
+    scope: TenantContext,
+    botInstanceId: BotInstanceId,
+    adminId: string,
+    purpose: 'RECEIPT_BLOCK_REASON' | 'RECEIPT_REJECT_REASON',
+    tx?: unknown,
+  ): Promise<AdminAmountCaptureRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .select()
+      .from(adminAmountCaptures)
+      .where(
+        and(
+          eq(adminAmountCaptures.tenantId, tenantId),
+          eq(adminAmountCaptures.botInstanceId, botInstanceId),
+          eq(adminAmountCaptures.adminId, adminId),
+          isNull(adminAmountCaptures.closedAt),
+          eq(adminAmountCaptures.purpose, purpose),
+          isNull(adminAmountCaptures.reason),
+        ),
+      )
+      .limit(1);
+    return row === undefined ? null : toRecord(row);
+  }
+
+  async recordReason(
+    scope: TenantContext,
+    id: string,
+    reason: string,
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(adminAmountCaptures)
+      .set({ reason })
+      .where(
+        and(
+          eq(adminAmountCaptures.tenantId, tenantId),
+          eq(adminAmountCaptures.id, id),
+          isNull(adminAmountCaptures.closedAt),
+          ne(adminAmountCaptures.purpose, 'RECEIPT_CREDIT_AMOUNT'),
+          isNull(adminAmountCaptures.reason),
+        ),
+      )
+      .returning({ id: adminAmountCaptures.id });
+    return rows.length > 0;
   }
 
   async findById(
@@ -180,7 +234,10 @@ function toRecord(row: typeof adminAmountCaptures.$inferSelect): AdminAmountCapt
     botInstanceId: row.botInstanceId as BotInstanceId,
     adminId: row.adminId,
     paymentId: row.paymentId as PaymentId,
+    // `admin_amount_captures_purpose_check` is built from the contract enum.
+    purpose: row.purpose as AdminCapturePurpose,
     amountMinor: row.amountMinor,
+    reason: row.reason,
     openedAt: row.openedAt,
     expiresAt: row.expiresAt,
     closedAt: row.closedAt,

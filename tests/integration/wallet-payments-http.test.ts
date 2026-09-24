@@ -751,6 +751,118 @@ describe('wallet and payment HTTP surfaces', () => {
       expect(receipts.body).not.toContain('همسرم');
     });
 
+    /*
+     * WP10 follow-up §5: a receipt CREDITED TO THE WALLET is FAILED by state and must not read
+     * as a rejection anywhere a payment is listed. Three receipts decided three ways, one
+     * pending, and a rejected transfer that never carried a receipt: the list and the detail
+     * say which is which, and the filter finds exactly the credited one.
+     */
+    it('tells a credited receipt from a rejected one, on the list, the detail and the filter', async () => {
+      const finance = adminActorFor(
+        await createAdmin(api.container, tenantA, {
+          username: 'finance-disp',
+          roleKeys: ['finance'],
+        }),
+      );
+      async function receipted(key: string, withReceipt = true) {
+        const order = await awaitingPayment(tenantA, customerA, panelA, key);
+        const { payment } = await api.container.payments.requestManualTransfer(
+          tenantA,
+          systemActor(key),
+          customerA,
+          { idempotencyKey: `${key}-manual`, orderId: order.id },
+        );
+        await api.container.payments.signalTransferSent(tenantA, systemActor(key), customerA, {
+          idempotencyKey: `${key}-signal`,
+          paymentId: payment.id,
+          botInstanceId: SEED_IDS.botA1 as BotInstanceId,
+        });
+        if (withReceipt) {
+          await api.container.receipts.submit(tenantA, systemActor(key), customerA, {
+            idempotencyKey: `${key}-file`,
+            botInstanceId: SEED_IDS.botA1 as BotInstanceId,
+            file: {
+              kind: 'PHOTO',
+              fileId: `file-${key}`,
+              fileUniqueId: `u-${key}`,
+              mimeType: null,
+              fileSize: 1_024n,
+              fileName: null,
+              telegramMessageId: 9n,
+              caption: null,
+            },
+          });
+        }
+        return payment.id;
+      }
+      const credited = await receipted('disp-credit');
+      await api.container.receiptDispositions.creditToWallet(tenantA, finance, {
+        idempotencyKey: 'disp-credit-credit',
+        paymentId: credited,
+        amountMinor: 230_000n,
+        note: null,
+      });
+      const rejected = await receipted('disp-reject');
+      await api.container.payments.rejectManualTransfer(tenantA, finance, rejected, {
+        idempotencyKey: 'disp-reject-reject',
+        note: 'رسید ناخوانا',
+      });
+      const approved = await receipted('disp-approve');
+      await api.container.payments.confirmManualTransfer(tenantA, finance, approved, {
+        idempotencyKey: 'disp-approve-approve',
+        note: 'ok',
+      });
+      const pending = await receipted('disp-pending');
+      const signalOnly = await receipted('disp-signal', false);
+      await api.container.payments.rejectManualTransfer(tenantA, finance, signalOnly, {
+        idempotencyKey: 'disp-signal-reject',
+        note: 'هیچ رسیدی نیامد',
+      });
+
+      const list = paymentListResponseSchema.parse(
+        JSON.parse((await get(PAYMENT_ROUTES.list, viewerCookie)).body),
+      );
+      const of = (id: string) => list.payments.find((one) => one.id === id);
+      expect(of(credited)).toMatchObject({
+        state: 'FAILED',
+        receiptDisposition: 'CREDITED_TO_WALLET',
+      });
+      expect(of(rejected)).toMatchObject({ state: 'FAILED', receiptDisposition: 'REJECTED' });
+      expect(of(approved)).toMatchObject({ state: 'CONFIRMED', receiptDisposition: 'APPROVED' });
+      expect(of(pending)).toMatchObject({ state: 'PENDING', receiptDisposition: null });
+      // A rejection with no receipt is a payment decision, not a receipt disposition.
+      expect(of(signalOnly)).toMatchObject({ state: 'FAILED', receiptDisposition: null });
+
+      const detail = paymentResponseSchema.parse(
+        JSON.parse((await get(PAYMENT_ROUTES.detail(credited), viewerCookie)).body),
+      );
+      expect(detail.payment).toMatchObject({
+        state: 'FAILED',
+        receiptDisposition: 'CREDITED_TO_WALLET',
+        receiptCredit: { amountMinor: '230000', currency: 'IRT', decidedByAdminId: finance.id },
+      });
+      expect(detail.payment.receiptCredit?.decidedAt).toEqual(expect.any(String));
+      const rejectedDetail = paymentResponseSchema.parse(
+        JSON.parse((await get(PAYMENT_ROUTES.detail(rejected), viewerCookie)).body),
+      );
+      expect(rejectedDetail.payment).toMatchObject({
+        receiptDisposition: 'REJECTED',
+        receiptCredit: null,
+        resolutionNote: 'رسید ناخوانا',
+      });
+
+      const filtered = paymentListResponseSchema.parse(
+        JSON.parse(
+          (await get(`${PAYMENT_ROUTES.list}?disposition=CREDITED_TO_WALLET`, viewerCookie)).body,
+        ),
+      );
+      expect(filtered.payments.map((one) => one.id)).toEqual([credited]);
+      const rejectedOnly = paymentListResponseSchema.parse(
+        JSON.parse((await get(`${PAYMENT_ROUTES.list}?disposition=REJECTED`, viewerCookie)).body),
+      );
+      expect(rejectedOnly.payments.map((one) => one.id)).toEqual([rejected]);
+    });
+
     it('lists the compensations: automatic wallet refunds of undeliverable orders, paged', async () => {
       const refused = await get(COMPENSATION_ROUTES.list, technicalCookie);
       expect(refused.statusCode).toBe(403);

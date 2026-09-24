@@ -85,6 +85,7 @@ import {
   type PaymentReceiptListResponse,
   type PaymentResponse,
   type PaymentState,
+  type ReceiptDisposition,
   type WalletEntryListResponse,
   type WalletEntryResponse,
   type WalletResponse,
@@ -1043,6 +1044,7 @@ export function fetchPayments(
     customerId?: string;
     orderId?: string;
     reference?: string;
+    disposition?: ReceiptDisposition;
   } = {},
 ): Promise<PaymentListResponse> {
   const params = new URLSearchParams();
@@ -1050,6 +1052,7 @@ export function fetchPayments(
   if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
   if (query.state !== undefined) params.set('state', query.state);
   if (query.method !== undefined) params.set('method', query.method);
+  if (query.disposition !== undefined) params.set('disposition', query.disposition);
   if (query.customerId !== undefined && query.customerId !== '') {
     params.set('customerId', query.customerId);
   }

@@ -646,7 +646,10 @@ describe('the customer Telegram turn', () => {
     expect(after[0]?.['status']).toBe('BLOCKED');
 
     expect(sent).toHaveLength(1);
-    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.blocked']);
+    // File 01 §9 (the owner's correction to WP10): the blocked text, WITH the stored reason.
+    expect(sent[0]?.body['text']).toBe(
+      CATALOGUE_FA['bot.blocked_with_reason'].replace('{reason}', 'blocked after the turn'),
+    );
     expect(sent[0]?.body['text']).not.toBe(CATALOGUE_FA['bot.start.welcome']);
     expect(sent[0]?.body['text']).not.toBe(CATALOGUE_FA['bot.start.welcome_back']);
   });
@@ -685,11 +688,14 @@ describe('the customer Telegram turn', () => {
      * which is the only thing that finds it.
      */
     expect(sent).toHaveLength(1);
-    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.blocked']);
+    /*
+     * Since File 01 §9 (the owner's correction to WP10) the stored reason IS the customer's
+     * to read: `bot.blocked_with_reason`, rendered with THIS customer's own reason.
+     */
+    expect(sent[0]?.body['text']).toBe(
+      CATALOGUE_FA['bot.blocked_with_reason'].replace('{reason}', 'operator note'),
+    );
     expect(sent[0]?.body['text']).not.toBe(CATALOGUE_FA['bot.start.welcome_back']);
-    // And it carries no operator note: `blockedReason` is an operator field and
-    // `bot.blocked` declares no placeholder for it.
-    expect(String(sent[0]?.body['text'] ?? '')).not.toContain('operator note');
   });
 
   // -------------------------------------------------------------------------

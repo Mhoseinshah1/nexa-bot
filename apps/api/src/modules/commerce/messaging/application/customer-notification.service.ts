@@ -166,6 +166,14 @@ export interface CustomerNotificationDeps {
    * principal of a top-up, its gift, and a reviewer's receipt credit. A reader, not a
    * payload (ADR 0030 §1).
    */
+  /**
+   * Why an administrator rejected a transfer, read from the payment the notification names
+   * (File 01 §7). A reader, not a payload — ADR 0030 §1 — the same shape as the refund and
+   * credit figures. Null for a rejection recorded before the reason was mandatory.
+   */
+  readonly rejectionReasons: {
+    rejectionReasonFor: (scope: TenantContext, paymentId: string) => Promise<string | null>;
+  };
   readonly paymentCredits: {
     creditedForPayment: (
       scope: TenantContext,
@@ -305,6 +313,15 @@ export class CustomerNotificationService {
      * `null`, and so no message, when the ledger holds none, for the refund's reason
      * above: a sentence naming an amount must not be sent without one.
      */
+    /*
+     * The rejection's reason (File 01 §7): the customer is told WHY, from the payment's own
+     * `resolution_note`. A dash — never an invented sentence — for a rejection recorded before
+     * the reason was mandatory; the rejection itself is still a fact worth telling.
+     */
+    if (row.kind === 'PAYMENT_REJECTED') {
+      const reason = await this.deps.rejectionReasons.rejectionReasonFor(scope, row.subjectId);
+      return { reason: reason ?? '\u2014' };
+    }
     const creditReason = PAYMENT_CREDIT_FIGURES[row.kind];
     if (creditReason !== undefined) {
       const amount = await this.deps.paymentCredits.creditedForPayment(

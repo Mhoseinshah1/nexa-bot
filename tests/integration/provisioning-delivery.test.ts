@@ -2282,7 +2282,7 @@ describe('a provisioned service announces itself', () => {
     expect(messages().length).toBe(before);
   });
 
-  it('answers a blocked customer with bot.blocked, whatever they tapped', async () => {
+  it('answers a blocked customer with the blocked text, whatever they tapped', async () => {
     const orderId = await paidOrder('bot-blocked-services');
     await ctx.container.provisionerLoop.tick();
     const service = await services.findByOrderId(tenantA, orderId);
@@ -2308,8 +2308,9 @@ describe('a provisioned service announces itself', () => {
       tapUpdate(`r:${service?.id ?? ''}`),
     );
 
-    expect(detail.replyKey).toBe('bot.blocked');
-    expect(resend.replyKey).toBe('bot.blocked');
+    // A block with a reason answers with it (File 01 §9, the owner's correction to WP10).
+    expect(detail.replyKey).toBe('bot.blocked_with_reason');
+    expect(resend.replyKey).toBe('bot.blocked_with_reason');
     // The blocked branch runs BEFORE `act`, so no subscription was read and none sent.
     expect(JSON.stringify(messages().slice(before))).not.toContain(service?.subscriptionRef ?? 'X');
   });

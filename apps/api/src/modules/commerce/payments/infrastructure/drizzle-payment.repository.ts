@@ -21,6 +21,7 @@ import type {
   PaymentMethod,
   PaymentResolvedState,
   PaymentState,
+  ReceiptDisposition,
   TenantContext,
   UserId,
 } from '@nexa/contracts';
@@ -33,6 +34,7 @@ import {
   customers,
   paymentReceipts,
   payments,
+  receiptCredits,
 } from '../../../../infrastructure/persistence/schema.js';
 import type {
   PaymentConfirmation,
@@ -195,6 +197,9 @@ export class DrizzlePaymentRepository implements PaymentRepository {
       conditions.push(eq(payments.customerId, search.customerId));
     if (search.orderId !== undefined) conditions.push(eq(payments.orderId, search.orderId));
     if (search.reference !== undefined) conditions.push(eq(payments.reference, search.reference));
+    if (search.disposition !== undefined) {
+      conditions.push(sql`(${receiptDispositionSql()}) = ${search.disposition}`);
+    }
     if (cursor !== null) {
       conditions.push(
         sql`(${payments.createdAt}, ${payments.id}) > (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`,
@@ -556,6 +561,91 @@ export class DrizzlePaymentRepository implements PaymentRepository {
     }
     return identities;
   }
+
+  async receiptDispositions(
+    scope: TenantContext,
+    paymentIds: readonly PaymentId[],
+    tx?: unknown,
+  ): Promise<ReadonlyMap<PaymentId, ReceiptDisposition>> {
+    const tenantId = requireTenantId(scope);
+    const found = new Map<PaymentId, ReceiptDisposition>();
+    if (paymentIds.length === 0) return found;
+    const rows = await this.exec(tx)
+      .select({ id: payments.id, disposition: sql<string | null>`${receiptDispositionSql()}` })
+      .from(payments)
+      .where(and(eq(payments.tenantId, tenantId), inArray(payments.id, [...new Set(paymentIds)])));
+    for (const row of rows) {
+      if (row.disposition !== null) {
+        found.set(row.id as PaymentId, row.disposition as ReceiptDisposition);
+      }
+    }
+    return found;
+  }
+
+  async rejectionReasonFor(
+    scope: TenantContext,
+    paymentId: string,
+    tx?: unknown,
+  ): Promise<string | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .select({ note: payments.resolutionNote })
+      .from(payments)
+      .where(
+        and(
+          eq(payments.tenantId, tenantId),
+          eq(payments.id, paymentId),
+          eq(payments.state, 'FAILED'),
+          isNotNull(payments.resolvedByAdminId),
+          sql`NOT EXISTS (
+            SELECT 1 FROM ${receiptCredits}
+             WHERE ${receiptCredits.tenantId} = ${payments.tenantId}
+               AND ${receiptCredits.paymentId} = ${payments.id})`,
+        ),
+      )
+      .limit(1);
+    const note = row?.note?.trim() ?? '';
+    return note === '' || note === PRE_REASON_REJECTION_NOTE ? null : note;
+  }
+}
+
+/**
+ * The note the Telegram surface wrote on EVERY rejection before the reason was mandatory: a
+ * sentence about the surface, not a reason. It is never shown to a customer as one.
+ */
+const PRE_REASON_REJECTION_NOTE = 'Rejected in the Telegram management panel.';
+
+/**
+ * How a payment's receipt left review, as ONE SQL expression over the `payments` row in scope
+ * (WP10 follow-up §5). The list's column, its filter and Telegram's already-resolved answer all
+ * read this, so none of them can disagree about what a credited FAILED payment is.
+ *
+ * - Not a MANUAL_TRANSFER holding a receipt: NULL. A signal-only transfer decided without a
+ *   receipt is a payment decision, not a receipt disposition.
+ * - A `receipt_credits` row: CREDITED_TO_WALLET — checked BEFORE the state, because the state
+ *   of a credited payment is FAILED and would otherwise read as a rejection.
+ * - CONFIRMED by an administrator: APPROVED. FAILED resolved by an administrator: REJECTED.
+ * - Anything else (pending, expired, withdrawn): NULL.
+ */
+export function receiptDispositionSql(): SQL {
+  return sql`CASE
+    WHEN ${payments.method} <> 'MANUAL_TRANSFER'
+      OR NOT EXISTS (
+        SELECT 1 FROM ${paymentReceipts}
+         WHERE ${paymentReceipts.tenantId} = ${payments.tenantId}
+           AND ${paymentReceipts.paymentId} = ${payments.id}
+      ) THEN NULL
+    WHEN EXISTS (
+        SELECT 1 FROM ${receiptCredits}
+         WHERE ${receiptCredits.tenantId} = ${payments.tenantId}
+           AND ${receiptCredits.paymentId} = ${payments.id}
+      ) THEN 'CREDITED_TO_WALLET'
+    WHEN ${payments.state} = 'CONFIRMED' AND ${payments.confirmedByAdminId} IS NOT NULL
+      THEN 'APPROVED'
+    WHEN ${payments.state} = 'FAILED' AND ${payments.resolvedByAdminId} IS NOT NULL
+      THEN 'REJECTED'
+    ELSE NULL
+  END`;
 }
 
 /**

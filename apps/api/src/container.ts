@@ -14,8 +14,6 @@ import type {
   Logger,
   OperationalEventRecorder,
   PasswordHasher,
-  PaymentId,
-  PermissionKey,
   SecretCipher,
   TenantId,
 } from '@nexa/contracts';
@@ -167,6 +165,22 @@ import { PaymentService } from './modules/commerce/payments/application/payment.
 import { RefundService } from './modules/commerce/payments/application/refund.service.js';
 import { ReceiptDispositionService } from './modules/commerce/payments/application/receipt-disposition.service.js';
 import { ReceiptCreditCaptureService } from './modules/commerce/payments/application/receipt-credit-capture.service.js';
+import {
+  receiptBlockCaptures,
+  receiptRejectCaptures,
+  type ReceiptBlockCaptureService,
+  type ReceiptRejectCaptureService,
+} from './modules/commerce/payments/application/receipt-reason-policies.js';
+import { ReceiptReviewCaption } from './modules/commerce/payments/application/receipt-review-caption.js';
+import { ReceiptReviewPushConsumer } from './modules/commerce/payments/application/receipt-review-push.consumer.js';
+import { ReceiptReviewPushService } from './modules/commerce/payments/application/receipt-review-push.service.js';
+import {
+  RECEIPT_PUSH_INTERVAL_MS,
+  ReceiptReviewPushLoop,
+} from './modules/commerce/payments/application/receipt-review-push-loop.js';
+import { DrizzleReceiptReviewPushRepository } from './modules/commerce/payments/infrastructure/drizzle-receipt-review-push.repository.js';
+import { DrizzleReceiptReviewFactsReader } from './modules/commerce/payments/infrastructure/drizzle-receipt-review-facts.reader.js';
+import { receiptReviewButtons } from './surfaces/telegram/bot-runtime.js';
 import { DrizzleAdminAmountCaptureRepository } from './modules/commerce/payments/infrastructure/drizzle-admin-amount-capture.repository.js';
 import { DrizzleReceiptCreditRepository } from './modules/commerce/payments/infrastructure/drizzle-receipt-credit.repository.js';
 import { DrizzleRefundRepository } from './modules/commerce/payments/infrastructure/drizzle-refund.repository.js';
@@ -469,6 +483,17 @@ export interface Container {
   readonly receiptDispositions: ReceiptDispositionService;
   /** The Telegram half of the credit-to-wallet disposition: the reviewer's amount capture (D3). */
   readonly receiptCreditCaptures: ReceiptCreditCaptureService;
+  /** Block User from the receipt message (WP10 follow-up §4): confirm, reason, block. */
+  readonly receiptBlockCaptures: ReceiptBlockCaptureService;
+  /** The rejection's mandatory reason (File 01 §7): reason, restated, reject. */
+  readonly receiptRejectCaptures: ReceiptRejectCaptureService;
+  /**
+   * The administrators' receipt push (WP10 follow-up §3, ADR-0031): the lane's repository,
+   * its dispatcher (one pass, for a test) and its timer, STARTED only by `main.worker.ts`.
+   */
+  readonly receiptReviewPushes: DrizzleReceiptReviewPushRepository;
+  readonly receiptReviewPush: ReceiptReviewPushService;
+  readonly receiptReviewPushLoop: ReceiptReviewPushLoop;
   /**
    * The route repository, exposed for ONE caller: the boot-time reconcile.
    *
@@ -776,15 +801,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * four role names against seven for one column, and whether either is enforced is
    * still NOT_TESTED.
    */
-  /*
-   * The permission a receipt decision takes, named once here.
-   *
-   * `receipts.review` is charged by `PaymentService.confirmManualTransfer` and
-   * `rejectManualTransfer`, and it is ALSO the filter for who gets told a receipt is
-   * waiting: telling somebody who could do nothing about it is noise, and telling
-   * nobody is a receipt that sits there.
-   */
-  const RECEIPTS_REVIEW_PERMISSION = 'receipts.review' as PermissionKey;
+
+  /** The administrators' receipt push lane, shared by its consumer and its dispatcher. */
+  const receiptReviewPushRepository = new DrizzleReceiptReviewPushRepository(database.db);
 
   const telegramAdmins = new TelegramAdminService({
     admins,
@@ -823,7 +842,23 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
 
   const relay = new OutboxRelay(
     database.db,
-    [new PingLogConsumer(opsLog)],
+    [
+      new PingLogConsumer(opsLog),
+      /*
+       * WHO is pushed a new receipt (WP10 follow-up §3, ADR-0031). A consumer, so the fan-out
+       * commits with the relay's claim and never inside the transaction that filed the
+       * receipt. Its repositories are built here for the relay alone: stateless, over the
+       * same pool.
+       */
+      new ReceiptReviewPushConsumer({
+        pushes: receiptReviewPushRepository,
+        payments: new DrizzlePaymentRepository(database.db),
+        receipts: new DrizzlePaymentReceiptRepository(database.db),
+        reviewers: telegramAdmins,
+        clock,
+        ids,
+      }),
+    ],
     clock,
     logger,
     {
@@ -2128,10 +2163,25 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * reject or settle anything — the addendum's own words, enforced by the dependency
    * rather than only by the permission.
    */
+  /*
+   * The reviewer's caption (File 01 §4): ONE builder, shared by the pull item and the push.
+   * The balance through the ledger's own SUM, gated by the guard's one resolution rule; the
+   * labels through the tenant's own template overrides.
+   */
+  const receiptReviewCaption = new ReceiptReviewCaption({
+    facts: new DrizzleReceiptReviewFactsReader(database.db),
+    balances: walletRepository,
+    guard,
+    labels: templateResolver,
+  });
+
   const receiptService = new ReceiptService({
     captures: receiptCaptureRepository,
     receipts: paymentReceiptRepository,
     payments: paymentRepository,
+    credits: receiptCreditRepository,
+    outbox,
+    caption: receiptReviewCaption,
     customers: customerRepository,
     guard,
     uow,
@@ -2260,6 +2310,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
        * prevent, applied to the reading side.
        */
       refundFigures: walletRepository,
+      // The rejection's reason (File 01 §7), from the payment's own row.
+      rejectionReasons: paymentRepository,
       // The same repository, for the same reason: the three payment-credit sentences
       // (Payment File 02 §18) read their figure from the entries the payment names.
       paymentCredits: walletRepository,
@@ -2299,6 +2351,68 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       logger,
     },
   );
+
+  /*
+   * Block User from the receipt message (WP10 follow-up §4). The payment READ, the customer
+   * READ, the capture table and the customers section's own block — nothing that decides a
+   * payment, and no blocking of its own. Its reason is read through the same capture
+   * mechanics as the rejection's, below.
+   */
+  const reasonCaptureDeps = {
+    captures: new DrizzleAdminAmountCaptureRepository(database.db),
+    payments: paymentRepository,
+    customers: customerRepository,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  };
+  const receiptBlockCaptureService = receiptBlockCaptures(reasonCaptureDeps, customerService);
+  /*
+   * The rejection's mandatory reason (File 01 §7). It rejects only through
+   * `PaymentService.rejectManualTransfer` — the conditional PENDING→FAILED edge approve and
+   * credit race on — so the three dispositions stay mutually exclusive.
+   */
+  const receiptRejectCaptureService = receiptRejectCaptures(reasonCaptureDeps, paymentService);
+
+  /*
+   * The administrators' receipt push (WP10 follow-up §3, ADR-0031): the send half. Built in
+   * every role and STARTED only by the worker, like `customerNotificationLoop`. It shares the
+   * customer messenger — one `sendFile`, one 429 classification — and takes the pull item's
+   * own keyboard builder, so the two messages cannot offer different buttons.
+   */
+  const receiptReviewPush = new ReceiptReviewPushService({
+    pushes: receiptReviewPushRepository,
+    payments: paymentRepository,
+    receipts: paymentReceiptRepository,
+    customers: customerRepository,
+    reviewers: telegramAdmins,
+    caption: receiptReviewCaption,
+    keyboard: (paymentId, permissions) =>
+      receiptReviewButtons(paymentId, permissions, { credit: true, block: true }),
+    messenger: customerMessenger,
+    opsLog,
+    conditions: new DrizzleOperationalConditionReader(database.db),
+    uow,
+    clock,
+    scopeIsActive: (scope) => uow.run(scope, async (tx) => tenants.scopeIsActive(scope, tx)),
+    correlationId: () => newCorrelationId(ids.uuid()),
+    logger,
+  });
+  const receiptReviewPushLoop = new ReceiptReviewPushLoop(receiptReviewPush, {
+    scope: () =>
+      installationTenantId === null
+        ? null
+        : { tenantId: installationTenantId, botInstanceId: null },
+    intervalMs: RECEIPT_PUSH_INTERVAL_MS,
+    now: () => clock.now().getTime(),
+    logger,
+  });
 
   /**
    * Where one customer's service announcement goes, or nothing.
@@ -2886,45 +3000,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   });
 
   /**
-   * Tells the administrators who may decide a receipt that one is waiting (Phase 5T).
-   *
-   * ONE transaction for the whole fan-out, so a reviewer list read halfway through a
-   * role change cannot produce a message for authority somebody no longer holds.
-   * Addressed to each administrator's own chat through the lane's destination override,
-   * snapshotted into the row — a message sent today still says which chat it went to
-   * after that binding is revoked tomorrow. The dedupe key names the payment AND the
-   * reviewer: one receipt is one message per person, and a redelivered upload is none.
-   */
-  const notifyReviewersOf = async (scope: TenantContext, paymentId: PaymentId): Promise<void> => {
-    await uow.run(scope, async (tx) => {
-      const payment = await paymentRepository.findById(scope, paymentId, tx);
-      if (payment === null) return;
-      const reviewers = await telegramAdmins.reviewers(
-        scope,
-        RECEIPTS_REVIEW_PERMISSION,
-        newCorrelationId(ids.uuid()),
-        tx,
-      );
-      for (const reviewer of reviewers) {
-        const chatId = reviewer.admin.telegramUserId;
-        /* istanbul ignore next -- `listTelegramBound` selects only bound rows. */
-        if (chatId === null) continue;
-        await notifications.queue(
-          scope,
-          {
-            kind: 'RECEIPT_AWAITING_REVIEW',
-            dedupeKey: `receipt.awaiting:${payment.id}:${reviewer.admin.id}`,
-            templateKey: 'bot.admin.receipt_awaiting',
-            values: { reference: payment.reference, total: payment.amount },
-            destination: { transport: 'TELEGRAM', chatId, topicId: null },
-          },
-          tx,
-        );
-      }
-    });
-  };
-
-  /**
    * The reminder configuration seam, named so BOTH surfaces and the test can hold it.
    *
    * Both halves go through the SAME application services the Web Admin uses, so the
@@ -3095,6 +3170,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     refunds: refundService,
     receiptDispositions: receiptDispositionService,
     receiptCreditCaptures: receiptCreditCaptureService,
+    receiptBlockCaptures: receiptBlockCaptureService,
+    receiptRejectCaptures: receiptRejectCaptureService,
+    receiptReviewPushes: receiptReviewPushRepository,
+    receiptReviewPush,
+    receiptReviewPushLoop,
     paymentGatewayProvisioning: paymentGatewayRepository,
     receipts: receiptService,
     receiptFiles,
@@ -3134,41 +3214,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       destinations: paymentDestinationRenderer,
       receipts: receiptService,
       receiptCredits: receiptCreditCaptureService,
+      receiptBlocks: receiptBlockCaptureService,
+      receiptRejects: receiptRejectCaptureService,
       telegramAdmins,
-      /*
-       * The reviewers' poke, Phase 5T.
-       *
-       * The transaction is opened HERE because a surface must not open one, and one
-       * transaction covers the whole fan-out so a reviewer list read halfway through a
-       * role change cannot produce a message for authority somebody no longer holds.
-       *
-       * Addressed to each administrator's OWN chat through the lane's destination
-       * override — snapshotted into the row, so a message sent today still says which
-       * chat it went to after that binding is revoked tomorrow. The dedupe key names
-       * the payment AND the reviewer: one receipt produces one message per person, and
-       * a redelivered upload produces none.
-       */
-      notifyReviewers: async (scope, paymentId) => {
-        /*
-         * Swallowed HERE, and recorded, because the surface awaits this.
-         *
-         * `submitReceipt` calls it inside the try whose catch is `refusal`, and
-         * `refusal` RETHROWS anything it has no reply for — so a failed settings read
-         * or notification insert would have cost the customer their
-         * "receipt received" answer for a receipt that is already committed, and
-         * Telegram's redelivery answers `filed: false`, which skips the poke for ever.
-         * The queue in the panel is the durable record; this is the poke, and a poke
-         * that failed is a log line rather than a customer left in silence.
-         */
-        try {
-          await notifyReviewersOf(scope, paymentId);
-        } catch (error) {
-          logger.error(
-            { err: error instanceof Error ? error.name : 'unknown', paymentId },
-            'Could not tell the reviewers a receipt is waiting.',
-          );
-        }
-      },
       /*
        * The one write the turn makes after its Telegram send, and the transaction
        * it needs, kept OUT of the surface.
@@ -3302,6 +3350,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       await paymentExpiryLoop.stop();
       await serviceReminderLoop.stop();
       await customerNotificationLoop.stop();
+      await receiptReviewPushLoop.stop();
       await redis.close();
       await database.close();
     },

@@ -67,6 +67,9 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'خوش آمدید. حساب شما در این ربات ساخته شد. برای دیدن سرویس‌ها دستور /catalog را بفرستید.',
   'bot.start.welcome_back': 'خوش آمدید. برای دیدن سرویس‌های قابل خرید دستور /catalog را بفرستید.',
   'bot.blocked': 'دسترسی این حساب به ربات بسته شده است.',
+  // File 01 §9, word for word: the account is blocked, why, and who to talk to.
+  'bot.blocked_with_reason':
+    'حساب شما مسدود شده است.\n\nدلیل:\n{reason}\n\nبرای بررسی یا رفع مسدودی با پشتیبانی در ارتباط باشید.',
 
   // What this bot can do, and the descriptions Telegram shows in its own command menu.
   // One list in `BOT_COMMANDS` feeds both, so a command cannot be registered and
@@ -212,7 +215,21 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.receipts_list': 'پرداخت‌های در انتظار بررسی:',
   'bot.admin.receipts_none': 'در حال حاضر هیچ پرداختی در انتظار بررسی نیست.',
   'bot.admin.receipt':
-    'کد پیگیری: {reference}\nمبلغ: {total}\nمشتری: {customer} {username}\nبابت: {order}\n\nتوضیح مشتری: {note}',
+    'پرداخت جدید برای بررسی\n\nنوع عملیات: {operation}\nنام کاربری سرویس: {serviceUsername}\nنام محصول: {order}\nحجم محصول: {trafficBytes}\nمدت محصول: {durationDays}\n\nنام اکانت کاربر: {name}\nشناسه عددی کاربر: {customer}\nیوزرنیم تلگرام: {username}\nموجودی فعلی کاربر: {balance}\n\nمبلغ پرداختی: {total}\nکد پیگیری پرداخت: {reference}\n\nتوضیحات کاربر: {note}',
+  'bot.admin.receipt_balance': '{balance}',
+  'bot.admin.receipt_duration': '{durationDays}',
+  'bot.admin.receipt_traffic': '{trafficBytes}',
+  'bot.admin.operation_new_service': 'خرید سرویس جدید',
+  'bot.admin.operation_renew': 'تمدید سرویس',
+  'bot.admin.operation_add_traffic': 'افزایش حجم سرویس',
+  'bot.admin.operation_add_time': 'افزایش زمان سرویس',
+  'bot.admin.operation_topup': 'افزایش موجودی کیف پول',
+  'bot.admin.receipt_already_approved':
+    'این رسید قبلاً تأیید شده است. اقدام دیگری روی آن ممکن نیست و چیزی جابه‌جا نشد.',
+  'bot.admin.receipt_already_rejected':
+    'این رسید قبلاً رد شده است. اقدام دیگری روی آن ممکن نیست و چیزی جابه‌جا نشد.',
+  'bot.admin.receipt_already_credited':
+    'این رسید قبلاً با واریز {amount} به کیف پول مشتری بسته شده است. تأیید یا رد آن دیگر ممکن نیست و چیزی جابه‌جا نشد.',
   'bot.admin.receipt_gone': 'این پرداخت دیگر در انتظار بررسی نیست و نتیجهٔ آن قبلاً ثبت شده است.',
   'bot.admin.approve_button': '✅ تأیید پرداخت',
   'bot.admin.reject_button': '❌ رد پرداخت',
@@ -241,6 +258,44 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'این پرداخت رسیدی ندارد و نمی‌توان آن را به کیف پول واریز کرد. مبلغی جابه‌جا نشد.',
   'bot.admin.credit_currency':
     'واحد پول این پرداخت دیگر واحد فروش این مجموعه نیست و واریز آن به کیف پول ممکن نیست. مبلغی جابه‌جا نشد؛ همچنان می‌توانید پرداخت را تأیید یا رد کنید.',
+  /*
+   * WP10 follow-up — Block User from the receipt (File 01 §9): confirmation, then a
+   * mandatory reason read by the same one-prompt-per-administrator capture, then a commit
+   * that restates it. It blocks the customer and decides nothing about the payment.
+   */
+  /*
+   * File 01 §7 — a rejection needs a mandatory reason, which the customer is told.
+   */
+  'bot.admin.reject_reason_prompt':
+    'رد پرداخت {reference}: دلیل رد را بفرستید. وارد کردن دلیل اجباری است و برای مشتری ارسال می‌شود. تا {minutes} دقیقه منتظر پیام شما هستم.',
+  'bot.admin.reject_reason_invalid':
+    'این پیام دلیل معتبری نیست. دلیل نباید خالی باشد و حداکثر {max} نویسه است. دوباره بفرستید.',
+  'bot.admin.reject_confirm':
+    'پرداخت {reference} با این دلیل رد شود؟\nدلیل: {reason}\nاین دلیل برای مشتری ارسال می‌شود.',
+  'bot.admin.reject_confirm_button': '❌ رد شود',
+  'bot.admin.reject_cancel_button': '✖️ انصراف',
+  'bot.admin.reject_cancelled': 'رد پرداخت لغو شد و چیزی جابه‌جا نشد. رسید همچنان در صف بررسی است.',
+  'bot.admin.reject_expired':
+    'مهلت وارد کردن دلیل تمام شده است و پرداخت رد نشد. برای رد کردن، دوباره از رسید اقدام کنید.',
+  'bot.admin.block_button': '⛔ بلاک کردن کاربر',
+  'bot.admin.block_ask':
+    'کاربر {customer} بلاک شود؟\nبلاک کردن، این رسید را تأیید، رد یا به کیف پول واریز نمی‌کند و رسید همچنان در صف بررسی می‌ماند.',
+  'bot.admin.block_yes_button': '✅ بله، دلیل را می‌نویسم',
+  'bot.admin.block_cancel_button': '✖️ انصراف',
+  'bot.admin.block_reason_prompt':
+    'دلیل بلاک کردن کاربر {customer} را بفرستید. وارد کردن دلیل اجباری است. تا {minutes} دقیقه منتظر پیام شما هستم.',
+  'bot.admin.block_reason_invalid':
+    'این پیام دلیل معتبری نیست. دلیل نباید خالی باشد و حداکثر {max} نویسه است. دوباره بفرستید.',
+  'bot.admin.block_confirm':
+    'کاربر {customer} با این دلیل بلاک شود؟\nدلیل: {reason}\nرسید همچنان در صف بررسی می‌ماند.',
+  'bot.admin.block_confirm_button': '⛔ بلاک شود',
+  'bot.admin.blocked_from_receipt':
+    'کاربر {customer} بلاک شد. این رسید هنوز بررسی نشده است و همچنان می‌توان آن را تأیید، رد یا به کیف پول واریز کرد.',
+  'bot.admin.block_already':
+    'کاربر {customer} از قبل بلاک بوده است و دلیل قبلی تغییری نکرد. رسید همچنان در صف بررسی است.',
+  'bot.admin.block_cancelled': 'بلاک کردن لغو شد و وضعیت کاربر تغییری نکرد.',
+  'bot.admin.block_expired':
+    'مهلت وارد کردن دلیل تمام شده است و کاربر بلاک نشد. برای بلاک کردن، دوباره از رسید اقدام کنید.',
   /*
    * The services section, Phase 6A. Every action goes through the canonical path the
    * Web Admin uses; these strings are what an administrator reads while it does.
@@ -570,7 +625,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * One kind, one frozen template (ADR 0030), so the sentence has to be true of both.
    */
   'bot.payment.rejected':
-    'پرداخت شما بررسی شد و تأیید نشد. اگر سفارشی در انتظار پرداخت دارید، تا پایان مهلت آن می‌توانید دوباره پرداخت کنید.',
+    'پرداخت شما بررسی شد و تأیید نشد.\nدلیل: {reason}\nاگر سفارشی در انتظار پرداخت دارید، تا پایان مهلت آن می‌توانید دوباره پرداخت کنید.',
   'bot.payment.expired': 'مهلت پرداخت شما به پایان رسید و این پرداخت بسته شد.',
   /*
    * P2. Paying from the wallet while a transfer the customer vouched for is waiting: the

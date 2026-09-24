@@ -98,7 +98,9 @@ Further receipts follow as media without buttons.
 3. An explicit confirm button states the amount before anything moves.
 4. The confirm carries the capture id and calls D2 with an idempotency key derived from it.
 
-A push notification to admins when a receipt arrives is **not** added. The review queue stays pull-based. File 01 may say otherwise; see `OQ-WP10-01`.
+A push notification to admins when a receipt arrives is **not** added in this package. The review queue stays pull-based.
+
+_Correction (WP10 follow-up):_ a text-only poke had already existed since Phase 5T. File 01 §3, supplied since, requires a real push. `docs/wp10-followup-audit.md` and ADR-0031 retire the poke and build the push.
 
 ### D4 — Zero total (§14, D5)
 

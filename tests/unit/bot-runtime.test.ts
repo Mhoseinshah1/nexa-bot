@@ -610,6 +610,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
      */
     expect([...sent].filter((key) => !key.startsWith('bot.admin.')).sort()).toEqual([
       'bot.blocked',
+      // File 01 §9 (the owner's correction to WP10): the blocked text carrying THEIR reason.
+      'bot.blocked_with_reason',
       /*
        * The five catalogue keys WP5 added, each reviewed against this case's rule.
        *
@@ -963,6 +965,24 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.admin.approve_button',
       'bot.admin.approved',
       /*
+       * WP10 follow-up's twelve, Block User from the receipt. Reviewed against the same rule:
+       * every one names a step the runtime routes (`xa:`…`xd:` and the reason capture), and
+       * none carries a price, a link or a credential — the reason is operator text shown back
+       * only to the administrator who typed it.
+       */
+      'bot.admin.block_already',
+      'bot.admin.block_ask',
+      'bot.admin.block_button',
+      'bot.admin.block_cancel_button',
+      'bot.admin.block_cancelled',
+      'bot.admin.block_confirm',
+      'bot.admin.block_confirm_button',
+      'bot.admin.block_expired',
+      'bot.admin.block_reason_invalid',
+      'bot.admin.block_reason_prompt',
+      'bot.admin.block_yes_button',
+      'bot.admin.blocked_from_receipt',
+      /*
        * WP5's twenty-eight, the categories section (the twenty-seven here and
        * `bot.admin.product_gone` further down). Reviewed against the same rule: the
        * commands they name — `/category_new`, `/category_rename`, `/category_emoji` — are
@@ -1076,12 +1096,28 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.admin.panels_section',
       'bot.admin.product_gone',
       'bot.admin.receipt',
+      // WP10 follow-up §5: a stale button is told which way the receipt was decided.
+      'bot.admin.receipt_already_approved',
+      'bot.admin.receipt_already_credited',
+      'bot.admin.receipt_already_rejected',
       'bot.admin.receipt_gone',
       'bot.admin.receipts_button',
       'bot.admin.receipts_list',
       'bot.admin.receipts_none',
       'bot.admin.refused',
       'bot.admin.reject_button',
+      /*
+       * File 01 §7 (the owner's correction to WP10): the rejection's mandatory reason — the
+       * prompt, its refusal, the restating confirmation and the outcomes. The reason is
+       * operator text shown back to the administrator who typed it, and then to the customer.
+       */
+      'bot.admin.reject_cancel_button',
+      'bot.admin.reject_cancelled',
+      'bot.admin.reject_confirm',
+      'bot.admin.reject_confirm_button',
+      'bot.admin.reject_expired',
+      'bot.admin.reject_reason_invalid',
+      'bot.admin.reject_reason_prompt',
       'bot.admin.rejected',
       /*
        * The reminder settings section (Phase 6C). Ten keys, each reviewed against this

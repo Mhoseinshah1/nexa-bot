@@ -105,6 +105,39 @@ describe('the payment list', () => {
     expect(within(table).getByText(/۲۵۰٬۰۰۰|250,000/u)).toBeInTheDocument();
   });
 
+  it('tells a credited receipt from a rejected one on the list, and filters by it (WP10 follow-up §5)', async () => {
+    const CREDITED = '019240ab-cdef-7012-8345-6789abcdef02';
+    const REJECTED = '019240ab-cdef-7012-8345-6789abcdef03';
+    stubApi(
+      list([
+        payment({
+          id: CREDITED,
+          reference: 'credited:manual',
+          state: 'FAILED',
+          receiptDisposition: 'CREDITED_TO_WALLET',
+        }),
+        payment({
+          id: REJECTED,
+          reference: 'rejected:manual',
+          state: 'FAILED',
+          receiptDisposition: 'REJECTED',
+        }),
+      ]),
+    );
+    renderPage(<PaymentsPage route={LIST_ROUTE} denied={false} />);
+    await screen.findByText('credited:manual');
+    const table = screen.getByRole('table');
+    const creditedRow = within(table).getByText('credited:manual').closest('tr');
+    const rejectedRow = within(table).getByText('rejected:manual').closest('tr');
+    expect(creditedRow?.textContent).toContain('واریز به کیف پول');
+    expect(creditedRow?.textContent).not.toContain('رد شد');
+    expect(rejectedRow?.textContent).toContain('رد شد');
+    // The disposition is offered as a filter, over the frozen vocabulary.
+    expect(
+      screen.getAllByRole('button', { name: 'واریز به کیف پول' }).length,
+    ).toBeGreaterThanOrEqual(1);
+  });
+
   it('carries an amount past 2^53 without losing a unit', async () => {
     // The wire form is a string precisely because `Number` would round this. A balance
     // can reach it by summing many movements even though one is bounded below it.
@@ -1010,6 +1043,27 @@ describe('the payment diagnostics (§21)', () => {
       .map((b) => b.textContent?.trim())
       .filter((label) => label !== '');
     expect(labels, 'the disposition card draws a control').toEqual([]);
+  });
+
+  it('names a credited receipt as credited on the detail, not as a bare failure (WP10 follow-up §5)', async () => {
+    const view = renderDetail({
+      state: 'FAILED',
+      resolvedAt: '2026-09-11T08:15:00.000Z',
+      resolvedByAdminId: '019200ab-cdef-7012-8345-6789abcdef01',
+      receiptDisposition: 'CREDITED_TO_WALLET',
+      receiptCredit: {
+        amountMinor: '240000',
+        currency: 'IRT',
+        walletEntryId: '019260ab-cdef-7012-8345-6789abcdef01',
+        decidedByAdminId: '019200ab-cdef-7012-8345-6789abcdef01',
+        decidedAt: '2026-09-11T08:15:00.000Z',
+        note: null,
+      },
+    });
+    await screen.findByText('واریز رسید به کیف پول');
+    expect(view.container.textContent).toContain('نتیجهٔ رسید');
+    expect(screen.getAllByText('واریز به کیف پول').length).toBeGreaterThanOrEqual(1);
+    expect(view.container.textContent).not.toContain('رد شد');
   });
 
   it('shows the gift a top-up promised, and no gift card for an order payment', async () => {

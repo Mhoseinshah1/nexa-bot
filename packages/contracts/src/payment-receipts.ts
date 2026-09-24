@@ -105,6 +105,84 @@ export const ADMIN_AMOUNT_CAPTURE_CLOSE_REASONS = [
 export type AdminAmountCaptureCloseReason = (typeof ADMIN_AMOUNT_CAPTURE_CLOSE_REASONS)[number];
 
 /**
+ * What an administrator's capture is reading (WP10 follow-up, `docs/wp10-followup-audit.md` §4).
+ *
+ * `admin_amount_captures` was built for ONE question — the amount a credit-to-wallet
+ * disposition credits. The Block User action on the same receipt message needs a second
+ * typed answer, the block's mandatory reason, and it is asked through the SAME table on
+ * purpose: the partial unique index on (tenant, bot, admin) is what guarantees an
+ * administrator has at most one open prompt, and two tables could only promise that in
+ * service code — which is how a typed message comes to belong to two prompts at once,
+ * INCIDENT-FIN-001 again.
+ *
+ * - `RECEIPT_CREDIT_AMOUNT` — the credit's amount; `amount_minor` is set once, `reason` never.
+ * - `RECEIPT_BLOCK_REASON` — the block's reason; `reason` is set once, `amount_minor` never.
+ *   The capture names the PAYMENT, which is the context link the block's audit carries and
+ *   what derives the customer. It is not a disposition: nothing about the payment moves.
+ * - `RECEIPT_REJECT_REASON` — a rejection's MANDATORY reason (File 01 §7, the owner's
+ *   correction to the follow-up): `reason` is set once, and the confirm that restates it is
+ *   what rejects, through the one conditional PENDING→FAILED edge.
+ */
+export const ADMIN_CAPTURE_PURPOSES = [
+  'RECEIPT_CREDIT_AMOUNT',
+  'RECEIPT_BLOCK_REASON',
+  'RECEIPT_REJECT_REASON',
+] as const;
+export type AdminCapturePurpose = (typeof ADMIN_CAPTURE_PURPOSES)[number];
+
+/**
+ * The bound on a reason an administrator types into a capture — a block's or a rejection's.
+ * The customers path's own bound (`CUSTOMER_BLOCK_REASON_MAX_LENGTH`), so a reason the capture
+ * accepts is one the block accepts; a longer message is refused, never cut.
+ */
+export const ADMIN_CAPTURE_REASON_MAX_LENGTH = 500;
+
+/**
+ * The states of one administrator's push of one receipt (ADR-0031).
+ *
+ * The customer lane's outcome table (ADR-0030 §2), applied to an administrator:
+ *
+ * - `PENDING` — queued, or backing off after a refusal or a rate limit.
+ * - `DELIVERED` — Telegram DEFINITELY accepted it.
+ * - `UNKNOWN` — Telegram MAY have delivered it (a timeout, a 5xx, an unreadable 2xx, or a
+ *   send whose process died mid-flight). Never recorded as delivered and never re-sent: a
+ *   second copy of a receipt with live decision buttons is the spam the owner forbade, and
+ *   the pull queue is where a reviewer finds it either way.
+ * - `FAILED` — DEFINITELY not delivered: refused on every permitted attempt.
+ * - `SUPERSEDED` — not sent, because what it would say stopped being true before the send:
+ *   the payment was decided, or the administrator no longer holds the authority.
+ */
+export const RECEIPT_REVIEW_PUSH_STATES = [
+  'PENDING',
+  'DELIVERED',
+  'UNKNOWN',
+  'FAILED',
+  'SUPERSEDED',
+] as const;
+export type ReceiptReviewPushState = (typeof RECEIPT_REVIEW_PUSH_STATES)[number];
+
+/** Definite refusals one push may spend before it is `FAILED`. A 429 spends none. */
+export const RECEIPT_REVIEW_PUSH_MAX_ATTEMPTS = 3;
+
+/**
+ * How a receipt left review, DERIVED and never stored (`docs/wp10-followup-audit.md` §5).
+ *
+ * A credit-to-wallet disposition moves the payment `PENDING -> FAILED` beside a
+ * `receipt_credits` row, so the payment's state alone reads exactly like a rejection. This
+ * is the answer a diagnostic surface shows instead:
+ *
+ * - `CREDITED_TO_WALLET` — a `receipt_credits` row exists.
+ * - `APPROVED` — CONFIRMED by an administrator.
+ * - `REJECTED` — FAILED, resolved by an administrator, with no credit.
+ *
+ * Null for every payment that is not a MANUAL_TRANSFER holding at least one receipt, and for
+ * one still pending, expired or withdrawn — a signal-only transfer decided without a receipt
+ * is a payment decision, not a receipt disposition.
+ */
+export const RECEIPT_DISPOSITIONS = ['APPROVED', 'REJECTED', 'CREDITED_TO_WALLET'] as const;
+export type ReceiptDisposition = (typeof RECEIPT_DISPOSITIONS)[number];
+
+/**
  * How long an amount capture stays open: five minutes, SHORTER than the customer windows'
  * ten, because it is a person at a desk answering one question about money, and an open
  * capture is the one thing that lets their ordinary message be read as an amount.

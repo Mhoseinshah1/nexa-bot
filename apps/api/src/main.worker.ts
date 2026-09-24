@@ -102,6 +102,10 @@ async function main(): Promise<void> {
         // that looks exactly like nothing being wrong — so it is health-checked rather
         // than trusted.
         ['customer-notifications', true, () => container.customerNotificationLoop.isFresh(now)],
+        // The administrators' receipt push (ADR-0031). No flag, for the customer lane's
+        // reason: a receipt nobody is told about is a customer waiting on a reviewer who
+        // does not know, and silence is exactly what a stalled lane looks like.
+        ['receipt-review-push', true, () => container.receiptReviewPushLoop.isFresh(now)],
         [
           'notification-dispatcher',
           config.NOTIFICATION_DISPATCH_ENABLED,
@@ -170,6 +174,9 @@ async function main(): Promise<void> {
   // And the customer notification lane. `docs/phase4h-audit.md` §1 measured what it
   // replaces: exactly one thing could be said to a customer who was not looking.
   container.customerNotificationLoop.start();
+  // And the administrators' receipt push: a new card-to-card receipt, to every Telegram
+  // administrator who may decide it (WP10 follow-up §3, ADR-0031).
+  container.receiptReviewPushLoop.start();
 
   // Notification delivery. A poller rather than an outbox consumer, because the
   // relay runs its consumers inside the claim transaction and a send must not

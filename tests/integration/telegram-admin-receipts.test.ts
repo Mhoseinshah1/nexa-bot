@@ -160,6 +160,8 @@ describe('the Telegram receipt review, as one message with three decisions', () 
       `D:${payment}`,
       `E:${payment}`,
       `wa:${payment}`,
+      // WP10 follow-up §4: the fourth, Block User, for an owner holding `users.block`.
+      `xa:${payment}`,
     ]);
   });
 
@@ -174,7 +176,7 @@ describe('the Telegram receipt review, as one message with three decisions', () 
     const files = sent.filter((one) => ['sendPhoto', 'sendDocument'].includes(method(one.url)));
     expect(files).toHaveLength(2);
     expect(files[0]?.body['photo']).toBe('file-a');
-    expect(keyboardOf(files[0]?.body ?? {})).toHaveLength(3);
+    expect(keyboardOf(files[0]?.body ?? {})).toHaveLength(4);
     // The first receipt carried no note; the reviewer's caption carries the one that exists.
     expect(String(files[0]?.body['caption'])).toContain('دومی');
     expect(files[1]?.body).toEqual({ chat_id: TG.owner, document: 'file-b' });
@@ -206,6 +208,8 @@ describe('the Telegram receipt review, as one message with three decisions', () 
       `D:${payment}`,
       `E:${payment}`,
       `wa:${payment}`,
+      // WP10 follow-up §4: the fourth, Block User, for an owner holding `users.block`.
+      `xa:${payment}`,
     ]);
   });
 
