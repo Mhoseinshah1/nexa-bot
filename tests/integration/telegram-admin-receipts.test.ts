@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import { sql } from 'drizzle-orm';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   money,
   type ActorContext,
@@ -390,6 +390,100 @@ describe('the Telegram receipt review, as one message with three decisions', () 
     expect(await receiptCredits(customer)).toEqual([]);
     expect(await paymentState(payment)).toBe('PENDING');
   });
+
+  /**
+   * Holds the capture repository's `close` for one reason, inside its transaction, until
+   * released — so a race is an interleaving the test chooses, not a scheduler's accident.
+   */
+  function holdClose(reason: 'CANCELLED' | 'CONFIRMED') {
+    const repository = (
+      ctx.container.receiptCreditCaptures as unknown as {
+        deps: { captures: { close: (...args: unknown[]) => Promise<boolean> } };
+      }
+    ).deps.captures;
+    const original = repository.close.bind(repository);
+    let entered!: () => void;
+    const inside = new Promise<void>((resolve) => (entered = resolve));
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => (open = resolve));
+    let held = false;
+    vi.spyOn(repository, 'close').mockImplementation(async (...args: unknown[]) => {
+      const result = await original(...args);
+      if (!held && args[2] === reason) {
+        held = true;
+        entered();
+        await gate;
+      }
+      return result;
+    });
+    return { inside, release: open };
+  }
+
+  /** Waits until some other session is seen blocked on a lock. */
+  async function awaitAnyLockWait(): Promise<void> {
+    const deadline = Date.now() + 5_000;
+    for (;;) {
+      const waiting = await ctx.container.database.db.execute(
+        sql`SELECT count(*)::int AS n FROM pg_stat_activity
+             WHERE wait_event_type = 'Lock' AND datname = current_database()`,
+      );
+      if (((waiting.rows[0] as { n: number } | undefined)?.n ?? 0) > 0) return;
+      if (Date.now() > deadline) throw new Error('nothing was seen waiting on a lock');
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
+  async function captureWithAmount(key: string, amount: string): Promise<string> {
+    const payment = await pendingWithReceipts(key, [{ fileId: `file-${key}`, caption: null }]);
+    await tap(`wa:${payment}`, TG.owner);
+    await say(amount, TG.owner);
+    const confirm = lastKeyboard()[0]?.callback_data ?? '';
+    return confirm.slice('wb:'.length);
+  }
+
+  it('a cancel that closes first wins a racing confirm: nothing is credited (Codex, PR #70)', async () => {
+    const captureId = await captureWithAmount('race-cc', '60000');
+    const held = holdClose('CANCELLED');
+
+    const cancelling = ctx.container.receiptCreditCaptures.cancel(tenantA, owner, {
+      idempotencyKey: 'race-cc-cancel',
+      captureId,
+    });
+    cancelling.catch(() => undefined);
+    await held.inside;
+    const confirming = ctx.container.receiptCreditCaptures.confirm(tenantA, owner, { captureId });
+    confirming.catch(() => undefined);
+    // The confirm waits for the cancel's admin lock rather than reading past it.
+    await awaitAnyLockWait();
+    held.release();
+
+    await expect(cancelling).resolves.toEqual({ outcome: 'CANCELLED' });
+    await expect(confirming).resolves.toMatchObject({ outcome: 'CLOSED', reason: 'CANCELLED' });
+    expect(await receiptCredits(customer)).toEqual([]);
+    vi.restoreAllMocks();
+  }, 30_000);
+
+  it('a confirm that closes first wins a racing cancel, and the cancel says so (Codex, PR #70)', async () => {
+    const captureId = await captureWithAmount('race-cf', '65000');
+    const held = holdClose('CONFIRMED');
+
+    const confirming = ctx.container.receiptCreditCaptures.confirm(tenantA, owner, { captureId });
+    confirming.catch(() => undefined);
+    await held.inside;
+    const cancelling = ctx.container.receiptCreditCaptures.cancel(tenantA, owner, {
+      idempotencyKey: 'race-cf-cancel',
+      captureId,
+    });
+    cancelling.catch(() => undefined);
+    await awaitAnyLockWait();
+    held.release();
+
+    await expect(confirming).resolves.toMatchObject({ outcome: 'CREDITED' });
+    // Not "cancelled": money moved, and the reviewer must not be told it did not.
+    await expect(cancelling).resolves.toEqual({ outcome: 'CONFIRMED' });
+    expect(await receiptCredits(customer)).toEqual([65_000n]);
+    vi.restoreAllMocks();
+  }, 30_000);
 
   it('tells the reviewer the payment was decided when an approval won first', async () => {
     const payment = await pendingWithReceipts('lost', [{ fileId: 'file-l', caption: null }]);

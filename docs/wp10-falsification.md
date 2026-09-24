@@ -232,3 +232,21 @@ six written in Persian or Arabic-Indic digits; the Latin ones passed, as they sh
 - The caption's optional placeholders and the dashes the runtime supplies for a top-up, a
   customer with no username and a receipt with no note are pinned by the integration and
   unit cases above, not by a separate mutation.
+
+## Payment File 02 — the one Codex review's fixes (PR #70)
+
+Each rule reverted alone in place against `nexa_wp10`, the named test watched to fail, and
+the file restored byte for byte.
+
+| #      | rule                                                                                 | mutation                                                                             | tests that die                                                                                                               | result |
+| ------ | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- | ------ |
+| PAY-65 | the compensation list shows the automatic lane only: `requested_by_admin_id IS NULL` | the predicate removed                                                                | `wallet-payments-http.test.ts` › lists the compensations: automatic wallet refunds of undeliverable orders, paged            | KILLED |
+| PAY-66 | a cancel racing a confirm that closed first reports the credit, not "nothing moved"  | the cancel's admin lock removed AND its conditional close's result ignored           | `telegram-admin-receipts.test.ts` › a confirm that closes first wins a racing cancel, and the cancel says so (Codex, PR #70) | KILLED |
+| PAY-67 | a confirm racing a cancel that closed first credits nothing                          | the cancel's admin lock removed AND the confirm's conditional close's result ignored | `telegram-admin-receipts.test.ts` › a cancel that closes first wins a racing confirm: nothing is credited (Codex, PR #70)    | KILLED |
+
+**Two guards, one rule.** The race is held twice over: the cancel takes the same admin lock
+the confirm takes, and each side acts only on a conditional close that actually happened.
+Reverting either guard ALONE leaves both tests green — the lock alone serialises the two, and
+the conditional close alone re-reads the winner — so each alone is an equivalent mutant, and
+PAY-66 and PAY-67 remove the lock together with one side's check. Measured: the lock alone
+removed, 2 of 2 pass.

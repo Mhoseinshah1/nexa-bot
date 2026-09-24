@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, sql, type SQL } from 'drizzle-orm';
 import {
   AUTOMATIC_REFUND_REASON,
   REFUND_CONSUMING_STATES,
@@ -116,9 +116,13 @@ export class DrizzleRefundRepository implements RefundRepository {
     const tenantId = requireTenantId(scope);
     const conditions: SQL[] = [
       eq(refunds.tenantId, tenantId),
-      // The automatic lane's two marks: its reason and its channel (§13's compensation).
+      // The automatic lane's marks: its reason and its channel (§13's compensation) — and
+      // NO requesting administrator. An operator's reason is free text and may read
+      // `UNDELIVERABLE` too; `requested_by_admin_id IS NULL` is what the schema itself
+      // uses to identify the automatic lane (Codex, PR #70).
       eq(refunds.reason, AUTOMATIC_REFUND_REASON),
       eq(refunds.channel, 'WALLET_CREDIT'),
+      isNull(refunds.requestedByAdminId),
     ];
     if (cursor !== null) {
       conditions.push(

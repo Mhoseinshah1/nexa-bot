@@ -362,7 +362,23 @@ export class ReceiptCreditCaptureService {
         await this.deps.captures.close(scope, capture.id, 'EXPIRED', now, tx);
         return { outcome: 'CLOSED', reason: 'EXPIRED' } as const;
       }
-      await this.deps.captures.close(scope, capture.id, 'CONFIRMED', now, tx);
+      if (!(await this.deps.captures.close(scope, capture.id, 'CONFIRMED', now, tx))) {
+        /*
+         * Somebody closed it between the read and this write. The admin lock makes that
+         * impossible for the cancel button, which takes the same lock; the answer is still
+         * read back rather than assumed, because a close that did not happen must never
+         * be followed by a credit.
+         */
+        const standing = await this.deps.captures.findById(scope, captureId, tx);
+        if (standing?.closeReason === 'CONFIRMED' && standing.amountMinor !== null) {
+          return {
+            outcome: 'CREDIT',
+            capture: standing,
+            amountMinor: standing.amountMinor,
+          } as const;
+        }
+        return { outcome: 'CLOSED', reason: standing?.closeReason ?? 'CANCELLED' } as const;
+      }
       return { outcome: 'CREDIT', capture, amountMinor: capture.amountMinor } as const;
     });
     if (decided.outcome !== 'CREDIT') return decided;
@@ -396,12 +412,30 @@ export class ReceiptCreditCaptureService {
     await this.authorize(scope, actor, RECEIPT_CREDIT_REVIEW_PERMISSION, denial);
 
     return this.mutate(scope, actor, denial, async (tx) => {
+      const found = await this.deps.captures.findById(scope, captureId, tx);
+      if (found === null || found.adminId !== adminId) return { outcome: 'GONE' } as const;
+      /*
+       * The SAME admin lock the confirm button takes, and the capture re-read under it.
+       *
+       * Without it a cancel and a confirm tapped together each read the capture open and
+       * each wrote their close: the loser's conditional UPDATE matched nothing, and
+       * whichever lost went on as if it had won — a confirm crediting a capture the
+       * cancel had closed, or a cancel reporting "nothing moved" beside a credit (Codex,
+       * PR #70). Under the lock the two are serial, and the second reads the first.
+       */
+      await this.deps.captures.lockForAdmin(scope, found.botInstanceId, adminId, tx);
       const capture = await this.deps.captures.findById(scope, captureId, tx);
-      if (capture === null || capture.adminId !== adminId) return { outcome: 'GONE' } as const;
+      if (capture === null) return { outcome: 'GONE' } as const;
       if (capture.closeReason === 'CONFIRMED') return { outcome: 'CONFIRMED' } as const;
       // An already-closed capture is answered as cancelled: nothing will move either way,
       // and a redelivered cancel must read the same as the first.
-      await this.deps.captures.close(scope, capture.id, 'CANCELLED', this.deps.clock.now(), tx);
+      if (
+        capture.closeReason === null &&
+        !(await this.deps.captures.close(scope, capture.id, 'CANCELLED', this.deps.clock.now(), tx))
+      ) {
+        const standing = await this.deps.captures.findById(scope, captureId, tx);
+        if (standing?.closeReason === 'CONFIRMED') return { outcome: 'CONFIRMED' } as const;
+      }
       await rememberOnce(
         this.deps.idempotency,
         scope,

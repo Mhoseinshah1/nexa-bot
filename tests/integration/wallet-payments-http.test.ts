@@ -794,7 +794,9 @@ describe('wallet and payment HTTP surfaces', () => {
       }
 
       // An OPERATOR's refund of a delivered wallet order, beside them: a refund, and not a
-      // compensation — its reason is the operator's words and nothing was undeliverable.
+      // compensation. Its reason is the operator's free text, and here it reads exactly
+      // like the automatic lane's — `UNDELIVERABLE`, on a `WALLET_CREDIT` refund — so only
+      // the missing requesting administrator can tell the two apart (Codex, PR #70).
       await api.container.database.db.execute(
         sql`UPDATE panels SET status = 'ACTIVE' WHERE id = ${panelA}`,
       );
@@ -823,7 +825,7 @@ describe('wallet and payment HTTP surfaces', () => {
         idempotencyKey: 'http-d7-c3-refund',
         paymentId: walletPayment.id,
         amountMinor: 50_000n,
-        reason: 'حسن نیت',
+        reason: 'UNDELIVERABLE',
       });
 
       const first = compensationListResponseSchema.parse(
