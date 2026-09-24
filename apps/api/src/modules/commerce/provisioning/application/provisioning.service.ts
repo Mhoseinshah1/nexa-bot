@@ -1,5 +1,8 @@
 import {
   COMMERCE_ERROR_CODES,
+  CUSTOMER_SYNC_MIN_INTERVAL_MS,
+  SERVICE_NOTE_MAX_LENGTH,
+  SERVICES_LIST_PAGE_SIZE,
   extendedAllowance,
   extendedExpiry,
   errors,
@@ -704,6 +707,171 @@ export class ProvisioningService {
    * holding an older message is refused rather than served. Not drawing the button is
    * what keeps the product honest; refusing the request is what keeps it correct.
    */
+  /**
+   * The customer's services by page NUMBER (customer UX completion §G). A page past the
+   * last is clamped to the last, so a stale button on an old message lands on a real
+   * page rather than an empty one; a customer with no services gets page 1 of 1.
+   */
+  async pageForCustomer(
+    scope: TenantContext,
+    customerId: UserId,
+    pageNumber: number,
+  ): Promise<{
+    readonly items: readonly ServiceRecord[];
+    readonly page: number;
+    readonly pages: number;
+    readonly total: number;
+  }> {
+    const size = SERVICES_LIST_PAGE_SIZE;
+    const first = await this.deps.services.pageForCustomer(scope, customerId, {
+      number: Math.max(1, Math.trunc(pageNumber) || 1),
+      size,
+    });
+    const pages = Math.max(1, Math.ceil(first.total / size));
+    const wanted = Math.min(Math.max(1, Math.trunc(pageNumber) || 1), pages);
+    if (wanted === Math.max(1, Math.trunc(pageNumber) || 1)) {
+      return { items: first.items, page: wanted, pages, total: first.total };
+    }
+    const clamped = await this.deps.services.pageForCustomer(scope, customerId, {
+      number: wanted,
+      size,
+    });
+    return { items: clamped.items, page: wanted, pages, total: clamped.total };
+  }
+
+  /**
+   * The customer's OWN services whose username starts with the typed text. The text is
+   * canonicalised the way usernames are stored (lowercase); the repository puts the
+   * tenant and the customer in the WHERE.
+   */
+  async searchForCustomer(
+    scope: TenantContext,
+    customerId: UserId,
+    query: string,
+  ): Promise<readonly ServiceRecord[]> {
+    const prefix = query.trim().toLowerCase();
+    if (prefix.length === 0) return [];
+    return this.deps.services.searchForCustomer(scope, customerId, prefix, SERVICES_LIST_PAGE_SIZE);
+  }
+
+  /**
+   * The customer's own note on their own service (customer UX completion §H4). Bounded,
+   * control characters stripped, and written with the ownership in the UPDATE's WHERE.
+   * Not provider identity and not provisioning input: nothing reads it but the card.
+   */
+  async setCustomerNote(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: UserId,
+    serviceId: string,
+    note: string | null,
+  ): Promise<{ readonly changed: boolean; readonly note: string | null }> {
+    await this.deps.guard.check(scope, actor, CUSTOMER_ROTATION_PERMISSION);
+    const service = await this.getForCustomer(scope, customerId, serviceId);
+    const cleaned = note === null ? null : normaliseCustomerNote(note);
+    if (cleaned !== null && cleaned.length === 0) {
+      throw errors.validation(
+        COMMERCE_ERROR_CODES.CAPTURE_INPUT_INVALID,
+        'A note is between one and the bound in length.',
+        { max: SERVICE_NOTE_MAX_LENGTH },
+      );
+    }
+    return this.deps.uow.run(scope, async (tx) => {
+      if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
+        throw errors.conflict(
+          COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+          'That tenant has stopped accepting work.',
+        );
+      }
+      const now = this.deps.clock.now();
+      const changed = await this.deps.services.setCustomerNote(
+        scope,
+        customerId,
+        service.id,
+        cleaned,
+        now,
+        tx,
+      );
+      if (!changed) {
+        throw errors.notFound(COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND, 'Unknown service.');
+      }
+      await this.deps.audit.record(
+        scope,
+        actor,
+        {
+          action: 'service.customer_note',
+          entityType: 'Service',
+          entityId: service.id,
+          before: { note: service.customerNote },
+          after: { note: cleaned },
+          result: 'SUCCESS',
+        },
+        tx,
+      );
+      return { changed: service.customerNote !== cleaned, note: cleaned };
+    });
+  }
+
+  /**
+   * Whether the refresh button is drawn: ACTIVE, and the panel can read usage.
+   * Re-decided on the tap by `requestSyncFromCustomer`.
+   */
+  async customerSyncOffered(scope: TenantContext, service: ServiceRecord): Promise<boolean> {
+    if (!OPERATION_LEGAL_FROM.SYNC_USAGE.includes(service.state)) return false;
+    return (await this.deps.panels.operability(scope, service.panelId, 'SYNC_USAGE')).ok;
+  }
+
+  /**
+   * «♻️ بروزرسانی اطلاعات» (customer UX completion §H1): a usage read on the panel,
+   * queued through the same operation model every other panel call takes — never
+   * dialled from the API process. One open `SYNC_USAGE` per service is the primary
+   * dedupe (`findOpen`); the interval below covers the read that just landed, so a
+   * tapped button cannot dial a panel in a loop. A failed read writes nothing to the
+   * row; the outcome reaches the customer through the announcer.
+   */
+  async requestSyncFromCustomer(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: UserId,
+    serviceId: string,
+    input: { readonly idempotencyKey: string },
+  ): Promise<OperationRecord> {
+    await this.deps.guard.check(scope, actor, CUSTOMER_ROTATION_PERMISSION);
+    const service = await this.getForCustomer(scope, customerId, serviceId);
+    return this.planRequestedOperation(scope, actor, service, 'SYNC_USAGE', input, {
+      requestedBy: customerId,
+      stateRefusal: COMMERCE_ERROR_CODES.ORDER_STATE_INVALID,
+      admission: {
+        serialize: async (tx) => {
+          if ((await this.deps.services.lockForUpdate(scope, service.id, tx)) === null) {
+            throw errors.notFound(COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND, 'Unknown service.');
+          }
+        },
+        admit: async (tx) => {
+          const customer = await this.deps.customers.findById(scope, customerId, tx);
+          if (customer === null || customer.status === 'BLOCKED') {
+            throw errors.conflict(
+              COMMERCE_ERROR_CODES.CUSTOMER_BLOCKED,
+              'This customer cannot act on their services.',
+            );
+          }
+          const fresh = await this.deps.services.findById(scope, service.id, tx);
+          const syncedAt = fresh?.usageSyncedAt ?? null;
+          if (
+            syncedAt !== null &&
+            this.deps.clock.now().getTime() - syncedAt.getTime() < CUSTOMER_SYNC_MIN_INTERVAL_MS
+          ) {
+            throw errors.conflict(
+              COMMERCE_ERROR_CODES.SERVICE_SYNC_TOO_SOON,
+              'Usage was read from the panel a moment ago.',
+              { syncedAt: syncedAt.toISOString() },
+            );
+          }
+        },
+      },
+    });
+  }
+
   async customerActionsFor(
     scope: TenantContext,
     service: ServiceRecord,
@@ -1400,3 +1568,15 @@ export class ProvisioningService {
 
 /** Kept honest: the sentinel the schema stores for an unlimited allowance is zero. */
 export const UNLIMITED_TRAFFIC_SENTINEL = UNLIMITED_TRAFFIC_BYTES;
+
+/**
+ * A note as stored: trimmed, control characters and line breaks collapsed to spaces,
+ * cut at the bound in CODE POINTS (never inside a surrogate pair).
+ */
+export function normaliseCustomerNote(raw: string): string {
+  const flat = raw
+    .replace(/[\p{Cc}\p{Cf}]+/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim();
+  return Array.from(flat).slice(0, SERVICE_NOTE_MAX_LENGTH).join('');
+}

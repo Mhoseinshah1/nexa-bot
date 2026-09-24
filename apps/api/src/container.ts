@@ -240,6 +240,7 @@ import {
 } from './modules/commerce/provisioning/application/provisioner.service.js';
 import { ProvisionerLoop } from './modules/commerce/provisioning/application/provisioner-loop.js';
 import { DeliveryService } from './modules/commerce/provisioning/application/delivery.service.js';
+import { PngQrCodeEncoder } from './infrastructure/qr/qr-png.js';
 import { CustomerNotificationService } from './modules/commerce/messaging/application/customer-notification.service.js';
 import {
   CustomerNotificationLoop,
@@ -2469,6 +2470,30 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     services: serviceRepository,
     contacts: customerContacts,
     messenger: customerMessenger,
+    /*
+     * The QR is encoded from the EXACT link the row holds at send time; the encoder is
+     * a pure function of that string and nothing else (customer UX completion §B).
+     */
+    qr: new PngQrCodeEncoder(),
+    /*
+     * The card's facts: the product name frozen on the ORDER (a historical fact), the
+     * plan's duration and allowance from the same snapshot, and the product's
+     * service-location label read LIVE — marketing display data, never routing. A
+     * service whose order or product cannot be read gets the plain link message.
+     */
+    card: {
+      factsFor: async (scope, service) => {
+        const order = await orderRepository.findById(scope, service.orderId);
+        if (order === null) return null;
+        const product = await productRepository.findById(scope, service.productId);
+        return {
+          productName: order.line.title,
+          serviceLocation: product?.display.serviceLocationLabel ?? null,
+          durationDays: order.line.specification.durationDays,
+          trafficBytes: order.line.specification.trafficBytes,
+        };
+      },
+    },
     // The same tenant kill switch every other write path reads.
     scopeActivity: tenants,
     uow,
@@ -2557,6 +2582,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
           serviceId: operation.serviceId,
           customerId: service.customerId,
           requestedByCustomerId: operation.requestedByCustomerId,
+          nextAttemptAt: operation.nextAttemptAt,
         };
       },
       /*

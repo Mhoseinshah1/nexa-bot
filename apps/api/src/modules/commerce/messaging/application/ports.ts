@@ -26,7 +26,14 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
  * different ways.
  */
 export type CustomerButtonLabel =
-  | { readonly kind: 'TEMPLATE'; readonly key: TemplateKey }
+  /**
+   * A catalogue key, optionally with the values its placeholders declare. Values are
+   * what lets a button carry a NAME and a FIGURE from the same catalogue as the body
+   * (`bot.wallet.topup_method_gift_button`, `bot.service.list_item_button`); the
+   * messenger renders them through the one resolver, so a tenant's override of the
+   * button's key is honoured like any other.
+   */
+  | { readonly kind: 'TEMPLATE'; readonly key: TemplateKey; readonly values?: TemplateValues }
   | { readonly kind: 'TEXT'; readonly text: string; readonly amount?: Money }
   /**
    * An amount and NOTHING else, formatted by the messenger.

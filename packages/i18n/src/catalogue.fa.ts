@@ -860,7 +860,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.search_none': 'سرویسی با این نام کاربری در میان سرویس‌های شما پیدا نشد.',
   'bot.service.search_invalid': 'عبارت جستجو معتبر نیست.',
   'bot.service.card':
-    '📊وضعیت سرویس: {status}\n👤 نام سرویس: {serviceUsername}\n\n🌍 موقعیت سرویس: 🚀 {serviceLocation}\n📦 نام محصول: {productName}\n\n🟩 ترافیک: {trafficBytes}\n📥 حجم مصرفی: {usedTraffic}\n💢 حجم باقی مانده: {remainingTraffic}\n\n📅 تاریخ اتمام: {expiresAt} ({remainingDays})\n{noExpiry}\n\n📶 آخرین زمان اتصال شما: {lastSeen}\n\n📝 یادداشت: {note}\n\n{rotateHint}',
+    '📊وضعیت سرویس: {status}\n👤 نام سرویس: {serviceUsername}\n\n🌍 موقعیت سرویس: 🚀 {serviceLocation}\n📦 نام محصول: {productName}\n\n🟩 ترافیک: {trafficBytes}\n📥 حجم مصرفی: {usedTraffic}\n💢 حجم باقی مانده: {remainingTraffic}\n\n📅 تاریخ اتمام: {expiresAt} ({remainingDays} روز)\n{noExpiry}\n\n📶 آخرین زمان اتصال شما: {lastSeen}\n\n📝 یادداشت: {note}\n\n{rotateHint}',
   'bot.service.state_pending_provision': '🟡 در حال ساخت',
   'bot.service.state_active': '🟢 فعال',
   'bot.service.state_suspended': '🔴 خاموش',

@@ -5948,8 +5948,10 @@ export const TEMPLATES = [
       },
       {
         token: 'remainingDays',
-        type: 'DURATION_DAYS',
-        description: 'Whole days left; absent when unlimited.',
+        // A NUMBER, not DURATION_DAYS: that type renders 0 as «نامحدود», and a service
+        // with no days left is the opposite of unlimited. The unit is in the body.
+        type: 'NUMBER',
+        description: 'Whole days left, floored at 0; absent when unlimited.',
         required: false,
         repeatable: false,
       },

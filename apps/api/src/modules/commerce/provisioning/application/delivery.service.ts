@@ -10,13 +10,23 @@ import {
   type TenantContext,
   type UnitOfWork,
   type UserId,
+  type TemplateValues,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
-import type { CustomerMessenger } from '../../messaging/application/ports.js';
+import type {
+  CustomerButton,
+  CustomerMessenger,
+  CustomerSendResult,
+} from '../../messaging/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import { serviceIdOrNotFound } from './service-id.js';
-import type { CustomerContactReader, ServiceRecord, ServiceRepository } from './ports.js';
+import type {
+  CustomerContactReader,
+  QrCodeEncoder,
+  ServiceRecord,
+  ServiceRepository,
+} from './ports.js';
 
 /** What an operator-initiated resend charges. The same key every other service edit does. */
 const SERVICE_EDIT_PERMISSION: PermissionKey = 'services.edit';
@@ -127,10 +137,36 @@ export interface DeliveryRecord {
   readonly recorded: boolean;
 }
 
+/**
+ * What the delivery card says about the service besides its link (customer UX
+ * completion §B): the product's public name (frozen on the order), the product's
+ * service-location label (marketing display data, read live — a label is not a
+ * snapshot-worthy fact), and the plan's duration and allowance. Null when the order or
+ * product cannot be read, and then the plain link message is sent rather than a card
+ * with holes in it.
+ */
+export interface DeliveryCardFacts {
+  readonly productName: string;
+  readonly serviceLocation: string | null;
+  readonly durationDays: number;
+  readonly trafficBytes: bigint;
+}
+
+export interface DeliveryCardFactsReader {
+  factsFor(scope: TenantContext, service: ServiceRecord): Promise<DeliveryCardFacts | null>;
+}
+
 export interface DeliveryServiceDeps {
   readonly services: ServiceRepository;
   readonly contacts: CustomerContactReader;
   readonly messenger: CustomerMessenger;
+  /**
+   * The QR encoder, called with the EXACT `subscriptionUrl` the row holds at send time —
+   * the same string `markSendStarted` compares-and-sets — and with nothing else. Never a
+   * draft URL, never the panel's base URL, never the username.
+   */
+  readonly qr: QrCodeEncoder;
+  readonly card: DeliveryCardFactsReader;
   /**
    * The tenant kill switch, read before anything leaves the process.
    *
@@ -282,12 +318,7 @@ export class DeliveryService {
      * it, and the record of the old link's send must not land on the row that now holds
      * the new one: that would mark a link DELIVERED the customer never received.
      */
-    const result = await this.deps.messenger.send(scope, {
-      chatId,
-      botInstanceId,
-      templateKey: 'bot.service.subscription',
-      values: { subscriptionUrl: sentUrl },
-    });
+    const result = await this.sendCard(scope, service, chatId, botInstanceId, sentUrl);
 
     const now = this.deps.clock.now();
 
@@ -556,6 +587,81 @@ export class DeliveryService {
    * of the bot, so the message is wanted and its arrival is observable to them. That is
    * exactly what an automatic retry is not, and why the sweep refuses the last two.
    */
+  /**
+   * The delivery card (customer UX completion §B): the QR of `sentUrl` as a photo, the
+   * approved text as its caption, and the three buttons.
+   *
+   * ONE media message whenever the rendered caption fits Telegram's caption bound; the
+   * messenger refuses an over-bound HTML caption WITHOUT a request, and then the
+   * arrangement is deterministic: the photo with its short caption, then the whole card
+   * as a text message carrying the buttons. The URL is in exactly one message either
+   * way — inside the caption, or inside the card — and is never split. The recorded
+   * outcome is the WORST of the sends, so an ambiguous second send is UNCONFIRMED and
+   * never DELIVERED, and no request is made after a send that did not deliver.
+   *
+   * Facts that cannot be read fall back to the plain link message this service sent
+   * before the card existed: a link without a card is still a delivery; a card with
+   * holes in it is a claim.
+   */
+  private async sendCard(
+    scope: TenantContext,
+    service: ServiceRecord,
+    chatId: string,
+    botInstanceId: BotInstanceId,
+    sentUrl: string,
+  ): Promise<CustomerSendResult> {
+    const facts = await this.deps.card.factsFor(scope, service);
+    if (facts === null) {
+      return this.deps.messenger.send(scope, {
+        chatId,
+        botInstanceId,
+        templateKey: 'bot.service.subscription',
+        values: { subscriptionUrl: sentUrl },
+      });
+    }
+    const values: TemplateValues = {
+      serviceUsername: service.providerUsername,
+      productName: facts.productName,
+      ...(facts.serviceLocation === null ? {} : { serviceLocation: facts.serviceLocation }),
+      durationDays: facts.durationDays,
+      trafficBytes: facts.trafficBytes,
+      subscriptionUrl: sentUrl,
+    };
+    const buttons = deliveryCardButtons(service.id);
+    const png = this.deps.qr.encode(sentUrl);
+    const photo = {
+      chatId,
+      botInstanceId,
+      kind: 'PHOTO' as const,
+      source: {
+        kind: 'BYTES' as const,
+        bytes: png,
+        fileName: 'subscription.png',
+        mimeType: 'image/png' as const,
+      },
+    };
+    const single = await this.deps.messenger.sendFile(scope, {
+      ...photo,
+      caption: { templateKey: 'bot.service.delivered', values },
+      buttons,
+    });
+    if (single.outcome !== 'REFUSED' || single.reason !== 'CAPTION_OVER_BOUND') return single;
+
+    const first = await this.deps.messenger.sendFile(scope, {
+      ...photo,
+      caption: { templateKey: 'bot.service.delivered_qr_caption', values: {} },
+    });
+    if (first.outcome !== 'DELIVERED') return first;
+    const second = await this.deps.messenger.send(scope, {
+      chatId,
+      botInstanceId,
+      templateKey: 'bot.service.delivered',
+      values,
+      buttons,
+    });
+    return second;
+  }
+
   async redeliver(
     scope: TenantContext,
     service: ServiceRecord,
@@ -628,3 +734,37 @@ const EMPTY_SWEEP: DeliverySweepReport = {
   errored: 0,
   lost: 0,
 };
+
+/**
+ * The card's buttons, and their order, as approved: the connection guide on its own
+ * row, then «وصل شدم» beside «مشکل دارم». The callbacks carry the service id and
+ * nothing else; the guide and the FAQ need no id at all.
+ */
+export function deliveryCardButtons(serviceId: string): readonly CustomerButton[] {
+  return [
+    {
+      label: { kind: 'TEMPLATE', key: 'bot.service.tutorial_button' },
+      data: `${TUTORIAL_CALLBACK_DATA}`,
+      row: 0,
+    },
+    {
+      label: { kind: 'TEMPLATE', key: 'bot.service.connected_button' },
+      data: `${CONNECTED_CALLBACK_PREFIX}${serviceId}`,
+      row: 1,
+    },
+    {
+      label: { kind: 'TEMPLATE', key: 'bot.service.problem_button' },
+      data: `${SUPPORT_CALLBACK_DATA}`,
+      row: 1,
+    },
+  ];
+}
+
+/**
+ * The callbacks the card's buttons carry. Declared HERE, beside the one composer that
+ * draws them, and read by the Telegram surface's router, so the two cannot drift: the
+ * surface imports these rather than spelling them a second time.
+ */
+export const TUTORIAL_CALLBACK_DATA = 'tu:';
+export const CONNECTED_CALLBACK_PREFIX = 'ok:';
+export const SUPPORT_CALLBACK_DATA = 'sp:';

@@ -485,7 +485,9 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
    * and the same amount in the text it sits under cannot be written two different ways.
    */
   private async labelText(scope: ScopeContext, label: CustomerButtonLabel): Promise<string> {
-    if (label.kind === 'TEMPLATE') return this.templates.render(scope, label.key, {});
+    if (label.kind === 'TEMPLATE') {
+      return this.templates.render(scope, label.key, label.values ?? {});
+    }
     if (label.kind === 'AMOUNT') return formatMoney(label.amount);
     return label.amount === undefined ? label.text : `${label.text} — ${formatMoney(label.amount)}`;
   }

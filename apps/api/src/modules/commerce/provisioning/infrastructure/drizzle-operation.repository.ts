@@ -284,7 +284,18 @@ export class DrizzleOperationRepository implements OperationRepository {
       .where(
         and(
           eq(provisioningOperations.tenantId, tenantId),
-          inArray(provisioningOperations.state, ['SUCCEEDED', 'ABANDONED']),
+          /*
+           * Terminal states: SUCCEEDED, ABANDONED, and a FAILED with no retry scheduled
+           * (customer UX completion §H1). Rows that completed FAILED before that rule
+           * were stamped by migration 0120, so the sweep announces no history.
+           */
+          or(
+            inArray(provisioningOperations.state, ['SUCCEEDED', 'ABANDONED']),
+            and(
+              eq(provisioningOperations.state, 'FAILED'),
+              isNull(provisioningOperations.nextAttemptAt),
+            ),
+          ),
           isNull(provisioningOperations.announcedAt),
           lt(provisioningOperations.completedAt, before),
         ),

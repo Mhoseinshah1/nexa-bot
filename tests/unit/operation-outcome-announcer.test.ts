@@ -289,6 +289,7 @@ describe('announcing how an operation turned out', () => {
             serviceId: SERVICE,
             customerId: CUSTOMER,
             requestedByCustomerId: CUSTOMER,
+            nextAttemptAt: null,
           }),
           dueForAnnouncement: async (_scope, before, limit) => {
             asked.push({ before, limit });

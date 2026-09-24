@@ -14,6 +14,8 @@ import type {
   ServiceState,
   TenantContext,
   UserId,
+  ProviderLastSeen,
+  ServiceLastSeenState,
 } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 
@@ -58,6 +60,15 @@ export interface ServiceRecord {
   readonly deliverySendStartedAt: Date | null;
   readonly provisionedAt: Date | null;
   readonly terminatedAt: Date | null;
+  /**
+   * Last connection as a provider PROVED it: a time, or NEVER. Null is "no provider has
+   * said", which the card renders as unavailable and never as «متصل نشده». Every
+   * adapter in this release answers UNSUPPORTED, so null is every row today.
+   */
+  readonly lastSeenAt: Date | null;
+  readonly lastSeenState: ServiceLastSeenState | null;
+  /** The customer's own note. Display only; never provider identity. */
+  readonly customerNote: string | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -419,7 +430,50 @@ export interface ServiceRepository {
   recordUsage(
     scope: TenantContext,
     id: string,
-    usage: { readonly usedBytes: bigint; readonly syncedAt: Date },
+    usage: {
+      readonly usedBytes: bigint;
+      readonly syncedAt: Date;
+      /** Written only when AT or NEVER; UNSUPPORTED leaves the stored value alone. */
+      readonly lastSeen?: ProviderLastSeen;
+    },
+    tx: TransactionScope,
+  ): Promise<boolean>;
+
+  /**
+   * One page of the customer's services by page NUMBER, newest first, with the total —
+   * the "my services" screen's shape (customer UX completion §G). Offset paging, because
+   * the screen shows `page/pages` and a page beyond the last is clamped by the caller;
+   * ordered `created_at DESC, id DESC`, so the order is stable between two taps.
+   */
+  pageForCustomer(
+    scope: TenantContext,
+    customerId: UserId,
+    page: { readonly number: number; readonly size: number },
+    tx?: unknown,
+  ): Promise<{ readonly items: readonly ServiceRecord[]; readonly total: number }>;
+
+  /**
+   * The customer's OWN services whose username starts with `prefix`, in SQL — the
+   * tenant and the customer are in the WHERE, so a crafted term can only ever match
+   * rows the caller could list anyway.
+   */
+  searchForCustomer(
+    scope: TenantContext,
+    customerId: UserId,
+    prefix: string,
+    limit: number,
+    tx?: unknown,
+  ): Promise<readonly ServiceRecord[]>;
+
+  countForCustomer(scope: TenantContext, customerId: UserId, tx?: unknown): Promise<number>;
+
+  /** Sets or clears the customer's note on THEIR service; false when the row is not theirs. */
+  setCustomerNote(
+    scope: TenantContext,
+    customerId: UserId,
+    id: string,
+    note: string | null,
+    now: Date,
     tx: TransactionScope,
   ): Promise<boolean>;
 

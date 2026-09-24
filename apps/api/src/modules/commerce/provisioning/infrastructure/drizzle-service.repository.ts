@@ -16,7 +16,9 @@ import type {
   OrderId,
   PanelId,
   ProductId,
+  ProviderLastSeen,
   ServiceDeliveryState,
+  ServiceLastSeenState,
   ServiceState,
   TenantContext,
   UserId,
@@ -64,6 +66,9 @@ function toRecord(row: Row): ServiceRecord {
     deliverySendStartedAt: row.deliverySendStartedAt,
     provisionedAt: row.provisionedAt,
     terminatedAt: row.terminatedAt,
+    lastSeenAt: row.lastSeenAt,
+    lastSeenState: row.lastSeenState as ServiceLastSeenState | null,
+    customerNote: row.customerNote,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -721,10 +726,100 @@ export class DrizzleServiceRepository implements ServiceRepository {
     return rows.map(toRecord);
   }
 
+  async pageForCustomer(
+    scope: TenantContext,
+    customerId: UserId,
+    page: { readonly number: number; readonly size: number },
+    tx?: unknown,
+  ): Promise<{ readonly items: readonly ServiceRecord[]; readonly total: number }> {
+    const tenantId = requireTenantId(scope);
+    const owned = and(eq(services.tenantId, tenantId), eq(services.customerId, customerId));
+    const [counted] = await this.exec(tx)
+      .select({ total: sql<number>`count(*)::int` })
+      .from(services)
+      .where(owned);
+    const total = Number(counted?.total ?? 0);
+    const size = Math.max(1, page.size);
+    const number = Math.max(1, page.number);
+    const rows = await this.exec(tx)
+      .select()
+      .from(services)
+      .where(owned)
+      .orderBy(desc(services.createdAt), desc(services.id))
+      .limit(size)
+      .offset((number - 1) * size);
+    return { items: rows.map(toRecord), total };
+  }
+
+  async searchForCustomer(
+    scope: TenantContext,
+    customerId: UserId,
+    prefix: string,
+    limit: number,
+    tx?: unknown,
+  ): Promise<readonly ServiceRecord[]> {
+    const tenantId = requireTenantId(scope);
+    // A prefix, never a LIKE pattern the customer typed: `%` and `_` are escaped, so
+    // the term matches usernames and nothing about the table's contents leaks through
+    // wildcard probing. The tenant and the customer are in the WHERE, not applied after.
+    const escaped = prefix.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+    const rows = await this.exec(tx)
+      .select()
+      .from(services)
+      .where(
+        and(
+          eq(services.tenantId, tenantId),
+          eq(services.customerId, customerId),
+          sql`${services.providerUsername} LIKE ${`${escaped}%`} ESCAPE '\\'`,
+        ),
+      )
+      .orderBy(desc(services.createdAt), desc(services.id))
+      .limit(Math.max(1, limit));
+    return rows.map(toRecord);
+  }
+
+  async countForCustomer(scope: TenantContext, customerId: UserId, tx?: unknown): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    const [counted] = await this.exec(tx)
+      .select({ total: sql<number>`count(*)::int` })
+      .from(services)
+      .where(and(eq(services.tenantId, tenantId), eq(services.customerId, customerId)));
+    return Number(counted?.total ?? 0);
+  }
+
+  async setCustomerNote(
+    scope: TenantContext,
+    customerId: UserId,
+    id: string,
+    note: string | null,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(services)
+      .set({ customerNote: note, updatedAt: now })
+      .where(
+        and(
+          eq(services.tenantId, tenantId),
+          eq(services.id, id),
+          // Ownership in the WRITE, not only in the read before it: a service that
+          // changed hands between the two is not written.
+          eq(services.customerId, customerId),
+        ),
+      )
+      .returning({ id: services.id });
+    return rows.length === 1;
+  }
+
   async recordUsage(
     scope: TenantContext,
     id: string,
-    usage: { readonly usedBytes: bigint; readonly syncedAt: Date },
+    usage: {
+      readonly usedBytes: bigint;
+      readonly syncedAt: Date;
+      readonly lastSeen?: ProviderLastSeen;
+    },
     tx: TransactionScope,
   ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
@@ -734,6 +829,7 @@ export class DrizzleServiceRepository implements ServiceRepository {
         trafficUsedBytes: usage.usedBytes,
         usageSyncedAt: usage.syncedAt,
         updatedAt: usage.syncedAt,
+        ...lastSeenColumns(usage.lastSeen),
       })
       .where(
         and(
@@ -885,4 +981,17 @@ export class DrizzleServiceRepository implements ServiceRepository {
 
     return expired;
   }
+}
+
+/**
+ * What a usage read says about the last connection, as columns. UNSUPPORTED (and an
+ * absent value) writes nothing: a panel that cannot say must not erase what another
+ * read proved, and must never be stored as "never connected".
+ */
+function lastSeenColumns(
+  lastSeen: ProviderLastSeen | undefined,
+): { lastSeenAt: Date | null; lastSeenState: ServiceLastSeenState } | Record<string, never> {
+  if (lastSeen === undefined || lastSeen.kind === 'UNSUPPORTED') return {};
+  if (lastSeen.kind === 'AT') return { lastSeenAt: lastSeen.at, lastSeenState: 'AT' };
+  return { lastSeenAt: null, lastSeenState: 'NEVER' };
 }
