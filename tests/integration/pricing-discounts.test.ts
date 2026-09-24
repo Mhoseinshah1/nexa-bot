@@ -245,6 +245,26 @@ describe('discounts reach the order, and confirmation keeps its word', () => {
     };
   }
 
+  /** Holds `SELECT … FOR UPDATE` on one order row until released. */
+  async function holdOrder(id: string): Promise<{ release: () => Promise<void> }> {
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => (open = resolve));
+    let locked!: () => void;
+    const holding = new Promise<void>((resolve) => (locked = resolve));
+    const holder = ctx.container.database.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT id FROM orders WHERE id = ${id} FOR UPDATE`);
+      locked();
+      await gate;
+    });
+    await holding;
+    return {
+      release: async () => {
+        open();
+        await holder;
+      },
+    };
+  }
+
   const refusalOf = async (promise: Promise<unknown>) => {
     try {
       await promise;
@@ -595,6 +615,82 @@ describe('discounts reach the order, and confirmation keeps its word', () => {
 
     expect((await Promise.all([a, b])).sort()).toEqual(['OK', 'commerce.discount_no_longer_valid']);
     expect(await count(sql`SELECT count(*)::int AS n FROM discount_redemptions`)).toBe(1);
+  });
+
+  /*
+   * Pre-release hardening V1. `confirm` read the order BEFORE taking its row lock and
+   * redeemed from that read. A code applied while the confirmation waited for the lock
+   * therefore committed its discounted total, and the confirmation that followed
+   * redeemed the draft as it had been — without the code. The order went to payment at
+   * the discounted price with no redemption behind it, so a code limited to one use
+   * could be used again, as often as the race was won.
+   */
+  it('redeems the code a racing entry applied while the confirmation waited for the order', async () => {
+    await rule({ kind: 'CODE', code: 'RACED', value: 20n, totalLimit: 1 });
+    const order = await draft(customerA, await product(100_000n));
+    expect(order.discountCode).toBeNull();
+
+    const held = await holdOrder(order.id);
+    // The code first, so it takes the order's lock before the confirmation does...
+    const coded = applyCode(customerA, order, 'RACED');
+    await awaitBlocked(1, 'the code entry');
+    // ...and the confirmation, which has read the draft WITHOUT the code, queues behind it.
+    const confirmed = confirm(customerA, order);
+    await awaitBlocked(2, 'the confirmation');
+    await held.release();
+
+    expect((await coded).discountCode).toBe('RACED');
+    const after = await confirmed;
+    expect(after.state).toBe('AWAITING_PAYMENT');
+    expect(after.discountCode).toBe('RACED');
+    expect(after.totals.total.amountMinor).toBe(80_000n);
+    // The price the order carries is the price a redemption stands behind.
+    expect(await count(sql`SELECT count(*)::int AS n FROM discount_redemptions`)).toBe(1);
+    // So the one use is taken, and the next customer is told so.
+    const refusal = await refusalOf(
+      applyCode(customerA2, await draft(customerA2, await product(100_000n)), 'RACED'),
+    );
+    expect(refusal.details?.['reason']).toBe('TOTAL_LIMIT');
+  });
+
+  /*
+   * The other half of V1. Two taps of Confirm are two updates, so two idempotency keys: no
+   * replay joins them. The one that waited reads the order again under its lock, finds it
+   * AWAITING_PAYMENT, and answers as an already-confirmed order does — success, no second
+   * redemption, no second event — rather than redeeming and transitioning a second time.
+   */
+  it('answers a second confirmation that waited behind the first as already confirmed', async () => {
+    await rule({ kind: 'CODE', code: 'TWICE', value: 20n });
+    const order = await applyCode(
+      customerA,
+      await draft(customerA, await product(100_000n)),
+      'TWICE',
+    );
+
+    const held = await holdOrder(order.id);
+    const first = confirm(customerA, order);
+    await awaitBlocked(1, 'the first confirmation');
+    const second = confirm(customerA, order);
+    await awaitBlocked(2, 'the second confirmation');
+    await held.release();
+
+    const [a, b] = await Promise.all([first, second]);
+    expect(a.state).toBe('AWAITING_PAYMENT');
+    expect(b.state).toBe('AWAITING_PAYMENT');
+    expect(await count(sql`SELECT count(*)::int AS n FROM discount_redemptions`)).toBe(1);
+    for (const eventType of ['DiscountRedeemed', 'OrderConfirmed']) {
+      expect(
+        await count(
+          sql`SELECT count(*)::int AS n FROM outbox_messages WHERE event_type = ${eventType}`,
+        ),
+      ).toBe(1);
+    }
+    // And the log still tells the two apart: one change, one confirmation of a done thing.
+    const audits = await count(
+      sql`SELECT count(*)::int AS n FROM audit_logs
+           WHERE action = 'order.confirm' AND entity_id = ${order.id}`,
+    );
+    expect(audits).toBe(2);
   });
 
   it('frees a use when the order that held it is cancelled', async () => {

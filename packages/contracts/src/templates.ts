@@ -35,7 +35,16 @@ export const PLACEHOLDER_TYPES = [
   'MONEY',
   'DATETIME',
   'DURATION_DAYS',
+  /** A byte QUANTITY — used, or added. Zero is zero bytes. The renderer owns the unit. */
   'BYTES',
+  /**
+   * A traffic ALLOWANCE in bytes, where `UNLIMITED_TRAFFIC_BYTES` (zero) means no limit. The
+   * renderer owns the unit and renders zero as the word for "unlimited", never as "0": the same
+   * figure means "nothing" as a quantity and "no ceiling" as an allowance, and one type for both
+   * printed a raw `53687091200` for one and a `0` that said the opposite of unlimited for the
+   * other (pre-release hardening §3).
+   */
+  'TRAFFIC_LIMIT',
 ] as const;
 export type PlaceholderType = (typeof PLACEHOLDER_TYPES)[number];
 
@@ -560,7 +569,7 @@ export const TEMPLATES = [
       },
       {
         token: 'trafficBytes',
-        type: 'BYTES',
+        type: 'TRAFFIC_LIMIT',
         description: 'Traffic allowance in bytes, or 0 for unlimited. The renderer owns the unit.',
         required: false,
         repeatable: false,
@@ -616,7 +625,7 @@ export const TEMPLATES = [
       },
       {
         token: 'trafficBytes',
-        type: 'BYTES',
+        type: 'TRAFFIC_LIMIT',
         description: 'Traffic allowance in bytes, or 0 for unlimited. The renderer owns the unit.',
         required: false,
         repeatable: false,
@@ -677,7 +686,7 @@ export const TEMPLATES = [
       },
       {
         token: 'trafficBytes',
-        type: 'BYTES',
+        type: 'TRAFFIC_LIMIT',
         description: 'Traffic allowance in bytes, or 0 for unlimited. The renderer owns the unit.',
         required: false,
         repeatable: false,
@@ -731,7 +740,7 @@ export const TEMPLATES = [
       },
       {
         token: 'trafficBytes',
-        type: 'BYTES',
+        type: 'TRAFFIC_LIMIT',
         description: 'Traffic allowance in bytes, or 0 for unlimited. The renderer owns the unit.',
         required: false,
         repeatable: false,
@@ -1323,8 +1332,10 @@ export const TEMPLATES = [
     placeholders: [
       {
         token: 'trafficBytes',
-        type: 'BYTES',
-        description: 'The order\u2019s frozen traffic allowance in bytes.',
+        type: 'TRAFFIC_LIMIT',
+        description:
+          'The order\u2019s frozen traffic allowance in bytes, or 0 for unlimited. The renderer ' +
+          'owns the unit.',
         required: true,
         repeatable: false,
       },
@@ -1951,7 +1962,7 @@ export const TEMPLATES = [
       },
       {
         token: 'totalTrafficBytes',
-        type: 'BYTES',
+        type: 'TRAFFIC_LIMIT',
         description: 'The allowance in bytes, or 0 for unlimited.',
         required: false,
         repeatable: false,
@@ -4247,7 +4258,7 @@ export const TEMPLATES = [
       },
       {
         token: 'totalTrafficBytes',
-        type: 'BYTES',
+        type: 'TRAFFIC_LIMIT',
         description: 'Traffic allowance in bytes, or 0 for unlimited.',
         required: false,
         repeatable: false,
@@ -4454,7 +4465,7 @@ export const TEMPLATES = [
       },
       {
         token: 'totalTraffic',
-        type: 'BYTES',
+        type: 'TRAFFIC_LIMIT',
         description: 'The allowance the reminder was raised against.',
         required: false,
         repeatable: true,
@@ -4500,7 +4511,7 @@ export const TEMPLATES = [
       },
       {
         token: 'totalTraffic',
-        type: 'BYTES',
+        type: 'TRAFFIC_LIMIT',
         description: 'The allowance the reminder was raised against.',
         required: false,
         repeatable: true,
@@ -4550,7 +4561,7 @@ export const TEMPLATES = [
       },
       {
         token: 'totalTraffic',
-        type: 'BYTES',
+        type: 'TRAFFIC_LIMIT',
         description: 'The allowance the reminder was raised against.',
         required: false,
         repeatable: true,
@@ -5055,7 +5066,7 @@ export function isMoneyValue(value: TemplateValue): value is Money {
  *
  * The text forms are stated once, here, rather than in each surface:
  *
- *   - `NUMBER`, `DURATION_DAYS`, `BYTES` — a whole number, e.g. `30`.
+ *   - `NUMBER`, `DURATION_DAYS`, `BYTES`, `TRAFFIC_LIMIT` — a whole number, e.g. `30`.
  *   - `DATETIME` — anything `Date` parses, in practice ISO-8601, e.g.
  *     `2026-09-02T08:00:00Z`.
  *   - `MONEY` — minor units and a currency, e.g. `1250000 IRR`. Two parts on
@@ -5086,7 +5097,8 @@ export function coerceTemplateValue(
 
     case 'NUMBER':
     case 'DURATION_DAYS':
-    case 'BYTES': {
+    case 'BYTES':
+    case 'TRAFFIC_LIMIT': {
       const trimmed = raw.trim();
       // A whole number, and `Number('')` is 0 — which would silently turn an
       // empty field into a supplied zero, and zero means something specific
@@ -5351,6 +5363,7 @@ export function validateTemplateValues(
       case 'NUMBER':
       case 'DURATION_DAYS':
       case 'BYTES':
+      case 'TRAFFIC_LIMIT':
         if (typeof value !== 'number' && typeof value !== 'bigint') wrong('a number or bigint');
         break;
       case 'STRING':

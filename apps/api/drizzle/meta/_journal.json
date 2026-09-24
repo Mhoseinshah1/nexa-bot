@@ -827,6 +827,13 @@
       "when": 1790255828280,
       "tag": "0117_admin_capture_purpose",
       "breakpoints": true
+    },
+    {
+      "idx": 118,
+      "version": "7",
+      "when": 1790273912766,
+      "tag": "0118_customer_block_reason_shown",
+      "breakpoints": true
     }
   ]
 }

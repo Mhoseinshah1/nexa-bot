@@ -279,6 +279,9 @@ export class DrizzleCustomerRepository implements CustomerRepository {
         // set together rather than in two statements that could be separated later.
         blockedAt: to === 'BLOCKED' ? now : null,
         blockedReason: to === 'BLOCKED' ? reason : null,
+        // Every caller of this block writes under the copy that says the customer sees the
+        // reason; a row blocked before that copy existed keeps FALSE (pre-release V2).
+        blockedReasonShown: to === 'BLOCKED' && reason !== null,
         updatedAt: now,
       })
       .where(
@@ -303,6 +306,7 @@ function toRecord(row: typeof customers.$inferSelect): CustomerRecord {
     lastSeenAt: row.lastSeenAt,
     blockedAt: row.blockedAt,
     blockedReason: row.blockedReason,
+    blockedReasonShown: row.blockedReasonShown,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

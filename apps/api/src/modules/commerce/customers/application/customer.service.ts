@@ -530,9 +530,17 @@ export class CustomerService {
      */
     await this.deps.guard.check(scope, actor, CUSTOMER_BLOCK_PERMISSION);
 
+    /*
+     * The key is remembered under the surface the ACTOR came from — the same `actor.surface`
+     * the audit row records as `source_surface` — never a fixed `WEB` (OQ-WP10F-04). A Telegram
+     * administrator's block and a Web operator's block are two commands from two surfaces, and
+     * a record that called both `WEB` misstated where one came from and let a key from one
+     * answer for the other.
+     */
+    const namespace = actor.surface;
     const replay = await this.deps.idempotency.find<{ customerId: string; changed?: boolean }>(
       scope,
-      'WEB',
+      namespace,
       input.idempotencyKey,
       requestHash,
     );
@@ -644,7 +652,7 @@ export class CustomerService {
         await rememberOnce(
           this.deps.idempotency,
           scope,
-          'WEB',
+          namespace,
           input.idempotencyKey,
           requestHash,
           { customerId: after.id, changed },

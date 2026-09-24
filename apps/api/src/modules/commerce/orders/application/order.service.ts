@@ -1256,25 +1256,26 @@ export class OrderService {
          * "this call confirmed it" from "it was already confirmed" — the distinction
          * `nexa-conventions` requires and a bare success would erase.
          */
-        if (before.state !== 'DRAFT') {
-          if (before.state !== 'AWAITING_PAYMENT') {
+        const alreadyConfirmed = async (order: OrderRecord): Promise<OrderRecord> => {
+          if (order.state !== 'AWAITING_PAYMENT') {
             throw errors.conflict(
               COMMERCE_ERROR_CODES.ORDER_STATE_INVALID,
               'This order can no longer be confirmed.',
             );
           }
-          await this.recordConfirmation(scope, actor, tx, before, before, false);
+          await this.recordConfirmation(scope, actor, tx, order, order, false);
           await rememberOnce(
             this.deps.idempotency,
             scope,
             ORDER_NAMESPACE,
             input.idempotencyKey,
             requestHash,
-            { orderId: before.id },
+            { orderId: order.id },
             tx,
           );
-          return before;
-        }
+          return order;
+        };
+        if (before.state !== 'DRAFT') return alreadyConfirmed(before);
 
         /*
          * The draft's own deadline, checked BEFORE the product.
@@ -1366,6 +1367,23 @@ export class OrderService {
         await this.deps.repository.lock(scope, orderId, tx);
 
         /*
+         * And the order READ AGAIN under that lock (pre-release hardening V1).
+         *
+         * `before` was read without it, and a discount code applied while this waited
+         * for the lock commits a new total and a new trace. Redeeming from `before`
+         * then redeemed the draft as it HAD been — no code — and sent the order to
+         * payment at the discounted price with no redemption behind it: a code limited
+         * to one use, used again. Everything from here on decides from `locked`, the
+         * row the conditional transition below will actually move.
+         */
+        const locked = await this.deps.repository.findById(scope, orderId, tx);
+        if (locked === null || locked.customerId !== customerId) {
+          throw errors.notFound(COMMERCE_ERROR_CODES.ORDER_NOT_FOUND, 'Unknown order.');
+        }
+        // A concurrent confirmation that got the lock first answers exactly as a replay.
+        if (locked.state !== 'DRAFT') return alreadyConfirmed(locked);
+
+        /*
          * A slot is taken ONLY by an order that creates a service.
          *
          * `acquire` used to run for every purpose, and Codex found what that cost:
@@ -1391,13 +1409,13 @@ export class OrderService {
          * right question here: `PanelSalesGate`'s own docblock says `decideEligibility`
          * asks whether we may take money for a NEW account, and a renewal is not one.
          */
-        if (orderPurposeCreatesNewService(before.purpose)) {
+        if (orderPurposeCreatesNewService(locked.purpose)) {
           const eligible = await this.deps.panelSales.acquire(
             scope,
-            before.line.panelId,
+            locked.line.panelId,
             orderId,
             tx,
-            before.expiresAt,
+            locked.expiresAt,
           );
           if (!eligible.eligible) {
             throw errors.preconditionFailed(
@@ -1433,8 +1451,8 @@ export class OrderService {
             {
               orderId,
               customerId,
-              panelId: before.line.panelId,
-              expiresAt: before.expiresAt ?? new Date(now.getTime() + USERNAME_HOLD_FALLBACK_MS),
+              panelId: locked.line.panelId,
+              expiresAt: locked.expiresAt ?? new Date(now.getTime() + USERNAME_HOLD_FALLBACK_MS),
             },
             tx,
           );
@@ -1456,7 +1474,7 @@ export class OrderService {
          * it. The quote is never re-priced here: a customer is refused and starts again
          * rather than being charged a number they did not see.
          */
-        await this.deps.pricing.redeem(scope, actor, before, now, tx);
+        await this.deps.pricing.redeem(scope, actor, locked, now, tx);
 
         const to = nextState(ORDER_MACHINE, 'DRAFT', 'CONFIRM');
         if (to === null) throw new Error('ORDER_MACHINE no longer allows CONFIRM from DRAFT.');
@@ -1476,7 +1494,7 @@ export class OrderService {
           throw errors.notFound(COMMERCE_ERROR_CODES.ORDER_NOT_FOUND, 'Unknown order.');
         }
 
-        await this.recordConfirmation(scope, actor, tx, before, after, changed);
+        await this.recordConfirmation(scope, actor, tx, locked, after, changed);
 
         /*
          * The event follows the ROW CHANGING, not the command succeeding.

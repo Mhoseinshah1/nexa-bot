@@ -101,6 +101,8 @@ export function receiptRejectCaptures(
       payments.rejectManualTransfer(scope, actor, input.payment.id, {
         idempotencyKey: input.idempotencyKey,
         note: input.reason,
+        // Checked again inside the rejection's own transaction, beside the capture's check.
+        requireReceipt: true,
       }),
   };
   return new ReceiptReasonCaptureService(deps, policy);

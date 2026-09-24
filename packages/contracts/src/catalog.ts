@@ -211,6 +211,45 @@ export const UNLIMITED_DURATION_DAYS = 0;
 /** The sentinel for a plan with no traffic limit. */
 export const UNLIMITED_TRAFFIC_BYTES = 0n;
 
+/** The units a byte count is shown in, largest first. */
+export const BYTE_UNITS = ['PIB', 'TIB', 'GIB', 'MIB', 'BYTE'] as const;
+export type ByteUnit = (typeof BYTE_UNITS)[number];
+
+/**
+ * Binary factors, because a panel's allowance is a power of two and not of ten: the
+ * Web Admin has always shown `53687091200` as 50 گیگابایت, and this is that rule, moved
+ * here so the bot and the admin cannot disagree about one figure.
+ */
+const BYTE_FACTOR: Readonly<Record<ByteUnit, bigint>> = {
+  PIB: 1_125_899_906_842_624n,
+  TIB: 1_099_511_627_776n,
+  GIB: 1_073_741_824n,
+  MIB: 1_048_576n,
+  BYTE: 1n,
+};
+
+/**
+ * A byte count as a whole part, one decimal place and a unit — the largest unit it
+ * reaches, or bytes below a mebibyte.
+ *
+ * `bigint` all the way, because a byte count passes 2^53 at eight pebibytes and `Number`
+ * would round it: the tenth is computed by hand and truncated, never rounded up, so a
+ * figure is never shown as more than it is. Presentation only — nothing stored changes.
+ * Zero is zero bytes here; what zero MEANS (an unlimited allowance) is the caller's call.
+ */
+export function splitByteCount(bytes: bigint): {
+  readonly whole: bigint;
+  readonly tenths: bigint;
+  readonly unit: ByteUnit;
+} {
+  const magnitude = bytes < 0n ? -bytes : bytes;
+  const unit = BYTE_UNITS.find((candidate) => magnitude >= BYTE_FACTOR[candidate]) ?? 'BYTE';
+  const factor = BYTE_FACTOR[unit];
+  const whole = magnitude / factor;
+  const tenths = ((magnitude - whole * factor) * 10n) / factor;
+  return { whole: bytes < 0n ? -whole : whole, tenths, unit };
+}
+
 export const MAX_DURATION_DAYS = 3650;
 export const MAX_TRAFFIC_BYTES = 1_099_511_627_776_000n; // 1 PiB, far past any real plan
 export const MAX_DEVICE_LIMIT = 1000;

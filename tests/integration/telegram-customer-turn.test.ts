@@ -7,6 +7,7 @@ import {
   TELEGRAM_SECRET_TOKEN_HEADER,
   type ActorContext,
   type AdminId,
+  type BotInstanceId,
   type CorrelationId,
   type UserId,
 } from '@nexa/contracts';
@@ -17,6 +18,7 @@ import {
   CUSTOMER_SEND_OK_CODE,
 } from '../../apps/api/src/modules/commerce/messaging/infrastructure/telegram-customer-messenger';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
+import { receiptFile } from './receipt-review-fixture';
 import {
   adminActorFor,
   createAdmin,
@@ -415,6 +417,23 @@ describe('the customer Telegram turn', () => {
       customerId,
       { idempotencyKey: 'buttons-topup', amountMinor: 500_000n },
     );
+    // A receipt, because the review screen and its decisions are a receipt's: a pending
+    // transfer the customer filed no evidence for is not reviewed (pre-release hardening §1).
+    await api.container.payments.signalTransferSent(
+      tenantA,
+      systemActor('buttons-signal'),
+      customerId,
+      {
+        idempotencyKey: 'buttons-signal',
+        paymentId: payment.id,
+        botInstanceId: BOT_A as BotInstanceId,
+      },
+    );
+    await api.container.receipts.submit(tenantA, systemActor('buttons-file'), customerId, {
+      idempotencyKey: 'buttons-file',
+      botInstanceId: BOT_A as BotInstanceId,
+      file: receiptFile('buttons-file'),
+    });
 
     const owner = await createAdmin(api.container, tenantA, {
       username: 'buttons-owner',
@@ -464,8 +483,13 @@ describe('the customer Telegram turn', () => {
         },
       });
     };
-    // A callback turn also answers the callback query; the reply is the message send.
-    const lastMessage = () => sent.filter((one) => one.url.includes('/sendMessage')).at(-1);
+    // A callback turn also answers the callback query; the reply is the message send —
+    // here the receipt's own photo, whose text is its caption.
+    const lastMessage = () =>
+      sent
+        .filter((one) => one.url.includes('/sendMessage') || one.url.includes('/sendPhoto'))
+        .at(-1);
+    const lastText = () => String(lastMessage()?.body['text'] ?? lastMessage()?.body['caption']);
     const decisionButtons = () => {
       const markup = lastMessage()?.body['reply_markup'] as
         { inline_keyboard?: { callback_data: string }[][] } | undefined;
@@ -479,12 +503,12 @@ describe('the customer Telegram turn', () => {
     // being answered with something else that also happens to carry no buttons.
     sent = [];
     await tap(5550000001, `C:${payment.id}`);
-    expect(String(lastMessage()?.body['text'])).toContain(payment.reference);
+    expect(lastText()).toContain(payment.reference);
     expect(decisionButtons(), 'the observer was drawn decision buttons').toEqual([]);
 
     sent = [];
     await tap(5550000002, `C:${payment.id}`);
-    expect(String(lastMessage()?.body['text'])).toContain(payment.reference);
+    expect(lastText()).toContain(payment.reference);
     expect(decisionButtons().sort()).toEqual([`D:${payment.id}`, `E:${payment.id}`].sort());
   });
 
@@ -633,7 +657,8 @@ describe('the customer Telegram turn', () => {
 
     await api.container.database.db.execute(sql`
       UPDATE customers
-         SET status = 'BLOCKED', blocked_at = now(), blocked_reason = 'blocked after the turn'
+         SET status = 'BLOCKED', blocked_at = now(), blocked_reason = 'blocked after the turn',
+             blocked_reason_shown = true
        WHERE id = ${row['id'] as string}`);
     sent = [];
 
@@ -659,7 +684,8 @@ describe('the customer Telegram turn', () => {
     const row = (await customers())[0] as Record<string, unknown>;
     await api.container.database.db.execute(sql`
       UPDATE customers
-         SET status = 'BLOCKED', blocked_at = now(), blocked_reason = 'operator note'
+         SET status = 'BLOCKED', blocked_at = now(), blocked_reason = 'operator note',
+             blocked_reason_shown = true
        WHERE id = ${row['id'] as string}`);
     sent = [];
     const blockedReply = (await customers())[0] as Record<string, unknown>;

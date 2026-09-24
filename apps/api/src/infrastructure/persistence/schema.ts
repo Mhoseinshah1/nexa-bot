@@ -2589,6 +2589,23 @@ export const customers = pgTable(
      * `bot.blocked` when there is none. It is the only field of the block they are shown.
      */
     blockedReason: text('blocked_reason'),
+    /**
+     * Whether `blocked_reason` was written under the promise that the customer sees it.
+     *
+     * Until WP10's follow-up the Web Admin said of this very field "this note is for the
+     * operator and is never shown to the customer", and operators wrote it on that promise.
+     * Showing every stored reason would publish those notes to the people they are about
+     * (pre-release hardening V2). So a reason is shown only when the block that wrote it
+     * said so: this column is added FALSE for every existing row and set only by the
+     * repository's block, whose every caller now writes under the shown-to-the-customer
+     * copy. An unblock clears it with the reason.
+     *
+     * No CHECK ties it to `status` or `blocked_reason`, deliberately: the previous release's
+     * unblock clears the reason and knows nothing of this column, and `botctl rollback`
+     * keeps this schema under that code. The reader (`blockedReply`) requires all three
+     * — BLOCKED, a reason, and this — so a stale TRUE on an active row shows nothing.
+     */
+    blockedReasonShown: boolean('blocked_reason_shown').notNull().default(false),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },

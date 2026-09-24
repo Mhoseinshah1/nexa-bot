@@ -26,6 +26,12 @@ export interface CustomerRecord {
   readonly lastSeenAt: Date;
   readonly blockedAt: Date | null;
   readonly blockedReason: string | null;
+  /**
+   * Whether `blockedReason` was written under the promise that the customer is shown it.
+   * FALSE for a block written before that promise, when the Web Admin told the operator the
+   * note was never shown (pre-release hardening V2).
+   */
+  readonly blockedReasonShown: boolean;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }

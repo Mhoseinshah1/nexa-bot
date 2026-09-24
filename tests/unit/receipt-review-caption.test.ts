@@ -110,7 +110,8 @@ describe('the reviewer’s caption (File 01 §4)', () => {
       operation: 'label:bot.admin.operation_renew',
       order: 'پلن ویژه',
       durationDays: '30',
-      trafficBytes: '5',
+      // A byte figure is shown in a unit, never as the stored integer (pre-release §3).
+      trafficBytes: '5 بایت',
       serviceUsername: 'zahra01',
       name: 'زهرا احمدی',
       customer: '750900',
@@ -156,7 +157,8 @@ describe('the reviewer’s caption (File 01 §4)', () => {
       }),
     });
     expect(values['durationDays']).toBe('30');
-    expect(values['trafficBytes']).toBe('53687091200');
+    // The frozen 53687091200 bytes, as a reviewer reads it — never the raw integer.
+    expect(values['trafficBytes']).toBe('50 گیگابایت');
     expect(rendered).toContain('bot.admin.receipt_duration');
     expect(rendered).toContain('bot.admin.receipt_traffic');
   });
@@ -231,15 +233,25 @@ describe('the typed reason', () => {
 });
 
 describe('what a blocked customer is told (File 01 §9)', () => {
+  const shown = (blockedReason: string | null) => ({ blockedReason, blockedReasonShown: true });
+
   it('names THEIR stored reason, and falls back to the whole blocked sentence without one', () => {
-    expect(blockedReply({ blockedReason: 'دلیل' })).toMatchObject({
+    expect(blockedReply(shown('دلیل'))).toMatchObject({
       key: 'bot.blocked_with_reason',
       values: { reason: 'دلیل' },
     });
-    expect(blockedReply({ blockedReason: null })).toMatchObject({ key: 'bot.blocked', values: {} });
-    expect(blockedReply({ blockedReason: '   ' })).toMatchObject({ key: 'bot.blocked' });
-    expect(
-      blockedReply({ blockedReason: 'Blocked from the Telegram management panel.' }),
-    ).toMatchObject({ key: 'bot.blocked' });
+    expect(blockedReply(shown(null))).toMatchObject({ key: 'bot.blocked', values: {} });
+    expect(blockedReply(shown('   '))).toMatchObject({ key: 'bot.blocked' });
+    expect(blockedReply(shown('Blocked from the Telegram management panel.'))).toMatchObject({
+      key: 'bot.blocked',
+    });
+  });
+
+  it('never shows a reason written when the operator was told it would stay private (V2)', () => {
+    // A block from before WP10's follow-up: the Web Admin's copy then read "this note is for
+    // the operator and is never shown to the customer".
+    const reply = blockedReply({ blockedReason: 'مشکوک به تقلب', blockedReasonShown: false });
+    expect(reply).toMatchObject({ key: 'bot.blocked', values: {} });
+    expect(JSON.stringify(reply)).not.toContain('مشکوک');
   });
 });

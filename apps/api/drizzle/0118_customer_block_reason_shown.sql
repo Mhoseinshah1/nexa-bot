@@ -1,0 +1,1 @@
+ALTER TABLE "customers" ADD COLUMN "blocked_reason_shown" boolean DEFAULT false NOT NULL;

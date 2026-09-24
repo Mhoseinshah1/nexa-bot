@@ -1,10 +1,14 @@
 import {
   CURRENCY_EXPONENT,
+  UNLIMITED_TRAFFIC_BYTES,
   isMoneyValue,
+  splitByteCount,
+  type ByteUnit,
   placeholderTokensIn,
   templateDefinition,
   TEMPLATE_KEYS,
   type Money,
+  type PlaceholderType,
   type TemplateDefinition,
   type TemplateKey,
   type TemplateValue,
@@ -89,9 +93,45 @@ export function escapeTelegramHtml(value: string): string {
     .replace(/'/g, '&#39;');
 }
 
-function renderValue(value: TemplateValue, locale: Locale): string {
+const BYTE_UNIT_WORD: Record<Locale, Readonly<Record<ByteUnit, string>>> = {
+  fa: { PIB: 'پتابایت', TIB: 'ترابایت', GIB: 'گیگابایت', MIB: 'مگابایت', BYTE: 'بایت' },
+};
+
+/** The word an unlimited traffic allowance is shown as — the Web Admin's own word. */
+const UNLIMITED_TRAFFIC_WORD: Record<Locale, string> = { fa: 'نامحدود' };
+
+/** A byte QUANTITY, human-readable: `53687091200` is «50 گیگابایت». Zero is «0 بایت». */
+export function formatBytes(bytes: bigint, locale: Locale = DEFAULT_LOCALE): string {
+  const { whole, tenths, unit } = splitByteCount(bytes);
+  const grouped = whole.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const amount = tenths === 0n ? grouped : `${grouped}.${tenths.toString()}`;
+  return `${amount} ${BYTE_UNIT_WORD[locale][unit]}`;
+}
+
+/** A traffic ALLOWANCE: `UNLIMITED_TRAFFIC_BYTES` is the word for unlimited, never «0». */
+export function formatTrafficLimit(bytes: bigint, locale: Locale = DEFAULT_LOCALE): string {
+  return bytes === UNLIMITED_TRAFFIC_BYTES
+    ? UNLIMITED_TRAFFIC_WORD[locale]
+    : formatBytes(bytes, locale);
+}
+
+function renderValue(value: TemplateValue, locale: Locale, type: PlaceholderType): string {
   if (isMoneyValue(value)) return formatMoney(value, locale);
   if (value instanceof Date) return value.toISOString();
+  /*
+   * A byte figure's unit is the renderer's, as the placeholder declarations have always
+   * said: before this, `BYTES` fell through to `String` and the customer read the stored
+   * integer. A whole number only; anything else is shown as given rather than guessed at.
+   */
+  if (
+    (type === 'BYTES' || type === 'TRAFFIC_LIMIT') &&
+    (typeof value === 'bigint' || (typeof value === 'number' && Number.isSafeInteger(value)))
+  ) {
+    const bytes = BigInt(value);
+    return type === 'TRAFFIC_LIMIT'
+      ? formatTrafficLimit(bytes, locale)
+      : formatBytes(bytes, locale);
+  }
   return String(value);
 }
 
@@ -113,13 +153,14 @@ export function renderTemplateBody(
   values: TemplateValues,
   locale: Locale = DEFAULT_LOCALE,
 ): string {
-  const declared = new Set(definition.placeholders.map((p) => p.token));
+  const declared = new Map(definition.placeholders.map((p) => [p.token, p.type] as const));
   const escape = definition.format === 'TELEGRAM_HTML' ? escapeTelegramHtml : (s: string) => s;
 
   return body.replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (match, token: string) => {
-    if (!declared.has(token)) return match;
+    const type = declared.get(token);
+    if (type === undefined) return match;
     const value = values[token];
-    return value === undefined ? match : escape(renderValue(value, locale));
+    return value === undefined ? match : escape(renderValue(value, locale, type));
   });
 }
 

@@ -3671,10 +3671,16 @@ const PRE_REASON_BLOCK_NOTE = 'Blocked from the Telegram management panel.';
  * blocked, WHY — the reason stored on THIS customer's own row, and nothing else of the block's
  * record — and to contact support. A block with no reason keeps `bot.blocked`, a whole sentence
  * with no empty "reason" line in it.
+ *
+ * Only a reason written to be shown is shown (pre-release hardening V2): until WP10's follow-up
+ * the Web Admin told the operator this note "is never shown to the customer", and a block
+ * written then keeps `blockedReasonShown` FALSE and is answered with `bot.blocked`.
  */
-export function blockedReply(customer: Pick<CustomerRecord, 'blockedReason'>): PendingReply {
+export function blockedReply(
+  customer: Pick<CustomerRecord, 'blockedReason' | 'blockedReasonShown'>,
+): PendingReply {
   const reason = customer.blockedReason?.trim() ?? '';
-  if (reason === '' || reason === PRE_REASON_BLOCK_NOTE) {
+  if (!customer.blockedReasonShown || reason === '' || reason === PRE_REASON_BLOCK_NOTE) {
     return { key: 'bot.blocked', values: {}, buttons: [], orderId: null };
   }
   return { key: 'bot.blocked_with_reason', values: { reason }, buttons: [], orderId: null };
@@ -5066,6 +5072,8 @@ export class BotRuntime {
         // through which surface the decision was taken, which is exactly what a
         // reviewer reading the payment later wants to know.
         note: 'Approved in the Telegram management panel.',
+        // A receipt-review decision: the service refuses a transfer with no stored receipt.
+        requireReceipt: true,
       });
       return { key: 'bot.admin.approved', values: {}, buttons: [], orderId: null };
     } catch (error) {
@@ -6516,7 +6524,9 @@ export class BotRuntime {
     idempotencyKey: string,
   ): Promise<PendingReply> {
     const input = {
-      idempotencyKey,
+      // Suffixed: the update's own key is `resolveFromUpdate`'s record in the `TELEGRAM`
+      // namespace, which is where a Telegram administrator's block is now remembered too.
+      idempotencyKey: `${idempotencyKey}:customer-status`,
       customerId,
       // Unchanged (OQ-WP10F-03 stays out of scope): a fixed note about the surface, which
       // `blockedReply` recognises and never shows the customer as a reason.
