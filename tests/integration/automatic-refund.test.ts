@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  EMPTY_PRODUCT_DISPLAY,
   money,
   templateDefinition,
   PANEL_UNHEALTHY_AFTER_FAILURES,
@@ -175,6 +176,7 @@ describe('an order that cannot be delivered is refunded', () => {
     categoryId: SEED_IDS.categoryA as ProductCategoryId,
     specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: 2 },
     price: money(250_000n, 'IRT'),
+    display: EMPTY_PRODUCT_DISPLAY,
   });
 
   /** An order in `AWAITING_PAYMENT`, made the way a customer makes one. */

@@ -5,6 +5,7 @@ import type {
   ProductCategoryId,
   ProductCategoryStatus,
   ProductCategoryVisibility,
+  ProductDisplay,
   ProductId,
   ProductSpecification,
   ProductStatus,
@@ -55,6 +56,16 @@ export interface ProductRecord {
    * "free": a product with no price is a product that cannot be sold.
    */
   readonly price: Money | null;
+  /**
+   * What the pre-invoice and the cards SHOW, and nothing the provisioner reads.
+   *
+   * Kept beside `specification` and deliberately not inside it: `ProductSpecification`
+   * is what a service is built from, and a location string is a promise to a customer,
+   * never an instruction to a machine. The panel a purchase lands on is `panelId`, and a
+   * display location naming some other host changes nothing about where it lands —
+   * `products-display.test.ts` provisions exactly that product to prove it.
+   */
+  readonly display: ProductDisplay;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -132,6 +143,13 @@ export interface ProductDraft {
   readonly categoryId: ProductCategoryId | null;
   readonly specification: ProductSpecification;
   readonly price: Money | null;
+  /**
+   * REQUIRED here even though the wire schema defaults it, so that a caller building a
+   * draft in code has to say what the customer sees — an omitted field would be a
+   * silent `[]` written over lists an operator typed. The controller fills it from the
+   * parsed body, whose defaults are the empty display.
+   */
+  readonly display: ProductDisplay;
 }
 
 /**

@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import type { ProductCategoryId } from '@nexa/contracts';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  EMPTY_PRODUCT_DISPLAY,
   API_PREFIX,
   AUTH_ROUTES,
   COMMERCE_ERROR_CODES,
@@ -227,11 +228,16 @@ describe('product HTTP surface', () => {
         'createdAt',
         'deviceLimit',
         'description',
+        // Customer UX completion §C: what the pre-invoice shows. Marketing copy the
+        // operator typed, never a panel fact.
+        'displayFeatures',
+        'displayLocations',
         'durationDays',
         'id',
         'panelId',
         'priceAmount',
         'priceCurrency',
+        'serviceLocationLabel',
         'sortOrder',
         'status',
         'title',
@@ -242,6 +248,70 @@ describe('product HTTP surface', () => {
     for (const forbidden of ['panelUrl', 'panelToken', 'credentials', 'providerType', 'password']) {
       expect(Object.keys(row), forbidden).not.toContain(forbidden);
     }
+  });
+
+  // -------------------------------------------------------------------------
+  // Display metadata over the wire (customer UX completion §C)
+  // -------------------------------------------------------------------------
+
+  it('writes an empty display for a body from the previous release, which sends none', async () => {
+    /*
+     * `body()` predates the three fields and deliberately still omits them: this is the
+     * client on the previous release, and its write must still succeed. What it writes
+     * is the empty display, which is what its form shows.
+     */
+    const product = await createProduct();
+    expect(product.displayLocations).toEqual([]);
+    expect(product.displayFeatures).toEqual([]);
+    expect(product.serviceLocationLabel).toBeNull();
+  });
+
+  it('round-trips the display lists in the order they were written', async () => {
+    const created = await createProduct({
+      displayLocations: ['🇩🇪 Germany', '🇳🇱 Netherlands', '🇫🇮 Finland'],
+      displayFeatures: ['• No logs', '• Unlimited devices'],
+      serviceLocationLabel: 'Frankfurt',
+    });
+    expect(created.displayLocations).toEqual(['🇩🇪 Germany', '🇳🇱 Netherlands', '🇫🇮 Finland']);
+    expect(created.displayFeatures).toEqual(['• No logs', '• Unlimited devices']);
+    expect(created.serviceLocationLabel).toBe('Frankfurt');
+
+    // Reversed on the edit, and read back reversed: the projection copies, never sorts.
+    const edited = await post(PRODUCT_ROUTES.update(created.id), editorCookie, {
+      ...body({
+        displayLocations: ['🇫🇮 Finland', '🇳🇱 Netherlands', '🇩🇪 Germany'],
+        displayFeatures: [],
+        serviceLocationLabel: null,
+      }),
+    });
+    expect(edited.statusCode, edited.body).toBe(201);
+    const after = productResponseSchema.parse(edited.json()).product;
+    expect(after.displayLocations).toEqual(['🇫🇮 Finland', '🇳🇱 Netherlands', '🇩🇪 Germany']);
+    expect(after.displayFeatures).toEqual([]);
+    expect(after.serviceLocationLabel).toBeNull();
+
+    const read = await get(PRODUCT_ROUTES.detail(created.id), editorCookie);
+    expect(productResponseSchema.parse(read.json()).product.displayLocations).toEqual([
+      '🇫🇮 Finland',
+      '🇳🇱 Netherlands',
+      '🇩🇪 Germany',
+    ]);
+  });
+
+  it.each([
+    [
+      'a thirty-first location',
+      { displayLocations: Array.from({ length: 31 }, (_, i) => `L${i}`) },
+    ],
+    ['a blank location line', { displayLocations: ['Germany', '   '] }],
+    ['a location with a line break', { displayLocations: ['Germany\nFrance'] }],
+    ['a location over sixty characters', { displayLocations: ['x'.repeat(61)] }],
+    ['a feature over two hundred characters', { displayFeatures: ['x'.repeat(201)] }],
+    ['a label over sixty characters', { serviceLocationLabel: 'x'.repeat(61) }],
+    ['a blank label', { serviceLocationLabel: '' }],
+  ])('refuses %s at the boundary', async (_label, overrides) => {
+    const response = await post(PRODUCT_ROUTES.create, editorCookie, body(overrides));
+    expect(response.statusCode, response.body).toBe(400);
   });
 
   it('carries the price as a STRING, so a large amount is not rounded by JSON', async () => {
@@ -609,6 +679,7 @@ describe('product HTTP surface', () => {
         categoryId: SEED_IDS.categoryB as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 1n, deviceLimit: null },
         price: money(100000n, 'IRT'),
+        display: EMPTY_PRODUCT_DISPLAY,
       },
       now: api.container.clock.now(),
     });
