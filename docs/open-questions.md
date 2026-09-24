@@ -2271,4 +2271,9 @@ namespace parameter on the command.
 
 It is pre-existing, found by the WP10 follow-up audit, and not changed there.
 
-UNRESOLVED.
+RESOLVED (pre-release hardening §2, `docs/prerelease-hardening-audit.md`).
+
+- **The namespace.** It is the actor's surface, `actor.surface`: the typed `SourceSurface` the audit row already stores as `source_surface`. A Web block is remembered under `WEB`, and both Telegram paths under `TELEGRAM`.
+- **The customers section's key.** It is suffixed `:customer-status`, so it cannot collide with the same update's `resolveFromUpdate` record.
+- **What holds.** Same-surface retries replay, other-surface keys are their own commands, tenant isolation and `users.block` are unchanged.
+- **Tests.** `tests/integration/customer-block-surface.test.ts`.
