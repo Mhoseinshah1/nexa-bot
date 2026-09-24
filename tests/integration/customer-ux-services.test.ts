@@ -115,7 +115,10 @@ describe('a customer looks after the services they bought', () => {
     };
     panel = await startFakeMarzban({ host: '127.0.0.2' });
     owner = adminActorFor(
-      await createAdmin(ctx.container, tenantA, { username: 'owner-selfcare', roleKeys: ['owner'] }),
+      await createAdmin(ctx.container, tenantA, {
+        username: 'owner-selfcare',
+        roleKeys: ['owner'],
+      }),
     );
     const created = await ctx.container.panels.create(tenantA, owner, {
       name: 'Marzban A',
@@ -172,7 +175,11 @@ describe('a customer looks after the services they bought', () => {
     return row.id;
   }
 
-  async function paidOrder(key: string, customerId: UserId, productId: ProductId): Promise<OrderId> {
+  async function paidOrder(
+    key: string,
+    customerId: UserId,
+    productId: ProductId,
+  ): Promise<OrderId> {
     const draft = await ctx.container.orders.createDraft(tenantA, systemActor(key), {
       idempotencyKey: `${key}-draft`,
       customerId,
@@ -380,10 +387,14 @@ describe('a customer looks after the services they bought', () => {
   // =========================================================================
   describe('the service card', () => {
     it('renders the approved card from the rows, with the capability-gated buttons', async () => {
-      const productId = await product('card', { durationDays: 30, trafficBytes: 53_687_091_200n }, {
-        ...EMPTY_PRODUCT_DISPLAY,
-        serviceLocationLabel: 'مولتی لوکیشن',
-      });
+      const productId = await product(
+        'card',
+        { durationDays: 30, trafficBytes: 53_687_091_200n },
+        {
+          ...EMPTY_PRODUCT_DISPLAY,
+          serviceLocationLabel: 'مولتی لوکیشن',
+        },
+      );
       const service = await activeService('card', maryam, productId);
       const result = await handle(tap(`s:${service.id}`));
       expect(result.replyKey).toBe('bot.service.card');
@@ -593,10 +604,14 @@ describe('a customer looks after the services they bought', () => {
   // =========================================================================
   describe('the delivery card', () => {
     it('arrives as ONE photo whose QR is the stored link and whose caption is the approved card', async () => {
-      const productId = await product('deliver', { durationDays: 30, trafficBytes: 53_687_091_200n }, {
-        ...EMPTY_PRODUCT_DISPLAY,
-        serviceLocationLabel: 'مولتی لوکیشن',
-      });
+      const productId = await product(
+        'deliver',
+        { durationDays: 30, trafficBytes: 53_687_091_200n },
+        {
+          ...EMPTY_PRODUCT_DISPLAY,
+          serviceLocationLabel: 'مولتی لوکیشن',
+        },
+      );
       const orderId = await paidOrder('deliver', maryam, productId);
       await ctx.container.provisionerLoop.tick();
       const service = await services.findByOrderId(tenantA, orderId);

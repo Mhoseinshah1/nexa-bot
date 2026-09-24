@@ -271,9 +271,15 @@ describe('a customer pays through the approved screens', () => {
       const body = lastText();
       expect(body.startsWith('🧾 پیش فاکتور شما:\n\n')).toBe(true);
       expect(body).toMatch(/👤 نام کاربر: nx[a-z0-9]+\n/u);
-      expect(body).toContain('🔐 نام سرویس: پلن pre\n📆 مدت اعتبار: 30 روز\n💵 قیمت: 250,000 تومان\n👥 حجم اکانت: 50 گیگابایت\n\n');
-      expect(body).toContain('🌍 لوکیشن‌های محصول:\n🇩🇪 آلمان\n🇳🇱 هلند\n\n✅ اتصال همزمان ۳ دستگاه\n✅ پشتیبانی ۲۴ ساعته\n\n');
-      expect(body.endsWith('💰 موجودی کیف پول شما: 1,000,000 تومان\n\n💰 سفارش شما آماده پرداخت است')).toBe(true);
+      expect(body).toContain(
+        '🔐 نام سرویس: پلن pre\n📆 مدت اعتبار: 30 روز\n💵 قیمت: 250,000 تومان\n👥 حجم اکانت: 50 گیگابایت\n\n',
+      );
+      expect(body).toContain(
+        '🌍 لوکیشن‌های محصول:\n🇩🇪 آلمان\n🇳🇱 هلند\n\n✅ اتصال همزمان ۳ دستگاه\n✅ پشتیبانی ۲۴ ساعته\n\n',
+      );
+      expect(
+        body.endsWith('💰 موجودی کیف پول شما: 1,000,000 تومان\n\n💰 سفارش شما آماده پرداخت است'),
+      ).toBe(true);
       expect(buttonsOf(lastMarkup())).toEqual([
         `w:${orderId}`,
         `m:${orderId}`,
@@ -309,8 +315,14 @@ describe('a customer pays through the approved screens', () => {
 
     it('splits a long pre-invoice at section boundaries and puts the keyboard on the last part only', async () => {
       const productId = await product('long', {
-        displayLocations: Array.from({ length: 30 }, (_, i) => `🌐 لوکیشن شمارهٔ ${String(i + 1)} ${'—'.repeat(40)}`),
-        displayFeatures: Array.from({ length: 30 }, (_, i) => `✅ ویژگی شمارهٔ ${String(i + 1)} ${'—'.repeat(120)}`),
+        displayLocations: Array.from(
+          { length: 30 },
+          (_, i) => `🌐 لوکیشن شمارهٔ ${String(i + 1)} ${'—'.repeat(40)}`,
+        ),
+        displayFeatures: Array.from(
+          { length: 30 },
+          (_, i) => `✅ ویژگی شمارهٔ ${String(i + 1)} ${'—'.repeat(120)}`,
+        ),
         serviceLocationLabel: null,
       });
       await draftTo(productId);
@@ -356,7 +368,10 @@ describe('a customer pays through the approved screens', () => {
       const rows = await ctx.container.database.db.execute(
         sql`SELECT state FROM orders WHERE id = ${orderId}`,
       );
-      expect((rows.rows[0] as { state: string }).state, 'no reservation held for missing money').toBe('DRAFT');
+      expect(
+        (rows.rows[0] as { state: string }).state,
+        'no reservation held for missing money',
+      ).toBe('DRAFT');
       expect((await ledger(maryam)).map((e) => e.reason)).toEqual(['ADMIN_CREDIT']);
     });
 
@@ -573,12 +588,21 @@ describe('a customer pays through the approved screens', () => {
       expect(help.replyKey).toBe('bot.faq.page');
       const body = lastText();
       expect(body.startsWith('💡 سوالات متداول ⁉️')).toBe(true);
-      expect(body).toContain('1️⃣ فیلترشکن شما آیپی ثابته؟ میتونم برای صرافی های ارز دیجیتال استفاده کنم؟');
-      expect(body).toContain('✅ به دلیل وضعیت نت و محدودیت های کشور سرویس ما مناسب ترید نیست و فقط لوکیشن‌ ثابته.');
+      expect(body).toContain(
+        '1️⃣ فیلترشکن شما آیپی ثابته؟ میتونم برای صرافی های ارز دیجیتال استفاده کنم؟',
+      );
+      expect(body).toContain(
+        '✅ به دلیل وضعیت نت و محدودیت های کشور سرویس ما مناسب ترید نیست و فقط لوکیشن‌ ثابته.',
+      );
       expect(body).toContain('9️⃣ امکان بازگشت وجه دارید؟');
-      expect(body.endsWith('💡 در صورتی که جواب سوالتون رو نگرفتید میتونید به «پشتیبانی» مراجعه کنید.')).toBe(true);
+      expect(
+        body.endsWith('💡 در صورتی که جواب سوالتون رو نگرفتید میتونید به «پشتیبانی» مراجعه کنید.'),
+      ).toBe(true);
       expect(lastMarkup()).toContain('"url":"https://t.me/nexa_support"');
-      expect(labelsOf(lastMarkup())).toEqual(['📨 ارسال پیام به پشتیبانی', '🏠 بازگشت به منوی اصلی']);
+      expect(labelsOf(lastMarkup())).toEqual([
+        '📨 ارسال پیام به پشتیبانی',
+        '🏠 بازگشت به منوی اصلی',
+      ]);
 
       const menu = await handle(tap('mm:'));
       expect(menu.replyKey).toBe('bot.start.welcome_back');

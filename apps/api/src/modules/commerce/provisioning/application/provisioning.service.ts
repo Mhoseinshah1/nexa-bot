@@ -720,23 +720,23 @@ export class ProvisioningService {
     readonly items: readonly ServiceRecord[];
     readonly page: number;
     readonly pages: number;
-    readonly total: number;
+    readonly count: number;
   }> {
     const size = SERVICES_LIST_PAGE_SIZE;
     const first = await this.deps.services.pageForCustomer(scope, customerId, {
       number: Math.max(1, Math.trunc(pageNumber) || 1),
       size,
     });
-    const pages = Math.max(1, Math.ceil(first.total / size));
+    const pages = Math.max(1, Math.ceil(first.count / size));
     const wanted = Math.min(Math.max(1, Math.trunc(pageNumber) || 1), pages);
     if (wanted === Math.max(1, Math.trunc(pageNumber) || 1)) {
-      return { items: first.items, page: wanted, pages, total: first.total };
+      return { items: first.items, page: wanted, pages, count: first.count };
     }
     const clamped = await this.deps.services.pageForCustomer(scope, customerId, {
       number: wanted,
       size,
     });
-    return { items: clamped.items, page: wanted, pages, total: clamped.total };
+    return { items: clamped.items, page: wanted, pages, count: clamped.count };
   }
 
   /**

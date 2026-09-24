@@ -167,8 +167,7 @@ export class WalletTopupFlowService {
     known?: CustomerCaptureRecord,
   ): Promise<TopupAmountResult> {
     const capture =
-      known ??
-      (await this.deps.captures.findOwnedOpen(scope, input.customerId, input.captureId));
+      known ?? (await this.deps.captures.findOwnedOpen(scope, input.customerId, input.captureId));
     if (
       capture === null ||
       capture.purpose !== 'TOPUP_AMOUNT' ||

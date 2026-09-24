@@ -105,7 +105,6 @@ import {
   TUTORIAL_CALLBACK_DATA,
 } from '../../modules/commerce/provisioning/application/delivery.service.js';
 import type { CustomerCaptureService } from '../../modules/commerce/customers/application/customer-capture.service.js';
-import type { CustomerCaptureRecord } from '../../modules/commerce/customers/application/customer-capture-ports.js';
 import type { CustomerCountersReader } from '../../modules/commerce/customers/application/customer-counters-ports.js';
 import type {
   TopupRoute,
@@ -113,10 +112,7 @@ import type {
 } from '../../modules/commerce/payments/application/wallet-topup-flow.service.js';
 import type { CustomerScreenComposer } from '../../modules/commerce/messaging/application/customer-screens.js';
 import type { ResellerService } from '../../modules/commerce/resellers/application/reseller.service.js';
-import type {
-  ServiceCursor,
-  ServiceRecord,
-} from '../../modules/commerce/provisioning/application/ports.js';
+import type { ServiceRecord } from '../../modules/commerce/provisioning/application/ports.js';
 import type { OperatorServiceOperation } from '../../modules/commerce/provisioning/application/provisioning.service.js';
 import type {
   ServiceAdminService,
@@ -8116,7 +8112,7 @@ export class BotRuntime {
     pageNumber: number,
   ): Promise<PendingReply> {
     const page = await this.deps.services.pageForCustomer(scope, customer.id, pageNumber);
-    if (page.total === 0) {
+    if (page.count === 0) {
       return {
         key: 'bot.service.list_empty',
         values: {},
@@ -8136,7 +8132,7 @@ export class BotRuntime {
     buttons.push(...servicesListControls(page.page, page.pages));
     return {
       key: 'bot.service.list',
-      values: { page: page.page, pages: page.pages, total: page.total },
+      values: { page: page.page, pages: page.pages, total: page.count },
       buttons,
       orderId: null,
     };
@@ -10697,7 +10693,7 @@ const TUTORIAL_KEYS: Readonly<
   LINUX: { button: 'bot.tutorial.linux_button', body: 'bot.tutorial.linux' },
 };
 
-/** «📚 مشاهده آموزش استفاده»: the platform choice. Needs no id; the guides are tenant text. */
+/** The connection guide's first screen: the platform choice. Needs no id; the guides are tenant text. */
 function tutorialChoice(): PendingReply {
   return {
     key: 'bot.tutorial.choose',

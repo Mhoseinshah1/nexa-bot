@@ -234,7 +234,9 @@ describe('the pre-invoice', () => {
     expect(text).not.toContain('لوکیشن');
     expect(text).not.toContain('نام کاربر');
     expect(text).not.toContain('{');
-    expect(text).toContain('💵 قیمت: 250,000 تومان\n👥 حجم اکانت: 50 گیگابایت\n\n💰 موجودی کیف پول شما');
+    expect(text).toContain(
+      '💵 قیمت: 250,000 تومان\n👥 حجم اکانت: 50 گیگابایت\n\n💰 موجودی کیف پول شما',
+    );
   });
 
   it('shows the discount and the cashback as their own lines, with the FINAL price on the price line', async () => {
@@ -279,12 +281,16 @@ describe('the referral screen', () => {
       commissionReceivedTotal: money(90_000n, 'IRT'),
     });
     const text = render(screen.key, screen.values);
-    expect(text).toContain('به ازای هر فرد جدیدی که برای اولین بار با لینک شما وارد ربات شود و خرید انجام دهد 15 درصد پورسانت دریافت کنید!');
+    expect(text).toContain(
+      'به ازای هر فرد جدیدی که برای اولین بار با لینک شما وارد ربات شود و خرید انجام دهد 15 درصد پورسانت دریافت کنید!',
+    );
     expect(text).toContain('🔗 https://t.me/nexa_bot?start=ref-ABCDEFGH');
     expect(text).toContain(
       '🎁 هدیه عضویت:\n• مجموع هدیه: 40,000 تومان\n• 70٪ برای شما (معرف)\n• 30٪ برای زیرمجموعه (کاربر جدید)',
     );
-    expect(text).toContain('💸 پورسانت خرید:\n• 15 درصد از مبلغ خرید زیرمجموعه به شما تعلق می‌گیرد');
+    expect(text).toContain(
+      '💸 پورسانت خرید:\n• 15 درصد از مبلغ خرید زیرمجموعه به شما تعلق می‌گیرد',
+    );
     expect(text).toContain(
       '📊 آمار شما:\n• زیرمجموعه‌ها: 5 نفر\n• خریدها: 2 عدد\n• مجموع خرید: 600,000 تومان\n• پورسانت دریافتی: 90,000 تومان',
     );

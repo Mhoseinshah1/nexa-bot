@@ -731,7 +731,7 @@ export class DrizzleServiceRepository implements ServiceRepository {
     customerId: UserId,
     page: { readonly number: number; readonly size: number },
     tx?: unknown,
-  ): Promise<{ readonly items: readonly ServiceRecord[]; readonly total: number }> {
+  ): Promise<{ readonly items: readonly ServiceRecord[]; readonly count: number }> {
     const tenantId = requireTenantId(scope);
     const owned = and(eq(services.tenantId, tenantId), eq(services.customerId, customerId));
     const [counted] = await this.exec(tx)
@@ -748,7 +748,7 @@ export class DrizzleServiceRepository implements ServiceRepository {
       .orderBy(desc(services.createdAt), desc(services.id))
       .limit(size)
       .offset((number - 1) * size);
-    return { items: rows.map(toRecord), total };
+    return { items: rows.map(toRecord), count: total };
   }
 
   async searchForCustomer(

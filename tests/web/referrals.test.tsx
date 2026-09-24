@@ -94,6 +94,8 @@ const render = (query = '', denied = false) =>
     <ReferralsPage
       route={{ path: '/referrals', query: new URLSearchParams(query) }}
       denied={denied}
+      mayViewBanner={false}
+      mayEditBanner={false}
     />,
   );
 

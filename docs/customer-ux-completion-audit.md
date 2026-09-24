@@ -23,20 +23,20 @@ Scope set by the owner and kept: no Payment Fee, no invented external gateway, n
 
 ## §A — global principles, how each is held
 
-| principle | mechanism |
-| --- | --- |
-| DB is the source of truth | every card is rendered from rows re-read on the tap; a provider read never changes a state, only `traffic_used_bytes` / `usage_synced_at` |
-| tenant isolation | every new repository method calls `requireTenantId(scope)` and filters by `tenant_id` AND `customer_id` where a customer is involved |
-| untrusted identifiers | callbacks carry ids only; `ownedService`, `orderForCustomer`, the capture's `customer_id` and the FAQ / gateway tenant filter decide; nothing is read from callback text as a fact |
-| re-read on callback | unchanged idiom (`ownedService`, `orderForCustomer`, `customerActionsFor` re-run on the tap) |
-| no network in a transaction | the QR is encoded before the send, outside any transaction; the banner bytes are read in one transaction and sent after it; provider work stays in the provisioner |
-| exactly-once money | new writers (signup gift) use unique ledger references and a conditional UPDATE naming `from` states; top-up principal and gift stay `wallet_entries_topup_payment_key` / `_topup_cashback_payment_key` |
-| provider idempotency | no new provider call shape; refresh is a `SYNC_USAGE` operation through `planRequestedOperation` |
-| redelivery | all commands keyed by the update key or by a capture id (UUIDv7), replay returns the first result |
-| truthful buttons | every button is drawn from a server-side decision that is re-decided on the tap; unsupported = hidden; a refusal maps to a typed reply |
-| no zero-for-unknown | `usage_synced_at IS NULL` renders as unknown; unlimited stays «نامحدود» (PR #72 rule); last seen unsupported renders as unavailable |
-| tenant dates | DATETIME placeholders render in the tenant's timezone and calendar (§H) |
-| secrets out of logs | the QR encoder, the multipart body and the delivery composer log ids and outcomes only; a test asserts the subscription URL never reaches a log line or an audit row |
+| principle                   | mechanism                                                                                                                                                                                               |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| DB is the source of truth   | every card is rendered from rows re-read on the tap; a provider read never changes a state, only `traffic_used_bytes` / `usage_synced_at`                                                               |
+| tenant isolation            | every new repository method calls `requireTenantId(scope)` and filters by `tenant_id` AND `customer_id` where a customer is involved                                                                    |
+| untrusted identifiers       | callbacks carry ids only; `ownedService`, `orderForCustomer`, the capture's `customer_id` and the FAQ / gateway tenant filter decide; nothing is read from callback text as a fact                      |
+| re-read on callback         | unchanged idiom (`ownedService`, `orderForCustomer`, `customerActionsFor` re-run on the tap)                                                                                                            |
+| no network in a transaction | the QR is encoded before the send, outside any transaction; the banner bytes are read in one transaction and sent after it; provider work stays in the provisioner                                      |
+| exactly-once money          | new writers (signup gift) use unique ledger references and a conditional UPDATE naming `from` states; top-up principal and gift stay `wallet_entries_topup_payment_key` / `_topup_cashback_payment_key` |
+| provider idempotency        | no new provider call shape; refresh is a `SYNC_USAGE` operation through `planRequestedOperation`                                                                                                        |
+| redelivery                  | all commands keyed by the update key or by a capture id (UUIDv7), replay returns the first result                                                                                                       |
+| truthful buttons            | every button is drawn from a server-side decision that is re-decided on the tap; unsupported = hidden; a refusal maps to a typed reply                                                                  |
+| no zero-for-unknown         | `usage_synced_at IS NULL` renders as unknown; unlimited stays «نامحدود» (PR #72 rule); last seen unsupported renders as unavailable                                                                     |
+| tenant dates                | DATETIME placeholders render in the tenant's timezone and calendar (§H)                                                                                                                                 |
+| secrets out of logs         | the QR encoder, the multipart body and the delivery composer log ids and outcomes only; a test asserts the subscription URL never reaches a log line or an audit row                                    |
 
 ## §B — service delivery after a successful purchase
 
@@ -155,13 +155,13 @@ Scope set by the owner and kept: no Payment Fee, no invented external gateway, n
 
 ## §L — Web Admin configuration
 
-| area | where | permission |
-| --- | --- | --- |
-| product display fields | products form (ordered list editors for locations and features, label input) | `catalog.edit` |
-| gateway allow-purchase / allow-top-up | payment-gateways form (two switches; `sortOrder`, `topupCashbackPercent` already there) | `payments.gateways.edit` |
-| referral signup gift | settings page (three keys) + features page (flag); banner upload/clear on the referrals page | `settings.edit` |
-| support destination | settings page (`support.accounts`, existing editor) | `settings.edit` |
-| FAQ CRUD / order / activation | new `/support` page | `settings.edit` |
+| area                                  | where                                                                                        | permission               |
+| ------------------------------------- | -------------------------------------------------------------------------------------------- | ------------------------ |
+| product display fields                | products form (ordered list editors for locations and features, label input)                 | `catalog.edit`           |
+| gateway allow-purchase / allow-top-up | payment-gateways form (two switches; `sortOrder`, `topupCashbackPercent` already there)      | `payments.gateways.edit` |
+| referral signup gift                  | settings page (three keys) + features page (flag); banner upload/clear on the referrals page | `settings.edit`          |
+| support destination                   | settings page (`support.accounts`, existing editor)                                          | `settings.edit`          |
+| FAQ CRUD / order / activation         | new `/support` page                                                                          | `settings.edit`          |
 
 All mutations: guard-checked, tenant-scoped, audited, idempotent; FAQ carries `version` + `expectedVersion`; the banner carries `version`.
 

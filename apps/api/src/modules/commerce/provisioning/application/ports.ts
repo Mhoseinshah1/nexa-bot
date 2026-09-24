@@ -450,7 +450,7 @@ export interface ServiceRepository {
     customerId: UserId,
     page: { readonly number: number; readonly size: number },
     tx?: unknown,
-  ): Promise<{ readonly items: readonly ServiceRecord[]; readonly total: number }>;
+  ): Promise<{ readonly items: readonly ServiceRecord[]; readonly count: number }>;
 
   /**
    * The customer's OWN services whose username starts with `prefix`, in SQL — the

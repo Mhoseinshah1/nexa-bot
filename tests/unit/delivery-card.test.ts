@@ -69,7 +69,13 @@ function harness(script: Script) {
   const deps: DeliveryServiceDeps = {
     services: {
       markSendStarted: async () => true,
-      recordDelivery: async (_s, _id, from, to, input) => {
+      recordDelivery: async (
+        _s: unknown,
+        _id: unknown,
+        from: string,
+        to: string,
+        input: { sentUrl: string },
+      ) => {
         recorded.push({ from, to, sentUrl: input.sentUrl });
         return true;
       },
@@ -102,7 +108,7 @@ function harness(script: Script) {
       }),
     },
     scopeActivity: { scopeIsActive: async () => true },
-    uow: { run: async (_s, fn) => fn({} as never) } as never,
+    uow: { run: async (_s: unknown, fn: (tx: never) => unknown) => fn({} as never) } as never,
     clock: new FixedClock(new Date('2026-09-24T18:30:00Z')),
     guard: { check: async () => undefined } as never,
   };
@@ -133,12 +139,13 @@ describe('the delivery card', () => {
   });
 
   it('draws the three approved buttons in their order and rows', () => {
-    expect(deliveryCardButtons('svc').map((b) => [b.label, 'data' in b ? b.data : null, b.row]))
-      .toEqual([
-        [{ kind: 'TEMPLATE', key: 'bot.service.tutorial_button' }, 'tu:', 0],
-        [{ kind: 'TEMPLATE', key: 'bot.service.connected_button' }, 'ok:svc', 1],
-        [{ kind: 'TEMPLATE', key: 'bot.service.problem_button' }, 'sp:', 1],
-      ]);
+    expect(
+      deliveryCardButtons('svc').map((b) => [b.label, 'data' in b ? b.data : null, b.row]),
+    ).toEqual([
+      [{ kind: 'TEMPLATE', key: 'bot.service.tutorial_button' }, 'tu:', 0],
+      [{ kind: 'TEMPLATE', key: 'bot.service.connected_button' }, 'ok:svc', 1],
+      [{ kind: 'TEMPLATE', key: 'bot.service.problem_button' }, 'sp:', 1],
+    ]);
   });
 
   it('falls back to the photo then the card as text when the caption is over the bound, and never splits the URL', async () => {
