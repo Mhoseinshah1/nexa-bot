@@ -1140,6 +1140,18 @@ export const WEB_FA = {
   'web.payment_gateway_amount_invalid':
     'حداقل و حداکثر مبلغ باید عددی صحیح باشند. علامت، نقطهٔ اعشار یا حروف پذیرفته نمی‌شود.',
   'web.payment_gateway_status_done': 'وضعیت روش پرداخت تغییر کرد.',
+  /*
+   * Per-purpose switches on a route (customer UX completion §D/§F). Two, because an
+   * operator may take card-to-card for a top-up and not for a purchase, or the
+   * reverse; one switch for both is a route that is on for something it was never
+   * meant for.
+   */
+  'web.gateway_allow_column': 'کاربرد',
+  'web.gateway_allow_service_purchase': 'خرید سرویس',
+  'web.gateway_allow_wallet_topup': 'شارژ کیف پول',
+  'web.gateway_allow_hint':
+    'این روش برای کدام کارها به مشتری پیشنهاد شود. روشِ فعال با هر دو گزینهٔ خاموش به هیچ مشتری‌ای پیشنهاد نمی‌شود.',
+  'web.gateway_allow_none': 'برای هیچ کاری',
   'web.payment_gateways_empty': 'هنوز روش پرداختی ثبت نشده است.',
   'web.payment_gateways_empty_hint':
     'در نصب سالم این فهرست خالی نمی‌ماند. اگر خالی است، سرویس را یک بار راه‌اندازی مجدد کنید تا روش‌های این نسخه ساخته شوند.',
