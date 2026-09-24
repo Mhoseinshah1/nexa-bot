@@ -90,6 +90,15 @@ describe('an optional placeholder with no value', () => {
     expect(render('اول {name}\n{note}\n\nدوم', { name: 'x' })).toBe('اول x\n\nدوم');
   });
 
+  it('leaves one blank line where a whole paragraph was dropped', () => {
+    // A paragraph that consisted only of the dropped line kept BOTH its separators, so
+    // the pre-invoice showed three blank lines where its features block would have
+    // been. Collapsed to one — and only when something was dropped, so a body nothing
+    // was removed from renders exactly as written.
+    expect(render('اول\n\n{note}\n\nدوم', {})).toBe('اول\n\nدوم');
+    expect(render('اول\n\n\nدوم', {})).toBe('اول\n\n\nدوم');
+  });
+
   it('drops consecutive absent lines without leaving a blank between them', () => {
     expect(render('نام: {name}\n{where}\n{until}\nپایان', { name: 'x' })).toBe('نام: x\nپایان');
   });
