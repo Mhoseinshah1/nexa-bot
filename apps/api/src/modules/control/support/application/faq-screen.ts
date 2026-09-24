@@ -60,7 +60,8 @@ export function composeFaqScreen(
     current = entry;
   });
 
-  const withFooter = current.length === 0 ? rendered.footer : `${current}${ITEM_SEPARATOR}${rendered.footer}`;
+  const withFooter =
+    current.length === 0 ? rendered.footer : `${current}${ITEM_SEPARATOR}${rendered.footer}`;
   if (withFooter.length <= max || current.length === 0) {
     current = withFooter;
   } else {

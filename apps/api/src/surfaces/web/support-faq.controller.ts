@@ -12,11 +12,7 @@ import {
   type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import {
-  adminActor,
-  assertOriginAllowed,
-  requireSessionToken,
-} from './authenticated-request.js';
+import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type { SupportFaqRecord } from '../../modules/control/support/application/ports.js';
 
@@ -46,10 +42,7 @@ export class SupportFaqController {
   }
 
   @Post(SUPPORT_FAQ_ROUTES.create)
-  async create(
-    @Req() request: FastifyRequest,
-    @Body() body: unknown,
-  ): Promise<SupportFaqResponse> {
+  async create(@Req() request: FastifyRequest, @Body() body: unknown): Promise<SupportFaqResponse> {
     const { scope, actor } = await this.authenticate(request, { write: true });
     const input = createSupportFaqRequestSchema.parse(body);
     return toView(await this.container.supportFaqs.create(scope, actor, input));
