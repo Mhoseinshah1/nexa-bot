@@ -1874,8 +1874,11 @@ describe('a customer manages the service they bought', () => {
     );
 
     expect(quoted.replyKey).toBe('bot.service.action_quote');
-    // The amount the order was written with, on the screen carrying the confirm button.
-    expect(lastMessage()).toContain('10000000000');
+    // The amount the order was written with, on the screen carrying the confirm button — in a
+    // unit, never the stored integer (pre-release §3). 10^10 bytes is 9.3 GiB under the
+    // project's binary rule, the same figure the Web Admin shows for it.
+    expect(lastMessage()).toContain('حجم افزوده: 9.3 گیگابایت');
+    expect(lastMessage()).not.toContain('10000000000');
   });
 
   it('answers a stale commercial button when the panel can no longer do it', async () => {

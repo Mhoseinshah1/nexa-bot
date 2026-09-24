@@ -28,6 +28,7 @@ const SAMPLE_HINTS: Partial<Record<TemplateViewResponse['placeholders'][number][
     NUMBER: 'web.sample_number',
     DURATION_DAYS: 'web.sample_number',
     BYTES: 'web.sample_number',
+    TRAFFIC_LIMIT: 'web.sample_number',
     DATETIME: 'web.sample_datetime',
     MONEY: 'web.sample_money',
   };

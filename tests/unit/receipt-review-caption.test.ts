@@ -110,7 +110,8 @@ describe('the reviewer’s caption (File 01 §4)', () => {
       operation: 'label:bot.admin.operation_renew',
       order: 'پلن ویژه',
       durationDays: '30',
-      trafficBytes: '5',
+      // A byte figure is shown in a unit, never as the stored integer (pre-release §3).
+      trafficBytes: '5 بایت',
       serviceUsername: 'zahra01',
       name: 'زهرا احمدی',
       customer: '750900',
@@ -156,7 +157,8 @@ describe('the reviewer’s caption (File 01 §4)', () => {
       }),
     });
     expect(values['durationDays']).toBe('30');
-    expect(values['trafficBytes']).toBe('53687091200');
+    // The frozen 53687091200 bytes, as a reviewer reads it — never the raw integer.
+    expect(values['trafficBytes']).toBe('50 گیگابایت');
     expect(rendered).toContain('bot.admin.receipt_duration');
     expect(rendered).toContain('bot.admin.receipt_traffic');
   });

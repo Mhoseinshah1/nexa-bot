@@ -903,6 +903,12 @@ function ProductForm({
           value={state.trafficBytes}
           onChange={(event) => set('trafficBytes', event.target.value.trim())}
         />
+        {/^\d{1,20}$/.test(state.trafficBytes) ? (
+          // What the typed byte count reads as — the input itself stays in bytes.
+          <small className="faint" data-testid={`product-traffic-readout-${mode}`}>
+            <Traffic bytes={state.trafficBytes} />
+          </small>
+        ) : null}
       </Field>
 
       <Field

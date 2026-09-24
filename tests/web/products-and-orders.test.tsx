@@ -173,6 +173,28 @@ describe('the product list', () => {
     expect(screen.getByText('50')).toBeInTheDocument();
   });
 
+  it('reads the typed byte count back in a unit beneath the traffic input', async () => {
+    stubApi(productList([product()]));
+    renderPage(<ProductsPage route={PRODUCTS_ROUTE} mayEdit denied={false} />);
+    await screen.findByText('پلن یک‌ماهه');
+    const input = document.getElementById('product-traffic-create') as HTMLInputElement;
+
+    // The input stays in bytes — the stored unit — and the readout says what that is.
+    fireEvent.change(input, { target: { value: '53687091200' } });
+    const readout = screen.getByTestId('product-traffic-readout-create');
+    expect(readout.textContent).toContain('50');
+    expect(readout.textContent).toContain('گیگابایت');
+    expect(readout.textContent).not.toContain('53687091200');
+
+    // Zero is the unlimited sentinel, and the readout says so rather than "0 bytes".
+    fireEvent.change(input, { target: { value: '0' } });
+    expect(screen.getByTestId('product-traffic-readout-create').textContent).toBe('نامحدود');
+
+    // Something that is not a byte count gets no readout at all, never a guess.
+    fireEvent.change(input, { target: { value: '50GB' } });
+    expect(screen.queryByTestId('product-traffic-readout-create')).toBeNull();
+  });
+
   it('says WHY a product is not in the catalogue, one reason per row', async () => {
     stubApi(
       productList([

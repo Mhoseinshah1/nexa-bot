@@ -516,6 +516,10 @@ describe('the customer purchase flow over Telegram', () => {
     const text = String(lastMessage()?.body['text']);
     expect(text).toContain('پلن پایه');
     expect(text).toContain(formatMoney(money(250_000n, 'IRT')));
+    // The plan's 53687091200 bytes as the customer reads them, never the stored integer
+    // (pre-release hardening §3).
+    expect(text).toContain('حجم: 50 گیگابایت');
+    expect(text).not.toContain('53687091200');
 
     // Two buttons, both naming the ORDER rather than the product: confirm, and — on a
     // new-purchase draft, the one order a code can reach (WP8 P7) — enter a code.

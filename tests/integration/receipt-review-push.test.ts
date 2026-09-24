@@ -687,7 +687,8 @@ describe('the administrators’ receipt push', () => {
       expect(caption).toContain('یادداشت مشتری'); // the customer's note
       expect(caption).not.toContain('file-caption'); // never a file id
       // The order's frozen volume and duration (1 byte, 30 days), typed through their labels.
-      expect(caption).toMatch(/حجم محصول: 1\n/u);
+      // The frozen allowance in a unit, never the stored integer (pre-release §3).
+      expect(caption).toMatch(/حجم محصول: 1 بایت\n/u);
       expect(caption).toMatch(/مدت محصول: 30\n/u);
     }
     // The owner holds users.view: the balance. The reviewer does not: a dash in its place.
