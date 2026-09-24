@@ -297,9 +297,13 @@ export function renderTemplateBody(
   };
 
   const rendered: string[] = [];
+  let dropped = false;
   for (const line of body.split('\n')) {
     const tokens = [...line.matchAll(PLACEHOLDER_EXPRESSION)].map((m) => m[1] as string);
-    if (tokens.length > 0 && tokens.every(absentOptional)) continue;
+    if (tokens.length > 0 && tokens.every(absentOptional)) {
+      dropped = true;
+      continue;
+    }
 
     rendered.push(
       line.replace(PLACEHOLDER_EXPRESSION, (match, token: string) => {
@@ -311,7 +315,13 @@ export function renderTemplateBody(
       }),
     );
   }
-  return rendered.join('\n');
+  /*
+   * A paragraph that consisted only of dropped lines leaves its two separators behind
+   * as a triple newline. Collapsed to one blank line — but ONLY when something was
+   * dropped, so a body nothing was removed from renders byte for byte as written.
+   */
+  const joined = rendered.join('\n');
+  return dropped ? joined.replace(/\n{3,}/g, '\n\n') : joined;
 }
 
 export class CatalogueTranslator implements Translator {
