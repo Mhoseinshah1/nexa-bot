@@ -207,6 +207,12 @@ import {
   PAYMENT_GATEWAY_ROUTES,
   paymentGatewayListResponseSchema,
   paymentGatewayResponseSchema,
+  supportFaqListSchema,
+  supportFaqSchema,
+  SUPPORT_FAQ_ROUTES,
+  type SupportFaqListResponse,
+  type SupportFaqResponse,
+  type SupportFaqStatus,
   type PaymentGatewayListResponse,
   type PaymentGatewayResponse,
   type PaymentGatewayStatus,
@@ -1353,6 +1359,51 @@ export function setPaymentGatewayStatus(input: {
 }): Promise<PaymentGatewayResponse> {
   const { provider, ...body } = input;
   return post(PAYMENT_GATEWAY_ROUTES.status(provider), body, paymentGatewayResponseSchema);
+}
+
+/**
+ * The tenant's FAQ (customer UX completion §J): every entry, whatever its status, in the
+ * customer's order. The first list of a fresh tenant is what copies the nine defaults in.
+ */
+export function fetchSupportFaqs(): Promise<SupportFaqListResponse> {
+  return authedGet(SUPPORT_FAQ_ROUTES.list, supportFaqListSchema);
+}
+
+export function createSupportFaq(input: {
+  idempotencyKey: string;
+  question: string;
+  answer: string;
+  sortOrder: number;
+}): Promise<SupportFaqResponse> {
+  return post(SUPPORT_FAQ_ROUTES.create, input, supportFaqSchema);
+}
+
+/**
+ * `expectedVersion` is required. A row that moved since it was read comes back as
+ * `commerce.support_faq_version_conflict` carrying the current version, and the page
+ * offers the fresh row rather than overwriting a colleague's edit.
+ */
+export function updateSupportFaq(input: {
+  id: string;
+  idempotencyKey: string;
+  question: string;
+  answer: string;
+  sortOrder: number;
+  expectedVersion: number;
+}): Promise<SupportFaqResponse> {
+  const { id, ...body } = input;
+  return post(SUPPORT_FAQ_ROUTES.update(id), body, supportFaqSchema);
+}
+
+/** Switches one entry on or off. A no-op when it is already there, and it says so. */
+export function setSupportFaqStatus(input: {
+  id: string;
+  idempotencyKey: string;
+  status: SupportFaqStatus;
+  expectedVersion: number;
+}): Promise<SupportFaqResponse> {
+  const { id, ...body } = input;
+  return post(SUPPORT_FAQ_ROUTES.status(id), body, supportFaqSchema);
 }
 
 export function fetchPanels(
