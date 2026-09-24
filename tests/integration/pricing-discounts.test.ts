@@ -653,6 +653,46 @@ describe('discounts reach the order, and confirmation keeps its word', () => {
     expect(refusal.details?.['reason']).toBe('TOTAL_LIMIT');
   });
 
+  /*
+   * The other half of V1. Two taps of Confirm are two updates, so two idempotency keys: no
+   * replay joins them. The one that waited reads the order again under its lock, finds it
+   * AWAITING_PAYMENT, and answers as an already-confirmed order does — success, no second
+   * redemption, no second event — rather than redeeming and transitioning a second time.
+   */
+  it('answers a second confirmation that waited behind the first as already confirmed', async () => {
+    await rule({ kind: 'CODE', code: 'TWICE', value: 20n });
+    const order = await applyCode(
+      customerA,
+      await draft(customerA, await product(100_000n)),
+      'TWICE',
+    );
+
+    const held = await holdOrder(order.id);
+    const first = confirm(customerA, order);
+    await awaitBlocked(1, 'the first confirmation');
+    const second = confirm(customerA, order);
+    await awaitBlocked(2, 'the second confirmation');
+    await held.release();
+
+    const [a, b] = await Promise.all([first, second]);
+    expect(a.state).toBe('AWAITING_PAYMENT');
+    expect(b.state).toBe('AWAITING_PAYMENT');
+    expect(await count(sql`SELECT count(*)::int AS n FROM discount_redemptions`)).toBe(1);
+    for (const eventType of ['DiscountRedeemed', 'OrderConfirmed']) {
+      expect(
+        await count(
+          sql`SELECT count(*)::int AS n FROM outbox_messages WHERE event_type = ${eventType}`,
+        ),
+      ).toBe(1);
+    }
+    // And the log still tells the two apart: one change, one confirmation of a done thing.
+    const audits = await count(
+      sql`SELECT count(*)::int AS n FROM audit_logs
+           WHERE action = 'order.confirm' AND entity_id = ${order.id}`,
+    );
+    expect(audits).toBe(2);
+  });
+
   it('frees a use when the order that held it is cancelled', async () => {
     await rule({ kind: 'CODE', code: 'SINGLE', value: 20n, totalLimit: 1 });
     const productId = await product(100_000n);
