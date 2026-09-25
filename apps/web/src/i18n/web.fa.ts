@@ -844,9 +844,23 @@ export const WEB_FA = {
   'web.user_blocked_reason': 'دلیل مسدودسازی',
   'web.user_block': 'مسدود کردن',
   'web.user_unblock': 'رفع مسدودی',
-  'web.user_block_reason_label': 'دلیل (اختیاری)',
+  'web.user_block_reason_label': 'دلیل مسدودسازی (اجباری)',
   'web.user_block_reason_hint':
     'این دلیل در پیام مسدودی به خود مشتری نشان داده می‌شود؛ آن را برای او بنویسید. با رفع مسدودی پاک می‌شود.',
+  'web.user_block_reason_required': 'بدون دلیل نمی‌توان مشتری را مسدود کرد.',
+  'web.user_block_confirm_title': 'تأیید مسدودسازی',
+  'web.user_block_confirm_body':
+    'پس از تأیید، ربات به پیام‌های این مشتری فقط با متن مسدودی و همین دلیل پاسخ می‌دهد. مسدودسازی بدون دلیل انجام نمی‌شود.',
+  'web.user_block_confirm': 'تأیید و مسدود کردن',
+  'web.user_unblock_confirm_title': 'تأیید رفع مسدودی',
+  'web.user_unblock_confirm_body':
+    'پس از تأیید، مشتری دوباره می‌تواند از ربات استفاده کند و دلیل مسدودی ثبت‌شده پاک می‌شود.',
+  'web.user_unblock_confirm': 'تأیید و رفع مسدودی',
+  'web.user_action_cancel': 'انصراف',
+  'web.user_blocked_reason_shown': 'نمایش دلیل به مشتری',
+  'web.user_blocked_reason_shown_yes': 'مشتری این دلیل را می‌بیند.',
+  'web.user_blocked_reason_shown_no':
+    'این دلیل پیش از قاعدهٔ فعلی ثبت شده و به مشتری نشان داده نمی‌شود؛ مشتری فقط پیام عمومی مسدودی را می‌بیند.',
   'web.user_blocked_banner_title': 'این مشتری مسدود است',
   'web.user_blocked_banner_body':
     'ربات به پیام‌های او فقط با متن «مسدود» پاسخ می‌دهد و /start این مسدودی را برنمی‌دارد.',

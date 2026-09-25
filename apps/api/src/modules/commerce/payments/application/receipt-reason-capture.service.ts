@@ -134,8 +134,7 @@ export interface CustomerReasonSubject {
 }
 
 export type ReasonAskResult<TSubject extends object = ReasonSubject> =
-  | ({ readonly outcome: 'ASK' } & TSubject)
-  | { readonly outcome: 'GONE' };
+  ({ readonly outcome: 'ASK' } & TSubject) | { readonly outcome: 'GONE' };
 
 export type ReasonOpenResult<TSubject extends object = ReasonSubject> =
   | ({ readonly outcome: 'OPENED'; readonly capture: AdminAmountCaptureRecord } & TSubject)

@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   CUSTOMER_BLOCK_REASON_MAX_LENGTH,
@@ -526,6 +526,14 @@ export function UserDetailPage({
   const queries = useQueryClient();
   const submission = useSubmissionKey();
   const [reason, setReason] = useState('');
+  /*
+   * Two steps, never one click (WP10G, closing OQ-WP10F-03). Step one chooses the direction;
+   * step two is the confirmation panel — with the MANDATORY reason for a block, a plain
+   * confirmation for an unblock — and only its confirm button sends anything. The server holds
+   * the rule (a block without a reason is a 400); the disabled button is the courtesy.
+   */
+  const [pending, setPending] = useState<'BLOCK' | 'UNBLOCK' | null>(null);
+  const trimmedReason = reason.trim();
 
   const customer = useQuery({
     queryKey: ['customer', id],
@@ -540,12 +548,11 @@ export function UserDetailPage({
       // reason and pressing again is a NEW command rather than a replay the
       // store would refuse as a payload mismatch. See `useSubmissionKey`.
       const idempotencyKey = submission.current({ id, to: input.to, reason: input.reason });
-      const request = {
-        id,
-        idempotencyKey,
-        ...(input.reason === '' ? {} : { reason: input.reason }),
-      };
-      return input.to === 'BLOCKED' ? blockCustomer(request) : unblockCustomer(request);
+      // A block carries its reason, always; an unblock carries none — the server clears the
+      // stored one, and a note typed into an unblock would only reach the audit row.
+      return input.to === 'BLOCKED'
+        ? blockCustomer({ id, idempotencyKey, reason: input.reason })
+        : unblockCustomer({ id, idempotencyKey });
     },
     onSuccess: (response, variables) => {
       submission.settle();
@@ -555,6 +562,7 @@ export function UserDetailPage({
           variables.to === 'BLOCKED' ? t('web.user_blocked_done') : t('web.user_unblocked_done'),
       });
       setReason('');
+      setPending(null);
       // The server's own answer, written straight into the cache: the response
       // carries the row as it now is. The list is invalidated rather than
       // patched, because a status change moves a row between the two status
@@ -632,44 +640,112 @@ export function UserDetailPage({
                     t('web.user_blocked_reason'),
                     row.blockedReason === null ? <Dash key="r" /> : row.blockedReason,
                   ],
+                  ...(row.status === 'BLOCKED' && row.blockedReason !== null
+                    ? ([
+                        [
+                          t('web.user_blocked_reason_shown'),
+                          row.blockedReasonShown
+                            ? t('web.user_blocked_reason_shown_yes')
+                            : t('web.user_blocked_reason_shown_no'),
+                        ],
+                      ] as [ReactNode, ReactNode][])
+                    : []),
                 ]}
               />
 
               {mayBlock ? (
                 <>
-                  <Field
-                    label={t('web.user_block_reason_label')}
-                    hint={t('web.user_block_reason_hint')}
-                    htmlFor="user-block-reason"
-                  >
-                    <input
-                      id="user-block-reason"
-                      value={reason}
-                      maxLength={CUSTOMER_BLOCK_REASON_MAX_LENGTH}
-                      onChange={(event) => setReason(event.target.value)}
-                    />
-                  </Field>
-                  <div className="toolbar">
-                    {row.status === 'ACTIVE' ? (
-                      <button
-                        type="button"
-                        className="btn danger sm"
-                        disabled={mutate.isPending}
-                        onClick={() => mutate.mutate({ to: 'BLOCKED', reason })}
+                  {pending === null && (
+                    <div className="toolbar">
+                      {row.status === 'ACTIVE' ? (
+                        <button
+                          type="button"
+                          className="btn danger sm"
+                          disabled={mutate.isPending}
+                          onClick={() => setPending('BLOCK')}
+                        >
+                          {t('web.user_block')}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn primary sm"
+                          disabled={mutate.isPending}
+                          onClick={() => setPending('UNBLOCK')}
+                        >
+                          {t('web.user_unblock')}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {pending === 'BLOCK' && (
+                    <>
+                      <Banner tone="warn" title={t('web.user_block_confirm_title')}>
+                        {t('web.user_block_confirm_body')}
+                      </Banner>
+                      <Field
+                        label={t('web.user_block_reason_label')}
+                        hint={t('web.user_block_reason_hint')}
+                        htmlFor="user-block-reason"
+                        {...(reason !== '' && trimmedReason === ''
+                          ? { error: t('web.user_block_reason_required') }
+                          : {})}
                       >
-                        {t('web.user_block')}
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        className="btn primary sm"
-                        disabled={mutate.isPending}
-                        onClick={() => mutate.mutate({ to: 'ACTIVE', reason })}
-                      >
-                        {t('web.user_unblock')}
-                      </button>
-                    )}
-                  </div>
+                        <input
+                          id="user-block-reason"
+                          value={reason}
+                          maxLength={CUSTOMER_BLOCK_REASON_MAX_LENGTH}
+                          onChange={(event) => setReason(event.target.value)}
+                        />
+                      </Field>
+                      <div className="toolbar">
+                        <button
+                          type="button"
+                          className="btn danger sm"
+                          disabled={mutate.isPending || trimmedReason === ''}
+                          onClick={() => mutate.mutate({ to: 'BLOCKED', reason: trimmedReason })}
+                        >
+                          {t('web.user_block_confirm')}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn sm"
+                          disabled={mutate.isPending}
+                          onClick={() => {
+                            setPending(null);
+                            setReason('');
+                          }}
+                        >
+                          {t('web.user_action_cancel')}
+                        </button>
+                      </div>
+                    </>
+                  )}
+                  {pending === 'UNBLOCK' && (
+                    <>
+                      <Banner tone="warn" title={t('web.user_unblock_confirm_title')}>
+                        {t('web.user_unblock_confirm_body')}
+                      </Banner>
+                      <div className="toolbar">
+                        <button
+                          type="button"
+                          className="btn primary sm"
+                          disabled={mutate.isPending}
+                          onClick={() => mutate.mutate({ to: 'ACTIVE', reason: '' })}
+                        >
+                          {t('web.user_unblock_confirm')}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn sm"
+                          disabled={mutate.isPending}
+                          onClick={() => setPending(null)}
+                        >
+                          {t('web.user_action_cancel')}
+                        </button>
+                      </div>
+                    </>
+                  )}
                   {mutate.error !== null && (
                     <Banner tone="danger">{messageFor(mutate.error)}</Banner>
                   )}

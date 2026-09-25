@@ -56,7 +56,11 @@ export type ReceiptRejectCaptureService = ReceiptReasonCaptureService<ReasonSubj
 function receiptSubject(
   deps: ReceiptReasonCaptureDeps,
   admits: (payment: PaymentRecord) => boolean,
-): (scope: TenantContext, paymentId: string, tx?: TransactionScope) => Promise<ReasonSubject | null> {
+): (
+  scope: TenantContext,
+  paymentId: string,
+  tx?: TransactionScope,
+) => Promise<ReasonSubject | null> {
   return async (scope, paymentId, tx) => {
     const payment = await deps.payments.findById(scope, paymentId as PaymentId, tx);
     if (payment === null || !admits(payment)) return null;
