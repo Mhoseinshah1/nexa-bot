@@ -70,10 +70,15 @@ describe('a RickPanel NEW_SERVICE', () => {
       request.on('data', (chunk: Buffer) => chunks.push(chunk));
       request.on('end', () => {
         const raw = Buffer.concat(chunks).toString('utf8');
-        sent.push({
-          url: request.url ?? '',
-          body: raw.length === 0 ? {} : (JSON.parse(raw) as Record<string, unknown>),
-        });
+        // A photo goes out as multipart; a body that is not JSON is kept raw rather
+        // than thrown on, which would leave the request unanswered and the send UNCONFIRMED.
+        let body: Record<string, unknown>;
+        try {
+          body = raw.length === 0 ? {} : (JSON.parse(raw) as Record<string, unknown>);
+        } catch {
+          body = { unparseable: raw };
+        }
+        sent.push({ url: request.url ?? '', body });
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(JSON.stringify({ ok: true, result: { message_id: 7 } }));
       });
@@ -239,7 +244,8 @@ describe('a RickPanel NEW_SERVICE', () => {
     // credentials the panel generated behind it.
     expect(service?.deliveryState).toBe('DELIVERED');
     expect(sent).toHaveLength(1);
-    const text = String(sent[0]?.body['text']);
+    // The card is a photo: the link is in its caption, inside the raw multipart body.
+    const text = String(sent[0]?.body['text'] ?? sent[0]?.body['unparseable']);
     expect(text).toContain(service?.subscriptionUrl ?? 'no-url');
     expect(text).not.toContain('internal-');
 

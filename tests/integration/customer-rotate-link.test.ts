@@ -75,10 +75,15 @@ describe('a customer rotating their own subscription link', () => {
       request.on('data', (chunk: Buffer) => chunks.push(chunk));
       request.on('end', () => {
         const raw = Buffer.concat(chunks).toString('utf8');
-        sent.push({
-          url: request.url ?? '',
-          body: raw.length === 0 ? {} : (JSON.parse(raw) as Record<string, unknown>),
-        });
+        // A photo goes out as multipart; a body that is not JSON is kept raw rather
+        // than thrown on, which would leave the request unanswered and the send UNCONFIRMED.
+        let body: Record<string, unknown>;
+        try {
+          body = raw.length === 0 ? {} : (JSON.parse(raw) as Record<string, unknown>);
+        } catch {
+          body = { unparseable: raw };
+        }
+        sent.push({ url: request.url ?? '', body });
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(JSON.stringify({ ok: true, result: { message_id: 7 } }));
       });
@@ -326,7 +331,11 @@ describe('a customer rotating their own subscription link', () => {
     expect(operation?.requestedByCustomerId, 'the row says a customer asked').toBe(customerId);
     // The customer is answered: the new link was sent, and the outcome is enqueued.
     expect(
-      sent.some((one) => String(one.body['text'] ?? '').includes(after.subscriptionUrl ?? '-')),
+      sent.some((one) =>
+        String(one.body['text'] ?? one.body['unparseable'] ?? '').includes(
+          after.subscriptionUrl ?? '-',
+        ),
+      ),
     ).toBe(true);
     expect(
       await count(

@@ -82,10 +82,15 @@ describe('a RickPanel subscription rotation', () => {
       request.on('data', (chunk: Buffer) => chunks.push(chunk));
       request.on('end', () => {
         const raw = Buffer.concat(chunks).toString('utf8');
-        sent.push({
-          url: request.url ?? '',
-          body: raw.length === 0 ? {} : (JSON.parse(raw) as Record<string, unknown>),
-        });
+        // A photo goes out as multipart; a body that is not JSON is kept raw rather
+        // than thrown on, which would leave the request unanswered and the send UNCONFIRMED.
+        let body: Record<string, unknown>;
+        try {
+          body = raw.length === 0 ? {} : (JSON.parse(raw) as Record<string, unknown>);
+        } catch {
+          body = { unparseable: raw };
+        }
+        sent.push({ url: request.url ?? '', body });
         const held = hold;
         hold = null;
         if (held === null) {
@@ -211,7 +216,10 @@ describe('a RickPanel subscription rotation', () => {
 
   /** The messages that carried a subscription link, in the order they were sent. */
   const linksSent = (): string[] =>
-    sent.map((one) => String(one.body['text'] ?? '')).filter((text) => text.includes('/sub/'));
+    // A link travels as the photo card's caption (multipart, kept raw) or as text.
+    sent
+      .map((one) => String(one.body['text'] ?? one.body['unparseable'] ?? ''))
+      .filter((text) => text.includes('/sub/'));
 
   const rotate = (serviceId: string, key: string) =>
     ctx.container.provisioning.requestFromOperator(
