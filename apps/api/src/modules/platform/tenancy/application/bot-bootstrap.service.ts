@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import {
   BOT_COMMANDS,
   errors,
@@ -24,18 +23,7 @@ import type {
   BotInstanceRepository,
   WebhookRegistration,
 } from './ports.js';
-
-/**
- * The one-way digest stored beside a webhook registration.
- *
- * SHA-256 hex of the secret, and nothing reads it back: the only question asked
- * of it is "is this the same secret as the one that was registered". A stored
- * plaintext would be a second copy of a credential that lives in exactly one
- * file today.
- */
-function fingerprintOf(secret: string): string {
-  return createHash('sha256').update(secret, 'utf8').digest('hex');
-}
+import { webhookSecretFingerprint } from './webhook-fingerprint.js';
 
 /** The identity `getMe` reported, once the probe outcome has been unwrapped. */
 interface BotIdentity {
@@ -316,7 +304,7 @@ export class BotBootstrapService {
   private registrationIsCurrent(view: BotBootstrapView, url: string): boolean {
     if (view.webhookRegisteredAt === null || view.webhookUrl !== url) return false;
     if (view.webhookSecretFingerprint === null) return false;
-    return view.webhookSecretFingerprint === fingerprintOf(this.requireWebhookSecret());
+    return view.webhookSecretFingerprint === webhookSecretFingerprint(this.requireWebhookSecret());
   }
 
   async execute(scope: TenantContext, input: BotBootstrapInput): Promise<BotBootstrapResult> {
@@ -495,7 +483,7 @@ export class BotBootstrapService {
       await this.deps.bots.markWebhookRegistered(
         scope,
         view.id,
-        { url, secretFingerprint: fingerprintOf(secretToken), now },
+        { url, secretFingerprint: webhookSecretFingerprint(secretToken), now },
         tx,
       );
       await this.deps.audit.record(

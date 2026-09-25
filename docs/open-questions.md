@@ -2329,3 +2329,25 @@ RESOLVED (pre-release hardening §2, `docs/prerelease-hardening-audit.md`).
 - **The customers section's key.** It is suffixed `:customer-status`, so it cannot collide with the same update's `resolveFromUpdate` record.
 - **What holds.** Same-surface retries replay, other-surface keys are their own commands, tenant isolation and `users.block` are unchanged.
 - **Tests.** `tests/integration/customer-block-surface.test.ts`.
+
+## OQ-WP13-01 — what does a bot's `DISABLED` status mean, and who may clear it?
+
+`BOT_INSTANCE_STATUSES` declares `ACTIVE`, `STOPPED` and `DISABLED`, and every reader
+treats anything but `ACTIVE` as off. Nothing in the codebase writes `DISABLED`, and no
+document records how it differs from `STOPPED`. WP13's Web Admin therefore manages
+ACTIVE ⇄ STOPPED only, and answers a `DISABLED` bot with `bot.status_not_managed`
+rather than guessing why it was set (`docs/wp13-bots-management-audit.md` D3).
+
+**Trigger to resolve:** the first path that needs to set `DISABLED`, or an owner decision
+on its meaning.
+
+## OQ-WP13-02 — does a BotFather token revocation keep the bot's webhook registration?
+
+WP13's token replacement stores a new token for the same bot and touches neither the
+webhook nor the command menu. Whether Telegram keeps a bot's webhook across a token
+revocation is not established in this repository, and is not guessed. The live check
+reads the registration with the new token and reports what Telegram holds; if the
+registration is gone, `botctl telegram register` restores it.
+
+**Trigger to resolve:** the first real token replacement on a running installation, whose
+live check answers it.

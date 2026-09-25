@@ -146,8 +146,9 @@ is fixed. There is no endpoint that writes `tenant_id`.
   `bot.status_not_managed` rather than guessed at. Recorded as `OQ-WP13-01`.
 - **The write** takes an idempotency key, `ScopeActivityReader` inside the transaction
   and the bot row `FOR UPDATE`. It is a conditional UPDATE naming the `from` state, and
-  writes an audit row, an operational event (`bot.status_changed`) and
-  `BotInstanceStatusChanged` in the same transaction.
+  writes an audit row and `BotInstanceStatusChanged` in the same transaction. No
+  operational-event code is added: a code is part of the schema (`CLAUDE.md`, Phase 3C),
+  and the audit row and the declared event already record the act.
 - **A request for the state the bot is already in** writes nothing and answers
   `changed: false`. That is true: the bot IS in the state asked for, and the response
   says nothing was changed. It is remembered under its key, so a redelivery after
@@ -333,7 +334,7 @@ alone, with no network:
 - **Integration (service, Telegram stubbed at the port):**
   - tenant isolation;
   - no secret column in any view;
-  - stop and start, with audit, event and operational event;
+  - stop and start, with the audit row and the outbox event;
   - `DISABLED` refused;
   - a no-op answers `changed: false`, and a replay writes nothing twice;
   - the webhook route 404s after a stop;
