@@ -2,18 +2,27 @@ import { createHash } from 'node:crypto';
 import { sql, type SQL } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  API_PREFIX,
+  AUTH_ROUTES,
   COMMERCE_ERROR_CODES,
   PLATFORM_ERROR_CODES,
+  SESSION_COOKIE_NAME,
   TENANT_MEDIA_MAX_BYTES,
+  TENANT_MEDIA_ROUTES,
   type ActorContext,
   type TenantContext,
 } from '@nexa/contracts';
+import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import {
   adminActorFor,
   createAdmin,
   createTestContext,
+  migrateOnce,
+  resetDatabase,
   tenantA,
   tenantB,
+  testConfig,
   type TestContext,
 } from './harness';
 
@@ -243,5 +252,77 @@ describe('tenant media: the referral banner', () => {
     expect(serialised).not.toContain(bytes.toString('base64'));
     expect(serialised).not.toContain(jpeg(700).toString('base64'));
     expect(serialised).not.toContain('content');
+  });
+});
+
+/**
+ * The upload as the Web Admin sends it: base64 inside JSON, through Fastify's own body
+ * reader. The bound the schema advertises is on the DECODED bytes; the encoded form is
+ * a third larger, and the adapter's default body limit is exactly one mebibyte — so a
+ * banner between about 768 KiB and the bound was refused with a 413 before the schema
+ * ever ran. The route carries its own ceiling now, and this is what proves it.
+ */
+describe('the referral banner over HTTP', () => {
+  const ORIGIN = 'https://admin.example.test';
+  let api: ApiApp;
+  let cookie: string;
+
+  const inject = (options: Record<string, unknown>) =>
+    api.app
+      .getHttpAdapter()
+      .getInstance()
+      .inject(options as never);
+
+  beforeAll(async () => {
+    const config = testConfig({ WEB_ADMIN_ORIGINS: ORIGIN });
+    await migrateOnce(config.DATABASE_URL);
+    api = await createApiApp(config);
+  }, 120_000);
+
+  afterAll(async () => {
+    await api?.close();
+  });
+
+  beforeEach(async () => {
+    await resetDatabase(api.container.database.db);
+    await seed(api.container.database.db, api.container.cipher);
+    api.container.setInstallationTenant(tenantA.tenantId);
+    await createAdmin(api.container, tenantA, {
+      username: 'owner-media-http',
+      password: 'the-owners-real-password',
+      roleKeys: ['owner'],
+    });
+    const login = await inject({
+      method: 'POST',
+      url: `${API_PREFIX}${AUTH_ROUTES.login}`,
+      headers: { origin: ORIGIN },
+      payload: { username: 'owner-media-http', password: 'the-owners-real-password' },
+    });
+    const match = new RegExp(`${SESSION_COOKIE_NAME}=([^;]+)`).exec(
+      String(login.headers['set-cookie'] ?? ''),
+    );
+    if (match === null) throw new Error('No session cookie.');
+    cookie = `${SESSION_COOKIE_NAME}=${match[1] as string}`;
+  });
+
+  const upload = (bytes: Buffer, idempotencyKey: string) =>
+    inject({
+      method: 'POST',
+      url: `${API_PREFIX}${TENANT_MEDIA_ROUTES.upload('REFERRAL_BANNER')}`,
+      headers: { origin: ORIGIN, cookie },
+      payload: { mimeType: 'image/png', contentBase64: bytes.toString('base64'), idempotencyKey },
+    });
+
+  it('accepts a file exactly at the advertised bound, and refuses one past it by the schema, never by the body reader', async () => {
+    const atBound = await upload(png(TENANT_MEDIA_MAX_BYTES), 'http-at-bound');
+    expect(atBound.statusCode, atBound.body).toBe(201);
+    expect((atBound.json() as { media: { byteLength: number } }).media.byteLength).toBe(
+      TENANT_MEDIA_MAX_BYTES,
+    );
+
+    const past = await upload(png(TENANT_MEDIA_MAX_BYTES + 1), 'http-past-bound');
+    // 400 from the contract's own bound — a validation refusal, not the adapter's 413.
+    expect(past.statusCode, past.body).toBe(400);
+    expect(past.body).toContain('"kind":"VALIDATION"');
   });
 });

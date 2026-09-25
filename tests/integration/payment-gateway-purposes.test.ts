@@ -196,6 +196,42 @@ describe('payment routes per purpose', () => {
       expect(await providers('WALLET_TOPUP')).toEqual([]);
     });
 
+    it('offers no manual route, for either purpose, while no enabled account can receive the money', async () => {
+      /*
+       * A route settling by manual transfer is configured, on, and — with every account
+       * disabled — impossible to pay through. Before this was decided here the button was
+       * drawn, the amount typed and the route chosen, and only the final tap was refused
+       * with `NO_DESTINATION`.
+       */
+      await ctx.container.database.db.execute(
+        sql`UPDATE payment_accounts SET enabled = false, is_default = false WHERE tenant_id = ${tenantA.tenantId}`,
+      );
+      expect(await providers('SERVICE_PURCHASE')).toEqual([]);
+      expect(await providers('WALLET_TOPUP')).toEqual([]);
+
+      await ctx.container.database.db.execute(
+        sql`UPDATE payment_accounts SET enabled = true, is_default = true WHERE tenant_id = ${tenantA.tenantId}`,
+      );
+      expect(await providers('SERVICE_PURCHASE')).toEqual(['MANUAL_TRANSFER']);
+      expect(await providers('WALLET_TOPUP')).toEqual(['MANUAL_TRANSFER']);
+    });
+
+    it('keeps a switch an update did not mention, rather than resetting it to ON', async () => {
+      // The previous release's client sends neither switch; editing the display name
+      // from it must not reopen a payment path the operator closed.
+      await configure({ allowWalletTopup: false }, 'topup-off');
+      const { allowServicePurchase: _purchase, allowWalletTopup: _topup, ...legacy } = OPEN;
+      const after = await ctx.container.paymentGateways.configure(tenantA, ownerA, {
+        idempotencyKey: 'cfg-legacy-edit',
+        provider: 'MANUAL_TRANSFER',
+        config: { ...legacy, displayName: 'کارت به کارت' },
+      });
+      expect(after.displayName).toBe('کارت به کارت');
+      expect(after.allowWalletTopup).toBe(false);
+      expect(after.allowServicePurchase).toBe(true);
+      expect(await providers('WALLET_TOPUP')).toEqual([]);
+    });
+
     it('filters by the customer’s eligibility', async () => {
       // Two confirmed payments are needed and the customer has none.
       await configure(

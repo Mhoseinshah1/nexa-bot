@@ -1562,6 +1562,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     scopeActivity: tenants,
     clock,
     settings: settingsResolver,
+    accounts: paymentAccountRepository,
   });
 
   /**

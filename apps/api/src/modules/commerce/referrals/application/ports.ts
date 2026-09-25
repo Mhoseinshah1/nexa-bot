@@ -276,6 +276,8 @@ export interface OpenReferralSignupGiftSide {
   readonly referralId: string;
   readonly side: ReferralSignupGiftSide;
   readonly snapshotAmount: bigint | null;
+  /** The currency the gift row was snapshotted in; null with `snapshotAmount` when no row exists. */
+  readonly snapshotCurrency: CurrencyCode | null;
 }
 
 /** What a referrer's referees have bought and had delivered, in one currency. */

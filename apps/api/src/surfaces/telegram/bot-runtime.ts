@@ -3446,8 +3446,9 @@ export interface PendingReply {
   /**
    * Messages sent BEFORE the reply, in order, each without buttons: the referral
    * banner ahead of its text, the earlier pages of a long FAQ ahead of the last one
-   * that carries the keyboard. A lead that does not deliver stops the turn there, so
-   * the customer never sees a keyboard without the text it belongs to.
+   * that carries the keyboard. A TEXT lead that does not deliver stops the turn there,
+   * so the customer never sees a keyboard without the text it belongs to; a PHOTO lead
+   * is decorative and its failure costs the customer nothing but the picture.
    */
   readonly lead?: readonly LeadMessage[];
 }
@@ -4128,6 +4129,15 @@ export class BotRuntime {
               },
             });
       if (led.outcome !== 'DELIVERED') {
+        /*
+         * A photo lead is the referral banner: an image an operator uploaded, which a
+         * structurally broken file or a transient refusal can keep from going out on
+         * every request. The screen behind it — the link, the gift, the statistics —
+         * is what the customer asked for, so a banner that fails is dropped and the
+         * reply goes on. A TEXT lead is an earlier part of the one message, and a
+         * keyboard without the text it belongs to is worse than no reply.
+         */
+        if (lead.kind === 'PHOTO_BYTES') continue;
         await this.stopSpinner(scope, command, input.botInstanceId);
         return {
           intent,

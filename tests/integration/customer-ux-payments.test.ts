@@ -552,6 +552,26 @@ describe('a customer pays through the approved screens', () => {
       expect(picked.replyKey).toBe('bot.wallet.topup_method_prompt');
     });
 
+    it('answers a redelivered amount update with the chooser again, and records the figure once', async () => {
+      /*
+       * Telegram resends an update whose answer it did not get. The runtime replays it
+       * against the window it read the first time — by then the figure is recorded and
+       * the row waits for a route — so the same figure is answered with the chooser
+       * again rather than with «expired», and nothing is recorded twice.
+       */
+      await handle(tap('o:'));
+      const update = text('100000');
+      const first = await handle(update);
+      expect(first.replyKey).toBe('bot.wallet.topup_method_prompt');
+      const again = await handle(update);
+      expect(again.replyKey).toBe('bot.wallet.topup_method_prompt');
+      expect(buttonsOf(lastMarkup()).some((b) => b.startsWith('tp:'))).toBe(true);
+      const rows = await ctx.container.database.db.execute(
+        sql`SELECT state, amount_minor::text AS amount FROM customer_text_captures WHERE tenant_id = ${tenantA.tenantId}`,
+      );
+      expect(rows.rows).toEqual([{ state: 'AMOUNT_RECORDED', amount: '100000' }]);
+    });
+
     it('an amount typed with no window open is not a top-up, and a window past its deadline reads nothing', async () => {
       const stray = await handle(text('50000'));
       expect(stray.replyKey).toBe('bot.unknown_command');
@@ -642,6 +662,75 @@ describe('a customer pays through the approved screens', () => {
       const result = await handle(text('/help'));
       expect(result.replyKey).toBe('bot.support.contact');
       expect(lastMarkup()).toContain('"url":"https://t.me/nexa_support"');
+    });
+  });
+
+  // =========================================================================
+  // §I — the referral screen behind its banner
+  // =========================================================================
+  describe('the referral screen', () => {
+    it('still arrives when the banner ahead of it is refused', async () => {
+      /*
+       * The banner is decorative: an image an operator uploaded, which Telegram can
+       * refuse on every request when the file is broken behind a valid magic number.
+       * The screen behind it — the link, the gift, the statistics — is what the customer
+       * asked for, and a refused picture must not cost them it.
+       */
+      await setSetting('referral.commission_percent', 10);
+      const flag = (await ctx.container.featureFlags.list(tenantA, owner)).find(
+        (row) => row.key === 'referrals',
+      );
+      if (flag === undefined) throw new Error('no referrals flag');
+      await ctx.container.featureFlags.set(tenantA, owner, {
+        idempotencyKey: 'flag-referrals-on',
+        key: 'referrals',
+        enabled: true,
+        expectedVersion: flag.version,
+        confirmKey: 'referrals',
+        reason: 'test',
+      });
+      const bytes = Buffer.alloc(64, 0x11);
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(bytes);
+      await ctx.container.tenantMedia.upload(tenantA, owner, 'REFERRAL_BANNER', {
+        mimeType: 'image/png',
+        contentBase64: bytes.toString('base64'),
+        idempotencyKey: 'banner-broken',
+      });
+      reply = (request, response) => {
+        // The invite link needs the bot's live username, which the runtime asks Telegram for.
+        if (String(request.url).includes('/getMe')) {
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end(
+            JSON.stringify({
+              ok: true,
+              result: { id: 999999, is_bot: true, first_name: 'Nexa', username: 'acme_store_bot' },
+            }),
+          );
+          return;
+        }
+        if (String(request.url).includes('/sendPhoto')) {
+          response.writeHead(400, { 'content-type': 'application/json' });
+          response.end(
+            JSON.stringify({
+              ok: false,
+              error_code: 400,
+              description: 'Bad Request: IMAGE_PROCESS_FAILED',
+            }),
+          );
+          return;
+        }
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ ok: true, result: { message_id: 11 } }));
+      };
+
+      const result = await handle(tap('rf:'));
+      expect(result.replyKey).toBe('bot.referral.screen');
+      expect(
+        sent.some((one) => one.url.includes('/sendPhoto')),
+        'the banner was tried',
+      ).toBe(true);
+      expect(lastText().startsWith('💼 زیرمجموعه‌گیری و هدیه خوش‌آمد')).toBe(true);
+      expect(lastText()).toContain('🔗 https://t.me/');
     });
   });
 });

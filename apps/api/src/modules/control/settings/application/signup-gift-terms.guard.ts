@@ -2,6 +2,7 @@ import {
   COMMERCE_ERROR_CODES,
   errors,
   money,
+  type CurrencyCode,
   type Money,
   type ScopeContext,
   type SettingKey,
@@ -28,17 +29,56 @@ export interface SignupGiftTerms {
 }
 
 /** Why a set of terms cannot pay a gift, or null when it can. */
-export type SignupGiftTermsProblem = 'TOTAL_ZERO' | 'SHARES_NOT_100';
+export type SignupGiftTermsProblem = 'TOTAL_ZERO' | 'SHARES_NOT_100' | 'CURRENCY_MISMATCH';
 
 /**
- * The ONE statement of what valid terms are: a positive total, and two shares that make
- * a whole. Read by the settings guard, the flag activation guard and the claim itself, so
- * the three cannot disagree about whether a gift is payable.
+ * The ONE statement of what valid terms are: a positive total, two shares that make a
+ * whole, and a total in the currency the wallet is kept in. Read by the settings guard,
+ * the flag activation guard and the claim itself, so the three cannot disagree about
+ * whether a gift is payable.
+ *
+ * The currency rule is not decoration. A wallet's balance and history are sums over ONE
+ * currency, `sales.currency`; a gift credited in another would be a stamped, paid share
+ * the customer can neither see nor spend.
  */
-export function signupGiftTermsProblem(terms: SignupGiftTerms): SignupGiftTermsProblem | null {
+export function signupGiftTermsProblem(
+  terms: SignupGiftTerms,
+  walletCurrency: CurrencyCode,
+): SignupGiftTermsProblem | null {
   if (terms.total.amountMinor <= 0n) return 'TOTAL_ZERO';
   if (terms.referrerPercent + terms.referredPercent !== 100) return 'SHARES_NOT_100';
+  if (terms.total.currency !== walletCurrency) return 'CURRENCY_MISMATCH';
   return null;
+}
+
+/** The sentence for each problem, for the two guards that refuse with it. */
+export function signupGiftTermsProblemMessage(
+  problem: SignupGiftTermsProblem,
+  when: 'ON' | 'ENABLING',
+): string {
+  switch (problem) {
+    case 'TOTAL_ZERO':
+      return when === 'ON'
+        ? 'The signup gift is on, so its total must be above zero.'
+        : 'Set a signup gift total above zero before turning the gift on.';
+    case 'SHARES_NOT_100':
+      return when === 'ON'
+        ? 'The signup gift is on, so the referrer and referred shares must total 100.'
+        : 'The referrer and referred shares must total 100 before the gift can turn on.';
+    case 'CURRENCY_MISMATCH':
+      return when === 'ON'
+        ? 'The signup gift is on, so its total must be in the sales currency the wallet is kept in.'
+        : 'The signup gift total must be in the sales currency before the gift can turn on.';
+  }
+}
+
+/** The currency every wallet entry is summed in — what a gift must be denominated in. */
+export async function readWalletCurrency(
+  resolver: SettingsResolver,
+  scope: ScopeContext,
+  tx?: unknown,
+): Promise<CurrencyCode> {
+  return resolver.valueOf<CurrencyCode>(scope, 'sales.currency', tx);
 }
 
 /** The three settings, resolved in one place, inside the caller's transaction when given. */
@@ -100,21 +140,24 @@ export class SignupGiftTermsGuard implements SettingChangeGuard {
   ): Promise<string | null> {
     if (!(await this.features.isEnabled(scope, 'referral_signup_gift', tx))) return null;
 
-    const current = await readSignupGiftTerms(this.settings, scope, tx);
+    const [current, walletCurrency] = await Promise.all([
+      readSignupGiftTerms(this.settings, scope, tx),
+      readWalletCurrency(this.settings, scope, tx),
+    ]);
     const proposed = this.withChange(current, change.to);
-    const problem = signupGiftTermsProblem(proposed);
+    const problem = signupGiftTermsProblem(proposed, walletCurrency);
     if (problem === null) return null;
     throw errors.validation(
       COMMERCE_ERROR_CODES.REFERRAL_GIFT_TERMS_INVALID,
-      problem === 'TOTAL_ZERO'
-        ? 'The signup gift is on, so its total must be above zero.'
-        : 'The signup gift is on, so the referrer and referred shares must total 100.',
+      signupGiftTermsProblemMessage(problem, 'ON'),
       {
         key: this.key,
         problem,
         referrerPercent: proposed.referrerPercent,
         referredPercent: proposed.referredPercent,
         totalMinor: proposed.total.amountMinor.toString(),
+        currency: proposed.total.currency,
+        walletCurrency,
       },
     );
   }

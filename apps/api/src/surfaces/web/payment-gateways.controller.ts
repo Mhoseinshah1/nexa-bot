@@ -79,15 +79,23 @@ export class PaymentGatewaysController {
       eligibility: input.eligibility,
       sortOrder: input.sortOrder,
       topupCashbackPercent: input.topupCashbackPercent,
-      // Optional on the wire for the previous release's client; the config schema
-      // defaults an absent switch to ON, which is the state every existing row is in.
       allowServicePurchase: input.allowServicePurchase,
       allowWalletTopup: input.allowWalletTopup,
     });
     const gateway = await this.container.paymentGateways.configure(scope, actor, {
       idempotencyKey: input.idempotencyKey,
       provider,
-      config,
+      /*
+       * The switches as the WIRE carried them, not as the config schema defaulted them:
+       * the previous release's client sends neither, and the service keeps the row's
+       * own values for a switch the request did not mention. The schema's default is
+       * for a config built in code, where an unmentioned switch means ON.
+       */
+      config: {
+        ...config,
+        allowServicePurchase: input.allowServicePurchase,
+        allowWalletTopup: input.allowWalletTopup,
+      },
     });
     return { gateway: toView(gateway, await this.container.paymentGateways.currency(scope)) };
   }

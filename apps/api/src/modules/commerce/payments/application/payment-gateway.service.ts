@@ -31,6 +31,7 @@ import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzl
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
+import type { PaymentAccountRepository } from './account-ports.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
   accountAgeInDays,
@@ -68,7 +69,26 @@ export interface PaymentGatewayServiceDeps {
    * installation sells in is what a bound means, and what a surface must render it as.
    */
   readonly settings: SettingsResolver;
+  /**
+   * Whether ANY enabled receiving account exists — the one fact that decides whether a
+   * route settling by manual transfer can be paid through at all. Asked here, where the
+   * routes are decided, so a surface never draws a route whose final tap `issueTopup`
+   * or the order's transfer would refuse with `NO_DESTINATION`.
+   */
+  readonly accounts: Pick<PaymentAccountRepository, 'hasEnabled'>;
 }
+
+/**
+ * `PaymentGatewayConfig` with the two purpose switches OPTIONAL: absent means "as the row
+ * has it", decided inside `configure`'s transaction against the row it is about to write.
+ */
+export type PaymentGatewayConfigInput = Omit<
+  PaymentGatewayConfig,
+  'allowServicePurchase' | 'allowWalletTopup'
+> & {
+  readonly allowServicePurchase?: boolean | undefined;
+  readonly allowWalletTopup?: boolean | undefined;
+};
 
 /** What one command was asked to do, so a replay can answer with the same route. */
 interface GatewayResult {
@@ -152,7 +172,7 @@ export class PaymentGatewayService {
     input: {
       readonly idempotencyKey: string;
       readonly provider: string;
-      readonly config: PaymentGatewayConfig;
+      readonly config: PaymentGatewayConfigInput;
     },
   ): Promise<PaymentGatewayRecord> {
     const provider = this.provider(input.provider);
@@ -203,14 +223,18 @@ export class PaymentGatewayService {
           'sales.currency',
           tx,
         );
-        const after = await this.deps.repository.update(
-          scope,
-          provider,
-          input.config,
-          currency,
-          now,
-          tx,
-        );
+        /*
+         * A switch the request did not carry keeps the row's value. The previous
+         * release's client sends neither, and a form with no field for a switch has
+         * nothing to say about it — defaulting an absent one to ON would re-enable a
+         * payment path an operator had switched off, from an edit to the display name.
+         */
+        const config: PaymentGatewayConfig = {
+          ...input.config,
+          allowServicePurchase: input.config.allowServicePurchase ?? before.allowServicePurchase,
+          allowWalletTopup: input.config.allowWalletTopup ?? before.allowWalletTopup,
+        };
+        const after = await this.deps.repository.update(scope, provider, config, currency, now, tx);
         if (after === null) {
           throw errors.notFound(
             COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_NOT_FOUND,
@@ -555,10 +579,20 @@ export class PaymentGatewayService {
   }> {
     const gateways = await this.deps.repository.list(scope, tx);
     const audience = await this.audienceFor(scope, customerId, tx);
+    /*
+     * A route that settles by manual transfer needs somewhere for the money to go. With
+     * no enabled account the route is CONFIGURED and cannot be paid through, and the
+     * customer would learn that on the last tap — after typing an amount and choosing
+     * it. So the destination is part of what makes the route offerable, for both
+     * purposes, and its absence drops the route from the list rather than the tap.
+     */
+    const destination = await this.deps.accounts.hasEnabled(scope, tx);
     const routes = gateways
       .filter(
         (gateway) =>
           gateway.status === 'ACTIVE' &&
+          (PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider].settlesVia !== 'MANUAL_TRANSFER' ||
+            destination) &&
           allowsPurpose(gateway, purpose) &&
           evaluateGatewayEligibility(gateway.status, gateway, audience).eligible &&
           /*

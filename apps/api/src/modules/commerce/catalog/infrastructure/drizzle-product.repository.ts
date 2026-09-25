@@ -474,8 +474,13 @@ export class DrizzleProductRepository implements ProductRepository {
   }
 }
 
-/** The draft's fields as columns. One place, so create and update cannot diverge. */
-function columnsFor(draft: ProductDraft) {
+/**
+ * The draft's fields as columns. One place, so create and update cannot diverge.
+ *
+ * A `ProductEdit` whose `display` is null contributes NO display columns, so the UPDATE
+ * leaves the row's own; a draft always carries one.
+ */
+function columnsFor(draft: ProductDraft | ProductEdit) {
   return {
     title: draft.title,
     description: draft.description,
@@ -515,9 +520,13 @@ function columnsFor(draft: ProductDraft) {
      * omits, and these three would fall back to `'[]'` and NULL — every list an operator
      * typed written back as nothing, with no error anywhere.
      */
-    displayLocations: [...draft.display.displayLocations],
-    displayFeatures: [...draft.display.displayFeatures],
-    serviceLocationLabel: draft.display.serviceLocationLabel,
+    ...(draft.display === null
+      ? {}
+      : {
+          displayLocations: [...draft.display.displayLocations],
+          displayFeatures: [...draft.display.displayFeatures],
+          serviceLocationLabel: draft.display.serviceLocationLabel,
+        }),
   };
 }
 

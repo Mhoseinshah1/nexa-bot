@@ -808,7 +808,7 @@ export class ProductService {
  * silently fails to serialise is a field whose change cannot be caught — which is the
  * defect `hashRequest`'s own comment records from the customer service's private copy.
  */
-function serialisableDraft(draft: ProductDraft): Record<string, unknown> {
+function serialisableDraft(draft: ProductDraft | ProductEdit): Record<string, unknown> {
   return {
     title: draft.title,
     description: draft.description,
@@ -832,9 +832,16 @@ function serialisableDraft(draft: ProductDraft): Record<string, unknown> {
      * a key reused with only the marketing copy changed would replay the earlier product
      * — the categoryId defect above, on three more fields.
      */
-    displayLocations: draft.display.displayLocations,
-    displayFeatures: draft.display.displayFeatures,
-    serviceLocationLabel: draft.display.serviceLocationLabel,
+    // A null display — an edit that did not mention it — hashes as its own value, so
+    // an edit that keeps the display and one that clears it are two commands.
+    display:
+      draft.display === null
+        ? null
+        : {
+            displayLocations: draft.display.displayLocations,
+            displayFeatures: draft.display.displayFeatures,
+            serviceLocationLabel: draft.display.serviceLocationLabel,
+          },
   };
 }
 

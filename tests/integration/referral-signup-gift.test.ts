@@ -678,6 +678,50 @@ describe('the referral signup gift and the referral statistics', () => {
       expect(terms).toMatchObject({ active: true, referrerPercent: 60, referredPercent: 40 });
     });
 
+    it('refuses a total in a currency the wallet does not keep, on and while turning on', async () => {
+      /*
+       * A wallet's balance and history are sums over ONE currency, `sales.currency`. A
+       * gift credited in another would be a stamped, paid share the customer can neither
+       * see nor spend, so the terms are refused before a customer can be told about them.
+       */
+      await f.gift();
+      await expect(
+        f.setSetting('referral.signup_gift.total', { amountMinor: '100000', currency: 'USD' }),
+      ).rejects.toMatchObject({
+        code: COMMERCE_ERROR_CODES.REFERRAL_GIFT_TERMS_INVALID,
+        details: expect.objectContaining({ problem: 'CURRENCY_MISMATCH' }),
+      });
+
+      await f.setFlag('referral_signup_gift', false);
+      await f.setSetting('referral.signup_gift.total', { amountMinor: '100000', currency: 'USD' });
+      await expect(f.setFlag('referral_signup_gift', true)).rejects.toMatchObject({
+        code: COMMERCE_ERROR_CODES.REFERRAL_GIFT_TERMS_INVALID,
+        details: expect.objectContaining({ problem: 'CURRENCY_MISMATCH' }),
+      });
+      expect((await ctx.container.referralSignupGifts.terms(tenantA)).active).toBe(false);
+    });
+
+    it('pays nothing for a side snapshotted in a currency the wallet no longer keeps, and leaves it unstamped', async () => {
+      await f.gift({ totalMinor: 100_000n });
+      const { referee, referrer, referralId } = await f.referred();
+      // The referee's claim snapshots the gift in IRT.
+      expect(await f.claim(referee)).toEqual({ credited: money(50_000n, 'IRT'), claimedCount: 1 });
+
+      // The installation moves to rials and the gift's total follows; the toman row does not.
+      await f.setFlag('referral_signup_gift', false);
+      await f.setSetting('sales.currency', 'IRR');
+      await f.setSetting('referral.signup_gift.total', { amountMinor: '1000000', currency: 'IRR' });
+      await f.setFlag('referral_signup_gift', true);
+
+      expect(await f.claimable(referrer)).toEqual([]);
+      expect(await f.claim(referrer)).toEqual({ credited: money(0n, 'IRR'), claimedCount: 0 });
+      expect(await f.giftEntries()).toHaveLength(1);
+      const [row] = await f.rows<{ referrer_claimed_at: string | null; currency: string }>(
+        sql`SELECT referrer_claimed_at, currency FROM referral_signup_gifts WHERE referral_id = ${referralId}`,
+      );
+      expect(row).toEqual({ referrer_claimed_at: null, currency: 'IRT' });
+    });
+
     it('refuses to turn the flag on over 60/30 or a zero total, and leaves it off', async () => {
       await f.gift({ referrerPercent: 60, referredPercent: 30, enabled: false });
 

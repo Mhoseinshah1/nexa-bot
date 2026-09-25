@@ -245,11 +245,14 @@ describe('product display metadata', () => {
       categoryId: null,
     };
 
-    it('defaults an old-style body, which sends none of the three, to the empty display', () => {
+    it('leaves an old-style body, which sends none of the three, without a display for the WRITE to decide', () => {
+      // No default at the schema: a create fills the empty display, an update keeps the
+      // row's own (`products-http.test.ts`). A default here would make an old client's
+      // edit of a price the deletion of every location and feature an operator typed.
       const parsed = productWriteSchema.parse(base);
-      expect(parsed.displayLocations).toEqual([]);
-      expect(parsed.displayFeatures).toEqual([]);
-      expect(parsed.serviceLocationLabel).toBeNull();
+      expect(parsed.displayLocations).toBeUndefined();
+      expect(parsed.displayFeatures).toBeUndefined();
+      expect(parsed.serviceLocationLabel).toBeUndefined();
     });
 
     it('keeps the order it was given and trims each line', () => {

@@ -28,6 +28,7 @@ import type { SettingsResolver } from '../../../control/settings/application/set
 import type { FeatureFlagResolver } from '../../../control/features/application/feature-flags.service.js';
 import {
   readSignupGiftTerms,
+  readWalletCurrency,
   signupGiftTermsProblem,
 } from '../../../control/settings/application/signup-gift-terms.guard.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
@@ -131,13 +132,16 @@ export class ReferralSignupGiftService {
    * guard having run earlier.
    */
   async terms(scope: TenantContext, tx?: unknown): Promise<ReferralSignupGiftTerms> {
-    const [gift, referrals, terms] = await Promise.all([
+    const [gift, referrals, terms, walletCurrency] = await Promise.all([
       this.deps.features.isEnabled(scope, 'referral_signup_gift', tx),
       this.deps.features.isEnabled(scope, 'referrals', tx),
       readSignupGiftTerms(this.deps.settings, scope, tx),
+      readWalletCurrency(this.deps.settings, scope, tx),
     ]);
+    // Inactive, not merely refused, when the total is in a currency the wallet does not
+    // keep: no button is drawn for a gift that could only be paid where nobody can see it.
     return {
-      active: gift && referrals && signupGiftTermsProblem(terms) === null,
+      active: gift && referrals && signupGiftTermsProblem(terms, walletCurrency) === null,
       total: terms.total,
       referrerPercent: terms.referrerPercent,
       referredPercent: terms.referredPercent,
@@ -163,6 +167,11 @@ export class ReferralSignupGiftService {
     const open = await this.deps.gifts.openSides(scope, customerId, tx);
     return open
       .filter((side) => {
+        // A row snapshotted in a currency the wallet no longer keeps is not offered: the
+        // claim skips it for the same reason, and a button that leads to nothing lies.
+        if (side.snapshotCurrency !== null && side.snapshotCurrency !== terms.total.currency) {
+          return false;
+        }
         const amount =
           side.snapshotAmount ?? (side.side === 'REFEREE' ? shares.referee : shares.referrer);
         return amount > 0n;
@@ -265,6 +274,13 @@ export class ReferralSignupGiftService {
             referral.refereeId === claimant ? 'REFEREE' : 'REFERRER';
 
           const gift = await this.giftFor(scope, referral, terms.total, shares, now, tx);
+          /*
+           * A gift snapshotted before `sales.currency` changed is in a currency the wallet
+           * no longer sums. Paying it would stamp the side claimed and write a credit the
+           * customer can neither see nor spend, so the row is left as it is — unstamped,
+           * unpaid, and visible to an operator as an open side under the old currency.
+           */
+          if (gift.total.currency !== currency) continue;
           // The snapshotted currency is the gift's; a total changed to another currency
           // since the first claim does not change what the second side is owed.
           const amount = side === 'REFEREE' ? gift.refereeAmount : gift.referrerAmount;

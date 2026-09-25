@@ -144,10 +144,10 @@ export interface ProductDraft {
   readonly specification: ProductSpecification;
   readonly price: Money | null;
   /**
-   * REQUIRED here even though the wire schema defaults it, so that a caller building a
-   * draft in code has to say what the customer sees — an omitted field would be a
-   * silent `[]` written over lists an operator typed. The controller fills it from the
-   * parsed body, whose defaults are the empty display.
+   * REQUIRED here, so that a caller building a draft in code has to say what the
+   * customer sees — an omitted field would be a silent `[]` written over lists an
+   * operator typed. The controller fills it from the parsed body, the empty display
+   * when the body carries none.
    */
   readonly display: ProductDisplay;
 }
@@ -158,8 +158,15 @@ export interface ProductDraft {
  * Every one is mutable by design, and every one is snapshotted onto an order at
  * confirmation — which is what makes editing safe. `status` is not here; it moves
  * through `setStatus` so the change is a conditional write with its own audit action.
+ *
+ * `display` is NULL for an edit that did not mention it — a client on the previous
+ * release has no field for the three — and a null display leaves the row's own display
+ * untouched. It is never the empty display by default: that would delete every location
+ * and feature an operator typed, from an edit to an unrelated field.
  */
-export type ProductEdit = ProductDraft;
+export type ProductEdit = Omit<ProductDraft, 'display'> & {
+  readonly display: ProductDisplay | null;
+};
 
 /**
  * "Is this panel one of MINE?" — the only question the catalogue asks about a panel.

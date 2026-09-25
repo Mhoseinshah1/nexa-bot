@@ -71,6 +71,7 @@ export class DrizzleReferralSignupGiftRepository implements ReferralSignupGiftRe
         giftId: referralSignupGifts.id,
         referrerAmount: referralSignupGifts.referrerAmount,
         refereeAmount: referralSignupGifts.refereeAmount,
+        currency: referralSignupGifts.currency,
         referrerClaimedAt: referralSignupGifts.referrerClaimedAt,
         refereeClaimedAt: referralSignupGifts.refereeClaimedAt,
       })
@@ -96,13 +97,23 @@ export class DrizzleReferralSignupGiftRepository implements ReferralSignupGiftRe
     for (const row of rows) {
       const side: ReferralSignupGiftSide = row.refereeId === customerId ? 'REFEREE' : 'REFERRER';
       if (row.giftId === null) {
-        open.push({ referralId: row.referralId, side, snapshotAmount: null });
+        open.push({
+          referralId: row.referralId,
+          side,
+          snapshotAmount: null,
+          snapshotCurrency: null,
+        });
         continue;
       }
       const claimedAt = side === 'REFEREE' ? row.refereeClaimedAt : row.referrerClaimedAt;
       if (claimedAt !== null) continue;
       const snapshotAmount = side === 'REFEREE' ? row.refereeAmount : row.referrerAmount;
-      open.push({ referralId: row.referralId, side, snapshotAmount });
+      open.push({
+        referralId: row.referralId,
+        side,
+        snapshotAmount,
+        snapshotCurrency: row.currency as CurrencyCode,
+      });
     }
     return open;
   }

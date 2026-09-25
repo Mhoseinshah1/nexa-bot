@@ -8,7 +8,9 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
 import type { SettingsResolver } from '../../settings/application/settings-resolver.js';
 import {
   readSignupGiftTerms,
+  readWalletCurrency,
   signupGiftTermsProblem,
+  signupGiftTermsProblemMessage,
 } from '../../settings/application/signup-gift-terms.guard.js';
 import type { FlagActivationGuard } from './feature-flags.service.js';
 
@@ -26,20 +28,23 @@ export class SignupGiftActivationGuard implements FlagActivationGuard {
   constructor(private readonly settings: SettingsResolver) {}
 
   async assertMayEnable(scope: ScopeContext, tx: TransactionScope): Promise<void> {
-    const terms = await readSignupGiftTerms(this.settings, scope, tx);
-    const problem = signupGiftTermsProblem(terms);
+    const [terms, walletCurrency] = await Promise.all([
+      readSignupGiftTerms(this.settings, scope, tx),
+      readWalletCurrency(this.settings, scope, tx),
+    ]);
+    const problem = signupGiftTermsProblem(terms, walletCurrency);
     if (problem === null) return;
     throw errors.validation(
       COMMERCE_ERROR_CODES.REFERRAL_GIFT_TERMS_INVALID,
-      problem === 'TOTAL_ZERO'
-        ? 'Set a signup gift total above zero before turning the gift on.'
-        : 'The referrer and referred shares must total 100 before the gift can turn on.',
+      signupGiftTermsProblemMessage(problem, 'ENABLING'),
       {
         key: this.key,
         problem,
         referrerPercent: terms.referrerPercent,
         referredPercent: terms.referredPercent,
         totalMinor: terms.total.amountMinor.toString(),
+        currency: terms.total.currency,
+        walletCurrency,
       },
     );
   }

@@ -266,6 +266,41 @@ describe('product HTTP surface', () => {
     expect(product.serviceLocationLabel).toBeNull();
   });
 
+  it('keeps the display an update from the previous release did not mention, and clears it only when told', async () => {
+    /*
+     * A client with no field for the three cannot mean "delete them": an edit to the
+     * title from that form keeps every location and feature an operator typed. Clearing
+     * is a statement — the three fields sent, empty.
+     */
+    const created = await createProduct({
+      displayLocations: ['🇩🇪 Germany'],
+      displayFeatures: ['• No logs'],
+      serviceLocationLabel: 'Frankfurt',
+    });
+    const renamed = await post(
+      PRODUCT_ROUTES.update(created.id),
+      editorCookie,
+      body({ title: 'پلن دوماهه' }),
+    );
+    expect(renamed.statusCode, renamed.body).toBe(201);
+    const kept = productResponseSchema.parse(renamed.json()).product;
+    expect(kept.title).toBe('پلن دوماهه');
+    expect(kept.displayLocations).toEqual(['🇩🇪 Germany']);
+    expect(kept.displayFeatures).toEqual(['• No logs']);
+    expect(kept.serviceLocationLabel).toBe('Frankfurt');
+
+    const cleared = await post(
+      PRODUCT_ROUTES.update(created.id),
+      editorCookie,
+      body({ displayLocations: [], displayFeatures: [], serviceLocationLabel: null }),
+    );
+    expect(cleared.statusCode, cleared.body).toBe(201);
+    const empty = productResponseSchema.parse(cleared.json()).product;
+    expect(empty.displayLocations).toEqual([]);
+    expect(empty.displayFeatures).toEqual([]);
+    expect(empty.serviceLocationLabel).toBeNull();
+  });
+
   it('round-trips the display lists in the order they were written', async () => {
     const created = await createProduct({
       displayLocations: ['🇩🇪 Germany', '🇳🇱 Netherlands', '🇫🇮 Finland'],

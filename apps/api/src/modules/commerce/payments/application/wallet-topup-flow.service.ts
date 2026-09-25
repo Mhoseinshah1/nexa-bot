@@ -144,13 +144,7 @@ export class WalletTopupFlowService {
       input.customerId,
       input.captureId,
     );
-    if (
-      capture === null ||
-      capture.purpose !== 'TOPUP_AMOUNT' ||
-      capture.state !== 'AWAITING_TEXT'
-    ) {
-      return { outcome: 'GONE' };
-    }
+    if (capture === null || capture.purpose !== 'TOPUP_AMOUNT') return { outcome: 'GONE' };
     const currency = await this.deps.settings.valueOf<CurrencyCode>(scope, 'sales.currency');
     const parsed = this.deps.parseAmount(input.text, currency);
     if (!parsed.ok) return { outcome: 'INVALID' };
@@ -168,13 +162,25 @@ export class WalletTopupFlowService {
   ): Promise<TopupAmountResult> {
     const capture =
       known ?? (await this.deps.captures.findOwnedOpen(scope, input.customerId, input.captureId));
-    if (
-      capture === null ||
-      capture.purpose !== 'TOPUP_AMOUNT' ||
-      capture.state !== 'AWAITING_TEXT'
-    ) {
-      return { outcome: 'GONE' };
+    if (capture === null || capture.purpose !== 'TOPUP_AMOUNT') return { outcome: 'GONE' };
+    if (capture.state === 'AMOUNT_RECORDED') {
+      /*
+       * A redelivered update. Telegram resends an update whose answer it did not get,
+       * and the runtime replays it against the window it read the first time — by then
+       * the figure is recorded and the row is waiting for a ROUTE. The same figure is
+       * the same request, so it is answered with the chooser again, re-decided now;
+       * a different figure under a recorded one is not an answer to anything.
+       */
+      if (
+        capture.amount === null ||
+        capture.amount.amountMinor !== input.amount.amountMinor ||
+        capture.amount.currency !== input.amount.currency
+      ) {
+        return { outcome: 'GONE' };
+      }
+      return this.recorded(scope, input.customerId, capture, capture.amount);
     }
+    if (capture.state !== 'AWAITING_TEXT') return { outcome: 'GONE' };
     const { minimum, maximum } = await this.bounds(scope);
     if (minimum !== null && input.amount.amountMinor < minimum.amountMinor) {
       return { outcome: 'BELOW_MINIMUM', minimum };
@@ -186,16 +192,21 @@ export class WalletTopupFlowService {
       this.deps.captures.recordAmount(scope, capture.id, input.amount, tx),
     );
     if (!recorded) return { outcome: 'GONE' };
-    const routes = await this.deps.routes.routesFor(
-      scope,
-      input.customerId,
-      'WALLET_TOPUP',
-      input.amount,
-    );
+    return this.recorded(scope, input.customerId, capture, input.amount);
+  }
+
+  /** The chooser for a recorded figure: the routes for it, decided now. */
+  private async recorded(
+    scope: TenantContext,
+    customerId: UserId,
+    capture: CustomerCaptureRecord,
+    amount: Money,
+  ): Promise<TopupAmountResult> {
+    const routes = await this.deps.routes.routesFor(scope, customerId, 'WALLET_TOPUP', amount);
     return {
       outcome: 'RECORDED',
-      capture: { ...capture, state: 'AMOUNT_RECORDED', amount: input.amount },
-      amount: input.amount,
+      capture: { ...capture, state: 'AMOUNT_RECORDED', amount },
+      amount,
       routes,
     };
   }

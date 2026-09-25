@@ -16,13 +16,23 @@ import {
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { customerTextCaptures } from '../../../../infrastructure/persistence/schema.js';
+import { USERNAME_CAPTURE_LOCK_CLASS } from '../../provisioning/infrastructure/drizzle-username-capture.repository.js';
 import type {
   CustomerCaptureRecord,
   CustomerCaptureRepository,
 } from '../application/customer-capture-ports.js';
 
-/** Its own advisory lock class, beside the admin capture's, so the two never contend. */
-export const CUSTOMER_CAPTURE_LOCK_CLASS = 0x4343;
+/**
+ * The SAME advisory lock as the username and discount-code windows, deliberately.
+ *
+ * The three windows answer one question — what does this customer's next plain message
+ * mean — and opening any one of them closes the other two. Under a lock of its own,
+ * two prompt-opening updates for one customer could each close what the other had not
+ * yet inserted and both commit open, and the reply would then be read by whichever the
+ * runtime checks first rather than the one the customer saw last. One class, one key,
+ * so every window-opening path serialises on it.
+ */
+export const CUSTOMER_CAPTURE_LOCK_CLASS = USERNAME_CAPTURE_LOCK_CLASS;
 
 export class DrizzleCustomerCaptureRepository implements CustomerCaptureRepository {
   constructor(private readonly db: Database) {}
