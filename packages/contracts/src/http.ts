@@ -3837,7 +3837,8 @@ export const paymentGatewaySchema = z.object({
    */
   callbackUrl: z.string().nullable().default(null),
   /*
-   * The descriptor's two facts — `settlesVia` and `requiresCredentials` — are NOT here.
+   * The descriptor's `settlesVia` is NOT here, and `requiresCredentials` is only as
+   * `credential.required` above (WP11A), which the key form needs.
    *
    * They were, and nothing read them: with one operable route `settlesVia` always says
    * the same thing and there is no credential field to gate. `PAYMENT_GATEWAY_DESCRIPTORS`

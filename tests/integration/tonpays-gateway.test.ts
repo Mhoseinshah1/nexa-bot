@@ -199,11 +199,25 @@ describe('TonPays, through the one settlement path', () => {
   let lane: GatewayPaymentService;
   let offsetMs: number;
   let updateSeq = 0;
+  /** Every `sendMessage` body the bot sent to the fake Telegram. */
+  const sent: Record<string, unknown>[] = [];
+  const lastMarkup = () => JSON.stringify(sent[sent.length - 1]?.['reply_markup'] ?? {});
+  const lastText = () => String(sent[sent.length - 1]?.['text'] ?? '');
 
   beforeAll(async () => {
     telegram = createServer((request, response) => {
-      request.resume();
+      const chunks: Buffer[] = [];
+      request.on('data', (chunk: Buffer) => chunks.push(chunk));
       request.on('end', () => {
+        try {
+          if ((request.url ?? '').includes('/sendMessage')) {
+            sent.push(
+              JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>,
+            );
+          }
+        } catch {
+          // a multipart upload; not what these cases read
+        }
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(JSON.stringify({ ok: true, result: { message_id: 11 } }));
       });
@@ -515,6 +529,21 @@ describe('TonPays, through the one settlement path', () => {
       expect((await paymentOf(paymentId)).external_reference).toBe(invoice.provider_invoice_id);
     });
 
+    it('tells the customer it is preparing, then shows the invoice with the web link, and never says paid', async () => {
+      await enableTonPays();
+      const orderId = await draftOrder();
+      const { paymentId } = await payWithGateway(orderId);
+      expect(lastMarkup()).toContain(`gc:${paymentId}`);
+      expect(lastMarkup()).not.toContain('"url"');
+      await pass();
+      await tap(`gc:${paymentId}`);
+      const invoice = await invoiceOf(paymentId);
+      expect(lastMarkup()).toContain(`"url":"${invoice.web_invoice_url!}"`);
+      expect(lastMarkup()).not.toContain(invoice.invoice_url!);
+      expect(lastText()).toContain('250,000');
+      expect(lastText()).not.toContain('تأیید و ثبت شد');
+    });
+
     it('offers web_invoice_url first and falls back to invoice_url, never inventing one', async () => {
       const { paymentId, invoice } = await createdAttempt();
       const view = await ctx.container.gatewayPayments.attemptFor(tenantA, maryam, paymentId);
@@ -527,6 +556,8 @@ describe('TonPays, through the one settlement path', () => {
       const fallback = await invoiceOf(other);
       expect(fallback.web_invoice_url).toBeNull();
       expect(fallback.invoice_url).toMatch(/^https:\/\/t\.me\//u);
+      await tap(`gc:${other}`);
+      expect(lastMarkup()).toContain(`"url":"${fallback.invoice_url!}"`);
     });
 
     it('hands back the open attempt to a second tap rather than making a second invoice', async () => {
