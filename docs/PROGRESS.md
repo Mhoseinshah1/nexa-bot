@@ -868,8 +868,9 @@ The customer's side of the bot, brought to the screens the owner approved:
   and the two-tap terminate. A terminal failure of a customer-requested operation is
   announced once, like a success.
 - **The referral screen** with the optional banner, the commission, the signup gift
-  block and the statistics; the gift is split by configured shares, claimed by each side
-  once, and only after the referred customer's first purchase is fulfilled.
+  block and the statistics. The membership gift is owed on the accepted attribution
+  itself — no purchase, payment or delivery — split by the configured shares and paid
+  once per side; the purchase commission is the separate reward that waits for delivery.
 - **Support and FAQ**: nine seeded Persian entries per tenant, editable in the Web
   Admin, rendered under the approved heading and footer, with the tenant's own support
   handle as the contact button.

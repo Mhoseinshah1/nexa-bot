@@ -100,8 +100,17 @@ interface ClaimReplayRecord {
  * The membership gift a valid referral pays, once per side
  * (`docs/customer-ux-completion-audit.md` §I).
  *
- * Independent of the purchase commission: the amounts come from settings, never from a
- * ledger entry, so nothing here can compound. Each share is ONE `REFERRAL_SIGNUP_GIFT`
+ * ELIGIBILITY IS THE ACCEPTED ATTRIBUTION, AND NOTHING ELSE. A new customer whose first
+ * `/start` carried a valid referral link is a referee the moment `attributeOnArrival`
+ * writes the referral row, and both sides may claim from then on — with zero orders,
+ * zero payments, no service anywhere. The owner defined two rewards and keeps them
+ * apart: this gift pays for the MEMBERSHIP, the purchase commission
+ * (`ReferralCommissionService`) pays for a DELIVERED purchase and waits for delivery.
+ * No purchase, payment or provisioning predicate belongs in this file; a later purchase
+ * creates no second gift, because the gift row is one per referral.
+ *
+ * Independent of the purchase commission in the other direction too: the amounts come
+ * from settings, never from a ledger entry, so nothing here can compound. Each share is ONE `REFERRAL_SIGNUP_GIFT`
  * credit whose reference is unique per (referral, side) — the database's backstop for a
  * writer that forgets the lock — and the gift row's `<side>_claimed_at` is the decision
  * that a share has been paid.
@@ -152,7 +161,8 @@ export class ReferralSignupGiftService {
    * What the customer could be paid for now, as referee and as referrer.
    *
    * Decides whether the claim button is drawn and lets "nothing to claim" be said
-   * truthfully. A side whose share is zero — snapshotted, or under the current terms when
+   * truthfully. A side is open from the attribution on: `openSides` reads the referral
+   * rows and the gift row and nothing about orders. A side whose share is zero — snapshotted, or under the current terms when
    * no row exists yet — is not claimable: there is nothing to pay, and the schema pins a
    * stamped side to a ledger entry, so a zero share is never stamped either.
    */

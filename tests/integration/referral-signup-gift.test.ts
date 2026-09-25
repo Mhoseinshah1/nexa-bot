@@ -765,6 +765,153 @@ describe('the referral signup gift and the referral statistics', () => {
   });
 
   // -------------------------------------------------------------------------
+  // 4b. The membership gift owes nothing to a purchase
+  // -------------------------------------------------------------------------
+
+  /**
+   * The owner defined two rewards and keeps them apart: the MEMBERSHIP gift is owed
+   * the moment a new customer's first `/start` carries a valid referral link, and the
+   * PURCHASE commission is owed when a referee's order is delivered. Nothing below buys
+   * anything before a claim, and every claim succeeds.
+   */
+  describe('the membership gift, independent of any purchase', () => {
+    const orders = () => f.count(sql`SELECT count(*)::int AS n FROM orders`);
+    const commissions = () =>
+      f.count(
+        sql`SELECT count(*)::int AS n FROM wallet_entries WHERE reason = 'REFERRAL_COMMISSION'`,
+      );
+
+    it('creates the eligibility on the accepted attribution, before any purchase exists', async () => {
+      await f.gift({ totalMinor: 100_000n, referrerPercent: 50, referredPercent: 50 });
+      const { referee, referrer, referralId } = await f.referred();
+      expect(await orders()).toBe(0);
+      expect(await f.claimable(referee)).toEqual([{ referralId, side: 'REFEREE' }]);
+      expect(await f.claimable(referrer)).toEqual([{ referralId, side: 'REFERRER' }]);
+    });
+
+    it('pays both sides with zero purchases on record', async () => {
+      await f.gift({ totalMinor: 100_000n, referrerPercent: 40, referredPercent: 60 });
+      const { referee, referrer, referralId } = await f.referred();
+      expect(await f.claim(referee)).toEqual({ credited: money(60_000n, 'IRT'), claimedCount: 1 });
+      expect(await f.claim(referrer)).toEqual({ credited: money(40_000n, 'IRT'), claimedCount: 1 });
+      expect(await orders()).toBe(0);
+      expect(await f.giftEntries()).toEqual([
+        {
+          customer_id: referee,
+          amount: '60000',
+          reference: referralSignupGiftReference(referralId, 'REFEREE'),
+          currency: 'IRT',
+        },
+        {
+          customer_id: referrer,
+          amount: '40000',
+          reference: referralSignupGiftReference(referralId, 'REFERRER'),
+          currency: 'IRT',
+        },
+      ]);
+    });
+
+    it('a later delivered purchase creates no second gift and reopens nothing', async () => {
+      await f.gift();
+      const { referee, referrer, referralId } = await f.referred();
+      await f.claim(referee);
+      await f.claim(referrer);
+
+      const order = await f.confirmed(referee, 1_000_000n);
+      await f.paidFromWallet(order);
+      await f.deliver(order.id);
+      expect(await ctx.container.referralCommissions.settle(tenantA, order.id)).toBe(true);
+
+      expect(await f.giftEntries()).toHaveLength(2);
+      expect(await f.claimable(referee)).toEqual([]);
+      expect(await f.claimable(referrer)).toEqual([]);
+      expect(await f.claim(referee)).toEqual({ credited: money(0n, 'IRT'), claimedCount: 0 });
+      expect(
+        await f.count(
+          sql`SELECT count(*)::int AS n FROM referral_signup_gifts WHERE referral_id = ${referralId}`,
+        ),
+      ).toBe(1);
+    });
+
+    it('the purchase commission still waits for delivery while the gift did not', async () => {
+      await f.gift();
+      const { referee, referrer } = await f.referred();
+      await f.claim(referee);
+      await f.claim(referrer);
+      expect(await f.giftEntries()).toHaveLength(2);
+      expect(await commissions()).toBe(0);
+
+      const order = await f.confirmed(referee, 1_000_000n);
+      await f.paidFromWallet(order);
+      // Paid, not delivered: the gift is long paid, the commission is not owed yet.
+      expect(await ctx.container.referralCommissions.settle(tenantA, order.id)).toBe(false);
+      expect(await commissions()).toBe(0);
+
+      await f.deliver(order.id);
+      expect(await ctx.container.referralCommissions.settle(tenantA, order.id)).toBe(true);
+      expect(await commissions()).toBe(1);
+    });
+
+    it('writes the gift and the commission as distinct ledger reasons, references and entries', async () => {
+      await f.gift({ totalMinor: 100_000n });
+      const { referee, referrer, referralId } = await f.referred();
+      await f.claim(referee);
+      await f.claim(referrer);
+      const order = await f.confirmed(referee, 1_000_000n);
+      await f.paidFromWallet(order);
+      await f.deliver(order.id);
+      await ctx.container.referralCommissions.settle(tenantA, order.id);
+
+      const entries = await f.rows<{ reason: string; reference: string | null; amount: string }>(
+        sql`SELECT reason, reference, amount::text AS amount FROM wallet_entries
+             WHERE tenant_id = ${tenantA.tenantId}
+               AND reason IN ('REFERRAL_SIGNUP_GIFT', 'REFERRAL_COMMISSION')
+             ORDER BY reason, created_at`,
+      );
+      expect(entries.map((e) => e.reason)).toEqual([
+        'REFERRAL_COMMISSION',
+        'REFERRAL_SIGNUP_GIFT',
+        'REFERRAL_SIGNUP_GIFT',
+      ]);
+      const gifts = entries.filter((e) => e.reason === 'REFERRAL_SIGNUP_GIFT');
+      expect(gifts.map((e) => e.reference).sort()).toEqual(
+        [
+          referralSignupGiftReference(referralId, 'REFEREE'),
+          referralSignupGiftReference(referralId, 'REFERRER'),
+        ].sort(),
+      );
+      const [commission] = entries.filter((e) => e.reason === 'REFERRAL_COMMISSION');
+      expect(commission?.reference).not.toBeNull();
+      expect(gifts.map((e) => e.reference)).not.toContain(commission?.reference);
+      expect(commission?.amount).toBe('100000');
+      // The referrer's wallet holds both, as two rows, never one figure.
+      expect(
+        await f.count(
+          sql`SELECT count(*)::int AS n FROM wallet_entries
+               WHERE customer_id = ${referrer}
+                 AND reason IN ('REFERRAL_SIGNUP_GIFT', 'REFERRAL_COMMISSION')`,
+        ),
+      ).toBe(2);
+    });
+
+    it('stays exactly once under a replayed key and two concurrent taps, with zero purchases', async () => {
+      await f.gift({ totalMinor: 100_000n, referrerPercent: 50, referredPercent: 50 });
+      const { referee } = await f.referred();
+      expect(await orders()).toBe(0);
+
+      const idempotencyKey = f.key();
+      const [a, b] = await Promise.all([
+        f.claim(referee, idempotencyKey),
+        f.claim(referee, f.key()),
+      ]);
+      const credited = [a, b].map((r) => r.credited.amountMinor).sort();
+      expect(credited).toEqual([0n, 50_000n]);
+      expect(await f.claim(referee, idempotencyKey)).toEqual(a);
+      expect(await f.giftEntries()).toHaveLength(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // 5. Statistics, and the purchase commission regression (§O4)
   // -------------------------------------------------------------------------
 
