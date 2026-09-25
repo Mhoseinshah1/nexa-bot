@@ -519,6 +519,11 @@ export const reportWalletResponseSchema = z.object({
       amount: minorString,
     }),
   ),
+  /**
+   * Per group, the NET ledger effect: credits positive, debits negative, by the ledger's
+   * own sign rule. SPENDING is therefore negative, and a group holding both directions
+   * (ADMINISTRATIVE) nets them instead of adding a debit to a credit total.
+   */
   groups: z.array(
     z.object({
       group: z.enum(WALLET_REPORT_GROUPS),
