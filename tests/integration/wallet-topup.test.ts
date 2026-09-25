@@ -130,13 +130,20 @@ describe('a customer topping up their wallet', () => {
      * installation cannot be left with nowhere to receive money through its own API. So
      * the branch under test here is the service's LAST line of defence, against a state
      * only a direct write or a deleted row can produce.
+     *
+     * Since the customer UX completion the destination is part of what makes a route
+     * OFFERABLE (`PaymentGatewayService.evaluateRoutes` asks `hasEnabled`), so the
+     * request is refused one step earlier — no route — with the gateway code; the
+     * customer reads the same `bot.wallet.topup_unavailable` either way. `issueTopup`'s
+     * own `NO_DESTINATION` refusal stays behind it for the account disabled between
+     * the route decision and the write.
      */
     await ctx.container.database.db.execute(
       sql`UPDATE payment_accounts SET enabled = false, is_default = false
            WHERE tenant_id = ${tenantA.tenantId}`,
     );
 
-    await expectRefusal(topup(500_000n, 't6'), 'commerce.topup_unavailable');
+    await expectRefusal(topup(500_000n, 't6'), 'commerce.payment_gateway_unavailable');
     expect(await count('payments')).toBe(0);
   });
 

@@ -48,11 +48,13 @@ describe('database connections wait under a bound', () => {
     const client = await holder.connect();
     try {
       await client.query('BEGIN');
-      await client.query('SELECT id FROM tenants LIMIT 1 FOR UPDATE');
+      // ORDER BY, so both connections ask for the SAME row: two seeded tenants and a
+      // bare LIMIT 1 could pick different ones, and then nothing waited at all.
+      await client.query('SELECT id FROM tenants ORDER BY id LIMIT 1 FOR UPDATE');
 
       const started = Date.now();
       const outcome = await ctx.container.database.db
-        .execute(sql`SELECT id FROM tenants LIMIT 1 FOR UPDATE`)
+        .execute(sql`SELECT id FROM tenants ORDER BY id LIMIT 1 FOR UPDATE`)
         .then(
           () => null,
           (error: unknown) => error,
