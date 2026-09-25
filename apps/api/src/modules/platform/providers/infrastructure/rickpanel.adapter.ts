@@ -1,4 +1,5 @@
 import {
+  SAFE_TO_REPLAY_FAILURE_KINDS,
   assertSendableProviderUsername,
   providerDescriptor,
   type CreateProviderUserInput,
@@ -527,7 +528,27 @@ export class RickpanelAdapter implements ProviderAdapter {
       input.username,
       this.readBackAttempts,
     );
-    if (!readBack.ok) return readBack;
+    if (!readBack.ok) {
+      /*
+       * THE CREATE WAS ACCEPTED, so no failure of the read after it may say "safe to
+       * replay" (WP15 H1, `docs/wp15-provider-hardening-audit.md`).
+       *
+       * `readBack` reports a transport failure or a 429 in the kinds that mean "the
+       * panel did not read the request" — true of the GET, and false of the POST that
+       * just answered 2xx. Returned as they were, a lost read-back after a successful
+       * create made the PROVISION `FAILED` and retried; the retry met the account this
+       * create made, answered 409, was refused, and the order was refunded while the
+       * account stayed on the panel with nobody holding it.
+       *
+       * `MALFORMED_RESPONSE`, as for "accepted, not readable yet" below: UNKNOWN for a
+       * create, so the service goes to `UNRECONCILED` and a READ adopts the account.
+       * A read-back failure that is already UNKNOWN (a timeout, a 5xx, an unreadable
+       * body) keeps its own kind, which is the more useful thing to show an operator.
+       */
+      return (SAFE_TO_REPLAY_FAILURE_KINDS as readonly string[]).includes(readBack.failure)
+        ? { ok: false, failure: 'MALFORMED_RESPONSE', status: created.status }
+        : readBack;
+    }
     if (!readBack.found) {
       /*
        * Accepted, and not readable yet.

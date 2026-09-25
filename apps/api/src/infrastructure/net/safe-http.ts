@@ -311,7 +311,19 @@ export class SafeHttpClient {
     let failure: ProviderFailureKind = 'UNREACHABLE';
     let status: number | null = null;
 
-    for (let attempt = 0; attempt <= this.options.maxRetries; attempt += 1) {
+    /*
+     * Only a READ is ever retried here (WP15 H4, `docs/wp15-provider-hardening-audit.md`).
+     *
+     * A transient failure after a write was sent — a timeout, a socket that died — does
+     * not say the panel did not act, and a second POST is a second account, a second
+     * rotation, a second anything. Whether a write may be tried again is decided by the
+     * operation layer, which knows what the write was (`IDEMPOTENT_MUTATIONS`,
+     * `failureOutcome`), never by a transport loop. `PANEL_HTTP_RETRIES` is 0 today, so
+     * this changes nothing that runs; it is what keeps raising that constant from
+     * quietly turning into duplicate creates.
+     */
+    const budget = request.method === 'GET' ? this.options.maxRetries : 0;
+    for (let attempt = 0; attempt <= budget; attempt += 1) {
       const outcome = await this.attempt(verdict.url, request);
       if (outcome.ok) return outcome;
       failure = outcome.failure;

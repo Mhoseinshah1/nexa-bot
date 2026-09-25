@@ -106,6 +106,11 @@ export interface FakeRickpanel {
   lostPutAnswers: number;
   /** How many `PUT /api/user/{name}` calls reached the panel, whatever they did. */
   putCalls(): number;
+  /**
+   * How many of the NEXT `GET /api/user/{name}` answer 429 without reading anything
+   * (WP15 H1): the read after an accepted create, lost to a rate limit.
+   */
+  rateLimitedReads: number;
   readonly requests: readonly FakeRickpanelRequest[];
   /** Everything this panel holds, keyed by username — the observer's view. */
   readonly users: ReadonlyMap<string, FakeRickpanelUser>;
@@ -135,6 +140,7 @@ export async function startFakeRickpanel(
   let revokeMode: RickpanelRevokeMode = 'rotates';
   let afterRotation: (() => Promise<void>) | null = null;
   let lostPutAnswers = 0;
+  let rateLimitedReads = 0;
   let rotationCounter = 0;
 
   const present = (user: FakeRickpanelUser): Record<string, unknown> => ({
@@ -249,6 +255,10 @@ export async function startFakeRickpanel(
         const name = decodeURIComponent(single[1] ?? '');
         const held = users.get(name);
         if (method === 'GET') {
+          if (rateLimitedReads > 0) {
+            rateLimitedReads -= 1;
+            return void json(429, { detail: 'slow down' });
+          }
           if (held === undefined) return void json(404, { detail: 'User not found' });
           return void json(200, present(held));
         }
@@ -295,6 +305,12 @@ export async function startFakeRickpanel(
     },
     set unprocessableCreates(next: number) {
       unprocessableCreates = next;
+    },
+    get rateLimitedReads() {
+      return rateLimitedReads;
+    },
+    set rateLimitedReads(next: number) {
+      rateLimitedReads = next;
     },
     get lostPutAnswers() {
       return lostPutAnswers;
