@@ -179,6 +179,11 @@ describe('dynamic route registration', () => {
       ['POST', 'resellers'],
       ['GET', `resellers/${id}`],
       ['POST', `resellers/${id}`],
+      // WP14: reseller phase 2 reads.
+      ['GET', `reseller-tiers/${id}/history`],
+      ['GET', `resellers/${id}/credit`],
+      ['GET', `resellers/${id}/purchases`],
+      ['GET', `resellers/${id}/history`],
       ['GET', `services/${id}`],
       ['GET', `services/${id}/operations`],
       ['POST', `services/${id}/sync-usage`],
