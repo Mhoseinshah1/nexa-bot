@@ -16,6 +16,11 @@ describe('database connections wait under a bound', () => {
 
   beforeAll(async () => {
     ctx = await createTestContext();
+    // Seed our own rows. Files run serially against one database, and several of
+    // them end by truncating it without re-seeding (the fresh-install bootstrap
+    // suites, the HTTP suites); whichever ran last decided whether `tenants` had a
+    // row for the probe below to lock, and with none there, nothing waited at all.
+    await ctx.reset();
   }, 60_000);
 
   afterAll(async () => {
@@ -50,7 +55,9 @@ describe('database connections wait under a bound', () => {
       await client.query('BEGIN');
       // ORDER BY, so both connections ask for the SAME row: two seeded tenants and a
       // bare LIMIT 1 could pick different ones, and then nothing waited at all.
-      await client.query('SELECT id FROM tenants ORDER BY id LIMIT 1 FOR UPDATE');
+      const held = await client.query('SELECT id FROM tenants ORDER BY id LIMIT 1 FOR UPDATE');
+      // The probe is only a probe if the holder actually locked something.
+      expect(held.rowCount).toBe(1);
 
       const started = Date.now();
       const outcome = await ctx.container.database.db
