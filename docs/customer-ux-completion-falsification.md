@@ -88,3 +88,31 @@ two tenants — and the predicate stays for the reason UX08 gives.
   directly and stayed green while the card passed a raw string through; the kill
   came from the screen composer's own test. A formatter test proves a formatter,
   not that the value reached it.
+
+## Round two — the Codex review of PR #73
+
+Eight findings on the reviewed head `bd20433`, two of them P1, every one confirmed
+against the code and fixed in `401126f` (the display schema's own commit is
+`0e4afd8`). Same standard as the first round: a worktree and a database of their
+own, one mutation per rule, only the named test run, the file restored byte for
+byte. Every row killed on the first attempt.
+
+| #    | Rule                                                           | Mutation                                                                  | Result | Named test                                                                                                                                                 |
+| ---- | -------------------------------------------------------------- | ------------------------------------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CX01 | a manual route needs an enabled receiving account              | `evaluateRoutes`: the `hasEnabled` read replaced with `true`              | KILLED | `tests/integration/payment-gateway-purposes.test.ts` › offers no manual route, for either purpose, while no enabled account can receive the money          |
+| CX02 | every customer text window serialises on one lock              | `CUSTOMER_CAPTURE_LOCK_CLASS` given a class of its own again              | KILLED | `tests/unit/customer-capture-lock.test.ts` › serialise every window-opening path on one advisory lock class                                                |
+| CX03 | a redelivered amount is answered with the chooser again        | `recordAmount`: the `AMOUNT_RECORDED` replay branch disabled              | KILLED | `tests/integration/customer-ux-payments.test.ts` › answers a redelivered amount update with the chooser again, and records the figure once                 |
+| CX04 | a refused banner never costs the screen behind it              | the lead loop: a `PHOTO_BYTES` lead stops the turn again                  | KILLED | `tests/integration/customer-ux-payments.test.ts` › still arrives when the banner ahead of it is refused                                                    |
+| CX05 | an absent purpose switch keeps the row's value                 | `configure`: an absent switch resolved to `true` instead of `before`'s    | KILLED | `tests/integration/payment-gateway-purposes.test.ts` › keeps a switch an update did not mention, rather than resetting it to ON                            |
+| CX06 | the gift's total is in the wallet's currency                   | `signupGiftTermsProblem`: the `CURRENCY_MISMATCH` rule deleted            | KILLED | `tests/integration/referral-signup-gift.test.ts` › refuses a total in a currency the wallet does not keep, on and while turning on                         |
+| CX07 | a gift row in a currency the wallet no longer keeps is skipped | `claim` and `claimableFor`: both currency skips deleted                   | KILLED | `tests/integration/referral-signup-gift.test.ts` › pays nothing for a side snapshotted in a currency the wallet no longer keeps, and leaves it unstamped   |
+| CX08 | the media upload route carries its own body ceiling            | `bootstrap.ts`: the route's `bodyLimit` override removed                  | KILLED | `tests/integration/tenant-media.test.ts` › accepts a file exactly at the advertised bound, and refuses one past it by the schema, never by the body reader |
+| CX09 | an update that did not mention the display keeps it            | `displayFrom`: an absent display on an UPDATE becomes the empty one again | KILLED | `tests/integration/products-http.test.ts` › keeps the display an update from the previous release did not mention, and clears it only when told            |
+
+What the round changed beyond the eight fixes: `ProductEdit` is no longer an alias
+of `ProductDraft`. An edit's `display` may be null — "not mentioned" — and a null
+display writes no display columns, which is a shape the type now states rather
+than a convention the controller kept. The previous comment in the wire schema
+called clearing on an old client's update "the honest reading of a form that has
+no field for it"; it was the honest reading of the form and a destructive one of
+the row, and the row is what the operator typed into.
