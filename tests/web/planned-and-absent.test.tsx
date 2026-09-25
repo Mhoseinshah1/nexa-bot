@@ -50,7 +50,9 @@ describe('planned surfaces', () => {
       // `discounts` left it in WP8 on the same terms; `discounts.test.tsx` pins the
       // live page at that route. `resellers` left it in WP9-B, and
       // `resellers.test.tsx` pins the live page at `/resellers`.
-      ['bots', 'reports'].sort(),
+      // `reports` left it in WP12, and `reports.test.tsx` pins the live page at
+      // `/reports`.
+      ['bots'].sort(),
     );
   });
 
@@ -208,9 +210,16 @@ describe('planned surfaces', () => {
     expect(container.querySelectorAll('button')).toHaveLength(0);
   });
 
-  /** Owner revision 25 — no general logs page. */
+  /**
+   * Owner revision 25 — no general logs page.
+   *
+   * Recorded on the reports placeholder until WP12 built `/reports`; the decision moved
+   * onto the live page with it, so it is asserted there, through the route table.
+   */
   it('records that the operational stream goes to Telegram rather than a logs page', () => {
-    const { container } = render('reports');
+    stubApi([]);
+    const resolved = resolve({ path: '/reports', query: new URLSearchParams() }, []);
+    const { container } = renderPage(resolved.element as ReactElement);
     const text = container.textContent ?? '';
     expect(text).toContain('لاگ');
     expect(text).toContain('گروه گزارش تلگرام');

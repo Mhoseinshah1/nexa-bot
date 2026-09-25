@@ -3,13 +3,13 @@ import { PANEL_PAGE_MAX, type PanelSummaryResponse } from '@nexa/contracts';
 import { fetchOpsLog, fetchPanels, fetchReadiness } from '../api/client';
 import { formatNumber, formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
-import { useLinkHandler } from '../router';
+import { useLinkHandler, type Route } from '../router';
+import { BusinessOverview } from './business';
 import {
   Badge,
   Card,
   Distribution,
   Empty,
-  MaturityBadge,
   Num,
   PageHead,
   StateSwitch,
@@ -34,11 +34,12 @@ const ATTENTION_SHOWN = 6;
 /**
  * The dashboard.
  *
- * Everything on it is a real figure from a real endpoint. There is no revenue
- * tile, no sales chart and no customer count, because this installation has no
- * orders, no payments and no customers — and a dashboard that invents those is
- * the single most damaging thing this release could ship, since a KPI is
- * exactly the kind of number nobody re-derives before acting on it.
+ * Everything on it is a real figure from a real endpoint. The business section —
+ * revenue, sales, customers — is WP12's, drawn for the owner only and computed by
+ * server aggregates over persisted orders, payments and ledger entries
+ * (`docs/wp12-business-analytics-audit.md`). A dashboard that invents a KPI is the
+ * single most damaging thing this product could ship, since a KPI is exactly the
+ * kind of number nobody re-derives before acting on it.
  *
  * Two owner revisions land here:
  *
@@ -52,7 +53,16 @@ const ATTENTION_SHOWN = 6;
  *     location field anywhere in the panel contract, so a location breakdown
  *     could only have come from inventing one.
  */
-export function DashboardPage({ permissions }: { permissions: readonly string[] }) {
+export function DashboardPage({
+  permissions,
+  route,
+  superAdmin = false,
+}: {
+  permissions: readonly string[];
+  route?: Route;
+  /** WP12: the owner, holding `reports.view`, sees the business section as well. */
+  superAdmin?: boolean;
+}) {
   const mayViewPanels = permissions.includes('panels.view');
   const mayViewOps = permissions.includes('opslog.view');
 
@@ -139,6 +149,13 @@ export function DashboardPage({ permissions }: { permissions: readonly string[] 
     <>
       <PageHead title={t('web.dashboard_title')} subtitle={t('web.dashboard_intro')} />
 
+      {/*
+       * WP12's business section, for the owner only. It FIRST, because the owner asked for
+       * the business dashboard as the landing page; the operational cards below keep their
+       * own cadence and their own permissions, unchanged.
+       */}
+      {superAdmin && route !== undefined && <BusinessOverview route={route} />}
+
       <div className="grid">
         <Card title={t('web.system_status')} className="span2">
           <StateSwitch query={readiness}>
@@ -213,12 +230,6 @@ export function DashboardPage({ permissions }: { permissions: readonly string[] 
       </div>
 
       {mayViewOps && <AttentionCard query={alerts} />}
-
-      <Card title={t('web.dashboard_scope_title')}>
-        <p className="muted small">
-          <MaturityBadge value="planned" /> {t('web.dashboard_scope_body')}
-        </p>
-      </Card>
     </>
   );
 }

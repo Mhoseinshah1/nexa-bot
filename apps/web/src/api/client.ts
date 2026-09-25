@@ -1,4 +1,34 @@
 import {
+  REPORT_ROUTES,
+  reportFailuresResponseSchema,
+  reportInfrastructureResponseSchema,
+  reportOrdersResponseSchema,
+  reportPaymentsResponseSchema,
+  reportProductsResponseSchema,
+  reportReferralsResponseSchema,
+  reportResellersResponseSchema,
+  reportServicesResponseSchema,
+  reportSummaryResponseSchema,
+  reportTrendResponseSchema,
+  reportWalletResponseSchema,
+  type OrderPurpose as ReportOrderPurpose,
+  type ReportExportFormat,
+  type ReportExportKind,
+  type ReportFailuresResponse,
+  type ReportInfrastructureResponse,
+  type ReportOrdersResponse,
+  type ReportPaymentsResponse,
+  type ReportProductRanking,
+  type ReportProductsResponse,
+  type ReportRange,
+  type ReportReferralsResponse,
+  type ReportReferrerRanking,
+  type ReportResellersResponse,
+  type ReportServicesResponse,
+  type ReportSummaryResponse,
+  type ReportTrendMetric,
+  type ReportTrendResponse,
+  type ReportWalletResponse,
   COMMERCE_ERROR_CODES,
   RESELLER_ROUTES,
   RESELLER_TIER_ROUTES,
@@ -2082,4 +2112,128 @@ export function clearTenantMedia(input: {
 }): Promise<TenantMediaStateResponse> {
   const { purpose, ...body } = input;
   return post(TENANT_MEDIA_ROUTES.clear(purpose), body, tenantMediaStateSchema);
+}
+
+// ---------------------------------------------------------------------------
+// Business reports (WP12)
+// ---------------------------------------------------------------------------
+
+/**
+ * The period every report is asked for. `from` and `to` are tenant-calendar dates and
+ * exist only for CUSTOM — the server refuses anything else, so this does not send them.
+ */
+export interface ReportRangeSelection {
+  readonly range: ReportRange;
+  readonly from?: string;
+  readonly to?: string;
+}
+
+export function reportParams(
+  selection: ReportRangeSelection,
+  extra: Readonly<Record<string, string | number | undefined>> = {},
+): URLSearchParams {
+  const params = new URLSearchParams({ range: selection.range });
+  if (selection.range === 'CUSTOM') {
+    if (selection.from !== undefined) params.set('from', selection.from);
+    if (selection.to !== undefined) params.set('to', selection.to);
+  }
+  for (const [key, value] of Object.entries(extra)) {
+    if (value !== undefined) params.set(key, String(value));
+  }
+  return params;
+}
+
+function reportGet<T>(
+  path: string,
+  schema: { parse: (v: unknown) => T },
+  params: URLSearchParams,
+): Promise<T> {
+  return authedGet(`${path}?${params.toString()}`, schema);
+}
+
+export function fetchReportSummary(s: ReportRangeSelection): Promise<ReportSummaryResponse> {
+  return reportGet(REPORT_ROUTES.summary, reportSummaryResponseSchema, reportParams(s));
+}
+
+export function fetchReportTrend(
+  s: ReportRangeSelection,
+  metric: ReportTrendMetric,
+): Promise<ReportTrendResponse> {
+  return reportGet(REPORT_ROUTES.trend, reportTrendResponseSchema, reportParams(s, { metric }));
+}
+
+export function fetchReportProducts(
+  s: ReportRangeSelection,
+  query: { by: ReportProductRanking; limit?: number; page?: number },
+): Promise<ReportProductsResponse> {
+  return reportGet(
+    REPORT_ROUTES.products,
+    reportProductsResponseSchema,
+    reportParams(s, { by: query.by, limit: query.limit, page: query.page }),
+  );
+}
+
+export function fetchReportServices(s: ReportRangeSelection): Promise<ReportServicesResponse> {
+  return reportGet(REPORT_ROUTES.services, reportServicesResponseSchema, reportParams(s));
+}
+
+export function fetchReportInfrastructure(
+  s: ReportRangeSelection,
+): Promise<ReportInfrastructureResponse> {
+  return reportGet(
+    REPORT_ROUTES.infrastructure,
+    reportInfrastructureResponseSchema,
+    reportParams(s),
+  );
+}
+
+export function fetchReportPayments(s: ReportRangeSelection): Promise<ReportPaymentsResponse> {
+  return reportGet(REPORT_ROUTES.payments, reportPaymentsResponseSchema, reportParams(s));
+}
+
+export function fetchReportWallet(s: ReportRangeSelection): Promise<ReportWalletResponse> {
+  return reportGet(REPORT_ROUTES.wallet, reportWalletResponseSchema, reportParams(s));
+}
+
+export function fetchReportReferrals(
+  s: ReportRangeSelection,
+  query: { by: ReportReferrerRanking; limit?: number; page?: number },
+): Promise<ReportReferralsResponse> {
+  return reportGet(
+    REPORT_ROUTES.referrals,
+    reportReferralsResponseSchema,
+    reportParams(s, { by: query.by, limit: query.limit, page: query.page }),
+  );
+}
+
+export function fetchReportResellers(s: ReportRangeSelection): Promise<ReportResellersResponse> {
+  return reportGet(REPORT_ROUTES.resellers, reportResellersResponseSchema, reportParams(s));
+}
+
+export function fetchReportFailures(s: ReportRangeSelection): Promise<ReportFailuresResponse> {
+  return reportGet(REPORT_ROUTES.failures, reportFailuresResponseSchema, reportParams(s));
+}
+
+export function fetchReportOrders(
+  s: ReportRangeSelection,
+  query: { purpose?: ReportOrderPurpose; productId?: string; cursor?: string },
+): Promise<ReportOrdersResponse> {
+  return reportGet(
+    REPORT_ROUTES.orders,
+    reportOrdersResponseSchema,
+    reportParams(s, { purpose: query.purpose, productId: query.productId, cursor: query.cursor }),
+  );
+}
+
+/**
+ * The download URL for one export. A URL rather than a fetch, for the reason the backup
+ * archive gives: the browser's own navigation carries the file to disk with the session
+ * cookie, and the tab never holds the whole report in memory.
+ */
+export function reportExportUrl(
+  s: ReportRangeSelection,
+  report: ReportExportKind,
+  format: ReportExportFormat,
+): string {
+  return `${API_PREFIX}${REPORT_ROUTES.export}?${reportParams(s, { report, format }).toString()}`;
 }

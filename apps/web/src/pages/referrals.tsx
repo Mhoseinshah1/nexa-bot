@@ -1,5 +1,6 @@
 import { useState, type ChangeEvent, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { ReferralAnalytics } from './business';
 import {
   REFERRAL_COMMISSION_STATES,
   TENANT_MEDIA_MAX_BYTES,
@@ -170,11 +171,14 @@ export function ReferralsPage({
   denied,
   mayViewBanner,
   mayEditBanner,
+  superAdmin = false,
 }: {
   route: Route;
   denied: boolean;
   mayViewBanner: boolean;
   mayEditBanner: boolean;
+  /** WP12: the owner sees the referral analytics above the lists. */
+  superAdmin?: boolean;
 }) {
   const onLink = useLinkHandler();
   const applied = route.query.get('referrerId') ?? '';
@@ -233,6 +237,8 @@ export function ReferralsPage({
           </form>
         </Card>
       )}
+
+      {superAdmin && <ReferralAnalytics route={route} />}
 
       <Attributions denied={denied} referrerId={applied} />
       <Commissions denied={denied} referrerId={applied} />
