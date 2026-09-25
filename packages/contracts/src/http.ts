@@ -1959,14 +1959,15 @@ export const productWriteSchema = z
      */
     categoryId: z.string().uuid().nullable(),
     /*
-     * OPTIONAL with empty defaults so a client on the previous release, which sends
-     * none of the three, still writes a product; an update from such a client clears
-     * display data it never showed, which is the honest reading of a form that has no
-     * field for it.
+     * OPTIONAL, with no default at this layer, so a client on the previous release —
+     * which sends none of the three — still writes a product. What an ABSENT field
+     * means is decided by the write: a create fills the empty display, an update keeps
+     * what the row already holds. Defaulting here would turn an old client's edit of a
+     * price into the silent deletion of every location and feature an operator typed.
      */
-    displayLocations: productDisplayLocationsSchema.optional().default([]),
-    displayFeatures: productDisplayFeaturesSchema.optional().default([]),
-    serviceLocationLabel: productServiceLocationLabelSchema.optional().default(null),
+    displayLocations: productDisplayLocationsSchema.optional(),
+    displayFeatures: productDisplayFeaturesSchema.optional(),
+    serviceLocationLabel: productServiceLocationLabelSchema.optional(),
   })
   .refine((p) => (p.priceAmount === null) === (p.priceCurrency === null), {
     message: 'A price is an amount and a currency, or it is absent.',
