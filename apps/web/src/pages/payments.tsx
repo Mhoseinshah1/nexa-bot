@@ -221,11 +221,10 @@ export function TelegramIdentity({
 /** The route a payment was offered through, by name, or a dash for a wallet settlement. */
 function GatewayName({ provider }: { provider: string | null }) {
   if (provider === null) return <Dash />;
-  return provider === 'MANUAL_TRANSFER' ? (
-    <>{t('web.payment_gateway_provider_manual_transfer')}</>
-  ) : (
-    <Ltr>{provider}</Ltr>
-  );
+  if (provider === 'MANUAL_TRANSFER')
+    return <>{t('web.payment_gateway_provider_manual_transfer')}</>;
+  if (provider === 'TONPAYS') return <>{t('web.payment_gateway_provider_tonpays')}</>;
+  return <Ltr>{provider}</Ltr>;
 }
 
 /** A full id, or the field's own error. The same guard `/orders` uses on its filters. */
@@ -1291,6 +1290,97 @@ export function PaymentDetailPage({
                   <Ltr>{`${String(row.topupCashbackPercent)}%`}</Ltr>
                 </p>
                 <p className="muted small">{t('web.payment_topup_gift_hint')}</p>
+              </Card>
+            )}
+
+            {/*
+              The external gateway's side of this payment (WP11A): the provider's ids,
+              what its INQUIRY last said, what its webhook last hinted and how the
+              attempt ended. The provider's amounts are metadata only — the payment's own
+              amount above is what Nexa charged — and no payment link is shown.
+            */}
+            {row.gatewayInvoice !== null && (
+              <Card
+                title={t('web.payment_gateway_invoice')}
+                hint={t('web.payment_gateway_invoice_hint')}
+              >
+                <KV
+                  items={[
+                    [
+                      t('web.payment_gateway_invoice_order_id'),
+                      <Copyable key="po" value={row.gatewayInvoice.providerOrderId} />,
+                    ],
+                    [
+                      t('web.payment_gateway_invoice_id'),
+                      row.gatewayInvoice.providerInvoiceId === null ? (
+                        <Dash key="pi" />
+                      ) : (
+                        <Copyable key="pi" value={row.gatewayInvoice.providerInvoiceId} />
+                      ),
+                    ],
+                    [
+                      t('web.payment_gateway_invoice_creation'),
+                      <Ltr key="cs">
+                        {row.gatewayInvoice.creationState}
+                        {row.gatewayInvoice.creationErrorCode === null
+                          ? ''
+                          : ` · ${row.gatewayInvoice.creationErrorCode}`}
+                      </Ltr>,
+                    ],
+                    [
+                      t('web.payment_gateway_invoice_status'),
+                      <Ltr key="st">
+                        {row.gatewayInvoice.providerStatus ?? '—'}
+                        {row.gatewayInvoice.providerPaid === null
+                          ? ''
+                          : ` · paid=${String(row.gatewayInvoice.providerPaid)}`}
+                      </Ltr>,
+                    ],
+                    [
+                      t('web.payment_gateway_invoice_last_inquiry'),
+                      row.gatewayInvoice.lastInquiryAt === null ? (
+                        <Dash key="li" />
+                      ) : (
+                        <span key="li">
+                          {formatTimestamp(row.gatewayInvoice.lastInquiryAt)}
+                          {row.gatewayInvoice.lastInquiryErrorCode === null ? null : (
+                            <>
+                              {' '}
+                              <Ltr>{row.gatewayInvoice.lastInquiryErrorCode}</Ltr>
+                            </>
+                          )}
+                        </span>
+                      ),
+                    ],
+                    [
+                      t('web.payment_gateway_invoice_webhook'),
+                      <span key="wh">
+                        <Ltr>{row.gatewayInvoice.webhookStatusHint ?? '—'}</Ltr>
+                        {` · ${String(row.gatewayInvoice.webhookCount)}`}
+                      </span>,
+                    ],
+                    [
+                      t('web.payment_gateway_invoice_amounts'),
+                      <Ltr key="am">
+                        {`${row.gatewayInvoice.sentAmount} / ${row.gatewayInvoice.requestAmount ?? '—'} / ${row.gatewayInvoice.finalAmount ?? '—'} / ${row.gatewayInvoice.creditAmount ?? '—'} ${row.gatewayInvoice.providerUnit}`}
+                      </Ltr>,
+                    ],
+                    [
+                      t('web.payment_gateway_invoice_outcome'),
+                      <Ltr key="oc">{row.gatewayInvoice.outcome ?? '—'}</Ltr>,
+                    ],
+                    [
+                      t('web.payment_gateway_invoice_late'),
+                      row.gatewayInvoice.lateCompletionObservedAt === null ? (
+                        <Dash key="lt" />
+                      ) : (
+                        <Badge key="lt" tone="warn">
+                          {formatTimestamp(row.gatewayInvoice.lateCompletionObservedAt)}
+                        </Badge>
+                      ),
+                    ],
+                  ]}
+                />
               </Card>
             )}
 

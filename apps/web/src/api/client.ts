@@ -1376,6 +1376,20 @@ export function setPaymentGatewayStatus(input: {
 }
 
 /**
+ * Replaces a route's API key (WP11A). Write-only: the answer is the route's view, whose
+ * `credential.setAt` says a key is stored and never what it is. The key is sent once, in
+ * the body of this request, and this client keeps no copy of it.
+ */
+export function setPaymentGatewayCredential(input: {
+  provider: string;
+  idempotencyKey: string;
+  apiKey: string;
+}): Promise<PaymentGatewayResponse> {
+  const { provider, ...body } = input;
+  return post(PAYMENT_GATEWAY_ROUTES.credential(provider), body, paymentGatewayResponseSchema);
+}
+
+/**
  * The tenant's FAQ (customer UX completion §J): every entry, whatever its status, in the
  * customer's order. The first list of a fresh tenant is what copies the nine defaults in.
  */
