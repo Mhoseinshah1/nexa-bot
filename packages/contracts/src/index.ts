@@ -72,3 +72,4 @@ export * from './recovery.js';
 export * from './secrets.js';
 export * from './ports.js';
 export * from './http.js';
+export * from './reporting.js';
