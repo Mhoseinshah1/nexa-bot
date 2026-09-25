@@ -100,6 +100,9 @@ const renderList = (options: { query?: string; denied?: boolean; mayEdit?: boole
       route={{ path: '/resellers', query: new URLSearchParams(options.query ?? '') }}
       denied={options.denied ?? false}
       mayEdit={options.mayEdit ?? true}
+      mayViewWallet={false}
+      mayViewOrders={false}
+      mayViewAudit={false}
     />,
   );
 
@@ -129,7 +132,13 @@ describe('permission gating', () => {
   it('asks for no tier and draws no tier form without the keys', async () => {
     const api = stubApi(listRoutes());
     renderPage(
-      <ResellerTiersPage denied mayEdit={false} mayViewCatalog={false} mayViewPanels={false} />,
+      <ResellerTiersPage
+        denied
+        mayEdit={false}
+        mayViewCatalog={false}
+        mayViewPanels={false}
+        mayViewAudit={false}
+      />,
     );
     expect(await screen.findByText('شما به این بخش دسترسی ندارید.')).toBeInTheDocument();
     expect(api.calls).toHaveLength(0);
@@ -425,7 +434,15 @@ describe('the tiers page', () => {
 
   it('shows that a tier with no grants sells nothing, kind by kind', async () => {
     stubApi([{ url: '/reseller-tiers', body: { tiers: [tier()] } }]);
-    renderPage(<ResellerTiersPage denied={false} mayEdit mayViewCatalog mayViewPanels />);
+    renderPage(
+      <ResellerTiersPage
+        denied={false}
+        mayEdit
+        mayViewCatalog
+        mayViewPanels
+        mayViewAudit={false}
+      />,
+    );
     const table = await screen.findByRole('table', { name: 'سطوح' });
     const row = within(table).getByText('Gold').closest('tr') as HTMLElement;
     // Five kinds, each drawn as the refusal it is, and the consequence in words.
@@ -441,7 +458,15 @@ describe('the tiers page', () => {
       ...pickers,
       { url: `/reseller-tiers/${TIER_ID}/grants`, body: { tier: tier() } },
     ]);
-    renderPage(<ResellerTiersPage denied={false} mayEdit mayViewCatalog mayViewPanels />);
+    renderPage(
+      <ResellerTiersPage
+        denied={false}
+        mayEdit
+        mayViewCatalog
+        mayViewPanels
+        mayViewAudit={false}
+      />,
+    );
     await screen.findByText('Gold');
     fireEvent.click(screen.getByRole('button', { name: 'مجوزها' }));
 
@@ -483,7 +508,13 @@ describe('the tiers page', () => {
       ...pickers,
     ]);
     renderPage(
-      <ResellerTiersPage denied={false} mayEdit mayViewCatalog={false} mayViewPanels={false} />,
+      <ResellerTiersPage
+        denied={false}
+        mayEdit
+        mayViewCatalog={false}
+        mayViewPanels={false}
+        mayViewAudit={false}
+      />,
     );
     await screen.findByText('Gold');
     fireEvent.click(screen.getByRole('button', { name: 'مجوزها' }));
@@ -508,6 +539,7 @@ describe('the tiers page', () => {
         mayEdit={false}
         mayViewCatalog={false}
         mayViewPanels={false}
+        mayViewAudit={false}
       />,
     );
     await screen.findByText('Gold');
@@ -521,7 +553,15 @@ describe('the tiers page', () => {
 
   it('creates a tier with its limit in minor units and no percentage for the list price', async () => {
     const api = stubApi([{ url: '/reseller-tiers', body: { tiers: [] } }]);
-    renderPage(<ResellerTiersPage denied={false} mayEdit mayViewCatalog mayViewPanels />);
+    renderPage(
+      <ResellerTiersPage
+        denied={false}
+        mayEdit
+        mayViewCatalog
+        mayViewPanels
+        mayViewAudit={false}
+      />,
+    );
     await screen.findByText('هنوز سطحی ساخته نشده است.');
     fireEvent.change(screen.getByLabelText('نام سطح'), { target: { value: ' Bronze ' } });
     fireEvent.change(screen.getByLabelText('سقف اعتبار (واحد خرد)'), { target: { value: '0' } });

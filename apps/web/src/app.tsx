@@ -772,6 +772,9 @@ export function resolve(
           route={route}
           denied={!may('resellers.view')}
           mayEdit={may('resellers.edit')}
+          mayViewWallet={may('users.view')}
+          mayViewOrders={may('orders.view')}
+          mayViewAudit={may('audit.view')}
         />
       ),
       crumbs: [{ label: t('web.resellers_title') }],
@@ -793,6 +796,7 @@ export function resolve(
            */
           mayViewCatalog={may('catalog.view')}
           mayViewPanels={may('panels.view')}
+          mayViewAudit={may('audit.view')}
         />
       ),
       crumbs: [nav('resellers'), { label: t('web.reseller_tiers_title') }],
