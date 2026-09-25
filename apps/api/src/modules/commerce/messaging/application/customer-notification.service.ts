@@ -95,7 +95,8 @@ export interface NotificationSweepReport {
 }
 
 /** The ledger reasons a payment's credit sentence can name. */
-export type PaymentCreditReason = 'TOPUP_RECEIPT' | 'CASHBACK_TOPUP' | 'RECEIPT_CREDIT';
+export type PaymentCreditReason =
+  'TOPUP_RECEIPT' | 'TOPUP_GATEWAY' | 'CASHBACK_TOPUP' | 'RECEIPT_CREDIT';
 
 /**
  * The three kinds whose subject is a PAYMENT and whose sentence names what it credited
@@ -104,11 +105,16 @@ export type PaymentCreditReason = 'TOPUP_RECEIPT' | 'CASHBACK_TOPUP' | 'RECEIPT_
  * never be able to read its gift, nor a receipt credit a top-up's principal.
  */
 export const PAYMENT_CREDIT_FIGURES: Readonly<
-  Partial<Record<CustomerNotificationKind, PaymentCreditReason>>
+  Partial<Record<CustomerNotificationKind, readonly PaymentCreditReason[]>>
 > = {
-  WALLET_TOPUP_CREDITED: 'TOPUP_RECEIPT',
-  WALLET_TOPUP_GIFT_CREDITED: 'CASHBACK_TOPUP',
-  RECEIPT_CREDITED_TO_WALLET: 'RECEIPT_CREDIT',
+  /*
+   * A top-up's principal, whichever rail funded it: a reviewed transfer credits
+   * `TOPUP_RECEIPT` and an external gateway `TOPUP_GATEWAY` (WP11A). A payment has one
+   * method, so exactly one of the two exists for it — never its gift, never a receipt credit.
+   */
+  WALLET_TOPUP_CREDITED: ['TOPUP_RECEIPT', 'TOPUP_GATEWAY'],
+  WALLET_TOPUP_GIFT_CREDITED: ['CASHBACK_TOPUP'],
+  RECEIPT_CREDITED_TO_WALLET: ['RECEIPT_CREDIT'],
 };
 
 /**
@@ -178,7 +184,7 @@ export interface CustomerNotificationDeps {
     creditedForPayment: (
       scope: TenantContext,
       paymentId: string,
-      reason: PaymentCreditReason,
+      reasons: readonly PaymentCreditReason[],
     ) => Promise<Money | null>;
   };
   readonly uow: UnitOfWork<TransactionScope>;

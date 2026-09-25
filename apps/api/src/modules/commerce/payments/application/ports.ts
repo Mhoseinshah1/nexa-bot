@@ -438,6 +438,19 @@ export interface PaymentRepository {
    * anything else, and for a rejection recorded before the reason was mandatory.
    */
   rejectionReasonFor(scope: TenantContext, paymentId: string, tx?: unknown): Promise<string | null>;
+
+  /**
+   * Records the external gateway's own id for a GATEWAY payment (WP11A): the provider's
+   * invoice id, once, while the payment is PENDING. Conditional on the column being
+   * null, so a second writer changes nothing. Never money, never state.
+   */
+  setExternalReference(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    externalReference: string,
+    now: Date,
+    tx?: unknown,
+  ): Promise<boolean>;
 }
 
 /** A customer as Telegram knows them, for the payment list. */

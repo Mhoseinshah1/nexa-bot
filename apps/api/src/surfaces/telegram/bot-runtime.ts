@@ -93,9 +93,14 @@ import type { TrialService } from '../../modules/commerce/trials/application/tri
 import type { OrderService } from '../../modules/commerce/orders/application/order.service.js';
 import type { OrderRecord } from '../../modules/commerce/orders/application/ports.js';
 import type {
+  GatewayAttempt,
   ManualTransferInstruction,
   PaymentService,
 } from '../../modules/commerce/payments/application/payment.service.js';
+import type {
+  GatewayAttemptView,
+  GatewayPaymentService,
+} from '../../modules/commerce/payments/application/gateway-payment.service.js';
 import type { WalletService } from '../../modules/commerce/wallet/application/wallet.service.js';
 import { ProvisioningService } from '../../modules/commerce/provisioning/application/provisioning.service.js';
 import type { CustomerServiceOperation } from '../../modules/commerce/provisioning/application/provisioning.service.js';
@@ -161,6 +166,8 @@ export const BOT_INTENTS = [
   'PAY_WALLET',
   'PAY_MANUAL',
   'PAY_GATEWAY',
+  /* WP11A: the customer asks what became of an external-gateway attempt. Names the payment. */
+  'GATEWAY_CHECK',
   'PAY_CANCEL_ASK',
   'PAY_CANCEL',
   'PAY_SENT',
@@ -599,14 +606,20 @@ export const CONFIRM_CALLBACK_PREFIX = 'c:';
 export const WALLET_PAY_CALLBACK_PREFIX = 'w:';
 export const MANUAL_PAY_CALLBACK_PREFIX = 'm:';
 /**
- * A rail this installation does not have.
- *
- * The button is NOT drawn — `paymentButtons` offers only what can be performed — and the
- * prefix exists anyway, because a customer holding an older message can still tap one.
- * Answering it with `bot.payment.unconfigured` is the honest reply; letting it fall
- * through to `bot.unknown_command` would tell them they typed something wrong.
+ * Paying an order through an external gateway (WP11A, TonPays). Carries the ORDER ID and
+ * nothing else; the route is re-decided on the server when the tap arrives. Drawn only
+ * when a real external route is offered for this order; a tap on a stale button when
+ * none is answers `bot.payment.gateway_unavailable`.
  */
 export const GATEWAY_PAY_CALLBACK_PREFIX = 'g:';
+
+/**
+ * "Check my payment" on an external-gateway attempt (WP11A). Names the PAYMENT. Reads the
+ * stored state and brings the next server-to-server inquiry forward; it never calls the
+ * gateway while Telegram waits, and never says paid until the payment is CONFIRMED.
+ * `g` then a letter, so it cannot shadow `g:` nor be shadowed by it.
+ */
+export const GATEWAY_CHECK_CALLBACK_PREFIX = 'gc:';
 
 /**
  * Withdrawing a pending out-of-band payment. It names the PAYMENT, not the order.
@@ -2134,6 +2147,9 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
     if (data.startsWith(GATEWAY_PAY_CALLBACK_PREFIX)) {
       return callbackCommand('PAY_GATEWAY', data.slice(GATEWAY_PAY_CALLBACK_PREFIX.length), id);
     }
+    if (data.startsWith(GATEWAY_CHECK_CALLBACK_PREFIX)) {
+      return callbackCommand('GATEWAY_CHECK', data.slice(GATEWAY_CHECK_CALLBACK_PREFIX.length), id);
+    }
     /*
      * ASK before the destructive prefix, and they are different letters so the order
      * cannot matter today. Fixed anyway for the reason the resend/service pair states:
@@ -3211,6 +3227,12 @@ export interface BotRuntimeDeps {
    */
   readonly captures: CustomerCaptureService;
   readonly topup: WalletTopupFlowService;
+  /**
+   * The external-gateway lane's customer reads (WP11A): an attempt that is this
+   * customer's own, and the check tap that brings its next inquiry forward. No provider
+   * call happens through either.
+   */
+  readonly gateway: Pick<GatewayPaymentService, 'attemptFor' | 'requestCheck'>;
   readonly screens: CustomerScreenComposer;
   readonly counters: CustomerCountersReader;
   /** The payment routes per purpose; the external chooser is drawn only from a real route. */
@@ -3834,6 +3856,33 @@ function refusal(error: unknown): PendingReply {
   const key = isNexaError(error) ? REFUSAL_REPLIES[error.code] : undefined;
   if (key === undefined) throw error;
   return { key, values: refusalValuesFor(key), buttons: [], orderId: null };
+}
+
+/** The external gateway cannot be used right now (WP11A): never the customer's failure. */
+function gatewayUnavailable(): PendingReply {
+  return {
+    key: 'bot.payment.gateway_unavailable',
+    values: {},
+    buttons: [mainMenuButton()],
+    orderId: null,
+  };
+}
+
+/**
+ * A refusal of an external-gateway request. The route being off, unconfigured or unable
+ * to take this amount is "unavailable" (the shared table would answer a top-up sentence
+ * for `PAYMENT_GATEWAY_UNAVAILABLE`); everything else goes through the shared table.
+ */
+function gatewayRefusal(error: unknown): PendingReply {
+  if (
+    isNexaError(error) &&
+    (error.code === COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE ||
+      error.code === COMMERCE_ERROR_CODES.PAYMENT_METHOD_UNAVAILABLE ||
+      error.code === COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_AMOUNT_REJECTED)
+  ) {
+    return gatewayUnavailable();
+  }
+  return refusal(error);
 }
 
 /**
@@ -8125,8 +8174,11 @@ export class BotRuntime {
      * is reached by a customer holding an older message, and it is the one place that
      * answer is produced. Nothing here pretends money moved.
      */
-    if (command.intent === 'PAY_GATEWAY') {
-      return { key: 'bot.payment.unconfigured', values: {}, buttons: [], orderId: null };
+    if (command.intent === 'PAY_GATEWAY' && command.targetId !== null) {
+      return this.gatewayPayment(scope, actor, command.targetId, customer, input.idempotencyKey);
+    }
+    if (command.intent === 'GATEWAY_CHECK' && command.targetId !== null) {
+      return this.gatewayCheck(scope, command.targetId, customer);
     }
     if (command.intent === 'PAY_CANCEL_ASK' && command.targetId !== null) {
       return this.cancelPaymentAsk(scope, command.targetId, customer);
@@ -8613,7 +8665,10 @@ export class BotRuntime {
           total: order.totals.total,
           ...(order.expiresAt === null ? {} : { expiresAt: order.expiresAt }),
         },
-        buttons: paymentButtons(order.id, await this.deps.payments.manualTransferOffered(scope)),
+        buttons: paymentButtons(order.id, {
+          manual: await this.deps.payments.manualTransferOffered(scope),
+          external: await this.externalOffered(scope, customer.id, order.totals.total),
+        }),
         orderId: order.id,
       };
     } catch (error) {
@@ -9043,6 +9098,9 @@ export class BotRuntime {
       }
       if (chosen.outcome === 'NOT_OFFERED') {
         return this.topupChooser(scope, captureId, chosen.routes);
+      }
+      if (chosen.outcome === 'GATEWAY_REQUESTED') {
+        return this.gatewayAttemptReply(chosen.attempt, null);
       }
       return this.transferInstruction(scope, chosen.instruction, null);
     } catch (error) {
@@ -9548,9 +9606,7 @@ export class BotRuntime {
       features: display?.displayFeatures ?? [],
       walletBalance: money(balance.amountMinor, balance.currency),
     });
-    const external = (
-      await this.deps.routes.routesFor(scope, customer.id, 'SERVICE_PURCHASE', order.totals.total)
-    ).some((route) => route.descriptor.settlesVia === 'GATEWAY');
+    const external = await this.externalOffered(scope, customer.id, order.totals.total);
     return {
       key: screen.key,
       values: screen.values,
@@ -9890,7 +9946,10 @@ export class BotRuntime {
           total: order.totals.total,
           ...(order.expiresAt === null ? {} : { expiresAt: order.expiresAt }),
         },
-        buttons: paymentButtons(order.id, await this.deps.payments.manualTransferOffered(scope)),
+        buttons: paymentButtons(order.id, {
+          manual: await this.deps.payments.manualTransferOffered(scope),
+          external: await this.externalOffered(scope, customer.id, order.totals.total),
+        }),
         orderId: order.id,
       };
     } catch (error) {
@@ -10291,6 +10350,149 @@ export class BotRuntime {
     } catch (error) {
       return refusal(error);
     }
+  }
+
+  /**
+   * Whether an external gateway route is offered for paying this amount (WP11A) — the one
+   * question the pre-invoice and the awaiting-payment message both ask before drawing the
+   * gateway button, and the question the service asks again when it is tapped.
+   */
+  private async externalOffered(
+    scope: TenantContext,
+    customerId: UserId,
+    amount: Money,
+  ): Promise<boolean> {
+    return (await this.deps.routes.routesFor(scope, customerId, 'SERVICE_PURCHASE', amount)).some(
+      (route) => route.descriptor.settlesVia === 'GATEWAY',
+    );
+  }
+
+  /**
+   * Paying an order through an external gateway (WP11A). The tap carries the ORDER ID.
+   *
+   * The route is the first external route offered for this order, in the operator's
+   * order — decided BEFORE a draft is confirmed, so a customer shown a stale button does
+   * not reserve a slot for a payment they cannot make. Then the service opens (or hands
+   * back) the attempt; the provider invoice is created by the worker, never while
+   * Telegram waits, so the first answer is usually "being prepared" with a check button.
+   *
+   * A route that cannot be used right now is answered as unavailable, never as the
+   * customer's payment failing (brief §19).
+   */
+  private async gatewayPayment(
+    scope: TenantContext,
+    actor: ActorContext,
+    orderId: string,
+    customer: CustomerRecord,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    try {
+      const before = await this.deps.orders.orderForCustomer(scope, actor, {
+        customerId: customer.id,
+        orderId,
+      });
+      const route = (
+        await this.deps.routes.routesFor(
+          scope,
+          customer.id,
+          'SERVICE_PURCHASE',
+          before.totals.total,
+        )
+      ).find((candidate) => candidate.descriptor.settlesVia === 'GATEWAY');
+      if (route === undefined) return gatewayUnavailable();
+      if (before.state === 'DRAFT') {
+        await this.confirmDraft(scope, actor, before, customer, idempotencyKey);
+      }
+      const attempt = await this.deps.payments.requestGatewayPayment(scope, actor, customer.id, {
+        idempotencyKey: `${idempotencyKey}:gateway-pay`,
+        orderId,
+        provider: route.provider,
+      });
+      return this.gatewayAttemptReply(attempt, orderId);
+    } catch (error) {
+      return gatewayRefusal(error);
+    }
+  }
+
+  /**
+   * "Check my payment" (WP11A): the stored state, and the next inquiry brought forward.
+   * Another customer's payment, or one that is not a gateway attempt, is answered as a
+   * closed attempt — never with anything about it.
+   */
+  private async gatewayCheck(
+    scope: TenantContext,
+    paymentId: string,
+    customer: CustomerRecord,
+  ): Promise<PendingReply> {
+    const view = await this.deps.gateway.attemptFor(scope, customer.id, paymentId);
+    if (view === null) {
+      return {
+        key: 'bot.payment.gateway_closed',
+        values: {},
+        buttons: [mainMenuButton()],
+        orderId: null,
+      };
+    }
+    await this.deps.gateway.requestCheck(scope, view);
+    return this.gatewayAttemptReply({ ...view, reissued: true }, view.payment.orderId);
+  }
+
+  /**
+   * An external-gateway attempt, as the customer sees it (brief §11, §23).
+   *
+   * Only a CONFIRMED payment is ever called paid, and a payment is CONFIRMED only by the
+   * gateway's own inquiry through the one settlement path. The link is the invoice's web
+   * link when the gateway returned one, else its Telegram link; nothing is fabricated.
+   */
+  private gatewayAttemptReply(
+    attempt: GatewayAttempt | GatewayAttemptView,
+    orderId: string | null,
+  ): PendingReply {
+    const { payment, invoice } = attempt;
+    const check: CustomerButton = {
+      label: { kind: 'TEMPLATE', key: 'bot.payment.gateway_check_button' },
+      data: `${GATEWAY_CHECK_CALLBACK_PREFIX}${payment.id}`,
+    };
+    const reply = (key: TemplateKey, buttons: readonly CustomerButton[]): PendingReply => ({
+      key,
+      values: {},
+      buttons: [...buttons, mainMenuButton()],
+      orderId,
+    });
+    if (payment.state === 'CONFIRMED') return reply('bot.payment.gateway_confirmed', []);
+    if (payment.state === 'FAILED') {
+      // A create the gateway refused is "unavailable"; an invoice it did not approve failed.
+      return reply(
+        invoice.creationState === 'CREATE_FAILED'
+          ? 'bot.payment.gateway_unavailable'
+          : 'bot.payment.gateway_failed',
+        [],
+      );
+    }
+    const now = this.deps.clock.now().getTime();
+    if (
+      payment.state !== 'PENDING' ||
+      payment.expiresAt === null ||
+      payment.expiresAt.getTime() <= now
+    ) {
+      return reply('bot.payment.gateway_closed', []);
+    }
+    if (invoice.creationState === 'CREATING')
+      return reply('bot.payment.gateway_preparing', [check]);
+    const link = invoice.webInvoiceUrl ?? invoice.invoiceUrl;
+    if (invoice.creationState !== 'CREATED' || link === null) {
+      return reply('bot.payment.gateway_unknown', []);
+    }
+    return {
+      key: 'bot.payment.gateway_invoice',
+      values: { total: payment.amount, expiresAt: payment.expiresAt },
+      buttons: [
+        { label: { kind: 'TEMPLATE', key: 'bot.payment.gateway_pay_button' }, url: link },
+        check,
+        mainMenuButton(),
+      ],
+      orderId,
+    };
   }
 
   /**
@@ -10937,12 +11139,25 @@ function tutorialFor(platform: ConnectionGuidePlatform): PendingReply {
   };
 }
 
-function paymentButtons(orderId: string, manualAvailable: boolean): readonly CustomerButton[] {
+function paymentButtons(
+  orderId: string,
+  offered: { readonly manual: boolean; readonly external: boolean },
+): readonly CustomerButton[] {
+  const manualAvailable = offered.manual;
   return [
     {
       label: { kind: 'TEMPLATE', key: 'bot.payment.wallet_button' },
       data: `${WALLET_PAY_CALLBACK_PREFIX}${orderId}`,
     },
+    // The external gateway (WP11A), only when a real external route is offered for it.
+    ...(offered.external
+      ? [
+          {
+            label: { kind: 'TEMPLATE' as const, key: 'bot.payment.gateway_button' as const },
+            data: `${GATEWAY_PAY_CALLBACK_PREFIX}${orderId}`,
+          },
+        ]
+      : []),
     /*
      * Drawn only when there is somewhere for the money to go.
      *

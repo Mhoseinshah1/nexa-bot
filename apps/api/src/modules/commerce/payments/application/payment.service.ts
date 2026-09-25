@@ -60,6 +60,12 @@ import type {
 import type { PaymentGatewayRecord } from './gateway-ports.js';
 import type { OfferedGateway, PaymentGatewayService } from './payment-gateway.service.js';
 import type { PaymentReceiptRepository, ReceiptCaptureRepository } from './receipt-ports.js';
+import type {
+  ExternalGatewayAdapter,
+  GatewayCredentialStore,
+  GatewayInvoiceRecord,
+  GatewayInvoiceRepository,
+} from './gateway-invoice-ports.js';
 import type { ReceiptCreditRepository } from './receipt-credit-ports.js';
 import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
@@ -237,7 +243,68 @@ export interface PaymentServiceDeps {
   readonly ids: IdGenerator;
   /** Derives a payment's reference from an idempotency key. See `referenceFor`. */
   readonly operationId: (idempotencyKey: string) => OperationId;
+  /**
+   * The external gateway's side of an attempt (WP11A): opened in the transaction that
+   * creates the payment, and read to hand an open attempt back. This module writes the
+   * row's FIRST state only; the invoice lane owns everything after.
+   */
+  readonly gatewayInvoices: Pick<
+    GatewayInvoiceRepository,
+    'open' | 'findOpenAttempt' | 'findByPayment'
+  >;
+  /**
+   * The adapter for a provider, or null for a route that is not an external gateway.
+   * Consulted for the three things an attempt needs before any call: the amount in the
+   * provider's unit, a fresh provider order id, and the attempt's lifetime.
+   */
+  readonly gatewayAdapters: (
+    provider: PaymentGatewayProvider,
+  ) => Pick<
+    ExternalGatewayAdapter,
+    'unit' | 'providerAmountOf' | 'newOrderId' | 'attemptLifetimeMs'
+  > | null;
+  /** Whether a route's API key is stored — READ only; never the key. */
+  readonly gatewayCredentials: Pick<GatewayCredentialStore, 'setAt'>;
 }
+
+/**
+ * An external-gateway attempt as the customer's command answers it: the payment and the
+ * gateway's side of it. `reissued` is true when an open attempt was handed back.
+ */
+export interface GatewayAttempt {
+  readonly payment: PaymentRecord;
+  readonly invoice: GatewayInvoiceRecord;
+  readonly reissued: boolean;
+}
+
+/**
+ * How a gateway approval was received by the one settlement path (WP11A §5.5).
+ *
+ * - `SETTLED` — this call confirmed the payment and settled the order, or credited the
+ *   wallet. Settled includes the automatic undeliverable refund to the wallet: the money
+ *   moved, and the order took one of its two terminal outcomes.
+ * - `ALREADY_CONFIRMED` — somebody got there first; nothing further happened.
+ * - `NOT_ELIGIBLE` — nothing happened, and `reason` says why: the attempt's deadline
+ *   passed, the payment was already closed another way, or its order is no longer
+ *   awaiting payment. The caller records this as an anomaly and moves no money.
+ */
+export type GatewayConfirmation =
+  | { readonly outcome: 'SETTLED'; readonly payment: PaymentRecord }
+  | { readonly outcome: 'ALREADY_CONFIRMED'; readonly payment: PaymentRecord }
+  | {
+      readonly outcome: 'NOT_ELIGIBLE';
+      readonly reason:
+        | 'DEADLINE_PASSED'
+        | 'PAYMENT_NOT_PENDING'
+        | 'NOT_A_GATEWAY_PAYMENT'
+        | 'ORDER_NOT_AWAITING_PAYMENT';
+      readonly payment: PaymentRecord;
+    };
+
+/** The action every gateway audit row carries, one per command. */
+const GATEWAY_REQUEST_ACTION = 'payment.gateway_request';
+const GATEWAY_CONFIRM_ACTION = 'payment.gateway_confirm';
+const GATEWAY_FAIL_ACTION = 'payment.gateway_fail';
 
 /**
  * What a customer's payment command carries. An ORDER ID AND NOTHING ELSE.
@@ -2135,7 +2202,7 @@ export class PaymentService {
     tx: TransactionScope,
     payment: PaymentRecord,
     confirmation: {
-      readonly evidenceKind: 'WALLET_DEBIT' | 'OPERATOR_REVIEW';
+      readonly evidenceKind: 'WALLET_DEBIT' | 'OPERATOR_REVIEW' | 'GATEWAY_INQUIRY';
       readonly evidenceNote: string | null;
       readonly confirmedByAdminId: string | null;
       readonly confirmedAt: Date;
@@ -2201,7 +2268,13 @@ export class PaymentService {
         id: this.deps.ids.uuid(),
         customerId: confirmed.customerId,
         direction: 'CREDIT',
-        reason: 'TOPUP_RECEIPT',
+        /*
+         * WHERE the money came from, by the payment's method: a card-to-card transfer an
+         * operator reviewed is `TOPUP_RECEIPT`, an external gateway's approved payment is
+         * `TOPUP_GATEWAY` (WP11A). Each has its own once-per-payment index, and both use
+         * the same derived reference, so one payment is one principal whichever it is.
+         */
+        reason: confirmed.method === 'GATEWAY' ? 'TOPUP_GATEWAY' : 'TOPUP_RECEIPT',
         // The payment's OWN frozen amount. Not a figure from the confirmation, which
         // carries none, and not a re-read of the presets, which may have changed.
         amount: confirmed.amount,
@@ -3037,6 +3110,546 @@ export class PaymentService {
     );
   }
 
+  // ---------------------------------------------------------------------------------------
+  // WP11A — external gateway attempts (`docs/tonpays-gateway-audit.md` §5.4–§5.5).
+  //
+  // Three commands and nothing else. Creating an attempt is a DATABASE write: the call to
+  // the provider happens later, in the worker, outside every transaction and never while
+  // Telegram waits. Confirming one is the SAME settlement path every other rail uses —
+  // `confirmAndSettle` or `confirmAndCredit` — with evidence `GATEWAY_INQUIRY`. Failing
+  // one is `PENDING -> FAILED` with no administrator. None of the three knows TonPays.
+  // ---------------------------------------------------------------------------------------
+
+  /**
+   * A customer choosing an external gateway to pay an ORDER.
+   *
+   * Carries an order id and a provider, and nothing else a figure could come from: the
+   * amount is the order's frozen total, re-read inside the transaction. The route must be
+   * among `routesFor(SERVICE_PURCHASE, total)` — the same question the pre-invoice asked
+   * before it drew the button — and settle through `GATEWAY`.
+   *
+   * An OPEN attempt for this order through this provider — PENDING, inside its deadline,
+   * its invoice being created or created — is handed back rather than doubled: two live
+   * invoices for one order is a customer who can pay twice. A closed one (failed,
+   * expired, or a create whose answer was lost) is not open, so the customer's next tap
+   * is a NEW attempt with a new provider order id (brief §16). The order itself is never
+   * cancelled by an attempt's failure.
+   */
+  async requestGatewayPayment(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: UserId,
+    intent: {
+      readonly idempotencyKey: string;
+      readonly orderId: string;
+      readonly provider: PaymentGatewayProvider;
+    },
+  ): Promise<GatewayAttempt> {
+    const orderId = this.orderId(intent.orderId);
+    const denial = { action: GATEWAY_REQUEST_ACTION, entityType: 'Order', entityId: orderId };
+    await this.authorize(scope, actor, PAYMENT_PLACE_PERMISSION, denial);
+
+    const requestHash = hashRequest({
+      customerId,
+      orderId,
+      method: 'GATEWAY',
+      provider: intent.provider,
+    });
+    const replayed = await this.replayedAttempt(scope, intent.idempotencyKey, requestHash);
+    if (replayed !== null) return replayed;
+
+    const now = this.deps.clock.now();
+    const reference = this.referenceFor(intent.idempotencyKey, 'gateway');
+    const paymentId = this.deps.ids.uuid() as PaymentId;
+
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      PAYMENT_PLACE_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        // The customer row first, in the order every issuing path takes it.
+        if (!(await this.deps.wallet.lockCustomer(scope, customerId, tx))) {
+          throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
+        }
+        await this.assertCustomerMayPay(scope, customerId, tx);
+        const order = await this.orderAwaitingPayment(
+          scope,
+          orderId,
+          customerId,
+          tx,
+          now,
+          'REFUSE_AFTER_DEADLINE',
+        );
+        const route = await this.gatewayRouteFor(
+          scope,
+          customerId,
+          'SERVICE_PURCHASE',
+          order.totals.total,
+          intent.provider,
+          tx,
+        );
+        return this.openGatewayAttempt(scope, actor, tx, {
+          customerId,
+          orderId,
+          amount: order.totals.total,
+          provider: route.provider,
+          // An order payment promises no top-up gift (File 02 §17), exactly as the manual path.
+          topupCashbackPercent: null,
+          paymentId,
+          reference,
+          now,
+          idempotencyKey: intent.idempotencyKey,
+          requestHash,
+        });
+      },
+    );
+  }
+
+  /**
+   * A customer topping their wallet up through an external gateway, for an amount they
+   * typed or tapped (customer UX completion §F), through the route they chose.
+   *
+   * The amount is checked against the installation's floor and ceiling exactly as a
+   * manual typed top-up is (`typedTopupAmount`), and the route must be among
+   * `routesFor(WALLET_TOPUP, amount)` and settle through `GATEWAY`. The route's gift is
+   * SNAPSHOTTED onto the payment now, frozen by 0114, and applied exactly once at
+   * settlement by the existing top-up path.
+   */
+  async requestGatewayTopup(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: UserId,
+    intent: {
+      readonly idempotencyKey: string;
+      readonly amount: Money;
+      readonly provider: PaymentGatewayProvider;
+    },
+  ): Promise<GatewayAttempt> {
+    const denial = { action: GATEWAY_REQUEST_ACTION, entityType: 'Customer', entityId: customerId };
+    await this.authorize(scope, actor, PAYMENT_PLACE_PERMISSION, denial);
+
+    const requestHash = hashRequest({
+      customerId,
+      amountMinor: intent.amount.amountMinor.toString(),
+      currency: intent.amount.currency,
+      provider: intent.provider,
+      method: 'GATEWAY',
+      purpose: 'WALLET_TOPUP',
+    });
+    const replayed = await this.replayedAttempt(scope, intent.idempotencyKey, requestHash);
+    if (replayed !== null) return replayed;
+
+    const now = this.deps.clock.now();
+    const reference = this.referenceFor(intent.idempotencyKey, 'gateway-topup');
+    const paymentId = this.deps.ids.uuid() as PaymentId;
+
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      PAYMENT_PLACE_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        if (!(await this.deps.wallet.lockCustomer(scope, customerId, tx))) {
+          throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
+        }
+        await this.assertCustomerMayPay(scope, customerId, tx);
+        const amount = await this.typedTopupAmount(scope, intent.amount, tx);
+        const route = await this.gatewayRouteFor(
+          scope,
+          customerId,
+          'WALLET_TOPUP',
+          amount,
+          intent.provider,
+          tx,
+        );
+        return this.openGatewayAttempt(scope, actor, tx, {
+          customerId,
+          orderId: null,
+          amount,
+          provider: route.provider,
+          topupCashbackPercent: route.gateway.topupCashbackPercent,
+          paymentId,
+          reference,
+          now,
+          idempotencyKey: intent.idempotencyKey,
+          requestHash,
+        });
+      },
+    );
+  }
+
+  /**
+   * An external gateway's INQUIRY said this payment was approved: confirm it, through the
+   * one settlement path, if — and only if — it is still eligible (WP11A §5.5).
+   *
+   * Called by the gateway lane as `SYSTEM_JOB`, after the provider's answer is on record.
+   * The whole decision is taken under the payment's row lock:
+   *
+   * - a payment already CONFIRMED is `ALREADY_CONFIRMED`, and nothing happens again —
+   *   a webhook, a reconciliation pass and a second replica all converge here;
+   * - a payment that is not a PENDING `GATEWAY` payment, or whose own deadline has
+   *   passed (`now >= expires_at`, the sweep's own comparison, whether or not the sweep
+   *   has run), is `NOT_ELIGIBLE` and NOTHING moves — the late completion the brief
+   *   forbids settling;
+   * - an order payment whose order is no longer `AWAITING_PAYMENT` is `NOT_ELIGIBLE`
+   *   too, rather than the throw `confirmAndSettle` would give it: money that arrived for
+   *   an order already paid or closed is an operator's anomaly, never a second settlement.
+   *
+   * Otherwise the order is settled (`confirmAndSettle`) or the wallet credited with its
+   * gift (`confirmAndCredit`), with evidence `GATEWAY_INQUIRY` and no administrator. The
+   * amount is the payment's own frozen snapshot; nothing the provider said about amounts
+   * reaches this method, which is the owner's amount rule by construction.
+   *
+   * An undeliverable order is refunded to the wallet in the same transaction —
+   * `onIneligible` is `REFUND` for any evidence but a wallet debit, because this money
+   * has already moved. That is the existing one credit path, not a provider refund.
+   */
+  async confirmGatewayPayment(
+    scope: TenantContext,
+    actor: ActorContext,
+    id: string,
+    input: { readonly evidenceNote: string | null },
+  ): Promise<GatewayConfirmation> {
+    const paymentId = this.paymentId(id);
+    const denial = { action: GATEWAY_CONFIRM_ACTION, entityType: 'Payment', entityId: paymentId };
+    await this.authorize(scope, actor, PAYMENT_PLACE_PERMISSION, denial);
+    const now = this.deps.clock.now();
+
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      PAYMENT_PLACE_PERMISSION,
+      denial,
+      async (tx): Promise<GatewayConfirmation> => {
+        await this.assertScopeActive(scope, tx);
+        const payment = await this.deps.repository.findByIdForUpdate(scope, paymentId, tx);
+        if (payment === null) {
+          throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
+        }
+        if (payment.method !== 'GATEWAY') {
+          return { outcome: 'NOT_ELIGIBLE', reason: 'NOT_A_GATEWAY_PAYMENT', payment };
+        }
+        if (payment.state === 'CONFIRMED') return { outcome: 'ALREADY_CONFIRMED', payment };
+        if (payment.state !== 'PENDING') {
+          return { outcome: 'NOT_ELIGIBLE', reason: 'PAYMENT_NOT_PENDING', payment };
+        }
+        /*
+         * The attempt's own deadline, hard, with no grace (brief §3). `expires_at` is
+         * always set on a gateway payment; a null is treated as past, never as "none".
+         */
+        if (payment.expiresAt === null || now.getTime() >= payment.expiresAt.getTime()) {
+          return { outcome: 'NOT_ELIGIBLE', reason: 'DEADLINE_PASSED', payment };
+        }
+        const confirmation = {
+          evidenceKind: 'GATEWAY_INQUIRY' as const,
+          evidenceNote: input.evidenceNote,
+          confirmedByAdminId: null,
+          confirmedAt: now,
+        };
+        if (payment.orderId === null) {
+          const credited = await this.confirmAndCredit(
+            scope,
+            actor,
+            tx,
+            payment,
+            confirmation,
+            now,
+            GATEWAY_CONFIRM_ACTION,
+          );
+          return { outcome: 'SETTLED', payment: credited };
+        }
+        const order = await this.deps.orders.findById(scope, payment.orderId, tx);
+        if (
+          order === null ||
+          order.customerId !== payment.customerId ||
+          order.state !== 'AWAITING_PAYMENT'
+        ) {
+          return { outcome: 'NOT_ELIGIBLE', reason: 'ORDER_NOT_AWAITING_PAYMENT', payment };
+        }
+        const settled = await this.confirmAndSettle(
+          scope,
+          actor,
+          tx,
+          payment,
+          order,
+          confirmation,
+          now,
+          GATEWAY_CONFIRM_ACTION,
+        );
+        return { outcome: 'SETTLED', payment: settled.payment };
+      },
+    );
+  }
+
+  /**
+   * An external gateway definitively did NOT approve this attempt: `PENDING -> FAILED`,
+   * with no administrator (`payments_resolution_reviewer_check`'s other half: that is
+   * how a gateway-driven failure is told from a person's rejection).
+   *
+   * The note is a machine code (`<provider>:<status or error>`), never a provider body.
+   * The order is untouched — a failed attempt is not a withdrawn purchase, and the
+   * customer may pay again. `notifyCustomer` is false for a failure that is the
+   * MERCHANT'S configuration (brief §19): that is never presented as the customer's
+   * payment failing.
+   *
+   * Returns whether this call moved the row. A payment already closed is left alone.
+   */
+  async failGatewayPayment(
+    scope: TenantContext,
+    actor: ActorContext,
+    id: string,
+    input: { readonly reasonCode: string; readonly notifyCustomer: boolean },
+  ): Promise<boolean> {
+    const paymentId = this.paymentId(id);
+    const denial = { action: GATEWAY_FAIL_ACTION, entityType: 'Payment', entityId: paymentId };
+    await this.authorize(scope, actor, PAYMENT_PLACE_PERMISSION, denial);
+    const now = this.deps.clock.now();
+    const note = input.reasonCode.slice(0, 120);
+
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      PAYMENT_PLACE_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        const payment = await this.deps.repository.findByIdForUpdate(scope, paymentId, tx);
+        if (payment === null || payment.method !== 'GATEWAY' || payment.state !== 'PENDING') {
+          return false;
+        }
+        const moved = await this.deps.repository.resolve(
+          scope,
+          paymentId,
+          'FAILED',
+          { resolvedByAdminId: null, resolutionNote: note, resolvedAt: now },
+          now,
+          tx,
+        );
+        if (!moved) return false;
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action: GATEWAY_FAIL_ACTION,
+            entityType: 'Payment',
+            entityId: paymentId,
+            before: { state: 'PENDING' },
+            after: {
+              state: 'FAILED',
+              orderId: payment.orderId,
+              gatewayProvider: payment.gatewayProvider,
+              reason: note,
+            },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        if (input.notifyCustomer) {
+          await this.deps.notifier.notify(
+            scope,
+            payment.customerId,
+            'GATEWAY_PAYMENT_FAILED',
+            paymentId,
+            now,
+            tx,
+          );
+        }
+        return true;
+      },
+    );
+  }
+
+  /**
+   * The route a gateway attempt is issued against, re-decided inside the transaction:
+   * offered for this purpose, customer and amount, and settling through `GATEWAY` with an
+   * adapter behind it and a stored key.
+   */
+  private async gatewayRouteFor(
+    scope: TenantContext,
+    customerId: UserId,
+    purpose: PaymentPurpose,
+    amount: Money,
+    provider: PaymentGatewayProvider,
+    tx: TransactionScope,
+  ): Promise<{
+    readonly provider: PaymentGatewayProvider;
+    readonly gateway: PaymentGatewayRecord;
+  }> {
+    const routes = await this.deps.gateways.routesFor(scope, customerId, purpose, amount, tx);
+    const chosen = routes.find((route) => route.provider === provider);
+    if (chosen === undefined || chosen.descriptor.settlesVia !== 'GATEWAY') {
+      throw errors.conflict(
+        purpose === 'WALLET_TOPUP'
+          ? COMMERCE_ERROR_CODES.TOPUP_NOT_OFFERED
+          : COMMERCE_ERROR_CODES.PAYMENT_METHOD_UNAVAILABLE,
+        'That payment route is not offered for this payment.',
+      );
+    }
+    if ((await this.deps.gatewayCredentials.setAt(scope, provider, tx)) === null) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
+        'This payment route is not configured.',
+        { reason: 'CREDENTIAL_MISSING' },
+      );
+    }
+    return { provider: chosen.provider, gateway: chosen.gateway };
+  }
+
+  /** The shared body of the two gateway requests: hand back an open attempt, or open one. */
+  private async openGatewayAttempt(
+    scope: TenantContext,
+    actor: ActorContext,
+    tx: TransactionScope,
+    input: {
+      readonly customerId: UserId;
+      readonly orderId: OrderId | null;
+      readonly amount: Money;
+      readonly provider: PaymentGatewayProvider;
+      readonly topupCashbackPercent: number | null;
+      readonly paymentId: PaymentId;
+      readonly reference: string;
+      readonly now: Date;
+      readonly idempotencyKey: string;
+      readonly requestHash: string;
+    },
+  ): Promise<GatewayAttempt> {
+    const adapter = this.deps.gatewayAdapters(input.provider);
+    if (adapter === null) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.PAYMENT_METHOD_UNAVAILABLE,
+        'This installation cannot take a payment that way.',
+      );
+    }
+    const open = await this.deps.gatewayInvoices.findOpenAttempt(
+      scope,
+      {
+        provider: input.provider,
+        orderId: input.orderId,
+        customerId: input.customerId,
+        now: input.now,
+      },
+      tx,
+    );
+    let payment: PaymentRecord;
+    let invoice: GatewayInvoiceRecord;
+    if (open !== null) {
+      const existing = await this.deps.repository.findById(scope, open.paymentId, tx);
+      if (existing === null) {
+        throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
+      }
+      payment = existing;
+      invoice = open;
+    } else {
+      /*
+       * The amount in the provider's unit, decided BEFORE anything is written. An amount
+       * with no exact value there (an IRR figure that is not a whole Toman) is refused
+       * rather than rounded: the invoice would be for a figure the customer never saw.
+       */
+      const sentAmount = adapter.providerAmountOf(input.amount);
+      if (sentAmount === null) {
+        throw errors.conflict(
+          COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
+          'This amount cannot be paid through this route.',
+          { reason: 'AMOUNT_NOT_REPRESENTABLE' },
+        );
+      }
+      payment = await this.deps.repository.create(
+        scope,
+        {
+          id: input.paymentId,
+          customerId: input.customerId,
+          orderId: input.orderId,
+          method: 'GATEWAY',
+          // The order's frozen total, or the top-up amount `typedTopupAmount` accepted.
+          amount: input.amount,
+          reference: input.reference,
+          // The attempt's own hard lifetime (brief §3), from its creation, no grace.
+          expiresAt: new Date(input.now.getTime() + adapter.attemptLifetimeMs),
+          gatewayProvider: input.provider,
+          topupCashbackPercent: input.topupCashbackPercent,
+          now: input.now,
+        },
+        tx,
+      );
+      invoice = await this.deps.gatewayInvoices.open(
+        scope,
+        {
+          paymentId: payment.id,
+          provider: input.provider,
+          providerOrderId: adapter.newOrderId(),
+          providerUnit: adapter.unit,
+          sentAmount,
+          now: input.now,
+        },
+        tx,
+      );
+    }
+    await this.deps.audit.record(
+      scope,
+      actor,
+      {
+        action: GATEWAY_REQUEST_ACTION,
+        entityType: 'Payment',
+        entityId: payment.id,
+        before: null,
+        after: {
+          orderId: payment.orderId,
+          method: payment.method,
+          state: payment.state,
+          amountMinor: payment.amount.amountMinor.toString(),
+          currency: payment.amount.currency,
+          reference: payment.reference,
+          gatewayProvider: input.provider,
+          providerOrderId: invoice.providerOrderId,
+          expiresAt: payment.expiresAt?.toISOString() ?? null,
+          topupCashbackPercent: payment.topupCashbackPercent,
+          reissued: open !== null,
+        },
+        result: 'SUCCESS',
+      },
+      tx,
+    );
+    await rememberOnce(
+      this.deps.idempotency,
+      scope,
+      CUSTOMER_NAMESPACE,
+      input.idempotencyKey,
+      input.requestHash,
+      { paymentId: payment.id },
+      tx,
+    );
+    return { payment, invoice, reissued: open !== null };
+  }
+
+  /** The attempt an identical earlier request produced, or null. */
+  private async replayedAttempt(
+    scope: TenantContext,
+    idempotencyKey: string,
+    requestHash: string,
+  ): Promise<GatewayAttempt | null> {
+    const found = await this.deps.idempotency.find<{ paymentId: string }>(
+      scope,
+      CUSTOMER_NAMESPACE,
+      idempotencyKey,
+      requestHash,
+    );
+    if (found === null) return null;
+    const paymentId = found.result.paymentId as PaymentId;
+    const [payment, invoice] = await Promise.all([
+      this.deps.repository.findById(scope, paymentId),
+      this.deps.gatewayInvoices.findByPayment(scope, paymentId),
+    ]);
+    if (payment === null || invoice === null) return null;
+    return { payment, invoice, reissued: true };
+  }
+
   /**
    * Confirm the payment, check the guard, settle the order. In that order, once.
    *
@@ -3053,7 +3666,7 @@ export class PaymentService {
     payment: PaymentRecord,
     order: OrderRecord,
     confirmation: {
-      readonly evidenceKind: 'WALLET_DEBIT' | 'OPERATOR_REVIEW';
+      readonly evidenceKind: 'WALLET_DEBIT' | 'OPERATOR_REVIEW' | 'GATEWAY_INQUIRY';
       readonly evidenceNote: string | null;
       readonly confirmedByAdminId: string | null;
       readonly confirmedAt: Date;

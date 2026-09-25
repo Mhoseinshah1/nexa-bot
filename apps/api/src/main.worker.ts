@@ -87,6 +87,10 @@ async function main(): Promise<void> {
         // progress — see `PaymentExpiryLoop`, where "nothing was due" is the healthy
         // answer most of the time.
         ['payment-expiry', true, () => container.paymentExpiryLoop.isFresh(now)],
+        // The external payment gateway lane (WP11A). No flag: an attempt nobody creates
+        // or asks about is a customer who paid and was never credited, and silence is
+        // exactly what a stalled lane looks like.
+        ['gateway-payments', true, () => container.gatewayPaymentLoop.isFresh(now)],
         // The lane that warns a customer before their service runs out of days or
         // traffic. No flag, and for the reason the two either side of it have none:
         // the alternative to warning them is finding out when it has already
@@ -168,6 +172,9 @@ async function main(): Promise<void> {
   // deadline a customer was shown was only ever a refusal, so a month-old order still
   // read as awaiting payment and an operator could not tell it from this morning's.
   container.paymentExpiryLoop.start();
+  // And the external payment gateway lane (WP11A): creates provider invoices and asks the
+  // provider what happened, outside every transaction, never while Telegram waits.
+  container.gatewayPaymentLoop.start();
   // And the reminder lane. Nothing here dials a panel: both halves read columns
   // `SYNC_USAGE` and the commercial actions already maintain.
   container.serviceReminderLoop.start();
