@@ -186,8 +186,8 @@ describe('the recovery page', () => {
       // checking a surface that is still planned. `/discounts` left in WP8 on the same
       // terms, and `discounts.test.tsx` asserts the live page at that path. `/resellers`
       // left in WP9-B, and `resellers.test.tsx` asserts the live page there. `/reports`
-      // left in WP12, and `reports.test.tsx` asserts the live page there.
-      '/bots',
+      // left in WP12 and `/bots` in WP13; `reports.test.tsx` and `bots.test.tsx` assert
+      // the live pages there. The list is empty until a surface is planned again.
     ]) {
       const resolved = resolve({ path, query: new URLSearchParams() }, ALL);
       const view = renderPage(resolved.element as ReactElement);
