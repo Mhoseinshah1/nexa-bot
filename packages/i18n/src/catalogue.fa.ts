@@ -841,6 +841,22 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.gateway_button': '💳 پرداخت با درگاه',
   'bot.payment.gateway_choose': '💳 درگاه پرداخت خود را انتخاب کنید:',
   'bot.payment.route_name_manual_transfer': 'کارت به کارت',
+  'bot.payment.route_name_tonpays': 'تون‌پیز (TonPays)',
+  'bot.payment.gateway_preparing':
+    '⏳ فاکتور پرداخت آنلاین شما در حال ساخت است.\n\nچند ثانیه دیگر دکمهٔ «بررسی وضعیت پرداخت» را بزنید تا لینک پرداخت نمایش داده شود.',
+  'bot.payment.gateway_invoice':
+    '🧾 فاکتور پرداخت آنلاین\n\n💰 مبلغ: {total}\n⏳ مهلت پرداخت: {expiresAt}\n\nبا دکمهٔ زیر پرداخت را انجام دهید. پرداخت شما فقط پس از تأیید درگاه ثبت می‌شود؛ پس از پرداخت، دکمهٔ «بررسی وضعیت پرداخت» را بزنید.',
+  'bot.payment.gateway_pay_button': '💳 پرداخت آنلاین',
+  'bot.payment.gateway_check_button': '🔄 بررسی وضعیت پرداخت',
+  'bot.payment.gateway_confirmed': '✅ پرداخت شما توسط درگاه تأیید و ثبت شد.',
+  'bot.payment.gateway_failed':
+    '❌ پرداخت آنلاین شما توسط درگاه تأیید نشد و از این پرداخت مبلغی ثبت نشد.\n\nدر صورت تمایل می‌توانید دوباره پرداخت کنید.',
+  'bot.payment.gateway_unavailable':
+    'این روش پرداخت در حال حاضر در دسترس نیست. لطفاً روش دیگری را انتخاب کنید یا کمی بعد دوباره تلاش کنید.',
+  'bot.payment.gateway_unknown':
+    'پاسخ درگاه برای ساخت این فاکتور دریافت نشد و لینکی برای آن در دسترس نیست. از این فاکتور مبلغی ثبت نشده است؛ می‌توانید دوباره پرداخت را آغاز کنید.',
+  'bot.payment.gateway_closed':
+    'این فاکتور دیگر قابل پرداخت نیست (مهلت آن تمام شده یا بسته شده است). برای پرداخت می‌توانید دوباره اقدام کنید.',
   'bot.wallet.summary':
     '🎡 اطلاعات حساب کاربری شما:\n\n🪪 آی دی عددی: {telegramId}\n👤 نام: {displayName}\n⚫ شماره تماس: {phoneState}\n⏳ زمان ثبت نام: {registeredAt}\n⭐ موجودی: {balance}\n🛒 تعداد سرویس های خریداری شده: {serviceCount} عدد\n🧾 تعداد فاکتورهای پرداخت شده: {paidInvoiceCount} عدد\n👥 تعداد زیرمجموعه های شما: {referralCount} نفر\n🔖 گروه کاربری: {customerGroup}',
   'bot.wallet.phone_missing': '🔴 ارسال نشده است',

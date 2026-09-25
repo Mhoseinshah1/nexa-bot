@@ -206,6 +206,17 @@ export const PAYMENT_EVIDENCE_KINDS = [
   'GATEWAY_CALLBACK',
   /** An operator resolved an UNKNOWN outcome against the gateway's own records. */
   'RECONCILIATION',
+  /**
+   * The gateway's own INQUIRY endpoint, asked server to server with this installation's
+   * credential, answered that the payment was approved (WP11A).
+   *
+   * Not `GATEWAY_CALLBACK`: a callback is something the provider sent us, and TonPays
+   * documents a signature header without documenting how to verify it — so its webhook
+   * is a hint that schedules this question and never the answer. Not `RECONCILIATION`,
+   * which is an operator's judgement. This is the one kind a background lane records
+   * for money that arrived through a third party.
+   */
+  'GATEWAY_INQUIRY',
 ] as const;
 export type PaymentEvidenceKind = (typeof PAYMENT_EVIDENCE_KINDS)[number];
 export const paymentEvidenceKindSchema = z.enum(PAYMENT_EVIDENCE_KINDS);

@@ -54,6 +54,8 @@ export * from './bot-commands.js';
 export * from './payment.js';
 export * from './payment-accounts.js';
 export * from './payment-gateways.js';
+export * from './gateway-invoices.js';
+export * from './tonpays.js';
 export * from './refunds.js';
 export * from './payment-receipts.js';
 export * from './provisioning.js';

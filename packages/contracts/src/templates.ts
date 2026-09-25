@@ -5650,14 +5650,14 @@ export const TEMPLATES = [
   {
     key: 'bot.payment.gateway_button',
     description:
-      'Pay through an external gateway. Drawn only when at least one REAL external route allows the purpose; none exists in this release, so it is never drawn.',
+      'Pay through an external gateway. Drawn only when at least one REAL external route (TonPays, WP11A) is active, configured and allows the purchase.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
   {
     key: 'bot.payment.gateway_choose',
     description:
-      'The external-gateway chooser heading. Reachable only when a real external route exists.',
+      'The external-gateway chooser heading. Reachable only when more than one real external route is offered.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -5665,6 +5665,109 @@ export const TEMPLATES = [
     key: 'bot.payment.route_name_manual_transfer',
     description:
       'The product’s own name for the card-to-card route, used when the operator set no display name.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  /*
+   * WP11A — the external gateway (TonPays), `docs/tonpays-gateway-audit.md` §5.8. None of
+   * these says the customer has paid until the payment is CONFIRMED by the gateway's own
+   * inquiry, and none names TonPays' amount fields: the amount is the payment's own.
+   */
+  {
+    key: 'bot.payment.route_name_tonpays',
+    description:
+      'The product’s own name for the TonPays route, used when the operator set no display name.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.gateway_preparing',
+    description:
+      'Answers a customer who chose an external gateway while the invoice is still being ' +
+      'created by the background worker (no external call is made while Telegram waits). ' +
+      'It asks them to press the check button in a few seconds. It must not say anything ' +
+      'was paid or charged.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.gateway_invoice',
+    description:
+      'The external gateway invoice, with the pay button beneath it. The amount is the ' +
+      'payment’s own frozen amount and the deadline is Nexa’s own seventy-minute limit. It ' +
+      'must say that a payment counts only once the gateway has confirmed it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'total',
+        type: 'MONEY',
+        description: 'The payment’s own amount, from Nexa’s snapshot.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description: 'When this attempt stops being payable (Nexa’s deadline).',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_pay_button',
+    description:
+      'The URL button that opens the gateway’s invoice page (web link when the gateway ' +
+      'returned one, else its Telegram link).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.gateway_check_button',
+    description:
+      'Asks this installation to check the attempt again. It reads the stored state and ' +
+      'brings the next gateway inquiry forward; it never calls the gateway while Telegram waits.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.gateway_confirmed',
+    description:
+      'The gateway’s inquiry confirmed the payment and it has been recorded. For an order, ' +
+      'delivery follows separately; for a top-up, the wallet is credited.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.gateway_failed',
+    description:
+      'The gateway definitively did not approve this attempt. Sent by the customer ' +
+      'notification lane and shown on a check. Says nothing was recorded from this attempt ' +
+      'and that the customer may pay again; it never says an order was cancelled.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.gateway_unavailable',
+    description:
+      'The gateway cannot be used right now because of the installation’s own configuration ' +
+      '(or the gateway account). Never phrased as the customer’s payment failing.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.gateway_unknown',
+    description:
+      'The gateway’s answer to creating the invoice was lost, so no payment link can be ' +
+      'shown for this attempt. Nothing is recorded as paid; the customer may start again.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.gateway_closed',
+    description:
+      'This attempt can no longer be paid: its deadline passed or it was closed. The order, ' +
+      'when there is one, is not cancelled by this; the customer may start a new payment.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
