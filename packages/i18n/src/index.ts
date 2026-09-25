@@ -367,3 +367,8 @@ export function auditCatalogue(locale: Locale): {
 }
 
 export { CATALOGUE_FA };
+export {
+  REPORT_EXPORT_HEADERS_FA,
+  REPORT_EXPORT_SHEETS_FA,
+  type ReportExportHeaderKey,
+} from './reports.fa.js';

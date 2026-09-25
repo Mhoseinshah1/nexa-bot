@@ -13,6 +13,7 @@ import { ProductCategoriesController } from './surfaces/web/product-categories.c
 import { ServiceAddonsController } from './surfaces/web/service-addons.controller.js';
 import { PricingController } from './surfaces/web/pricing.controller.js';
 import { ReferralsController } from './surfaces/web/referrals.controller.js';
+import { ReportsController } from './surfaces/web/reports.controller.js';
 import { TenantMediaController } from './surfaces/web/tenant-media.controller.js';
 import { ResellersController } from './surfaces/web/resellers.controller.js';
 import { OrdersController } from './surfaces/web/orders.controller.js';
@@ -72,6 +73,7 @@ export class AppModule implements NestModule {
         ServiceAddonsController as never,
         PricingController as never,
         ReferralsController as never,
+        ReportsController as never,
         TenantMediaController as never,
         ResellersController as never,
         OrdersController as never,
