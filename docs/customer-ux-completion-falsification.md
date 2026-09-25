@@ -116,3 +116,33 @@ than a convention the controller kept. The previous comment in the wire schema
 called clearing on an old client's update "the honest reading of a form that has
 no field for it"; it was the honest reading of the form and a destructive one of
 the row, and the row is what the operator typed into.
+
+## Round three — the membership gift owes nothing to a purchase
+
+The owner keeps two referral rewards apart: the MEMBERSHIP gift, owed the moment a
+new customer's first `/start` carries a valid referral link and the attribution is
+accepted, and the PURCHASE commission, owed when the referee's order is delivered.
+The code had always decided the gift from the attribution alone — nothing about
+orders appears in `openSides`, `claimableFor` or `claim` — but this package's own
+summary said the gift waited for "the referee's first fulfilled purchase". Six tests
+now pin the rule; five mutations, each adding or removing exactly the dependency the
+rule forbids, were run in a worktree and a database of their own. Every row killed.
+
+| #    | Rule                                                         | Mutation                                                                                        | Result | Named test                                                                                                                               |
+| ---- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| MG01 | eligibility is the accepted attribution, before any purchase | `claimableFor`: returns nothing until the customer's referees have a delivered purchase         | KILLED | `tests/integration/referral-signup-gift.test.ts` › creates the eligibility on the accepted attribution, before any purchase exists       |
+| MG02 | a claim pays with zero purchases on record                   | `claim`: a referral is skipped until its referrer's referees have a delivered purchase          | KILLED | `tests/integration/referral-signup-gift.test.ts` › pays both sides with zero purchases on record                                         |
+| MG03 | a later purchase reopens no side and creates no second gift  | `openSides`: a claimed side is offered again                                                    | KILLED | `tests/integration/referral-signup-gift.test.ts` › a later delivered purchase creates no second gift and reopens nothing                 |
+| MG04 | the purchase commission still waits for delivery             | `drizzle-referral.repository.ts` `dueFor`: any operation of the bought type counts as delivered | KILLED | `tests/integration/referral-signup-gift.test.ts` › the purchase commission still waits for delivery while the gift did not               |
+| MG05 | the gift and the commission are distinct ledger reasons      | the gift's append written under `REFERRAL_COMMISSION`                                           | KILLED | `tests/integration/referral-signup-gift.test.ts` › writes the gift and the commission as distinct ledger reasons, references and entries |
+
+Exactly-once under a replayed key and two concurrent taps with zero purchases is the
+sixth test of the group, _stays exactly once under a replayed key and two concurrent
+taps, with zero purchases_; the rule it pins is UX06's, whose mutation already kills.
+
+Two mutations were tried first and are declared rather than dropped:
+
+| #     | Rule                              | What was tried                                                                                                              | What holds it                                                                                                                                                                                                                                                                                                         |
+| ----- | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| MG03a | one gift row per referral         | `giftFor`: the pre-read of the existing row disabled, so the second side's claim inserts again; the named test stayed green | the insert is `ON CONFLICT DO NOTHING` against `referral_signup_gifts_referral_id` (unique) and the row is read back afterwards, so the second insert changes nothing. The pre-read stays: it is what takes the gift row's lock (`FOR UPDATE`) before the side's `claimed_at` is read, not a copy of the index's rule |
+| MG04a | the commission waits for delivery | `ReferralCommissionService.settle`: the `!answer.delivered` branch disabled; the named test stayed green                    | `dueFor` answers nothing at all while the order is paid and undelivered — the wait is in the query, and the branch decides only between EARNED and VOID once the order has ended one way or the other. MG04 mutates the query and kills                                                                               |
