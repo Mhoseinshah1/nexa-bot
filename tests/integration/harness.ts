@@ -107,6 +107,8 @@ export async function resetDatabase(db: Database): Promise<void> {
        tenant_media_assets,
        wallet_entries, discount_redemptions, referrals, trial_grants, trial_resets,
        trial_limit_overrides, resellers,
+       -- WP11A, before the payments they reference.
+       gateway_invoices, payment_gateway_credentials, payment_gateway_call_budgets,
        provisioning_operations, services, payments, orders, discounts, products,
        -- AFTER products, which reference it. Named for the same reason as the rest:
        -- the tenants table above does CASCADE to it today, and a table whose clearing
