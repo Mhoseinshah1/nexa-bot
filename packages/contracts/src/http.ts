@@ -3822,17 +3822,20 @@ export const paymentGatewaySchema = z.object({
    * `********` a form can echo back is a value somebody can resubmit as the key, which is
    * the rule panels already follow. The screen says "configured" from `setAt` alone.
    */
-  credential: z.object({
-    required: z.boolean(),
-    setAt: z.iso.datetime().nullable(),
-  }),
+  credential: z
+    .object({
+      required: z.boolean(),
+      setAt: z.iso.datetime().nullable(),
+    })
+    // Defaulted, like the D7 fields: a response from the previous release has neither.
+    .default({ required: false, setAt: null }),
   /**
    * The URL this installation sends the gateway as its webhook, GENERATED and never
    * typed (WP11A §14). Null for a route that takes no callback, or while the installation
    * has no registered public origin — in which case the gateway is asked without one and
    * reconciliation alone decides. Shown for diagnostics only.
    */
-  callbackUrl: z.string().nullable(),
+  callbackUrl: z.string().nullable().default(null),
   /*
    * The descriptor's two facts — `settlesVia` and `requiresCredentials` — are NOT here.
    *
@@ -3951,8 +3954,7 @@ export const PAYMENT_GATEWAY_ROUTES = {
   list: '/payment-gateways',
   update: (provider: string) => `/payment-gateways/${encodeURIComponent(provider)}`,
   status: (provider: string) => `/payment-gateways/${encodeURIComponent(provider)}/status`,
-  credential: (provider: string) =>
-    `/payment-gateways/${encodeURIComponent(provider)}/credential`,
+  credential: (provider: string) => `/payment-gateways/${encodeURIComponent(provider)}/credential`,
 } as const;
 
 // --- Support FAQ and tenant media (customer UX completion §J, §I) --------------
