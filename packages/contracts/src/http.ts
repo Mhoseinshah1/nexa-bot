@@ -1766,6 +1766,13 @@ export const customerSummarySchema = z.object({
   lastSeenAt: z.iso.datetime(),
   blockedAt: z.iso.datetime().nullable(),
   blockedReason: z.string().nullable(),
+  /**
+   * Whether `blockedReason` was written under the promise that the customer is shown it
+   * (pre-release hardening V2). FALSE for a historical note an operator wrote when the Web
+   * Admin said it was private; the customer is answered with the plain blocked sentence then.
+   * Shown so an operator can tell the two apart (WP10G).
+   */
+  blockedReasonShown: z.boolean(),
 });
 export type CustomerSummaryResponse = z.infer<typeof customerSummarySchema>;
 
@@ -1813,11 +1820,13 @@ export const customerResponseSchema = z.object({ customer: customerSummarySchema
 export type CustomerResponse = z.infer<typeof customerResponseSchema>;
 
 /**
- * Block or unblock.
+ * Block.
  *
- * The reason is optional and bounded. It is an operator note, so it is not required — an
- * operator who must type a justification to press a button types "x" — and it is bounded
- * because it lands in a durable column and an audit row.
+ * The reason is MANDATORY, trimmed and bounded (WP10G, closing OQ-WP10F-03). It is not an
+ * operator note: it lands on the customer's row and is the sentence the customer is shown, so a
+ * block cannot be silent. Bounded because it lands in a durable column and an audit row; an
+ * over-long reason is refused here, never cut. `CustomerService` refuses the same two things
+ * again, so a caller that skips this schema is refused there.
  */
 export const blockCustomerRequestSchema = z.object({
   /**
@@ -1829,9 +1838,22 @@ export const blockCustomerRequestSchema = z.object({
    * because nothing in the schema would say it was missing.
    */
   idempotencyKey: z.string().min(8).max(255),
-  reason: z.string().trim().max(CUSTOMER_BLOCK_REASON_MAX_LENGTH).optional(),
+  reason: z.string().trim().min(1).max(CUSTOMER_BLOCK_REASON_MAX_LENGTH),
 });
 export type BlockCustomerRequest = z.infer<typeof blockCustomerRequestSchema>;
+
+/**
+ * Unblock.
+ *
+ * Its own schema, so making the block's reason mandatory could not make the unblock's one by
+ * accident. The reason here is optional: it is the audit row's justification, and the service
+ * CLEARS the stored reason on an unblock rather than replacing it.
+ */
+export const unblockCustomerRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  reason: z.string().trim().max(CUSTOMER_BLOCK_REASON_MAX_LENGTH).optional(),
+});
+export type UnblockCustomerRequest = z.infer<typeof unblockCustomerRequestSchema>;
 
 export const CUSTOMER_ROUTES = {
   list: '/users',

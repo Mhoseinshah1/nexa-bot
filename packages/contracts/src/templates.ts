@@ -3096,6 +3096,118 @@ export const TEMPLATES = [
     ],
   },
   {
+    key: 'bot.admin.customer_block_ask',
+    description:
+      'The confirmation before anything is written (WP10G): names the customer and says a ' +
+      'reason will be asked for and shown to them. A block cannot be silent.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'customer',
+        type: 'STRING',
+        description: 'The customer\u2019s numeric Telegram id.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.customer_block_reason_prompt',
+    description:
+      'Asks for the mandatory reason of a block from the customers section. Only this ' +
+      'administrator\u2019s next plain message, for a few minutes, is read as it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'customer',
+        type: 'STRING',
+        description: 'The customer\u2019s numeric Telegram id.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'minutes',
+        type: 'NUMBER',
+        description: 'How long the capture stays open.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.customer_block_confirm',
+    description:
+      'Restates the typed reason and offers the one button that blocks. The typed text alone ' +
+      'never changes a customer.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'customer',
+        type: 'STRING',
+        description: 'The customer\u2019s numeric Telegram id.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'reason',
+        type: 'STRING',
+        description: 'The reason as it will be stored and shown to the customer.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.customer_block_already',
+    description:
+      'The customer was already blocked when the confirm ran: the stored reason was not ' +
+      'overwritten, and nothing changed. Truthful about the state found.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'customer',
+        type: 'STRING',
+        description: 'The customer\u2019s numeric Telegram id.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.customer_block_cancelled',
+    description: 'The block from the customers section was abandoned; the customer is untouched.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.customer_block_expired',
+    description: 'The reason capture expired before it was confirmed; nothing was blocked.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.customer_unblock_ask',
+    description:
+      'The confirmation before an unblock is written (WP10G). No reason is asked for: the ' +
+      'stored one is cleared by the unblock.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'customer',
+        type: 'STRING',
+        description: 'The customer\u2019s numeric Telegram id.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.customer_unblock_confirm_button',
+    description: 'The one button that unblocks. Produced by the confirmation alone.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.admin.customer_usage',
     description:
       'The lookup command was sent without a readable Telegram id. Repeats the syntax ' +

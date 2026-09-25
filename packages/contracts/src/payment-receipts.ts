@@ -122,13 +122,26 @@ export type AdminAmountCaptureCloseReason = (typeof ADMIN_AMOUNT_CAPTURE_CLOSE_R
  * - `RECEIPT_REJECT_REASON` — a rejection's MANDATORY reason (File 01 §7, the owner's
  *   correction to the follow-up): `reason` is set once, and the confirm that restates it is
  *   what rejects, through the one conditional PENDING→FAILED edge.
+ * - `CUSTOMER_BLOCK_REASON` — the mandatory reason of a block taken from the Telegram customers
+ *   section (WP10G, closing OQ-WP10F-03). The capture names the CUSTOMER and no payment: the
+ *   same table, so the one-open-prompt index still covers it, and the same mechanics, so a typed
+ *   message is read once and acts only through the restating confirm.
  */
 export const ADMIN_CAPTURE_PURPOSES = [
   'RECEIPT_CREDIT_AMOUNT',
   'RECEIPT_BLOCK_REASON',
   'RECEIPT_REJECT_REASON',
+  'CUSTOMER_BLOCK_REASON',
 ] as const;
 export type AdminCapturePurpose = (typeof ADMIN_CAPTURE_PURPOSES)[number];
+
+/** The purposes that read a typed REASON (never an amount). */
+export const ADMIN_REASON_CAPTURE_PURPOSES = [
+  'RECEIPT_BLOCK_REASON',
+  'RECEIPT_REJECT_REASON',
+  'CUSTOMER_BLOCK_REASON',
+] as const satisfies readonly AdminCapturePurpose[];
+export type AdminReasonCapturePurpose = (typeof ADMIN_REASON_CAPTURE_PURPOSES)[number];
 
 /**
  * The bound on a reason an administrator types into a capture — a block's or a rejection's.

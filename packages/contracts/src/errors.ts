@@ -636,6 +636,15 @@ export const COMMERCE_ERROR_CODES = {
    * leaves an operator unable to tell a mistake from a moderation action.
    */
   CUSTOMER_BLOCKED: 'commerce.customer_blocked',
+  /**
+   * A block was asked for without a reason (WP10G, closing OQ-WP10F-03).
+   *
+   * A customer cannot be blocked silently: the reason is trimmed, must be non-empty and at
+   * most `CUSTOMER_BLOCK_REASON_MAX_LENGTH` code points, is stored on the customer's row and is
+   * the sentence they are shown. Refused before any record is written, so the same idempotency
+   * key can carry the corrected request. An unblock never requires one.
+   */
+  CUSTOMER_BLOCK_REASON_REQUIRED: 'commerce.customer_block_reason_required',
 
   PRODUCT_NOT_FOUND: 'commerce.product_not_found',
   /** The product exists and is withdrawn from sale. Not the same as absent. */

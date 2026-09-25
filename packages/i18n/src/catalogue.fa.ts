@@ -442,6 +442,19 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.customer_block_button': '⛔️ مسدود کردن',
   'bot.admin.customer_unblock_button': '✅ رفع مسدودی',
   'bot.admin.customer_status_changed': 'وضعیت {telegramId} اکنون {status} است.',
+  'bot.admin.customer_block_ask':
+    'کاربر {customer} مسدود شود؟\nبرای مسدود کردن، نوشتن دلیل اجباری است و همان دلیل به مشتری نشان داده می‌شود.',
+  'bot.admin.customer_block_reason_prompt':
+    'دلیل مسدود کردن کاربر {customer} را بفرستید. وارد کردن دلیل اجباری است و به مشتری نشان داده می‌شود. تا {minutes} دقیقه منتظر پیام شما هستم.',
+  'bot.admin.customer_block_confirm':
+    'کاربر {customer} با این دلیل مسدود شود؟\nدلیل: {reason}\nاین دلیل به مشتری نشان داده می‌شود.',
+  'bot.admin.customer_block_already':
+    'کاربر {customer} از قبل مسدود بوده است و دلیل قبلی تغییری نکرد.',
+  'bot.admin.customer_block_cancelled': 'مسدود کردن لغو شد و وضعیت کاربر تغییری نکرد.',
+  'bot.admin.customer_block_expired':
+    'مهلت وارد کردن دلیل تمام شده است و کاربر مسدود نشد. برای مسدود کردن، دوباره از صفحهٔ مشتری اقدام کنید.',
+  'bot.admin.customer_unblock_ask': 'مسدودی کاربر {customer} برداشته شود؟',
+  'bot.admin.customer_unblock_confirm_button': '✅ رفع مسدودی شود',
   'bot.admin.customer_usage': 'دستور ناقص یا نامعتبر است.\n\n/customer <شناسهٔ عددی تلگرام>',
   'bot.admin.categories_button': '🗂 دسته‌بندی‌ها',
   'bot.admin.categories_section':
