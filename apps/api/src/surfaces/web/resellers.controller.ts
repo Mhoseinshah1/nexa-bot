@@ -6,12 +6,17 @@ import {
   RESELLER_TIER_ROUTES,
   money,
   resellerListQuerySchema,
+  resellerPurchaseQuerySchema,
   resellerRegisterSchema,
   resellerTierGrantsWriteSchema,
   resellerTierWriteSchema,
   resellerUpdateSchema,
   type CurrencyCode,
+  type ResellerCreditResponse,
+  type ResellerHistoryEntry,
+  type ResellerHistoryResponse,
   type ResellerListResponse,
+  type ResellerPurchasePage,
   type ResellerResponse,
   type ResellerSummaryResponse,
   type ResellerTierListResponse,
@@ -26,8 +31,12 @@ import { decodeKeysetCursor, encodeKeysetCursor } from './keyset-cursor.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type {
   ResellerListing,
+  ResellerPurchaseRecord,
   ResellerTierListing,
 } from '../../modules/commerce/resellers/application/ports.js';
+import type { ResellerCreditStandingRecord } from '../../modules/commerce/resellers/application/reseller-admin.service.js';
+import { effectiveLimitOf } from '../../modules/commerce/resellers/domain/reseller-credit.js';
+import type { AuditHistoryRecord } from '../../modules/platform/audit/application/ports.js';
 
 /**
  * Reseller tiers and resellers, over HTTP (`docs/wp9-reseller-audit.md` R11, R12).
@@ -185,6 +194,65 @@ export class ResellersController {
     return { reseller: toResellerSummary(reseller) };
   }
 
+  @Get('reseller-tiers/:id/history')
+  async tierHistory(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+  ): Promise<ResellerHistoryResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const entries = await this.container.resellersAdmin.tierHistory(scope, actor, id);
+    return { entries: entries.map(toHistoryEntry) };
+  }
+
+  @Get('resellers/:customerId/credit')
+  async credit(
+    @Req() request: FastifyRequest,
+    @Param('customerId') customerId: string,
+  ): Promise<ResellerCreditResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    return {
+      credit: toCreditStanding(
+        await this.container.resellersAdmin.creditStanding(scope, actor, customerId),
+      ),
+    };
+  }
+
+  @Get('resellers/:customerId/purchases')
+  async purchases(
+    @Req() request: FastifyRequest,
+    @Param('customerId') customerId: string,
+    @Query() raw: Record<string, unknown>,
+  ): Promise<ResellerPurchasePage> {
+    const { scope, actor } = await this.authenticate(request);
+    const query = singleValued(raw);
+    const page = resellerPurchaseQuerySchema.parse({
+      ...(query.limit === undefined ? {} : { limit: query.limit }),
+      ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+    });
+    const result = await this.container.resellersAdmin.purchases(scope, actor, customerId, {
+      ...(page.limit === undefined ? {} : { limit: page.limit }),
+      ...(page.cursor === undefined
+        ? {}
+        : {
+            cursor: (({ createdAt, id }) => ({ createdAt, id }))(decodeKeysetCursor(page.cursor)),
+          }),
+    });
+    return {
+      purchases: result.items.map(toPurchase),
+      nextCursor: result.next === null ? null : encodeKeysetCursor(result.next),
+    };
+  }
+
+  @Get('resellers/:customerId/history')
+  async history(
+    @Req() request: FastifyRequest,
+    @Param('customerId') customerId: string,
+  ): Promise<ResellerHistoryResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const entries = await this.container.resellersAdmin.history(scope, actor, customerId);
+    return { entries: entries.map(toHistoryEntry) };
+  }
+
   private async authenticate(
     request: FastifyRequest,
   ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
@@ -241,7 +309,11 @@ function toTierSummary(tier: ResellerTierListing): ResellerTierSummaryResponse {
 }
 
 function toResellerSummary(reseller: ResellerListing): ResellerSummaryResponse {
-  const effective = reseller.creditLimit ?? reseller.tier.creditLimit;
+  const effective = effectiveLimitOf({
+    status: reseller.status,
+    ownLimit: reseller.creditLimit,
+    tierLimit: reseller.tier.creditLimit,
+  }).limit;
   return {
     customerId: reseller.customerId,
     telegramUserId: reseller.telegramUserId,
@@ -263,5 +335,59 @@ function toResellerSummary(reseller: ResellerListing): ResellerSummaryResponse {
     },
     createdAt: reseller.createdAt.toISOString(),
     updatedAt: reseller.updatedAt.toISOString(),
+  };
+}
+
+function toCreditStanding(standing: ResellerCreditStandingRecord) {
+  const inSelling = (amount: bigint) => ({
+    amount: amount.toString(),
+    currency: standing.sellingCurrency,
+  });
+  return {
+    customerId: standing.customerId,
+    status: standing.status,
+    effectiveLimit: {
+      amount: standing.effectiveLimit.amountMinor.toString(),
+      currency: standing.effectiveLimit.currency,
+    },
+    limitSource: standing.limitSource,
+    sellingCurrency: standing.sellingCurrency,
+    credit: standing.credit,
+    balance: inSelling(standing.balance),
+    allowance: inSelling(standing.allowance),
+    creditInUse: inSelling(standing.creditInUse),
+    availableToSpend: inSelling(standing.availableToSpend),
+    overLimitBy: inSelling(standing.overLimitBy),
+  };
+}
+
+function toPurchase(purchase: ResellerPurchaseRecord) {
+  return {
+    orderId: purchase.orderId,
+    orderState: purchase.orderState,
+    purpose: purchase.purpose,
+    confirmedAt: purchase.createdAt.toISOString(),
+    tierName: purchase.tierName,
+    layer: purchase.layer,
+    percent: purchase.percent,
+    listAmount: purchase.listAmount.toString(),
+    costAmount: purchase.costAmount.toString(),
+    promotionAmount: purchase.promotionAmount.toString(),
+    saleAmount: purchase.saleAmount.toString(),
+    currency: purchase.currency,
+  };
+}
+
+function toHistoryEntry(entry: AuditHistoryRecord): ResellerHistoryEntry {
+  return {
+    id: entry.id,
+    action: entry.action,
+    actorType: entry.actorType,
+    actorLabel: entry.actorLabel,
+    surface: entry.surface,
+    result: entry.result,
+    occurredAt: entry.occurredAt.toISOString(),
+    before: entry.before === null ? null : { ...entry.before },
+    after: entry.after === null ? null : { ...entry.after },
   };
 }

@@ -2,6 +2,8 @@ import { and, asc, desc, eq, ilike, or, sql, type SQL } from 'drizzle-orm';
 import { money } from '@nexa/contracts';
 import type {
   CurrencyCode,
+  OrderPurpose,
+  OrderState,
   ResellerGrantKind,
   ResellerOverrideMode,
   ResellerPriceLayer,
@@ -17,6 +19,7 @@ import {
 import {
   customers,
   orderResellerTerms,
+  orders,
   resellerTierGrants,
   resellerTiers,
   resellers,
@@ -25,6 +28,7 @@ import type {
   OrderResellerTermsRecord,
   ResellerCursor,
   ResellerListing,
+  ResellerPurchaseRecord,
   ResellerRecord,
   ResellerRepository,
   ResellerTierGrantRecord,
@@ -546,6 +550,82 @@ export class DrizzleResellerRepository implements ResellerRepository {
       currency: row.currency as CurrencyCode,
       botInstanceId: row.botInstanceId,
       createdAt: row.createdAt,
+    };
+  }
+
+  async listPurchases(
+    scope: TenantContext,
+    resellerCustomerId: string,
+    limit: number,
+    cursor: ResellerCursor | null,
+  ): Promise<{
+    readonly items: readonly ResellerPurchaseRecord[];
+    readonly next: ResellerCursor | null;
+  }> {
+    const tenantId = requireTenantId(scope);
+    const conditions: (SQL | undefined)[] = [
+      eq(orderResellerTerms.tenantId, tenantId),
+      eq(orderResellerTerms.resellerCustomerId, resellerCustomerId),
+    ];
+    if (cursor !== null) {
+      conditions.push(
+        sql`(${orderResellerTerms.createdAt}, ${orderResellerTerms.orderId}) < (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`,
+      );
+    }
+    /*
+     * The margin column is not selected (WP14 §3). The order join is on the terms' own
+     * composite key — `(tenant, order, reseller)` is the foreign key — so a row can only
+     * ever be joined to the order it was written for.
+     */
+    const rows = await this.db
+      .select({
+        orderId: orderResellerTerms.orderId,
+        orderState: orders.state,
+        purpose: orders.purpose,
+        tierName: orderResellerTerms.tierName,
+        layer: orderResellerTerms.layer,
+        percent: orderResellerTerms.percent,
+        listAmount: orderResellerTerms.listAmount,
+        costAmount: orderResellerTerms.costAmount,
+        promotionAmount: orderResellerTerms.promotionAmount,
+        saleAmount: orderResellerTerms.saleAmount,
+        currency: orderResellerTerms.currency,
+        createdAt: orderResellerTerms.createdAt,
+        createdAtText: sql<string>`to_char(${orderResellerTerms.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+      })
+      .from(orderResellerTerms)
+      .innerJoin(
+        orders,
+        and(
+          eq(orders.tenantId, orderResellerTerms.tenantId),
+          eq(orders.id, orderResellerTerms.orderId),
+          eq(orders.customerId, orderResellerTerms.resellerCustomerId),
+        ),
+      )
+      .where(and(...conditions))
+      .orderBy(desc(orderResellerTerms.createdAt), desc(orderResellerTerms.orderId))
+      .limit(limit + 1);
+    const page = rows.slice(0, limit);
+    const last = page[page.length - 1];
+    return {
+      items: page.map((row) => ({
+        orderId: row.orderId,
+        orderState: row.orderState as OrderState,
+        purpose: row.purpose as OrderPurpose,
+        tierName: row.tierName,
+        layer: row.layer as ResellerPriceLayer,
+        percent: row.percent,
+        listAmount: row.listAmount,
+        costAmount: row.costAmount,
+        promotionAmount: row.promotionAmount,
+        saleAmount: row.saleAmount,
+        currency: row.currency as CurrencyCode,
+        createdAt: row.createdAt,
+      })),
+      next:
+        rows.length > limit && last !== undefined
+          ? { createdAt: last.createdAtText, id: last.orderId }
+          : null,
     };
   }
 }
