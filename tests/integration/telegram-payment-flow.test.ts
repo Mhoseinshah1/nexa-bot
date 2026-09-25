@@ -2,7 +2,12 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { ProductCategoryId } from '@nexa/contracts';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { TELEGRAM_SECRET_TOKEN_HEADER, money, type ProductId } from '@nexa/contracts';
+import {
+  EMPTY_PRODUCT_DISPLAY,
+  TELEGRAM_SECRET_TOKEN_HEADER,
+  money,
+  type ProductId,
+} from '@nexa/contracts';
 import { CATALOGUE_FA, formatMoney } from '@nexa/i18n';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
@@ -193,6 +198,7 @@ describe('the customer payment flow over Telegram', () => {
     categoryId: seededCategoryFor(scope) as ProductCategoryId,
     specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: 2 },
     price: money(250_000n, 'IRT'),
+    display: EMPTY_PRODUCT_DISPLAY,
     ...overrides,
   });
 
@@ -318,9 +324,10 @@ describe('the customer payment flow over Telegram', () => {
 
     await command('/wallet');
 
-    expect(lastMessage()?.body['text']).toBe(
-      CATALOGUE_FA['bot.wallet.balance'].replace('{balance}', formatMoney(money(750_000n, 'IRT'))),
-    );
+    // The account summary; its balance line is the ledger's sum, not a column.
+    const text = String(lastMessage()?.body['text']);
+    expect(text.startsWith('🎡 اطلاعات حساب کاربری شما:')).toBe(true);
+    expect(text).toContain(`⭐ موجودی: ${formatMoney(money(750_000n, 'IRT'))}`);
   });
 
   // -------------------------------------------------------------------------
@@ -391,11 +398,12 @@ describe('the customer payment flow over Telegram', () => {
         formatMoney(money(150_000n, 'IRT')),
       ),
     );
-    // No debit, no payment, no settlement — and NO invented top-up offered.
+    // No debit, no payment, no settlement. The way to the top-up flow is offered and
+    // nothing else — no payment is invented for the shortfall.
     expect(await entries()).toHaveLength(1);
     expect(await payments()).toHaveLength(0);
     expect((await orders())[0]?.['state']).toBe('AWAITING_PAYMENT');
-    expect(buttonsOf(lastMessage())).toEqual([]);
+    expect(buttonsOf(lastMessage()).map((b) => b.callback_data)).toEqual(['o:', 'mm:']);
   });
 
   it('treats a REDELIVERED settlement tap as a replay: one debit, one payment', async () => {

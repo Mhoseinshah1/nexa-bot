@@ -5,6 +5,7 @@ import {
   MAIN_MENU_BUTTONS,
   MAX_REQUESTS_PER_PROBE,
   OPERATION_LEASE_SECONDS_MIN,
+  faqNumberMarker,
 } from '@nexa/contracts';
 import type {
   AuditWriter,
@@ -54,7 +55,10 @@ import { blocksReadiness } from './modules/platform/system/application/readiness
 import { createLogger, newCorrelationId } from './infrastructure/logging/logger.js';
 import { createDatabase, type DatabaseHandle } from './infrastructure/persistence/database.js';
 import { createRedis, type RedisHandle } from './infrastructure/redis/redis.js';
-import { DrizzleUnitOfWork } from './infrastructure/persistence/unit-of-work.js';
+import {
+  DrizzleUnitOfWork,
+  type TransactionScope,
+} from './infrastructure/persistence/unit-of-work.js';
 
 import {
   DrizzleBotInstanceRepository,
@@ -111,6 +115,12 @@ import { DrizzleSettingRepository } from './modules/control/settings/infrastruct
 import { SettingsResolver } from './modules/control/settings/application/settings-resolver.js';
 import { SettingsService } from './modules/control/settings/application/settings.service.js';
 import { ReminderThresholdsGuard } from './modules/control/settings/application/reminder-thresholds.guard.js';
+import { SignupGiftTermsGuard } from './modules/control/settings/application/signup-gift-terms.guard.js';
+import { SignupGiftActivationGuard } from './modules/control/features/application/signup-gift-activation.guard.js';
+import { TenantMediaService } from './modules/control/media/application/tenant-media.service.js';
+import { DrizzleTenantMediaRepository } from './modules/control/media/infrastructure/drizzle-tenant-media.repository.js';
+import { ReferralSignupGiftService } from './modules/commerce/referrals/application/referral-signup-gift.service.js';
+import { DrizzleReferralSignupGiftRepository } from './modules/commerce/referrals/infrastructure/drizzle-referral-signup-gift.repository.js';
 import { CONTROL_ERROR_CODES, SERVICE_REMINDER_DEFAULTS, isNexaError } from '@nexa/contracts';
 import { DrizzleFeatureFlagRepository } from './modules/control/features/infrastructure/drizzle-feature-flags.repository.js';
 import {
@@ -158,6 +168,12 @@ import {
 import { PaymentAccountService } from './modules/commerce/payments/application/payment-account.service.js';
 import { PaymentGatewayService } from './modules/commerce/payments/application/payment-gateway.service.js';
 import type { PaymentGatewayRepository } from './modules/commerce/payments/application/gateway-ports.js';
+import { DrizzleSupportFaqRepository } from './modules/control/support/infrastructure/drizzle-support-faq.repository.js';
+import { SupportFaqService } from './modules/control/support/application/support-faq.service.js';
+import {
+  SupportFaqSeeder,
+  SupportScreenReader,
+} from './modules/control/support/application/support-screen.reader.js';
 import type { CustomerContactReader } from './modules/commerce/provisioning/application/ports.js';
 import { ReceiptService } from './modules/commerce/payments/application/receipt.service.js';
 import { TelegramReceiptFiles } from './modules/commerce/payments/infrastructure/telegram-receipt-files.js';
@@ -240,6 +256,15 @@ import {
 } from './modules/commerce/provisioning/application/provisioner.service.js';
 import { ProvisionerLoop } from './modules/commerce/provisioning/application/provisioner-loop.js';
 import { DeliveryService } from './modules/commerce/provisioning/application/delivery.service.js';
+import { PngQrCodeEncoder } from './infrastructure/qr/qr-png.js';
+import { CustomerCaptureService } from './modules/commerce/customers/application/customer-capture.service.js';
+import { DrizzleCustomerCaptureRepository } from './modules/commerce/customers/infrastructure/drizzle-customer-capture.repository.js';
+import { DrizzleCustomerCountersReader } from './modules/commerce/customers/infrastructure/drizzle-customer-counters.reader.js';
+import { CustomerScreenComposer } from './modules/commerce/messaging/application/customer-screens.js';
+import { TELEGRAM_MESSAGE_MAX } from './modules/commerce/messaging/application/message-split.js';
+import { WalletTopupFlowService } from './modules/commerce/payments/application/wallet-topup-flow.service.js';
+import { parseCustomerAmount } from './modules/commerce/payments/domain/customer-amount.js';
+import { composeFaqScreen } from './modules/control/support/application/faq-screen.js';
 import { CustomerNotificationService } from './modules/commerce/messaging/application/customer-notification.service.js';
 import {
   CustomerNotificationLoop,
@@ -252,6 +277,7 @@ import { DrizzleNotificationSubjectReader } from './modules/commerce/messaging/i
 import { BotRuntime } from './surfaces/telegram/bot-runtime.js';
 import type { BotRuntimeDeps } from './surfaces/telegram/bot-runtime.js';
 import { I18nTemplateCatalogue } from './modules/control/templates/infrastructure/i18n-template-catalogue.js';
+import { CachedTenantPresentationReader } from './modules/control/templates/infrastructure/cached-tenant-presentation.reader.js';
 import { TemplateManagementService } from './modules/control/templates/application/template-management.service.js';
 import { DrizzleNotificationRepository } from './modules/control/notifications/infrastructure/drizzle-notification.repository.js';
 import { NotificationService } from './modules/control/notifications/application/notification.service.js';
@@ -448,6 +474,8 @@ export interface Container {
   readonly referralCommissions: ReferralCommissionService;
   /** WP9: the operator's read-only view of attributions and commissions. */
   readonly referralsRead: ReferralReadService;
+  readonly referralSignupGifts: ReferralSignupGiftService;
+  readonly tenantMedia: TenantMediaService;
   /** WP9-B: a reseller's standing, entitlements, pricing layer, credit and purchase record. */
   readonly resellers: ResellerService;
   /** WP9-B: reseller tiers, grants and resellers, as an operator manages them. */
@@ -548,6 +576,10 @@ export interface Container {
   readonly featureFlagResolver: FeatureFlagResolver;
   readonly templatesService: TemplateManagementService;
   readonly templateResolver: TemplateResolver;
+  /** The tenant's FAQ as the operator maintains it (customer UX completion §J). */
+  readonly supportFaqs: SupportFaqService;
+  /** The customer's support screen: active FAQ in order, and the first support account's URL. */
+  readonly supportScreen: SupportScreenReader;
   /** Exposed for the tests that drive the resolver against a substituted catalogue. */
   readonly templateRepository: DrizzleTemplateRepository;
   readonly notifications: NotificationService;
@@ -1324,10 +1356,13 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     guard,
     clock,
   });
+  const discountCodeCaptureRepository = new DrizzleDiscountCodeCaptureRepository(database.db);
+  const customerCaptureRepository = new DrizzleCustomerCaptureRepository(database.db);
   const orderService = new OrderService({
     pricing: pricingService,
     resellers: resellerService,
-    discountCodes: new DrizzleDiscountCodeCaptureRepository(database.db),
+    discountCodes: discountCodeCaptureRepository,
+    captures: customerCaptureRepository,
     panelSales: panelSalesGate,
     categories: productCategoryRepository,
     usernames: usernameLane,
@@ -1527,6 +1562,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     scopeActivity: tenants,
     clock,
     settings: settingsResolver,
+    accounts: paymentAccountRepository,
   });
 
   /**
@@ -1583,6 +1619,42 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
   });
+  /*
+   * The signup gift (customer UX §I): one credit per side of a referral, from the terms
+   * in settings, independent of the commission lane above.
+   */
+  const referralSignupGiftService = new ReferralSignupGiftService({
+    gifts: new DrizzleReferralSignupGiftRepository(database.db),
+    referrals: referralRepository,
+    customers: customerRepository,
+    wallet: walletRepository,
+    settings: settingsResolver,
+    features: featureFlagResolver,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    uow,
+    idempotency,
+    outbox,
+    clock,
+    ids,
+  });
+
+  /* The tenant's media slots (customer UX §I): the referral banner, bytes in the database. */
+  const tenantMediaService = new TenantMediaService({
+    repository: new DrizzleTenantMediaRepository(database.db),
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    uow,
+    idempotency,
+    clock,
+  });
+
   const refundService = new RefundService({
     cashback: cashbackService,
     referrals: referralCommissionService,
@@ -2026,6 +2098,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       // One per reminder threshold. The five have to agree with one another, and no
       // per-key schema can say so — see `ReminderThresholdsGuard`.
       ...ReminderThresholdsGuard.all(settingsResolver),
+      // The signup gift's three terms have to make a whole while the gift is on.
+      ...SignupGiftTermsGuard.all(settingsResolver, featureFlagResolver),
     ],
   );
 
@@ -2097,6 +2171,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     opsLogWriter,
     // For the mutation-time session-revocation check.
     sessions,
+    // The vetoes over a flag turning on: the signup gift needs coherent terms first.
+    [new SignupGiftActivationGuard(settingsResolver)],
   );
 
   const serviceReminderSweep = new ServiceReminderService({
@@ -2127,10 +2203,14 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
 
   const templateRepository = new DrizzleTemplateRepository(database.db);
   const templateCatalogue = new I18nTemplateCatalogue();
+  // One reader for the resolver and the preview, so both show a tenant's dates the
+  // same way and share one cache.
+  const templatePresentation = new CachedTenantPresentationReader(tenants, clock);
   const templateResolver = new TemplateResolver(
     templateRepository,
     featureFlagResolver,
     templateCatalogue,
+    templatePresentation,
   );
   /*
    * Composes the destination block behind the application layer.
@@ -2141,6 +2221,117 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * else.
    */
   const paymentDestinationRenderer = new PaymentDestinationRenderer(templateResolver);
+
+  /*
+   * The support FAQ (customer UX completion §J). Built after the template resolver
+   * because the seeder renders the nine defaults through it — a tenant override of
+   * `bot.faq.default_<n>_*` is the tenant's default. Two objects over one repository:
+   * the operator's service, and the customer's reader that charges no permission.
+   */
+  const supportFaqRepository = new DrizzleSupportFaqRepository(database.db);
+  const supportFaqSeeder = new SupportFaqSeeder({
+    repository: supportFaqRepository,
+    uow,
+    templates: templateResolver,
+    scopeActivity: tenants,
+    ids,
+    clock,
+  });
+  const supportFaqService = new SupportFaqService({
+    repository: supportFaqRepository,
+    seeder: supportFaqSeeder,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    ids,
+    clock,
+  });
+  const supportScreenReader = new SupportScreenReader({
+    repository: supportFaqRepository,
+    seeder: supportFaqSeeder,
+    settings: settingsResolver,
+  });
+
+  /*
+   * The customer UX completion's application services (docs/customer-ux-completion-
+   * audit.md). The capture service closes the ORDER windows when it opens, through the
+   * two lanes that own them; `OrderService` closes captures when it opens its own. One
+   * open prompt per customer, across three tables.
+   */
+  const customerCaptureService = new CustomerCaptureService({
+    captures: customerCaptureRepository,
+    windows: {
+      closeOpenFor: async (scope, botInstanceId, customerId, at, tx) => {
+        // The lane types its transaction; the capture port carries it opaquely, as
+        // every other repository port does.
+        const scoped = tx as TransactionScope;
+        const usernameWindow = await usernameLane.openWindowFor(
+          scope,
+          botInstanceId,
+          customerId,
+          scoped,
+        );
+        if (usernameWindow !== null) {
+          await usernameLane.closeWindow(scope, usernameWindow.id, 'SUPERSEDED', at, scoped);
+        }
+        const discountWindow = await discountCodeCaptureRepository.findOpen(
+          scope,
+          botInstanceId,
+          customerId,
+          tx,
+        );
+        if (discountWindow !== null) {
+          await discountCodeCaptureRepository.close(scope, discountWindow.id, 'SUPERSEDED', at, tx);
+        }
+      },
+    },
+    customers: customerRepository,
+    guard,
+    uow,
+    audit,
+    opsLog: opsLogWriter,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
+  const customerScreens = new CustomerScreenComposer(templateResolver);
+  const customerCounters = new DrizzleCustomerCountersReader(database.db);
+  /**
+   * The FAQ screen, rendered into message parts HERE — application code holds the
+   * resolver, the surface does not — and split at item boundaries by `composeFaqScreen`.
+   */
+  const supportScreenParts = async (
+    scope: TenantContext,
+  ): Promise<{ readonly parts: readonly string[]; readonly supportUrl: string | null }> => {
+    const screen = await supportScreenReader.screenFor(scope);
+    if (screen.faqs.length === 0) return { parts: [], supportUrl: screen.supportUrl };
+    const heading = await templateResolver.render(scope, 'bot.faq.heading', {});
+    const footer = await templateResolver.render(scope, 'bot.faq.footer', {});
+    const items = new Map<string, string>();
+    for (const [index, faq] of screen.faqs.entries()) {
+      const number = faqNumberMarker(index + 1);
+      items.set(
+        number,
+        await templateResolver.render(scope, 'bot.faq.item', {
+          number,
+          question: faq.question,
+          answer: faq.answer,
+        }),
+      );
+    }
+    const parts = composeFaqScreen(
+      screen.faqs,
+      { heading, footer, item: (number) => items.get(number) ?? '' },
+      TELEGRAM_MESSAGE_MAX,
+    );
+    return { parts, supportUrl: screen.supportUrl };
+  };
 
   const paymentAccountService = new PaymentAccountService({
     repository: paymentAccountRepository,
@@ -2211,6 +2402,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     opsLogWriter,
     // For the mutation-time session-revocation check.
     sessions,
+    templatePresentation,
   );
 
   /**
@@ -2465,10 +2657,43 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     contacts: customerContacts,
   });
 
+  const walletTopupFlow = new WalletTopupFlowService({
+    captures: customerCaptureService,
+    routes: paymentGatewayService,
+    payments: paymentService,
+    parseAmount: parseCustomerAmount,
+    settings: settingsResolver,
+    uow,
+  });
+
   const deliveryService = new DeliveryService({
     services: serviceRepository,
     contacts: customerContacts,
     messenger: customerMessenger,
+    /*
+     * The QR is encoded from the EXACT link the row holds at send time; the encoder is
+     * a pure function of that string and nothing else (customer UX completion §B).
+     */
+    qr: new PngQrCodeEncoder(),
+    /*
+     * The card's facts: the product name frozen on the ORDER (a historical fact), the
+     * plan's duration and allowance from the same snapshot, and the product's
+     * service-location label read LIVE — marketing display data, never routing. A
+     * service whose order or product cannot be read gets the plain link message.
+     */
+    card: {
+      factsFor: async (scope, service) => {
+        const order = await orderRepository.findById(scope, service.orderId);
+        if (order === null) return null;
+        const product = await productRepository.findById(scope, service.productId);
+        return {
+          productName: order.line.title,
+          serviceLocation: product?.display.serviceLocationLabel ?? null,
+          durationDays: order.line.specification.durationDays,
+          trafficBytes: order.line.specification.trafficBytes,
+        };
+      },
+    },
     // The same tenant kill switch every other write path reads.
     scopeActivity: tenants,
     uow,
@@ -2557,6 +2782,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
           serviceId: operation.serviceId,
           customerId: service.customerId,
           requestedByCustomerId: operation.requestedByCustomerId,
+          nextAttemptAt: operation.nextAttemptAt,
         };
       },
       /*
@@ -3159,6 +3385,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     referrals: referralProgram,
     referralCommissions: referralCommissionService,
     referralsRead: referralReadService,
+    referralSignupGifts: referralSignupGiftService,
+    tenantMedia: tenantMediaService,
     resellers: resellerService,
     resellersAdmin: resellerAdminService,
     commercialActions: commercialActionService,
@@ -3218,6 +3446,22 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       receiptBlocks: receiptBlockCaptureService,
       receiptRejects: receiptRejectCaptureService,
       telegramAdmins,
+      // The customer UX completion's seams. Each re-reads its facts on the tap.
+      captures: customerCaptureService,
+      topup: walletTopupFlow,
+      screens: customerScreens,
+      counters: customerCounters,
+      routes: paymentGatewayService,
+      support: { partsFor: supportScreenParts },
+      productDisplay: {
+        displayFor: async (scope, productId) => {
+          const product = await productRepository.findById(scope, productId);
+          return product === null ? null : product.display;
+        },
+      },
+      resellers: resellerService,
+      referralGifts: referralSignupGiftService,
+      media: tenantMediaService,
       /*
        * The one write the turn makes after its Telegram send, and the transaction
        * it needs, kept OUT of the surface.
@@ -3320,6 +3564,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     featureFlagResolver,
     templatesService,
     templateResolver,
+    supportFaqs: supportFaqService,
+    supportScreen: supportScreenReader,
     templateRepository,
     notifications,
     notificationRepository,

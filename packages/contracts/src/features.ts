@@ -192,6 +192,25 @@ export const FEATURE_FLAGS = [
       'referral.minimum_order_amount',
     ],
   },
+  {
+    key: 'referral_signup_gift',
+    description:
+      'Pay a membership gift for a valid referral: one total, split between the referrer ' +
+      'and the new customer by two share percents, each side claimed once from the ' +
+      'referral screen. Independent of the purchase commission and never recursive. ' +
+      'Turning it on requires the two shares to total 100 and a total above zero; turning ' +
+      'it off withdraws the button and refuses new claims, and shares already credited ' +
+      'stay credited.',
+    defaultEnabled: false,
+    // TENANT_WIDE like `referrals`: it puts money on offer to every referred customer of
+    // the tenant at once.
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: [
+      'referral.signup_gift.total',
+      'referral.signup_gift.referrer_percent',
+      'referral.signup_gift.referred_percent',
+    ],
+  },
 ] as const satisfies readonly FeatureFlagDefinition[];
 
 export type FeatureFlagKey = (typeof FEATURE_FLAGS)[number]['key'];

@@ -16,13 +16,18 @@ import {
   type ResellerTierWriteRequest,
   type ResellerUpdateRequest,
   REFERRAL_ROUTES,
+  TENANT_MEDIA_ROUTES,
   customerReferralResponseSchema,
   referralCommissionListResponseSchema,
   referralListResponseSchema,
+  tenantMediaStateSchema,
   type CustomerReferralResponse,
   type ReferralCommissionListResponse,
   type ReferralCommissionState,
   type ReferralListResponse,
+  type TenantMediaMimeType,
+  type TenantMediaPurpose,
+  type TenantMediaStateResponse,
   CASHBACK_RULE_ROUTES,
   DISCOUNT_ROUTES,
   PRICE_PREVIEW_ROUTE,
@@ -207,6 +212,12 @@ import {
   PAYMENT_GATEWAY_ROUTES,
   paymentGatewayListResponseSchema,
   paymentGatewayResponseSchema,
+  supportFaqListSchema,
+  supportFaqSchema,
+  SUPPORT_FAQ_ROUTES,
+  type SupportFaqListResponse,
+  type SupportFaqResponse,
+  type SupportFaqStatus,
   type PaymentGatewayListResponse,
   type PaymentGatewayResponse,
   type PaymentGatewayStatus,
@@ -833,6 +844,14 @@ export interface ProductWriteInput {
   priceCurrency: CurrencyCode | null;
   /** Required by the contract; `null` files the product under no category. */
   categoryId: string | null;
+  /**
+   * Customer-facing display data (customer UX completion §C), in the operator's order.
+   * Always sent: the write replaces the whole product, so a form that omitted them
+   * would clear lists it never showed.
+   */
+  displayLocations: string[];
+  displayFeatures: string[];
+  serviceLocationLabel: string | null;
   idempotencyKey: string;
 }
 
@@ -1353,6 +1372,51 @@ export function setPaymentGatewayStatus(input: {
 }): Promise<PaymentGatewayResponse> {
   const { provider, ...body } = input;
   return post(PAYMENT_GATEWAY_ROUTES.status(provider), body, paymentGatewayResponseSchema);
+}
+
+/**
+ * The tenant's FAQ (customer UX completion §J): every entry, whatever its status, in the
+ * customer's order. The first list of a fresh tenant is what copies the nine defaults in.
+ */
+export function fetchSupportFaqs(): Promise<SupportFaqListResponse> {
+  return authedGet(SUPPORT_FAQ_ROUTES.list, supportFaqListSchema);
+}
+
+export function createSupportFaq(input: {
+  idempotencyKey: string;
+  question: string;
+  answer: string;
+  sortOrder: number;
+}): Promise<SupportFaqResponse> {
+  return post(SUPPORT_FAQ_ROUTES.create, input, supportFaqSchema);
+}
+
+/**
+ * `expectedVersion` is required. A row that moved since it was read comes back as
+ * `commerce.support_faq_version_conflict` carrying the current version, and the page
+ * offers the fresh row rather than overwriting a colleague's edit.
+ */
+export function updateSupportFaq(input: {
+  id: string;
+  idempotencyKey: string;
+  question: string;
+  answer: string;
+  sortOrder: number;
+  expectedVersion: number;
+}): Promise<SupportFaqResponse> {
+  const { id, ...body } = input;
+  return post(SUPPORT_FAQ_ROUTES.update(id), body, supportFaqSchema);
+}
+
+/** Switches one entry on or off. A no-op when it is already there, and it says so. */
+export function setSupportFaqStatus(input: {
+  id: string;
+  idempotencyKey: string;
+  status: SupportFaqStatus;
+  expectedVersion: number;
+}): Promise<SupportFaqResponse> {
+  const { id, ...body } = input;
+  return post(SUPPORT_FAQ_ROUTES.status(id), body, supportFaqSchema);
 }
 
 export function fetchPanels(
@@ -1976,4 +2040,31 @@ export function updateReseller(
 ): Promise<ResellerResponse> {
   const { customerId, ...body } = input;
   return post(RESELLER_ROUTES.update(customerId), body, resellerResponseSchema);
+}
+
+// ---------------------------------------------------------------------------
+// Tenant media (customer UX §I): the referral banner's metadata, never its bytes
+// ---------------------------------------------------------------------------
+
+export function fetchTenantMedia(purpose: TenantMediaPurpose): Promise<TenantMediaStateResponse> {
+  return authedGet(TENANT_MEDIA_ROUTES.detail(purpose), tenantMediaStateSchema);
+}
+
+/** Replaces the slot. The bytes travel as base64 in JSON, bounded by the schema on both sides. */
+export function uploadTenantMedia(input: {
+  purpose: TenantMediaPurpose;
+  idempotencyKey: string;
+  mimeType: TenantMediaMimeType;
+  contentBase64: string;
+}): Promise<TenantMediaStateResponse> {
+  const { purpose, ...body } = input;
+  return post(TENANT_MEDIA_ROUTES.upload(purpose), body, tenantMediaStateSchema);
+}
+
+export function clearTenantMedia(input: {
+  purpose: TenantMediaPurpose;
+  idempotencyKey: string;
+}): Promise<TenantMediaStateResponse> {
+  const { purpose, ...body } = input;
+  return post(TENANT_MEDIA_ROUTES.clear(purpose), body, tenantMediaStateSchema);
 }

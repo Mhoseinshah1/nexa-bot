@@ -808,7 +808,7 @@ export class ProductService {
  * silently fails to serialise is a field whose change cannot be caught — which is the
  * defect `hashRequest`'s own comment records from the customer service's private copy.
  */
-function serialisableDraft(draft: ProductDraft): Record<string, unknown> {
+function serialisableDraft(draft: ProductDraft | ProductEdit): Record<string, unknown> {
   return {
     title: draft.title,
     description: draft.description,
@@ -826,6 +826,22 @@ function serialisableDraft(draft: ProductDraft): Record<string, unknown> {
     deviceLimit: draft.specification.deviceLimit,
     priceAmount: draft.price === null ? null : draft.price.amountMinor.toString(),
     priceCurrency: draft.price === null ? null : draft.price.currency,
+    /*
+     * The display data too, ORDER INCLUDED: the hash is over a JSON array, so two edits
+     * that differ only in which location is listed first are two commands. Without these
+     * a key reused with only the marketing copy changed would replay the earlier product
+     * — the categoryId defect above, on three more fields.
+     */
+    // A null display — an edit that did not mention it — hashes as its own value, so
+    // an edit that keeps the display and one that clears it are two commands.
+    display:
+      draft.display === null
+        ? null
+        : {
+            displayLocations: draft.display.displayLocations,
+            displayFeatures: draft.display.displayFeatures,
+            serviceLocationLabel: draft.display.serviceLocationLabel,
+          },
   };
 }
 
@@ -854,5 +870,10 @@ function auditView(product: ProductRecord): Record<string, unknown> {
     deviceLimit: product.specification.deviceLimit,
     priceAmount: product.price === null ? null : product.price.amountMinor.toString(),
     priceCurrency: product.price === null ? null : product.price.currency,
+    // Customer-facing copy is a mutable field like any other, and a pair that omitted it
+    // would record a rewritten location list as a change of nothing.
+    displayLocations: product.display.displayLocations,
+    displayFeatures: product.display.displayFeatures,
+    serviceLocationLabel: product.display.serviceLocationLabel,
   };
 }

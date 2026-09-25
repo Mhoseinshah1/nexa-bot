@@ -35,7 +35,12 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
 import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
 import { rememberOnce } from '../../../platform/idempotency/application/remember-once.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
-import type { TemplateCatalogue, TemplateRepository, TemplateRevision } from './ports.js';
+import type {
+  TemplateCatalogue,
+  TemplateRepository,
+  TemplateRevision,
+  TenantPresentationReader,
+} from './ports.js';
 import { DEFAULT_TEMPLATE_LOCALE, type Locale } from './template-resolver.js';
 
 export const TEMPLATES_VIEW: PermissionKey = 'templates.view';
@@ -177,6 +182,11 @@ export class TemplateManagementService {
     private readonly opsLog: OperationalEventRecorder,
     /** For the mutation-time session-revocation check. */
     private readonly sessions: SessionRepository,
+    /**
+     * The same reader the resolver renders a real send with, so a preview shows a
+     * date the way the customer will read it, not the way a different lookup would.
+     */
+    private readonly presentation: TenantPresentationReader,
   ) {}
 
   async list(
@@ -249,8 +259,10 @@ export class TemplateManagementService {
     }
 
     // Text into declared types. A field left empty is not a supplied value: it
-    // is reported as unresolved below and its token stays in the output, which
-    // is what an administrator previewing a half-filled form expects to see.
+    // is reported as unresolved below, and the renderer treats it as a real send
+    // would — a required token stays in the output, an optional one renders as
+    // absent — so an administrator previewing a half-filled form sees both what
+    // is missing and what the customer would actually read.
     //
     // Absent values are not refused — a preview with no samples at all is the
     // normal first thing anybody does — but a value that WAS typed and does not
@@ -264,11 +276,13 @@ export class TemplateManagementService {
       );
     }
 
+    const presentation = await this.presentation.presentationFor(scope);
     const rendered = this.catalogue.render(
       definition,
       command.body,
       values,
       DEFAULT_TEMPLATE_LOCALE,
+      presentation,
     );
     const unresolved = definition.placeholders
       .map((placeholder) => placeholder.token)

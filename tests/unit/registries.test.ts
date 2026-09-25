@@ -250,6 +250,9 @@ describe('the feature flag registry', () => {
       // WP6-C. Off by default; the customer rotation path it switches on is reachable.
       'customer_link_rotation',
       'ops_notifications',
+      // Customer UX completion §I. Off by default; the claim path it switches on is
+      // reachable, and it refuses to turn on until the two shares total 100.
+      'referral_signup_gift',
       // WP9. Off by default; attribution at /start and the commission lane it switches on
       // are reachable, and it does nothing until referral.commission_percent is chosen.
       'referrals',

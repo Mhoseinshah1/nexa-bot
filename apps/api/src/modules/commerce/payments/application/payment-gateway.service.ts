@@ -2,19 +2,19 @@ import {
   COMMERCE_ERROR_CODES,
   PAYMENT_GATEWAY_DESCRIPTORS,
   errors,
-  money,
   paymentGatewayProviderSchema,
   type ActorContext,
   type AuditWriter,
   type Clock,
-  type CurrencyCode,
   type IdempotencyStore,
   type Money,
   type OperationalEventRecorder,
   type PaymentGatewayConfig,
+  type PaymentGatewayDescriptor,
   type PaymentMethod,
   type PaymentGatewayProvider,
   type PaymentGatewayStatus,
+  type PaymentPurpose,
   type PermissionKey,
   type TenantContext,
   type SalesCurrencyCode,
@@ -31,12 +31,15 @@ import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzl
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
+import type { PaymentAccountRepository } from './account-ports.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
   accountAgeInDays,
   evaluateGatewayEligibility,
+  type GatewayAudience,
   type GatewayEligibility,
 } from '../domain/gateway-eligibility.js';
+import { allowsPurpose, boundsOf, decideAmount } from '../domain/gateway-selection.js';
 import type {
   GatewayAudienceReader,
   PaymentGatewayRecord,
@@ -66,7 +69,26 @@ export interface PaymentGatewayServiceDeps {
    * installation sells in is what a bound means, and what a surface must render it as.
    */
   readonly settings: SettingsResolver;
+  /**
+   * Whether ANY enabled receiving account exists — the one fact that decides whether a
+   * route settling by manual transfer can be paid through at all. Asked here, where the
+   * routes are decided, so a surface never draws a route whose final tap `issueTopup`
+   * or the order's transfer would refuse with `NO_DESTINATION`.
+   */
+  readonly accounts: Pick<PaymentAccountRepository, 'hasEnabled'>;
 }
+
+/**
+ * `PaymentGatewayConfig` with the two purpose switches OPTIONAL: absent means "as the row
+ * has it", decided inside `configure`'s transaction against the row it is about to write.
+ */
+export type PaymentGatewayConfigInput = Omit<
+  PaymentGatewayConfig,
+  'allowServicePurchase' | 'allowWalletTopup'
+> & {
+  readonly allowServicePurchase?: boolean | undefined;
+  readonly allowWalletTopup?: boolean | undefined;
+};
 
 /** What one command was asked to do, so a replay can answer with the same route. */
 interface GatewayResult {
@@ -78,6 +100,23 @@ export interface OfferedGateway {
   readonly gateway: PaymentGatewayRecord;
   readonly minAmount: Money;
   readonly maxAmount: Money | null;
+}
+
+/**
+ * One route a customer may be SHOWN for a purpose (customer UX completion §D/§F).
+ *
+ * The descriptor travels with it so a surface decides how the route settles from the
+ * descriptor and never from the provider's name — `externalRoutes` in
+ * `gateway-selection.ts` is the one consumer today. `gateway` is the row itself, for
+ * the caller that goes on to issue a payment against it and snapshots what it promised.
+ */
+export interface OfferedRoute {
+  readonly provider: PaymentGatewayProvider;
+  /** Null means "the product's own name for this route", rendered from a template key. */
+  readonly displayName: string | null;
+  readonly topupCashbackPercent: number;
+  readonly descriptor: PaymentGatewayDescriptor;
+  readonly gateway: PaymentGatewayRecord;
 }
 
 /**
@@ -95,8 +134,9 @@ export interface OfferedGateway {
  * `SYSTEM_JOB_PERMISSIONS` for a statement that writes nothing an operator asked for.
  *
  * Everything that mutates charges `payments.gateways.edit`; the reads charge
- * `payments.gateways.view`, except `offer`, which charges nothing because its caller is
- * a customer's own payment attempt rather than an administrator.
+ * `payments.gateways.view`, except `routesFor`, `offer` and `methodIsOffered`, which
+ * charge nothing because their caller is a customer's own payment attempt rather than
+ * an administrator.
  */
 export class PaymentGatewayService {
   constructor(private readonly deps: PaymentGatewayServiceDeps) {}
@@ -132,7 +172,7 @@ export class PaymentGatewayService {
     input: {
       readonly idempotencyKey: string;
       readonly provider: string;
-      readonly config: PaymentGatewayConfig;
+      readonly config: PaymentGatewayConfigInput;
     },
   ): Promise<PaymentGatewayRecord> {
     const provider = this.provider(input.provider);
@@ -158,6 +198,10 @@ export class PaymentGatewayService {
       sortOrder: input.config.sortOrder,
       // In the hash, so two edits differing only in the gift are two commands (D5).
       topupCashbackPercent: input.config.topupCashbackPercent,
+      // And the two purpose switches, for the same reason: switching top-up off is an
+      // edit, and a key reused for it must not replay the edit that left it on.
+      allowServicePurchase: input.config.allowServicePurchase,
+      allowWalletTopup: input.config.allowWalletTopup,
     });
     const replayed = await this.replay(scope, input.idempotencyKey, requestHash);
     if (replayed !== null) return replayed;
@@ -179,14 +223,18 @@ export class PaymentGatewayService {
           'sales.currency',
           tx,
         );
-        const after = await this.deps.repository.update(
-          scope,
-          provider,
-          input.config,
-          currency,
-          now,
-          tx,
-        );
+        /*
+         * A switch the request did not carry keeps the row's value. The previous
+         * release's client sends neither, and a form with no field for a switch has
+         * nothing to say about it — defaulting an absent one to ON would re-enable a
+         * payment path an operator had switched off, from an edit to the display name.
+         */
+        const config: PaymentGatewayConfig = {
+          ...input.config,
+          allowServicePurchase: input.config.allowServicePurchase ?? before.allowServicePurchase,
+          allowWalletTopup: input.config.allowWalletTopup ?? before.allowWalletTopup,
+        };
+        const after = await this.deps.repository.update(scope, provider, config, currency, now, tx);
         if (after === null) {
           throw errors.notFound(
             COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_NOT_FOUND,
@@ -311,13 +359,45 @@ export class PaymentGatewayService {
   }
 
   /**
-   * The route a customer's payment of this amount should be issued against.
+   * Every route a customer may be SHOWN for a purpose, in the operator's order.
    *
-   * The one method here with no permission check, and that is deliberate rather than an
-   * omission: the caller is the customer's own payment attempt, acting as the customer,
-   * and there is no `ActorContext` for a customer in this product. What bounds it instead
-   * is that it takes a CUSTOMER id and an amount and returns configuration — it writes
-   * nothing, and every fact it reads is about the tenant the scope already names.
+   * A route is in the list when it is ACTIVE, switched on for `purpose`, admits this
+   * customer under its thresholds, and — when an amount is given — admits the amount
+   * under its own bounds. Ordered `(sortOrder, provider)`, which is the order the
+   * repository reads and every surface renders. Each item carries its descriptor, so
+   * what a surface draws for a route is decided from the descriptor and never from the
+   * provider's name.
+   *
+   * The amount is OPTIONAL because the two callers ask at different moments: the
+   * pre-invoice asks before any amount is typed and needs to know whether to draw a
+   * button at all, while the top-up chooser asks for an amount the customer has already
+   * given and must show only the routes that will take it. Passing null means "do not
+   * decide the amount here"; `assertAmountAccepted` is the throwing check for a caller
+   * that has already chosen.
+   *
+   * No permission check, for the reason `offer` gives: the caller is a customer's own
+   * payment attempt, it takes a customer id and reads configuration, and it writes
+   * nothing. Inside a transaction the list is read FOR SHARE — see the repository.
+   */
+  async routesFor(
+    scope: TenantContext,
+    customerId: UserId,
+    purpose: PaymentPurpose,
+    amount: Money | null,
+    tx?: unknown,
+  ): Promise<readonly OfferedRoute[]> {
+    const { routes } = await this.evaluateRoutes(scope, customerId, purpose, amount, tx);
+    return routes;
+  }
+
+  /**
+   * The route a customer's TOP-UP of this amount should be issued against.
+   *
+   * `routesFor(WALLET_TOPUP)`'s first answer, with the refusals a caller that needs
+   * exactly one route deserves. The amount is deliberately NOT passed to the filter:
+   * `assertAmountAccepted` is where an amount outside the chosen route's window is
+   * refused, and it refuses with `PAYMENT_GATEWAY_AMOUNT_REJECTED` — a misconfiguration
+   * an operator can act on, which "no route available" would hide.
    *
    * ## Three refusals, and only one of them is the customer's to know
    *
@@ -339,7 +419,7 @@ export class PaymentGatewayService {
    * `sortOrder` then provider, which is the order the operator arranged and the order
    * every surface renders. With one operable route the choice is not a choice; when
    * there are several, the first ELIGIBLE one is what a customer would have tapped, and
-   * a chooser can be added over this method without changing what it decides.
+   * the chooser built over `routesFor` decides nothing this method would not.
    */
   async offer(
     scope: TenantContext,
@@ -347,7 +427,13 @@ export class PaymentGatewayService {
     amount: Money,
     tx?: unknown,
   ): Promise<OfferedGateway> {
-    const gateways = await this.deps.repository.list(scope, tx);
+    const { gateways, audience, routes } = await this.evaluateRoutes(
+      scope,
+      customerId,
+      'WALLET_TOPUP',
+      null,
+      tx,
+    );
     if (gateways.length === 0) {
       throw errors.conflict(
         COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
@@ -356,10 +442,7 @@ export class PaymentGatewayService {
       );
     }
 
-    const audience = await this.audienceFor(scope, customerId, tx);
-    const eligible = gateways.find(
-      (gateway) => evaluateGatewayEligibility(gateway.status, gateway, audience).eligible,
-    );
+    const eligible = routes[0];
     if (eligible === undefined) {
       /*
        * The reasons go to the DETAIL, not to the message. An operator reading the
@@ -368,7 +451,10 @@ export class PaymentGatewayService {
        */
       const reasons = gateways.map((gateway) => {
         const verdict = evaluateGatewayEligibility(gateway.status, gateway, audience);
-        return `${gateway.provider}:${verdict.eligible ? 'ELIGIBLE' : verdict.reason}`;
+        if (!verdict.eligible) return `${gateway.provider}:${verdict.reason}`;
+        return `${gateway.provider}:${
+          allowsPurpose(gateway, 'WALLET_TOPUP') ? 'ELIGIBLE' : 'PURPOSE_NOT_ALLOWED'
+        }`;
       });
       throw errors.conflict(
         COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
@@ -382,15 +468,8 @@ export class PaymentGatewayService {
      * the rolling update that shipped the column, and that release relabelled its
      * bounds with the amount's currency — so that, and only that, is what a NULL means.
      */
-    const boundsCurrency = eligible.boundsCurrency ?? amount.currency;
-    return {
-      gateway: eligible,
-      minAmount: this.boundFor(eligible.minAmountMinor, boundsCurrency),
-      maxAmount:
-        eligible.maxAmountMinor === 0n
-          ? null
-          : this.boundFor(eligible.maxAmountMinor, boundsCurrency),
-    };
+    const bounds = boundsOf(eligible.gateway, amount.currency);
+    return { gateway: eligible.gateway, minAmount: bounds.minAmount, maxAmount: bounds.maxAmount };
   }
 
   /**
@@ -404,35 +483,29 @@ export class PaymentGatewayService {
    * permit what either layer forbids.
    */
   assertAmountAccepted(offered: OfferedGateway, amount: Money): void {
-    if (amount.currency !== offered.minAmount.currency) {
+    const verdict = decideAmount(
+      { minAmount: offered.minAmount, maxAmount: offered.maxAmount },
+      amount,
+    );
+    if (verdict.admitted) return;
+    if (verdict.reason === 'BOUND_CURRENCY_MISMATCH') {
       throw errors.conflict(
         COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
         'This payment route is configured in another currency.',
         { reason: 'BOUND_CURRENCY_MISMATCH' },
       );
     }
-    if (offered.minAmount.amountMinor > 0n && amount.amountMinor < offered.minAmount.amountMinor) {
-      throw errors.conflict(
-        COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_AMOUNT_REJECTED,
-        'That amount is below what this payment route accepts.',
-        {
-          side: 'BELOW_MINIMUM',
-          boundMinor: offered.minAmount.amountMinor.toString(),
-          currency: offered.minAmount.currency,
-        },
-      );
-    }
-    if (offered.maxAmount !== null && amount.amountMinor > offered.maxAmount.amountMinor) {
-      throw errors.conflict(
-        COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_AMOUNT_REJECTED,
-        'That amount is above what this payment route accepts.',
-        {
-          side: 'ABOVE_MAXIMUM',
-          boundMinor: offered.maxAmount.amountMinor.toString(),
-          currency: offered.maxAmount.currency,
-        },
-      );
-    }
+    throw errors.conflict(
+      COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_AMOUNT_REJECTED,
+      verdict.reason === 'BELOW_MINIMUM'
+        ? 'That amount is below what this payment route accepts.'
+        : 'That amount is above what this payment route accepts.',
+      {
+        side: verdict.reason,
+        boundMinor: verdict.bound.amountMinor.toString(),
+        currency: verdict.bound.currency,
+      },
+    );
   }
 
   /**
@@ -461,11 +534,19 @@ export class PaymentGatewayService {
     scope: TenantContext,
     method: PaymentMethod,
     tx?: unknown,
+    /*
+     * The purpose the route is being offered FOR. Defaults to a purchase, because every
+     * caller before the switches existed was asking on behalf of an order; the top-up
+     * chooser asks `routesFor` directly and never comes through here.
+     */
+    purpose: PaymentPurpose = 'SERVICE_PURCHASE',
   ): Promise<boolean> {
     const gateways = await this.deps.repository.list(scope, tx);
     return gateways.some(
       (gateway) =>
-        gateway.status === 'ACTIVE' && this.settlementMethodFor(gateway.provider) === method,
+        gateway.status === 'ACTIVE' &&
+        allowsPurpose(gateway, purpose) &&
+        this.settlementMethodFor(gateway.provider) === method,
     );
   }
 
@@ -477,18 +558,59 @@ export class PaymentGatewayService {
   // -------------------------------------------------------------------------
 
   /**
-   * A bound, denominated in the currency it was WRITTEN in — the row's, never the
-   * amount's.
+   * The one evaluation behind `routesFor` and `offer`.
    *
-   * It used to take the amount's currency, which made `BOUND_CURRENCY_MISMATCH`
-   * unreachable by construction and hid the failure it was reserved for: an operator
-   * switching `sales.currency` from IRT to IRR relabelled every stored `1000000` as
-   * IRR at comparison time, so each route began accepting a tenth of what it had, with
-   * no bound edited and no conversion performed. `assertAmountAccepted` now meets the
-   * row's own denomination and fails closed until the operator re-saves the bounds.
+   * Returns the unfiltered roster and the audience beside the answer, because `offer`
+   * owes an operator the per-route reasons when nothing is offered, and computing them
+   * from a second read would be a second answer to the same question. The predicates
+   * are applied in the order an operator would expect a reason in: switched off, then
+   * not for this purpose, then the customer's thresholds, then the amount.
    */
-  private boundFor(amountMinor: bigint, currency: CurrencyCode): Money {
-    return money(amountMinor, currency);
+  private async evaluateRoutes(
+    scope: TenantContext,
+    customerId: UserId,
+    purpose: PaymentPurpose,
+    amount: Money | null,
+    tx?: unknown,
+  ): Promise<{
+    readonly gateways: readonly PaymentGatewayRecord[];
+    readonly audience: GatewayAudience;
+    readonly routes: readonly OfferedRoute[];
+  }> {
+    const gateways = await this.deps.repository.list(scope, tx);
+    const audience = await this.audienceFor(scope, customerId, tx);
+    /*
+     * A route that settles by manual transfer needs somewhere for the money to go. With
+     * no enabled account the route is CONFIGURED and cannot be paid through, and the
+     * customer would learn that on the last tap — after typing an amount and choosing
+     * it. So the destination is part of what makes the route offerable, for both
+     * purposes, and its absence drops the route from the list rather than the tap.
+     */
+    const destination = await this.deps.accounts.hasEnabled(scope, tx);
+    const routes = gateways
+      .filter(
+        (gateway) =>
+          gateway.status === 'ACTIVE' &&
+          (PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider].settlesVia !== 'MANUAL_TRANSFER' ||
+            destination) &&
+          allowsPurpose(gateway, purpose) &&
+          evaluateGatewayEligibility(gateway.status, gateway, audience).eligible &&
+          /*
+           * The amount, against the row's OWN denomination — `boundsOf` says why the
+           * fallback is the amount's currency and why that is the only case it stands
+           * in for. A window in another currency admits nothing, so such a route drops
+           * out of the list rather than being shown and refused a tap later.
+           */
+          (amount === null || decideAmount(boundsOf(gateway, amount.currency), amount).admitted),
+      )
+      .map((gateway) => ({
+        provider: gateway.provider,
+        displayName: gateway.displayName,
+        topupCashbackPercent: gateway.topupCashbackPercent,
+        descriptor: PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider],
+        gateway,
+      }));
+    return { gateways, audience, routes };
   }
 
   private async audienceFor(scope: TenantContext, customerId: UserId, tx?: unknown) {
@@ -662,5 +784,7 @@ function auditView(gateway: PaymentGatewayRecord): Record<string, unknown> {
     activateAfterAccountDays: gateway.activateAfterAccountDays,
     sortOrder: gateway.sortOrder,
     topupCashbackPercent: gateway.topupCashbackPercent,
+    allowServicePurchase: gateway.allowServicePurchase,
+    allowWalletTopup: gateway.allowWalletTopup,
   };
 }

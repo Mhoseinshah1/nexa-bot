@@ -118,7 +118,7 @@ describe('the messenger’s file send', () => {
       chatId: '42',
       botInstanceId: '01900000-0000-7000-8000-0000000000bb' as never,
       kind: 'PHOTO',
-      fileId: 'file-1',
+      source: { kind: 'FILE_ID', fileId: 'file-1' },
       caption: { templateKey: 'bot.admin.receipt', values: { reference: 'R1' } as never },
       buttons: [{ label: { kind: 'TEMPLATE', key: 'bot.admin.approve_button' }, data: 'D:x' }],
     });
@@ -140,7 +140,7 @@ describe('the messenger’s file send', () => {
       chatId: '42',
       botInstanceId: '01900000-0000-7000-8000-0000000000bb' as never,
       kind: 'DOCUMENT',
-      fileId: 'file-2',
+      source: { kind: 'FILE_ID', fileId: 'file-2' },
     });
     expect(urls[0]).toContain('/sendDocument');
     expect(bodies[0]).toEqual({ chat_id: '42', document: 'file-2' });

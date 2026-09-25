@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  EMPTY_PRODUCT_DISPLAY,
   type ActorContext,
   type BotInstanceId,
   type CorrelationId,
@@ -67,10 +68,15 @@ describe('a free trial', () => {
       request.on('data', (chunk: Buffer) => chunks.push(chunk));
       request.on('end', () => {
         const raw = Buffer.concat(chunks).toString('utf8');
-        sent.push({
-          url: request.url ?? '',
-          body: raw.length === 0 ? {} : (JSON.parse(raw) as Record<string, unknown>),
-        });
+        // A photo goes out as multipart; a body that is not JSON is kept raw rather
+        // than thrown on, which would leave the request unanswered and the send UNCONFIRMED.
+        let body: Record<string, unknown>;
+        try {
+          body = raw.length === 0 ? {} : (JSON.parse(raw) as Record<string, unknown>);
+        } catch {
+          body = { unparseable: raw };
+        }
+        sent.push({ url: request.url ?? '', body });
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(JSON.stringify({ ok: true, result: { message_id: 7 } }));
       });
@@ -130,6 +136,7 @@ describe('a free trial', () => {
         categoryId: SEED_IDS.categoryA as ProductCategoryId,
         specification: { durationDays: 1, trafficBytes: 1_073_741_824n, deviceLimit: null },
         price: null,
+        display: EMPTY_PRODUCT_DISPLAY,
       },
       now: ctx.container.clock.now(),
     });
@@ -309,7 +316,7 @@ describe('a free trial', () => {
     expect(service?.trafficLimitBytes).toBe(1_073_741_824n);
     expect(panel.users.get(service?.providerUsername ?? '')).toBeDefined();
     expect(service?.deliveryState).toBe('DELIVERED');
-    expect(sent.some((one) => one.url.endsWith('/sendMessage'))).toBe(true);
+    expect(sent.some((one) => one.url.endsWith('/sendPhoto'))).toBe(true);
 
     // No wallet entry, no payment, no refund: a trial is free and touches no ledger.
     expect(await moneyRows()).toEqual({ wallet: 0, payments: 0, refunds: 0 });
@@ -337,6 +344,7 @@ describe('a free trial', () => {
         categoryId: SEED_IDS.categoryA as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 107_374_182_400n, deviceLimit: null },
         price: null,
+        display: EMPTY_PRODUCT_DISPLAY,
       },
       ctx.container.clock.now(),
     );

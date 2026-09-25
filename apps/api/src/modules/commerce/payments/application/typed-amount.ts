@@ -54,7 +54,14 @@ const BIDI_MARKS = /[\u200e\u200f\u061c\u202a-\u202e\u2066-\u2069]/gu;
 
 const SEPARATORS = /[,\u066c\u060c \u00a0\u202f]/u;
 
-function toLatinDigits(text: string): string {
+/**
+ * Persian and Arabic-Indic digits as Latin ones, everything else untouched.
+ *
+ * Exported for `parseCustomerAmount`, which reads a CUSTOMER's figure under stricter
+ * rules than a reviewer's and must not carry a second copy of this table: the two would
+ * agree until somebody added a digit range to one of them.
+ */
+export function toLatinDigits(text: string): string {
   return text.replace(/[\u06f0-\u06f9\u0660-\u0669]/gu, (digit) => {
     const code = digit.charCodeAt(0);
     return String(code >= 0x06f0 ? code - 0x06f0 : code - 0x0660);

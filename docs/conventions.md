@@ -181,6 +181,22 @@ was swallowed by a value-capture prompt and overwrote a production tutorial text
 Placeholders are unvalidated and overloaded: `{time}` means both "now" and
 "service duration".
 
+**Rendering absent values.** A declared OPTIONAL placeholder with no value
+renders as the empty string, and a line whose placeholders are all such tokens
+is dropped whole — label text included, with exactly one adjacent newline (the
+following one, or the preceding one for the last line), so paragraphs stay one
+blank line apart. A line where at least one placeholder still has a value is
+kept. A REQUIRED token with no value stays literal, because
+`validateTemplateValues` refuses that send before it renders and a preview is
+expected to show the gap; an undeclared token stays literal too. Before this a
+customer with no expiry read `{expiresAt}`. The same renderer owns every unit:
+`DATETIME` values are shown in the tenant's `display_timezone` and `calendar`
+through `formatDateTime` (ISO-8601 UTC only when no presentation was
+resolved), `BYTES` and `TRAFFIC_LIMIT` through `formatBytes` and
+`formatTrafficLimit`, and `DURATION_DAYS` through `formatDurationDays` — «30
+روز», and «نامحدود» for `UNLIMITED_DURATION_DAYS`, never a bare `30` or a `0`
+that reads as the opposite of unlimited.
+
 **Enforced by.** `check-i18n-keys.mjs` fails on a missing key, an undeclared
 token, a hard-coded Persian string in **either** surface, or a `web.*` key
 nothing renders any more. `validateTemplateBody` in `@nexa/contracts` refuses a

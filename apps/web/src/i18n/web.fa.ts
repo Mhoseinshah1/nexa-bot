@@ -1140,9 +1140,61 @@ export const WEB_FA = {
   'web.payment_gateway_amount_invalid':
     'حداقل و حداکثر مبلغ باید عددی صحیح باشند. علامت، نقطهٔ اعشار یا حروف پذیرفته نمی‌شود.',
   'web.payment_gateway_status_done': 'وضعیت روش پرداخت تغییر کرد.',
+  /*
+   * Per-purpose switches on a route (customer UX completion §D/§F). Two, because an
+   * operator may take card-to-card for a top-up and not for a purchase, or the
+   * reverse; one switch for both is a route that is on for something it was never
+   * meant for.
+   */
+  'web.gateway_allow_column': 'کاربرد',
+  'web.gateway_allow_service_purchase': 'خرید سرویس',
+  'web.gateway_allow_wallet_topup': 'شارژ کیف پول',
+  'web.gateway_allow_hint':
+    'این روش برای کدام کارها به مشتری پیشنهاد شود. روشِ فعال با هر دو گزینهٔ خاموش به هیچ مشتری‌ای پیشنهاد نمی‌شود.',
+  'web.gateway_allow_none': 'برای هیچ کاری',
   'web.payment_gateways_empty': 'هنوز روش پرداختی ثبت نشده است.',
   'web.payment_gateways_empty_hint':
     'در نصب سالم این فهرست خالی نمی‌ماند. اگر خالی است، سرویس را یک بار راه‌اندازی مجدد کنید تا روش‌های این نسخه ساخته شوند.',
+  // Support (customer UX completion §J) — the FAQ the bot answers with, and a
+  // pointer at the settings page, where the support DESTINATION already lives.
+  'web.nav_support': 'پشتیبانی',
+  'web.support_title': 'پشتیبانی',
+  'web.support_subtitle':
+    'سوالات متداولی که ربات به مشتری نشان می‌دهد، به همان ترتیب، و راه ارتباط با پشتیبانی.',
+  'web.support_faq_hint':
+    'فقط پرسش‌های فعال به مشتری نشان داده می‌شوند، به ترتیب عدد «ترتیب». بار اول نه پرسش پیش‌فرض ساخته می‌شود؛ از آن پس فهرست مال شماست و خودبه‌خود پر نمی‌شود.',
+  'web.support_destination_title': 'راه ارتباط با پشتیبانی',
+  'web.support_destination_note':
+    'دکمهٔ «ارسال پیام به پشتیبانی» به نخستین حساب فهرست «حساب‌های پشتیبانی» می‌رود. آن فهرست در صفحهٔ تنظیمات ویرایش می‌شود، نه این‌جا؛ اگر خالی باشد به مشتری گفته می‌شود راه ارتباطی تنظیم نشده است.',
+  'web.support_destination_link': 'رفتن به تنظیمات',
+  'web.support_faq_order': 'ترتیب',
+  'web.support_faq_question': 'پرسش',
+  'web.support_faq_answer': 'پاسخ',
+  'web.support_faq_status': 'وضعیت',
+  'web.support_faq_active': 'فعال',
+  'web.support_faq_inactive': 'غیرفعال',
+  'web.support_faq_updated': 'آخرین تغییر',
+  'web.support_faq_actions': 'عملیات',
+  'web.support_faq_edit': 'ویرایش',
+  'web.support_faq_activate': 'فعال کردن',
+  'web.support_faq_deactivate': 'غیرفعال کردن',
+  'web.support_faq_new': 'افزودن پرسش',
+  'web.support_faq_creating': 'پرسش تازه',
+  'web.support_faq_editing': 'ویرایش پرسش',
+  'web.support_faq_form_hint':
+    'پرسش تا ۳۰۰ و پاسخ تا ۲۰۰۰ نویسه. متن همان‌طور که نوشته می‌شود به مشتری نشان داده می‌شود.',
+  'web.support_faq_sort_hint': 'عدد کوچک‌تر بالاتر نشان داده می‌شود. پیش‌فرض‌ها ۱۰ تا ۹۰ هستند.',
+  'web.support_faq_sort_invalid': 'ترتیب باید عددی صحیح از ۰ تا ۱۰۰٬۰۰۰ باشد.',
+  'web.support_faq_text_required': 'پرسش و پاسخ هر دو لازم‌اند.',
+  'web.support_faq_save': 'ذخیره',
+  'web.support_faq_cancel': 'انصراف',
+  'web.support_faq_saved': 'پرسش ذخیره شد.',
+  'web.support_faq_status_done': 'وضعیت پرسش تغییر کرد.',
+  'web.support_faq_conflict':
+    'این پرسش پس از خواندن شما تغییر کرده است. نسخهٔ تازه را بگیرید و تغییر خود را دوباره اعمال کنید.',
+  'web.support_faq_limit': 'سقف تعداد پرسش‌ها پر شده است. یکی را غیرفعال یا ویرایش کنید.',
+  'web.support_faq_empty': 'هنوز پرسشی ثبت نشده است.',
+  'web.support_faq_empty_hint': 'با «افزودن پرسش» نخستین پرسش را بسازید.',
   'web.payment_resolution': 'نتیجهٔ بدون دریافت وجه',
   'web.payment_destination': 'مقصد واریز اعلام‌شده',
   'web.payment_destination_label': 'عنوان حساب',
@@ -1428,6 +1480,35 @@ export const WEB_FA = {
   'web.product_problem_traffic': 'حجم باید عددی صحیح به بایت باشد.',
   'web.product_problem_devices': 'سقف دستگاه باید عددی صحیح و بزرگ‌تر از صفر باشد یا خالی بماند.',
   'web.product_problem_price': 'قیمت باید عددی صحیح و بزرگ‌تر از صفر باشد یا خالی بماند.',
+  /*
+   * Product display metadata (customer UX completion §C). Marketing copy the
+   * pre-invoice and the cards render in the operator's order; the panel field, not
+   * any of this, decides where a purchase is delivered — and the hints say so where
+   * the operator is typing, because a location list that LOOKS like routing is one
+   * somebody will one day edit expecting it to route.
+   */
+  'web.product_display_locations': 'لوکیشن‌ها',
+  'web.product_display_locations_hint':
+    'به همین ترتیب در پیش‌فاکتور نمایش داده می‌شود؛ هر خط یک لوکیشن، حداکثر ۳۰ خط و هر خط تا ۶۰ نویسه. فقط برای نمایش است: سرویس روی پنلِ انتخاب‌شده در بالا ساخته می‌شود، نه بر اساس این متن.',
+  'web.product_display_locations_empty':
+    'لوکیشنی نوشته نشده است؛ این بخش در پیش‌فاکتور نمایش داده نمی‌شود.',
+  'web.product_display_add_location': 'افزودن لوکیشن',
+  'web.product_display_location_n': 'لوکیشن',
+  'web.product_display_features': 'ویژگی‌ها',
+  'web.product_display_features_hint':
+    'به همین ترتیب در پیش‌فاکتور نمایش داده می‌شود؛ هر خط یک ویژگی، حداکثر ۳۰ خط و هر خط تا ۲۰۰ نویسه.',
+  'web.product_display_features_empty':
+    'ویژگی‌ای نوشته نشده است؛ این بخش در پیش‌فاکتور نمایش داده نمی‌شود.',
+  'web.product_display_add_feature': 'افزودن ویژگی',
+  'web.product_display_feature_n': 'ویژگی',
+  'web.product_display_location_label': 'برچسب لوکیشن سرویس',
+  'web.product_display_location_label_hint':
+    'برچسب کوتاهی که کارت تحویل و کارت سرویس به‌عنوان لوکیشن سرویس نشان می‌دهند، تا ۶۰ نویسه. خالی یعنی نمایش داده نمی‌شود.',
+  'web.product_display_problem_locations':
+    'هر لوکیشن باید یک خط غیرخالی و حداکثر ۶۰ نویسه باشد و بیش از ۳۰ لوکیشن مجاز نیست.',
+  'web.product_display_problem_features':
+    'هر ویژگی باید یک خط غیرخالی و حداکثر ۲۰۰ نویسه باشد و بیش از ۳۰ ویژگی مجاز نیست.',
+  'web.product_display_problem_label': 'برچسب لوکیشن سرویس باید یک خط و حداکثر ۶۰ نویسه باشد.',
   'web.products_scope_title': 'آنچه در این نسخه نیست',
   'web.products_scope_body':
     'فهرست قیمت جداگانه برای نمایندگان در این نسخه وجود ندارد. قیمت هر محصول همان عددی است که اینجا وارد می‌کنید؛ نماینده با نرخ سطح خود (یا نرخ اختصاصی‌اش) از همین قیمت خرید می‌کند، و تخفیف‌ها و کش‌بک قاعده‌هایی جدا هستند که در صفحهٔ «تخفیف‌ها و کش‌بک» روی قیمت اعمال می‌شوند.',
@@ -1802,6 +1883,10 @@ export const WEB_FA = {
   'web.setting_trial_limit_per_customer': 'تعداد مجاز سرویس آزمایشی برای هر مشتری',
   'web.flag_customer_link_rotation': 'دریافت لینک اشتراک جدید توسط مشتری',
   'web.setting_link_rotation_cooldown_hours': 'فاصلهٔ مجاز بین دو درخواست لینک جدید (ساعت)',
+  'web.flag_referral_signup_gift': 'هدیهٔ عضویت از طریق معرفی',
+  'web.setting_referral_signup_gift_total': 'مبلغ کل هدیهٔ عضویت',
+  'web.setting_referral_signup_gift_referrer_percent': 'سهم معرف از هدیهٔ عضویت (درصد)',
+  'web.setting_referral_signup_gift_referred_percent': 'سهم کاربر معرفی‌شده از هدیهٔ عضویت (درصد)',
   'web.trial_product_none': 'هیچ‌کدام (سرویس آزمایشی ارائه نمی‌شود)',
   'web.trial_product_unlisted': 'محصول فعلی (در فهرست محصولات فعال نیست)',
 
@@ -2156,6 +2241,29 @@ export const WEB_FA = {
     'برنامهٔ معرفی از صفحهٔ قابلیت‌ها روشن می‌شود و درصد، دامنه و حداقل مبلغ سفارش از صفحهٔ تنظیمات.',
   'web.referrals_rule_unrecovered':
     'آن بخش از برگشت پورسانت که موجودی کیف پول معرف پوشش نداد فقط ثبت می‌شود و هرگز از او مطالبه نمی‌شود.',
+  'web.referral_banner_title': 'بنر معرفی',
+  'web.referral_banner_hint':
+    'تصویری که بالای صفحهٔ معرفی در تلگرام نمایش داده می‌شود. PNG یا JPEG، حداکثر یک مگابایت.',
+  'web.referral_banner_empty': 'بنری تنظیم نشده است؛ صفحهٔ معرفی بدون تصویر ارسال می‌شود.',
+  'web.referral_banner_type': 'نوع فایل',
+  'web.referral_banner_size': 'اندازه',
+  'web.referral_banner_version': 'نسخه',
+  'web.referral_banner_updated_at': 'آخرین تغییر',
+  'web.referral_banner_digest': 'اثر انگشت (SHA-256)',
+  'web.referral_banner_file': 'فایل بنر',
+  'web.referral_banner_file_hint': 'PNG یا JPEG تا یک مگابایت.',
+  'web.referral_banner_file_invalid_type': 'فقط PNG یا JPEG پذیرفته می‌شود.',
+  'web.referral_banner_file_too_large': 'اندازهٔ فایل بیش از یک مگابایت است.',
+  'web.referral_banner_file_unreadable': 'خواندن فایل ممکن نشد.',
+  'web.referral_banner_upload': 'بارگذاری بنر',
+  'web.referral_banner_uploading': 'در حال بارگذاری…',
+  'web.referral_banner_uploaded': 'بنر ذخیره شد.',
+  'web.referral_banner_clear': 'حذف بنر',
+  'web.referral_banner_cleared': 'بنر حذف شد.',
+  'web.referral_banner_read_only': 'برای تغییر بنر به مجوز ویرایش تنظیمات نیاز است.',
+  'web.referral_banner_invalid': 'فایل با نوع اعلام‌شده هم‌خوانی ندارد یا بیش از حد بزرگ است.',
+  'web.referral_gift_terms_invalid':
+    'شرایط هدیهٔ عضویت نامعتبر است: مبلغ کل باید بیش از صفر و مجموع دو سهم دقیقاً ۱۰۰ باشد.',
   'web.referral_referrer': 'معرف',
   'web.referral_referee': 'معرفی‌شده',
   'web.referral_trigger': 'دامنهٔ پورسانت',

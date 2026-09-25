@@ -4,6 +4,7 @@ import type {
   Money,
   ReferralCommissionScope,
   ReferralCommissionState,
+  ReferralSignupGiftSide,
   ReferralTrigger,
   TenantContext,
 } from '@nexa/contracts';
@@ -246,4 +247,116 @@ export interface ReferralCommissionRepository {
   }>;
 
   totalsForReferrer(scope: TenantContext, referrerId: string): Promise<readonly ReferralTotals[]>;
+}
+
+// --- The signup gift (docs/customer-ux-completion-audit.md §I) -------------------
+
+/** One referral's gift row: the terms snapshotted at the first claim, and each side's stamp. */
+export interface ReferralSignupGiftRecord {
+  readonly id: string;
+  readonly referralId: string;
+  readonly referrerId: string;
+  readonly refereeId: string;
+  readonly total: Money;
+  readonly referrerAmount: bigint;
+  readonly refereeAmount: bigint;
+  readonly referrerEntryId: string | null;
+  readonly refereeEntryId: string | null;
+  readonly referrerClaimedAt: Date | null;
+  readonly refereeClaimedAt: Date | null;
+  readonly createdAt: Date;
+}
+
+/**
+ * A side of a referral a customer has not been paid for. `snapshotAmount` is the gift
+ * row's figure for that side, or null while no row exists yet — in which case the
+ * current terms decide whether there is anything to claim.
+ */
+export interface OpenReferralSignupGiftSide {
+  readonly referralId: string;
+  readonly side: ReferralSignupGiftSide;
+  readonly snapshotAmount: bigint | null;
+  /** The currency the gift row was snapshotted in; null with `snapshotAmount` when no row exists. */
+  readonly snapshotCurrency: CurrencyCode | null;
+}
+
+/** What a referrer's referees have bought and had delivered, in one currency. */
+export interface ReferredPurchaseTotals {
+  readonly count: number;
+  readonly total: bigint;
+}
+
+export interface ReferralSignupGiftRepository {
+  /**
+   * Every side of every referral this customer is party to that has not been stamped
+   * claimed, with the snapshotted amount when a gift row exists. Never locks: it decides
+   * whether a button is drawn, and the claim re-decides under the lock.
+   */
+  openSides(
+    scope: TenantContext,
+    customerId: string,
+    tx?: unknown,
+  ): Promise<readonly OpenReferralSignupGiftSide[]>;
+
+  /**
+   * The referrals this customer is party to, `FOR UPDATE`, in id order. The stable order
+   * is what keeps two claimants who share a referral from locking in opposite orders.
+   */
+  lockReferralsOf(
+    scope: TenantContext,
+    customerId: string,
+    tx: unknown,
+  ): Promise<readonly ReferralRecord[]>;
+
+  /** The gift row of one referral, `FOR UPDATE` when asked. Null until the first claim. */
+  findByReferral(
+    scope: TenantContext,
+    referralId: string,
+    options: { readonly forUpdate: boolean },
+    tx: unknown,
+  ): Promise<ReferralSignupGiftRecord | null>;
+
+  /** One per referral, by the unique index. True when this call wrote it. */
+  insert(
+    scope: TenantContext,
+    draft: {
+      readonly id: string;
+      readonly referralId: string;
+      readonly referrerId: string;
+      readonly refereeId: string;
+      readonly total: Money;
+      readonly referrerAmount: bigint;
+      readonly refereeAmount: bigint;
+      readonly now: Date;
+    },
+    tx: unknown,
+  ): Promise<boolean>;
+
+  /**
+   * Stamps one side claimed, conditionally: `WHERE <side>_claimed_at IS NULL`. False when
+   * the side had already been stamped, which is the caller's signal to write nothing.
+   */
+  claimSide(
+    scope: TenantContext,
+    giftId: string,
+    side: ReferralSignupGiftSide,
+    stamp: { readonly entryId: string; readonly now: Date },
+    tx: unknown,
+  ): Promise<boolean>;
+
+  /** Delivered, paid-for orders of this referrer's referees, in `currency`. */
+  referredPurchases(
+    scope: TenantContext,
+    referrerId: string,
+    currency: CurrencyCode,
+    tx?: unknown,
+  ): Promise<ReferredPurchaseTotals>;
+
+  /** `REFERRAL_COMMISSION` credits minus `REFERRAL_COMMISSION_REVERSAL` debits, from the ledger. */
+  netCommission(
+    scope: TenantContext,
+    customerId: string,
+    currency: CurrencyCode,
+    tx?: unknown,
+  ): Promise<bigint>;
 }

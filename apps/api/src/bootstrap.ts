@@ -1,7 +1,12 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
-import { RECOVERY_ROUTES, type SalesCurrencyCode, type TenantContext } from '@nexa/contracts';
+import {
+  RECOVERY_ROUTES,
+  TENANT_MEDIA_MAX_BYTES,
+  type SalesCurrencyCode,
+  type TenantContext,
+} from '@nexa/contracts';
 import { AppModule } from './app.module.js';
 import {
   TELEGRAM_WEBHOOK_BODY_LIMIT_BYTES,
@@ -11,6 +16,15 @@ import { createContainer, type Container } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
 import { trustProxyOption } from './infrastructure/trusted-proxy.js';
 import type { AppConfig } from './infrastructure/config/config.schema.js';
+
+/**
+ * `POST /media/:purpose`, as Nest registers it. The detail read shares the URL and a
+ * larger limit on a GET is harmless, but the match is on the method anyway.
+ */
+const TENANT_MEDIA_UPLOAD_ROUTE = /\/media\/[^/]+$/u;
+/** The base64 form of a file at the bound, plus room for the JSON around it. */
+const TENANT_MEDIA_UPLOAD_BODY_LIMIT_BYTES =
+  Math.ceil((TENANT_MEDIA_MAX_BYTES * 4) / 3) + 16 * 1024;
 
 /**
  * Resolves the primary tenant this installation serves.
@@ -177,6 +191,17 @@ export async function createApiApp(config: AppConfig = loadConfig()): Promise<Ap
      */
     if (route.url.endsWith(RECOVERY_ROUTES.upload)) {
       route.bodyLimit = config.RECOVERY_UPLOAD_MAX_BYTES;
+    }
+    /*
+     * The media upload carries its file as base64 inside JSON — four thirds of the
+     * decoded bytes plus the envelope — so under the adapter's default a banner above
+     * about 768 KiB was refused with a 413 before the schema's own bound, which
+     * advertises a full mebibyte, ever ran. Raised to what the encoded form of a file
+     * at the bound needs; the schema still decides the DECODED size.
+     */
+    const methods = Array.isArray(route.method) ? route.method : [route.method];
+    if (methods.includes('POST') && TENANT_MEDIA_UPLOAD_ROUTE.test(route.url)) {
+      route.bodyLimit = TENANT_MEDIA_UPLOAD_BODY_LIMIT_BYTES;
     }
   });
 

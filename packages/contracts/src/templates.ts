@@ -4342,7 +4342,9 @@ export const TEMPLATES = [
       },
       {
         token: 'days',
-        type: 'DURATION_DAYS',
+        // A NUMBER: a count of days LEFT, whose unit the body writes and whose zero is
+        // zero. DURATION_DAYS would render 0 as «نامحدود» and double the unit.
+        type: 'NUMBER',
         description:
           'Whole days left when the reminder was raised, from the snapshot on the ' +
           'service_reminders row rather than re-read at send time.',
@@ -4380,7 +4382,9 @@ export const TEMPLATES = [
       },
       {
         token: 'days',
-        type: 'DURATION_DAYS',
+        // A NUMBER: a count of days LEFT, whose unit the body writes and whose zero is
+        // zero. DURATION_DAYS would render 0 as «نامحدود» and double the unit.
+        type: 'NUMBER',
         description:
           'Whole days left when the reminder was raised, from the snapshot on the ' +
           'service_reminders row rather than re-read at send time.',
@@ -5008,6 +5012,1358 @@ export const TEMPLATES = [
       'channel: the lane has no payload (ADR 0030 \u00a71), so the sentence is true of both ' +
       'channels and points at /wallet. The automatic refund of an undeliverable order is ' +
       'told by `bot.order.refunded_to_wallet` instead (docs/wp10-payments-audit.md P3).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  /*
+   * ---------------------------------------------------------------------------
+   * Customer UX completion (docs/customer-ux-completion-audit.md).
+   *
+   * The bodies in the catalogue are the owner's approved defaults, verbatim. Every
+   * screen is composed from ONE main key plus per-line keys, so an absent optional
+   * block is omitted rather than rendered as a label with nothing after it, and an
+   * operator can still edit each piece from Content. A DECLARED optional placeholder
+   * with no value takes its line with it (`renderTemplateBody`); that rule is what
+   * lets these bodies hold the approved lines as written.
+   * ---------------------------------------------------------------------------
+   */
+  {
+    key: 'bot.service.delivered',
+    description:
+      'The delivery card after a successful purchase: sent as the caption of the QR ' +
+      'code encoded from the EXACT subscription URL in the body. TELEGRAM_HTML so the ' +
+      'link is in <code> and copies on tap. The location line is optional: it is the ' +
+      'product’s service-location label, and a product with none shows no line rather ' +
+      'than an empty one. Never split across messages — when the caption is too long ' +
+      'for Telegram the whole card goes as one text message after the picture.',
+    format: 'TELEGRAM_HTML',
+    placeholders: [
+      {
+        token: 'serviceUsername',
+        type: 'STRING',
+        description: 'The service’s username on the panel.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'productName',
+        type: 'STRING',
+        description: 'The product’s public name, frozen on the order.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'serviceLocation',
+        type: 'STRING',
+        description: 'The product’s service-location label, when configured.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'durationDays',
+        type: 'DURATION_DAYS',
+        description: 'The plan’s validity in days; 0 is unlimited.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'trafficBytes',
+        type: 'TRAFFIC_LIMIT',
+        description: 'The plan’s traffic allowance; 0 is unlimited.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'subscriptionUrl',
+        type: 'STRING',
+        description:
+          'The subscription URL issued by the provider — the same string the QR encodes.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.delivered_qr_caption',
+    description:
+      'The short caption under the QR picture when the full card does not fit a Telegram ' +
+      'caption and follows as its own message. Carries no link: the link is in the card.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.tutorial_button',
+    description: 'Opens the connection guide’s platform choice.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.connected_button',
+    description: 'The customer says they connected. Acknowledged; nothing is written.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.problem_button',
+    description: 'The customer has a problem: opens the FAQ and support screen.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.connected_ack',
+    description: 'The answer to “I connected”. Changes nothing, so it claims nothing.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.tutorial.choose',
+    description: 'The connection guide’s first screen: pick the platform.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.tutorial.android_button',
+    description: 'Platform button.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.tutorial.ios_button',
+    description: 'Platform button.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.tutorial.windows_button',
+    description: 'Platform button.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.tutorial.macos_button',
+    description: 'Platform button.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.tutorial.linux_button',
+    description: 'Platform button.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.tutorial.android',
+    description:
+      'The connection guide for Android. A raw template the operator rewrites for their own apps and links; the default is deliberately short and names nothing this installation does not offer.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.tutorial.ios',
+    description: 'The connection guide for iOS. See `bot.tutorial.android`.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.tutorial.windows',
+    description: 'The connection guide for Windows. See `bot.tutorial.android`.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.tutorial.macos',
+    description: 'The connection guide for macOS. See `bot.tutorial.android`.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.tutorial.linux',
+    description: 'The connection guide for Linux. See `bot.tutorial.android`.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.menu.main_button',
+    description: 'Back to the main menu, from any customer screen.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.faq.heading',
+    description: 'The heading over the tenant’s active FAQ entries.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.faq.item',
+    description:
+      'One FAQ entry. The number is a STRING because it is a keycap emoji for 1–10 and a ' +
+      'plain figure afterwards; the question and answer are the operator’s rows, rendered ' +
+      'as written. Entries are split across messages at item boundaries only.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'number',
+        type: 'STRING',
+        description: 'The entry’s position marker.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'question',
+        type: 'STRING',
+        description: 'The question, as the operator wrote it.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'answer',
+        type: 'STRING',
+        description: 'The answer, as the operator wrote it.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.faq.footer',
+    description: 'The line after the last FAQ entry, pointing at support.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.faq.default_1_question',
+    description:
+      'Seeded FAQ 1, question. Copied into `support_faqs` once per tenant, then owned by the operator.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.faq.default_1_answer',
+    description: 'Seeded FAQ 1, answer.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.faq.default_2_question',
+    description: 'Seeded FAQ 2, question.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.faq.default_2_answer',
+    description: 'Seeded FAQ 2, answer.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.faq.default_3_question',
+    description: 'Seeded FAQ 3, question.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.faq.default_3_answer',
+    description: 'Seeded FAQ 3, answer.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.faq.default_4_question',
+    description: 'Seeded FAQ 4, question.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.faq.default_4_answer',
+    description: 'Seeded FAQ 4, answer.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.faq.default_5_question',
+    description: 'Seeded FAQ 5, question.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.faq.default_5_answer',
+    description: 'Seeded FAQ 5, answer.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.faq.default_6_question',
+    description: 'Seeded FAQ 6, question.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.faq.default_6_answer',
+    description: 'Seeded FAQ 6, answer.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.faq.default_7_question',
+    description: 'Seeded FAQ 7, question.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.faq.default_7_answer',
+    description: 'Seeded FAQ 7, answer.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.faq.default_8_question',
+    description: 'Seeded FAQ 8, question.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.faq.default_8_answer',
+    description: 'Seeded FAQ 8, answer.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.faq.default_9_question',
+    description: 'Seeded FAQ 9, question.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.faq.default_9_answer',
+    description: 'Seeded FAQ 9, answer.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.faq.page',
+    description:
+      'One message of the FAQ screen: the parts are composed in application code from ' +
+      '`bot.faq.heading`, `bot.faq.item` and `bot.faq.footer`, split at item boundaries, ' +
+      'and each part is sent through this wrapper — the way `bot.admin.receipt` carries ' +
+      'rendered sections. Nothing rendered is persisted.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'content',
+        type: 'STRING',
+        description: 'The rendered part, whole.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.support.contact_button',
+    description:
+      'Opens the tenant’s first support account in Telegram. A URL button, drawn only when `support.accounts` names one.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.contact',
+    description: 'The support screen when no FAQ is active: the contact action alone.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.unconfigured',
+    description:
+      'No support account is configured. Says so rather than drawing a button that opens nothing.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.order.preinvoice',
+    description:
+      'The pre-invoice a customer pays from. Composed: the location and feature blocks ' +
+      'are optional STRING tokens rendered from `bot.order.preinvoice_locations` and ' +
+      '`bot.order.preinvoice_features`, so a product with neither shows neither. The ' +
+      'discount and cashback lines are optional for the same reason. The price is the ' +
+      'FINAL total; a discounted order shows the subtotal on its own line. The wallet ' +
+      'balance is read when the card is rendered. Buttons are the payment routes the ' +
+      'installation can actually perform.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'serviceUsername',
+        type: 'STRING',
+        description: 'The reserved or existing username; absent until one is chosen.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'productName',
+        type: 'STRING',
+        description: 'The product or package name, frozen on the order.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'durationDays',
+        type: 'DURATION_DAYS',
+        description: 'Validity bought; absent for a traffic-only package.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'total',
+        type: 'MONEY',
+        description: 'The final amount to pay.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'trafficBytes',
+        type: 'TRAFFIC_LIMIT',
+        description: 'The plan’s allowance; absent for a time-only package.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'addedTrafficBytes',
+        type: 'BYTES',
+        description: 'The volume an add-traffic package adds.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'discountLine',
+        type: 'STRING',
+        description: 'Rendered `bot.order.preinvoice_discount_line`, when a discount applies.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'cashbackLine',
+        type: 'STRING',
+        description: 'Rendered `bot.order.preinvoice_cashback_line`, when cashback is promised.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'locationsBlock',
+        type: 'STRING',
+        description: 'Rendered `bot.order.preinvoice_locations`, when the product lists locations.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'featuresBlock',
+        type: 'STRING',
+        description: 'Rendered `bot.order.preinvoice_features`, when the product lists features.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'walletBalance',
+        type: 'MONEY',
+        description: 'The customer’s balance in the order’s currency, read at render time.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.order.preinvoice_locations',
+    description:
+      'The pre-invoice’s locations block: the heading and the product’s ordered display locations, one per line, as the operator wrote them.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'lines',
+        type: 'STRING',
+        description: 'The locations, one per line.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.order.preinvoice_features',
+    description:
+      'The pre-invoice’s features block: the product’s ordered features, one per line, as the operator wrote them (bullets included if they typed them).',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'lines',
+        type: 'STRING',
+        description: 'The features, one per line.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.order.preinvoice_discount_line',
+    description:
+      'The pre-invoice line for an applied discount: what was taken off and what the price was before.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'discount',
+        type: 'MONEY',
+        description: 'The amount taken off.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'subtotal',
+        type: 'MONEY',
+        description: 'The price before the discount.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.order.preinvoice_cashback_line',
+    description: 'The pre-invoice line for a promised cashback, credited only after delivery.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'cashback',
+        type: 'MONEY',
+        description: 'The cashback promised.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_button',
+    description:
+      'Pay through an external gateway. Drawn only when at least one REAL external route allows the purpose; none exists in this release, so it is never drawn.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.gateway_choose',
+    description:
+      'The external-gateway chooser heading. Reachable only when a real external route exists.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.route_name_manual_transfer',
+    description:
+      'The product’s own name for the card-to-card route, used when the operator set no display name.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.wallet.summary',
+    description:
+      'The wallet screen: the customer’s account summary. Every figure is read on render ' +
+      'from rows: the Telegram id and names from the customer row, the balance from the ' +
+      'ledger, the counts from services, payments and referrals, the group from the ' +
+      'reseller standing. The phone line is `bot.wallet.phone_missing` because this ' +
+      'installation stores no phone number and asks for none.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'telegramId',
+        type: 'STRING',
+        description: 'The customer’s numeric Telegram id.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'displayName',
+        type: 'STRING',
+        description: 'First and last name, else username, else the Telegram id.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'phoneState',
+        type: 'STRING',
+        description: 'Rendered `bot.wallet.phone_missing`.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'registeredAt',
+        type: 'DATETIME',
+        description: 'When the customer first arrived.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'balance',
+        type: 'MONEY',
+        description: 'The wallet balance.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'serviceCount',
+        type: 'NUMBER',
+        description: 'Services ever created for the customer.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'paidInvoiceCount',
+        type: 'NUMBER',
+        description: 'CONFIRMED payments of the customer.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'referralCount',
+        type: 'NUMBER',
+        description: 'Customers attributed to this one.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'customerGroup',
+        type: 'STRING',
+        description: 'Rendered `bot.wallet.group_customer` or `bot.wallet.group_reseller`.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.wallet.phone_missing',
+    description: 'The phone line when no number is stored — always, in this release.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.wallet.group_customer',
+    description: 'The group label for an ordinary customer.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.wallet.group_reseller',
+    description: 'The group label for an ACTIVE reseller.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.wallet.topup_amount_prompt',
+    description:
+      'Asks for the top-up amount. Opens a bounded capture (10 minutes, this customer, ' +
+      'this purpose); the bounds are the installation’s settings and are shown only when ' +
+      'set. Digits may be Latin, Persian or Arabic-Indic.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'minimum',
+        type: 'MONEY',
+        description: '`wallet.topup.minimum`, when above zero.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'maximum',
+        type: 'MONEY',
+        description: '`wallet.topup.maximum`, when above zero.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.wallet.topup_amount_invalid',
+    description: 'The typed text is not a positive whole amount.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.wallet.topup_below_minimum',
+    description: 'The amount is below `wallet.topup.minimum`.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'minimum',
+        type: 'MONEY',
+        description: 'The minimum.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.wallet.topup_above_maximum',
+    description: 'The amount is above `wallet.topup.maximum`.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'maximum',
+        type: 'MONEY',
+        description: 'The maximum.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.wallet.topup_method_prompt',
+    description:
+      'Choose the payment route for the recorded amount. One button per route that is ACTIVE, allows wallet top-up, and admits this customer and this amount.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.wallet.topup_method_button',
+    description: 'A route button with no gift.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'name',
+        type: 'STRING',
+        description: 'The route’s display name, or the product’s name for it.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.wallet.topup_method_gift_button',
+    description: 'A route button whose `topup_cashback_percent` is above zero.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'name',
+        type: 'STRING',
+        description: 'The route’s name.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'percent',
+        type: 'NUMBER',
+        description: 'The gift, in whole percent.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.wallet.topup_close_button',
+    description: 'Closes the route list and the capture.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.wallet.topup_closed',
+    description: 'The list was closed; nothing was requested.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.wallet.topup_none_available',
+    description: 'No route admits this customer and amount right now.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.wallet.topup_expired',
+    description: 'The capture behind the tapped button has expired or was superseded.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.list',
+    description: 'The “my services” screen over the buttons: one button per service on this page.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'page',
+        type: 'NUMBER',
+        description: 'This page, from 1.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'pages',
+        type: 'NUMBER',
+        description: 'How many pages there are.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'total',
+        type: 'NUMBER',
+        description: 'How many services the customer has.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.list_item_button',
+    description: 'One service’s button: its real username on the panel.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'username',
+        type: 'STRING',
+        description: 'The service’s username.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.search_label_button',
+    description: 'The search row’s label button; opens the search like its neighbour.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.search_button',
+    description: 'Opens the username search capture.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.page_button',
+    description: 'The page indicator between the arrows; a tap re-renders the page.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'page',
+        type: 'NUMBER',
+        description: 'This page.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'pages',
+        type: 'NUMBER',
+        description: 'All pages.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.prev_page_button',
+    description: 'Previous page.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.next_page_button',
+    description: 'Next page.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.back_to_menu_button',
+    description: 'Back to the main menu from the list.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.search_prompt',
+    description:
+      'Asks for the username to search. Opens a bounded capture; matches are a prefix of the customer’s OWN services’ usernames.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.search_results',
+    description: 'The heading over search results.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'query',
+        type: 'STRING',
+        description: 'The canonicalised search text.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.search_none',
+    description: 'No service of the customer’s matches.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.search_invalid',
+    description: 'The search text is empty or too long.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.card',
+    description:
+      'The service management card. Status is a localised `bot.service.state_*`. Used and ' +
+      'remaining traffic are STRINGS rendered by the composer from `bot.service.traffic_*` ' +
+      'keys, because an unread figure is a WORD, never 0 — `usage_synced_at IS NULL` renders ' +
+      '`bot.service.traffic_unknown`. The expiry line drops when the service has no expiry ' +
+      'and `bot.service.no_expiry` takes its place. Last seen is a word unless a provider ' +
+      'proved a time or proved never. The rotate hint is drawn only when the rotate button ' +
+      'is offered.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'status',
+        type: 'STRING',
+        description: 'Rendered `bot.service.state_*`.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'serviceUsername',
+        type: 'STRING',
+        description: 'The username on the panel.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'serviceLocation',
+        type: 'STRING',
+        description: 'The product’s service-location label, when configured.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'productName',
+        type: 'STRING',
+        description: 'The product, frozen on the order.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'trafficBytes',
+        type: 'TRAFFIC_LIMIT',
+        description: 'The allowance; 0 is unlimited.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'usedTraffic',
+        type: 'STRING',
+        description: 'Rendered `bot.service.traffic_value` or `bot.service.traffic_unknown`.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'remainingTraffic',
+        type: 'STRING',
+        description:
+          'Rendered `bot.service.remaining_value`, `bot.service.remaining_unlimited` or `bot.service.traffic_unknown`.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description: 'The expiry, in the tenant’s calendar; absent when unlimited.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'remainingDays',
+        // A NUMBER, not DURATION_DAYS: that type renders 0 as «نامحدود», and a service
+        // with no days left is the opposite of unlimited. The unit is in the body.
+        type: 'NUMBER',
+        description: 'Whole days left, floored at 0; absent when unlimited.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'noExpiry',
+        type: 'STRING',
+        description: 'Rendered `bot.service.no_expiry`, only when the service has no expiry.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'lastSeen',
+        type: 'STRING',
+        description: 'Rendered `bot.service.last_seen_*`.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'note',
+        type: 'STRING',
+        description: 'The customer’s own note, when set.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'rotateHint',
+        type: 'STRING',
+        description: 'Rendered `bot.service.rotate_hint`, only when rotation is offered.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.state_pending_provision',
+    description: 'Status line for PENDING_PROVISION.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.state_active',
+    description: 'Status line for ACTIVE.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.state_suspended',
+    description: 'Status line for SUSPENDED.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.state_expired',
+    description: 'Status line for EXPIRED.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.state_terminated',
+    description: 'Status line for TERMINATED.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.state_unreconciled',
+    description:
+      'Status line for UNRECONCILED: the panel’s answer was lost and a read decides first.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.traffic_value',
+    description: 'A traffic figure in a unit, through the one formatter.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'bytes',
+        type: 'BYTES',
+        description: 'The figure.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.traffic_unknown',
+    description: 'Usage has never been read from the panel. A word, never 0.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.remaining_value',
+    description: 'Remaining traffic and its share of the allowance.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'bytes',
+        type: 'BYTES',
+        description: 'Remaining, floored at zero.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'percent',
+        type: 'NUMBER',
+        description: 'Remaining as a whole percent of the allowance.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.remaining_unlimited',
+    description: 'Remaining traffic on an unlimited plan.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.no_expiry',
+    description: 'The expiry line for a service with no time limit.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.last_seen_at',
+    description: 'Last connection, when a provider proved a time.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'at',
+        type: 'DATETIME',
+        description: 'The time.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.last_seen_never',
+    description: 'The provider proved the account has never connected.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.last_seen_unavailable',
+    description: 'The provider does not supply the field. Never says “never connected”.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.rotate_hint',
+    description: 'The hint under the card, drawn only when the rotate button is.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.refresh_button',
+    description: 'Queues a usage read on the panel for this service.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.link_button',
+    description: 'Re-sends the current subscription link. Never regenerates it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.note_button',
+    description: 'Opens the note capture.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.back_to_list_button',
+    description: 'Back to the service list.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.refresh_requested',
+    description: 'The read is queued; the outcome arrives as its own message.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.refresh_too_soon',
+    description: 'A read landed within the minimum interval; nothing new is queued.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.note_prompt',
+    description: 'Asks for the note. Opens a bounded capture naming the service.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'max',
+        type: 'NUMBER',
+        description: 'The length bound.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.note_saved',
+    description: 'The note was stored on the customer’s own service.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.note_cleared',
+    description: 'The note was removed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.note_invalid',
+    description: 'The text is empty after trimming, or over the bound.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'max',
+        type: 'NUMBER',
+        description: 'The length bound.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.renew_choose',
+    description: 'The renew screen: the product’s renewal and the add-time packages.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.renew_option_button',
+    description: 'The renewal itself: the product re-priced at its current terms.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'title',
+        type: 'STRING',
+        description: 'The product.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'price',
+        type: 'MONEY',
+        description: 'Its current price.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.renew_unavailable',
+    description:
+      'Nothing to renew with and no add-time package: the product was withdrawn or unpriced.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.referral.screen',
+    description:
+      'The referral screen. Every figure comes from settings or rows: the commission ' +
+      'percent from `referral.commission_percent`, the gift block from the signup-gift ' +
+      'settings (absent when the flag is off), the counts and totals from referrals, ' +
+      'orders and the ledger. The link is the customer’s own. Sent as the banner’s ' +
+      'caption when it fits, else after the banner.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'commissionPercent',
+        type: 'NUMBER',
+        description: 'The purchase commission, whole percent.',
+        required: true,
+        repeatable: true,
+      },
+      {
+        token: 'referralLink',
+        type: 'STRING',
+        description: 'The customer’s personal invite link.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'giftBlock',
+        type: 'STRING',
+        description: 'Rendered `bot.referral.gift_block`, when the signup gift is on.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'referralCount',
+        type: 'NUMBER',
+        description: 'Customers attributed to this one.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'referredPurchaseCount',
+        type: 'NUMBER',
+        description: 'Delivered orders of those customers.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'referredPurchaseTotal',
+        type: 'MONEY',
+        description: 'The sum of those orders.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'commissionReceivedTotal',
+        type: 'MONEY',
+        description: 'Commission credited, net of reversals.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.referral.gift_block',
+    description: 'The signup-gift terms as configured: the total and the two shares.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'total',
+        type: 'MONEY',
+        description: '`referral.signup_gift.total`.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'referrerPercent',
+        type: 'NUMBER',
+        description: '`referral.signup_gift.referrer_percent`.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'referredPercent',
+        type: 'NUMBER',
+        description: '`referral.signup_gift.referred_percent`.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.referral.share_button',
+    description: 'Opens Telegram’s share sheet with the invite link. A URL button.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.referral.gift_button',
+    description:
+      'Claims every unclaimed signup-gift share owed to this customer. Drawn only when the flag is on.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.referral.gift_claimed',
+    description: 'What was credited by this claim, in total.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'amount',
+        type: 'MONEY',
+        description: 'The sum credited now.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.referral.gift_nothing',
+    description: 'Nothing is claimable: no attribution, or every share already claimed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.referral.gift_disabled',
+    description: 'The signup gift is off or its terms are incomplete.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },

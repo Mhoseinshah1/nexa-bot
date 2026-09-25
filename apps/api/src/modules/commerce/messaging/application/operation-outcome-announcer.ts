@@ -32,6 +32,13 @@ export const CUSTOMER_REQUESTABLE_OPERATIONS: readonly OperationType[] = [
   'ADD_TRAFFIC',
   'ADD_TIME',
   'ROTATE_SUBSCRIPTION',
+  /*
+   * Since the customer UX completion (§H1): a customer may ask for a usage read from
+   * the service card, and is then owed its outcome like any other request. The
+   * SCHEDULED sync still has `requested_by_customer_id` NULL and is still announced to
+   * nobody — the docblock on `DELAY_ANNOUNCED_OPERATIONS` still holds for it.
+   */
+  'SYNC_USAGE',
 ];
 
 /**
@@ -93,6 +100,11 @@ export interface OperationOutcomeReader {
      * cannot be now — an operator's suspend is the same type and the same service.
      */
     readonly requestedByCustomerId: UserId | null;
+    /**
+     * Null on a FAILED row means the failure is TERMINAL: no retry is scheduled. A
+     * FAILED row with a retry pending is not an outcome yet and is announced to nobody.
+     */
+    readonly nextAttemptAt: Date | null;
   } | null>;
 
   /**
@@ -238,8 +250,18 @@ export class OperationOutcomeAnnouncer {
         await stamp();
         return;
       }
-      /* The one exit that does not stamp. See above. */
-      if (subject.state !== 'SUCCEEDED' && subject.state !== 'ABANDONED') return;
+      /*
+       * The one exit that does not stamp. See above.
+       *
+       * A terminal FAILED (no retry scheduled) IS an outcome since the customer UX
+       * completion (§H1): a customer who asked for something and will never get it is
+       * owed the sentence, whatever the type. A FAILED row still waiting for its retry
+       * is not terminal and falls through this exit like any IN_FLIGHT one.
+       */
+      const terminalFailure = subject.state === 'FAILED' && subject.nextAttemptAt === null;
+      if (subject.state !== 'SUCCEEDED' && subject.state !== 'ABANDONED' && !terminalFailure) {
+        return;
+      }
       const { serviceId } = subject;
       const outcome = subject.state;
 

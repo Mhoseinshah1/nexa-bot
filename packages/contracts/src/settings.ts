@@ -28,6 +28,7 @@ import {
   PAYMENT_WINDOW_MINUTES_MIN,
   TOPUP_PRESETS_MAX,
 } from './payment.js';
+import { referralSignupGiftShareSchema } from './customer-ux.js';
 
 /**
  * The settings registry.
@@ -313,7 +314,9 @@ export const SETTINGS = [
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
     configures: null,
-    consumer: 'PLANNED',
+    // ACTIVE since the customer UX completion: the FAQ/support screen opens the FIRST
+    // account as its contact button, and draws no button when the list is empty.
+    consumer: 'ACTIVE',
   },
   {
     key: 'telegram.channels',
@@ -747,6 +750,78 @@ export const SETTINGS = [
     defaultValue: { amountMinor: '0', currency: 'IRT' },
     configures: 'referrals',
     zeroMeaning: 'DISABLES',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'wallet.topup.maximum',
+    description:
+      'The largest wallet top-up a customer may type, as an explicit amount and currency. ' +
+      'Zero means no ceiling beyond the route\u2019s own maximum and the largest amount this ' +
+      'system stores. A ceiling, because the amount is now TYPED rather than picked from ' +
+      'presets, and a typed figure with a slipped digit is money a customer is asked to ' +
+      'transfer.',
+    schema: moneySchema.refine(
+      (money) => BigInt(money.amountMinor) >= 0n,
+      'A maximum top-up cannot be negative; zero means no ceiling.',
+    ),
+    defaultValue: { amountMinor: '0', currency: 'IRT' },
+    // DISABLES, not UNLIMITED: the registry's UNLIMITED is a claim about the NUMBER zero,
+    // and this key holds a Money whose zero amount switches the ceiling off.
+    zeroMeaning: 'DISABLES',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  /*
+   * The signup gift (docs/customer-ux-completion-audit.md §I). A flag with three
+   * parameters, per the rule that a feature flag is a boolean and its parameters are
+   * settings. The two shares must total 100 while the flag is on; the settings service's
+   * change guard and the flag's own activation both refuse otherwise, so an operator
+   * cannot store terms that pay out more or less than the total they typed.
+   */
+  {
+    key: 'referral.signup_gift.total',
+    description:
+      'The whole membership gift a valid referral produces, as an explicit amount and ' +
+      'currency, split between the referrer and the new customer by the two share ' +
+      'percents. Zero means no gift is paid even while the flag is on. Snapshotted on the ' +
+      'gift row at the first claim, so both shares always come from one total.',
+    schema: moneySchema.refine(
+      (money) => BigInt(money.amountMinor) >= 0n,
+      'A gift total cannot be negative; zero means no gift.',
+    ),
+    defaultValue: { amountMinor: '0', currency: 'IRT' },
+    configures: 'referral_signup_gift',
+    zeroMeaning: 'DISABLES',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'referral.signup_gift.referrer_percent',
+    description:
+      'The referrer\u2019s share of the membership gift, in whole percent. Must total 100 ' +
+      'with referral.signup_gift.referred_percent while the flag is on.',
+    schema: referralSignupGiftShareSchema,
+    defaultValue: 50,
+    configures: 'referral_signup_gift',
+    zeroMeaning: 'LITERAL',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'referral.signup_gift.referred_percent',
+    description:
+      'The new customer\u2019s share of the membership gift, in whole percent. Must total ' +
+      '100 with referral.signup_gift.referrer_percent while the flag is on.',
+    schema: referralSignupGiftShareSchema,
+    defaultValue: 50,
+    configures: 'referral_signup_gift',
+    zeroMeaning: 'LITERAL',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
     consumer: 'ACTIVE',

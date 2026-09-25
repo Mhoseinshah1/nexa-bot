@@ -1480,7 +1480,7 @@ export class ProvisionerService {
       await this.deps.services.recordUsage(
         scope,
         serviceId,
-        { usedBytes: read.usage.usedBytes, syncedAt: now },
+        { usedBytes: read.usage.usedBytes, syncedAt: now, lastSeen: read.usage.lastSeen },
         tx,
       );
     });
@@ -1877,7 +1877,7 @@ export class ProvisionerService {
         await this.deps.services.recordUsage(
           scope,
           serviceId,
-          { usedBytes: changed.usage.usedBytes, syncedAt: now },
+          { usedBytes: changed.usage.usedBytes, syncedAt: now, lastSeen: changed.usage.lastSeen },
           tx,
         );
       }

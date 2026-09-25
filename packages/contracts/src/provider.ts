@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { ProviderLastSeen } from './customer-ux.js';
 import type { ServiceId } from './ids.js';
 
 /**
@@ -430,7 +431,13 @@ export interface ProviderUsage {
   readonly usedBytes: bigint;
   readonly totalBytes: bigint | null;
   readonly expiresAt: Date | null;
-  readonly lastConnectionAt: Date | null;
+  /**
+   * Last connection as the panel can answer it — a time, a proven never, or
+   * UNSUPPORTED. Every adapter in this release answers UNSUPPORTED: no panel's
+   * last-seen field is evidenced, and a `null` here used to make "never connected" and
+   * "cannot say" the same value, which the customer-facing card must keep apart.
+   */
+  readonly lastSeen: ProviderLastSeen;
 }
 
 /**

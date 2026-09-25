@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import {
+  EMPTY_PRODUCT_DISPLAY,
   money,
   type PanelId,
   type ProductAudience,
@@ -74,6 +75,7 @@ describe('the categorised customer catalogue, at the repository', () => {
         categoryId: categoryId as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 1n, deviceLimit: null },
         price: overrides.price === null ? null : money(100_000n, 'IRT'),
+        display: EMPTY_PRODUCT_DISPLAY,
       },
       now: ctx.container.clock.now(),
     });

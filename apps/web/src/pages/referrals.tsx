@@ -1,7 +1,9 @@
-import { useState, type FormEvent } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useState, type ChangeEvent, type FormEvent } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   REFERRAL_COMMISSION_STATES,
+  TENANT_MEDIA_MAX_BYTES,
+  TENANT_MEDIA_MIME_TYPES,
   uuidV7Schema,
   type CurrencyCode,
   type ReferralCommissionScope,
@@ -10,12 +12,22 @@ import {
   type ReferralPartyResponse,
   type ReferralSummaryResponse,
   type ReferralTrigger,
+  type TenantMediaMimeType,
+  type TenantMediaResponse,
 } from '@nexa/contracts';
-import { fetchReferralCommissions, fetchReferrals } from '../api/client';
-import { formatTimestamp } from '../format';
+import {
+  clearTenantMedia,
+  fetchReferralCommissions,
+  fetchReferrals,
+  fetchTenantMedia,
+  uploadTenantMedia,
+} from '../api/client';
+import { formatTimestamp, splitBytes } from '../format';
+import { useSubmissionKey } from '../submission-key';
 import { mayRequest } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, useLinkHandler, type Route } from '../router';
+import { messageFor } from './settings';
 import {
   Badge,
   Banner,
@@ -29,6 +41,7 @@ import {
   PageHead,
   Pills,
   StateSwitch,
+  useToast,
   type Column,
   type Tone,
 } from '../ui/kit';
@@ -145,7 +158,24 @@ function useTrail(signature: string) {
 // The page
 // ---------------------------------------------------------------------------
 
-export function ReferralsPage({ route, denied }: { route: Route; denied: boolean }) {
+/**
+ * `mayViewBanner` and `mayEditBanner` are passed, never derived from `denied`: the lists
+ * take `referrals.view`, the banner is tenant configuration under `settings.view` and
+ * `settings.edit`, and `TenantMediaService` charges each on its own. Deriving one from
+ * another would draw an upload control for a role that may only read the ledger, and
+ * teach it about the refusal by pressing it.
+ */
+export function ReferralsPage({
+  route,
+  denied,
+  mayViewBanner,
+  mayEditBanner,
+}: {
+  route: Route;
+  denied: boolean;
+  mayViewBanner: boolean;
+  mayEditBanner: boolean;
+}) {
   const onLink = useLinkHandler();
   const applied = route.query.get('referrerId') ?? '';
 
@@ -206,6 +236,8 @@ export function ReferralsPage({ route, denied }: { route: Route; denied: boolean
 
       <Attributions denied={denied} referrerId={applied} />
       <Commissions denied={denied} referrerId={applied} />
+
+      {mayViewBanner && <BannerCard mayEdit={mayEditBanner} />}
 
       <Card title={t('web.referrals_scope_title')}>
         <p className="muted">{t('web.referrals_rule_read_only')}</p>
@@ -459,6 +491,226 @@ function Commissions({ denied, referrerId }: { denied: boolean; referrerId: stri
         />
         {anyUnrecovered && <Banner tone="warn">{t('web.referral_unrecovered_note')}</Banner>}
       </StateSwitch>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The referral banner (customer UX §I)
+// ---------------------------------------------------------------------------
+
+const MIME_LABELS: Readonly<Record<TenantMediaMimeType, string>> = {
+  'image/png': 'PNG',
+  'image/jpeg': 'JPEG',
+};
+
+/** A file read into the shape the upload route takes, or the reason it was not. */
+type PickedFile =
+  | { readonly kind: 'NONE' }
+  | { readonly kind: 'INVALID'; readonly reason: WebKey }
+  | {
+      readonly kind: 'READY';
+      readonly name: string;
+      readonly mimeType: TenantMediaMimeType;
+      readonly byteLength: number;
+      readonly contentBase64: string;
+    };
+
+function isMediaMimeType(value: string): value is TenantMediaMimeType {
+  return (TENANT_MEDIA_MIME_TYPES as readonly string[]).includes(value);
+}
+
+/**
+ * Reads the chosen file as base64 in the browser. The type and the size are checked
+ * HERE before a megabyte is read, and again by the server against the bytes' own magic
+ * number — this check only spares the operator a round trip for a file that cannot be
+ * accepted.
+ */
+function readPicked(file: File): Promise<PickedFile> {
+  if (!isMediaMimeType(file.type)) {
+    return Promise.resolve({ kind: 'INVALID', reason: 'web.referral_banner_file_invalid_type' });
+  }
+  if (file.size > TENANT_MEDIA_MAX_BYTES) {
+    return Promise.resolve({ kind: 'INVALID', reason: 'web.referral_banner_file_too_large' });
+  }
+  const mimeType = file.type;
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onerror = () =>
+      resolve({ kind: 'INVALID', reason: 'web.referral_banner_file_unreadable' });
+    reader.onload = () => {
+      const url = typeof reader.result === 'string' ? reader.result : '';
+      // A data URL is `data:<type>;base64,<payload>`; the payload is what the route takes.
+      const comma = url.indexOf(',');
+      if (comma < 0) {
+        resolve({ kind: 'INVALID', reason: 'web.referral_banner_file_unreadable' });
+        return;
+      }
+      resolve({
+        kind: 'READY',
+        name: file.name,
+        mimeType,
+        byteLength: file.size,
+        contentBase64: url.slice(comma + 1),
+      });
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function BannerMetadata({ media }: { media: TenantMediaResponse }) {
+  const size = splitBytes(BigInt(media.byteLength));
+  return (
+    <dl className="kv">
+      <dt>{t('web.referral_banner_type')}</dt>
+      <dd>{MIME_LABELS[media.mimeType]}</dd>
+      <dt>{t('web.referral_banner_size')}</dt>
+      <dd>
+        {size.value} {t(size.unit)}
+      </dd>
+      <dt>{t('web.referral_banner_version')}</dt>
+      <dd>{media.version}</dd>
+      <dt>{t('web.referral_banner_updated_at')}</dt>
+      <dd className="nowrap">{formatTimestamp(media.updatedAt)}</dd>
+      <dt>{t('web.referral_banner_digest')}</dt>
+      <dd>
+        <Ltr>
+          <code>{media.sha256}</code>
+        </Ltr>
+      </dd>
+    </dl>
+  );
+}
+
+/**
+ * The banner slot: what is stored (never the bytes — the digest, the size and the
+ * version are what an operator can compare), a file input, and the two writes.
+ */
+function BannerCard({ mayEdit }: { mayEdit: boolean }) {
+  const queries = useQueryClient();
+  const notify = useToast();
+  const submission = useSubmissionKey();
+  const [picked, setPicked] = useState<PickedFile>({ kind: 'NONE' });
+
+  const media = useQuery({
+    queryKey: ['tenant-media', 'REFERRAL_BANNER'],
+    queryFn: () => fetchTenantMedia('REFERRAL_BANNER'),
+  });
+
+  const refresh = () => {
+    void queries.invalidateQueries({ queryKey: ['tenant-media', 'REFERRAL_BANNER'] });
+  };
+
+  const upload = useMutation({
+    mutationFn: () => {
+      if (picked.kind !== 'READY') throw new Error(t('web.referral_banner_file_unreadable'));
+      const body = {
+        purpose: 'REFERRAL_BANNER' as const,
+        mimeType: picked.mimeType,
+        contentBase64: picked.contentBase64,
+      };
+      // Keyed to the digest-sized fingerprint of the payload: picking a different file is
+      // a new command, retrying the same one after an ambiguous failure is not.
+      return uploadTenantMedia({
+        ...body,
+        idempotencyKey: submission.current({ name: picked.name, size: picked.byteLength }),
+      });
+    },
+    onSuccess: () => {
+      submission.settle();
+      notify({ tone: 'ok', message: t('web.referral_banner_uploaded') });
+      setPicked({ kind: 'NONE' });
+      refresh();
+    },
+    onError: (error) => submission.settleOn(error),
+  });
+
+  const clear = useMutation({
+    mutationFn: () =>
+      clearTenantMedia({
+        purpose: 'REFERRAL_BANNER',
+        idempotencyKey: submission.current({ clear: media.data?.media?.version ?? null }),
+      }),
+    onSuccess: () => {
+      submission.settle();
+      notify({ tone: 'ok', message: t('web.referral_banner_cleared') });
+      refresh();
+    },
+    onError: (error) => submission.settleOn(error),
+  });
+
+  const onPick = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file === undefined) {
+      setPicked({ kind: 'NONE' });
+      return;
+    }
+    void readPicked(file).then(setPicked);
+  };
+
+  const busy = upload.isPending || clear.isPending;
+  const failure = upload.error ?? clear.error;
+  const current = media.data?.media ?? null;
+
+  return (
+    <Card title={t('web.referral_banner_title')} hint={t('web.referral_banner_hint')}>
+      <StateSwitch
+        query={media}
+        denied={false}
+        isEmpty={media.data !== undefined && current === null}
+        empty={<Empty title={t('web.referral_banner_empty')} icon="link" />}
+      >
+        {current !== null && <BannerMetadata media={current} />}
+      </StateSwitch>
+
+      {mayEdit ? (
+        <form
+          className="form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (picked.kind === 'READY' && !busy) upload.mutate();
+          }}
+        >
+          <Field
+            label={t('web.referral_banner_file')}
+            hint={t('web.referral_banner_file_hint')}
+            htmlFor="referral-banner-file"
+            {...(picked.kind === 'INVALID' ? { error: t(picked.reason) } : {})}
+          >
+            <input
+              id="referral-banner-file"
+              type="file"
+              accept={TENANT_MEDIA_MIME_TYPES.join(',')}
+              onChange={onPick}
+              disabled={busy}
+            />
+          </Field>
+          <div className="toolbar">
+            <button
+              type="submit"
+              className="btn primary sm"
+              disabled={busy || picked.kind !== 'READY'}
+            >
+              {upload.isPending
+                ? t('web.referral_banner_uploading')
+                : t('web.referral_banner_upload')}
+            </button>
+            {current !== null && (
+              <button
+                type="button"
+                className="btn sm"
+                disabled={busy}
+                onClick={() => clear.mutate()}
+              >
+                {t('web.referral_banner_clear')}
+              </button>
+            )}
+          </div>
+          {failure != null && <Banner tone="danger">{messageFor(failure)}</Banner>}
+        </form>
+      ) : (
+        <p className="muted">{t('web.referral_banner_read_only')}</p>
+      )}
     </Card>
   );
 }

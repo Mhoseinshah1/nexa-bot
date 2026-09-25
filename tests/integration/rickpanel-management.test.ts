@@ -2,6 +2,7 @@ import { createServer, type Server } from 'node:http';
 import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  EMPTY_PRODUCT_DISPLAY,
   money,
   type ActorContext,
   type BotInstanceId,
@@ -83,10 +84,15 @@ describe('RickPanel service management through the application layer', () => {
       request.on('data', (chunk: Buffer) => chunks.push(chunk));
       request.on('end', () => {
         const raw = Buffer.concat(chunks).toString('utf8');
-        sent.push({
-          url: request.url ?? '',
-          body: raw.length === 0 ? {} : (JSON.parse(raw) as Record<string, unknown>),
-        });
+        // A photo goes out as multipart; a body that is not JSON is kept raw rather
+        // than thrown on, which would leave the request unanswered and the send UNCONFIRMED.
+        let body: Record<string, unknown>;
+        try {
+          body = raw.length === 0 ? {} : (JSON.parse(raw) as Record<string, unknown>);
+        } catch {
+          body = { unparseable: raw };
+        }
+        sent.push({ url: request.url ?? '', body });
         const held = hold;
         hold = null;
         if (held === null) {
@@ -165,6 +171,7 @@ describe('RickPanel service management through the application layer', () => {
         categoryId: SEED_IDS.categoryA as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: null },
         price: money(250_000n, 'IRT'),
+        display: EMPTY_PRODUCT_DISPLAY,
       },
       now: ctx.container.clock.now(),
     });

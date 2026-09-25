@@ -80,7 +80,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.command.catalog': 'خرید سرویس',
   'bot.command.services': 'سرویس‌های من',
   'bot.command.wallet': 'کیف پول',
-  'bot.command.help': 'راهنما',
+  'bot.command.help': 'پشتیبانی و سوالات متداول',
 
   // The persistent main menu, as the owner specified it after v0.2.0 staging
   // acceptance. These four are ROUTES as well as labels: `intentOf` matches the
@@ -89,7 +89,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.menu.catalog': '🛒 خرید اشتراک',
   'bot.menu.services': '📱 سرویس‌های من',
   'bot.menu.wallet': '💰 کیف پول',
-  'bot.menu.help': '📚 راهنما',
+  'bot.menu.help': '💬 پشتیبانی',
 
   'bot.catalog.empty': 'در حال حاضر سرویسی برای فروش تنظیم نشده است.',
   'bot.catalog.heading': 'سرویس‌های قابل خرید:',
@@ -510,7 +510,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
 
   'bot.wallet.balance': 'موجودی کیف پول شما: {balance}',
   'bot.wallet.insufficient': 'موجودی کیف پول کافی نیست. کمبود: {shortfall}',
-  'bot.wallet.topup_button': '➕ شارژ کیف پول',
+  'bot.wallet.topup_button': '💰 افزایش موجودی',
   'bot.wallet.topup_choose': 'مبلغ شارژ را انتخاب کنید:',
   'bot.wallet.topup_refused': 'این مبلغ قابل شارژ نیست. لطفاً مبلغ دیگری را از فهرست انتخاب کنید.',
   'bot.wallet.topup_unavailable':
@@ -558,8 +558,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.destination.sheba': 'شبا: {value}',
   'bot.payment.copy_card_button': '📋 کپی شماره کارت',
   'bot.payment.copy_amount_button': '💵 کپی مبلغ',
-  'bot.payment.wallet_button': 'پرداخت از کیف پول',
-  'bot.payment.manual_button': 'پرداخت کارت به کارت',
+  'bot.payment.wallet_button': '💰 پرداخت از کیف پول',
+  'bot.payment.manual_button': '🧾 ثبت پرداخت',
   /*
    * The generic refusal, and it says two things on purpose: that the request cannot be
    * completed NOW (so trying later is sensible), and that nothing was charged — because
@@ -652,7 +652,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'سرویس: {productTitle}\nوضعیت: {state}\nمصرف: {usedTrafficBytes} از {totalTrafficBytes}\nانقضا: {expiresAt}\nآخرین به‌روزرسانی مصرف: {syncedAt}',
   'bot.service.subscription': 'لینک اشتراک شما:\n<code>{subscriptionUrl}</code>',
   'bot.service.resend_button': 'ارسال دوباره لینک اشتراک',
-  'bot.service.rotate_button': 'دریافت لینک اشتراک جدید',
+  'bot.service.rotate_button': '⚙️ تغییر لینک',
   // Says nothing about the old link on purpose: that it stops working is not proven
   // (OQ-RP-07), and templates.ts records why a sentence here must not imply it.
   'bot.service.rotate_ask':
@@ -694,8 +694,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'از بخش «سرویس‌های من» می‌توانید حجم اضافه کنید.',
   'bot.service.provision_delayed':
     'ساخت سرویس کامل نشد و موضوع به پشتیبانی اطلاع داده شد. لطفاً منتظر پیگیری بمانید.',
-  'bot.service.renew_button': 'تمدید سرویس',
-  'bot.service.add_traffic_button': 'حجم اضافه',
+  'bot.service.renew_button': '💊 تمدید سرویس',
+  'bot.service.add_traffic_button': '➕ خرید حجم اضافه',
   'bot.service.add_time_button': 'زمان اضافه',
   // ONE message for "no package is configured", "the plan behind this renewal was
   // withdrawn" and "this panel cannot do it". The customer's next step is the same for
@@ -710,8 +710,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.action_quote':
     '{productTitle}\nحجم افزوده: {trafficBytes}\nمدت افزوده: {durationDays}\nمبلغ: {total}',
   'bot.service.action_confirm_button': 'تأیید و پرداخت',
-  'bot.service.suspend_button': 'توقف موقت سرویس',
-  'bot.service.resume_button': 'فعال‌سازی دوباره سرویس',
+  'bot.service.suspend_button': '❌ خاموش کردن اکانت',
+  'bot.service.resume_button': '✅ روشن کردن اکانت',
   'bot.service.terminate_button': 'حذف سرویس',
   'bot.service.terminate_confirm':
     'آیا از حذف «{productTitle}» مطمئن هستید؟ با تأیید، حساب شما روی سرور پاک می‌شود و این کار برگشت‌پذیر نیست.',
@@ -729,7 +729,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // One message for every rejection reason, so the bot is not an oracle for guessing
   // codes. `templates.ts` records the reasoning.
   'bot.discount.rejected': 'این کد تخفیف قابل استفاده نیست.',
-  'bot.discount.enter_button': 'کد تخفیف',
+  'bot.discount.enter_button': '🏷 اعمال کد تخفیف',
   'bot.discount.remove_button': 'حذف کد تخفیف',
   'bot.discount.ask': 'کد تخفیف خود را در پیام بعدی بفرستید.',
   'bot.discount.no_longer_valid':
@@ -752,4 +752,154 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    */
   'bot.refund.completed':
     'بازپرداخت شما انجام شد. اگر مبلغ به کیف پول بازگشته باشد، موجودی جدید را با /wallet ببینید.',
+
+  /*
+   * Customer UX completion — the owner's approved defaults, verbatim
+   * (docs/customer-ux-completion-audit.md). A line whose only placeholders are
+   * optional and absent is dropped by the renderer, which is what lets these bodies
+   * carry the approved lines exactly as written.
+   */
+  'bot.service.delivered':
+    '✅ سرویس با موفقیت ایجاد شد\n\n👤 نام کاربری سرویس: {serviceUsername}\n🌿 نام سرویس: {productName}\n🌍 لوکیشن: 🚀 {serviceLocation}\n⌛ مدت زمان: {durationDays}\n⏱ حجم سرویس: {trafficBytes}\n\nلینک اتصال:\n<code>{subscriptionUrl}</code>\n\n🚶 شما میتوانید شیوه اتصال را با فشردن دکمه زیر و\nانتخاب سیستم عامل خود را دریافت کنید',
+  'bot.service.delivered_qr_caption':
+    '📷 کد QR لینک اتصال شما. جزئیات سرویس در پیام بعدی آمده است.',
+  'bot.service.tutorial_button': '📚 مشاهده آموزش استفاده',
+  'bot.service.connected_button': '🥰 وصل شدم',
+  'bot.service.problem_button': '😐 مشکل دارم',
+  'bot.service.connected_ack':
+    '🥰 عالی! از استفادهٔ شما سپاسگزاریم. هر زمان مشکلی داشتید از بخش «پشتیبانی» کمک بگیرید.',
+  'bot.tutorial.choose': '📚 سیستم عامل خود را انتخاب کنید:',
+  'bot.tutorial.android_button': '🤖 اندروید',
+  'bot.tutorial.ios_button': '🍎 آیفون (iOS)',
+  'bot.tutorial.windows_button': '🪟 ویندوز',
+  'bot.tutorial.macos_button': '💻 مک',
+  'bot.tutorial.linux_button': '🐧 لینوکس',
+  // Short and neutral, on purpose: no copy was supplied for the guides, so each default
+  // says only what is true of every v2ray-compatible client and points at support. The
+  // operator rewrites them from Content for the apps they actually recommend.
+  'bot.tutorial.android':
+    '🤖 اتصال در اندروید\n\n1. یک برنامهٔ سازگار با v2ray را از فروشگاه نصب کنید.\n2. لینک اشتراک خود را کپی کنید و در برنامه گزینهٔ افزودن از کلیپ‌بورد (Import) را بزنید.\n3. اشتراک را به‌روزرسانی کنید و یکی از سرورها را انتخاب و متصل شوید.\n\nاگر با مشکلی روبه‌رو شدید، از بخش «پشتیبانی» کمک بگیرید.',
+  'bot.tutorial.ios':
+    '🍎 اتصال در آیفون\n\n1. یک برنامهٔ سازگار با v2ray را از App Store نصب کنید.\n2. لینک اشتراک خود را کپی کنید و در برنامه آن را به‌عنوان اشتراک (Subscription) اضافه کنید.\n3. اشتراک را به‌روزرسانی کنید و یکی از سرورها را انتخاب و متصل شوید.\n\nاگر با مشکلی روبه‌رو شدید، از بخش «پشتیبانی» کمک بگیرید.',
+  'bot.tutorial.windows':
+    '🪟 اتصال در ویندوز\n\n1. یک برنامهٔ سازگار با v2ray را دانلود و اجرا کنید.\n2. لینک اشتراک خود را کپی کنید و در برنامه آن را به‌عنوان اشتراک اضافه کنید.\n3. اشتراک را به‌روزرسانی کنید و یکی از سرورها را انتخاب و متصل شوید.\n\nاگر با مشکلی روبه‌رو شدید، از بخش «پشتیبانی» کمک بگیرید.',
+  'bot.tutorial.macos':
+    '💻 اتصال در مک\n\n1. یک برنامهٔ سازگار با v2ray را نصب کنید.\n2. لینک اشتراک خود را کپی کنید و در برنامه آن را به‌عنوان اشتراک اضافه کنید.\n3. اشتراک را به‌روزرسانی کنید و یکی از سرورها را انتخاب و متصل شوید.\n\nاگر با مشکلی روبه‌رو شدید، از بخش «پشتیبانی» کمک بگیرید.',
+  'bot.tutorial.linux':
+    '🐧 اتصال در لینوکس\n\n1. یک کلاینت سازگار با v2ray را نصب کنید.\n2. لینک اشتراک خود را کپی کنید و در برنامه آن را به‌عنوان اشتراک اضافه کنید.\n3. اشتراک را به‌روزرسانی کنید و یکی از سرورها را انتخاب و متصل شوید.\n\nاگر با مشکلی روبه‌رو شدید، از بخش «پشتیبانی» کمک بگیرید.',
+  'bot.menu.main_button': '🏠 بازگشت به منوی اصلی',
+  'bot.faq.heading': '💡 سوالات متداول ⁉️',
+  'bot.faq.item': '{number} {question}\n\n✅ {answer}',
+  'bot.faq.footer': '💡 در صورتی که جواب سوالتون رو نگرفتید میتونید به «پشتیبانی» مراجعه کنید.',
+  'bot.faq.default_1_question':
+    'فیلترشکن شما آیپی ثابته؟ میتونم برای صرافی های ارز دیجیتال استفاده کنم؟',
+  'bot.faq.default_1_answer':
+    'به دلیل وضعیت نت و محدودیت های کشور سرویس ما مناسب ترید نیست و فقط لوکیشن‌ ثابته.',
+  'bot.faq.default_2_question': 'اگه قبل از منقضی شدن اکانت، تمدیدش کنم روزهای باقی مانده می سوزد؟',
+  'bot.faq.default_2_answer':
+    'خیر، روزهای باقیمونده اکانت موقع تمدید حساب میشن و اگه مثلا 5 روز قبل از منقضی شدن اکانت 1 ماهه خودتون اون رو تمدید کنید 5 روز باقیمونده + 30 روز تمدید میشه.',
+  'bot.faq.default_3_question': 'اگه به یک اکانت بیشتر از حد مجاز متصل شیم چه اتفاقی میافته؟',
+  'bot.faq.default_3_answer': 'در این صورت حجم سرویس شما زود تمام خواهد شد.',
+  'bot.faq.default_4_question': 'فیلترشکن شما از چه نوعیه؟',
+  'bot.faq.default_4_answer':
+    'فیلترشکن های ما v2ray است و پروتکل‌های مختلفی رو ساپورت میکنیم تا حتی تو دورانی که اینترنت اختلال داره بدون مشکل و افت سرعت بتونید از سرویستون استفاده کنید.',
+  'bot.faq.default_5_question': 'فیلترشکن از کدوم کشور است؟',
+  'bot.faq.default_5_answer':
+    'سرور فیلترشکن ما از 25 کشور همزمان هست در یک اشتراک که از اینجا میتونین مشاهده کنین',
+  'bot.faq.default_6_question': 'چطور باید از این فیلترشکن استفاده کنم؟',
+  'bot.faq.default_6_answer': 'برای آموزش استفاده از برنامه، روی دکمه «📚 آموزش» بزنید.',
+  'bot.faq.default_7_question': 'فیلترشکن وصل نمیشه، چیکار کنم؟',
+  'bot.faq.default_7_answer': 'به همراه یک عکس از پیغام خطایی که میگیرید به پشتیبانی مراجعه کنید.',
+  'bot.faq.default_8_question': 'فیلترشکن شما تضمینی هست که همیشه مواقع متصل بشه؟',
+  'bot.faq.default_8_answer':
+    'به دلیل قابل پیش‌بینی نبودن وضعیت نت کشور، امکان دادن تضمین نیست فقط می‌تونیم تضمین کنیم که تمام تلاشمون رو برای ارائه سرویس هر چه بهتر انجام بدیم.',
+  'bot.faq.default_9_question': 'امکان بازگشت وجه دارید؟',
+  'bot.faq.default_9_answer': 'امکان بازگشت وجه در صورت حل نشدن مشکل از سمت ما وجود دارد.',
+  'bot.faq.page': '{content}',
+  'bot.support.contact_button': '📨 ارسال پیام به پشتیبانی',
+  'bot.support.contact': 'برای ارتباط با پشتیبانی روی دکمهٔ زیر بزنید.',
+  'bot.support.unconfigured': 'در حال حاضر راه ارتباطی با پشتیبانی تنظیم نشده است.',
+  'bot.order.preinvoice':
+    '🧾 پیش فاکتور شما:\n\n👤 نام کاربر: {serviceUsername}\n🔐 نام سرویس: {productName}\n📆 مدت اعتبار: {durationDays}\n💵 قیمت: {total}\n👥 حجم اکانت: {trafficBytes}\n➕ حجم افزوده: {addedTrafficBytes}\n{discountLine}\n{cashbackLine}\n\n{locationsBlock}\n\n{featuresBlock}\n\n💰 موجودی کیف پول شما: {walletBalance}\n\n💰 سفارش شما آماده پرداخت است',
+  'bot.order.preinvoice_locations': '🌍 لوکیشن‌های محصول:\n{lines}',
+  'bot.order.preinvoice_features': '{lines}',
+  'bot.order.preinvoice_discount_line': '🏷 تخفیف: {discount} (قیمت پیش از تخفیف: {subtotal})',
+  'bot.order.preinvoice_cashback_line': '🎁 کش‌بک این سفارش پس از تحویل: {cashback}',
+  'bot.payment.gateway_button': '💳 پرداخت با درگاه',
+  'bot.payment.gateway_choose': '💳 درگاه پرداخت خود را انتخاب کنید:',
+  'bot.payment.route_name_manual_transfer': 'کارت به کارت',
+  'bot.wallet.summary':
+    '🎡 اطلاعات حساب کاربری شما:\n\n🪪 آی دی عددی: {telegramId}\n👤 نام: {displayName}\n⚫ شماره تماس: {phoneState}\n⏳ زمان ثبت نام: {registeredAt}\n⭐ موجودی: {balance}\n🛒 تعداد سرویس های خریداری شده: {serviceCount} عدد\n🧾 تعداد فاکتورهای پرداخت شده: {paidInvoiceCount} عدد\n👥 تعداد زیرمجموعه های شما: {referralCount} نفر\n🔖 گروه کاربری: {customerGroup}',
+  'bot.wallet.phone_missing': '🔴 ارسال نشده است',
+  'bot.wallet.group_customer': 'کاربر عادی',
+  'bot.wallet.group_reseller': 'نماینده',
+  'bot.wallet.topup_amount_prompt':
+    '💰 مبلغ مورد نظر برای افزایش موجودی را وارد کنید (فقط عدد):\nحداقل: {minimum}\nحداکثر: {maximum}',
+  'bot.wallet.topup_amount_invalid':
+    'مبلغ واردشده معتبر نیست. لطفاً فقط یک عدد صحیح و مثبت بفرستید.',
+  'bot.wallet.topup_below_minimum': 'مبلغ واردشده کمتر از حداقل مجاز است. حداقل: {minimum}',
+  'bot.wallet.topup_above_maximum': 'مبلغ واردشده بیشتر از حداکثر مجاز است. حداکثر: {maximum}',
+  'bot.wallet.topup_method_prompt': '💳 روش پرداخت خود را انتخاب نمایید',
+  'bot.wallet.topup_method_button': 'پرداخت با {name}',
+  'bot.wallet.topup_method_gift_button': 'پرداخت با {name} ({percent} درصد شارژ هدیه)',
+  'bot.wallet.topup_close_button': '❌ بستن لیست',
+  'bot.wallet.topup_closed': 'فهرست بسته شد. درخواستی ثبت نشد.',
+  'bot.wallet.topup_none_available': 'در حال حاضر روش پرداختی برای این مبلغ در دسترس نیست.',
+  'bot.wallet.topup_expired':
+    'مهلت این درخواست به پایان رسیده است. لطفاً دوباره از کیف پول شروع کنید.',
+  'bot.service.list':
+    '✨ اشتراک های خریداری شده توسط شما\n\n⚠️ برای مشاهده اطلاعات و مدیریت روی نام کاربری کلیک کنید\n\n🔴 همچنین برای پیدا کردن سریع سرویس خود و مدیریت آن می توانید از دکمه "🔎 جستجو سرویس" استفاده کنید\n\n📄 صفحه {page} از {pages} | 📊 کل: {total} سرویس',
+  'bot.service.list_item_button': '✨ {username} ✨',
+  'bot.service.search_label_button': 'جستجو نام کاربری',
+  'bot.service.search_button': '🔎 جستجو',
+  'bot.service.page_button': '{page}/{pages}',
+  'bot.service.prev_page_button': '◀️',
+  'bot.service.next_page_button': '▶️',
+  'bot.service.back_to_menu_button': '🔙 بازگشت به منوی اصلی',
+  'bot.service.search_prompt': '🔎 نام کاربری سرویس (یا ابتدای آن) را بفرستید:',
+  'bot.service.search_results': '🔎 نتایج جستجو برای «{query}»:',
+  'bot.service.search_none': 'سرویسی با این نام کاربری در میان سرویس‌های شما پیدا نشد.',
+  'bot.service.search_invalid': 'عبارت جستجو معتبر نیست.',
+  'bot.service.card':
+    '📊وضعیت سرویس: {status}\n👤 نام سرویس: {serviceUsername}\n\n🌍 موقعیت سرویس: 🚀 {serviceLocation}\n📦 نام محصول: {productName}\n\n🟩 ترافیک: {trafficBytes}\n📥 حجم مصرفی: {usedTraffic}\n💢 حجم باقی مانده: {remainingTraffic}\n\n📅 تاریخ اتمام: {expiresAt} ({remainingDays} روز)\n{noExpiry}\n\n📶 آخرین زمان اتصال شما: {lastSeen}\n\n📝 یادداشت: {note}\n\n{rotateHint}',
+  'bot.service.state_pending_provision': '🟡 در حال ساخت',
+  'bot.service.state_active': '🟢 فعال',
+  'bot.service.state_suspended': '🔴 خاموش',
+  'bot.service.state_expired': '⚫ منقضی شده',
+  'bot.service.state_terminated': '⛔ حذف شده',
+  'bot.service.state_unreconciled': '🟠 در حال بررسی',
+  'bot.service.traffic_value': '{bytes}',
+  'bot.service.traffic_unknown': 'هنوز از سرور خوانده نشده',
+  'bot.service.remaining_value': '{bytes} ({percent}%)',
+  'bot.service.remaining_unlimited': 'نامحدود',
+  'bot.service.no_expiry': '📅 تاریخ اتمام: بدون محدودیت زمانی',
+  'bot.service.last_seen_at': '{at}',
+  'bot.service.last_seen_never': 'متصل نشده',
+  'bot.service.last_seen_unavailable': 'در دسترس نیست',
+  'bot.service.rotate_hint': '💡 برای قطع دسترسی دیگران کافیست روی گزینه "تغییر لینک" کلیک کنید.',
+  'bot.service.refresh_button': '♻️ بروزرسانی اطلاعات',
+  'bot.service.link_button': '🔗 لینک اشتراک',
+  'bot.service.note_button': '📝 تغییر یادداشت',
+  'bot.service.back_to_list_button': '🏠 بازگشت به لیست سرویس ها',
+  'bot.service.refresh_requested':
+    '♻️ درخواست به‌روزرسانی ثبت شد. نتیجه پس از خواندن از سرور به شما اعلام می‌شود.',
+  'bot.service.refresh_too_soon':
+    'اطلاعات این سرویس به‌تازگی به‌روزرسانی شده است. کمی بعد دوباره تلاش کنید.',
+  'bot.service.note_prompt':
+    '📝 یادداشت خود را برای این سرویس بفرستید (حداکثر {max} نویسه).\nبرای حذف یادداشت فعلی، فقط یک خط تیره (-) بفرستید.',
+  'bot.service.note_saved': '📝 یادداشت ذخیره شد.',
+  'bot.service.note_cleared': '📝 یادداشت حذف شد.',
+  'bot.service.note_invalid': 'یادداشت معتبر نیست. متنی بین ۱ تا {max} نویسه بفرستید.',
+  'bot.service.renew_choose': '💊 یکی از گزینه‌های تمدید یا افزایش زمان را انتخاب کنید:',
+  'bot.service.renew_option_button': '🔄 تمدید {title} — {price}',
+  'bot.service.renew_unavailable': 'در حال حاضر گزینه‌ای برای تمدید این سرویس در دسترس نیست.',
+  'bot.referral.screen':
+    '💼 زیرمجموعه‌گیری و هدیه خوش‌آمد\n\n📱 خبری خوش راحت ترین راه پول دراوردن\n\n📤 با ارسال 📎 لینک دعوت اختصاصی خود به مخاطبین و دوستان خود به ازای هر فرد جدیدی که برای اولین بار با لینک شما وارد ربات شود و خرید انجام دهد {commissionPercent} درصد پورسانت دریافت کنید!\n\n💳 بعد از دعوت دیگران میتوانید درخواست برداشت موجودی خود به کارت بانکیتان را ثبت کنید و مبلغ به کارت بانکی شما واریز خواهد شد.\n\n💰برای برداشت موجودی بدست آمده به پشتیبانی ربات پیام ارسال کنید\n\n🔰همکاری با شما باعث افتخار ماست\n\n🔗 {referralLink}\n\n{giftBlock}\n\n💸 پورسانت خرید:\n• {commissionPercent} درصد از مبلغ خرید زیرمجموعه به شما تعلق می‌گیرد\n\n📊 آمار شما:\n• زیرمجموعه‌ها: {referralCount} نفر\n• خریدها: {referredPurchaseCount} عدد\n• مجموع خرید: {referredPurchaseTotal}\n• پورسانت دریافتی: {commissionReceivedTotal}\n\n📢 دعوت کن، هدیه بگیر، رشد کن!',
+  'bot.referral.gift_block':
+    '🎁 هدیه عضویت:\n• مجموع هدیه: {total}\n• {referrerPercent}٪ برای شما (معرف)\n• {referredPercent}٪ برای زیرمجموعه (کاربر جدید)',
+  'bot.referral.share_button': '🔗 اشتراک گذاری لینک',
+  'bot.referral.gift_button': '🎁 دریافت هدیه عضویت',
+  'bot.referral.gift_claimed': '🎁 هدیهٔ عضویت به کیف پول شما واریز شد: {amount}',
+  'bot.referral.gift_nothing': 'در حال حاضر هدیهٔ عضویتی برای دریافت ندارید.',
+  'bot.referral.gift_disabled': 'هدیهٔ عضویت در حال حاضر فعال نیست.',
 };

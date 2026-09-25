@@ -84,6 +84,10 @@ const REGISTRY_LABELS: Readonly<Record<string, WebKey>> = {
   'trial.limit_per_customer': 'web.setting_trial_limit_per_customer',
   customer_link_rotation: 'web.flag_customer_link_rotation',
   'services.link_rotation_cooldown_hours': 'web.setting_link_rotation_cooldown_hours',
+  referral_signup_gift: 'web.flag_referral_signup_gift',
+  'referral.signup_gift.total': 'web.setting_referral_signup_gift_total',
+  'referral.signup_gift.referrer_percent': 'web.setting_referral_signup_gift_referrer_percent',
+  'referral.signup_gift.referred_percent': 'web.setting_referral_signup_gift_referred_percent',
 };
 
 /**
@@ -890,6 +894,9 @@ export function messageFor(error: unknown): string {
     if (error.code === 'control.version_conflict') return t('web.conflict');
     if (error.code === 'control.confirmation_required') return t('web.confirm_required');
     if (error.code === 'control.destination_not_configured') return t('web.destination_missing');
+    if (error.code === 'commerce.referral_gift_terms_invalid')
+      return t('web.referral_gift_terms_invalid');
+    if (error.code === 'commerce.media_invalid') return t('web.referral_banner_invalid');
     if (error.status === 403) return t('web.no_permission');
     // The server's message names the offending field and is written for an
     // operator. Replacing it with a generic sentence here would throw away the

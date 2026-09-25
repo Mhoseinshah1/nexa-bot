@@ -474,8 +474,13 @@ export class DrizzleProductRepository implements ProductRepository {
   }
 }
 
-/** The draft's fields as columns. One place, so create and update cannot diverge. */
-function columnsFor(draft: ProductDraft) {
+/**
+ * The draft's fields as columns. One place, so create and update cannot diverge.
+ *
+ * A `ProductEdit` whose `display` is null contributes NO display columns, so the UPDATE
+ * leaves the row's own; a draft always carries one.
+ */
+function columnsFor(draft: ProductDraft | ProductEdit) {
   return {
     title: draft.title,
     description: draft.description,
@@ -506,7 +511,46 @@ function columnsFor(draft: ProductDraft) {
      */
     priceAmount: draft.price === null ? null : draft.price.amountMinor,
     priceCurrency: draft.price === null ? null : draft.price.currency,
+    /*
+     * The display lists, as jsonb arrays of strings, in the operator's order.
+     *
+     * Copied rather than passed through so the driver serialises a plain array whatever
+     * readonly wrapper the draft arrived in. Mapped HERE for the reason `categoryId`
+     * gives above: a field missing from this function is a field the INSERT silently
+     * omits, and these three would fall back to `'[]'` and NULL — every list an operator
+     * typed written back as nothing, with no error anywhere.
+     */
+    ...(draft.display === null
+      ? {}
+      : {
+          displayLocations: [...draft.display.displayLocations],
+          displayFeatures: [...draft.display.displayFeatures],
+          serviceLocationLabel: draft.display.serviceLocationLabel,
+        }),
   };
+}
+
+/**
+ * A jsonb display list, as an array of strings or not at all.
+ *
+ * `jsonb` carries no shape, so the column type is `unknown` and what came back is
+ * checked rather than cast. A row that holds anything but an array of strings is
+ * CORRUPT — nothing this repository writes can produce one — and it is refused rather
+ * than coerced, because the alternative is a pre-invoice quietly rendering `[object
+ * Object]` or `null` as a server location, which is a false claim to a customer with
+ * no error anywhere to explain it. The refusal names the column so the operator who
+ * meets it can find the row.
+ */
+function displayListOf(value: unknown, column: string): readonly string[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`products.${column} is not a JSON array; the row is corrupted.`);
+  }
+  for (const item of value) {
+    if (typeof item !== 'string') {
+      throw new Error(`products.${column} holds a non-string element; the row is corrupted.`);
+    }
+  }
+  return value as readonly string[];
 }
 
 function toCategoryRecord(row: typeof productCategories.$inferSelect): ProductCategoryRecord {
@@ -544,6 +588,11 @@ function toRecord(row: typeof products.$inferSelect): ProductRecord {
       row.priceAmount === null || row.priceCurrency === null
         ? null
         : money(row.priceAmount, row.priceCurrency as CurrencyCode),
+    display: {
+      displayLocations: displayListOf(row.displayLocations, 'display_locations'),
+      displayFeatures: displayListOf(row.displayFeatures, 'display_features'),
+      serviceLocationLabel: row.serviceLocationLabel,
+    },
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

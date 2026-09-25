@@ -738,10 +738,13 @@ describe('the Web Admin V2 surface', () => {
       );
       const byKey = new Map(body.settings.map((setting) => [setting.key, setting]));
 
-      for (const key of ['support.accounts', 'telegram.channels']) {
+      for (const key of ['telegram.channels']) {
         expect(byKey.get(key)?.consumer, key).toBe('PLANNED');
       }
       /*
+       * `support.accounts` left that list with the customer UX completion: the support
+       * screen's contact button is its first handle, so it is read.
+       *
        * `sales.currency` left that list in Phase 4B. It is ACTIVE because
        * `ProductService` refuses a price in any other currency — the Codex review
        * found it declared, rendered and enforced by nothing, which is a setting an
@@ -758,6 +761,7 @@ describe('the Web Admin V2 surface', () => {
         'ops.notifications.max_attempts',
         'wallet.topup.minimum',
         'wallet.topup.presets',
+        'support.accounts',
       ]) {
         expect(byKey.get(key)?.consumer, key).toBe('ACTIVE');
       }

@@ -14,7 +14,7 @@ import {
   type ProductWriteRequest,
   type TenantContext,
 } from '@nexa/contracts';
-import type { ProductCategoryId, ProductId } from '@nexa/contracts';
+import type { ProductCategoryId, ProductDisplay, ProductId } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
 import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
 import { singleValued } from './query.js';
@@ -23,6 +23,7 @@ import { currentCorrelationId, newCorrelationId } from '../../infrastructure/log
 import type {
   ProductCursor,
   ProductDraft,
+  ProductEdit,
   ProductRecord,
 } from '../../modules/commerce/catalog/application/ports.js';
 
@@ -100,7 +101,7 @@ export class ProductsController {
     const command = productWriteSchema.parse(body);
     const product = await this.container.products.create(scope, actor, {
       idempotencyKey: command.idempotencyKey,
-      draft: draftFrom(command),
+      draft: draftFrom(command, 'CREATE'),
     });
     return { product: toSummary(product) };
   }
@@ -124,7 +125,7 @@ export class ProductsController {
     const product = await this.container.products.update(scope, actor, {
       idempotencyKey: command.idempotencyKey,
       productId: id,
-      edit: draftFrom(command),
+      edit: draftFrom(command, 'UPDATE'),
     });
     return { product: toSummary(product) };
   }
@@ -190,7 +191,9 @@ export class ProductsController {
  * fields that could disagree — the schema has already refused a half-price, and below
  * this point nothing can construct one.
  */
-function draftFrom(command: ProductWriteRequest): ProductDraft {
+function draftFrom(command: ProductWriteRequest, write: 'CREATE'): ProductDraft;
+function draftFrom(command: ProductWriteRequest, write: 'UPDATE'): ProductEdit;
+function draftFrom(command: ProductWriteRequest, write: 'CREATE' | 'UPDATE'): ProductEdit {
   return {
     title: command.title,
     description: command.description,
@@ -207,6 +210,7 @@ function draftFrom(command: ProductWriteRequest): ProductDraft {
       command.priceAmount === null || command.priceCurrency === null
         ? null
         : money(BigInt(command.priceAmount), command.priceCurrency),
+    display: displayFrom(command, write),
   };
 }
 
@@ -242,7 +246,37 @@ function toSummary(record: ProductRecord): ProductSummaryResponse {
     deviceLimit: record.specification.deviceLimit,
     priceAmount: record.price === null ? null : record.price.amountMinor.toString(),
     priceCurrency: record.price === null ? null : record.price.currency,
+    // In the order the operator wrote them. The projection copies, never sorts.
+    displayLocations: [...record.display.displayLocations],
+    displayFeatures: [...record.display.displayFeatures],
+    serviceLocationLabel: record.display.serviceLocationLabel,
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
+  };
+}
+
+/**
+ * The display the body carries, or what its absence means.
+ *
+ * A client on the previous release sends none of the three. On a CREATE that is the
+ * empty display — the form had no field, and there is no earlier value to keep. On an
+ * UPDATE it is null: keep the row's display, because an edit to the price from an old
+ * form is not an instruction to delete every location and feature an operator typed. A
+ * current client always sends all three, so a body with some of them is treated as a
+ * statement about all three, the absent ones empty.
+ */
+function displayFrom(
+  command: ProductWriteRequest,
+  write: 'CREATE' | 'UPDATE',
+): ProductDisplay | null {
+  const absent =
+    command.displayLocations === undefined &&
+    command.displayFeatures === undefined &&
+    command.serviceLocationLabel === undefined;
+  if (absent && write === 'UPDATE') return null;
+  return {
+    displayLocations: command.displayLocations ?? [],
+    displayFeatures: command.displayFeatures ?? [],
+    serviceLocationLabel: command.serviceLocationLabel ?? null,
   };
 }

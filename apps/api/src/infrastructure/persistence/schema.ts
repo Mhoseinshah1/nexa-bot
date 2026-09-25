@@ -14,6 +14,7 @@ import {
   uniqueIndex,
   uuid,
   doublePrecision,
+  customType,
 } from 'drizzle-orm/pg-core';
 import { sql, type SQL } from 'drizzle-orm';
 import {
@@ -121,6 +122,19 @@ import {
   RESELLER_PRICE_LAYERS,
   TRIAL_LIMIT_MAX,
   TRIAL_LIMIT_MIN,
+  // Customer UX completion.
+  CUSTOMER_CAPTURE_PURPOSES,
+  CUSTOMER_CAPTURE_CLOSE_REASONS,
+  CUSTOMER_CAPTURE_STATES,
+  SERVICE_LAST_SEEN_STATES,
+  SERVICE_NOTE_MAX_LENGTH,
+  SUPPORT_FAQ_STATUSES,
+  SUPPORT_FAQ_QUESTION_MAX_LENGTH,
+  SUPPORT_FAQ_ANSWER_MAX_LENGTH,
+  TENANT_MEDIA_PURPOSES,
+  TENANT_MEDIA_MIME_TYPES,
+  TENANT_MEDIA_MAX_BYTES,
+  PRODUCT_SERVICE_LOCATION_LABEL_MAX_LENGTH,
 } from '@nexa/contracts';
 
 /**
@@ -2816,6 +2830,20 @@ export const products = pgTable(
     deviceLimit: integer('device_limit'),
     priceAmount: bigint('price_amount', { mode: 'bigint' }),
     priceCurrency: text('price_currency'),
+    /**
+     * Customer-facing DISPLAY data (customer UX completion §C): ordered strings the
+     * pre-invoice and the cards render as written. Marketing copy, not routing — the
+     * provisioner reads `panel_id` and never these. JSON arrays of strings, bounded at
+     * the contract; `'[]'` is the default every existing row takes, which the screens
+     * render as no section rather than an empty one.
+     */
+    displayLocations: jsonb('display_locations')
+      .notNull()
+      .default(sql`'[]'::jsonb`),
+    displayFeatures: jsonb('display_features')
+      .notNull()
+      .default(sql`'[]'::jsonb`),
+    serviceLocationLabel: text('service_location_label'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -2842,6 +2870,14 @@ export const products = pgTable(
     check('products_duration_check', sql`duration_days >= 0 AND duration_days <= 3650`),
     check('products_traffic_check', sql`traffic_bytes >= 0`),
     check('products_device_limit_check', sql`device_limit IS NULL OR device_limit > 0`),
+    check(
+      'products_display_lists_check',
+      sql`jsonb_typeof(display_locations) = 'array' AND jsonb_typeof(display_features) = 'array'`,
+    ),
+    check(
+      'products_service_location_label_check',
+      sql`service_location_label IS NULL OR length(btrim(service_location_label)) BETWEEN 1 AND ${sql.raw(String(PRODUCT_SERVICE_LOCATION_LABEL_MAX_LENGTH))}`,
+    ),
     /**
      * The pair, not the two halves. The same defect 0018 fixed for panel children.
      *
@@ -3655,6 +3691,14 @@ export const paymentGateways = pgTable(
      * onto `payments.topup_cashback_percent` when it is created.
      */
     topupCashbackPercent: integer('topup_cashback_percent').notNull().default(0),
+    /**
+     * Per PURPOSE (customer UX completion §D/§F): whether the route may be offered for
+     * a service purchase and for a wallet top-up. Both default to true, the state every
+     * row was in before the columns existed. `status` still decides whether the route is
+     * offered at all.
+     */
+    allowServicePurchase: boolean('allow_service_purchase').notNull().default(true),
+    allowWalletTopup: boolean('allow_wallet_topup').notNull().default(true),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -4578,6 +4622,16 @@ export const services = pgTable(
       .default(sql`0`),
     usageSyncedAt: timestamptz('usage_synced_at'),
     /**
+     * Last connection, as a provider PROVED it (customer UX completion §H). `AT` with a
+     * time, or `NEVER`; NULL is "no provider has said" — which is every row today, since
+     * every adapter answers UNSUPPORTED and UNSUPPORTED is never stored. The card renders
+     * NULL as unavailable and never as «متصل نشده».
+     */
+    lastSeenAt: timestamptz('last_seen_at'),
+    lastSeenState: text('last_seen_state'),
+    /** The customer's own note on their service. Display only; never provider identity. */
+    customerNote: text('customer_note'),
+    /**
      * Whether the customer has been told. A separate axis from `state`, deliberately.
      *
      * A failed Telegram send must leave a paid-for, provider-side account `ACTIVE`;
@@ -4690,6 +4744,18 @@ export const services = pgTable(
     check(
       'services_terminated_at_check',
       sql`(state = 'TERMINATED') = (terminated_at IS NOT NULL)`,
+    ),
+    check(
+      'services_last_seen_state_check',
+      nullableEnumCheck('last_seen_state', SERVICE_LAST_SEEN_STATES),
+    ),
+    check(
+      'services_last_seen_pair_check',
+      sql`(last_seen_state IS NOT DISTINCT FROM 'AT') = (last_seen_at IS NOT NULL)`,
+    ),
+    check(
+      'services_customer_note_check',
+      sql`customer_note IS NULL OR length(btrim(customer_note)) BETWEEN 1 AND ${sql.raw(String(SERVICE_NOTE_MAX_LENGTH))}`,
     ),
     /** A usage figure and its "as of" travel together, or the figure is a lie. */
     check(
@@ -6513,5 +6579,260 @@ export const customerNotifications = pgTable(
     index('customer_notifications_due_idx')
       .on(table.nextAttemptAt)
       .where(sql`state = 'PENDING'`),
+  ],
+);
+
+// --- Customer UX completion (docs/customer-ux-completion-audit.md) -------------
+
+/**
+ * PostgreSQL `bytea`, which drizzle's pg-core does not model. The one consumer is the
+ * tenant media slot below; a second consumer is a reason to move this beside the other
+ * helpers, not to write a second definition.
+ */
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType: () => 'bytea',
+});
+
+/**
+ * A customer's open plain-text window: what their next message is being read FOR.
+ *
+ * One table with a purpose column, the shape `admin_amount_captures` set, rather than a
+ * third and fourth window table. The partial unique index is the rule: ONE open window
+ * per (tenant, bot, customer), so the most recent prompt is the only reader, and a
+ * message a customer sends with nothing open falls through to the command router.
+ * `subject_id` names the service a note is for; a search and an amount have none.
+ *
+ * The amount is recorded ON the row (`AMOUNT_RECORDED`) while the customer picks a route,
+ * so the figure a route button acts on is the one the customer typed and confirmed by
+ * tapping, never one carried in the callback.
+ */
+export const customerTextCaptures = pgTable(
+  'customer_text_captures',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    customerId: uuid('customer_id').notNull(),
+    purpose: text('purpose').notNull(),
+    subjectId: uuid('subject_id'),
+    state: text('state').notNull().default('AWAITING_TEXT'),
+    amountMinor: bigint('amount_minor', { mode: 'bigint' }),
+    amountCurrency: text('amount_currency'),
+    openedAt: timestamptz('opened_at').notNull().defaultNow(),
+    expiresAt: timestamptz('expires_at').notNull(),
+    closedAt: timestamptz('closed_at'),
+    closeReason: text('close_reason'),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'customer_text_captures_customer_fk',
+    }),
+    uniqueIndex('customer_text_captures_open_key')
+      .on(table.tenantId, table.botInstanceId, table.customerId)
+      .where(sql`closed_at IS NULL`),
+    index('customer_text_captures_expiry_idx')
+      .on(table.tenantId, table.expiresAt)
+      .where(sql`closed_at IS NULL`),
+    check('customer_text_captures_purpose_check', enumCheck('purpose', CUSTOMER_CAPTURE_PURPOSES)),
+    check('customer_text_captures_state_check', enumCheck('state', CUSTOMER_CAPTURE_STATES)),
+    check(
+      'customer_text_captures_close_reason_check',
+      nullableEnumCheck('close_reason', CUSTOMER_CAPTURE_CLOSE_REASONS),
+    ),
+    check('customer_text_captures_closed_check', sql`(closed_at IS NULL) = (close_reason IS NULL)`),
+    check('customer_text_captures_expiry_check', sql`expires_at > opened_at`),
+    check(
+      'customer_text_captures_amount_currency_check',
+      nullableEnumCheck('amount_currency', CURRENCY_CODES),
+    ),
+    check(
+      'customer_text_captures_amount_check',
+      sql`(amount_minor IS NULL) = (amount_currency IS NULL) AND (amount_minor IS NULL OR amount_minor > 0)`,
+    ),
+    /** Only an amount window records an amount, and a recorded state has one. */
+    check(
+      'customer_text_captures_amount_state_check',
+      sql`(state = 'AMOUNT_RECORDED') = (amount_minor IS NOT NULL)
+          AND (amount_minor IS NULL OR purpose = 'TOPUP_AMOUNT')`,
+    ),
+    /** A note names its service; the other two purposes name nothing. */
+    check(
+      'customer_text_captures_subject_check',
+      sql`(purpose = 'SERVICE_NOTE') = (subject_id IS NOT NULL)`,
+    ),
+  ],
+);
+
+/**
+ * The tenant's FAQ, as the operator maintains it. The nine approved defaults are copied
+ * in from the catalogue the first time a tenant's FAQ is read (see `support_faq_seeds`);
+ * from then on these rows are the operator's and the catalogue is not consulted.
+ */
+export const supportFaqs = pgTable(
+  'support_faqs',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    question: text('question').notNull(),
+    answer: text('answer').notNull(),
+    status: text('status').notNull().default('ACTIVE'),
+    sortOrder: integer('sort_order').notNull().default(0),
+    version: integer('version').notNull().default(1),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    /** The customer's screen: active rows in order. */
+    index('support_faqs_tenant_sort_idx').on(
+      table.tenantId,
+      table.sortOrder,
+      table.createdAt,
+      table.id,
+    ),
+    unique('support_faqs_tenant_id_key').on(table.tenantId, table.id),
+    check('support_faqs_status_check', enumCheck('status', SUPPORT_FAQ_STATUSES)),
+    check(
+      'support_faqs_question_check',
+      sql`length(btrim(question)) BETWEEN 1 AND ${sql.raw(String(SUPPORT_FAQ_QUESTION_MAX_LENGTH))}`,
+    ),
+    check(
+      'support_faqs_answer_check',
+      sql`length(btrim(answer)) BETWEEN 1 AND ${sql.raw(String(SUPPORT_FAQ_ANSWER_MAX_LENGTH))}`,
+    ),
+    check('support_faqs_sort_order_check', sql`sort_order BETWEEN 0 AND 100000`),
+    check('support_faqs_version_check', sql`version >= 1`),
+  ],
+);
+
+/**
+ * That a tenant's FAQ defaults were seeded, once. A tenant that then deletes or
+ * deactivates every entry is NOT re-seeded — an empty FAQ is a decision the operator
+ * made, and the seed is a convenience for a tenant that never had one.
+ */
+export const supportFaqSeeds = pgTable('support_faq_seeds', {
+  tenantId: uuid('tenant_id')
+    .primaryKey()
+    .references(() => tenants.id),
+  seededAt: timestamptz('seeded_at').notNull().defaultNow(),
+});
+
+/**
+ * One membership gift per referral: the total and the two shares, snapshotted at the
+ * FIRST claim so both sides always sum to one total whatever the settings say later.
+ * Each side is claimed once — the claimed-at stamp is set by a conditional UPDATE and
+ * the ledger entry it names is unique by reference — and neither side's claim depends on
+ * the other's. Independent of `order_referral_commissions`, which is purchase money.
+ */
+export const referralSignupGifts = pgTable(
+  'referral_signup_gifts',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    referralId: uuid('referral_id').notNull(),
+    referrerId: uuid('referrer_id').notNull(),
+    refereeId: uuid('referee_id').notNull(),
+    totalAmount: bigint('total_amount', { mode: 'bigint' }).notNull(),
+    referrerAmount: bigint('referrer_amount', { mode: 'bigint' }).notNull(),
+    refereeAmount: bigint('referee_amount', { mode: 'bigint' }).notNull(),
+    currency: text('currency').notNull(),
+    referrerEntryId: uuid('referrer_entry_id'),
+    refereeEntryId: uuid('referee_entry_id'),
+    referrerClaimedAt: timestamptz('referrer_claimed_at'),
+    refereeClaimedAt: timestamptz('referee_claimed_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.referralId],
+      foreignColumns: [referrals.tenantId, referrals.id],
+      name: 'referral_signup_gifts_referral_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.referrerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'referral_signup_gifts_referrer_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.refereeId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'referral_signup_gifts_referee_fk',
+    }),
+    /** One gift per referral, for ever. */
+    uniqueIndex('referral_signup_gifts_referral_key').on(table.tenantId, table.referralId),
+    index('referral_signup_gifts_referrer_idx').on(table.tenantId, table.referrerId),
+    index('referral_signup_gifts_referee_idx').on(table.tenantId, table.refereeId),
+    check('referral_signup_gifts_currency_check', enumCheck('currency', CURRENCY_CODES)),
+    check('referral_signup_gifts_not_self_check', sql`referrer_id <> referee_id`),
+    check(
+      'referral_signup_gifts_amounts_check',
+      sql`total_amount >= 0 AND referrer_amount >= 0 AND referee_amount >= 0
+          AND referrer_amount + referee_amount = total_amount`,
+    ),
+    check(
+      'referral_signup_gifts_referrer_claim_check',
+      sql`(referrer_entry_id IS NULL) = (referrer_claimed_at IS NULL)`,
+    ),
+    check(
+      'referral_signup_gifts_referee_claim_check',
+      sql`(referee_entry_id IS NULL) = (referee_claimed_at IS NULL)`,
+    ),
+  ],
+);
+
+/**
+ * The tenant's media slots: today the referral banner. The BYTES live here, bounded,
+ * so nothing customer-facing ever carries a filesystem path and a bot-scoped Telegram
+ * `file_id` is never the source of truth. The Web Admin reads the metadata and never
+ * the bytes; the bot sends the bytes by multipart upload.
+ */
+export const tenantMediaAssets = pgTable(
+  'tenant_media_assets',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    purpose: text('purpose').notNull(),
+    mimeType: text('mime_type').notNull(),
+    content: bytea('content').notNull(),
+    byteLength: integer('byte_length').notNull(),
+    sha256: text('sha256').notNull(),
+    version: integer('version').notNull().default(1),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ name: 'tenant_media_assets_pk', columns: [table.tenantId, table.purpose] }),
+    check('tenant_media_assets_purpose_check', enumCheck('purpose', TENANT_MEDIA_PURPOSES)),
+    /*
+     * By hand: `enumCheck` refuses a literal with a slash, and a MIME type has one. The
+     * list is the contract's; the guard below is what `enumCheck` would have applied.
+     */
+    check(
+      'tenant_media_assets_mime_check',
+      sql`mime_type IN (${sql.raw(
+        TENANT_MEDIA_MIME_TYPES.map((value) => {
+          if (!/^[a-z]+\/[a-z0-9.+-]+$/.test(value)) {
+            throw new Error(`tenant_media_assets: "${value}" is not a plain MIME literal.`);
+          }
+          return `'${value}'`;
+        }).join(', '),
+      )})`,
+    ),
+    check(
+      'tenant_media_assets_size_check',
+      sql`byte_length BETWEEN 1 AND ${sql.raw(String(TENANT_MEDIA_MAX_BYTES))} AND byte_length = octet_length(content)`,
+    ),
+    check('tenant_media_assets_sha256_check', sql`sha256 ~ '^[0-9a-f]{64}$'`),
+    check('tenant_media_assets_version_check', sql`version >= 1`),
   ],
 );

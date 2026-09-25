@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import type { ProductCategoryId } from '@nexa/contracts';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  EMPTY_PRODUCT_DISPLAY,
   money,
   type ActorContext,
   type BotInstanceId,
@@ -148,6 +149,7 @@ describe('the order in which an order, its panel and its reservation are locked'
         categoryId: SEED_IDS.categoryA as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 0n, deviceLimit: 1 },
         price: money(250_000n, 'IRT'),
+        display: EMPTY_PRODUCT_DISPLAY,
       },
       now: ctx.container.clock.now(),
     });

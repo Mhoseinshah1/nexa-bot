@@ -151,6 +151,22 @@ export interface SetFeatureFlagResult {
   readonly replayed: boolean;
 }
 
+/**
+ * A veto another registry holds over ONE flag turning on.
+ *
+ * `SettingChangeGuard`'s twin, one aggregate over: a flag is a boolean and its
+ * parameters are settings, so whether it may be switched on can depend on values this
+ * module does not own. Asked INSIDE the write's transaction, only when the flag is
+ * actually going from off to on — a replay, a no-op and a switch-off are never refused by
+ * a condition that has nothing to do with them. It throws its own typed refusal, so the
+ * code an operator sees names the terms rather than the toggle.
+ */
+export interface FlagActivationGuard {
+  /** The one flag this guard speaks for. */
+  readonly key: FeatureFlagKey;
+  assertMayEnable(scope: ScopeContext, tx: TransactionScope): Promise<void>;
+}
+
 export class FeatureFlagsService {
   constructor(
     private readonly guard: PermissionGuard,
@@ -173,6 +189,11 @@ export class FeatureFlagsService {
     private readonly opsLog: OperationalEventRecorder,
     /** For the mutation-time session-revocation check. */
     private readonly sessions: SessionRepository,
+    /**
+     * The vetoes other registries hold over a flag turning on, by key. Empty by default
+     * so a caller that registers none behaves exactly as before.
+     */
+    private readonly activationGuards: readonly FlagActivationGuard[] = [],
   ) {}
 
   async list(scope: ScopeContext, actor: ActorContext): Promise<ResolvedFeatureFlag[]> {
@@ -330,6 +351,14 @@ export class FeatureFlagsService {
             tx,
           );
           return { flag, changed: false };
+        }
+
+        // Off to on is the one transition a guard is asked about; see `FlagActivationGuard`.
+        if (command.enabled && !before.enabled) {
+          for (const veto of this.activationGuards) {
+            if (veto.key !== key) continue;
+            await veto.assertMayEnable(scope, tx);
+          }
         }
 
         const written = await this.flags.upsert(

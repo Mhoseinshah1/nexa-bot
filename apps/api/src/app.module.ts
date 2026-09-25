@@ -13,12 +13,14 @@ import { ProductCategoriesController } from './surfaces/web/product-categories.c
 import { ServiceAddonsController } from './surfaces/web/service-addons.controller.js';
 import { PricingController } from './surfaces/web/pricing.controller.js';
 import { ReferralsController } from './surfaces/web/referrals.controller.js';
+import { TenantMediaController } from './surfaces/web/tenant-media.controller.js';
 import { ResellersController } from './surfaces/web/resellers.controller.js';
 import { OrdersController } from './surfaces/web/orders.controller.js';
 import { WalletController } from './surfaces/web/wallet.controller.js';
 import { PaymentsController } from './surfaces/web/payments.controller.js';
 import { PaymentAccountsController } from './surfaces/web/payment-accounts.controller.js';
 import { PaymentGatewaysController } from './surfaces/web/payment-gateways.controller.js';
+import { SupportFaqController } from './surfaces/web/support-faq.controller.js';
 import { RefundsController } from './surfaces/web/refunds.controller.js';
 import { ServicesController } from './surfaces/web/services.controller.js';
 import { PanelsController } from './surfaces/web/panels.controller.js';
@@ -69,12 +71,14 @@ export class AppModule implements NestModule {
         ServiceAddonsController as never,
         PricingController as never,
         ReferralsController as never,
+        TenantMediaController as never,
         ResellersController as never,
         OrdersController as never,
         WalletController as never,
         PaymentsController as never,
         PaymentAccountsController as never,
         PaymentGatewaysController as never,
+        SupportFaqController as never,
         RefundsController as never,
         ServicesController as never,
         PanelsController as never,

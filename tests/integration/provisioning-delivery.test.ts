@@ -1,8 +1,9 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import type { ProductCategoryId } from '@nexa/contracts';
+import { SERVICES_LIST_PAGE_SIZE, type ProductCategoryId } from '@nexa/contracts';
 import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  EMPTY_PRODUCT_DISPLAY,
   money,
   type ActorContext,
   type BotInstanceId,
@@ -14,10 +15,7 @@ import {
 } from '@nexa/contracts';
 import { providerDescriptor } from '@nexa/contracts';
 import { operationIdFor } from '../../apps/api/src/infrastructure/crypto/operation-id';
-import {
-  SERVICES_PAGE_CALLBACK_PREFIX,
-  SERVICES_PAGE_SIZE,
-} from '../../apps/api/src/surfaces/telegram/bot-runtime';
+import { SERVICES_LIST_PAGE_CALLBACK_PREFIX } from '../../apps/api/src/surfaces/telegram/bot-runtime';
 import { encodeKeysetToken } from '../../apps/api/src/surfaces/telegram/keyset-token';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
@@ -231,6 +229,7 @@ describe('a provisioned service announces itself', () => {
         categoryId: SEED_IDS.categoryA as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: 2 },
         price: money(250_000n, 'IRT'),
+        display: EMPTY_PRODUCT_DISPLAY,
       },
       now: ctx.container.clock.now(),
     });
@@ -281,6 +280,7 @@ describe('a provisioned service announces itself', () => {
         categoryId: SEED_IDS.categoryA as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: 2 },
         price: money(250_000n, 'IRT'),
+        display: EMPTY_PRODUCT_DISPLAY,
       },
       now: ctx.container.clock.now(),
     });
@@ -385,10 +385,12 @@ describe('a provisioned service announces itself', () => {
     expect(service?.deliveryNextAttemptAt).toBeNull();
 
     expect(sent, 'the customer was told, once').toHaveLength(1);
-    expect(sent[0]?.url).toContain('/sendMessage');
-    expect(sent[0]?.body['chat_id']).toBe('910910');
-    // The link the panel produced, in the message the catalogue rendered.
-    expect(String(sent[0]?.body['text'])).toContain(service?.subscriptionUrl ?? 'no-url');
+    // The delivery card is ONE photo: the QR of the link, the card as its caption.
+    expect(sent[0]?.url).toContain('/sendPhoto');
+    const raw = String(sent[0]?.body['unparseable']);
+    expect(raw).toContain('name="chat_id"\r\n\r\n910910');
+    // The link the panel produced, in the caption the catalogue rendered.
+    expect(raw).toContain(service?.subscriptionUrl ?? 'no-url');
   });
 
   it('leaves the service ACTIVE when Telegram refuses the message', async () => {
@@ -1983,16 +1985,19 @@ describe('a provisioned service announces itself', () => {
     const result = await runtime().handle(tenantA, systemActor('bot'), textUpdate('/services'));
 
     expect(result.intent).toBe('SERVICES');
-    expect(result.replyKey).toBe('bot.service.list_heading');
+    expect(result.replyKey).toBe('bot.service.list');
     /*
-     * The label is the plan's frozen title, not the product's current one and not the
-     * service id. `nexa_orders_snapshot_guard` froze it at confirmation, which is the
-     * only copy that still says what the customer agreed to — the legacy defect where
-     * renaming a product rewrote past reports, applied to something a customer reads.
+     * The button is the account's REAL name on the panel (§F), never the service id; the
+     * plan's frozen title is on the card the button opens. `nexa_orders_snapshot_guard`
+     * froze that title at confirmation, which is the only copy that still says what the
+     * customer agreed to — the legacy defect where renaming a product rewrote past
+     * reports, applied to something a customer reads.
      */
-    const listed = messages()[messages().length - 1];
-    expect(JSON.stringify(listed)).toContain('پلن پایه');
-    expect(JSON.stringify(listed)).toContain(`s:${service?.id ?? ''}`);
+    const listed = JSON.stringify(messages()[messages().length - 1]);
+    expect(listed).toContain(service?.providerUsername ?? 'MISSING');
+    expect(listed).toContain(`s:${service?.id ?? ''}`);
+    await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`s:${service?.id ?? ''}`));
+    expect(JSON.stringify(messages()[messages().length - 1])).toContain('پلن پایه');
   });
 
   it('answers a customer with no services with a different key, not an empty list', async () => {
@@ -2003,63 +2008,60 @@ describe('a provisioned service announces itself', () => {
   /**
    * The bound became a PAGE, and this is what proves it.
    *
-   * Before Phase 6A the list was `SERVICES_PAGE_SIZE` services and silence: the
+   * Before Phase 6A the list was twenty services and silence: the
    * repository returned a `nextCursor` and the surface dropped it, so a customer with
    * more than twenty saw twenty and was told nothing about the rest. Twenty is above any
    * list `docs/research/` shows, which is why nobody noticed and not why it was all
    * right.
    *
-   * Twenty-one services, built the way the product builds them — a settled order each,
-   * no panel involved — because the defect only exists above the bound and a fixture at
-   * or below it cannot see either the presence of the button or its absence.
+   * One service more than a page, built the way the product builds them — a settled
+   * order each, no panel involved — because the defect only exists above the bound and
+   * a fixture at or below it cannot see either the presence of the button or its absence.
+   * The pager is numbered now (`sl:<page>`), and the second page is reached through the
+   * arrow the bot drew, never a number this test made up.
    */
-  it('offers a next page rather than silently showing twenty of twenty-one services', async () => {
+  it('offers a next page rather than silently showing one page of one page and one', async () => {
     const created: string[] = [];
-    for (let index = 0; index < SERVICES_PAGE_SIZE + 1; index += 1) {
+    for (let index = 0; index < SERVICES_LIST_PAGE_SIZE + 1; index += 1) {
       const orderId = await paidOrder(`bot-page-${String(index)}`);
       const service = await services.findByOrderId(tenantA, orderId);
       created.push(service?.id ?? '');
     }
 
+    const next = `${SERVICES_LIST_PAGE_CALLBACK_PREFIX}2`;
     const first = await runtime().handle(tenantA, systemActor('bot'), textUpdate('/services'));
-    expect(first.replyKey).toBe('bot.service.list_heading');
+    expect(first.replyKey).toBe('bot.service.list');
     const firstBody = JSON.stringify(messages()[messages().length - 1]);
     const firstPage = created.filter((id) => firstBody.includes(`s:${id}`));
-    expect(firstPage, 'the page is the bound, not the whole list').toHaveLength(SERVICES_PAGE_SIZE);
-    expect(firstBody, 'and it says there is more').toContain(SERVICES_PAGE_CALLBACK_PREFIX);
+    expect(firstPage, 'the page is the bound, not the whole list').toHaveLength(
+      SERVICES_LIST_PAGE_SIZE,
+    );
+    expect(firstBody, 'and it says there is more').toContain(`"${next}"`);
 
-    /*
-     * The token is taken from the button the bot actually drew, never rebuilt here.
-     * A test that constructed its own cursor would pass against a surface that drew a
-     * broken one.
-     */
-    const token = /"l:([^"]+)"/.exec(firstBody)?.[1];
-    if (token === undefined) throw new Error(`no page token in ${firstBody}`);
-    expect(Buffer.byteLength(`l:${token}`, 'utf8')).toBeLessThanOrEqual(64);
-
-    const second = await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`l:${token}`));
+    const second = await runtime().handle(tenantA, systemActor('bot'), tapUpdate(next));
     expect(second.intent).toBe('SERVICES_PAGE');
-    expect(second.replyKey).toBe('bot.service.list_heading');
+    expect(second.replyKey).toBe('bot.service.list');
     const secondBody = JSON.stringify(messages()[messages().length - 1]);
     const secondPage = created.filter((id) => secondBody.includes(`s:${id}`));
 
-    /* The twenty-first, and NOT one the first page already showed. */
+    /* The one past the page, and NOT one the first page already showed. */
     expect(secondPage).toHaveLength(1);
     expect(firstPage).not.toContain(secondPage[0]);
-    /* And the traversal ends: no further button on the last page. */
-    expect(secondBody).not.toContain(SERVICES_PAGE_CALLBACK_PREFIX);
+    /* And the traversal ends: no further arrow on the last page, only the way back. */
+    expect(secondBody).not.toContain(`"${SERVICES_LIST_PAGE_CALLBACK_PREFIX}3"`);
+    expect(secondBody).toContain(`"${SERVICES_LIST_PAGE_CALLBACK_PREFIX}1"`);
 
     /* Every service was reachable across the two pages, none twice. */
-    expect(new Set([...firstPage, ...secondPage]).size).toBe(SERVICES_PAGE_SIZE + 1);
+    expect(new Set([...firstPage, ...secondPage]).size).toBe(SERVICES_LIST_PAGE_SIZE + 1);
   });
 
   it('draws no next-page button for a customer whose services fit on one page', async () => {
     await paidOrder('bot-one-page');
     const result = await runtime().handle(tenantA, systemActor('bot'), textUpdate('/services'));
 
-    expect(result.replyKey).toBe('bot.service.list_heading');
+    expect(result.replyKey).toBe('bot.service.list');
     expect(JSON.stringify(messages()[messages().length - 1])).not.toContain(
-      SERVICES_PAGE_CALLBACK_PREFIX,
+      `"${SERVICES_LIST_PAGE_CALLBACK_PREFIX}2"`,
     );
   });
 
@@ -2121,7 +2123,7 @@ describe('a provisioned service announces itself', () => {
     );
 
     expect(result.intent).toBe('SERVICE');
-    expect(result.replyKey).toBe('bot.service.detail');
+    expect(result.replyKey).toBe('bot.service.card');
     // `usage_synced_at` is null until a SYNC_USAGE succeeds, so the template gets an
     // absent `syncedAt` rather than a fabricated one. A figure with no asOf is a figure
     // a customer reads as live.
@@ -2202,12 +2204,13 @@ describe('a provisioned service announces itself', () => {
 
     const result = await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`s:${id}`));
 
-    expect(result.replyKey).toBe('bot.service.detail');
+    expect(result.replyKey).toBe('bot.service.card');
     const body = JSON.stringify(messages()[messages().length - 1]);
-    expect(body, 'the resend button is still offered').toContain(`r:${id}`);
+    expect(body, 'the resend button is still offered').toContain(`"r:${id}"`);
     for (const prefix of ['u:', 'e:', 't:', 'k:']) {
+      // The whole callback, quoted: `nt:<id>` (the note button) ends in `t:<id>`.
       expect(body, `${prefix} must not be offered on a panel that cannot do it`).not.toContain(
-        `${prefix}${id}`,
+        `"${prefix}${id}"`,
       );
     }
 
@@ -2227,7 +2230,9 @@ describe('a provisioned service announces itself', () => {
     await ctx.container.provisionerLoop.tick();
     const service = await services.findByOrderId(tenantA, orderId);
     expect(service?.deliveryState, 'the automatic announcement already ran').toBe('DELIVERED');
-    const before = messages().length;
+    // The card is a photo, so the count that must grow is the photos', not the texts'.
+    const photos = () => sent.filter((one) => one.url.includes('/sendPhoto'));
+    const before = photos().length;
 
     const result = await runtime().handle(
       tenantA,
@@ -2246,8 +2251,8 @@ describe('a provisioned service announces itself', () => {
      */
     expect(result.intent).toBe('SERVICE_RESEND');
     expect(result.replyKey).toBeNull();
-    expect(messages().length, 'and the subscription really went out').toBeGreaterThan(before);
-    const resent = messages()[messages().length - 1];
+    expect(photos().length, 'and the subscription really went out').toBeGreaterThan(before);
+    const resent = photos()[photos().length - 1];
     expect(JSON.stringify(resent)).toContain(service?.subscriptionRef ?? 'MISSING');
 
     const after = await services.findByOrderId(tenantA, orderId);

@@ -448,7 +448,7 @@ function usageFromClient(obj: unknown): ProviderUsage | null {
     // v3.7.0's client traffic record carries no last-connection timestamp. Null rather
     // than a guess: `bot.service.detail` renders an "as of", and inventing one is how
     // the legacy reports came to disagree with each other.
-    lastConnectionAt: null,
+    lastSeen: { kind: 'UNSUPPORTED' },
   };
 }
 

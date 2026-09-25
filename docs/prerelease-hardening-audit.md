@@ -179,7 +179,7 @@ The product questions it met in the referral and reseller packages (#68, #69) ar
 ## Deferred and known, not changed here
 
 - **OQ-WP10F-03.** A mandatory reason on every block. OPEN.
-- **Duration.** `DURATION_DAYS` renders as a bare number, with `0` for unlimited, in bot text (e.g. «مدت: 30»). This is a presentation follow-up of the same shape as §3.
+- **Duration.** `DURATION_DAYS` rendered as a bare number, with `0` for unlimited, in bot text (e.g. «مدت: 30»). Closed after this audit: `formatDurationDays` in `@nexa/i18n` renders «30 روز» and «نامحدود», and `renderTemplateBody` routes the type through it the way §3 routes bytes.
 - **V3 and V4.** Above, with proposed one-line fixes.
 - **Other `WEB` namespaces.** The remaining hard-coded `'WEB'` idempotency namespaces are Web-only services today (§2).
 - **OQ-WP9-01…05.** The referral and reseller owner decisions, unchanged.

@@ -3,6 +3,7 @@ import type { ProductCategoryId } from '@nexa/contracts';
 import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  EMPTY_PRODUCT_DISPLAY,
   ADMIN_MENU_BUTTON,
   money,
   type ActorContext,
@@ -1292,9 +1293,15 @@ describe('the services section of the Telegram management panel', () => {
      * admin's own reply says it was sent and carries no link — this surface reports
      * what happened rather than repeating the secret back.
      */
-    const toCustomer = sent.filter((one) => String(one.body['chat_id']) === TG.customer);
+    // The delivery card is a photo, so the customer's copy is a multipart body whose
+    // `chat_id` part is read from the raw form, not from a JSON field.
+    const chatOf = (one: (typeof sent)[number]) =>
+      typeof one.body['chat_id'] === 'string'
+        ? one.body['chat_id']
+        : (/name="chat_id"\r\n\r\n(\d+)/.exec(String(one.body['unparseable'] ?? ''))?.[1] ?? '');
+    const toCustomer = sent.filter((one) => chatOf(one) === TG.customer);
     expect(toCustomer.length, 'the customer was not sent anything').toBeGreaterThan(0);
-    const toAdmin = sent.filter((one) => String(one.body['chat_id']) !== TG.customer);
+    const toAdmin = sent.filter((one) => chatOf(one) !== TG.customer);
     for (const message of toAdmin) {
       expect(JSON.stringify(message.body)).not.toContain(before?.subscriptionUrl);
     }
@@ -1563,6 +1570,7 @@ describe('the services section of the Telegram management panel', () => {
           deviceLimit: where.deviceLimit,
         },
         price: money(250_000n, 'IRT'),
+        display: EMPTY_PRODUCT_DISPLAY,
       },
       now: ctx.container.clock.now(),
     });
@@ -1683,6 +1691,7 @@ describe('the services section of the Telegram management panel', () => {
         categoryId: SEED_IDS.categoryB as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 1_000n, deviceLimit: null },
         price: money(100_000n, 'IRT'),
+        display: EMPTY_PRODUCT_DISPLAY,
       },
       now: ctx.container.clock.now(),
     });

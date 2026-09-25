@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  EMPTY_PRODUCT_DISPLAY,
   DEFAULT_PRODUCT_CATEGORY_NAME,
   money,
   uuidV7Schema,
@@ -357,6 +358,7 @@ describe('0100 gives every backfilled category a UUIDv7', () => {
         categoryId: categoryId as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 1n, deviceLimit: null },
         price: money(100_000n, 'IRT'),
+        display: EMPTY_PRODUCT_DISPLAY,
       },
       now: ctx.container.clock.now(),
     });

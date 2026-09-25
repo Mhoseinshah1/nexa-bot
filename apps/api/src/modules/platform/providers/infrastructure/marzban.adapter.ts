@@ -186,7 +186,7 @@ function usageFromUser(record: Record<string, unknown>): ProviderUsage | null {
       typeof expire === 'number' && Number.isFinite(expire) && expire > 0
         ? new Date(Math.trunc(expire) * 1000)
         : null,
-    lastConnectionAt: null,
+    lastSeen: { kind: 'UNSUPPORTED' },
   };
 }
 

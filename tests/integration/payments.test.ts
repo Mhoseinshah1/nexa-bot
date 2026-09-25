@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  EMPTY_PRODUCT_DISPLAY,
   COMMERCE_ERROR_CODES,
   money,
   type ActorContext,
@@ -148,6 +149,7 @@ describe('payments and settlement', () => {
     categoryId: seededCategoryFor(scope) as ProductCategoryId,
     specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: 2 },
     price: money(250_000n, 'IRT'),
+    display: EMPTY_PRODUCT_DISPLAY,
     ...overrides,
   });
 

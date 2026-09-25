@@ -1693,6 +1693,20 @@ textarea.input {
   flex: none;
 }
 
+/* --- Ordered display lists on the product detail (customer UX §C) ---------- */
+/*
+ * Numbered, because the order is the data: the pre-invoice renders these lines
+ * as the operator arranged them, and a detail page that showed them unnumbered
+ * would hide the one property the editor exists to set.
+ */
+.display-list {
+  margin: 0;
+  padding-inline-start: 1.25rem;
+}
+.display-list li + li {
+  margin-top: 2px;
+}
+
 /* --- Inline link-buttons ---------------------------------------------------- */
 /*
  * `class="link"` is used four times — "load the fresh value", the revert

@@ -25,6 +25,7 @@ import type { TransactionScope } from '../../apps/api/src/infrastructure/persist
 describe('announcing how an operation turned out', () => {
   const scope = { tenantId: 'tenant-1', botInstanceId: null } as unknown as TenantContext;
   const CUSTOMER = 'customer-1' as UserId;
+  const RETRY_AT = new Date('2026-01-01T00:05:00Z');
   const SERVICE = 'service-1';
   const NOW = new Date('2026-09-16T00:00:00.000Z');
 
@@ -62,6 +63,8 @@ describe('announcing how an operation turned out', () => {
      * it explicitly.
      */
     requestedByCustomerId: UserId | null = CUSTOMER,
+    /** Null means terminal for a FAILED row; a date means a retry is scheduled. */
+    nextAttemptAt: Date | null = null,
   ) {
     const queued: Queued[] = [];
     /*
@@ -80,6 +83,7 @@ describe('announcing how an operation turned out', () => {
           serviceId: SERVICE,
           customerId: CUSTOMER,
           requestedByCustomerId,
+          nextAttemptAt,
         }),
         dueForAnnouncement: async () => [],
       },
@@ -138,9 +142,11 @@ describe('announcing how an operation turned out', () => {
   });
 
   it('says nothing about a FAILED operation', async () => {
+    // FAILED with a retry scheduled: not an outcome yet. A FAILED with no retry IS one
+    // since the customer UX completion, and is covered on its own below.
     const silent: OperationState[] = ['FAILED', 'UNKNOWN', 'IN_FLIGHT', 'PLANNED'];
     for (const outcome of silent) {
-      const { announcer, queued } = announcerFor('RENEW', outcome);
+      const { announcer, queued } = announcerFor('RENEW', outcome, CUSTOMER, RETRY_AT);
       await announcer.announce(scope, 'operation-1');
       expect(queued, `${outcome} must say nothing`).toEqual([]);
     }
@@ -154,10 +160,34 @@ describe('announcing how an operation turned out', () => {
      * about either would be told about something they never did.
      */
     for (const type of ['PROVISION', 'RECONCILE', 'SYNC_USAGE'] as OperationType[]) {
-      const { announcer, queued } = announcerFor(type, 'SUCCEEDED');
+      // The SCHEDULED sync has no requester; since the customer UX completion a customer
+      // may ask for one from the service card, and that one IS announced (below).
+      const { announcer, queued } = announcerFor(type, 'SUCCEEDED', null);
       await announcer.announce(scope, 'operation-1');
       expect(queued, `${type} must not be announced`).toEqual([]);
     }
+  });
+
+  it('answers a usage read the CUSTOMER asked for, and a terminal failure of it', async () => {
+    // Customer UX completion §H1: «♻️ بروزرسانی اطلاعات» queues a SYNC_USAGE with the
+    // customer as its requester, and the customer is owed its outcome either way.
+    const ok = announcerFor('SYNC_USAGE', 'SUCCEEDED');
+    await ok.announcer.announce(scope, 'operation-1');
+    expect(ok.queued.map((q) => q.kind)).toEqual(['SERVICE_ACTION_SUCCEEDED']);
+    const failed = announcerFor('SYNC_USAGE', 'FAILED');
+    await failed.announcer.announce(scope, 'operation-1');
+    expect(failed.queued.map((q) => q.kind)).toEqual(['SERVICE_ACTION_FAILED']);
+    expect(failed.stamped).toEqual(['operation-1']);
+  });
+
+  it('says nothing about a FAILED operation whose retry is still scheduled', async () => {
+    // A FAILED row with `next_attempt_at` set is not an outcome yet: the provisioner
+    // will try again, and announcing a failure now would be a message the retry makes
+    // false a minute later.
+    const { announcer, queued, stamped } = announcerFor('RENEW', 'FAILED', CUSTOMER, RETRY_AT);
+    await announcer.announce(scope, 'operation-1');
+    expect(queued).toEqual([]);
+    expect(stamped).toEqual([]);
   });
 
   it('announces every operation a customer can start from My Services', async () => {
@@ -263,7 +293,7 @@ describe('announcing how an operation turned out', () => {
      * `SYNC_USAGE` reads a number back from a panel. A customer waiting on nothing is
      * not delayed, and announcing it would be a message about our housekeeping.
      */
-    const { announcer, queued } = announcerFor('SYNC_USAGE', 'ABANDONED');
+    const { announcer, queued } = announcerFor('SYNC_USAGE', 'ABANDONED', null);
     await announcer.announce(scope, 'operation-1');
     expect(queued).toEqual([]);
   });
@@ -289,6 +319,7 @@ describe('announcing how an operation turned out', () => {
             serviceId: SERVICE,
             customerId: CUSTOMER,
             requestedByCustomerId: CUSTOMER,
+            nextAttemptAt: null,
           }),
           dueForAnnouncement: async (_scope, before, limit) => {
             asked.push({ before, limit });
@@ -446,7 +477,7 @@ describe('announcing how an operation turned out', () => {
       // `SYNC_USAGE` is a background read the customer never asked for. It says
       // nothing — and saying nothing is an answer, so the sweep must not keep
       // asking.
-      const { announcer, queued, stamped } = announcerFor('SYNC_USAGE', 'SUCCEEDED');
+      const { announcer, queued, stamped } = announcerFor('SYNC_USAGE', 'SUCCEEDED', null);
       await announcer.announce(scope, 'operation-1');
       expect(queued).toEqual([]);
       expect(stamped).toEqual(['operation-1']);
@@ -466,7 +497,7 @@ describe('announcing how an operation turned out', () => {
        * sweep skips it for ever once it DOES terminalise, and the customer who
        * paid for the renewal is never told how it went.
        */
-      const { announcer, queued, stamped } = announcerFor('RENEW', 'FAILED');
+      const { announcer, queued, stamped } = announcerFor('RENEW', 'FAILED', CUSTOMER, RETRY_AT);
       await announcer.announce(scope, 'operation-1');
       expect(queued).toEqual([]);
       expect(stamped).toEqual([]);

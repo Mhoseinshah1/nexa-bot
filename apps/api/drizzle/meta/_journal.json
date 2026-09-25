@@ -834,6 +834,20 @@
       "when": 1790273912766,
       "tag": "0118_customer_block_reason_shown",
       "breakpoints": true
+    },
+    {
+      "idx": 119,
+      "version": "7",
+      "when": 1790284972477,
+      "tag": "0119_customer_ux_completion",
+      "breakpoints": true
+    },
+    {
+      "idx": 120,
+      "version": "7",
+      "when": 1790285755362,
+      "tag": "0120_announce_historical_failures",
+      "breakpoints": true
     }
   ]
 }

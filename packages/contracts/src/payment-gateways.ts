@@ -308,6 +308,14 @@ export const paymentGatewayConfigSchema = z
     sortOrder: z.number().int().min(PAYMENT_GATEWAY_SORT_MIN).max(PAYMENT_GATEWAY_SORT_MAX),
     /** The top-up gift, 0–100. See `topupCashbackPercentSchema`. */
     topupCashbackPercent: topupCashbackPercentSchema,
+    /*
+     * Per PURPOSE (customer UX completion §D/§F). Both default to true so a client on
+     * the previous release, which sends neither, keeps the route offered for both — the
+     * state every existing row is in. `status` still decides whether the route is
+     * offered at all; these decide for what.
+     */
+    allowServicePurchase: z.boolean().optional().default(true),
+    allowWalletTopup: z.boolean().optional().default(true),
   })
   .superRefine((value, ctx) => {
     /*

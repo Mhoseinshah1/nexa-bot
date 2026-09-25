@@ -21,6 +21,7 @@ import { PaymentsPage, PaymentDetailPage } from './pages/payments';
 import { CompensationsPage } from './pages/compensations';
 import { PaymentAccountsPage } from './pages/payment-accounts';
 import { PaymentGatewaysPage } from './pages/payment-gateways';
+import { SupportPage } from './pages/support';
 import { ProductDetailPage, ProductsPage } from './pages/products';
 import { ProductCategoriesPage } from './pages/product-categories';
 import { OrderDetailPage, OrdersPage } from './pages/orders';
@@ -406,6 +407,20 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_config',
   },
   {
+    id: 'support',
+    path: '/support',
+    label: 'web.nav_support',
+    icon: 'message',
+    /*
+     * `settings.view`, and only that — the payment-accounts rule. The FAQ is
+     * configuration: the server's list charges `settings.view` and its writes
+     * `settings.edit`, the same pair the settings page beside it uses, because the
+     * support DESTINATION is a setting on that page.
+     */
+    permission: 'settings.view',
+    group: 'web.navgroup_config',
+  },
+  {
     id: 'features',
     path: '/features',
     label: 'web.nav_features',
@@ -694,7 +709,16 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
 
   if (route.path === '/referrals') {
     return {
-      element: <ReferralsPage route={route} denied={!may('referrals.view')} />,
+      element: (
+        <ReferralsPage
+          route={route}
+          denied={!may('referrals.view')}
+          // The banner is tenant configuration: read under `settings.view`, written under
+          // `settings.edit`, both charged by `TenantMediaService` on their own.
+          mayViewBanner={may('settings.view')}
+          mayEditBanner={may('settings.edit')}
+        />
+      ),
       crumbs: [{ label: t('web.referrals_title') }],
       title: t('web.referrals_title'),
     };
@@ -892,6 +916,14 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
       element: <SettingsPage mayEdit={may('settings.edit')} denied={!may('settings.view')} />,
       crumbs: [{ label: t('web.nav_settings') }],
       title: t('web.nav_settings'),
+    };
+  }
+
+  if (route.path === '/support') {
+    return {
+      element: <SupportPage mayEdit={may('settings.edit')} denied={!may('settings.view')} />,
+      crumbs: [{ label: t('web.nav_support') }],
+      title: t('web.nav_support'),
     };
   }
 

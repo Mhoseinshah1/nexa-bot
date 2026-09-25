@@ -438,6 +438,8 @@ describe('control-plane isolation and concurrency', () => {
           render: (_definition, body, values) =>
             body.replace('{correlationId}', String(values.correlationId ?? '')),
         },
+        // A presentation the fake catalogue never looks at; the port is what is under test.
+        { presentationFor: async () => ({ timezone: 'UTC', calendar: 'gregorian' }) },
       );
 
       // `'en'` is deliberately NOT in `SUPPORTED_LOCALES`, and the cast says

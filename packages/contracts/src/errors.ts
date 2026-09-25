@@ -1256,6 +1256,28 @@ export const COMMERCE_ERROR_CODES = {
   RESELLER_ALREADY_REGISTERED: 'commerce.reseller_already_registered',
   /** An operator's reseller tier id that names nothing in this tenant. */
   RESELLER_TIER_NOT_FOUND: 'commerce.reseller_tier_not_found',
+
+  // --- Customer UX completion (docs/customer-ux-completion-audit.md) ---------------
+  /** The typed top-up amount is above `wallet.topup.maximum`. */
+  TOPUP_ABOVE_MAXIMUM: 'commerce.topup_above_maximum',
+  /** The capture behind a tapped button is gone: expired, superseded or another customer's. */
+  CAPTURE_NOT_OPEN: 'commerce.capture_not_open',
+  /** The typed text is not something the open capture can read (an amount, a note, a search term). */
+  CAPTURE_INPUT_INVALID: 'commerce.capture_input_invalid',
+  /** A usage read landed within `CUSTOMER_SYNC_MIN_INTERVAL_MS`; nothing new is queued. */
+  SERVICE_SYNC_TOO_SOON: 'commerce.service_sync_too_soon',
+  /** The signup gift flag is off or its terms are incomplete. */
+  REFERRAL_GIFT_DISABLED: 'commerce.referral_gift_disabled',
+  /** No such FAQ entry in this tenant. Another tenant's is answered the same way. */
+  SUPPORT_FAQ_NOT_FOUND: 'commerce.support_faq_not_found',
+  /** The FAQ row moved since the client read it. Carries the current version. */
+  SUPPORT_FAQ_VERSION_CONFLICT: 'commerce.support_faq_version_conflict',
+  /** The tenant already holds `SUPPORT_FAQ_MAX_ENTRIES`. */
+  SUPPORT_FAQ_LIMIT: 'commerce.support_faq_limit',
+  /** The uploaded banner is not a PNG/JPEG under the size bound, or is not what it claims. */
+  MEDIA_INVALID: 'commerce.media_invalid',
+  /** The gift shares do not total 100 while the flag is (or is being turned) on. */
+  REFERRAL_GIFT_TERMS_INVALID: 'commerce.referral_gift_terms_invalid',
 } as const;
 
 /*

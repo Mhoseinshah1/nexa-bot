@@ -165,6 +165,10 @@ describe('dynamic route registration', () => {
       ['GET', 'referrals'],
       ['GET', 'referral-commissions'],
       ['GET', `users/${id}/referral`],
+      // Customer UX §I: the referral banner slot.
+      ['GET', 'media/REFERRAL_BANNER'],
+      ['POST', 'media/REFERRAL_BANNER'],
+      ['POST', 'media/REFERRAL_BANNER/clear'],
       // WP9-B: reseller tiers and resellers.
       ['GET', 'reseller-tiers'],
       ['POST', 'reseller-tiers'],
@@ -197,6 +201,11 @@ describe('dynamic route registration', () => {
       ['POST', `admins/${id}/telegram`],
       ['POST', `settings/sales.currency`],
       ['POST', `features/telegram.webhook`],
+      // Customer UX completion §J: the FAQ editor.
+      ['GET', 'support/faqs'],
+      ['POST', 'support/faqs'],
+      ['POST', `support/faqs/${id}`],
+      ['POST', `support/faqs/${id}/status`],
       ['GET', `templates/bot.start.greeting`],
       ['GET', `templates/bot.start.greeting/revisions`],
       ['POST', `templates/bot.start.greeting`],

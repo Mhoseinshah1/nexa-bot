@@ -42,6 +42,14 @@ export interface PaymentGatewayRecord {
    * payment when created; it is read here, never at confirmation.
    */
   readonly topupCashbackPercent: number;
+  /**
+   * What the route may be offered FOR (customer UX completion §D/§F). `status` decides
+   * whether it is offered at all; these decide for which purpose. An operator may take
+   * card-to-card for a top-up and not for a purchase, or the reverse, and one switch
+   * for both is a route that is on for something it was never meant for.
+   */
+  readonly allowServicePurchase: boolean;
+  readonly allowWalletTopup: boolean;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }

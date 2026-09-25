@@ -1,0 +1,148 @@
+# Customer UX completion falsification — the approved screens, one rule at a time
+
+Every production rule the customer UX completion introduces, reverted one at a
+time, with the committed test that fails as a result. A rule with no test is a
+rule the next commit reverts silently; a test that stays green under mutation
+is not a test.
+
+The area has one failure shape and twenty ways to reach it: a customer shown
+something that is not theirs, or not true. Another customer's card, a search
+that reaches across customers, a route the operator switched off, a gift paid
+twice, a usage figure that was never read shown as zero, a raw byte count where
+a unit belongs, a subscription URL in a log line, a keyboard on the wrong half of
+a split message.
+
+Procedure, per row: apply exactly one mutation in a worktree of its own
+(`/home/user/nexa-falsify`, detached at the branch head) against a database of
+its own (`nexa_falsify_ux`); run only the named tests with `-t`; record KILLED
+when vitest exits non-zero AND the named test is the one listed as failed;
+restore the file byte-for-byte and confirm the tree is clean before the next
+row. Every survivor's named test was observed green under the mutation, so a
+survivor is a real gap in what the suite can see, not a broken test.
+
+## The twenty-two
+
+| #    | Rule                                              | Mutation                                                                                                                                   | Result | Named test                                                                                                                                                                                                                                                                |
+| ---- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| UX01 | the QR encodes the EXACT stored subscription URL  | `delivery.service.ts` `sendCard`: `qr.encode(sentUrl)` → `qr.encode(service.providerUsername)`                                             | KILLED | `tests/unit/delivery-card.test.ts` › encodes the QR from the EXACT stored subscription URL and nothing else                                                                                                                                                               |
+| UX02 | a service is read by its owner only               | `provisioning.service.ts` `getForCustomer`: the `service.customerId !== customerId` half of the guard deleted                              | KILLED | `tests/integration/customer-ux-services.test.ts` › never shows another customer’s card, by id; › cannot be asked for another customer’s service                                                                                                                           |
+| UX03 | search stays within the customer's own services   | `drizzle-service.repository.ts` `searchForCustomer`: the `customerId` predicate removed                                                    | KILLED | `tests/integration/customer-ux-services.test.ts` › finds by prefix within the customer’s own services only                                                                                                                                                                |
+| UX04 | a route switched off for a purpose is not offered | `gateway-selection.ts` `allowsPurpose`: body → `return true`                                                                               | KILLED | `tests/integration/payment-gateway-purposes.test.ts` › filters by the purpose switches, each on its own; › refuses a route switched off for top-up; `tests/integration/customer-ux-payments.test.ts` › offers no route that is not allowed for top-up, and says so        |
+| UX05 | a receipt credit earns no top-up gift             | `receipt-disposition.service.ts` `creditToWallet`: a second append, `CASHBACK_TOPUP` for a tenth of the amount                             | KILLED | `tests/integration/receipt-dispositions.test.ts` › earns no top-up gift: a credited top-up receipt is not a top-up                                                                                                                                                        |
+| UX06 | a gift side is claimed once                       | `drizzle-referral-signup-gift.repository.ts` `claimSide`: the `IS NULL` predicate on the side's `claimed_at` removed from the UPDATE       | KILLED | `tests/integration/referral-signup-gift.test.ts` › replays the same key with the first result and credits nothing more on a new key; › yields exactly one entry per side under two CONCURRENT claims by the same customer                                                 |
+| UX09 | the wallet summary is the tapping customer's      | `drizzle-wallet.repository.ts` `balanceOf`: the `customerId` predicate removed                                                             | KILLED | `tests/integration/customer-ux-payments.test.ts` › renders the approved account summary from the customer’s OWN rows                                                                                                                                                      |
+| UX10 | add-traffic applies once on replay                | `provisioning.service.ts` `planCommercialAction`: the operation id suffixed with the clock, so a replay plans a second operation           | KILLED | `tests/integration/rickpanel-management.test.ts` › adds traffic without touching the expiry, and adds time without touching the traffic; › converges when a renewal was applied and its answer lost: the replay sets, it does not add                                     |
+| UX11 | renewal applies once on replay                    | same line as UX10                                                                                                                          | KILLED | `tests/integration/rickpanel-management.test.ts` › renews: charged once, applied once, and Nexa and the panel agree                                                                                                                                                       |
+| UX12 | an unsupported action is not rendered             | `bot-runtime.ts` `serviceDetail`: the suspend button pushed whether or not `actions` includes `SUSPEND`                                    | KILLED | `tests/integration/customer-ux-services.test.ts` › shows the switch-on button, not the switch-off one, for a suspended service                                                                                                                                            |
+| UX13 | FAQ rows are the tenant's                         | `drizzle-support-faq.repository.ts` `list`: the tenant predicate removed                                                                   | KILLED | `tests/integration/support-faq.test.ts` › keeps one tenant’s FAQ invisible and unreachable from the other                                                                                                                                                                 |
+| UX14 | the support destination is this tenant's          | `support-screen.reader.ts` `screenFor`: `support.accounts` read under the first scope the reader ever saw, not the caller's                | KILLED | `tests/integration/support-faq.test.ts` › takes the support URL from THIS tenant’s support.accounts                                                                                                                                                                       |
+| UX15 | display data is never routing                     | `drizzle-order.repository.ts` `create`: `panel_id` overwritten with the tenant panel whose host appears in the product's display locations | KILLED | `tests/integration/products-display.test.ts` › provisions on the panel_id panel when the display locations name another panel’s host                                                                                                                                      |
+| UX16 | no raw byte figure reaches a customer             | `customer-screens.ts` `serviceCard`: `trafficBytes` passed as a string of the integer rather than the typed value                          | KILLED | `tests/unit/customer-screens.test.ts` › renders the approved lines, in order, from the rows                                                                                                                                                                               |
+| UX17 | unread usage is a word, never 0                   | `customer-screens.ts` `serviceCard`: `known = facts.usageSyncedAt !== null` → `known = true`                                               | KILLED | `tests/unit/customer-screens.test.ts` › never turns an unread usage into 0, and never claims never-connected for an unsupported field; `tests/integration/customer-ux-services.test.ts` › keeps unlimited and unread apart from zero                                      |
+| UX18 | a subscription URL never reaches a log            | `redaction.ts`: `subscription` removed from `SENSITIVE_FRAGMENTS`                                                                          | KILLED | `tests/unit/secrets-and-ids.test.ts` › redacts a subscription URL and reference by key, wherever they sit                                                                                                                                                                 |
+| UX19 | a stale capture consumes nothing                  | `customer-capture.service.ts` `readText`: the `EXPIRED` branch deleted                                                                     | KILLED | `tests/integration/customer-ux-payments.test.ts` › an amount typed with no window open is not a top-up, and a window past its deadline reads nothing                                                                                                                      |
+| UX20 | a terminal FAILED request is answered once        | `operation-outcome-announcer.ts` `announce`: `terminalFailure` → `false`                                                                   | KILLED | `tests/unit/operation-outcome-announcer.test.ts` › answers a usage read the CUSTOMER asked for, and a terminal failure of it                                                                                                                                              |
+| UX21 | a wallet tap on a short balance confirms nothing  | `bot-runtime.ts` `walletPayment`: the balance pre-check deleted, so `confirmDraft` runs first                                              | KILLED | `tests/integration/customer-ux-payments.test.ts` › names the shortfall, offers the top-up, and confirms NOTHING when the balance is short                                                                                                                                 |
+| UX22 | the pre-invoice keyboard sits on the LAST part    | `telegram-customer-messenger.ts` split send: `last = index === sequence.length - 1` → `last = index === 0`                                 | KILLED | `tests/unit/telegram-messenger-parts.test.ts` › goes out as several parts in order, buttons and keyboard on the last only; `tests/integration/customer-ux-payments.test.ts` › splits a long pre-invoice at section boundaries and puts the keyboard on the last part only |
+
+Two rows the plan listed are held by a mechanism rather than by a mutation a test
+can see, and are declared rather than dropped:
+
+| #    | Rule                          | What was tried                                                                                                                                                                                       | What holds it                                                                                                                                                                                                                                                                                                                                                                                        |
+| ---- | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| UX07 | no self-referral              | the `SELF_REFERRAL` refusal in `attributeOnArrival` AND the `referrerId !== refereeId` re-check in the gift claim both deleted; `referrals.test.ts` (_makes self-referral impossible…_) stayed green | a customer's own link is a RETURNING arrival, refused `ALREADY_REGISTERED` before any code is resolved, and the database CHECK `referrals_not_self_check` refuses a self row written any other way. Neither code branch is reachable from a test; both are kept as the re-check the in-source comment already calls unreachable                                                                      |
+| UX08 | gift claims are tenant-scoped | the tenant predicate removed from `openSides`; `referral-signup-gift.test.ts` (_never credits tenant B's referral through tenant A's claim…_) stayed green                                           | the claim path locks through `lockReferralsOf`, which keeps its own tenant predicate, and `openSides` is already bounded by the customer id — the same Telegram user is a different customer row in each tenant. The predicate stays: a query that names its tenant is the convention, and one that relies on an id's uniqueness across tenants is the kind of query that is right until a migration |
+
+## What the pass changed
+
+UX06 did not kill on the first attempt. `claim` read the gift row under the
+referral's lock and skipped a side whose `claimed_at` was set BEFORE calling
+`claimSide`, whose conditional UPDATE names the same predicate. With both
+present the suite stayed green when either was reverted alone — the read masked
+the write and the write masked the read — and killed only when both went. The
+same shape as Phase 6C's F6C-03: a read issued before a conditional write is an
+optimisation wearing a rule's clothes.
+
+The conditional UPDATE is the half that survives concurrency — two claims from
+two replicas serialise on the referral lock, and the second sees zero rows —
+so the pre-read is gone and the row above is the repository predicate alone,
+which now kills. `amount <= 0n` stays in the service: a zero share is refused
+before an entry id is drawn, which is a rule about what is owed, not about
+whether it was paid.
+
+UX03b, the tenant predicate in the same `searchForCustomer` the row UX03
+mutates, survived as predicted: a customer id is a UUIDv7 unique across
+tenants, so the customer predicate alone bounds the rows for any fixture the
+suite can build. It is recorded here rather than in a row because it is not a
+gap a test can close — there is no way to give one customer id service rows in
+two tenants — and the predicate stays for the reason UX08 gives.
+
+## Two things the pass established rather than assumed
+
+- **UX15 died a step earlier than the plan expected.** The decoy panel the
+  display locations named was refused `PANEL_NOT_ELIGIBLE` at confirmation
+  before the test's own `panel_id` assertion ran: an order routed by display
+  text meets the eligibility gate first. The named test failed either way; the
+  order in which the two defences fire is now on record.
+- **`traffic-format.test.ts` cannot see UX16.** It tests the formatters
+  directly and stayed green while the card passed a raw string through; the kill
+  came from the screen composer's own test. A formatter test proves a formatter,
+  not that the value reached it.
+
+## Round two — the Codex review of PR #73
+
+Eight findings on the reviewed head `bd20433`, two of them P1, every one confirmed
+against the code and fixed in `401126f` (the display schema's own commit is
+`0e4afd8`). Same standard as the first round: a worktree and a database of their
+own, one mutation per rule, only the named test run, the file restored byte for
+byte. Every row killed on the first attempt.
+
+| #    | Rule                                                           | Mutation                                                                  | Result | Named test                                                                                                                                                 |
+| ---- | -------------------------------------------------------------- | ------------------------------------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CX01 | a manual route needs an enabled receiving account              | `evaluateRoutes`: the `hasEnabled` read replaced with `true`              | KILLED | `tests/integration/payment-gateway-purposes.test.ts` › offers no manual route, for either purpose, while no enabled account can receive the money          |
+| CX02 | every customer text window serialises on one lock              | `CUSTOMER_CAPTURE_LOCK_CLASS` given a class of its own again              | KILLED | `tests/unit/customer-capture-lock.test.ts` › serialise every window-opening path on one advisory lock class                                                |
+| CX03 | a redelivered amount is answered with the chooser again        | `recordAmount`: the `AMOUNT_RECORDED` replay branch disabled              | KILLED | `tests/integration/customer-ux-payments.test.ts` › answers a redelivered amount update with the chooser again, and records the figure once                 |
+| CX04 | a refused banner never costs the screen behind it              | the lead loop: a `PHOTO_BYTES` lead stops the turn again                  | KILLED | `tests/integration/customer-ux-payments.test.ts` › still arrives when the banner ahead of it is refused                                                    |
+| CX05 | an absent purpose switch keeps the row's value                 | `configure`: an absent switch resolved to `true` instead of `before`'s    | KILLED | `tests/integration/payment-gateway-purposes.test.ts` › keeps a switch an update did not mention, rather than resetting it to ON                            |
+| CX06 | the gift's total is in the wallet's currency                   | `signupGiftTermsProblem`: the `CURRENCY_MISMATCH` rule deleted            | KILLED | `tests/integration/referral-signup-gift.test.ts` › refuses a total in a currency the wallet does not keep, on and while turning on                         |
+| CX07 | a gift row in a currency the wallet no longer keeps is skipped | `claim` and `claimableFor`: both currency skips deleted                   | KILLED | `tests/integration/referral-signup-gift.test.ts` › pays nothing for a side snapshotted in a currency the wallet no longer keeps, and leaves it unstamped   |
+| CX08 | the media upload route carries its own body ceiling            | `bootstrap.ts`: the route's `bodyLimit` override removed                  | KILLED | `tests/integration/tenant-media.test.ts` › accepts a file exactly at the advertised bound, and refuses one past it by the schema, never by the body reader |
+| CX09 | an update that did not mention the display keeps it            | `displayFrom`: an absent display on an UPDATE becomes the empty one again | KILLED | `tests/integration/products-http.test.ts` › keeps the display an update from the previous release did not mention, and clears it only when told            |
+
+What the round changed beyond the eight fixes: `ProductEdit` is no longer an alias
+of `ProductDraft`. An edit's `display` may be null — "not mentioned" — and a null
+display writes no display columns, which is a shape the type now states rather
+than a convention the controller kept. The previous comment in the wire schema
+called clearing on an old client's update "the honest reading of a form that has
+no field for it"; it was the honest reading of the form and a destructive one of
+the row, and the row is what the operator typed into.
+
+## Round three — the membership gift owes nothing to a purchase
+
+The owner keeps two referral rewards apart: the MEMBERSHIP gift, owed the moment a
+new customer's first `/start` carries a valid referral link and the attribution is
+accepted, and the PURCHASE commission, owed when the referee's order is delivered.
+The code had always decided the gift from the attribution alone — nothing about
+orders appears in `openSides`, `claimableFor` or `claim` — but this package's own
+summary said the gift waited for "the referee's first fulfilled purchase". Six tests
+now pin the rule; five mutations, each adding or removing exactly the dependency the
+rule forbids, were run in a worktree and a database of their own. Every row killed.
+
+| #    | Rule                                                         | Mutation                                                                                        | Result | Named test                                                                                                                               |
+| ---- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| MG01 | eligibility is the accepted attribution, before any purchase | `claimableFor`: returns nothing until the customer's referees have a delivered purchase         | KILLED | `tests/integration/referral-signup-gift.test.ts` › creates the eligibility on the accepted attribution, before any purchase exists       |
+| MG02 | a claim pays with zero purchases on record                   | `claim`: a referral is skipped until its referrer's referees have a delivered purchase          | KILLED | `tests/integration/referral-signup-gift.test.ts` › pays both sides with zero purchases on record                                         |
+| MG03 | a later purchase reopens no side and creates no second gift  | `openSides`: a claimed side is offered again                                                    | KILLED | `tests/integration/referral-signup-gift.test.ts` › a later delivered purchase creates no second gift and reopens nothing                 |
+| MG04 | the purchase commission still waits for delivery             | `drizzle-referral.repository.ts` `dueFor`: any operation of the bought type counts as delivered | KILLED | `tests/integration/referral-signup-gift.test.ts` › the purchase commission still waits for delivery while the gift did not               |
+| MG05 | the gift and the commission are distinct ledger reasons      | the gift's append written under `REFERRAL_COMMISSION`                                           | KILLED | `tests/integration/referral-signup-gift.test.ts` › writes the gift and the commission as distinct ledger reasons, references and entries |
+
+Exactly-once under a replayed key and two concurrent taps with zero purchases is the
+sixth test of the group, _stays exactly once under a replayed key and two concurrent
+taps, with zero purchases_; the rule it pins is UX06's, whose mutation already kills.
+
+Two mutations were tried first and are declared rather than dropped:
+
+| #     | Rule                              | What was tried                                                                                                              | What holds it                                                                                                                                                                                                                                                                                                         |
+| ----- | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| MG03a | one gift row per referral         | `giftFor`: the pre-read of the existing row disabled, so the second side's claim inserts again; the named test stayed green | the insert is `ON CONFLICT DO NOTHING` against `referral_signup_gifts_referral_id` (unique) and the row is read back afterwards, so the second insert changes nothing. The pre-read stays: it is what takes the gift row's lock (`FOR UPDATE`) before the side's `claimed_at` is read, not a copy of the index's rule |
+| MG04a | the commission waits for delivery | `ReferralCommissionService.settle`: the `!answer.delivered` branch disabled; the named test stayed green                    | `dueFor` answers nothing at all while the order is paid and undelivered — the wait is in the query, and the branch decides only between EARNED and VOID once the order has ended one way or the other. MG04 mutates the query and kills                                                                               |

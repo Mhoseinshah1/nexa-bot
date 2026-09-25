@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  EMPTY_PRODUCT_DISPLAY,
   money,
   type ActorContext,
   type BotInstanceId,
@@ -97,6 +98,7 @@ describe('product categories — the admin service', () => {
         categoryId: categoryId as ProductCategoryId,
         specification: { durationDays: 30, trafficBytes: 1n, deviceLimit: null },
         price: money(100_000n, 'IRT'),
+        display: EMPTY_PRODUCT_DISPLAY,
       },
       now: ctx.container.clock.now(),
     });
@@ -492,6 +494,7 @@ describe('product categories — the admin service', () => {
       categoryId: categoryId as ProductCategoryId | null,
       specification: { durationDays: 30, trafficBytes: 1n, deviceLimit: null },
       price: money(100_000n, 'IRT'),
+      display: EMPTY_PRODUCT_DISPLAY,
     });
 
     it('confirms nothing in a category deactivated while the confirmation waited for it', async () => {

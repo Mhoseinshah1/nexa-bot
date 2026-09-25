@@ -33,6 +33,15 @@ const SENSITIVE_FRAGMENTS = [
   'signature',
   'cookie',
   'session',
+  /*
+   * Customer UX completion §A14. A subscription URL is a bearer capability — whoever
+   * holds it is the customer — and `subscription_ref` is the panel's half of it. Nothing
+   * legitimately writes either into a log, an audit row or an operational event (the
+   * rotation audit and its event carry the customer id and the delivery state only), so
+   * the key rule fails closed on the whole family rather than trusting every future
+   * call site to remember.
+   */
+  'subscription',
 ];
 
 const MAX_DEPTH = 12;
