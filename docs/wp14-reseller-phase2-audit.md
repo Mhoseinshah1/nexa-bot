@@ -1,6 +1,6 @@
 # WP14 — Reseller Phase 2: audit and design
 
-Status: audit written before any implementation. Branch `claude/wp14-reseller-phase2`,
+Status: audit written before any implementation; §7 records what was built and the evidence. Branch `claude/wp14-reseller-phase2`,
 from `origin/main` at `4e6fb39`. It does not depend on WP10G, WP11A, WP12 or WP13.
 
 The governing rule is the owner's: **no reseller debt, repayment, settlement, commission,
@@ -142,3 +142,46 @@ All of it is read-only except one confirmation in the Web Admin, which changes n
   - tenant isolation.
 - **Web:** the credit card; the confirmation before lowering a limit below debt; the
   per-key gating.
+
+## 7. What was built, and the evidence
+
+Implemented exactly as §4 describes. No state, ledger reason, permission, event, setting,
+template key or migration was added.
+
+| Piece                              | Where                                                                                                                                               |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| R8 stated once                     | `resellers/domain/reseller-credit.ts` (`creditAllowanceOf`, `creditStateOf`, `effectiveLimitOf`, `creditFigures`)                                   |
+| Settlement uses it                 | `ResellerService.creditAllowance`; `toResellerSummary`'s effective limit now uses `effectiveLimitOf` too                                            |
+| D1–D3 reads                        | `ResellerAdminService.creditStanding`, `.purchases`, `.history`, `.tierHistory`; `ResellersController`                                              |
+| Purchase snapshot page             | `DrizzleResellerRepository.listPurchases` — keyset on `(created_at, order_id)`, joined on the terms' own composite foreign key, no margin           |
+| Audit reader (reusable, e.g. WP16) | `platform/audit/application/ports.ts` (`AuditHistoryReader`, `AUDIT_VIEW_PERMISSION`) and `drizzle-audit-history.reader.ts`                         |
+| Web Admin                          | `pages/reseller-standing.tsx` (three cards), `debtWarningOf` and the acknowledgement in `pages/resellers.tsx`, tier history in `reseller-tiers.tsx` |
+
+Tests:
+
+- `tests/unit/reseller-credit.test.ts` (11): the allowance over status, own/tier limit,
+  zero and currency, and the derivations, including `canCover` at the frontier.
+- `tests/integration/reseller-phase2-http.test.ts` (12): credit drawn by a real
+  `settleFromWallet`; the view's available-to-spend passes settlement and one unit more is
+  refused with `shortfallMinor: '1'`; a lowered limit; a suspension; `NO_LIMIT` and
+  `CURRENCY_MISMATCH`; the snapshot surviving a tier re-price and rename, without the
+  margin; keyset paging and a refused foreign cursor; the exact reseller and tier history,
+  a DENIED attempt included, a wallet audit row on the same customer excluded, no IP or
+  user agent; the 50-row bound; the permission split key by key; tenant isolation and
+  404s.
+- `tests/integration/route-registration.test.ts`: the four new routes.
+- `tests/web/reseller-standing.test.tsx` (12): the cards, per-key gating (no request
+  without the key), both acknowledgements and their reset on any further change, the
+  unchanged body, `debtWarningOf` and `changedFieldsOf`.
+
+Mutations, each reverted after the run (one rule at a time):
+
+| Mutation                                                      | Failed                                                                                                                                                                           |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `creditStateOf` without the `status !== 'ACTIVE'` line        | 2 unit cases; integration "keeps a suspended reseller's debt and applies no credit to it"                                                                                        |
+| `creditStateOf` without the currency line                     | 1 unit case; the EXISTING settlement case "grants nothing for a purchase in a currency other than the limit's" (`resellers.test.ts`), which shows settlement reads this function |
+| The save button without `(warning !== null && !acknowledged)` | 3 web cases (both acknowledgements, and the reset)                                                                                                                               |
+
+Still open, unchanged by this package: `OQ-WP9-04` (settlement, repayment, ageing,
+collection) and `OQ-WP9-05` (reseller prices in the catalogue list), the membership fee
+and monthly floor, and profit or commission reporting.
