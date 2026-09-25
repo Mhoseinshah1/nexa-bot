@@ -334,7 +334,33 @@ What was built, where it differs in detail from §5, and why.
   with the current time, or the migrator's watermark will skip it
   (`nexa-migrations` skill).
 
-### 7.4 Targeted tests
+### 7.4 Deferred: the successful-payment admin notification
+
+The owner asked for an admin message on each TonPays success (order and wallet top-up),
+emitted only after the inquiry confirmed `completed` + `paid === true` and the payment
+settled, and only if a shared admin payment notification mechanism already exists. The
+audit found none:
+
+- **The operator lane** (`notifications`, ADR-0018) has three kinds: `OPERATIONAL_EVENT`,
+  `OPERATIONS_TEST` and `RECEIPT_AWAITING_REVIEW`, whose producer the WP10 follow-up
+  retired. `OPERATIONAL_EVENT` projects severity-routed operational CONDITIONS to
+  `ops.notifications.telegram_chat_id`. A settled payment is the product working, and the
+  codebase refuses to record that as an operator condition (`PaymentExpiryService`).
+- **The receipt push lane** (`receipt_review_pushes`, ADR-0031) pushes a card-to-card
+  receipt to its reviewers, keyed by the receipt. It is not a success log.
+- **Nothing consumes `PaymentConfirmed` or `OrderSettled`.** The outbox's only consumers
+  are the ping log and the receipt push fan-out. No rail — manual approval, wallet payment
+  or gateway — tells an administrator about a successful payment today.
+
+So, per the owner's instruction, nothing was built. Deferred: TonPays successful-payment
+admin notification/log — no suitable existing shared notification mechanism was found;
+intentionally not implemented in WP11A. When a later package builds a shared one, the
+natural hook is an outbox consumer on `PaymentConfirmed` whose payment has method
+`GATEWAY` and evidence `GATEWAY_INQUIRY`. It would be written in the settling transaction,
+so it is exactly-once by `processed_messages` and never webhook-driven, and it would read
+the provider's `final_amount` from `gateway_invoices` for display only.
+
+### 7.5 Targeted tests
 
 - `tests/unit/tonpays-adapter.test.ts` — request shape and headers, key never in any
   outcome, link preference and https-only links, outcome classes, every status's verdict,
