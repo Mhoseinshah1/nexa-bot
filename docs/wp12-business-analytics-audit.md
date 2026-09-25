@@ -24,19 +24,19 @@ with the query each one serves.
 
 ### 1.1 Orders — `orders` (`schema.ts`, `commerce.ts`)
 
-| Fact | Column | Notes |
-|---|---|---|
-| Tenant | `tenant_id` | Every query's first predicate. |
-| State | `state` ∈ `ORDER_STATES` = DRAFT, AWAITING_PAYMENT, PAID, CANCELLED, EXPIRED, REFUNDED | `ORDER_SETTLED_STATES` = PAID, REFUNDED. `orders_settled_at_check` pins `settled_at IS NOT NULL` ⇔ settled. |
-| When the money arrived | `settled_at` | The timestamp basis for every sale (`PAID_AT`). |
-| When it was given back | `refunded_at` | Non-null exactly on REFUNDED (`orders_refunded_at_check`). |
-| Commercial operation | `purpose` ∈ NEW_SERVICE, RENEW, ADD_TRAFFIC, ADD_TIME, TRIAL | Structured and CHECK-pinned. It is never inferred from a label. |
-| Gross, discount, final | `subtotal_amount`, `discount_amount`, `total_amount`, `currency` | `orders_total_consistent_check`: `total = subtotal − discount`. `orders_discount_bounded_check`. bigint minor units. |
-| Product snapshot | `line_title`, `line_duration_days`, `line_traffic_bytes`, `line_quantity`, `line_unit_price_amount` | Immutable after confirmation (`nexa_orders_snapshot_guard`). `product_id` is "navigation only" — the docblock says so. |
-| Category snapshot | `line_category_id`, `line_category_name`, `line_category_emoji` | NULL means UNKNOWN (pre-WP5 orders), never "uncategorised". |
-| Trial is free | `orders_trial_is_free_check` | `purpose = 'TRIAL'` implies `total_amount = 0`. |
-| Discount code | `discount_code` | Normalised upper case, or null. |
-| Panel | `panel_id` | Navigation, set when the order is created. |
+| Fact                   | Column                                                                                              | Notes                                                                                                                  |
+| ---------------------- | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Tenant                 | `tenant_id`                                                                                         | Every query's first predicate.                                                                                         |
+| State                  | `state` ∈ `ORDER_STATES` = DRAFT, AWAITING_PAYMENT, PAID, CANCELLED, EXPIRED, REFUNDED              | `ORDER_SETTLED_STATES` = PAID, REFUNDED. `orders_settled_at_check` pins `settled_at IS NOT NULL` ⇔ settled.            |
+| When the money arrived | `settled_at`                                                                                        | The timestamp basis for every sale (`PAID_AT`).                                                                        |
+| When it was given back | `refunded_at`                                                                                       | Non-null exactly on REFUNDED (`orders_refunded_at_check`).                                                             |
+| Commercial operation   | `purpose` ∈ NEW_SERVICE, RENEW, ADD_TRAFFIC, ADD_TIME, TRIAL                                        | Structured and CHECK-pinned. It is never inferred from a label.                                                        |
+| Gross, discount, final | `subtotal_amount`, `discount_amount`, `total_amount`, `currency`                                    | `orders_total_consistent_check`: `total = subtotal − discount`. `orders_discount_bounded_check`. bigint minor units.   |
+| Product snapshot       | `line_title`, `line_duration_days`, `line_traffic_bytes`, `line_quantity`, `line_unit_price_amount` | Immutable after confirmation (`nexa_orders_snapshot_guard`). `product_id` is "navigation only" — the docblock says so. |
+| Category snapshot      | `line_category_id`, `line_category_name`, `line_category_emoji`                                     | NULL means UNKNOWN (pre-WP5 orders), never "uncategorised".                                                            |
+| Trial is free          | `orders_trial_is_free_check`                                                                        | `purpose = 'TRIAL'` implies `total_amount = 0`.                                                                        |
+| Discount code          | `discount_code`                                                                                     | Normalised upper case, or null.                                                                                        |
+| Panel                  | `panel_id`                                                                                          | Navigation, set when the order is created.                                                                             |
 
 A **partial refund** leaves the order PAID (`RefundService.completed`: the order moves
 `PAID → REFUNDED` only when the COMPLETED refunds cover the whole payment). The
@@ -44,17 +44,17 @@ A **partial refund** leaves the order PAID (`RefundService.completed`: the order
 
 ### 1.2 Payments — `payments` (`payment.ts`)
 
-| Fact | Column |
-|---|---|
-| Attempt state | `state` ∈ PENDING, CONFIRMED, FAILED, CANCELLED, EXPIRED, UNKNOWN |
-| Terminal with money | CONFIRMED |
-| Terminal without money | `PAYMENT_RESOLVED_STATES` = FAILED, CANCELLED, EXPIRED |
-| Undecided | PENDING (open) and UNKNOWN (terminal until reconciled, never retried) |
-| Method | `method` ∈ `PAYMENT_METHODS` = WALLET, MANUAL_TRANSFER, GATEWAY |
-| Route/provider | `gateway_provider` (nullable text snapshot, frozen by `nexa_payments_confirmation_guard`) |
-| Order payment vs top-up | `order_id` (NULL = wallet top-up) |
-| Timestamps | `created_at`, `confirmed_at`, `resolved_at` |
-| One sale per order | `payments_order_confirmed_key`: at most ONE CONFIRMED payment per order |
+| Fact                    | Column                                                                                    |
+| ----------------------- | ----------------------------------------------------------------------------------------- |
+| Attempt state           | `state` ∈ PENDING, CONFIRMED, FAILED, CANCELLED, EXPIRED, UNKNOWN                         |
+| Terminal with money     | CONFIRMED                                                                                 |
+| Terminal without money  | `PAYMENT_RESOLVED_STATES` = FAILED, CANCELLED, EXPIRED                                    |
+| Undecided               | PENDING (open) and UNKNOWN (terminal until reconciled, never retried)                     |
+| Method                  | `method` ∈ `PAYMENT_METHODS` = WALLET, MANUAL_TRANSFER, GATEWAY                           |
+| Route/provider          | `gateway_provider` (nullable text snapshot, frozen by `nexa_payments_confirmation_guard`) |
+| Order payment vs top-up | `order_id` (NULL = wallet top-up)                                                         |
+| Timestamps              | `created_at`, `confirmed_at`, `resolved_at`                                               |
+| One sale per order      | `payments_order_confirmed_key`: at most ONE CONFIRMED payment per order                   |
 
 `gateway_provider` is generic text. On `main` it holds `MANUAL_TRANSFER` or NULL. When
 WP11A merges, a TonPays payment carries its own provider value and appears in the
@@ -67,19 +67,19 @@ Append-only. `direction` is CREDIT or DEBIT, `amount > 0`, and `reason` ∈
 there is no balance column. Every WP12 wallet figure is grouped by `reason`, never by
 the free-text `note`.
 
-| Group (WP12) | Reasons | Direction |
-|---|---|---|
-| Customer-funded top-up | TOPUP_GATEWAY, TOPUP_RECEIPT, TOPUP_STARS, TOPUP_CRYPTO | CREDIT |
-| Receipt credited to wallet | RECEIPT_CREDIT (a reviewer crediting a card-to-card receipt; customer money, but not a top-up the customer asked for) | CREDIT |
-| Cashback | CASHBACK_GATEWAY, CASHBACK_TOPUP, CASHBACK_RENEWAL, CASHBACK_PURCHASE | CREDIT |
-| Cashback reversal | CASHBACK_REVERSAL | DEBIT |
-| Gifts | REFERRAL_SIGNUP_GIFT, START_GIFT, LOTTERY_WIN, LUCK_WHEEL_WIN | CREDIT |
-| Referral commission | REFERRAL_COMMISSION | CREDIT |
-| Referral commission reversal | REFERRAL_COMMISSION_REVERSAL | DEBIT |
-| Wallet spending | PURCHASE | DEBIT |
-| Refund to wallet | REFUND, PURCHASE_REVERSAL | CREDIT |
-| Administrative | ADMIN_CREDIT, ADMIN_DEBIT, MASS_CREDIT, MASS_DEBIT, CORRECTION | either |
-| Other | RESELLER_SETTLEMENT, RESELLER_MEMBERSHIP_FEE, CHARGEBACK, OTHER | either |
+| Group (WP12)                 | Reasons                                                                                                               | Direction |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------- | --------- |
+| Customer-funded top-up       | TOPUP_GATEWAY, TOPUP_RECEIPT, TOPUP_STARS, TOPUP_CRYPTO                                                               | CREDIT    |
+| Receipt credited to wallet   | RECEIPT_CREDIT (a reviewer crediting a card-to-card receipt; customer money, but not a top-up the customer asked for) | CREDIT    |
+| Cashback                     | CASHBACK_GATEWAY, CASHBACK_TOPUP, CASHBACK_RENEWAL, CASHBACK_PURCHASE                                                 | CREDIT    |
+| Cashback reversal            | CASHBACK_REVERSAL                                                                                                     | DEBIT     |
+| Gifts                        | REFERRAL_SIGNUP_GIFT, START_GIFT, LOTTERY_WIN, LUCK_WHEEL_WIN                                                         | CREDIT    |
+| Referral commission          | REFERRAL_COMMISSION                                                                                                   | CREDIT    |
+| Referral commission reversal | REFERRAL_COMMISSION_REVERSAL                                                                                          | DEBIT     |
+| Wallet spending              | PURCHASE                                                                                                              | DEBIT     |
+| Refund to wallet             | REFUND, PURCHASE_REVERSAL                                                                                             | CREDIT    |
+| Administrative               | ADMIN_CREDIT, ADMIN_DEBIT, MASS_CREDIT, MASS_DEBIT, CORRECTION                                                        | either    |
+| Other                        | RESELLER_SETTLEMENT, RESELLER_MEMBERSHIP_FEE, CHARGEBACK, OTHER                                                       | either    |
 
 The report returns the per-reason rows, and the groups above are a pure function of
 the reason code, declared once in the reporting domain.
@@ -125,12 +125,12 @@ order or the service.
 
 ### 1.9 Referrals
 
-| Table | What it records |
-|---|---|
-| `referrals` | One attribution per referee, made at registration and never changed. `created_at` = signup. `trigger` = policy snapshot. |
-| `referral_signup_gifts` | The membership gift: `referrer_amount`, `referee_amount`, and entry ids once claimed. |
-| `order_referral_commissions` | PENDING, then EARNED (`earned_amount`, `earned_at`) or VOID. |
-| `wallet_entries` | REFERRAL_SIGNUP_GIFT, REFERRAL_COMMISSION, REFERRAL_COMMISSION_REVERSAL: the money actually moved. |
+| Table                        | What it records                                                                                                          |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `referrals`                  | One attribution per referee, made at registration and never changed. `created_at` = signup. `trigger` = policy snapshot. |
+| `referral_signup_gifts`      | The membership gift: `referrer_amount`, `referee_amount`, and entry ids once claimed.                                    |
+| `order_referral_commissions` | PENDING, then EARNED (`earned_amount`, `earned_at`) or VOID.                                                             |
+| `wallet_entries`             | REFERRAL_SIGNUP_GIFT, REFERRAL_COMMISSION, REFERRAL_COMMISSION_REVERSAL: the money actually moved.                       |
 
 WP12 reads **money granted** from the ledger, the one place money moves, and reads
 attribution from `referrals`.
@@ -236,15 +236,15 @@ and the database's and the browser's zones play no part. Jalali only changes whe
 MONTH or YEAR begins and how a label is written; the Jalali label is presentation over
 the same instant.
 
-| Range | Current `[start, end)` | Previous (nominal) |
-|---|---|---|
-| TODAY | local midnight today → next local midnight | yesterday |
-| YESTERDAY | yesterday | the day before |
-| LAST_7_DAYS | 6 days before today → tomorrow (7 local days, today included) | the 7 days before |
-| LAST_30_DAYS | as above, 30 days | the 30 days before |
-| THIS_MONTH | first day of this calendar month → first day of next | the previous calendar month |
-| PREVIOUS_MONTH | the previous calendar month | the month before it |
-| THIS_YEAR | first day of this calendar year → first day of next | the previous calendar year |
+| Range             | Current `[start, end)`                                                                                          | Previous (nominal)                         |
+| ----------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| TODAY             | local midnight today → next local midnight                                                                      | yesterday                                  |
+| YESTERDAY         | yesterday                                                                                                       | the day before                             |
+| LAST_7_DAYS       | 6 days before today → tomorrow (7 local days, today included)                                                   | the 7 days before                          |
+| LAST_30_DAYS      | as above, 30 days                                                                                               | the 30 days before                         |
+| THIS_MONTH        | first day of this calendar month → first day of next                                                            | the previous calendar month                |
+| PREVIOUS_MONTH    | the previous calendar month                                                                                     | the month before it                        |
+| THIS_YEAR         | first day of this calendar year → first day of next                                                             | the previous calendar year                 |
 | CUSTOM `from..to` | local midnight of `from` → local midnight after `to` (dates in the TENANT's calendar, inclusive, 1 to 731 days) | the same number of days immediately before |
 
 "Calendar month" and "calendar year" are in the tenant's calendar: Mehr 1405, not
@@ -254,7 +254,7 @@ September.
 of the range: a day, N days, a calendar month or a calendar year.
 
 **Comparisons (KPI cards) compare like with like.** When the current period contains
-*now*, its figures run to *now* and the previous period's run for the same elapsed
+_now_, its figures run to _now_ and the previous period's run for the same elapsed
 duration from its own start. So "today so far" is compared with "yesterday up to the
 same time", and "this month so far" with "last month's first N days to the same hour".
 When the current period is wholly past, both full periods are compared. For
@@ -266,16 +266,16 @@ for it.
 D = 1 → hourly; D ≤ 31 → daily; D ≤ 186 (6 × 31) → weekly; otherwise monthly. TODAY and
 YESTERDAY are hourly, the month presets daily and THIS_YEAR monthly.
 
-**Bucket alignment.** Bucket *i* of the current period is compared with bucket *i* of
+**Bucket alignment.** Bucket _i_ of the current period is compared with bucket _i_ of
 the previous period:
 
-- hour *i* of the day;
-- day *i* of the span (day *i* of the month for the month presets);
-- the *i*-th 7-day block from the period start (the last block may be short);
-- the *i*-th calendar month.
+- hour _i_ of the day;
+- day _i_ of the span (day _i_ of the month for the month presets);
+- the _i_-th 7-day block from the period start (the last block may be short);
+- the _i_-th calendar month.
 
 Each series carries its own labels and bucket ranges, so the tooltip names both. A
-current bucket that starts after *now* is `null` (future), never `0`. The chart draws
+current bucket that starts after _now_ is `null` (future), never `0`. The chart draws
 the whole previous series.
 
 **Percentages.** The server returns both raw values and never a ratio of zero. The UI
@@ -295,20 +295,20 @@ A movement is never coloured good or bad.
 "Commercial purposes" means NEW_SERVICE, RENEW, ADD_TRAFFIC and ADD_TIME. It is
 `ORDER_PURPOSES` minus TRIAL, decided by an exhaustive classifier.
 
-| # | Metric (registry name) | Classification | Derivation | Basis |
-|---|---|---|---|---|
-| 1 | Sales count `sales.count` | SUPPORTED_WITH_DEFINED_DERIVATION | `count(*)` of orders with `state='PAID'`, `purpose ∈ commercial`, `settled_at ∈ period` | PAID_AT |
-| 2 | Revenue `sales.revenue` | SUPPORTED_WITH_DEFINED_DERIVATION | `sum(total_amount)` over the same rows, grouped by `currency` | PAID_AT |
-| 3 | Successful orders `orders.successful` | SUPPORTED_WITH_DEFINED_DERIVATION | `count(*)` of `state='PAID'` orders of ANY purpose, `settled_at ∈ period`: sales plus trials granted | PAID_AT |
-| 4 | New users `customers.new` | SUPPORTED_EXACTLY | `count(*)` of customers with `created_at ∈ period` | CREATED_AT |
-| 5 | New services `services.new` | SUPPORTED_WITH_DEFINED_DERIVATION | `count(*)` of services with `provisioned_at ∈ period`, split by the creating order's purpose (NEW_SERVICE, TRIAL) | COMPLETED_AT |
-| 6 | Renewals `sales.renewals` | SUPPORTED_EXACTLY | as #1, with `purpose='RENEW'` | PAID_AT |
-| 7 | Wallet top-up `wallet.topup` | SUPPORTED_EXACTLY | `sum(amount)` and `count(*)` of CREDIT entries with reason ∈ TOPUP_*, `created_at ∈ period`, by currency | OCCURRED_AT |
-| 8 | Active services now `services.active` | SUPPORTED_EXACTLY | `count(*)` of services with `state='ACTIVE'`, now (a gauge, with no comparison) | — |
-| 9 | Active customers now `customers.active` | SUPPORTED_WITH_DEFINED_DERIVATION | distinct customers with an ACTIVE service OR a PAID commercial order with `settled_at ∈ [now−30 d, now)` (§4.5 of the spec). A top-up alone does not qualify. | — |
-| 10 | New buyers `customers.new_buyers` | SUPPORTED_WITH_DEFINED_DERIVATION | customers whose EARLIEST PAID commercial order has `settled_at ∈ period` | PAID_AT |
-| 11 | Gross order value `sales.gross` | SUPPORTED_EXACTLY | `sum(subtotal_amount)` over #1's rows | PAID_AT |
-| 12 | Discount granted `sales.discount` | SUPPORTED_EXACTLY | `sum(discount_amount)` over #1's rows | PAID_AT |
+| #   | Metric (registry name)                  | Classification                    | Derivation                                                                                                                                                    | Basis        |
+| --- | --------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| 1   | Sales count `sales.count`               | SUPPORTED_WITH_DEFINED_DERIVATION | `count(*)` of orders with `state='PAID'`, `purpose ∈ commercial`, `settled_at ∈ period`                                                                       | PAID_AT      |
+| 2   | Revenue `sales.revenue`                 | SUPPORTED_WITH_DEFINED_DERIVATION | `sum(total_amount)` over the same rows, grouped by `currency`                                                                                                 | PAID_AT      |
+| 3   | Successful orders `orders.successful`   | SUPPORTED_WITH_DEFINED_DERIVATION | `count(*)` of `state='PAID'` orders of ANY purpose, `settled_at ∈ period`: sales plus trials granted                                                          | PAID_AT      |
+| 4   | New users `customers.new`               | SUPPORTED_EXACTLY                 | `count(*)` of customers with `created_at ∈ period`                                                                                                            | CREATED_AT   |
+| 5   | New services `services.new`             | SUPPORTED_WITH_DEFINED_DERIVATION | `count(*)` of services with `provisioned_at ∈ period`, split by the creating order's purpose (NEW_SERVICE, TRIAL)                                             | COMPLETED_AT |
+| 6   | Renewals `sales.renewals`               | SUPPORTED_EXACTLY                 | as #1, with `purpose='RENEW'`                                                                                                                                 | PAID_AT      |
+| 7   | Wallet top-up `wallet.topup`            | SUPPORTED_EXACTLY                 | `sum(amount)` and `count(*)` of CREDIT entries with reason ∈ TOPUP_*, `created_at ∈ period`, by currency                                                      | OCCURRED_AT  |
+| 8   | Active services now `services.active`   | SUPPORTED_EXACTLY                 | `count(*)` of services with `state='ACTIVE'`, now (a gauge, with no comparison)                                                                               | —            |
+| 9   | Active customers now `customers.active` | SUPPORTED_WITH_DEFINED_DERIVATION | distinct customers with an ACTIVE service OR a PAID commercial order with `settled_at ∈ [now−30 d, now)` (§4.5 of the spec). A top-up alone does not qualify. | —            |
+| 10  | New buyers `customers.new_buyers`       | SUPPORTED_WITH_DEFINED_DERIVATION | customers whose EARLIEST PAID commercial order has `settled_at ∈ period`                                                                                      | PAID_AT      |
+| 11  | Gross order value `sales.gross`         | SUPPORTED_EXACTLY                 | `sum(subtotal_amount)` over #1's rows                                                                                                                         | PAID_AT      |
+| 12  | Discount granted `sales.discount`       | SUPPORTED_EXACTLY                 | `sum(discount_amount)` over #1's rows                                                                                                                         | PAID_AT      |
 
 **Revenue rules**
 
@@ -344,7 +344,7 @@ Group PAID NEW_SERVICE and RENEW orders settled in the period by
 `sum(line_quantity)`. The ranking label is the SNAPSHOT `line_title`. A product renamed
 after a sale therefore appears under the name it was sold as, and new sales appear
 under the new name, as a separate row. The current product row is read for ONE fact
-only, its current `status`, shown as a lifecycle badge (ACTIVE, INACTIVE or ARCHIVED).
+only, its current `status`, shown as a lifecycle badge (ACTIVE or INACTIVE — `PRODUCT_STATUSES` has no third).
 Products cannot be deleted while orders reference them (`orders_product_fk`), so a
 historical row always has a product to link to. The snapshot category name is shown
 beside the title. Add-on purchases (ADD_TRAFFIC, ADD_TIME) are not products and are
@@ -352,25 +352,25 @@ reported under Services. Top 10 by count and top 10 by revenue; "View all" is pa
 
 ### 5.2 Services (§10)
 
-| Metric | Classification | Derivation |
-|---|---|---|
-| New services | SUPPORTED_WITH_DEFINED_DERIVATION | #5 above |
-| Currently active | SUPPORTED_EXACTLY | `state='ACTIVE'` |
-| Current state distribution | SUPPORTED_EXACTLY | `count(*)` by `state`, now |
-| Renewals / extra traffic / extra time | SUPPORTED_EXACTLY | PAID orders by `purpose`, settled in the period: count and revenue |
-| Traffic sold | SUPPORTED_WITH_DEFINED_DERIVATION | `sum(line_traffic_bytes × line_quantity)` over PAID NEW_SERVICE, RENEW and ADD_TRAFFIC orders settled in the period, EXCLUDING `line_traffic_bytes = 0`, which is `UNLIMITED_TRAFFIC_BYTES`. Unlimited lines are counted separately rather than added as zero. |
-| Expired/inactive | SUPPORTED_EXACTLY | the EXPIRED, SUSPENDED and TERMINATED counts in the current distribution |
+| Metric                                | Classification                    | Derivation                                                                                                                                                                                                                                                     |
+| ------------------------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| New services                          | SUPPORTED_WITH_DEFINED_DERIVATION | #5 above                                                                                                                                                                                                                                                       |
+| Currently active                      | SUPPORTED_EXACTLY                 | `state='ACTIVE'`                                                                                                                                                                                                                                               |
+| Current state distribution            | SUPPORTED_EXACTLY                 | `count(*)` by `state`, now                                                                                                                                                                                                                                     |
+| Renewals / extra traffic / extra time | SUPPORTED_EXACTLY                 | PAID orders by `purpose`, settled in the period: count and revenue                                                                                                                                                                                             |
+| Traffic sold                          | SUPPORTED_WITH_DEFINED_DERIVATION | `sum(line_traffic_bytes × line_quantity)` over PAID NEW_SERVICE, RENEW and ADD_TRAFFIC orders settled in the period, EXCLUDING `line_traffic_bytes = 0`, which is `UNLIMITED_TRAFFIC_BYTES`. Unlimited lines are counted separately rather than added as zero. |
+| Expired/inactive                      | SUPPORTED_EXACTLY                 | the EXPIRED, SUSPENDED and TERMINATED counts in the current distribution                                                                                                                                                                                       |
 
 ### 5.3 Provider / panel / location (§11) — no revenue
 
-| Metric | Classification | Derivation |
-|---|---|---|
-| Services created, by panel | SUPPORTED_WITH_DEFINED_DERIVATION | services with `provisioned_at ∈ period`, grouped by `services.panel_id` |
-| Active services, by panel | SUPPORTED_EXACTLY | `state='ACTIVE'` grouped by `panel_id` |
-| Traffic sold, by panel | SUPPORTED_WITH_DEFINED_DERIVATION | §5.2's traffic rule grouped by `orders.panel_id`. Bytes only, never money. |
-| Provisioning failures, by panel | SUPPORTED_WITH_DEFINED_DERIVATION | `provisioning_operations` with `type='PROVISION'`, `state ∈ {FAILED, ABANDONED}`, `completed_at ∈ period` |
-| By provider | SUPPORTED_WITH_DEFINED_DERIVATION | the panel rows rolled up by `panels.provider_type`; one service has one panel, so there is no double count |
-| **By location** | **NOT_SUPPORTED_BY_CURRENT_DATA** | Location is marketing text on the CURRENT product, not snapshotted, and a product may list several. Attributing a service to a location would either rewrite history from today's catalogue or count one service more than once. Omitted, and the UI says why. |
+| Metric                          | Classification                    | Derivation                                                                                                                                                                                                                                                     |
+| ------------------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Services created, by panel      | SUPPORTED_WITH_DEFINED_DERIVATION | services with `provisioned_at ∈ period`, grouped by `services.panel_id`                                                                                                                                                                                        |
+| Active services, by panel       | SUPPORTED_EXACTLY                 | `state='ACTIVE'` grouped by `panel_id`                                                                                                                                                                                                                         |
+| Traffic sold, by panel          | SUPPORTED_WITH_DEFINED_DERIVATION | §5.2's traffic rule grouped by `orders.panel_id`. Bytes only, never money.                                                                                                                                                                                     |
+| Provisioning failures, by panel | SUPPORTED_WITH_DEFINED_DERIVATION | `provisioning_operations` with `type='PROVISION'`, `state ∈ {FAILED, ABANDONED}`, `completed_at ∈ period`                                                                                                                                                      |
+| By provider                     | SUPPORTED_WITH_DEFINED_DERIVATION | the panel rows rolled up by `panels.provider_type`; one service has one panel, so there is no double count                                                                                                                                                     |
+| **By location**                 | **NOT_SUPPORTED_BY_CURRENT_DATA** | Location is marketing text on the CURRENT product, not snapshotted, and a product may list several. Attributing a service to a location would either rewrite history from today's catalogue or count one service more than once. Omitted, and the UI says why. |
 
 There is no money anywhere in this section. That is the spec's §28 and the dashboard's
 "Revision 2".
@@ -380,66 +380,66 @@ There is no money anywhere in this section. That is the spec's §28 and the dash
 A cohort of payment attempts **created** in the period, grouped by
 `(method, gateway_provider, kind)`, where kind is ORDER (`order_id` not null) or TOPUP:
 
-| Metric | Classification | Derivation |
-|---|---|---|
-| Attempts | SUPPORTED_EXACTLY | `count(*)` |
-| Successful | SUPPORTED_EXACTLY | `state='CONFIRMED'` |
-| Failed terminal | SUPPORTED_WITH_DEFINED_DERIVATION | `state ∈ PAYMENT_RESOLVED_STATES` (FAILED, CANCELLED, EXPIRED), each shown separately as well |
-| Pending / undecided | SUPPORTED_EXACTLY | PENDING and UNKNOWN, shown separately |
-| Success rate | SUPPORTED_WITH_DEFINED_DERIVATION | `successful / (successful + failed terminal)`, where failed terminal = FAILED + CANCELLED + EXPIRED. PENDING and UNKNOWN are in neither term. Null when the denominator is zero. |
-| Successful amount | SUPPORTED_EXACTLY | `sum(amount)` of CONFIRMED rows, by currency |
+| Metric              | Classification                    | Derivation                                                                                                                                                                       |
+| ------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Attempts            | SUPPORTED_EXACTLY                 | `count(*)`                                                                                                                                                                       |
+| Successful          | SUPPORTED_EXACTLY                 | `state='CONFIRMED'`                                                                                                                                                              |
+| Failed terminal     | SUPPORTED_WITH_DEFINED_DERIVATION | `state ∈ PAYMENT_RESOLVED_STATES` (FAILED, CANCELLED, EXPIRED), each shown separately as well                                                                                    |
+| Pending / undecided | SUPPORTED_EXACTLY                 | PENDING and UNKNOWN, shown separately                                                                                                                                            |
+| Success rate        | SUPPORTED_WITH_DEFINED_DERIVATION | `successful / (successful + failed terminal)`, where failed terminal = FAILED + CANCELLED + EXPIRED. PENDING and UNKNOWN are in neither term. Null when the denominator is zero. |
+| Successful amount   | SUPPORTED_EXACTLY                 | `sum(amount)` of CONFIRMED rows, by currency                                                                                                                                     |
 
 WALLET payments appear as their own method. The route name is the raw
 `gateway_provider` code, with no provider-specific branch.
 
 ### 5.5 Wallet (§13)
 
-| Metric | Classification | Derivation |
-|---|---|---|
-| Customer-funded top-up amount and count | SUPPORTED_EXACTLY | TOPUP_* credits, `created_at ∈ period` |
-| Receipt credited to wallet | SUPPORTED_EXACTLY | RECEIPT_CREDIT credits (shown separately, not merged into top-up) |
-| Cashback / gift amount | SUPPORTED_EXACTLY | the groups in §1.3 |
-| Wallet spending | SUPPORTED_EXACTLY | PURCHASE debits |
-| Aggregate balance | SUPPORTED_WITH_DEFINED_DERIVATION | Σ signed amount of every entry up to now, by currency — the same `signedMinor` rule. This is the stored-value liability; it can include a reseller's negative balance. |
-| Per-reason detail | SUPPORTED_EXACTLY | every (reason, direction) row with count and amount |
+| Metric                                  | Classification                    | Derivation                                                                                                                                                             |
+| --------------------------------------- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Customer-funded top-up amount and count | SUPPORTED_EXACTLY                 | TOPUP_* credits, `created_at ∈ period`                                                                                                                                 |
+| Receipt credited to wallet              | SUPPORTED_EXACTLY                 | RECEIPT_CREDIT credits (shown separately, not merged into top-up)                                                                                                      |
+| Cashback / gift amount                  | SUPPORTED_EXACTLY                 | the groups in §1.3                                                                                                                                                     |
+| Wallet spending                         | SUPPORTED_EXACTLY                 | PURCHASE debits                                                                                                                                                        |
+| Aggregate balance                       | SUPPORTED_WITH_DEFINED_DERIVATION | Σ signed amount of every entry up to now, by currency — the same `signedMinor` rule. This is the stored-value liability; it can include a reseller's negative balance. |
+| Per-reason detail                       | SUPPORTED_EXACTLY                 | every (reason, direction) row with count and amount                                                                                                                    |
 
 ### 5.6 Referral (§14)
 
-| Metric | Classification | Derivation |
-|---|---|---|
-| Referral signups | SUPPORTED_EXACTLY | `referrals.created_at ∈ period` |
-| Converted buyers | SUPPORTED_WITH_DEFINED_DERIVATION | a cohort: referees attributed in the period who have ≥ 1 PAID commercial order, at any time up to now |
-| Conversion rate | SUPPORTED_WITH_DEFINED_DERIVATION | converted ÷ signups of the same cohort; null when there are no signups |
-| Signup / membership gifts | SUPPORTED_EXACTLY | REFERRAL_SIGNUP_GIFT credits in the period (amount and count, both parties) |
-| Purchase commissions granted | SUPPORTED_EXACTLY | REFERRAL_COMMISSION credits in the period; reversals are shown separately |
-| Revenue from referred customers | SUPPORTED_WITH_DEFINED_DERIVATION | §4 revenue restricted to customers who are a `referrals.referee_id` |
-| Top referrers | SUPPORTED_WITH_DEFINED_DERIVATION | per referrer: signups in the period, converted buyers from those signups, referred revenue in the period, commission credited in the period. Ranked by the chosen field; top 10 plus a paged view. |
+| Metric                          | Classification                    | Derivation                                                                                                                                                                                         |
+| ------------------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Referral signups                | SUPPORTED_EXACTLY                 | `referrals.created_at ∈ period`                                                                                                                                                                    |
+| Converted buyers                | SUPPORTED_WITH_DEFINED_DERIVATION | a cohort: referees attributed in the period who have ≥ 1 PAID commercial order, at any time up to now                                                                                              |
+| Conversion rate                 | SUPPORTED_WITH_DEFINED_DERIVATION | converted ÷ signups of the same cohort; null when there are no signups                                                                                                                             |
+| Signup / membership gifts       | SUPPORTED_EXACTLY                 | REFERRAL_SIGNUP_GIFT credits in the period (amount and count, both parties)                                                                                                                        |
+| Purchase commissions granted    | SUPPORTED_EXACTLY                 | REFERRAL_COMMISSION credits in the period; reversals are shown separately                                                                                                                          |
+| Revenue from referred customers | SUPPORTED_WITH_DEFINED_DERIVATION | §4 revenue restricted to customers who are a `referrals.referee_id`                                                                                                                                |
+| Top referrers                   | SUPPORTED_WITH_DEFINED_DERIVATION | per referrer: signups in the period, converted buyers from those signups, referred revenue in the period, commission credited in the period. Ranked by the chosen field; top 10 plus a paged view. |
 
 Referral rewards are not revenue: every reward figure comes from the ledger, and revenue
 comes from orders only.
 
 ### 5.7 Reseller (§15)
 
-| Metric | Classification | Derivation |
-|---|---|---|
-| Order count | SUPPORTED_EXACTLY | PAID orders settled in the period that have an `order_reseller_terms` row, grouped by `reseller_customer_id` |
-| Sales amount | SUPPORTED_EXACTLY | `sum(orders.total_amount)` over those orders — what the reseller was charged |
-| Service count | SUPPORTED_WITH_DEFINED_DERIVATION | services created from those orders (`services.order_id`) and provisioned in the period |
-| Credit in use | SUPPORTED_WITH_DEFINED_DERIVATION | now: max(0, −balance) of the reseller's wallet in `credit_limit_currency`, beside the limit |
-| Profit / margin / settlement | NOT REPORTED | `order_reseller_terms.margin_amount` and `cost_amount` exist and are deliberately **never selected** (§15 and §27 of the spec) |
+| Metric                       | Classification                    | Derivation                                                                                                                     |
+| ---------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Order count                  | SUPPORTED_EXACTLY                 | PAID orders settled in the period that have an `order_reseller_terms` row, grouped by `reseller_customer_id`                   |
+| Sales amount                 | SUPPORTED_EXACTLY                 | `sum(orders.total_amount)` over those orders — what the reseller was charged                                                   |
+| Service count                | SUPPORTED_WITH_DEFINED_DERIVATION | services created from those orders (`services.order_id`) and provisioned in the period                                         |
+| Credit in use                | SUPPORTED_WITH_DEFINED_DERIVATION | now: max(0, −balance) of the reseller's wallet in `credit_limit_currency`, beside the limit                                    |
+| Profit / margin / settlement | NOT REPORTED                      | `order_reseller_terms.margin_amount` and `cost_amount` exist and are deliberately **never selected** (§15 and §27 of the spec) |
 
 ### 5.8 Failure summary (§16)
 
-| Metric | Classification | Derivation |
-|---|---|---|
-| Failed payments | SUPPORTED_EXACTLY | `state='FAILED'`, `resolved_at ∈ period`; EXPIRED and CANCELLED beside it |
-| Payments with unknown outcome | SUPPORTED_EXACTLY | `state='UNKNOWN'` now |
-| Failed service provisioning | SUPPORTED_EXACTLY | PROVISION operations FAILED or ABANDONED, `completed_at ∈ period` |
-| Failed commercial operations | SUPPORTED_EXACTLY | RENEW, ADD_TRAFFIC and ADD_TIME operations FAILED or ABANDONED, `completed_at ∈ period` |
-| Provider failures | SUPPORTED_WITH_DEFINED_DERIVATION | failed operations of any type, `completed_at ∈ period`, grouped by structured `failure_kind` |
-| Operations with unknown outcome | SUPPORTED_EXACTLY | `state='UNKNOWN'` now |
-| Orders refunded | SUPPORTED_EXACTLY | `refunded_at ∈ period` (any cause; the cause is not structured on the order) |
-| Queue / outbox / worker health | out of scope | WP16 |
+| Metric                          | Classification                    | Derivation                                                                                   |
+| ------------------------------- | --------------------------------- | -------------------------------------------------------------------------------------------- |
+| Failed payments                 | SUPPORTED_EXACTLY                 | `state='FAILED'`, `resolved_at ∈ period`; EXPIRED and CANCELLED beside it                    |
+| Payments with unknown outcome   | SUPPORTED_EXACTLY                 | `state='UNKNOWN'` now                                                                        |
+| Failed service provisioning     | SUPPORTED_EXACTLY                 | PROVISION operations FAILED or ABANDONED, `completed_at ∈ period`                            |
+| Failed commercial operations    | SUPPORTED_EXACTLY                 | RENEW, ADD_TRAFFIC and ADD_TIME operations FAILED or ABANDONED, `completed_at ∈ period`      |
+| Provider failures               | SUPPORTED_WITH_DEFINED_DERIVATION | failed operations of any type, `completed_at ∈ period`, grouped by structured `failure_kind` |
+| Operations with unknown outcome | SUPPORTED_EXACTLY                 | `state='UNKNOWN'` now                                                                        |
+| Orders refunded                 | SUPPORTED_EXACTLY                 | `refunded_at ∈ period` (any cause; the cause is not structured on the order)                 |
+| Queue / outbox / worker health  | out of scope                      | WP16                                                                                         |
 
 ---
 
@@ -472,20 +472,20 @@ All are `GET` under `/api/admin/v1/reports/…`, all are Super Admin (§2), all 
 tenant-scoped by the session, and all take `range` (a preset or `CUSTOM` with
 `from`/`to` as tenant-calendar dates `YYYY-MM-DD`).
 
-| Path | Answers |
-|---|---|
-| `summary` | KPI cards 1–12 with comparisons, plus the resolved period |
-| `trend?metric=REVENUE\|SALES\|NEW_USERS\|RENEWALS[&currency=]` | aligned current and previous buckets |
-| `products?by=COUNT\|REVENUE[&page=]` | ranking: top 10, then paged |
-| `services` | §5.2 |
-| `infrastructure` | §5.3 |
-| `payments` | §5.4 |
-| `wallet` | §5.5 |
-| `referrals[&by=SIGNUPS\|BUYERS\|REVENUE\|COMMISSION&page=]` | §5.6 |
-| `resellers` | §5.7 |
-| `failures` | §5.8 |
-| `orders`, `payment-attempts`, `operations` | drill-downs (§6) |
-| `export?report=…&format=csv\|xlsx` | §8 |
+| Path                                                           | Answers                                                   |
+| -------------------------------------------------------------- | --------------------------------------------------------- |
+| `summary`                                                      | KPI cards 1–12 with comparisons, plus the resolved period |
+| `trend?metric=REVENUE\|SALES\|NEW_USERS\|RENEWALS[&currency=]` | aligned current and previous buckets                      |
+| `products?by=COUNT\|REVENUE[&page=]`                           | ranking: top 10, then paged                               |
+| `services`                                                     | §5.2                                                      |
+| `infrastructure`                                               | §5.3                                                      |
+| `payments`                                                     | §5.4                                                      |
+| `wallet`                                                       | §5.5                                                      |
+| `referrals[&by=SIGNUPS\|BUYERS\|REVENUE\|COMMISSION&page=]`    | §5.6                                                      |
+| `resellers`                                                    | §5.7                                                      |
+| `failures`                                                     | §5.8                                                      |
+| `orders`, `payment-attempts`, `operations`                     | drill-downs (§6)                                          |
+| `export?report=…&format=csv\|xlsx`                             | §8                                                        |
 
 ---
 
@@ -528,14 +528,14 @@ range, and returns grouped rows. There is no N+1, and Node never sums raw rows. 
 are computed in SQL with `width_bucket(ts, $boundaries::timestamptz[])` over boundaries
 built in Node from the tenant calendar, so a Jalali month needs no SQL calendar.
 
-| Query | Index used today |
-|---|---|
-| customers by `created_at` | a sequential scan of the tenant's customers (acceptable at current scale) |
-| orders PAID by `settled_at` | `orders_tenant_state_idx (tenant_id, state)`, then a filter |
-| payments by `created_at` | `payments_tenant_created_idx` |
-| ledger by `created_at` | `wallet_entries_tenant_created_idx` |
-| services by `provisioned_at` / state | `services_tenant_state_idx`, `services_tenant_created_idx` |
-| operations | the tenant filter; volume is small |
+| Query                                | Index used today                                                          |
+| ------------------------------------ | ------------------------------------------------------------------------- |
+| customers by `created_at`            | a sequential scan of the tenant's customers (acceptable at current scale) |
+| orders PAID by `settled_at`          | `orders_tenant_state_idx (tenant_id, state)`, then a filter               |
+| payments by `created_at`             | `payments_tenant_created_idx`                                             |
+| ledger by `created_at`               | `wallet_entries_tenant_created_idx`                                       |
+| services by `provisioned_at` / state | `services_tenant_state_idx`, `services_tenant_created_idx`                |
+| operations                           | the tenant filter; volume is small                                        |
 
 **No cache.** Each query is bounded and indexed, and a 5-minute cadence from a handful
 of owners is a trivial load. Adding Redis without a measurement is what §21 forbids. If
@@ -551,11 +551,11 @@ parameters.
 
 ## 11. Not supported, and why
 
-| Requested | Why |
-|---|---|
-| Location breakdown | No snapshotted, unambiguous single location (§5.3). |
-| Refund-netted revenue | Refund accounting is out of scope (spec §34). A partial refund is not netted; a full refund removes the order. |
-| Profit, margin, cost | Forbidden (spec §27); `margin_amount` and `cost_amount` are never selected. |
-| Revenue by panel, provider or location | Forbidden (spec §28). |
-| Refund cause on the order | Not structured on `orders`; "orders refunded" is reported without a cause. |
-| Reseller settlement or debt | Reseller Phase 2. |
+| Requested                              | Why                                                                                                            |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Location breakdown                     | No snapshotted, unambiguous single location (§5.3).                                                            |
+| Refund-netted revenue                  | Refund accounting is out of scope (spec §34). A partial refund is not netted; a full refund removes the order. |
+| Profit, margin, cost                   | Forbidden (spec §27); `margin_amount` and `cost_amount` are never selected.                                    |
+| Revenue by panel, provider or location | Forbidden (spec §28).                                                                                          |
+| Refund cause on the order              | Not structured on `orders`; "orders refunded" is reported without a cause.                                     |
+| Reseller settlement or debt            | Reseller Phase 2.                                                                                              |
