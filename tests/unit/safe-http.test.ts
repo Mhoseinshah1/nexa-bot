@@ -276,6 +276,32 @@ describe('the outbound client — retry', () => {
     expect(blocked.ok).toBe(false);
   });
 
+  /*
+   * WP15 H4. A write that timed out may have been applied; repeating it is the operation
+   * layer's decision, never the transport's. A read that timed out changed nothing.
+   */
+  it('retries a read on a transient failure and never a write', async () => {
+    let calls = 0;
+    route = () => {
+      calls += 1;
+      return { status: 200, hang: true };
+    };
+    for (const method of ['POST', 'PUT', 'DELETE'] as const) {
+      calls = 0;
+      const result = await client({ maxRetries: 2, totalTimeoutMs: 150 }).send(base, {
+        method,
+        path: '/api/user',
+        ...(method === 'DELETE' ? {} : { body: { kind: 'json' as const, value: {} } }),
+      });
+      expect(result.ok, method).toBe(false);
+      if (!result.ok) expect(result.failure).toBe('TIMEOUT');
+      expect(calls, `${method} was sent more than once`).toBe(1);
+    }
+    calls = 0;
+    await client({ maxRetries: 2, totalTimeoutMs: 150 }).send(base, { method: 'GET', path: '/x' });
+    expect(calls, 'a read is retried within its budget').toBe(3);
+  });
+
   it('bounds the attempts it does make', async () => {
     // A closed port is transient by classification, so it is the one thing a
     // retry budget applies to — and the budget is spent, not exceeded.

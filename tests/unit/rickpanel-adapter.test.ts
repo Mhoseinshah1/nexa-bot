@@ -90,6 +90,12 @@ let tokenStatus = 200;
 let tokenBody: unknown = { access_token: 'a-real-jwt', token_type: 'bearer' };
 let createMode: CreateMode = 'accepts';
 let readsBeforeVisible = 0;
+/**
+ * How a GET of one user answers, independently of the create (WP15 H1). `normal` is
+ * the record; `rate-limited` a 429; `drops` a socket destroyed before any answer —
+ * what the client reports as UNREACHABLE.
+ */
+let userReadMode: 'normal' | 'rate-limited' | 'drops' | 'server-error' = 'normal';
 let deleteStatus: number | null = null;
 let putStatus: number | null = null;
 /**
@@ -259,6 +265,12 @@ beforeAll(async () => {
       if (match !== null) {
         const name = decodeURIComponent(match[1] ?? '');
         if (request.method === 'GET') {
+          if (userReadMode === 'rate-limited') return json(429, { detail: 'slow down' });
+          if (userReadMode === 'server-error') return json(500, { detail: 'boom' });
+          if (userReadMode === 'drops') {
+            response.destroy();
+            return;
+          }
           if (createMode === 'accepts-after-delay' && readsBeforeVisible > 0) {
             readsBeforeVisible -= 1;
             return json(404, { detail: 'User not found' });
@@ -311,6 +323,7 @@ beforeEach(() => {
   tokenBody = { access_token: 'a-real-jwt', token_type: 'bearer' };
   createMode = 'accepts';
   readsBeforeVisible = 0;
+  userReadMode = 'normal';
   deleteStatus = null;
   putStatus = null;
   missingSeedStatus = 422;
@@ -546,6 +559,40 @@ describe('RickPanel create', () => {
     expect(operationFailureOutcome(outcome.failure, 'PROVISION')).toBe('UNKNOWN');
     expect(PROVIDER_FAILURE_RETRYABLE[outcome.failure]).toBe(false);
     expect(reads()).toHaveLength(3);
+  });
+
+  /*
+   * WP15 H1. The POST answered 2xx and the account exists; only the READ after it was
+   * lost. A read-back failure reported in a safe-to-replay kind made the PROVISION
+   * FAILED and retried, the retry met this very account as a 409, and the order was
+   * refunded with the account left on the panel.
+   */
+  for (const mode of ['rate-limited', 'drops'] as const) {
+    it(`reports an accepted create whose read-back ${mode === 'drops' ? 'dropped' : 'was rate-limited'} as UNKNOWN, never safe to replay`, async () => {
+      userReadMode = mode;
+      const outcome = await adapter().createUser(target(), http(), CREATE);
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok) return;
+      expect(outcome.failure).toBe('MALFORMED_RESPONSE');
+      expect(outcome.status).toBe(200);
+      expect(operationFailureOutcome(outcome.failure, 'PROVISION')).toBe('UNKNOWN');
+      // The account this create made is there, which is what RECONCILE will find.
+      expect(users.has(CREATE.username)).toBe(true);
+      expect(
+        requests.filter((one) => one.method === 'POST' && one.path === '/api/user'),
+      ).toHaveLength(1);
+    });
+  }
+
+  it('keeps an already-UNKNOWN read-back failure in its own kind', async () => {
+    // A 5xx on the read is PROVIDER_ERROR, UNKNOWN for a create already; it is not rewritten.
+    userReadMode = 'server-error';
+    const outcome = await adapter().createUser(target(), http(), CREATE);
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.failure).toBe('PROVIDER_ERROR');
+    expect(outcome.status).toBe(500);
+    expect(operationFailureOutcome(outcome.failure, 'PROVISION')).toBe('UNKNOWN');
   });
 
   it('reports a created user with no readable subscription as UNKNOWN, not delivered', async () => {

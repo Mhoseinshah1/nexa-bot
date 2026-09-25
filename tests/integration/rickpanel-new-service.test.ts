@@ -344,6 +344,34 @@ describe('a RickPanel NEW_SERVICE', () => {
   });
 
   /**
+   * WP15 H1 (`docs/wp15-provider-hardening-audit.md`): the create is accepted and the
+   * READ after it is lost to a rate limit.
+   *
+   * A 429 on that GET says the GET was not read, not that the POST was not. Reported as
+   * RATE_LIMITED, the PROVISION was safe to replay: the retry met this very account as
+   * a 409, was refused, and the order was refunded with the account left on the panel.
+   * Now the create is UNKNOWN, a RECONCILE reads the account and adopts it: one create,
+   * delivered, nothing refunded.
+   */
+  it('adopts, never refunds, an accepted create whose read-back was rate-limited', async () => {
+    panel.rateLimitedReads = 1;
+    const orderId = await paidOrder('rick-lost-read', 53_687_091_200n);
+
+    await ctx.container.provisionerLoop.tick();
+    for (let round = 0; round < 3; round += 1) {
+      await makeOperationDue();
+      await ctx.container.provisionerLoop.tick();
+    }
+
+    const settled = await services.findByOrderId(tenantA, orderId);
+    expect(settled?.state).toBe('ACTIVE');
+    expect(panel.createCalls(), 'an accepted create was replayed').toBe(1);
+    expect(panel.users.size).toBe(1);
+    expect(await refunds(), 'an accepted create was refunded').toHaveLength(0);
+    expect(await orderState(orderId)).toBe('PAID');
+  });
+
+  /**
    * The owner's incident, reproduced through the shipped container: a create the panel
    * refuses with a status this adapter does not classify.
    *
