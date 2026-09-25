@@ -82,6 +82,18 @@ export interface ReasonCapturePolicy<TSubject extends object, TOutcome> {
     targetId: string,
     tx?: TransactionScope,
   ) => Promise<TSubject | null>;
+  /**
+   * The target as the CONFIRM reads it, without `load`'s admission: a capture already
+   * CONFIRMED re-drives its action under the same key so a double tap or a crash between the
+   * close and the action is one action — and by then the action may have made the target
+   * inadmissible (a rejected payment is no longer PENDING). The path behind `act` answers the
+   * replay with its first result; this only has to find the target. Defaults to `load`.
+   */
+  readonly loadForAct?: (
+    scope: TenantContext,
+    targetId: string,
+    tx?: TransactionScope,
+  ) => Promise<TSubject | null>;
   /** The key the confirmed capture acts under — derived from the capture, so it acts once. */
   readonly keyFor: (captureId: string) => string;
   /**
@@ -421,7 +433,11 @@ export class ReceiptReasonCaptureService<TSubject extends object, TOutcome> {
     });
     if (decided.outcome !== 'ACT') return decided;
 
-    const subject = await this.subjectOf(scope, decided.capture);
+    const targetId = this.targetIdOf(decided.capture);
+    const subject =
+      targetId === null
+        ? null
+        : await (this.policy.loadForAct ?? this.policy.load)(scope, targetId);
     if (subject === null) return { outcome: 'GONE' };
     const result = await this.policy.act(scope, actor, {
       idempotencyKey: this.policy.keyFor(decided.capture.id),

@@ -419,12 +419,14 @@ describe('Block User and the rejection reason, from the receipt message', () => 
       expect(lastText(f)).not.toContain('دلیل مستأجر دیگر');
     });
 
-    it('a block with no reason still reads as the whole blocked sentence', async () => {
-      await f.ctx.container.customers.block(tenantA, f.owner, {
-        idempotencyKey: 'block-no-reason',
-        customerId: f.customer,
-        reason: null,
-      });
+    it('a historical block with no reason still reads as the whole blocked sentence', async () => {
+      // Written as a release before WP10G wrote it: no reason, no shown mark. A block with no
+      // reason cannot be produced any more (the service refuses it), and the rows that carry
+      // one keep the plain sentence rather than an empty "reason" line.
+      await f.ctx.container.database.db.execute(sql`
+        UPDATE customers
+           SET status = 'BLOCKED', blocked_at = now(), blocked_reason = NULL, blocked_reason_shown = false
+         WHERE id = ${f.customer}`);
       await say(f, '/start', TG.customer);
       expect(lastText(f)).toBe(CATALOGUE_FA['bot.blocked']);
     });
@@ -475,13 +477,16 @@ describe('Block User and the rejection reason, from the receipt message', () => 
         reason: null,
       });
       expect(await flag()).toBe(false);
-      // A block with no reason has nothing to show, so nothing is marked shown.
-      await f.ctx.container.customers.block(tenantA, f.owner, {
-        idempotencyKey: 'block-unshown',
-        customerId: f.customer,
-        reason: null,
-      });
+      // A block with no reason is refused (WP10G), so nothing is marked shown and nothing moves.
+      await expect(
+        f.ctx.container.customers.block(tenantA, f.owner, {
+          idempotencyKey: 'block-unshown',
+          customerId: f.customer,
+          reason: null,
+        }),
+      ).rejects.toMatchObject({ code: COMMERCE_ERROR_CODES.CUSTOMER_BLOCK_REASON_REQUIRED });
       expect(await flag()).toBe(false);
+      expect((await customerStatus(f, f.customer)).status).toBe('ACTIVE');
     });
 
     it('the customer blocked from a receipt gets the blocked-account reply with that reason', async () => {
@@ -838,7 +843,7 @@ describe('Block User and the rejection reason, from the receipt message', () => 
         f.ctx.container.receiptRejectCaptures.open(tenantA, blindActor, {
           idempotencyKey: 'r-noview-open',
           botInstanceId: SEED_IDS.botA1 as BotInstanceId,
-          paymentId: payment,
+          targetId: payment,
         }),
       ).rejects.toMatchObject({ code: 'platform.permission_denied' });
       expect(await openCaptures()).toEqual([]);
@@ -855,17 +860,19 @@ describe('Block User and the rejection reason, from the receipt message', () => 
       expect((await customerStatus(f, f.customer)).blocked_reason).toBe(reason);
     });
 
-    it('bounds a block reason in code points and never cuts a character in half', async () => {
+    it('refuses a block reason over the bound, counted in code points, rather than cutting it', async () => {
+      // 501 code points and 1001 UTF-16 units. Until WP10G the service CUT this to 500 code
+      // points; a reason cut short is a different reason from the one confirmed, so it is
+      // refused whole and the customer is untouched. 500 code points still store whole (above).
       const other = await customerNamed(f, '750901', 'other_emoji');
-      await f.ctx.container.customers.blockWithOutcome(tenantA, f.owner, {
-        idempotencyKey: 'b-emoji-bound',
-        customerId: other,
-        reason: `a${'😀'.repeat(500)}`,
-      });
-      const stored = (await customerStatus(f, other)).blocked_reason ?? '';
-      expect(stored).toBe(`a${'😀'.repeat(499)}`);
-      expect(Array.from(stored)).toHaveLength(500);
-      expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u.test(stored)).toBe(false);
+      await expect(
+        f.ctx.container.customers.blockWithOutcome(tenantA, f.owner, {
+          idempotencyKey: 'b-emoji-bound',
+          customerId: other,
+          reason: `a${'😀'.repeat(500)}`,
+        }),
+      ).rejects.toMatchObject({ code: COMMERCE_ERROR_CODES.CUSTOMER_BLOCK_REASON_REQUIRED });
+      expect((await customerStatus(f, other)).status).toBe('ACTIVE');
     });
 
     it('a Cancel after a confirmed block that never ran says what the customer IS, and the confirm still blocks', async () => {

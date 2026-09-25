@@ -47,6 +47,22 @@ export type ReceiptBlockCaptureService = ReceiptReasonCaptureService<
 >;
 export type ReceiptRejectCaptureService = ReceiptReasonCaptureService<ReasonSubject, PaymentRecord>;
 
+/** The payment by existence alone, for the confirm's re-drive (see `loadForAct`). */
+function paymentSubject(
+  deps: ReceiptReasonCaptureDeps,
+): (
+  scope: TenantContext,
+  paymentId: string,
+  tx?: TransactionScope,
+) => Promise<ReasonSubject | null> {
+  return async (scope, paymentId, tx) => {
+    const payment = await deps.payments.findById(scope, paymentId as PaymentId, tx);
+    if (payment === null) return null;
+    const customer = await deps.customers.findById(scope, payment.customerId, tx);
+    return { payment, customer };
+  };
+}
+
 /**
  * A receipt action's subject: the payment, when it exists, ADMITS the action and carries a stored
  * receipt — and the customer it belongs to. Receipts are append-only
@@ -90,6 +106,7 @@ export function receiptBlockCaptures(
     permission: RECEIPT_BLOCK_PERMISSION,
     viewPermission: RECEIPT_BLOCK_VIEW_PERMISSION,
     load: receiptSubject(deps, (payment) => payment.method === 'MANUAL_TRANSFER'),
+    loadForAct: paymentSubject(deps),
     keyFor: receiptBlockCaptureKey,
     act: (scope, actor, input) =>
       block.blockWithOutcome(scope, actor, {
@@ -129,6 +146,9 @@ export function receiptRejectCaptures(
       deps,
       (payment) => payment.method === 'MANUAL_TRANSFER' && payment.state === 'PENDING',
     ),
+    // The confirm's re-drive after the rejection: the payment is FAILED now, and the reject
+    // path answers the same key with its first result. Existence is all the confirm needs.
+    loadForAct: paymentSubject(deps),
     keyFor: receiptRejectCaptureKey,
     act: (scope, actor, input) =>
       payments.rejectManualTransfer(scope, actor, input.subject.payment.id, {

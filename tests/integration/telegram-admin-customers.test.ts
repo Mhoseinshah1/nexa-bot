@@ -58,6 +58,11 @@ const PREFIX = {
   view: '9:v:',
   block: '9:b:',
   unblock: '9:u:',
+  /* WP10G: the reason capture's open, confirm and cancel, and the unblock's confirm. */
+  open: '9:o:',
+  confirm: '9:c:',
+  cancel: '9:x:',
+  unblockConfirm: '9:n:',
 } as const;
 
 const systemActor = (correlationId: string): ActorContext => ({
@@ -505,63 +510,160 @@ describe('the customers section of the Telegram management panel', () => {
     expect((await ctx.container.customers.get(tenantA, owner, customerId)).status).toBe('ACTIVE');
   });
 
-  it('blocks a customer, and the reply offers the unblock rather than the block again', async () => {
+  // =========================================================================
+  // The two-step block and unblock (WP10G, closing OQ-WP10F-03)
+  // =========================================================================
+
+  it('the block button asks first and writes nothing', async () => {
     const result = await open(`${PREFIX.block}${customerId}`, TG.owner);
+
+    expect(result.replyKey).toBe('bot.admin.customer_block_ask');
+    expect((await ctx.container.customers.get(tenantA, owner, customerId)).status).toBe('ACTIVE');
+    // The yes button opens the reason capture; the cancel goes back to the customer.
+    expect(lastMessage()).toContain(`${PREFIX.open}${customerId}`);
+    expect(lastMessage()).toContain(`${PREFIX.view}${customerId}`);
+    expect(await openCaptures()).toEqual([]);
+  });
+
+  it('blocks a customer through ask → reason → confirm, and the reply offers the unblock', async () => {
+    const captureId = await blockUpTo(customerId, TG.owner, 'sends spam to support');
+    const result = await open(`${PREFIX.confirm}${captureId}`, TG.owner);
 
     expect(result.replyKey).toBe('bot.admin.customer_status_changed');
     const after = await ctx.container.customers.get(tenantA, owner, customerId);
     expect(after.status).toBe('BLOCKED');
-    expect(after.blockedReason, 'the block recorded no operator note').not.toBeNull();
+    expect(after.blockedReason).toBe('sends spam to support');
+    // Written under the promise that the customer is shown it.
+    expect(after.blockedReasonShown).toBe(true);
 
     /* ONE builder for the read and the write, so the new state's buttons are drawn. */
     expect(lastMessage()).toContain(`${PREFIX.unblock}${customerId}`);
     expect(lastMessage()).not.toContain(`${PREFIX.block}${customerId}`);
   });
 
-  it('unblocks, and clears the reason so a stale one cannot read as current', async () => {
-    await open(`${PREFIX.block}${customerId}`, TG.owner);
-    const result = await open(`${PREFIX.unblock}${customerId}`, TG.owner);
+  it('the typed reason alone blocks nobody; only the restating confirm does', async () => {
+    await blockUpTo(customerId, TG.owner, 'a reason that is typed');
+    expect((await ctx.container.customers.get(tenantA, owner, customerId)).status).toBe('ACTIVE');
+    expect(
+      (await ctx.container.customers.get(tenantA, owner, customerId)).blockedReason,
+    ).toBeNull();
+  });
 
+  it('refuses an empty or over-long reason and keeps the capture open', async () => {
+    expect((await open(`${PREFIX.block}${customerId}`, TG.owner)).replyKey).toBe(
+      'bot.admin.customer_block_ask',
+    );
+    expect((await open(`${PREFIX.open}${customerId}`, TG.owner)).replyKey).toBe(
+      'bot.admin.customer_block_reason_prompt',
+    );
+    expect((await say('   ', TG.owner)).replyKey).toBe('bot.admin.block_reason_invalid');
+    expect((await say('x'.repeat(501), TG.owner)).replyKey).toBe('bot.admin.block_reason_invalid');
+    expect((await ctx.container.customers.get(tenantA, owner, customerId)).status).toBe('ACTIVE');
+    // Still open, still reading: the corrected reason is taken and restated.
+    expect((await say('  a real reason  ', TG.owner)).replyKey).toBe(
+      'bot.admin.customer_block_confirm',
+    );
+    expect(lastBody()?.['text']).toContain('a real reason');
+  });
+
+  it('cancel closes the capture and leaves the customer untouched', async () => {
+    const captureId = await blockUpTo(customerId, TG.owner, 'changed my mind');
+    expect((await open(`${PREFIX.cancel}${captureId}`, TG.owner)).replyKey).toBe(
+      'bot.admin.customer_block_cancelled',
+    );
+    expect((await ctx.container.customers.get(tenantA, owner, customerId)).status).toBe('ACTIVE');
+    expect(await openCaptures()).toEqual([]);
+    // A confirm after the cancel finds a closed capture and blocks nobody.
+    expect((await open(`${PREFIX.confirm}${captureId}`, TG.owner)).replyKey).toBe(
+      'bot.admin.customer_block_cancelled',
+    );
+    expect((await ctx.container.customers.get(tenantA, owner, customerId)).status).toBe('ACTIVE');
+  });
+
+  it('a second confirm of the same capture is one block, not two', async () => {
+    const captureId = await blockUpTo(customerId, TG.owner, 'once');
+    await open(`${PREFIX.confirm}${captureId}`, TG.owner);
+    const second = await open(`${PREFIX.confirm}${captureId}`, TG.owner);
+
+    expect(second.replyKey).toBe('bot.admin.customer_status_changed');
+    expect((await ctx.container.customers.get(tenantA, owner, customerId)).status).toBe('BLOCKED');
+    const rows = await ctx.container.database.db.execute(sql`
+      SELECT count(*)::int AS n FROM audit_logs
+      WHERE tenant_id = ${tenantA.tenantId} AND entity_id = ${customerId} AND action = 'customer.block'`);
+    // ONE audit row: the second confirm re-drove the same capture-derived key and replayed.
+    expect((rows.rows[0] as { n: number }).n).toBe(1);
+  });
+
+  it('confirming a block on a customer already blocked leaves the stored reason untouched', async () => {
+    const first = await blockUpTo(customerId, TG.owner, 'the first reason');
+    await open(`${PREFIX.confirm}${first}`, TG.owner);
+    // A second capture, opened straight (the ask would already answer with the state held).
+    expect((await open(`${PREFIX.open}${customerId}`, TG.owner)).replyKey).toBe(
+      'bot.admin.customer_block_reason_prompt',
+    );
+    expect((await say('a different reason', TG.owner)).replyKey).toBe(
+      'bot.admin.customer_block_confirm',
+    );
+    const second = captureIdFrom(PREFIX.confirm);
+    const result = await open(`${PREFIX.confirm}${second}`, TG.owner);
+
+    expect(result.replyKey).toBe('bot.admin.customer_block_already');
+    const after = await ctx.container.customers.get(tenantA, owner, customerId);
+    expect(after.status).toBe('BLOCKED');
+    expect(after.blockedReason).toBe('the first reason');
+  });
+
+  it('the ask on a customer already blocked answers the state held, not a question', async () => {
+    const captureId = await blockUpTo(customerId, TG.owner, 'spam');
+    await open(`${PREFIX.confirm}${captureId}`, TG.owner);
+    const result = await open(`${PREFIX.block}${customerId}`, TG.owner);
+    expect(result.replyKey).toBe('bot.admin.customer_status_changed');
+    expect(await openCaptures()).toEqual([]);
+  });
+
+  it('unblock asks first, then unblocks and clears the reason so a stale one cannot read as current', async () => {
+    const captureId = await blockUpTo(customerId, TG.owner, 'spam');
+    await open(`${PREFIX.confirm}${captureId}`, TG.owner);
+
+    const asked = await open(`${PREFIX.unblock}${customerId}`, TG.owner);
+    expect(asked.replyKey).toBe('bot.admin.customer_unblock_ask');
+    expect((await ctx.container.customers.get(tenantA, owner, customerId)).status).toBe('BLOCKED');
+    expect(lastMessage()).toContain(`${PREFIX.unblockConfirm}${customerId}`);
+
+    const result = await open(`${PREFIX.unblockConfirm}${customerId}`, TG.owner);
     expect(result.replyKey).toBe('bot.admin.customer_status_changed');
     const after = await ctx.container.customers.get(tenantA, owner, customerId);
     expect(after.status).toBe('ACTIVE');
     expect(after.blockedReason).toBeNull();
     expect(after.blockedAt).toBeNull();
+    expect(after.blockedReasonShown).toBe(false);
   });
 
-  it('a second tap on the same button is a no-op, not a toggle back', async () => {
-    /*
-     * The callback carries the TARGET status rather than "flip it", which is the whole
-     * reason it is spelled `9:b:` and not `9:t:`. A redelivered update — Telegram
-     * retries, and a slow connection invites a second tap — writes BLOCKED twice, which
-     * the conditional UPDATE answers as a successful no-op. A toggle would have
-     * unblocked somebody the operator had just blocked.
-     *
-     * Two DIFFERENT updates, so the idempotency store is not what makes this pass:
-     * each carries its own key, and the property being tested is the callback's shape.
-     */
-    await open(`${PREFIX.block}${customerId}`, TG.owner);
-    const second = await open(`${PREFIX.block}${customerId}`, TG.owner);
+  it('a second tap on the unblock confirm is a no-op, not a toggle back', async () => {
+    const captureId = await blockUpTo(customerId, TG.owner, 'spam');
+    await open(`${PREFIX.confirm}${captureId}`, TG.owner);
+    await open(`${PREFIX.unblockConfirm}${customerId}`, TG.owner);
+    const second = await open(`${PREFIX.unblockConfirm}${customerId}`, TG.owner);
 
     expect(second.replyKey).toBe('bot.admin.customer_status_changed');
-    expect((await ctx.container.customers.get(tenantA, owner, customerId)).status).toBe('BLOCKED');
+    expect((await ctx.container.customers.get(tenantA, owner, customerId)).status).toBe('ACTIVE');
   });
 
   it('never blocks another tenant’s customer', async () => {
     const theirs = await makeCustomer(tenantB, '555222111', {});
 
-    const result = await open(`${PREFIX.block}${theirs}`, TG.owner);
-
     /*
-     * The panel's single refusal, not `customer_gone`.
-     *
-     * The two writes have no catch of their own, deliberately: `setStatus` carries
-     * every refusal they need and nothing they could usefully say back. So a write
-     * against an id that is not this tenant's answers the same way every other denied
-     * write does, and a reader comparing it against the READ's `customer_gone` learns
-     * nothing either way — both are "no" for every id they do not own.
+     * The one answer the READ gives for an id this tenant does not own, at every step: the
+     * ask, the open and the confirm each read the customer in THIS tenant and find nobody,
+     * so nothing about tenant B is learned or written.
      */
-    expect(result.replyKey).toBe('bot.admin.refused');
+    expect((await open(`${PREFIX.block}${theirs}`, TG.owner)).replyKey).toBe(
+      'bot.admin.customer_gone',
+    );
+    expect((await open(`${PREFIX.open}${theirs}`, TG.owner)).replyKey).toBe(
+      'bot.admin.customer_gone',
+    );
+    expect(await openCaptures()).toEqual([]);
     /*
      * Read back in RAW SQL, deliberately.
      *
@@ -575,12 +677,13 @@ describe('the customers section of the Telegram management panel', () => {
     expect((rows.rows[0] as { status: string } | undefined)?.status).toBe('ACTIVE');
   });
 
-  it('writes an audit row naming the administrator who blocked', async () => {
-    await open(`${PREFIX.block}${customerId}`, TG.owner);
+  it('writes an audit row naming the administrator, the surface and the reason', async () => {
+    const captureId = await blockUpTo(customerId, TG.owner, 'audited reason');
+    await open(`${PREFIX.confirm}${captureId}`, TG.owner);
 
     const rows = await ctx.container.database.db.execute(sql`
-      SELECT actor_id, actor_type, action, result, source_surface FROM audit_logs
-      WHERE tenant_id = ${tenantA.tenantId} AND entity_id = ${customerId}
+      SELECT actor_id, actor_type, action, result, source_surface, reason, after FROM audit_logs
+      WHERE tenant_id = ${tenantA.tenantId} AND entity_id = ${customerId} AND action = 'customer.block'
       ORDER BY occurred_at DESC LIMIT 1`);
     const row = rows.rows[0] as Record<string, unknown> | undefined;
     expect(row, 'the block left no audit row').toBeDefined();
@@ -588,6 +691,13 @@ describe('the customers section of the Telegram management panel', () => {
     expect(row?.['actor_type']).toBe('TELEGRAM_ADMIN');
     expect(row?.['source_surface']).toBe('TELEGRAM');
     expect(row?.['result']).toBe('SUCCESS');
+    expect(row?.['reason']).toBe('audited reason');
+    expect(row?.['after']).toMatchObject({
+      status: 'BLOCKED',
+      changed: true,
+      blockedReason: 'audited reason',
+      context: { source: 'CUSTOMERS_SECTION', captureId },
+    });
   });
 
   // =========================================================================
@@ -604,6 +714,44 @@ describe('the customers section of the Telegram management panel', () => {
     sent = [];
     return runtime().handle(tenantA, systemActor('bot'), tapUpdate(data, telegramUserId));
   };
+
+  /** One plain message from an administrator's chat, the way a typed reason arrives. */
+  const say = async (text: string, telegramUserId: string) => {
+    sent = [];
+    return runtime().handle(tenantA, systemActor('bot'), adminUpdate(text, telegramUserId));
+  };
+
+  /** The id a `9:<code>:` button in the last keyboard carries. */
+  const captureIdFrom = (code: string): string => {
+    const markup = lastBody()?.['reply_markup'] as
+      { inline_keyboard?: { callback_data?: string }[][] } | undefined;
+    for (const row of markup?.inline_keyboard ?? []) {
+      for (const button of row) {
+        const data = button.callback_data ?? '';
+        if (data.startsWith(code)) return data.slice(code.length);
+      }
+    }
+    throw new Error(`no ${code} button in the last keyboard`);
+  };
+
+  /** Ask, say yes, type the reason: the confirmation's capture id, nothing blocked yet. */
+  async function blockUpTo(id: UserId, telegramUserId: string, reason: string): Promise<string> {
+    expect((await open(`${PREFIX.block}${id}`, telegramUserId)).replyKey).toBe(
+      'bot.admin.customer_block_ask',
+    );
+    expect((await open(`${PREFIX.open}${id}`, telegramUserId)).replyKey).toBe(
+      'bot.admin.customer_block_reason_prompt',
+    );
+    expect((await say(reason, telegramUserId)).replyKey).toBe('bot.admin.customer_block_confirm');
+    return captureIdFrom(PREFIX.confirm);
+  }
+
+  async function openCaptures(): Promise<{ purpose: string }[]> {
+    const rows = await ctx.container.database.db.execute(
+      sql`SELECT purpose FROM admin_amount_captures WHERE closed_at IS NULL`,
+    );
+    return rows.rows as { purpose: string }[];
+  }
 
   const bind = (adminId: AdminId, telegramUserId: string) =>
     ctx.container.adminManagement.setTelegramBinding(tenantA, owner, adminId, {

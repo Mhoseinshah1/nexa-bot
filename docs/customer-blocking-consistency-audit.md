@@ -14,16 +14,16 @@ and the minimal design.
 
 ## 1. Every block/unblock entry point, as found
 
-| # | Entry point | Where | Confirmation | Reason | Note |
-|---|---|---|---|---|---|
-| E1 | `POST /users/:id/block` | `customers.controller.ts` | none (one request) | **optional**, `blockCustomerRequestSchema` `reason?: string.trim().max(500)` | The only generic HTTP write. |
-| E2 | `POST /users/:id/unblock` | same | none | optional; audit-only, the service clears the stored reason | Same schema as E1. |
-| E3 | Web Admin customer detail, «مسدود کردن» | `apps/web/src/pages/users.tsx` `UserDetailPage` | **none — one click** | optional field «دلیل (اختیاری)» | Calls E1. |
-| E4 | Web Admin customer detail, «رفع مسدودی» | same | **none — one click** | the same optional field, passed through | Calls E2. |
-| E5 | Telegram Admin customers section, `9:b:<customerId>` | `bot-runtime.ts` `adminCustomerStatus` | **none — one tap** | **none typed**: stores the fixed English sentence `PRE_REASON_BLOCK_NOTE` | `blockedReply` recognises the sentence and never shows it. |
-| E6 | Telegram Admin customers section, `9:u:<customerId>` | same | **none — one tap** | none | |
-| E7 | Telegram Admin receipt message, Block User (`xa:` → `xb:` → typed reason → `xc:`) | `ReceiptReasonCaptureService` + `receiptBlockCaptures` policy | ask, then a restating confirm | **mandatory**, trimmed, 1–500, refused not cut | The intended semantics. Unchanged by this package. |
-| E8 | `CustomerService.block` / `blockWithOutcome` / `unblock` → private `setStatus` | `customer.service.ts` | n/a | `string \| null`; a null or blank reason is stored as NULL; an over-long one is **truncated** to 500 code points | Every surface above ends here. |
+| #   | Entry point                                                                       | Where                                                         | Confirmation                  | Reason                                                                                                           | Note                                                       |
+| --- | --------------------------------------------------------------------------------- | ------------------------------------------------------------- | ----------------------------- | ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| E1  | `POST /users/:id/block`                                                           | `customers.controller.ts`                                     | none (one request)            | **optional**, `blockCustomerRequestSchema` `reason?: string.trim().max(500)`                                     | The only generic HTTP write.                               |
+| E2  | `POST /users/:id/unblock`                                                         | same                                                          | none                          | optional; audit-only, the service clears the stored reason                                                       | Same schema as E1.                                         |
+| E3  | Web Admin customer detail, «مسدود کردن»                                           | `apps/web/src/pages/users.tsx` `UserDetailPage`               | **none — one click**          | optional field «دلیل (اختیاری)»                                                                                  | Calls E1.                                                  |
+| E4  | Web Admin customer detail, «رفع مسدودی»                                           | same                                                          | **none — one click**          | the same optional field, passed through                                                                          | Calls E2.                                                  |
+| E5  | Telegram Admin customers section, `9:b:<customerId>`                              | `bot-runtime.ts` `adminCustomerStatus`                        | **none — one tap**            | **none typed**: stores the fixed English sentence `PRE_REASON_BLOCK_NOTE`                                        | `blockedReply` recognises the sentence and never shows it. |
+| E6  | Telegram Admin customers section, `9:u:<customerId>`                              | same                                                          | **none — one tap**            | none                                                                                                             |                                                            |
+| E7  | Telegram Admin receipt message, Block User (`xa:` → `xb:` → typed reason → `xc:`) | `ReceiptReasonCaptureService` + `receiptBlockCaptures` policy | ask, then a restating confirm | **mandatory**, trimmed, 1–500, refused not cut                                                                   | The intended semantics. Unchanged by this package.         |
+| E8  | `CustomerService.block` / `blockWithOutcome` / `unblock` → private `setStatus`    | `customer.service.ts`                                         | n/a                           | `string \| null`; a null or blank reason is stored as NULL; an over-long one is **truncated** to 500 code points | Every surface above ends here.                             |
 
 No other writer touches `customers.status`: `resolveFromUpdate` never does (the DO UPDATE list
 omits it), and no job or worker blocks customers.
@@ -99,15 +99,15 @@ migration.**
 
 `9:` codes, validated at the boundary by the same table as before:
 
-| Code | Intent | Step |
-|---|---|---|
-| `9:b:<customerId>` | `ADMIN_CUSTOMER_BLOCK` | **ask**: «کاربر … مسدود شود؟» with «بله، دلیل را می‌نویسم» / «انصراف». Writes nothing. |
-| `9:o:<customerId>` | `ADMIN_CUSTOMER_BLOCK_OPEN` | opens a `CUSTOMER_BLOCK_REASON` capture naming the customer; prompts for the reason. |
-| plain text | (capture) | `submitReason`: trimmed, 1–500; invalid text is answered and the capture stays open; a confirmation restates the reason. |
-| `9:c:<captureId>` | `ADMIN_CUSTOMER_BLOCK_CONFIRM` | closes the capture CONFIRMED, then `CustomerService.blockWithOutcome` under the capture-derived key with the reason and the `CUSTOMERS_SECTION` context. |
-| `9:x:<captureId>` | `ADMIN_CUSTOMER_BLOCK_CANCEL` | closes the capture CANCELLED; the customer is untouched. |
-| `9:u:<customerId>` | `ADMIN_CUSTOMER_UNBLOCK` | **ask**: confirmation with «رفع مسدودی شود» / «انصراف». Writes nothing. |
-| `9:n:<customerId>` | `ADMIN_CUSTOMER_UNBLOCK_CONFIRM` | `CustomerService.unblock` under the update's key. |
+| Code               | Intent                           | Step                                                                                                                                                     |
+| ------------------ | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `9:b:<customerId>` | `ADMIN_CUSTOMER_BLOCK`           | **ask**: «کاربر … مسدود شود؟» with «بله، دلیل را می‌نویسم» / «انصراف». Writes nothing.                                                                   |
+| `9:o:<customerId>` | `ADMIN_CUSTOMER_BLOCK_OPEN`      | opens a `CUSTOMER_BLOCK_REASON` capture naming the customer; prompts for the reason.                                                                     |
+| plain text         | (capture)                        | `submitReason`: trimmed, 1–500; invalid text is answered and the capture stays open; a confirmation restates the reason.                                 |
+| `9:c:<captureId>`  | `ADMIN_CUSTOMER_BLOCK_CONFIRM`   | closes the capture CONFIRMED, then `CustomerService.blockWithOutcome` under the capture-derived key with the reason and the `CUSTOMERS_SECTION` context. |
+| `9:x:<captureId>`  | `ADMIN_CUSTOMER_BLOCK_CANCEL`    | closes the capture CANCELLED; the customer is untouched.                                                                                                 |
+| `9:u:<customerId>` | `ADMIN_CUSTOMER_UNBLOCK`         | **ask**: confirmation with «رفع مسدودی شود» / «انصراف». Writes nothing.                                                                                  |
+| `9:n:<customerId>` | `ADMIN_CUSTOMER_UNBLOCK_CONFIRM` | `CustomerService.unblock` under the update's key.                                                                                                        |
 
 Every reply after a write is the detail screen's own builder, so the buttons match the state held.
 `PRE_REASON_BLOCK_NOTE` is no longer written by anything; the constant stays so `blockedReply`

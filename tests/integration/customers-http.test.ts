@@ -5,6 +5,7 @@ import {
   AUTH_ROUTES,
   COMMERCE_ERROR_CODES,
   CONTROL_ERROR_CODES,
+  CUSTOMER_BLOCK_REASON_MAX_LENGTH,
   CUSTOMER_ROUTES,
   customerListResponseSchema,
   customerResponseSchema,
@@ -15,7 +16,15 @@ import type { BotInstanceId, UserId } from '@nexa/contracts';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import { DrizzleCustomerRepository } from '../../apps/api/src/modules/commerce/customers/infrastructure/drizzle-customer.repository';
-import { createAdmin, migrateOnce, resetDatabase, tenantA, tenantB, testConfig } from './harness';
+import {
+  adminActorFor,
+  createAdmin,
+  migrateOnce,
+  resetDatabase,
+  tenantA,
+  tenantB,
+  testConfig,
+} from './harness';
 
 /**
  * Customers over real HTTP.
@@ -41,6 +50,7 @@ describe('customer HTTP surface', () => {
   let api: ApiApp;
   /** operator: users.view + users.search + users.block. */
   let operatorCookie: string;
+  let operatorAdmin: Awaited<ReturnType<typeof createAdmin>>;
   /** support: users.view + users.search, and NOT users.block. */
   let supportCookie: string;
   /** A custom role holding users.view ALONE — no system role has that shape. */
@@ -69,7 +79,7 @@ describe('customer HTTP surface', () => {
     await seed(api.container.database.db, api.container.cipher);
     api.container.setInstallationTenant(tenantA.tenantId);
 
-    await createAdmin(api.container, tenantA, {
+    operatorAdmin = await createAdmin(api.container, tenantA, {
       username: 'operator',
       password: 'the-operators-real-password',
       roleKeys: ['operator'],
@@ -202,6 +212,7 @@ describe('customer HTTP surface', () => {
       [
         'blockedAt',
         'blockedReason',
+        'blockedReasonShown',
         'firstName',
         'firstSeenAt',
         'id',
@@ -313,8 +324,11 @@ describe('customer HTTP surface', () => {
 
   it('refuses a BLOCK to users.view plus users.search without users.block', async () => {
     const id = await customerIn(tenantA, '5551234567');
+    // A well-formed request, so the refusal is the GUARD's: a body the schema refuses is a
+    // 400 before any permission is asked (WP10G).
     const response = await post(CUSTOMER_ROUTES.block(id), supportCookie, {
       idempotencyKey: idempotencyKey(),
+      reason: 'spam',
     });
     expect(response.statusCode).toBe(403);
 
@@ -326,7 +340,10 @@ describe('customer HTTP surface', () => {
 
   it('refuses an UNBLOCK to the same actor', async () => {
     const id = await customerIn(tenantA, '5551234567');
-    await post(CUSTOMER_ROUTES.block(id), operatorCookie, { idempotencyKey: idempotencyKey() });
+    await post(CUSTOMER_ROUTES.block(id), operatorCookie, {
+      idempotencyKey: idempotencyKey(),
+      reason: 'spam',
+    });
     const response = await post(CUSTOMER_ROUTES.unblock(id), supportCookie, {
       idempotencyKey: idempotencyKey(),
     });
@@ -386,6 +403,7 @@ describe('customer HTTP surface', () => {
     const inB = await customerIn(tenantB, '900100202');
     const response = await post(CUSTOMER_ROUTES.block(inB), operatorCookie, {
       idempotencyKey: idempotencyKey(),
+      reason: 'spam',
     });
     expect(response.statusCode).toBe(404);
     // And B's row is untouched, read from the database rather than from an API
@@ -539,6 +557,138 @@ describe('customer HTTP surface', () => {
     expect((audits.rows[1] as { after: { changed: boolean } }).after.changed).toBe(false);
   });
 
+  // -------------------------------------------------------------------------
+  // The mandatory reason (WP10G, closing OQ-WP10F-03)
+  // -------------------------------------------------------------------------
+
+  it('refuses a block with no reason, before any record is written', async () => {
+    const id = await customerIn(tenantA, '900400021');
+    const key = idempotencyKey();
+    const response = await post(CUSTOMER_ROUTES.block(id), operatorCookie, {
+      idempotencyKey: key,
+    });
+    expect(response.statusCode).toBe(400);
+
+    // Nothing moved, nothing was remembered, nothing was audited: the refusal is BEFORE the
+    // idempotency lookup, so the same key can carry the corrected request.
+    const after = await get(CUSTOMER_ROUTES.detail(id), operatorCookie);
+    expect(customerResponseSchema.parse(after.json()).customer.status).toBe('ACTIVE');
+    const remembered = await api.container.database.db.execute(
+      sql`SELECT key FROM request_idempotency WHERE key = ${key}`,
+    );
+    expect(remembered.rows).toEqual([]);
+    const audits = await api.container.database.db.execute(sql`
+      SELECT count(*)::int AS n FROM audit_logs
+       WHERE entity_id = ${id} AND action = 'customer.block'`);
+    expect((audits.rows[0] as { n: number }).n).toBe(0);
+
+    const corrected = await post(CUSTOMER_ROUTES.block(id), operatorCookie, {
+      idempotencyKey: key,
+      reason: 'repeated abuse',
+    });
+    expect(corrected.statusCode).toBe(201);
+    expect(customerResponseSchema.parse(corrected.json()).customer.blockedReason).toBe(
+      'repeated abuse',
+    );
+  });
+
+  it('refuses a whitespace-only reason as no reason, and trims a real one', async () => {
+    const id = await customerIn(tenantA, '900400022');
+    const blank = await post(CUSTOMER_ROUTES.block(id), operatorCookie, {
+      idempotencyKey: idempotencyKey(),
+      reason: '   \t\n ',
+    });
+    expect(blank.statusCode).toBe(400);
+    expect(
+      customerResponseSchema.parse((await get(CUSTOMER_ROUTES.detail(id), operatorCookie)).json())
+        .customer.status,
+    ).toBe('ACTIVE');
+
+    const padded = await post(CUSTOMER_ROUTES.block(id), operatorCookie, {
+      idempotencyKey: idempotencyKey(),
+      reason: '  spam links  ',
+    });
+    expect(padded.statusCode).toBe(201);
+    const blocked = customerResponseSchema.parse(padded.json()).customer;
+    expect(blocked.blockedReason).toBe('spam links');
+    // Written under the promise that the customer sees it.
+    expect(blocked.blockedReasonShown).toBe(true);
+  });
+
+  it('refuses an over-long reason rather than cutting it', async () => {
+    const id = await customerIn(tenantA, '900400023');
+    const response = await post(CUSTOMER_ROUTES.block(id), operatorCookie, {
+      idempotencyKey: idempotencyKey(),
+      reason: 'x'.repeat(CUSTOMER_BLOCK_REASON_MAX_LENGTH + 1),
+    });
+    expect(response.statusCode).toBe(400);
+    expect(
+      customerResponseSchema.parse((await get(CUSTOMER_ROUTES.detail(id), operatorCookie)).json())
+        .customer.status,
+    ).toBe('ACTIVE');
+  });
+
+  it('the service refuses a reason-less block from any caller, not only the schema', async () => {
+    // Straight at the service, as a surface that skipped the schema would call it: the rule
+    // lives in `CustomerService`, and the HTTP schema is the courtesy in front of it.
+    const id = await customerIn(tenantA, '900400024');
+    const operator = adminActorFor(operatorAdmin);
+    await expect(
+      api.container.customers.block(tenantA, operator, {
+        idempotencyKey: `service-no-reason-${id}`,
+        customerId: id,
+        reason: null,
+      }),
+    ).rejects.toMatchObject({ code: COMMERCE_ERROR_CODES.CUSTOMER_BLOCK_REASON_REQUIRED });
+    await expect(
+      api.container.customers.block(tenantA, operator, {
+        idempotencyKey: `service-blank-reason-${id}`,
+        customerId: id,
+        reason: '   ',
+      }),
+    ).rejects.toMatchObject({ code: COMMERCE_ERROR_CODES.CUSTOMER_BLOCK_REASON_REQUIRED });
+    expect((await api.container.customers.get(tenantA, operator, id)).status).toBe('ACTIVE');
+  });
+
+  it('an unblock needs no reason, and clears the stored one', async () => {
+    const id = await customerIn(tenantA, '900400025');
+    await post(CUSTOMER_ROUTES.block(id), operatorCookie, {
+      idempotencyKey: idempotencyKey(),
+      reason: 'spam',
+    });
+    const response = await post(CUSTOMER_ROUTES.unblock(id), operatorCookie, {
+      idempotencyKey: idempotencyKey(),
+    });
+    expect(response.statusCode).toBe(201);
+    const active = customerResponseSchema.parse(response.json()).customer;
+    expect(active.status).toBe('ACTIVE');
+    expect(active.blockedReason).toBeNull();
+    expect(active.blockedReasonShown).toBe(false);
+  });
+
+  it('a second block of a blocked customer leaves the stored reason untouched', async () => {
+    const id = await customerIn(tenantA, '900400026');
+    await post(CUSTOMER_ROUTES.block(id), operatorCookie, {
+      idempotencyKey: idempotencyKey(),
+      reason: 'the first reason',
+    });
+    const again = await post(CUSTOMER_ROUTES.block(id), operatorCookie, {
+      idempotencyKey: idempotencyKey(),
+      reason: 'a different reason',
+    });
+    // Not an error — the end state asked for holds — and not an overwrite: the conditional
+    // UPDATE did not match, so changing a reason is unblock-then-block, never a replay.
+    expect(again.statusCode).toBe(201);
+    expect(customerResponseSchema.parse(again.json()).customer.blockedReason).toBe(
+      'the first reason',
+    );
+    const audits = await api.container.database.db.execute(sql`
+      SELECT after FROM audit_logs
+       WHERE entity_id = ${id} AND action = 'customer.block'
+       ORDER BY occurred_at ASC`);
+    expect((audits.rows[1] as { after: { changed: boolean } }).after.changed).toBe(false);
+  });
+
   it('remembers a Web block under WEB and audits it as WEB (OQ-WP10F-04)', async () => {
     const id = await customerIn(tenantA, '900400009');
     const key = idempotencyKey();
@@ -584,7 +734,12 @@ describe('customer HTTP surface', () => {
     const id = await customerIn(tenantA, '900400003');
     const key = idempotencyKey();
     expect(
-      (await post(CUSTOMER_ROUTES.block(id), operatorCookie, { idempotencyKey: key })).statusCode,
+      (
+        await post(CUSTOMER_ROUTES.block(id), operatorCookie, {
+          idempotencyKey: key,
+          reason: 'one question',
+        })
+      ).statusCode,
     ).toBe(201);
     const mismatched = await post(CUSTOMER_ROUTES.block(id), operatorCookie, {
       idempotencyKey: key,

@@ -143,7 +143,7 @@ describe('receipt-review actions require a stored receipt', () => {
       f.ctx.container.receiptRejectCaptures.open(tenantA, f.owner, {
         idempotencyKey: 'capture-reject-open',
         botInstanceId: bot,
-        paymentId: payment,
+        targetId: payment,
       }),
     ).resolves.toEqual({ outcome: 'GONE' });
     expect(await openCaptures()).toBe(0);

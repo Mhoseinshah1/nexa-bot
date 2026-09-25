@@ -884,6 +884,15 @@ order still has two outcomes and no third. `PAID_UNFULFILLED` did not come back 
 the renew chooser: an option that cannot be honoured is not drawn, and a tap on a stale
 one is refused with a reason.
 
+**Customer blocking is consistent across surfaces (WP10G,
+`docs/customer-blocking-consistency-audit.md`).** A block needs a reason on every
+surface — the Web Admin in two steps with a mandatory field, the Telegram customers
+section through the same reason capture as the receipt's Block User, naming the
+customer — and `CustomerService` refuses a block without one for any caller. The stored
+reason is the one the customer is shown; an unblock asks for confirmation and no reason.
+OQ-WP10F-03 is closed. Acceptance (falsification, the full gate, a Codex round) is a
+later pass.
+
 ## Phases 6–8
 
 Phase 6 is done — 6A the service lifecycle on every surface, 6B capacity, eligibility

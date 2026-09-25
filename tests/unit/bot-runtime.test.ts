@@ -899,11 +899,25 @@ describe('profile metadata, normalised before it is ever stored', () => {
        * tenant's and not-matched, so an administrator cannot use this surface to
        * discover whether an id names anybody here.
        */
+      /*
+       * WP10G (closing OQ-WP10F-03): the customers section's block is ask → the typed
+       * reason → a restating confirm, and its unblock asks first. Each step has one
+       * sentence, reviewed: every one names a state this head produces, and the
+       * "expired"/"cancelled" ones say nothing was blocked.
+       */
+      'bot.admin.customer_block_already',
+      'bot.admin.customer_block_ask',
       'bot.admin.customer_block_button',
+      'bot.admin.customer_block_cancelled',
+      'bot.admin.customer_block_confirm',
+      'bot.admin.customer_block_expired',
+      'bot.admin.customer_block_reason_prompt',
       'bot.admin.customer_detail',
       'bot.admin.customer_gone',
       'bot.admin.customer_status_changed',
+      'bot.admin.customer_unblock_ask',
       'bot.admin.customer_unblock_button',
+      'bot.admin.customer_unblock_confirm_button',
       'bot.admin.customer_usage',
       'bot.admin.customers_back_button',
       'bot.admin.customers_button',
