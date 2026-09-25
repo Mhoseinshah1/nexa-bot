@@ -6125,7 +6125,8 @@ export const TEMPLATES = [
   },
   {
     key: 'bot.service.rotate_hint',
-    description: 'The hint under the card, drawn only when the rotate button is.',
+    description:
+      'The hint under the card, drawn only when the rotate button is. Must not say or imply that the old link stops working or that other people lose access: that is not proven on any panel (OQ-RP-07).',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
