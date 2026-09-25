@@ -16,23 +16,23 @@ unmerged WP10G branch.
 
 ## 1. What exists (the audit)
 
-| Concern | Where | What it does today |
-| --- | --- | --- |
-| Gateway persistence | `payment_gateways`, `(tenant, provider)` PK; `contracts/payment-gateways.ts` | A closed roster `PAYMENT_GATEWAY_PROVIDERS = ['MANUAL_TRANSFER']`. Each route has status, display name, bounds, eligibility, sort, `topup_cashback_percent`, and per-purpose switches. `PAYMENT_GATEWAY_DESCRIPTORS` says how a route settles (`settlesVia`) and whether it needs credentials. No credential column exists — the file says one arrives with the first route that needs it. |
-| Route selection | `PaymentGatewayService.routesFor` / `offer` / `methodIsOffered`; `domain/gateway-selection.ts` | Pure, descriptor-driven. `externalRoutes()` already exists and answers `[]`; the pre-invoice already draws a `g:` "pay with gateway" button when an external route allows the purchase, and the `PAY_GATEWAY` intent answers `bot.payment.unconfigured`. |
-| Payment attempt | `payments`; `contracts/payment.ts` | One row per attempt. States PENDING/CONFIRMED/FAILED/CANCELLED/EXPIRED/UNKNOWN; methods WALLET/MANUAL_TRANSFER/GATEWAY. `GATEWAY` is refused by `assertMethodAvailable`. `external_reference` has no writer. `expires_at` is the attempt's own deadline. Every edge is a conditional UPDATE naming `PENDING`. `payments_order_confirmed_key` allows one CONFIRMED payment per order. `gateway_provider` and `topup_cashback_percent` are snapshotted at creation and frozen by 0114. |
-| Order settlement | `PaymentService.confirmAndSettle` (private) | Conditional confirm, order lock, customer lock, fulfilment/commercial planning, the automatic undeliverable refund to the wallet, `PaymentConfirmed` / `OrderSettled` in the outbox. `onIneligible` is `REFUSE` for a wallet debit and `REFUND` for money that already moved. |
-| Wallet top-up settlement | `PaymentService.confirmAndCredit` (private) | Conditional confirm, `TOPUP_RECEIPT` credit under `<paymentId>:topup`, the gift `CASHBACK_TOPUP` under `<paymentId>:topup-cashback` from the payment's snapshot, `WalletEntryRecorded`, `WALLET_TOPUP_CREDITED` / `WALLET_TOPUP_GIFT_CREDITED`. Once-only by partial unique indexes on the ledger. |
-| Top-up gift | `payment_gateways.topup_cashback_percent`, snapshotted onto the payment | Per route; any future route inherits the column. |
-| Web Admin gateways | `payment-gateways.controller.ts`, `pages/payment-gateways.tsx` | List, configure, enable/disable. No credential field. |
-| Telegram top-up | `WalletTopupFlowService` (typed amount → route chooser `tp:<capture>.<provider>`) | `choose` always calls `requestWalletTopupTyped`, which issues a MANUAL_TRANSFER. |
-| Expiry | `PaymentExpiryService` (worker, 60 s) | Expires every PENDING payment at `expires_at` (except a receipted manual transfer), then the orders whose deadline passed and that have no PENDING payment. Sends `PAYMENT_EXPIRED`. |
-| Reconciliation | none | `UNKNOWN` and the `RECONCILE_*` edges have no producer. There is no gateway queue or worker (`OQ-WP10-01`). |
-| Outbox / idempotency | `OutboxWriter`, `IdempotencyStore` + `rememberOnce` | Events in the business transaction; customer commands keyed per surface namespace. |
-| HTTP callbacks | `TelegramWebhookController` | The one public inbound route. Rules: authenticate before parsing ids; answer unknown/stopped the same way; a small body limit; **no handler dials a payment gateway or a panel inline**. Caddy proxies only `/api/*`, `/health/*` and `/telegram/webhook/*`. |
-| Secrets | Secret Envelope v2 (`SecretCipher`), `SECRET_PURPOSES`, `secret-registry.ts` | AEAD-bound to `(purpose, tenant, entity)`. Every `*_ciphertext` column must be registered, and every purpose must have a producer (unit test). Panels hold the pattern: projections select a set-at timestamp and never a ciphertext, and never a masked stand-in. |
-| Customer notifications | `customer_notifications`, closed kinds, no payload | A fact about an entity, rendered from one frozen template. Credit sentences read their figure from the payment's own ledger entry (`PAYMENT_CREDIT_FIGURES`), one reason per kind. |
-| Operational log | `OperationalEventRecorder`, codes declared beside the producer | Deduped conditions an operator acts on. |
+| Concern                  | Where                                                                                          | What it does today                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------------ | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Gateway persistence      | `payment_gateways`, `(tenant, provider)` PK; `contracts/payment-gateways.ts`                   | A closed roster `PAYMENT_GATEWAY_PROVIDERS = ['MANUAL_TRANSFER']`. Each route has status, display name, bounds, eligibility, sort, `topup_cashback_percent`, and per-purpose switches. `PAYMENT_GATEWAY_DESCRIPTORS` says how a route settles (`settlesVia`) and whether it needs credentials. No credential column exists — the file says one arrives with the first route that needs it.                                                                                           |
+| Route selection          | `PaymentGatewayService.routesFor` / `offer` / `methodIsOffered`; `domain/gateway-selection.ts` | Pure, descriptor-driven. `externalRoutes()` already exists and answers `[]`; the pre-invoice already draws a `g:` "pay with gateway" button when an external route allows the purchase, and the `PAY_GATEWAY` intent answers `bot.payment.unconfigured`.                                                                                                                                                                                                                             |
+| Payment attempt          | `payments`; `contracts/payment.ts`                                                             | One row per attempt. States PENDING/CONFIRMED/FAILED/CANCELLED/EXPIRED/UNKNOWN; methods WALLET/MANUAL_TRANSFER/GATEWAY. `GATEWAY` is refused by `assertMethodAvailable`. `external_reference` has no writer. `expires_at` is the attempt's own deadline. Every edge is a conditional UPDATE naming `PENDING`. `payments_order_confirmed_key` allows one CONFIRMED payment per order. `gateway_provider` and `topup_cashback_percent` are snapshotted at creation and frozen by 0114. |
+| Order settlement         | `PaymentService.confirmAndSettle` (private)                                                    | Conditional confirm, order lock, customer lock, fulfilment/commercial planning, the automatic undeliverable refund to the wallet, `PaymentConfirmed` / `OrderSettled` in the outbox. `onIneligible` is `REFUSE` for a wallet debit and `REFUND` for money that already moved.                                                                                                                                                                                                        |
+| Wallet top-up settlement | `PaymentService.confirmAndCredit` (private)                                                    | Conditional confirm, `TOPUP_RECEIPT` credit under `<paymentId>:topup`, the gift `CASHBACK_TOPUP` under `<paymentId>:topup-cashback` from the payment's snapshot, `WalletEntryRecorded`, `WALLET_TOPUP_CREDITED` / `WALLET_TOPUP_GIFT_CREDITED`. Once-only by partial unique indexes on the ledger.                                                                                                                                                                                   |
+| Top-up gift              | `payment_gateways.topup_cashback_percent`, snapshotted onto the payment                        | Per route; any future route inherits the column.                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Web Admin gateways       | `payment-gateways.controller.ts`, `pages/payment-gateways.tsx`                                 | List, configure, enable/disable. No credential field.                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Telegram top-up          | `WalletTopupFlowService` (typed amount → route chooser `tp:<capture>.<provider>`)              | `choose` always calls `requestWalletTopupTyped`, which issues a MANUAL_TRANSFER.                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Expiry                   | `PaymentExpiryService` (worker, 60 s)                                                          | Expires every PENDING payment at `expires_at` (except a receipted manual transfer), then the orders whose deadline passed and that have no PENDING payment. Sends `PAYMENT_EXPIRED`.                                                                                                                                                                                                                                                                                                 |
+| Reconciliation           | none                                                                                           | `UNKNOWN` and the `RECONCILE_*` edges have no producer. There is no gateway queue or worker (`OQ-WP10-01`).                                                                                                                                                                                                                                                                                                                                                                          |
+| Outbox / idempotency     | `OutboxWriter`, `IdempotencyStore` + `rememberOnce`                                            | Events in the business transaction; customer commands keyed per surface namespace.                                                                                                                                                                                                                                                                                                                                                                                                   |
+| HTTP callbacks           | `TelegramWebhookController`                                                                    | The one public inbound route. Rules: authenticate before parsing ids; answer unknown/stopped the same way; a small body limit; **no handler dials a payment gateway or a panel inline**. Caddy proxies only `/api/*`, `/health/*` and `/telegram/webhook/*`.                                                                                                                                                                                                                         |
+| Secrets                  | Secret Envelope v2 (`SecretCipher`), `SECRET_PURPOSES`, `secret-registry.ts`                   | AEAD-bound to `(purpose, tenant, entity)`. Every `*_ciphertext` column must be registered, and every purpose must have a producer (unit test). Panels hold the pattern: projections select a set-at timestamp and never a ciphertext, and never a masked stand-in.                                                                                                                                                                                                                   |
+| Customer notifications   | `customer_notifications`, closed kinds, no payload                                             | A fact about an entity, rendered from one frozen template. Credit sentences read their figure from the payment's own ledger entry (`PAYMENT_CREDIT_FIGURES`), one reason per kind.                                                                                                                                                                                                                                                                                                   |
+| Operational log          | `OperationalEventRecorder`, codes declared beside the producer                                 | Deduped conditions an operator acts on.                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 
 Three things in the existing code would have been wrong for an external route, and are
 fixed in this package:
@@ -98,19 +98,19 @@ the setting.
 
 ## 4. C — undocumented behaviour deliberately NOT invented
 
-| Gap | What Nexa does instead |
-| --- | --- |
-| How to verify `X-TonPays-Signature` | Never verified, never logged, never trusted. The webhook only schedules an inquiry. |
-| What `X-API-Key` on a webhook contains | Ignored and never logged. |
-| Webhook retry schedule | Nothing depends on it. A background inquiry with bounded backoff covers a lost webhook. |
-| Refund API | None. No provider refund, no partial refund, no claim that TonPays refunded. An undeliverable order is refunded to the **wallet** by the existing one credit path, as for every rail. |
-| Cancel API | None. Nexa's expiry closes the Nexa attempt; the provider invoice is not cancelled and Nexa never says it was. |
-| The meaning of `request_amount` vs `final_amount` vs `credit_amount` | Stored as metadata only. |
-| Inquiry by `order_id` | None. A create whose answer was lost cannot be looked up; see §5.4. |
-| Whether `DUPLICATE_ORDER_ID` returns the existing invoice | Not assumed: it is recorded as "an invoice may exist under this order id". |
-| HTTP status of each error | The documented `detail.code` is what is classified; a status with no readable code is classified by status class, and an ambiguous one is UNKNOWN. |
-| Whether the rate limit is per key, per store or per account | Nexa stays below 60/min per tenant across every replica (§5.7). |
-| A sandbox | None configured; the production URL is the only one. |
+| Gap                                                                  | What Nexa does instead                                                                                                                                                                |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| How to verify `X-TonPays-Signature`                                  | Never verified, never logged, never trusted. The webhook only schedules an inquiry.                                                                                                   |
+| What `X-API-Key` on a webhook contains                               | Ignored and never logged.                                                                                                                                                             |
+| Webhook retry schedule                                               | Nothing depends on it. A background inquiry with bounded backoff covers a lost webhook.                                                                                               |
+| Refund API                                                           | None. No provider refund, no partial refund, no claim that TonPays refunded. An undeliverable order is refunded to the **wallet** by the existing one credit path, as for every rail. |
+| Cancel API                                                           | None. Nexa's expiry closes the Nexa attempt; the provider invoice is not cancelled and Nexa never says it was.                                                                        |
+| The meaning of `request_amount` vs `final_amount` vs `credit_amount` | Stored as metadata only.                                                                                                                                                              |
+| Inquiry by `order_id`                                                | None. A create whose answer was lost cannot be looked up; see §5.4.                                                                                                                   |
+| Whether `DUPLICATE_ORDER_ID` returns the existing invoice            | Not assumed: it is recorded as "an invoice may exist under this order id".                                                                                                            |
+| HTTP status of each error                                            | The documented `detail.code` is what is classified; a status with no readable code is classified by status class, and an ambiguous one is UNKNOWN.                                    |
+| Whether the rate limit is per key, per store or per account          | Nexa stays below 60/min per tenant across every replica (§5.7).                                                                                                                       |
+| A sandbox                                                            | None configured; the production URL is the only one.                                                                                                                                  |
 
 ## 5. Design
 
@@ -138,7 +138,7 @@ and wallet code is unchanged except for the reason a gateway top-up credits unde
   `{ settlesVia: 'GATEWAY', requiresCredentials: true }`.
 - `PAYMENT_EVIDENCE_KINDS` gains `GATEWAY_INQUIRY`: "the gateway's own inquiry endpoint,
   asked server to server with this installation's credential, answered paid".
-  `GATEWAY_CALLBACK` names a *verified* callback, which this is not, and
+  `GATEWAY_CALLBACK` names a _verified_ callback, which this is not, and
   `RECONCILIATION` names an operator.
 - `SECRET_PURPOSES` gains `payment_gateway.api_key`.
 - `CUSTOMER_NOTIFICATION_KINDS` gains `GATEWAY_PAYMENT_FAILED` (subject: the payment),
@@ -189,8 +189,8 @@ and wallet code is unchanged except for the reason a gateway top-up credits unde
      The payment stays `PENDING` until its deadline and then expires; if a webhook
      later names this `order_id`, its `invoice_id` is inquired and adopted only if the
      inquiry returns this attempt's `order_id`.
-   A claim found with `creation_sent_at` already stamped (a crashed worker) is
-   `CREATE_UNKNOWN`, never re-sent.
+     A claim found with `creation_sent_at` already stamped (a crashed worker) is
+     `CREATE_UNKNOWN`, never re-sent.
 3. `order_id` is `NX` + 18 characters of Crockford base32 from 90 random bits: 20
    characters, not derived from anything the customer typed or from any internal id.
 
@@ -256,17 +256,91 @@ creates up to 50 per minute, inquiries up to 40, across every replica.
 
 ## 6. TonPays error mapping
 
-| Code | Class | Create | Inquiry |
-| --- | --- | --- | --- |
-| `MISSING_API_KEY`, `INVALID_API_KEY`, `INACTIVE_API_KEY`, `ACCOUNT_NOT_VERIFIED`, `ACCOUNT_SUSPENDED`, `STORE_INACTIVE`, `ACCESS_DENIED` | configuration | FAILED + condition; customer told the method is unavailable | backoff + condition |
-| `RATE_LIMIT_EXCEEDED` | rate limit | retry same `order_id`, ≤ 3 | backoff |
-| `DUPLICATE_ORDER_ID` | ambiguous | CREATE_UNKNOWN | — |
-| `AMOUNT_TOO_LOW`, `AMOUNT_TOO_HIGH`, `INVALID_BUYER_CHAT_ID`, `BUYER_IS_MERCHANT`, `BUYER_SUSPENDED`, `PAYER_RESERVE_FAILED`, `WEB_PAY_URL_FAILED` | invoice | FAILED | — |
-| `INVALID_CALLBACK_URL` | configuration | FAILED + condition | — |
-| `INVOICE_NOT_FOUND` | not found | — | recorded, backoff; never treated as failed or paid |
-| anything else with a 4xx | refused | FAILED | backoff |
-| 5xx, timeout, network, unreadable | unknown | CREATE_UNKNOWN | backoff |
+| Code                                                                                                                                               | Class         | Create                                                      | Inquiry                                            |
+| -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ----------------------------------------------------------- | -------------------------------------------------- |
+| `MISSING_API_KEY`, `INVALID_API_KEY`, `INACTIVE_API_KEY`, `ACCOUNT_NOT_VERIFIED`, `ACCOUNT_SUSPENDED`, `STORE_INACTIVE`, `ACCESS_DENIED`           | configuration | FAILED + condition; customer told the method is unavailable | backoff + condition                                |
+| `RATE_LIMIT_EXCEEDED`                                                                                                                              | rate limit    | retry same `order_id`, ≤ 3                                  | backoff                                            |
+| `DUPLICATE_ORDER_ID`                                                                                                                               | ambiguous     | CREATE_UNKNOWN                                              | —                                                  |
+| `AMOUNT_TOO_LOW`, `AMOUNT_TOO_HIGH`, `INVALID_BUYER_CHAT_ID`, `BUYER_IS_MERCHANT`, `BUYER_SUSPENDED`, `PAYER_RESERVE_FAILED`, `WEB_PAY_URL_FAILED` | invoice       | FAILED                                                      | —                                                  |
+| `INVALID_CALLBACK_URL`                                                                                                                             | configuration | FAILED + condition                                          | —                                                  |
+| `INVOICE_NOT_FOUND`                                                                                                                                | not found     | —                                                           | recorded, backoff; never treated as failed or paid |
+| anything else with a 4xx                                                                                                                           | refused       | FAILED                                                      | backoff                                            |
+| 5xx, timeout, network, unreadable                                                                                                                  | unknown       | CREATE_UNKNOWN                                              | backoff                                            |
 
 ## 7. Implementation notes
 
-Filled in after the build; see the section at the end of this file.
+What was built, where it differs in detail from §5, and why.
+
+### 7.1 Where things live
+
+| Concern                                                       | Code                                                                                                          |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Pure rules (verdict, Toman, order id, error classes, backoff) | `payments/domain/tonpays.ts`                                                                                  |
+| Adapter port, invoice repository, credential store, budget    | `payments/application/gateway-invoice-ports.ts`                                                               |
+| The only TonPays HTTP                                         | `payments/infrastructure/tonpays-adapter.ts` (a listed transaction-guarded sink in `check-boundaries.sh`)     |
+| Attempts and settlement                                       | `PaymentService.requestGatewayPayment`, `requestGatewayTopup`, `confirmGatewayPayment`, `failGatewayPayment`  |
+| Orchestration, webhook, customer reads                        | `payments/application/gateway-payment.service.ts`                                                             |
+| Worker loop (3 s, health-checked)                             | `payments/application/gateway-payment-loop.ts`, `main.worker.ts`                                              |
+| Route config, key, enable gate                                | `PaymentGatewayService.setCredential`, `setStatus`, `factsFor`                                                |
+| Webhook route                                                 | `surfaces/gateway/webhook.controller.ts`, `deploy/caddy/routes.caddy`                                         |
+| Telegram                                                      | `bot-runtime.ts`: `g:` pays, `gc:` checks; the top-up chooser dispatches in `WalletTopupFlowService.choose`   |
+| Web Admin                                                     | `pages/payment-gateways.tsx` (key state, key form, callback URL), `pages/payments.tsx` (gateway invoice card) |
+
+### 7.2 Details that differ from, or add to, §5
+
+- **The first answer is "preparing".** The Telegram webhook rule forbids dialling a
+  gateway while Telegram waits, so the tap writes the attempt and replies with a check
+  button; the worker creates the invoice within seconds and the check tap shows the link.
+  A check also brings the next inquiry forward (no sooner than five seconds after the
+  last). No proactive "your link is ready" message is sent: the customer notification lane
+  carries no buttons and no payload (ADR-0030), and a link is state, not a fact.
+- **Customer sentences.** A create the provider refused (any code) is shown as
+  `gateway_unavailable`; an invoice the provider did not approve is `gateway_failed` and is
+  also sent as `GATEWAY_PAYMENT_FAILED` — except for configuration and rate-limit refusals,
+  which are never presented as the customer's payment failing. `PAYMENT_EXPIRED` is sent by
+  the existing sweep when an attempt reaches its deadline.
+- **Evidence and audit.** A confirmed payment carries `GATEWAY_INQUIRY` and the note
+  `tonpays:completed:paid`; a failed one has no administrator and the note
+  `tonpays:<status or code>`. Audit actions: `payment.gateway_request`,
+  `payment.gateway_confirm`, `payment.gateway_fail`, `gateway_invoice.created`,
+  `gateway_invoice.create_failed`, `gateway_invoice.create_unknown`,
+  `gateway_invoice.late_completion`, `payment_gateway.set_credential` (records only that a
+  key was stored and when). Operational codes: `payments.gateway_misconfigured` /
+  `payments.gateway_configured`, `payments.gateway_create_unknown`,
+  `payments.gateway_late_completion`, `payments.gateway_identity_mismatch`.
+- **Rate limit and budget.** A create is granted while the tenant's minute holds fewer than
+  50 calls, an inquiry fewer than 40. A pass that is refused stops and the next pass (3 s)
+  retries; nothing is dropped.
+- **Webhook dedupe.** One `last_webhook_delivery_id` per attempt: a repeat of the last
+  delivery changes nothing. The settlement's own exactly-once does not depend on it.
+- **One attempt at a time.** An order (or a customer's gateway top-up) has at most one
+  OPEN attempt per provider — PENDING, inside its deadline, invoice `CREATING` or `CREATED`
+  — which a second tap is handed back. It is enforced under the customer's row lock, not by
+  an index. A `CREATE_UNKNOWN` attempt is not open: the customer never received its link.
+- **Seed and defaults.** A route that needs a credential is created and seeded
+  `DISABLED`. `offer()` (the preset top-up) and `requestWalletTopupTyped` only ever use a
+  route that settles by manual transfer.
+- **Callback origin.** The origin is the tenant's ACTIVE bot's registered Telegram webhook
+  URL, https only.
+
+### 7.3 Known limits, stated rather than hidden
+
+- **Not yet proven against the real provider** (`OQ-WP10-01`, `CLAUDE.md`'s provider
+  rule). Every test uses a fake written from the documentation.
+- **A closed attempt can still be paid at TonPays.** Nexa has no cancel API to call. Late
+  money is recorded (`LATE_COMPLETION`) and never settled automatically (`OQ-WP11A-03`).
+- **Migration number.** The unmerged WP10G branch also adds a `0121`, with an earlier
+  journal `when`. Whichever of the two merges second must be renumbered and re-stamped
+  with the current time, or the migrator's watermark will skip it
+  (`nexa-migrations` skill).
+
+### 7.4 Targeted tests
+
+- `tests/unit/tonpays-adapter.test.ts` — request shape and headers, key never in any
+  outcome, link preference and https-only links, outcome classes, every status's verdict,
+  order id, Toman, budget and backoff.
+- `tests/integration/tonpays-gateway.test.ts` — the whole lane against PostgreSQL and the
+  container's own services, including the brief's §24 list.
+- `tests/integration/tonpays-http.test.ts` — the Web Admin key route, the enable gate and
+  the webhook route's answers.
+- `tests/web/payment-gateways.test.tsx` — the key's state and the write-only form.

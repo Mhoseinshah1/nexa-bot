@@ -2236,6 +2236,46 @@ UNRESOLVED. The gateway machinery is built with its first provider, against that
 provider's real sandbox, per `CLAUDE.md`'s provider rule. Until then no external gateway can
 be enabled.
 
+PARTLY RESOLVED by WP11A (`docs/tonpays-gateway-audit.md`). The owner named TonPays and
+decided its rules, which override File 02 where they differ: a hard 70-minute attempt
+lifetime with NO ten-minute grace, and no amount-mismatch outcome (approval is
+`completed` + `paid === true` from the inquiry alone; the provider's amounts are metadata).
+Two parts stand:
+
+- **The provider rule.** TonPays documents no sandbox, and the owner deferred acceptance
+  to a later pass. The adapter has so far been checked only against a fake written from the
+  documentation, which proves only that the two agree (`CLAUDE.md`). TonPays should not be
+  enabled for real customers until an acceptance run against the real provider has passed.
+- **One active external gateway at a time** (File 02). Not enforced: TonPays is the only
+  external route. The partial unique index belongs with the second external provider.
+
+## OQ-WP11A-01 — how to verify `X-TonPays-Signature`
+
+TonPays sends `X-TonPays-Signature` (and `X-API-Key`) on its webhook and documents no
+verification algorithm. UNRESOLVED. Until the provider documents one, a webhook is a hint
+that schedules an inquiry and nothing more; neither header is read, stored or logged.
+
+## OQ-WP11A-02 — the undocumented TonPays semantics
+
+UNRESOLVED, and none is guessed:
+
+- what `request_amount`, `final_amount` and `credit_amount` each mean (stored as metadata);
+- whether an inquiry by `order_id` exists (a create whose answer was lost cannot be looked
+  up, so it is `CREATE_UNKNOWN` and expires at its deadline unless a webhook names it);
+- what `DUPLICATE_ORDER_ID` returns, and the webhook retry schedule;
+- whether the documented rate limit is per key, per store or per account (Nexa stays under
+  it per tenant across replicas);
+- refund and cancel APIs (none documented; none built).
+
+## OQ-WP11A-03 — money that arrives for an attempt Nexa can no longer settle
+
+A TonPays invoice may be paid after Nexa closed the attempt: past the 70-minute deadline,
+after the customer paid the order another way (a wallet payment withdraws the order's other
+pending payments), or after the customer cancelled the order. By the owner's rule nothing
+settles automatically; the lane records `LATE_COMPLETION` on the invoice, an audit row and
+the condition `payments.gateway_late_completion`. What an operator then does — credit the
+wallet by hand, or nothing — is UNRESOLVED; TonPays documents no refund.
+
 ## OQ-WP10-02 — the customer's claimed amount, reference and date on a receipt
 
 Not captured: the reviewer reads them from the image, and asking for them adds turns to the

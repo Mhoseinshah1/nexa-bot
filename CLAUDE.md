@@ -37,6 +37,19 @@ share its account namespace — funded in the transaction that takes the money,
 and released only by the transaction that gives it back. A panel with no
 template keeps the `nx…` shape. `docs/phase6c-username-falsification.md`.
 
+**TonPays (WP11A) is the first external payment gateway, built and NOT yet accepted
+against the real provider** (`docs/tonpays-gateway-audit.md`, `OQ-WP10-01`). Three rules,
+each a way to credit money nobody approved:
+
+- **Only the inquiry decides.** `completed` AND `paid === true`, read from TonPays' own
+  check endpoint, is the one approval. A webhook is a hint that brings an inquiry forward;
+  its signature is undocumented and never read. The provider's amounts are metadata.
+- **The attempt's 70-minute deadline is checked under the payment's lock**, in
+  `PaymentService.confirmGatewayPayment`, whatever its caller believes. A later approval is
+  recorded as `LATE_COMPLETION` and settles nothing.
+- **A create whose answer was lost is never retried and never re-keyed.** The send is
+  stamped before the call; only the provider's own `RATE_LIMIT_EXCEEDED` clears it.
+
 **Marzban is the supported mutable provider.** 3X-UI keeps the five
 capabilities it has — of which only `CREATE_USER` mutates anything — and gains
 no new mutable scope: the owner's correction, recorded in
