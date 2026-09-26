@@ -148,7 +148,7 @@ and wallet code is unchanged except for the reason a gateway top-up credits unde
   20-character order id and the 70-minute lifetime.
 - Templates for the customer replies and the Web Admin labels.
 
-### 5.3 Persistence (migration 0121)
+### 5.3 Persistence (migration 0122)
 
 - `payment_gateway_credentials` — `id`, `(tenant_id, provider)` unique, the API key's
   ciphertext, key id and set-at. Registered in `secret-registry.ts`. No plaintext
@@ -329,10 +329,10 @@ What was built, where it differs in detail from §5, and why.
   rule). Every test uses a fake written from the documentation.
 - **A closed attempt can still be paid at TonPays.** Nexa has no cancel API to call. Late
   money is recorded (`LATE_COMPLETION`) and never settled automatically (`OQ-WP11A-03`).
-- **Migration number.** The unmerged WP10G branch also adds a `0121`, with an earlier
-  journal `when`. Whichever of the two merges second must be renumbered and re-stamped
-  with the current time, or the migrator's watermark will skip it
-  (`nexa-migrations` skill).
+- **Migration number.** WP10G merged first and kept `0121`; this package's migration was
+  regenerated at integration as `0122_tonpays_gateway`, chained to WP10G's snapshot and
+  stamped with the time it was regenerated, so the migrator's watermark cannot skip it
+  (`nexa-migrations` skill). The SQL is byte-identical to the original `0121`.
 
 ### 7.4 Deferred: the successful-payment admin notification
 
