@@ -752,7 +752,7 @@ describe('TonPays, through the one settlement path', () => {
       const { orderId, paymentId, invoiceId } = await createdAttempt();
       // The provider answers this invoice id with somebody else's order: completed and paid.
       const fake = tonpays.invoices.get(invoiceId)!;
-      fake.orderId = 'NX0000000000000000ZZ';
+      tonpays.invoices.set(invoiceId, { ...fake, orderId: 'NX0000000000000000ZZ' });
       tonpays.set(invoiceId, 'completed', true);
       await inquireNow();
 
