@@ -82,6 +82,8 @@ import {
   PAYMENT_EVIDENCE_KINDS,
   PAYMENT_RESOLVED_STATES,
   PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MAX,
+  CUSTOMER_FEE_BASIS_POINTS_MAX,
+  CUSTOMER_FEE_BASIS_POINTS_MIN,
   PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MIN,
   RECEIPT_CAPTION_MAX_LENGTH,
   RECEIPT_CREDIT_NOTE_MAX_LENGTH,
@@ -3328,6 +3330,21 @@ export const payments = pgTable(
      * cannot change a promise already made: Payment File 02 §17's snapshot rule.
      */
     topupCashbackPercent: integer('topup_cashback_percent'),
+    /**
+     * The customer's gateway fee this attempt was created with (WP18), snapshotted from
+     * its route's `customer_fee_basis_points`: the rate, the fee it produced on `amount`,
+     * and the payable the invoice asked for. `amount` stays the PRINCIPAL — every reader
+     * of it (settlement, the top-up credit and gift, the refund ceiling, the reversals,
+     * the reports) keeps its meaning, and the fee is none of those things.
+     *
+     * All three null, or all three set on a `GATEWAY` payment with
+     * `payable = amount + fee` (`payments_customer_fee_check`). Null is every other
+     * method, and a gateway attempt created before WP18, which is read as no fee. Frozen
+     * after insert in every state (0124), like the route snapshot beside it.
+     */
+    customerFeeBasisPoints: integer('customer_fee_basis_points'),
+    customerFeeAmount: bigint('customer_fee_amount', { mode: 'bigint' }),
+    payableAmount: bigint('payable_amount', { mode: 'bigint' }),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -3480,6 +3497,15 @@ export const payments = pgTable(
     check(
       'payments_topup_cashback_percent_check',
       sql`topup_cashback_percent IS NULL OR topup_cashback_percent BETWEEN ${sql.raw(String(PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MIN))} AND ${sql.raw(String(PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MAX))}`,
+    ),
+    /*
+     * WP18: the fee snapshot is all-or-nothing, only on a gateway payment, and its
+     * arithmetic is the database's too — a payable that is not principal plus fee is a
+     * figure nobody quoted.
+     */
+    check(
+      'payments_customer_fee_check',
+      sql`(customer_fee_basis_points IS NULL AND customer_fee_amount IS NULL AND payable_amount IS NULL) OR (method = 'GATEWAY' AND customer_fee_basis_points BETWEEN ${sql.raw(String(CUSTOMER_FEE_BASIS_POINTS_MIN))} AND ${sql.raw(String(CUSTOMER_FEE_BASIS_POINTS_MAX))} AND customer_fee_amount >= 0 AND payable_amount = amount + customer_fee_amount)`,
     ),
     unique('payments_tenant_id_key').on(table.tenantId, table.id),
   ],
@@ -3829,6 +3855,13 @@ export const paymentGateways = pgTable(
      */
     topupCashbackPercent: integer('topup_cashback_percent').notNull().default(0),
     /**
+     * The customer's gateway fee in basis points (WP18): `525` is 5.25 %. `0` is none and
+     * the default, so every existing route charges nothing until an operator says so.
+     * Only a route that settles through `GATEWAY` may carry a non-zero rate — the service
+     * refuses one anywhere else. Each attempt snapshots it onto `payments`.
+     */
+    customerFeeBasisPoints: integer('customer_fee_basis_points').notNull().default(0),
+    /**
      * Per PURPOSE (customer UX completion §D/§F): whether the route may be offered for
      * a service purchase and for a wallet top-up. Both default to true, the state every
      * row was in before the columns existed. `status` still decides whether the route is
@@ -3899,6 +3932,10 @@ export const paymentGateways = pgTable(
     check(
       'payment_gateways_topup_cashback_percent_check',
       sql`topup_cashback_percent BETWEEN ${sql.raw(String(PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MIN))} AND ${sql.raw(String(PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MAX))}`,
+    ),
+    check(
+      'payment_gateways_customer_fee_check',
+      sql`customer_fee_basis_points BETWEEN ${sql.raw(String(CUSTOMER_FEE_BASIS_POINTS_MIN))} AND ${sql.raw(String(CUSTOMER_FEE_BASIS_POINTS_MAX))}`,
     ),
   ],
 );

@@ -869,6 +869,13 @@
       "when": 1790418275425,
       "tag": "0123_wp15_provider_provenance",
       "breakpoints": true
+    },
+    {
+      "idx": 124,
+      "version": "7",
+      "when": 1790455574519,
+      "tag": "0124_wp18_gateway_customer_fee",
+      "breakpoints": true
     }
   ]
 }
