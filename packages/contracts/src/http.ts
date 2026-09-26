@@ -88,8 +88,13 @@ import {
   PAYMENT_AMOUNT_MAX_MINOR,
   PAYMENT_EVIDENCE_KINDS,
   PAYMENT_METHODS,
+  PAYMENT_RESOLVED_STATES,
   PAYMENT_STATES,
 } from './payment.js';
+import {
+  CUSTOMER_NOTIFICATION_KINDS,
+  CUSTOMER_NOTIFICATION_STATES,
+} from './customer-notifications.js';
 import { CURRENCY_CODES, MAX_MONEY_AMOUNT_MINOR, salesCurrencyCodeSchema } from './money.js';
 import { OPERATIONAL_SEVERITIES } from './ports.js';
 import {
@@ -3432,6 +3437,141 @@ export type PaymentListResponse = z.infer<typeof paymentListResponseSchema>;
 export const paymentResponseSchema = z.object({ payment: paymentDetailSchema });
 export type PaymentResponse = z.infer<typeof paymentResponseSchema>;
 
+// --- Payment timeline (WP17) --------------------------------------------------
+
+/**
+ * The most entries one timeline returns. A longer history says `truncated: true` rather
+ * than dropping entries silently. Two hundred is far above what one payment produces
+ * (a handful of receipts, a few refunds, one notification per kind), so reaching it is
+ * itself a signal worth showing.
+ */
+export const PAYMENT_TIMELINE_MAX_ENTRIES = 200;
+
+/**
+ * The parts of a payment's history that sit behind a permission OTHER than
+ * `payments.view`, each the permission that already guards the same fact elsewhere:
+ * receipts behind `receipts.view`, refunds behind `refunds.view`, and the wallet ledger
+ * behind `users.view`. A section the viewer may not see is WITHHELD and named in the
+ * response, so an empty history is never mistaken for a complete one.
+ */
+export const PAYMENT_TIMELINE_SECTIONS = ['RECEIPTS', 'REFUNDS', 'WALLET'] as const;
+export type PaymentTimelineSection = (typeof PAYMENT_TIMELINE_SECTIONS)[number];
+
+/**
+ * Every kind of entry, in the order two entries at the same instant are shown.
+ *
+ * Each is a fact some flow has ALREADY written; the timeline assembles, it does not
+ * record. `docs/wp17-payment-phase3-audit.md` F4 names the column behind each one and how
+ * truthful its timestamp is. `REFUND_CLOSED_FAILED` is timed by the refund row's
+ * `updated_at`: a FAILED refund is terminal in the database (migration 0073) and only a
+ * conditional write from an open state reaches it, so that is the time it failed.
+ */
+export const PAYMENT_TIMELINE_KINDS = [
+  'PAYMENT_CREATED',
+  'CUSTOMER_SIGNALLED',
+  'RECEIPT_SUBMITTED',
+  'PAYMENT_CONFIRMED',
+  'PAYMENT_RESOLVED',
+  'RECEIPT_CREDITED',
+  'WALLET_ENTRY',
+  'REFUND_REQUESTED',
+  'REFUND_COMPLETED',
+  'REFUND_CLOSED_FAILED',
+  'CUSTOMER_NOTIFIED',
+] as const;
+export type PaymentTimelineKind = (typeof PAYMENT_TIMELINE_KINDS)[number];
+
+const timelineAt = { at: z.iso.datetime() };
+const timelineMoney = { amountMinor: z.string(), currency: z.enum(CURRENCY_CODES) };
+
+/**
+ * One entry. No free text of any kind — not the evidence note, not a resolution note,
+ * not a refund reason, not a receipt caption. Those are on the detail and refund cards,
+ * behind the same permissions, and a second copy is a second place for an operator's
+ * words about somebody's bank transfer to leak. Administrator ids are included where
+ * the detail already returns them.
+ */
+export const paymentTimelineEntrySchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('PAYMENT_CREATED'),
+    ...timelineAt,
+    method: z.enum(PAYMENT_METHODS),
+    ...timelineMoney,
+  }),
+  z.object({ kind: z.literal('CUSTOMER_SIGNALLED'), ...timelineAt }),
+  z.object({
+    kind: z.literal('RECEIPT_SUBMITTED'),
+    ...timelineAt,
+    receiptId: z.string(),
+    receiptKind: z.enum(PAYMENT_RECEIPT_KINDS),
+  }),
+  z.object({
+    kind: z.literal('PAYMENT_CONFIRMED'),
+    ...timelineAt,
+    evidenceKind: z.enum(PAYMENT_EVIDENCE_KINDS),
+    adminId: z.string().nullable(),
+  }),
+  z.object({
+    kind: z.literal('PAYMENT_RESOLVED'),
+    ...timelineAt,
+    state: z.enum(PAYMENT_RESOLVED_STATES),
+    adminId: z.string().nullable(),
+  }),
+  z.object({
+    kind: z.literal('RECEIPT_CREDITED'),
+    ...timelineAt,
+    ...timelineMoney,
+    adminId: z.string(),
+  }),
+  z.object({
+    kind: z.literal('WALLET_ENTRY'),
+    ...timelineAt,
+    entryId: z.string(),
+    direction: z.enum(LEDGER_DIRECTIONS),
+    reason: z.enum(LEDGER_REASONS),
+    ...timelineMoney,
+  }),
+  z.object({
+    kind: z.literal('REFUND_REQUESTED'),
+    ...timelineAt,
+    refundId: z.string(),
+    channel: refundChannelSchema,
+    ...timelineMoney,
+    /** Null for the automatic refund of an order that could not be delivered. */
+    adminId: z.string().nullable(),
+  }),
+  z.object({
+    kind: z.literal('REFUND_COMPLETED'),
+    ...timelineAt,
+    refundId: z.string(),
+    ...timelineMoney,
+    adminId: z.string().nullable(),
+  }),
+  z.object({
+    kind: z.literal('REFUND_CLOSED_FAILED'),
+    ...timelineAt,
+    refundId: z.string(),
+    ...timelineMoney,
+  }),
+  z.object({
+    kind: z.literal('CUSTOMER_NOTIFIED'),
+    /** When the fact was queued for the customer, not when it reached them. */
+    ...timelineAt,
+    notificationKind: z.enum(CUSTOMER_NOTIFICATION_KINDS),
+    deliveryState: z.enum(CUSTOMER_NOTIFICATION_STATES),
+    resolvedAt: z.iso.datetime().nullable(),
+  }),
+]);
+export type PaymentTimelineEntry = z.infer<typeof paymentTimelineEntrySchema>;
+
+export const paymentTimelineResponseSchema = z.object({
+  paymentId: z.string(),
+  entries: z.array(paymentTimelineEntrySchema).max(PAYMENT_TIMELINE_MAX_ENTRIES),
+  withheld: z.array(z.enum(PAYMENT_TIMELINE_SECTIONS)),
+  truncated: z.boolean(),
+});
+export type PaymentTimelineResponse = z.infer<typeof paymentTimelineResponseSchema>;
+
 export const WALLET_ROUTES = {
   balance: (customerId: string) => `/users/${encodeURIComponent(customerId)}/wallet`,
   entries: (customerId: string) => `/users/${encodeURIComponent(customerId)}/wallet/entries`,
@@ -3461,6 +3601,12 @@ export const PAYMENT_ROUTES = {
    */
   receiptContent: (paymentId: string, receiptId: string) =>
     `/payments/${encodeURIComponent(paymentId)}/receipts/${encodeURIComponent(receiptId)}/content`,
+  /**
+   * What has happened to one payment, assembled from facts already recorded (WP17).
+   * Read-only, under `payments.view`, with the receipt, refund and wallet sections each
+   * behind their own permission — `paymentTimelineResponseSchema`.
+   */
+  timeline: (id: string) => `/payments/${encodeURIComponent(id)}/timeline`,
 } as const;
 
 /**
