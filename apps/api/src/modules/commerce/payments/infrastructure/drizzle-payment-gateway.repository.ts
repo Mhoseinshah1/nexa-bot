@@ -39,6 +39,7 @@ const COLUMNS = {
   activateAfterAccountDays: paymentGateways.activateAfterAccountDays,
   sortOrder: paymentGateways.sortOrder,
   topupCashbackPercent: paymentGateways.topupCashbackPercent,
+  customerFeeBasisPoints: paymentGateways.customerFeeBasisPoints,
   allowServicePurchase: paymentGateways.allowServicePurchase,
   allowWalletTopup: paymentGateways.allowWalletTopup,
   createdAt: paymentGateways.createdAt,
@@ -59,6 +60,7 @@ interface Row {
   readonly activateAfterAccountDays: number;
   readonly sortOrder: number;
   readonly topupCashbackPercent: number;
+  readonly customerFeeBasisPoints: number;
   readonly allowServicePurchase: boolean;
   readonly allowWalletTopup: boolean;
   readonly createdAt: Date;
@@ -86,6 +88,7 @@ function toRecord(row: Row): PaymentGatewayRecord {
     activateAfterAccountDays: row.activateAfterAccountDays,
     sortOrder: row.sortOrder,
     topupCashbackPercent: row.topupCashbackPercent,
+    customerFeeBasisPoints: row.customerFeeBasisPoints,
     allowServicePurchase: row.allowServicePurchase,
     allowWalletTopup: row.allowWalletTopup,
     createdAt: row.createdAt,
@@ -204,7 +207,7 @@ export class DrizzlePaymentGatewayRepository implements PaymentGatewayRepository
   async update(
     scope: TenantContext,
     provider: PaymentGatewayProvider,
-    config: PaymentGatewayConfig,
+    config: PaymentGatewayConfig & { readonly customerFeeBasisPoints: number },
     currency: SalesCurrencyCode,
     now: Date,
     tx: unknown,
@@ -224,6 +227,7 @@ export class DrizzlePaymentGatewayRepository implements PaymentGatewayRepository
         activateAfterAccountDays: config.eligibility.activateAfterAccountDays,
         sortOrder: config.sortOrder,
         topupCashbackPercent: config.topupCashbackPercent,
+        customerFeeBasisPoints: config.customerFeeBasisPoints,
         allowServicePurchase: config.allowServicePurchase,
         allowWalletTopup: config.allowWalletTopup,
         updatedAt: now,

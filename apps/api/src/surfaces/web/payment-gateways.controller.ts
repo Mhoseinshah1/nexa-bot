@@ -86,6 +86,7 @@ export class PaymentGatewaysController {
       eligibility: input.eligibility,
       sortOrder: input.sortOrder,
       topupCashbackPercent: input.topupCashbackPercent,
+      customerFeeBasisPoints: input.customerFeeBasisPoints,
       allowServicePurchase: input.allowServicePurchase,
       allowWalletTopup: input.allowWalletTopup,
     });
@@ -210,6 +211,7 @@ function toView(
     },
     sortOrder: gateway.sortOrder,
     topupCashbackPercent: gateway.topupCashbackPercent,
+    customerFeeBasisPoints: gateway.customerFeeBasisPoints,
     allowServicePurchase: gateway.allowServicePurchase,
     allowWalletTopup: gateway.allowWalletTopup,
     credential: {

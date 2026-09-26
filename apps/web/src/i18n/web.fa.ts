@@ -1126,6 +1126,12 @@ export const WEB_FA = {
   'web.payment_gateway': 'درگاه',
   'web.payment_external_reference': 'شناسهٔ پیگیری بیرونی',
   'web.payment_updated_at': 'آخرین تغییر',
+  'web.payment_customer_fee': 'کارمزد درگاه',
+  'web.payment_customer_fee_rate': 'نرخ کارمزد مشتری',
+  'web.payment_customer_fee_amount': 'کارمزد درگاه',
+  'web.payment_customer_fee_payable': 'مبلغ قابل پرداخت',
+  'web.payment_customer_fee_hint':
+    'مبلغ پرداخت بالا اصل سفارش یا شارژ است. کارمزد جداگانه ثبت شده، جزو درآمد یا شارژ کیف پول نیست و قابل بازگشت نیست.',
   'web.payment_topup_gift': 'هدیهٔ شارژ این پرداخت',
   'web.payment_topup_gift_hint':
     'درصدی که هنگام ایجاد این شارژ از درگاه آن ثبت شد. تغییر بعدی تنظیمات درگاه آن را عوض نمی‌کند.',
@@ -1278,6 +1284,11 @@ export const WEB_FA = {
   'web.payment_gateway_topup_gift_hint':
     'درصدی از مبلغ هر شارژ کیف پول از این درگاه که جداگانه به‌عنوان هدیه به کیف پول مشتری واریز می‌شود؛ ۰ یعنی بدون هدیه. هر شارژ درصد زمان ایجاد خود را نگه می‌دارد، پس تغییر آن فقط بر شارژهای بعدی اثر دارد.',
   'web.payment_gateway_topup_invalid': 'درصد هدیهٔ شارژ باید عددی صحیح از ۰ تا ۱۰۰ باشد.',
+  'web.payment_gateway_customer_fee': 'کارمزد مشتری (%)',
+  'web.payment_gateway_customer_fee_hint':
+    'درصدی از مبلغ سفارش یا شارژ که به‌عنوان کارمزد درگاه به مبلغ قابل پرداخت مشتری اضافه می‌شود؛ حداکثر دو رقم اعشار، ۰ یعنی بدون کارمزد. کارمزد جزو مبلغ سفارش یا شارژ کیف پول نیست و بازگردانده نمی‌شود. هر پرداخت کارمزد زمان ایجاد خود را نگه می‌دارد.',
+  'web.payment_gateway_customer_fee_invalid':
+    'کارمزد مشتری باید عددی از ۰ تا ۱۰۰ با حداکثر دو رقم اعشار باشد.',
   'web.payment_gateway_unbounded': 'بدون محدودیت',
   'web.payment_gateway_instructions': 'راهنمای مشتری',
   'web.payment_gateway_instructions_hint':

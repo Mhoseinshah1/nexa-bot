@@ -201,6 +201,7 @@ import {
 } from './modules/commerce/payments/application/receipt-reason-policies.js';
 import { customerBlockCaptures } from './modules/commerce/customers/application/customer-block-capture.js';
 import { ReceiptReviewCaption } from './modules/commerce/payments/application/receipt-review-caption.js';
+import { FinancialLogConsumer } from './modules/commerce/payments/application/financial-log.consumer.js';
 import { ReceiptReviewPushConsumer } from './modules/commerce/payments/application/receipt-review-push.consumer.js';
 import { ReceiptReviewPushService } from './modules/commerce/payments/application/receipt-review-push.service.js';
 import {
@@ -969,6 +970,22 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         reviewers: telegramAdmins,
         clock,
         ids,
+      }),
+      /*
+       * The financial log (WP18): a committed payment or refund fact, into the operator
+       * notification lane's payments topic. A consumer, so no log can reach the money's
+       * transaction. The lane is resolved lazily — it is built further down, and this
+       * closure is called only once the relay runs.
+       */
+      new FinancialLogConsumer({
+        lane: {
+          financialDestination: (scope, tx) => notifications.financialDestination(scope, tx),
+          queue: (scope, input, tx) => notifications.queue(scope, input, tx),
+        },
+        payments: new DrizzlePaymentRepository(database.db),
+        customers: new DrizzleCustomerRepository(database.db),
+        invoices: new DrizzleGatewayInvoiceRepository(database.db),
+        wallet: new DrizzleWalletRepository(database.db),
       }),
     ],
     clock,
@@ -1928,6 +1945,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     uow,
     audit,
     opsLog,
+    outbox,
     clock,
     ids,
     logger,

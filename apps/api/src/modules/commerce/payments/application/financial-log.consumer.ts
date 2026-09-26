@@ -1,0 +1,301 @@
+import {
+  EVENT_PAYLOAD_SCHEMAS,
+  money,
+  topupCashbackReference,
+  type CurrencyCode,
+  type DomainEvent,
+  type EventType,
+  type Money,
+  type NotificationDestination,
+  type NotificationKind,
+  type PaymentId,
+  type TemplateKey,
+  type TemplateValues,
+  type TenantContext,
+  type UserId,
+} from '@nexa/contracts';
+import type { EventConsumer } from '../../../platform/eventing/application/event-consumer.js';
+import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
+import type { CustomerRecord, CustomerRepository } from '../../customers/application/ports.js';
+import type { WalletRepository } from '../../wallet/application/ports.js';
+import type { GatewayInvoiceRecord, GatewayInvoiceRepository } from './gateway-invoice-ports.js';
+import type { PaymentRecord, PaymentRepository } from './ports.js';
+
+/** The notification lane, as the financial log needs it. `NotificationService` is it. */
+export interface FinancialLogLane {
+  financialDestination(scope: TenantContext, tx?: unknown): Promise<NotificationDestination | null>;
+  queue(
+    scope: TenantContext,
+    input: {
+      readonly kind: NotificationKind;
+      readonly dedupeKey: string;
+      readonly templateKey: TemplateKey;
+      readonly values: TemplateValues;
+      readonly correlationId?: string;
+      readonly destination?: NotificationDestination;
+    },
+    tx?: unknown,
+  ): Promise<unknown>;
+}
+
+/** A value the log has no answer for. Punctuation, not language: a template renders it. */
+const NONE = '—';
+
+/**
+ * The financial log (WP18 §1.3): one provider-neutral pipeline from a committed financial
+ * fact to the log group's payments topic.
+ *
+ * A CONSUMER, so it runs in the outbox relay's transaction, after the business transaction
+ * committed, and never inside it — a log that fails, is not configured, or is never
+ * delivered cannot roll back, delay or veto money. It does database work only
+ * (`EventConsumer` forbids the network here): it reads the rows it renders and writes one
+ * `FINANCIAL_EVENT` intent into the operator notification lane, which sends it later,
+ * outside every transaction, with that lane's bounded retries.
+ *
+ * What it renders is named field by field — ids, amounts, a Telegram id, username and
+ * display name, a provider invoice id and the provider's final amount labelled diagnostic.
+ * Never a raw provider payload, an invoice or payment link, a subscription link, a key, a
+ * token or an operator's free-text note.
+ *
+ * Idempotent twice over: the relay's `processed_messages` claim, and the dedupe key
+ * `fin:<event id>` on `(tenant, dedupe_key)`, so a replay whose claim was lost writes
+ * nothing new.
+ */
+export class FinancialLogConsumer implements EventConsumer {
+  /** Stable: it is the key in `processed_messages`. */
+  readonly name = 'payments.financial-log';
+  readonly subscribesTo: readonly EventType[] = [
+    'PaymentConfirmed',
+    'PaymentFailed',
+    'PaymentLateCompletionObserved',
+    'RefundCompleted',
+    'RefundFailed',
+  ];
+
+  constructor(
+    private readonly deps: {
+      readonly lane: FinancialLogLane;
+      readonly payments: Pick<PaymentRepository, 'findById'>;
+      readonly customers: Pick<CustomerRepository, 'findById'>;
+      readonly invoices: Pick<GatewayInvoiceRepository, 'findByPayment'>;
+      readonly wallet: Pick<WalletRepository, 'findByReference'>;
+    },
+  ) {}
+
+  async handle(event: DomainEvent, tx: TransactionScope): Promise<void> {
+    // Every financial fact is a tenant's; a platform-scoped copy has no log group.
+    if (event.tenantId === null) return;
+    const scope: TenantContext = { tenantId: event.tenantId as never, botInstanceId: null };
+
+    const destination = await this.deps.lane.financialDestination(scope, tx);
+    // Not configured, or switched off: the rows are the record, and nothing is owed.
+    if (destination === null) return;
+
+    const rendered = await this.render(scope, event, tx);
+    if (rendered === null) return;
+    await this.deps.lane.queue(
+      scope,
+      {
+        kind: 'FINANCIAL_EVENT',
+        dedupeKey: `fin:${event.eventId}`,
+        templateKey: rendered.templateKey,
+        values: rendered.values,
+        correlationId: event.correlationId,
+        destination,
+      },
+      tx,
+    );
+  }
+
+  private async render(
+    scope: TenantContext,
+    event: DomainEvent,
+    tx: TransactionScope,
+  ): Promise<{ readonly templateKey: TemplateKey; readonly values: TemplateValues } | null> {
+    switch (event.eventType as EventType) {
+      case 'PaymentConfirmed': {
+        const payload = EVENT_PAYLOAD_SCHEMAS.PaymentConfirmed.parse(event.payload);
+        const facts = await this.facts(scope, event.aggregateId as PaymentId, tx);
+        if (facts === null) return null;
+        const common = {
+          method: facts.payment.method,
+          route: facts.payment.gatewayProvider ?? NONE,
+          ...who(facts.customer),
+          reference: facts.payment.reference,
+          paymentId: facts.payment.id,
+          ...amounts(facts.payment),
+          ...provider(facts.invoice),
+          evidence: payload.evidenceKind,
+          at: facts.payment.confirmedAt ?? new Date(event.occurredAt),
+        };
+        if (facts.payment.orderId === null) {
+          // The gift actually CREDITED, read from the ledger — never recomputed here.
+          const gift = await this.deps.wallet.findByReference(
+            scope,
+            topupCashbackReference(facts.payment.id),
+            tx,
+          );
+          return {
+            templateKey: 'ops.financial.topup_credited' as TemplateKey,
+            values: {
+              ...common,
+              gift: gift?.amount ?? money(0n, facts.payment.amount.currency),
+            },
+          };
+        }
+        return {
+          templateKey: 'ops.financial.order_paid' as TemplateKey,
+          values: { ...common, orderId: facts.payment.orderId },
+        };
+      }
+      case 'PaymentFailed': {
+        const payload = EVENT_PAYLOAD_SCHEMAS.PaymentFailed.parse(event.payload);
+        const facts = await this.facts(scope, event.aggregateId as PaymentId, tx);
+        if (facts === null) return null;
+        return {
+          templateKey: 'ops.financial.payment_failed' as TemplateKey,
+          values: {
+            cause: payload.cause,
+            method: facts.payment.method,
+            route: facts.payment.gatewayProvider ?? NONE,
+            ...who(facts.customer),
+            reference: facts.payment.reference,
+            paymentId: facts.payment.id,
+            orderId: facts.payment.orderId ?? NONE,
+            ...amounts(facts.payment),
+            at: facts.payment.resolvedAt ?? new Date(event.occurredAt),
+          },
+        };
+      }
+      case 'PaymentLateCompletionObserved': {
+        const payload = EVENT_PAYLOAD_SCHEMAS.PaymentLateCompletionObserved.parse(event.payload);
+        const facts = await this.facts(scope, event.aggregateId as PaymentId, tx);
+        if (facts === null) return null;
+        return {
+          templateKey: 'ops.financial.late_completion' as TemplateKey,
+          values: {
+            route: payload.provider,
+            ...who(facts.customer),
+            reference: facts.payment.reference,
+            paymentId: facts.payment.id,
+            orderId: facts.payment.orderId ?? NONE,
+            ...amounts(facts.payment),
+            ...provider(facts.invoice),
+            at: new Date(event.occurredAt),
+          },
+        };
+      }
+      case 'RefundCompleted': {
+        const payload = EVENT_PAYLOAD_SCHEMAS.RefundCompleted.parse(event.payload);
+        const values = await this.refundValues(scope, event, payload, tx);
+        if (values === null) return null;
+        return { templateKey: 'ops.financial.refund_completed' as TemplateKey, values };
+      }
+      case 'RefundFailed': {
+        const payload = EVENT_PAYLOAD_SCHEMAS.RefundFailed.parse(event.payload);
+        const values = await this.refundValues(scope, event, payload, tx);
+        if (values === null) return null;
+        return {
+          templateKey: 'ops.financial.refund_failed' as TemplateKey,
+          values: { ...values, cause: payload.cause },
+        };
+      }
+      /* istanbul ignore next -- `subscribesTo` is the list above; the relay routes by it. */
+      default:
+        return null;
+    }
+  }
+
+  /** What both refund logs say: the refund, the payment it returns money from, and who. */
+  private async refundValues(
+    scope: TenantContext,
+    event: DomainEvent,
+    payload: {
+      readonly refundId: string;
+      readonly paymentId: string;
+      readonly orderId: string | null;
+      readonly channel: string;
+      readonly amountMinor: string;
+      readonly currency: string;
+    },
+    tx: TransactionScope,
+  ): Promise<TemplateValues | null> {
+    const facts = await this.facts(scope, payload.paymentId as PaymentId, tx);
+    if (facts === null) return null;
+    return {
+      refundId: payload.refundId,
+      channel: payload.channel,
+      ...who(facts.customer),
+      reference: facts.payment.reference,
+      paymentId: facts.payment.id,
+      orderId: payload.orderId ?? NONE,
+      amount: money(BigInt(payload.amountMinor), payload.currency as CurrencyCode),
+      at: new Date(event.occurredAt),
+    };
+  }
+
+  /** The payment, its customer and (for a gateway payment) its invoice, as they stand. */
+  private async facts(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    tx: TransactionScope,
+  ): Promise<{
+    readonly payment: PaymentRecord;
+    readonly customer: CustomerRecord | null;
+    readonly invoice: GatewayInvoiceRecord | null;
+  } | null> {
+    const payment = await this.deps.payments.findById(scope, paymentId, tx);
+    if (payment === null) return null;
+    const customer = await this.deps.customers.findById(scope, payment.customerId as UserId, tx);
+    const invoice =
+      payment.method === 'GATEWAY'
+        ? await this.deps.invoices.findByPayment(scope, payment.id, tx)
+        : null;
+    return { payment, customer, invoice };
+  }
+}
+
+/** Who paid, as Telegram knows them. A dash, never a guess, for what is not known. */
+function who(customer: CustomerRecord | null): TemplateValues {
+  if (customer === null) return { telegramId: NONE, username: NONE, displayName: NONE };
+  const name = [customer.firstName, customer.lastName]
+    .filter((part): part is string => part !== null && part.trim() !== '')
+    .join(' ');
+  return {
+    telegramId: customer.telegramUserId,
+    username: customer.username === null ? NONE : `@${customer.username}`,
+    displayName: name === '' ? NONE : name,
+  };
+}
+
+/**
+ * The three amounts, from the payment's own snapshot. A non-gateway payment, or a gateway
+ * attempt from before WP18, had no fee: its fee is zero and its payable is its principal.
+ */
+function amounts(payment: PaymentRecord): {
+  readonly principal: Money;
+  readonly fee: Money;
+  readonly payable: Money;
+} {
+  const fee = payment.customerFee;
+  return {
+    principal: payment.amount,
+    fee: fee?.fee ?? money(0n, payment.amount.currency),
+    payable: fee?.payable ?? payment.amount,
+  };
+}
+
+/**
+ * The provider's side, for a gateway payment: its invoice id and the final amount it
+ * reported, in ITS unit. Diagnostic only — the template says so, and nothing reads it back.
+ */
+function provider(invoice: GatewayInvoiceRecord | null): TemplateValues {
+  if (invoice === null) return { providerInvoiceId: NONE, providerFinalAmount: NONE };
+  return {
+    providerInvoiceId: invoice.providerInvoiceId ?? invoice.hintedInvoiceId ?? NONE,
+    providerFinalAmount:
+      invoice.finalAmount === null
+        ? NONE
+        : `${invoice.finalAmount.toString()} ${invoice.providerUnit}`,
+  };
+}

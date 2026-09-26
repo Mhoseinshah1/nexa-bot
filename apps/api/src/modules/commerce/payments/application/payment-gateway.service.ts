@@ -321,6 +321,8 @@ export class PaymentGatewayService {
       sortOrder: input.config.sortOrder,
       // In the hash, so two edits differing only in the gift are two commands (D5).
       topupCashbackPercent: input.config.topupCashbackPercent,
+      // And the fee (WP18): two edits differing only in the rate are two commands.
+      customerFeeBasisPoints: input.config.customerFeeBasisPoints ?? null,
       // And the two purpose switches, for the same reason: switching top-up off is an
       // edit, and a key reused for it must not replay the edit that left it on.
       allowServicePurchase: input.config.allowServicePurchase,
@@ -352,11 +354,30 @@ export class PaymentGatewayService {
          * nothing to say about it — defaulting an absent one to ON would re-enable a
          * payment path an operator had switched off, from an edit to the display name.
          */
-        const config: PaymentGatewayConfig = {
+        const config: PaymentGatewayConfig & { readonly customerFeeBasisPoints: number } = {
           ...input.config,
           allowServicePurchase: input.config.allowServicePurchase ?? before.allowServicePurchase,
           allowWalletTopup: input.config.allowWalletTopup ?? before.allowWalletTopup,
+          // Absent keeps the stored rate, for the reason the two switches above do.
+          customerFeeBasisPoints:
+            input.config.customerFeeBasisPoints ?? before.customerFeeBasisPoints,
         };
+        /*
+         * A customer fee exists only on a route that settles through `GATEWAY` (WP18,
+         * owner decision). A card-to-card transfer, a wallet settlement and an operator's
+         * credit are never charged one, so a non-zero rate anywhere else is a number
+         * nothing reads — refused, rather than stored for an operator to believe.
+         */
+        if (
+          config.customerFeeBasisPoints !== 0 &&
+          PAYMENT_GATEWAY_DESCRIPTORS[provider].settlesVia !== 'GATEWAY'
+        ) {
+          throw errors.validation(
+            COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+            'A customer fee applies only to an external gateway route.',
+            { field: 'customerFeeBasisPoints' },
+          );
+        }
         const after = await this.deps.repository.update(scope, provider, config, currency, now, tx);
         if (after === null) {
           throw errors.notFound(
@@ -942,6 +963,7 @@ function auditView(gateway: PaymentGatewayRecord): Record<string, unknown> {
     activateAfterAccountDays: gateway.activateAfterAccountDays,
     sortOrder: gateway.sortOrder,
     topupCashbackPercent: gateway.topupCashbackPercent,
+    customerFeeBasisPoints: gateway.customerFeeBasisPoints,
     allowServicePurchase: gateway.allowServicePurchase,
     allowWalletTopup: gateway.allowWalletTopup,
   };

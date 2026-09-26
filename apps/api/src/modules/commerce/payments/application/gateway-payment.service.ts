@@ -12,6 +12,7 @@ import {
   type UnitOfWork,
   type UserId,
 } from '@nexa/contracts';
+import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { CustomerRepository } from '../../customers/application/ports.js';
@@ -102,6 +103,8 @@ export interface GatewayPaymentServiceDeps {
   readonly uow: UnitOfWork<TransactionScope>;
   readonly audit: AuditWriter;
   readonly opsLog: OperationalEventRecorder;
+  /** For `PaymentLateCompletionObserved` (WP18), written beside the audit row. */
+  readonly outbox: Pick<OutboxWriter, 'write'>;
   readonly clock: Clock;
   readonly ids: IdGenerator;
   readonly logger: {
@@ -907,6 +910,24 @@ export class GatewayPaymentService {
         },
         tx,
       );
+      /*
+       * And the financial log (WP18). Once, with the audit row — `first` is the same
+       * conditional stamp that keeps a second inquiry from writing either. The payment
+       * row is read for its customer and order; the event carries ids only.
+       */
+      const payment = await this.deps.paymentRecords.findById(scope, invoice.paymentId, tx);
+      if (payment !== null) {
+        await this.deps.outbox.write(tx, actor, {
+          eventType: 'PaymentLateCompletionObserved',
+          aggregateType: 'Payment',
+          aggregateId: invoice.paymentId,
+          payload: {
+            customerId: payment.customerId,
+            orderId: payment.orderId,
+            provider: invoice.provider,
+          },
+        });
+      }
     });
   }
 

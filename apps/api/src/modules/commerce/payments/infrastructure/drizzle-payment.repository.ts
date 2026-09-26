@@ -91,6 +91,10 @@ export class DrizzlePaymentRepository implements PaymentRepository {
         // The route snapshot (D5), written here once and frozen by 0114 afterwards.
         gatewayProvider: draft.gatewayProvider,
         topupCashbackPercent: draft.topupCashbackPercent,
+        // The fee snapshot (WP18), all three or none — `payments_customer_fee_check`.
+        customerFeeBasisPoints: draft.customerFee?.basisPoints ?? null,
+        customerFeeAmount: draft.customerFee?.fee.amountMinor ?? null,
+        payableAmount: draft.customerFee?.payable.amountMinor ?? null,
         createdAt: draft.now,
         updatedAt: draft.now,
       })
@@ -707,6 +711,9 @@ type Row = {
   expiresAt: Date | null;
   gatewayProvider: string | null;
   topupCashbackPercent: number | null;
+  customerFeeBasisPoints: number | null;
+  customerFeeAmount: bigint | null;
+  payableAmount: bigint | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -734,6 +741,16 @@ function toRecord(row: Row): PaymentRecord {
     // `payments_gateway_provider_check` is built from the contract enum.
     gatewayProvider: row.gatewayProvider as PaymentGatewayProvider | null,
     topupCashbackPercent: row.topupCashbackPercent,
+    customerFee:
+      row.customerFeeBasisPoints === null ||
+      row.customerFeeAmount === null ||
+      row.payableAmount === null
+        ? null
+        : {
+            basisPoints: row.customerFeeBasisPoints,
+            fee: money(row.customerFeeAmount, row.currency as CurrencyCode),
+            payable: money(row.payableAmount, row.currency as CurrencyCode),
+          },
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

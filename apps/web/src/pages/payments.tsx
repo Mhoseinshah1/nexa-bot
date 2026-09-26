@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   COMMERCE_ERROR_CODES,
   PAYMENT_METHODS,
+  formatBasisPointsPercent,
   PAYMENT_STATES,
   RECEIPT_DISPOSITIONS,
   uuidV7Schema,
@@ -1325,6 +1326,39 @@ export function PaymentDetailPage({
                   <Ltr>{`${String(row.topupCashbackPercent)}%`}</Ltr>
                 </p>
                 <p className="muted small">{t('web.payment_topup_gift_hint')}</p>
+              </Card>
+            )}
+
+            {/*
+              The customer's gateway fee this attempt was created with (WP18): the rate,
+              the fee and the payable, BESIDE the principal above and never added to it.
+              Null for every non-gateway payment, so the card is absent there.
+            */}
+            {row.customerFee !== null && (
+              <Card title={t('web.payment_customer_fee')}>
+                <KV
+                  items={[
+                    [
+                      t('web.payment_customer_fee_rate'),
+                      <Ltr key="r">{`${formatBasisPointsPercent(row.customerFee.basisPoints)}%`}</Ltr>,
+                    ],
+                    [
+                      t('web.payment_customer_fee_amount'),
+                      <Money
+                        key="f"
+                        value={{ amountMinor: row.customerFee.fee, currency: row.currency }}
+                      />,
+                    ],
+                    [
+                      t('web.payment_customer_fee_payable'),
+                      <Money
+                        key="p"
+                        value={{ amountMinor: row.customerFee.payable, currency: row.currency }}
+                      />,
+                    ],
+                  ]}
+                />
+                <p className="muted small">{t('web.payment_customer_fee_hint')}</p>
               </Card>
             )}
 

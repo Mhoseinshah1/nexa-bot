@@ -13,6 +13,7 @@ import {
   cashbackAmountMinor,
   errors,
   money,
+  gatewayCustomerFeeMinor,
   topupCashbackReference,
   nextState,
   orderIdSchema,
@@ -80,6 +81,7 @@ import { canCover, shortfallMinor } from '../../wallet/domain/balance.js';
 import { settlementRefusal } from '../domain/settlement.js';
 import type {
   PaymentCursor,
+  PaymentCustomerFee,
   PaymentCustomerIdentity,
   PaymentPage,
   PaymentRecord,
@@ -2663,6 +2665,18 @@ export class PaymentService {
           now,
           tx,
         );
+        // The financial log hears of it (WP18) — after this commits, never inside it.
+        await this.deps.outbox.write(tx, actor, {
+          eventType: 'PaymentFailed',
+          aggregateType: 'Payment',
+          aggregateId: paymentId,
+          payload: {
+            customerId: payment.customerId,
+            orderId: payment.orderId,
+            method: payment.method,
+            cause: 'REJECTED',
+          },
+        });
 
         await rememberOnce(
           this.deps.idempotency,
@@ -3198,6 +3212,7 @@ export class PaymentService {
           provider: route.provider,
           // An order payment promises no top-up gift (File 02 §17), exactly as the manual path.
           topupCashbackPercent: null,
+          customerFeeBasisPoints: route.gateway.customerFeeBasisPoints,
           paymentId,
           reference,
           now,
@@ -3273,6 +3288,7 @@ export class PaymentService {
           amount,
           provider: route.provider,
           topupCashbackPercent: route.gateway.topupCashbackPercent,
+          customerFeeBasisPoints: route.gateway.customerFeeBasisPoints,
           paymentId,
           reference,
           now,
@@ -3461,6 +3477,22 @@ export class PaymentService {
             tx,
           );
         }
+        /*
+         * The financial log hears of every final gateway failure (WP18), whether or not
+         * the customer is told: an operator reconciling a provider wants the refused
+         * create as much as the unsuccessful inquiry. The reason code stays on the row.
+         */
+        await this.deps.outbox.write(tx, actor, {
+          eventType: 'PaymentFailed',
+          aggregateType: 'Payment',
+          aggregateId: paymentId,
+          payload: {
+            customerId: payment.customerId,
+            orderId: payment.orderId,
+            method: payment.method,
+            cause: 'GATEWAY_FAILED',
+          },
+        });
         return true;
       },
     );
@@ -3513,6 +3545,8 @@ export class PaymentService {
       readonly amount: Money;
       readonly provider: PaymentGatewayProvider;
       readonly topupCashbackPercent: number | null;
+      /** The route's customer fee rate (WP18), read in this transaction and snapshotted. */
+      readonly customerFeeBasisPoints: number;
       readonly paymentId: PaymentId;
       readonly reference: string;
       readonly now: Date;
@@ -3549,11 +3583,24 @@ export class PaymentService {
       invoice = open;
     } else {
       /*
-       * The amount in the provider's unit, decided BEFORE anything is written. An amount
+       * The customer's gateway fee (WP18, owner decision): the principal stays
+       * `input.amount` — what the order cost or the wallet receives, the figure every
+       * settlement, credit, gift, refund and report reads — and the fee sits BESIDE it.
+       * Half-up to the minor unit on `bigint`, by the one function in contracts. The
+       * invoice asks for the PAYABLE, principal plus fee; nothing else ever does.
+       */
+      const fee = gatewayCustomerFeeMinor(input.amount.amountMinor, input.customerFeeBasisPoints);
+      const customerFee: PaymentCustomerFee = {
+        basisPoints: input.customerFeeBasisPoints,
+        fee: money(fee, input.amount.currency),
+        payable: money(input.amount.amountMinor + fee, input.amount.currency),
+      };
+      /*
+       * The PAYABLE in the provider's unit, decided BEFORE anything is written. An amount
        * with no exact value there (an IRR figure that is not a whole Toman) is refused
        * rather than rounded: the invoice would be for a figure the customer never saw.
        */
-      const sentAmount = adapter.providerAmountOf(input.amount);
+      const sentAmount = adapter.providerAmountOf(customerFee.payable);
       if (sentAmount === null) {
         throw errors.conflict(
           COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
@@ -3575,6 +3622,8 @@ export class PaymentService {
           expiresAt: new Date(input.now.getTime() + adapter.attemptLifetimeMs),
           gatewayProvider: input.provider,
           topupCashbackPercent: input.topupCashbackPercent,
+          // The fee snapshot (WP18), frozen by 0124 in every state afterwards.
+          customerFee,
           now: input.now,
         },
         tx,
@@ -3611,6 +3660,9 @@ export class PaymentService {
           providerOrderId: invoice.providerOrderId,
           expiresAt: payment.expiresAt?.toISOString() ?? null,
           topupCashbackPercent: payment.topupCashbackPercent,
+          customerFeeBasisPoints: payment.customerFee?.basisPoints ?? null,
+          customerFeeMinor: payment.customerFee?.fee.amountMinor.toString() ?? null,
+          payableMinor: payment.customerFee?.payable.amountMinor.toString() ?? null,
           reissued: open !== null,
         },
         result: 'SUCCESS',

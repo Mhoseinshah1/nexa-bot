@@ -652,6 +652,7 @@ export class RefundService {
           },
           tx,
         );
+        await this.announce(actor, after, tx, { outcome: 'FAILED', cause: 'OPERATOR_FAILED' });
         await this.remember(scope, input.idempotencyKey, requestHash, refundId, tx);
         return after;
       },
@@ -754,6 +755,46 @@ export class RefundService {
    * refund while its purchase operation is undecided, so the automatic refund — the
    * only other writer of `PAID -> REFUNDED` — has nothing left to discover.
    */
+  /**
+   * A refund reached a terminal state: the financial log hears of it (WP18), through the
+   * outbox, in the transaction that moved it — so it is told exactly the transitions that
+   * committed, and a log that cannot be delivered costs the refund nothing. Ids, the
+   * channel code and the amount only; never the operator's note.
+   */
+  private async announce(
+    actor: ActorContext,
+    refund: RefundRecord,
+    tx: TransactionScope,
+    result:
+      | { readonly outcome: 'COMPLETED' }
+      | { readonly outcome: 'FAILED'; readonly cause: 'OPERATOR_FAILED' | 'SUPERSEDED' },
+  ): Promise<void> {
+    const common = {
+      refundId: refund.id,
+      customerId: refund.customerId,
+      paymentId: refund.paymentId,
+      orderId: refund.orderId,
+      channel: refund.channel,
+      amountMinor: refund.amount.amountMinor.toString(),
+      currency: refund.amount.currency,
+    };
+    if (result.outcome === 'COMPLETED') {
+      await this.deps.outbox.write(tx, actor, {
+        eventType: 'RefundCompleted',
+        aggregateType: 'Payment',
+        aggregateId: refund.paymentId,
+        payload: common,
+      });
+      return;
+    }
+    await this.deps.outbox.write(tx, actor, {
+      eventType: 'RefundFailed',
+      aggregateType: 'Payment',
+      aggregateId: refund.paymentId,
+      payload: { ...common, cause: result.cause },
+    });
+  }
+
   private async completed(
     scope: TenantContext,
     actor: ActorContext,
@@ -770,6 +811,7 @@ export class RefundService {
       now,
       tx,
     );
+    await this.announce(actor, refund, tx, { outcome: 'COMPLETED' });
 
     if (payment.orderId === null) return;
     const refunded = (await this.deps.repository.listForPayment(scope, payment.id, tx))
@@ -906,7 +948,7 @@ export class RefundService {
      */
     for (const open of await this.deps.repository.listForPayment(scope, payment.id, tx)) {
       if (open.state !== 'REQUESTED' && open.state !== 'AWAITING_EXTERNAL') continue;
-      await this.deps.repository.transition(
+      const superseded = await this.deps.repository.transition(
         scope,
         open.id,
         {
@@ -917,6 +959,10 @@ export class RefundService {
         input.now,
         tx,
       );
+      // A concurrent completion won the row; that refund is not failed and says nothing.
+      if (superseded !== null) {
+        await this.announce(actor, superseded, tx, { outcome: 'FAILED', cause: 'SUPERSEDED' });
+      }
     }
 
     const consumption = await this.deps.repository.consumptionFor(scope, payment.id, tx);
@@ -967,6 +1013,7 @@ export class RefundService {
     );
 
     await this.creditWallet(scope, created, actor, input.now, tx);
+    await this.announce(actor, created, tx, { outcome: 'COMPLETED' });
 
     await this.deps.audit.record(
       scope,

@@ -458,6 +458,31 @@ export class NotificationService {
     );
   }
 
+  /**
+   * Where the financial log goes (WP18), or null when it goes nowhere.
+   *
+   * The operations chat, in the payments topic when one is configured and the operations
+   * topic otherwise — one log group, no second bot, no hardcoded id. Gated by the same
+   * `ops_notifications` flag as the operations lane, because it IS that destination: an
+   * installation that has not configured and tested it is not sent financial reports
+   * either. A caller that gets null writes nothing; the payment and refund rows remain the
+   * record, and nothing about money waits on this answer.
+   */
+  async financialDestination(
+    scope: ScopeContext,
+    tx?: unknown,
+  ): Promise<NotificationDestination | null> {
+    if (!(await this.features.isEnabled(scope, 'ops_notifications', tx))) return null;
+    const base = await this.destination(scope, tx);
+    if (base === null || base.transport !== 'TELEGRAM') return base;
+    const paymentsTopic = await this.settings.valueOf<number | null>(
+      scope,
+      'ops.notifications.payments_topic_id' as SettingKey,
+      tx,
+    );
+    return paymentsTopic === null ? base : { ...base, topicId: paymentsTopic };
+  }
+
   /** The configured destination, or null when there is none. */
   private async destination(
     scope: ScopeContext,
