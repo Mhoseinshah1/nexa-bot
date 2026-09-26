@@ -89,6 +89,7 @@ const RECORDS = [
    * than being quietly admitted or quietly forgotten.
    */
   'docs/customer-ux-completion-falsification.md',
+  'docs/wp15-falsification.md',
 ];
 /**
  * The fewest citations this record may contain.

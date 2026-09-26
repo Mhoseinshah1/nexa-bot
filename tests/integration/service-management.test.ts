@@ -472,6 +472,17 @@ describe('a customer manages the service they bought', () => {
     }
     const again = await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`k:${service.id}`));
     expect(again.replyKey).toBe('bot.service.capability_unsupported');
+    /*
+     * And a stale PAUSE on the ended service is refused by the state it is legal from —
+     * the customer path's own check, since the end tap no longer reaches it at all.
+     */
+    const paused = await runtime().handle(
+      tenantA,
+      systemActor('bot'),
+      tapUpdate(`u:${service.id}`),
+    );
+    expect(paused.replyKey).toBe('bot.service.capability_unsupported');
+    expect(await operationOf(service.id, 'SUSPEND'), 'nothing was planned').toBeUndefined();
   });
 
   // =========================================================================
