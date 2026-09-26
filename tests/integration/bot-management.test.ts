@@ -5,6 +5,7 @@ import {
   API_PREFIX,
   AUTH_ROUTES,
   BOT_ERROR_CODES,
+  PLATFORM_ERROR_CODES,
   BOT_ROUTES,
   SESSION_COOKIE_NAME,
   TELEGRAM_SECRET_TOKEN_HEADER,
@@ -473,6 +474,58 @@ describe('WP13 bot management', () => {
       expect(same.changed).toBe(false);
       expect(calls).toEqual(['identify']);
       expect(await auditCount('bot_instance.token_replace', BOT_A1)).toBe(1);
+    });
+
+    it('refuses a reused key sent with a different token, and never reports it replaced', async () => {
+      const first = tokenFor(TELEGRAM_ID, 'first');
+      expect(
+        (
+          await service.replaceToken(scope, owner, {
+            idempotencyKey: 'replace-reused',
+            botId: BOT_A1,
+            token: first,
+          })
+        ).changed,
+      ).toBe(true);
+
+      // The response was lost; the operator retries the same key with another token —
+      // another bot's, or a newer one for this bot from BotFather.
+      for (const other of [tokenFor('7000000999', 'x'), tokenFor(TELEGRAM_ID, 'newer')]) {
+        expect(
+          await refusal(
+            service.replaceToken(scope, owner, {
+              idempotencyKey: 'replace-reused',
+              botId: BOT_A1,
+              token: other,
+            }),
+          ),
+        ).toBe(PLATFORM_ERROR_CODES.IDEMPOTENCY_PAYLOAD_MISMATCH);
+      }
+      expect(await api.container.botInstances.resolveToken(scope as never, BOT_A1)).toBe(first);
+
+      // The same key with the token it stored still answers as itself.
+      const again = await service.replaceToken(scope, owner, {
+        idempotencyKey: 'replace-reused',
+        botId: BOT_A1,
+        token: first,
+      });
+      expect(again.changed).toBe(true);
+      expect(calls).toEqual(['identify']);
+    });
+
+    it('shows a webhook URL in full only when it is the recorded one, and a foreign one by its origin', async () => {
+      const recorded = await service.diagnose(scope, owner, BOT_A1);
+      expect(recorded.webhook.url).toBe('https://bot.example.test/telegram/webhook/a1');
+
+      // A legacy registration that carries the bot token in its path.
+      webhook = {
+        ...webhook,
+        url: `https://legacy.example.test/${tokenFor(TELEGRAM_ID, 'LEAKED')}/hook`,
+      } as BotWebhookRead;
+      const foreign = await service.diagnose(scope, owner, BOT_A1);
+      expect(foreign.webhook.url).toBe('https://legacy.example.test/…');
+      expect(foreign.webhook.urlMatchesRecorded).toBe(false);
+      expect(JSON.stringify(foreign)).not.toContain('LEAKED');
     });
 
     it('reports what Telegram holds, and compares it with what was recorded', async () => {

@@ -261,7 +261,23 @@ export class BotManagementService {
 
     const requestHash = hashRequest({ botId, action: 'replace_token' });
     const replayed = await this.replay(scope, input.idempotencyKey, requestHash);
-    if (replayed !== null) return replayed;
+    if (replayed !== null) {
+      /*
+       * The hash cannot tell two tokens apart (it must not carry one), so the replay is
+       * decided against the stored token instead: a key that already replaced this bot's
+       * token answers as itself only when it is sent with THAT token. Sent with another —
+       * another bot's, or a newer one from BotFather — it is a different request under a
+       * reused key, and reporting it as "replaced" would tell the operator a token was
+       * stored that never was.
+       */
+      if (!(await this.sameAsStored(scope, botId, input.token))) {
+        throw errors.conflict(
+          PLATFORM_ERROR_CODES.IDEMPOTENCY_PAYLOAD_MISMATCH,
+          'This request key was already used to replace the token with a different value.',
+        );
+      }
+      return replayed;
+    }
 
     const record = await this.require(scope, botId);
     if (record.telegramBotId === null) {
@@ -275,10 +291,19 @@ export class BotManagementService {
     if (claimed !== identity) throw this.differentBot();
 
     if (await this.sameAsStored(scope, botId, input.token)) {
-      await this.deps.uow.run(scope, async (tx) => {
-        await this.assertScopeActive(scope, tx);
-        await this.remember(scope, input.idempotencyKey, requestHash, botId, false, tx);
-      });
+      // Even the no-op is remembered under the same in-transaction session and permission
+      // check as every other write on this path.
+      await runAuthorizedMutation(
+        this.mutationDeps(),
+        scope,
+        actor,
+        BOTS_TOKEN_PERMISSION,
+        denial,
+        async (tx) => {
+          await this.assertScopeActive(scope, tx);
+          await this.remember(scope, input.idempotencyKey, requestHash, botId, false, tx);
+        },
+      );
       return this.outcome(scope, botId, false);
     }
 
@@ -417,7 +442,7 @@ export class BotManagementService {
           : webhook.outcome === 'READ'
             ? {
                 outcome: 'READ',
-                url: webhook.url,
+                url: shownWebhookUrl(webhook.url, record.webhookUrl),
                 urlMatchesRecorded:
                   record.webhookUrl === null ? null : webhook.url === record.webhookUrl,
                 pendingUpdateCount: webhook.pendingUpdateCount,
@@ -628,5 +653,25 @@ export class BotManagementService {
       sessions: this.deps.sessions,
       clock: this.deps.clock,
     };
+  }
+}
+
+/**
+ * The webhook URL Telegram holds, as far as it may be shown.
+ *
+ * In full only when it is the one this installation recorded registering — that URL is
+ * ours and carries no secret. Anything else is somebody else's registration (a legacy
+ * install, another system, a bot pointed elsewhere), and the common shapes of those put
+ * the bot token or a webhook secret in the PATH: `https://host/<token>`. The check is open
+ * to `settings.edit`, which may not read a token, so a foreign URL is cut to its origin.
+ */
+export function shownWebhookUrl(held: string | null, recorded: string | null): string | null {
+  if (held === null) return null;
+  if (recorded !== null && held === recorded) return held;
+  try {
+    const origin = new URL(held).origin;
+    return origin === 'null' ? null : `${origin}/…`;
+  } catch {
+    return null;
   }
 }
