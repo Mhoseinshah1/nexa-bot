@@ -202,9 +202,17 @@ export class TonPaysAdapter implements ExternalGatewayAdapter {
         finalAmount: parsed.data.final_amount ?? null,
       };
     }
+    /*
+     * A 5xx is UNKNOWN whatever its body says, and is decided BEFORE any code is read:
+     * the provider may have failed after doing the work. A readable RATE_LIMIT_EXCEEDED
+     * or configuration code in a 500 would otherwise clear the send stamp and send the
+     * create again — a second payable invoice for an order that may already have one.
+     * Only a 4xx is taken at its word.
+     */
+    if (raw.status >= 500) return { kind: 'UNKNOWN', code: `http.${String(raw.status)}` };
     const code = this.errorCodeOf(raw.body);
     if (code === null) {
-      // A 5xx, or a 4xx/429 with no readable code: nothing documented was said.
+      // A 4xx/429 with no readable code: nothing documented was said.
       return {
         kind: 'UNKNOWN',
         code: `http.${String(raw.status)}`,
@@ -219,11 +227,6 @@ export class TonPaysAdapter implements ExternalGatewayAdapter {
         return { kind: 'AMBIGUOUS', code: boundedCode(code) };
       case 'NOT_FOUND':
       case 'REFUSED':
-        /*
-         * A readable refusal from a 5xx is still a 5xx: the provider may have failed
-         * after doing the work. Only a 4xx refusal is taken at its word.
-         */
-        if (raw.status >= 500) return { kind: 'UNKNOWN', code: `http.${String(raw.status)}` };
         return { kind: 'REFUSED', code: boundedCode(code), configuration: false };
     }
   }
@@ -324,15 +327,15 @@ export class TonPaysAdapter implements ExternalGatewayAdapter {
         // Nothing about the error is kept: an undici error can quote the request.
         return { kind: 'NO_RESPONSE', reason: controller.signal.aborted ? 'timeout' : 'network' };
       }
-      let text: string;
+      let text: string | null;
       try {
-        text = await response.text();
+        text = await readBounded(response, MAX_RESPONSE_BYTES);
       } catch {
         return controller.signal.aborted
           ? { kind: 'NO_RESPONSE', reason: 'timeout' }
           : { kind: 'UNREADABLE', status: response.status };
       }
-      if (text.length > MAX_RESPONSE_BYTES) return { kind: 'UNREADABLE', status: response.status };
+      if (text === null) return { kind: 'UNREADABLE', status: response.status };
       try {
         return { kind: 'BODY', status: response.status, body: JSON.parse(text) as unknown };
       } catch {
@@ -342,4 +345,39 @@ export class TonPaysAdapter implements ExternalGatewayAdapter {
       clearTimeout(timer);
     }
   }
+}
+
+/**
+ * The body as text, or null once it is longer than `limit` BYTES. The bound is enforced
+ * while the stream is read, never after: `response.text()` would buffer the whole body
+ * first, so an oversized or endless answer would cost the worker its heap before the
+ * limit was ever consulted. A declared length over the limit is refused unread.
+ */
+async function readBounded(response: Response, limit: number): Promise<string | null> {
+  const declared = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > limit) {
+    await response.body?.cancel().catch(() => undefined);
+    return null;
+  }
+  if (response.body === null) return '';
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > limit) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
 }

@@ -3533,6 +3533,7 @@ export class PaymentService {
         provider: input.provider,
         orderId: input.orderId,
         customerId: input.customerId,
+        amount: input.amount,
         now: input.now,
       },
       tx,

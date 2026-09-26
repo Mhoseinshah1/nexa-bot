@@ -33,7 +33,9 @@ import {
 import {
   GatewayPaymentService,
   gatewayCallbackUrl,
+  type GatewayPaymentServiceDeps,
 } from '../../apps/api/src/modules/commerce/payments/application/gateway-payment.service';
+import type { GatewayCallBudget } from '../../apps/api/src/modules/commerce/payments/application/gateway-invoice-ports';
 import { DrizzleOperationalConditionReader } from '../../apps/api/src/modules/platform/opslog/infrastructure/drizzle-operational-event.reader';
 import { startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
 import {
@@ -278,19 +280,25 @@ describe('TonPays, through the one settlement path', () => {
   });
 
   /** A gateway lane over the container's database, with a fake TonPays and a movable clock. */
-  function laneWith(fake: FakeTonPays): GatewayPaymentService {
+  function laneWith(
+    fake: FakeTonPays,
+    overrides: {
+      readonly budget?: GatewayCallBudget;
+      readonly payments?: GatewayPaymentServiceDeps['payments'];
+    } = {},
+  ): GatewayPaymentService {
     const db = ctx.container.database.db;
     const adapter = new TonPaysAdapter({ fetch: fake.fetch });
     const origins = new DrizzlePublicOriginReader(db);
     return new GatewayPaymentService({
       invoices: new DrizzleGatewayInvoiceRepository(db),
-      payments: ctx.container.payments,
+      payments: overrides.payments ?? ctx.container.payments,
       paymentRecords: new DrizzlePaymentRepository(db),
       adapters: (provider) => (provider === 'TONPAYS' ? adapter : null),
       credentials: new DrizzleGatewayCredentialStore(db, ctx.container.cipher, () =>
         ctx.container.ids.uuid(),
       ),
-      budget: new DrizzleGatewayCallBudget(db),
+      budget: overrides.budget ?? new DrizzleGatewayCallBudget(db),
       callbackUrlFor: async (scope: TenantContext, provider) =>
         gatewayCallbackUrl(await origins.originFor(scope), provider, String(scope.tenantId)),
       customers: new DrizzleCustomerRepository(db),
@@ -624,6 +632,23 @@ describe('TonPays, through the one settlement path', () => {
       expect((await invoiceOf(paymentId)).creation_state).toBe('CREATED');
     });
 
+    it('treats a 5xx create as CREATE_UNKNOWN even when its body carries a rate-limit code, and never re-sends it', async () => {
+      await enableTonPays();
+      const orderId = await draftOrder();
+      // A server failure that may have happened after the invoice was made.
+      tonpays.createMode = { code: 'RATE_LIMIT_EXCEEDED', status: 500 };
+      const { paymentId } = await payWithGateway(orderId);
+      await pass();
+      expect((await invoiceOf(paymentId)).creation_state).toBe('CREATE_UNKNOWN');
+
+      tonpays.createMode = 'OK';
+      offsetMs += 20_000;
+      await pass();
+      expect(tonpays.creates).toHaveLength(1);
+      expect((await paymentOf(paymentId)).state).toBe('PENDING');
+      expect(await ledger()).toEqual([]);
+    });
+
     it('treats a merchant configuration refusal as unavailable, not as the customer’s payment failing', async () => {
       await enableTonPays();
       const orderId = await draftOrder();
@@ -729,6 +754,37 @@ describe('TonPays, through the one settlement path', () => {
         expect(tonpays.creates).toHaveLength(2);
       });
     }
+
+    it('keeps an unsuccessful inquiry scheduled until the failure is durable, so a failed write is retried', async () => {
+      const { paymentId, invoiceId } = await createdAttempt();
+      tonpays.set(invoiceId, 'rejected', false);
+      // The failure's own transaction dies once, after the inquiry was recorded.
+      let refusals = 1;
+      const flaky = laneWith(tonpays, {
+        payments: {
+          confirmGatewayPayment: (...args) => ctx.container.payments.confirmGatewayPayment(...args),
+          failGatewayPayment: (...args) => {
+            if (refusals > 0) {
+              refusals -= 1;
+              return Promise.reject(new Error('connection terminated'));
+            }
+            return ctx.container.payments.failGatewayPayment(...args);
+          },
+        },
+      });
+      offsetMs += 6 * 60_000;
+      await expect(flaky.runOnce(tenantA)).rejects.toThrow('connection terminated');
+      expect((await paymentOf(paymentId)).state).toBe('PENDING');
+      const stranded = await invoiceOf(paymentId);
+      expect(stranded.outcome).toBeNull();
+      expect(stranded.next_inquiry_at).not.toBeNull();
+
+      await inquireNow();
+      expect((await paymentOf(paymentId)).state).toBe('FAILED');
+      const done = await invoiceOf(paymentId);
+      expect(done.outcome).toBe('UNSUCCESSFUL');
+      expect(done.next_inquiry_at).toBeNull();
+    });
 
     it('never lets the old attempt settle the new one', async () => {
       const first = await createdAttempt();
@@ -909,7 +965,74 @@ describe('TonPays, through the one settlement path', () => {
     });
   });
 
+  describe('an exhausted call budget', () => {
+    const empty: GatewayCallBudget = { take: () => Promise.resolve(false) };
+    const claims = async (column: 'creation_claimed_until' | 'inquiry_claimed_until') =>
+      (
+        await rows<{ claimed: Date | null }>(
+          sql`SELECT ${sql.raw(column)} AS claimed FROM gateway_invoices
+              WHERE tenant_id = ${tenantA.tenantId} ORDER BY created_at`,
+        )
+      ).map((row) => row.claimed);
+
+    it('gives back the creation leases it did not reach, so each is retried within seconds', async () => {
+      await enableTonPays();
+      await payWithGateway(await draftOrder());
+      await payWithGateway(await draftOrder(300_000n));
+      const starved = await laneWith(tonpays, { budget: empty }).runOnce(tenantA);
+      expect(starved.budgetExhausted).toBe(true);
+      expect(await claims('creation_claimed_until')).toEqual([null, null]);
+
+      offsetMs += 6_000;
+      await pass();
+      expect(tonpays.creates).toHaveLength(2);
+    });
+
+    it('gives back the inquiry leases it did not reach, the row that met the empty budget included', async () => {
+      const first = await createdAttempt();
+      const second = await payWithGateway(await draftOrder(300_000n));
+      await pass();
+      expect((await invoiceOf(second.paymentId)).provider_invoice_id).not.toBeNull();
+
+      offsetMs += 6 * 60_000;
+      const starved = await laneWith(tonpays, { budget: empty }).runOnce(tenantA);
+      expect(starved.budgetExhausted).toBe(true);
+      expect(await claims('inquiry_claimed_until')).toEqual([null, null]);
+      expect(tonpays.checks).toHaveLength(0);
+
+      // The promised retry, five seconds out — not a minute later when a lease runs out.
+      offsetMs += 6_000;
+      await pass();
+      expect([...tonpays.checks].sort()).toEqual(
+        [first.invoiceId, (await invoiceOf(second.paymentId)).provider_invoice_id!].sort(),
+      );
+    });
+  });
+
   describe('a wallet top-up', () => {
+    it('hands back an open top-up only for the same amount, and opens a new attempt for another', async () => {
+      await enableTonPays();
+      const scope = { ...tenantA, botInstanceId: BOT_A };
+      const topup = (key: string, amountMinor: bigint) =>
+        ctx.container.payments.requestGatewayTopup(scope, systemActor(key), maryam, {
+          idempotencyKey: key,
+          amount: money(amountMinor, 'IRT'),
+          provider: 'TONPAYS',
+        });
+      const fifty = await topup('tu-50', 50_000n);
+      const hundred = await topup('tu-100', 100_000n);
+      expect(hundred.reissued).toBe(false);
+      expect(hundred.payment.id).not.toBe(fifty.payment.id);
+      expect(String((await paymentOf(hundred.payment.id)).amount)).toBe('100000');
+
+      const fiftyAgain = await topup('tu-50-again', 50_000n);
+      expect(fiftyAgain.reissued).toBe(true);
+      expect(fiftyAgain.payment.id).toBe(fifty.payment.id);
+
+      await pass();
+      expect(tonpays.creates.map((create) => create.body.amount).sort()).toEqual([100_000, 50_000]);
+    });
+
     it('credits the Nexa amount and the route’s gift exactly once, and nothing for a failed attempt', async () => {
       await enableTonPays({ topupCashbackPercent: 10 });
       const scope = { ...tenantA, botInstanceId: BOT_A };

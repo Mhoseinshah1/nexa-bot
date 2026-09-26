@@ -14,6 +14,20 @@ import type { GatewayPaymentService } from './gateway-payment.service.js';
 export const GATEWAY_PAYMENT_INTERVAL_MS = 3_000;
 
 /**
+ * How many intervals of silence the lane's readiness tolerates: the longest a pass that
+ * is still making bounded progress may take, in intervals, plus the usual three.
+ *
+ * NOT the interval alone. A pass makes its provider calls one after another — up to a
+ * create batch and an inquiry batch of them, each allowed its full timeout — so an
+ * ordinary slow provider can hold one pass far past three intervals. Freshness measured
+ * from the interval would call that lane stalled, stop the worker's heartbeat and fail a
+ * rollout; measured from the pass bound, it still catches a pass that never returns.
+ */
+export function gatewayLoopSlackIntervals(intervalMs: number, passBoundMs: number): number {
+  return Math.ceil(passBoundMs / intervalMs) + 3;
+}
+
+/**
  * The timer that drives the external-gateway lane, and the readiness it earns.
  *
  * Its OWN FILE for the reason `PaymentExpiryLoop` gives (`worker-health-coverage.test.ts`
@@ -35,6 +49,8 @@ export class GatewayPaymentLoop {
     private readonly options: {
       readonly scope: () => TenantContext | null;
       readonly intervalMs: number;
+      /** The longest one bounded pass may take: its calls times their timeout. */
+      readonly passBoundMs: number;
       readonly now: () => number;
       readonly logger: {
         info: (context: Record<string, unknown>, message: string) => void;
@@ -42,7 +58,10 @@ export class GatewayPaymentLoop {
       };
     },
   ) {
-    this.progress = new LoopProgress(options.intervalMs);
+    this.progress = new LoopProgress(
+      options.intervalMs,
+      gatewayLoopSlackIntervals(options.intervalMs, options.passBoundMs),
+    );
   }
 
   isFresh(nowMs: number): boolean {

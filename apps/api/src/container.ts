@@ -212,7 +212,10 @@ import {
   PaymentExpiryLoop,
   PAYMENT_EXPIRY_INTERVAL_MS,
 } from './modules/commerce/payments/application/payment-expiry-loop.js';
-import { TonPaysAdapter } from './modules/commerce/payments/infrastructure/tonpays-adapter.js';
+import {
+  TONPAYS_TIMEOUT_MS,
+  TonPaysAdapter,
+} from './modules/commerce/payments/infrastructure/tonpays-adapter.js';
 import { DrizzleGatewayInvoiceRepository } from './modules/commerce/payments/infrastructure/drizzle-gateway-invoice.repository.js';
 import {
   DrizzleGatewayCallBudget,
@@ -220,6 +223,8 @@ import {
   DrizzlePublicOriginReader,
 } from './modules/commerce/payments/infrastructure/drizzle-gateway-credentials.js';
 import {
+  GATEWAY_CREATE_BATCH,
+  GATEWAY_INQUIRY_BATCH,
   GatewayPaymentService,
   gatewayCallbackUrl,
 } from './modules/commerce/payments/application/gateway-payment.service.js';
@@ -1877,6 +1882,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         ? null
         : { tenantId: installationTenantId, botInstanceId: null },
     intervalMs: GATEWAY_PAYMENT_INTERVAL_MS,
+    // Every call a pass may make, one after another, each allowed its whole timeout.
+    passBoundMs: (GATEWAY_CREATE_BATCH + GATEWAY_INQUIRY_BATCH) * TONPAYS_TIMEOUT_MS,
     now: () => clock.now().getTime(),
     logger,
   });

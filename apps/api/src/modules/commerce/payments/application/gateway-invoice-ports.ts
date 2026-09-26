@@ -261,6 +261,22 @@ export interface GatewayInvoiceRepository {
     tx?: unknown,
   ): Promise<readonly ClaimedGatewayInvoice[]>;
 
+  /**
+   * Gives back the leases a pass took and will not use. Only a lease still carrying the
+   * value this claim set is cleared, so a row another worker has since claimed keeps its
+   * lease. A pass that stops early (the call budget ran out) calls this for the rows it
+   * did not reach; otherwise each would sit leased for the whole lease and miss the
+   * retry that was promised a few seconds out.
+   */
+  releaseClaims(
+    scope: TenantContext,
+    lane: 'CREATION' | 'INQUIRY',
+    paymentIds: readonly PaymentId[],
+    leaseUntil: Date,
+    now: Date,
+    tx?: unknown,
+  ): Promise<number>;
+
   /** Records what an inquiry returned and when the next one is due (null: none). */
   recordInquiry(
     scope: TenantContext,
@@ -325,7 +341,10 @@ export interface GatewayInvoiceRepository {
 
   /**
    * The open attempt for an order or a customer's top-up through this provider:
-   * a PENDING payment whose invoice is CREATING or CREATED, inside its deadline.
+   * a PENDING payment whose invoice is CREATING or CREATED, inside its deadline,
+   * for exactly `amount`. A top-up has no order to pin its figure, so an attempt for
+   * another amount is not this request's: handing it back would take a sum the
+   * customer did not ask to pay.
    */
   findOpenAttempt(
     scope: TenantContext,
@@ -333,6 +352,7 @@ export interface GatewayInvoiceRepository {
       readonly provider: PaymentGatewayProvider;
       readonly orderId: string | null;
       readonly customerId: string;
+      readonly amount: Money;
       readonly now: Date;
     },
     tx: unknown,

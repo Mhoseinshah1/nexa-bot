@@ -1,6 +1,7 @@
 import { and, asc, eq, gt, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
 import type {
   CurrencyCode,
+  Money,
   GatewayInvoiceCreationState,
   GatewayInvoiceOutcome,
   PaymentGatewayProvider,
@@ -341,6 +342,38 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
     return this.withPayments(scope, rows, tx);
   }
 
+  async releaseClaims(
+    scope: TenantContext,
+    lane: 'CREATION' | 'INQUIRY',
+    paymentIds: readonly PaymentId[],
+    leaseUntil: Date,
+    now: Date,
+    tx?: unknown,
+  ): Promise<number> {
+    if (paymentIds.length === 0) return 0;
+    const tenantId = requireTenantId(scope);
+    const column =
+      lane === 'CREATION'
+        ? gatewayInvoices.creationClaimedUntil
+        : gatewayInvoices.inquiryClaimedUntil;
+    const rows = await this.exec(tx)
+      .update(gatewayInvoices)
+      .set(
+        lane === 'CREATION'
+          ? { creationClaimedUntil: null, updatedAt: now }
+          : { inquiryClaimedUntil: null, updatedAt: now },
+      )
+      .where(
+        and(
+          eq(gatewayInvoices.tenantId, tenantId),
+          inArray(gatewayInvoices.paymentId, [...paymentIds]),
+          eq(column, leaseUntil),
+        ),
+      )
+      .returning({ paymentId: gatewayInvoices.paymentId });
+    return rows.length;
+  }
+
   async recordInquiry(
     scope: TenantContext,
     paymentId: PaymentId,
@@ -511,6 +544,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
       readonly provider: PaymentGatewayProvider;
       readonly orderId: string | null;
       readonly customerId: string;
+      readonly amount: Money;
       readonly now: Date;
     },
     tx: unknown,
@@ -534,6 +568,8 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
           eq(payments.state, 'PENDING'),
           eq(payments.customerId, input.customerId),
           input.orderId === null ? isNull(payments.orderId) : eq(payments.orderId, input.orderId),
+          eq(payments.amount, input.amount.amountMinor),
+          eq(payments.currency, input.amount.currency),
           gt(payments.expiresAt, input.now),
         ),
       )

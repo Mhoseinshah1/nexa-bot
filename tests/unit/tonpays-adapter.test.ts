@@ -235,6 +235,61 @@ describe('what a create outcome may conclude', () => {
     ).toEqual({ kind: 'AMBIGUOUS', code: 'DUPLICATE_ORDER_ID' });
   });
 
+  it('calls every 5xx UNKNOWN whatever code its body carries — a rate limit, a configuration refusal or a duplicate', async () => {
+    for (const code of [
+      'RATE_LIMIT_EXCEEDED',
+      'INVALID_API_KEY',
+      'DUPLICATE_ORDER_ID',
+      'AMOUNT_TOO_LOW',
+    ]) {
+      for (const status of [500, 502, 503]) {
+        expect(await create(() => json(status, { detail: { code, message: 'x' } }))).toEqual({
+          kind: 'UNKNOWN',
+          code: `http.${String(status)}`,
+        });
+      }
+    }
+  });
+
+  it('stops reading a body at the bound instead of buffering it whole, and refuses a declared length over it unread', async () => {
+    const chunk = new Uint8Array(16 * 1024).fill(0x20);
+    let pulled = 0;
+    const endless = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += chunk.byteLength;
+        // A megabyte in all: `response.text()` would read every byte of it.
+        if (pulled > 1024 * 1024) controller.close();
+        else controller.enqueue(chunk);
+      },
+    });
+    expect(await create(() => new Response(endless, { status: 201 }))).toEqual({
+      kind: 'UNKNOWN',
+      code: 'http.201.unreadable',
+    });
+    expect(pulled).toBeLessThanOrEqual(64 * 1024 + 2 * chunk.byteLength);
+
+    let declaredPulls = 0;
+    const declared = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        declaredPulls += 1;
+        controller.enqueue(new TextEncoder().encode(JSON.stringify(CREATED)));
+        controller.close();
+      },
+    });
+    const response = new Response(declared, {
+      status: 201,
+      headers: { 'content-length': String(10 * 1024 * 1024) },
+    });
+    expect(await create(() => response)).toEqual({
+      kind: 'UNKNOWN',
+      code: 'http.201.unreadable',
+    });
+    expect(declaredPulls).toBeLessThanOrEqual(1);
+
+    // A body inside the bound is read as before.
+    expect(await create(() => json(201, CREATED))).toMatchObject({ kind: 'CREATED' });
+  });
+
   it('never carries the API key in any outcome, whatever the provider or the network says', async () => {
     const answers: (() => Response | Promise<Response>)[] = [
       () => json(201, CREATED),

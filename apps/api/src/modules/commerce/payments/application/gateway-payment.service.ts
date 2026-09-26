@@ -188,6 +188,7 @@ export class GatewayPaymentService {
     const now = this.deps.clock.now();
     const actor = this.actor();
 
+    const creationLease = new Date(now.getTime() + GATEWAY_CLAIM_LEASE_MS);
     const creating = await this.deps.uow.run(scope, (tx) =>
       this.deps.invoices.claimCreating(
         scope,
@@ -197,29 +198,39 @@ export class GatewayPaymentService {
         tx,
       ),
     );
-    for (const claimed of creating) {
+    for (const [index, claimed] of creating.entries()) {
       const result = await this.processCreation(scope, actor, claimed);
       if (result === 'BUDGET') {
         report.budgetExhausted = true;
+        // The deferred row cleared its own lease; the rows not reached give theirs back.
+        await this.releaseUnreached(scope, 'CREATION', creating.slice(index + 1), creationLease);
         break;
       }
       report[result] += 1;
     }
 
     if (!report.budgetExhausted) {
+      const inquiryNow = this.deps.clock.now();
+      const inquiryLease = new Date(inquiryNow.getTime() + GATEWAY_CLAIM_LEASE_MS);
       const due = await this.deps.uow.run(scope, (tx) =>
         this.deps.invoices.claimInquiries(
           scope,
-          this.deps.clock.now(),
+          inquiryNow,
           GATEWAY_CLAIM_LEASE_MS,
           GATEWAY_INQUIRY_BATCH,
           tx,
         ),
       );
-      for (const claimed of due) {
+      for (const [index, claimed] of due.entries()) {
         const result = await this.processInquiry(scope, actor, claimed);
         if (result === 'BUDGET') {
           report.budgetExhausted = true;
+          /*
+           * The row that met the empty budget was rescheduled five seconds out; it and
+           * every row after it give their leases back, or each would sit leased for the
+           * whole lease and miss that retry — the last inquiry before a deadline among them.
+           */
+          await this.releaseUnreached(scope, 'INQUIRY', due.slice(index), inquiryLease);
           break;
         }
         report.inquired += 1;
@@ -229,6 +240,25 @@ export class GatewayPaymentService {
       }
     }
     return report;
+  }
+
+  private async releaseUnreached(
+    scope: TenantContext,
+    lane: 'CREATION' | 'INQUIRY',
+    rows: readonly ClaimedGatewayInvoice[],
+    leaseUntil: Date,
+  ): Promise<void> {
+    if (rows.length === 0) return;
+    await this.deps.uow.run(scope, (tx) =>
+      this.deps.invoices.releaseClaims(
+        scope,
+        lane,
+        rows.map((row) => row.invoice.paymentId),
+        leaseUntil,
+        this.deps.clock.now(),
+        tx,
+      ),
+    );
   }
 
   private async processCreation(
@@ -534,7 +564,6 @@ export class GatewayPaymentService {
       return 'ERROR';
     }
 
-    const terminal = outcome.verdict !== 'OPEN';
     await this.deps.uow.run(scope, (tx) =>
       this.deps.invoices.recordInquiry(
         scope,
@@ -549,11 +578,15 @@ export class GatewayPaymentService {
           // order id: adopted. Nothing else is ever adopted.
           adoptInvoiceId: invoice.providerInvoiceId === null ? invoiceId : null,
           /*
-           * An approval keeps the next inquiry scheduled until its outcome is recorded:
-           * a crash between here and the settlement is then retried rather than lost,
-           * and the retry is harmless because the settlement is exactly-once.
+           * A terminal verdict keeps the next inquiry scheduled until its outcome is
+           * recorded — `recordOutcome` is what clears it. A crash, or a failed transaction,
+           * between here and the settlement or the failure is then retried rather than
+           * lost: an UNSUCCESSFUL row unscheduled here would leave its payment PENDING and
+           * its rejected invoice handed back as the open attempt. The retry is harmless:
+           * the settlement is exactly-once, and a payment already failed is no longer
+           * eligible, so the retry only records the outcome.
            */
-          nextInquiryAt: terminal && outcome.verdict !== 'APPROVED' ? null : next,
+          nextInquiryAt: next,
           postDeadline,
         },
         at,
