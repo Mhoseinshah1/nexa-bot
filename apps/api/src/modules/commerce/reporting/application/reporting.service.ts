@@ -12,10 +12,12 @@ import {
   SERVICE_STATES,
   WALLET_REPORT_GROUP_OF,
   errors,
+  money,
   type ActorContext,
   type Clock,
   type CountComparison,
   type CurrencyCode,
+  type Money,
   type MoneyComparison,
   type OrderPurpose,
   type PaymentMethod,
@@ -42,9 +44,16 @@ import {
   type ReportTrendMetric,
   type ReportTrendResponse,
   type ReportWalletResponse,
+  type ResellerStatus,
   type TenantContext,
   type WalletReportGroup,
 } from '@nexa/contracts';
+import {
+  creditAllowanceOf,
+  creditFigures,
+  effectiveLimitOf,
+  type CreditTerms,
+} from '../../resellers/domain/reseller-credit.js';
 import {
   REPORTS_EXPORT_PERMISSION,
   REPORTS_VIEW_PERMISSION,
@@ -65,6 +74,7 @@ import type {
   ReportPeriodResolver,
   ReportPresentationReader,
   ReportingRepository,
+  ResellerRow,
   ResolvedPeriod,
   SalesCurrencyReader,
   Window,
@@ -445,7 +455,13 @@ export class ReportingService {
     request: ReportRangeRequest,
   ): Promise<ReportResellersResponse> {
     const r = await this.prepare(scope, actor, request, REPORTS_VIEW_PERMISSION);
-    const rows = await this.deps.repository.resellers(scope, r.current, REPORT_ENTITY_ROWS_MAX + 1);
+    const selling = await this.deps.salesCurrency.salesCurrency(scope);
+    const rows = await this.deps.repository.resellers(
+      scope,
+      r.current,
+      selling,
+      REPORT_ENTITY_ROWS_MAX + 1,
+    );
     return {
       period: r.wire,
       truncated: rows.length > REPORT_ENTITY_ROWS_MAX,
@@ -456,25 +472,16 @@ export class ReportingService {
         orders: row.orders,
         sales: row.sales.map(toMoneyTotal),
         services: row.services,
-        creditLimit:
-          row.creditLimit === null
-            ? null
-            : {
-                amountMinor: row.creditLimit.amount.toString(),
-                currency: row.creditLimit.currency,
-              },
-        creditInUse:
-          row.creditLimit === null || row.balanceInLimitCurrency === null
-            ? null
-            : {
-                // `canCover`'s own rule, read the other way: credit in use is how far below
-                // zero the wallet stands. A positive balance uses none of it.
-                amountMinor: (row.balanceInLimitCurrency < 0n
-                  ? -row.balanceInLimitCurrency
-                  : 0n
-                ).toString(),
-                currency: row.creditLimit.currency,
-              },
+        ...((credit) => ({
+          creditLimit: {
+            amountMinor: credit.limit.amountMinor.toString(),
+            currency: credit.limit.currency,
+          },
+          creditInUse: {
+            amountMinor: credit.inUse.amountMinor.toString(),
+            currency: credit.inUse.currency,
+          },
+        }))(resellerCreditOf(row, selling)),
       })),
     };
   }
@@ -905,17 +912,13 @@ export class ReportingService {
         );
       }
       case 'RESELLERS': {
-        const rows = await repo.resellers(scope, r.current, cap);
+        const selling = await this.deps.salesCurrency.salesCurrency(scope);
+        const rows = await repo.resellers(scope, r.current, selling, cap);
         const out: Record<string, ExportCell>[] = [];
         for (const row of rows) {
           const sales = row.sales.length > 0 ? row.sales : [null];
+          const credit = resellerCreditOf(row, selling);
           for (const sale of sales) {
-            const inUse =
-              row.creditLimit === null || row.balanceInLimitCurrency === null
-                ? null
-                : row.balanceInLimitCurrency < 0n
-                  ? -row.balanceInLimitCurrency
-                  : 0n;
             out.push({
               resellerCustomerId: row.resellerCustomerId,
               tierName: row.tierName,
@@ -924,14 +927,14 @@ export class ReportingService {
               sales: sale === null ? null : { amountMinor: sale.amount, currency: sale.currency },
               currency: sale === null ? null : sale.currency,
               services: row.services,
-              creditLimit:
-                row.creditLimit === null
-                  ? null
-                  : { amountMinor: row.creditLimit.amount, currency: row.creditLimit.currency },
-              creditInUse:
-                row.creditLimit === null || inUse === null
-                  ? null
-                  : { amountMinor: inUse, currency: row.creditLimit.currency },
+              creditLimit: {
+                amountMinor: credit.limit.amountMinor,
+                currency: credit.limit.currency,
+              },
+              creditInUse: {
+                amountMinor: credit.inUse.amountMinor,
+                currency: credit.inUse.currency,
+              },
             });
           }
         }
@@ -1170,4 +1173,27 @@ export function exportFileStem(
   const from = periods.formatLocalDate(startLocal, '-');
   const to = periods.formatLocalDate(endLocalInclusive, '-');
   return from === to ? `${base}-${from}` : `${base}-${from}-to-${to}`;
+}
+
+/**
+ * A reseller's credit line as settlement sees it — the ONE derivation (`reseller-credit.ts`),
+ * never a second: the effective limit (the reseller's own, else the tier's), and credit in
+ * use as the negative part of the balance in the SELLING currency, the only currency a
+ * debit is written in. Reading the balance in the limit's currency, or ignoring a tier's
+ * limit, gave the report a different answer from the operator's credit card.
+ */
+function resellerCreditOf(
+  row: ResellerRow,
+  selling: CurrencyCode,
+): { readonly limit: Money; readonly inUse: Money } {
+  const terms: CreditTerms = {
+    status: row.status as ResellerStatus,
+    ownLimit: row.ownLimit === null ? null : money(row.ownLimit.amount, row.ownLimit.currency),
+    tierLimit: money(row.tierLimit.amount, row.tierLimit.currency),
+  };
+  const { creditInUse } = creditFigures(
+    row.balanceInSellingCurrency,
+    creditAllowanceOf(terms, selling),
+  );
+  return { limit: effectiveLimitOf(terms).limit, inUse: money(creditInUse, selling) };
 }

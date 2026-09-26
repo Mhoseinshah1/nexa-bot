@@ -2351,3 +2351,16 @@ registration is gone, `botctl telegram register` restores it.
 
 **Trigger to resolve:** the first real token replacement on a running installation, whose
 live check answers it.
+
+## OQ-WP14-01 — should the server require an acknowledgement before suspending a reseller who owes?
+
+WP14's Web Admin asks an operator to confirm before suspending a reseller with credit in
+use, or lowering a limit below it. The server accepts both without asking, as it always
+has: R8 and `OQ-WP9-04` leave the debt where it is, so nothing is lost either way. The
+page skips its confirmation silently when the credit read has not loaded or failed, when
+the operator lacks `users.view`, and for a direct API call. Requiring an acknowledgement
+server-side would be a new rule on `ResellerAdminService.update`, and is not guessed
+(`docs/wp14-reseller-phase2-audit.md` D4).
+
+**Trigger to resolve:** an owner decision, or the first operator who suspends a reseller
+without having seen the debt.
