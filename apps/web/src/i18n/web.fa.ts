@@ -1473,7 +1473,12 @@ export const WEB_FA = {
   'web.payment_timeline_signalled': 'مشتری اعلام کرد واریز کرده است',
   'web.payment_timeline_receipt': 'رسید ارسال شد',
   'web.payment_timeline_confirmed': 'پرداخت تأیید شد',
-  'web.payment_timeline_resolved': 'پرداخت بدون دریافت وجه بسته شد',
+  /*
+   * "Closed without being settled", never "without receiving money": a receipt credited to
+   * the wallet closes the payment FAILED while the money it carried is credited, and the
+   * row right below says so (Codex review of #81).
+   */
+  'web.payment_timeline_resolved': 'پرداخت بدون تسویه بسته شد',
   'web.payment_timeline_receipt_credited': 'مبلغ رسید به کیف پول واریز شد',
   'web.payment_timeline_wallet_entry': 'تراکنش کیف پول',
   'web.payment_timeline_refund_requested': 'بازپرداخت ثبت شد',

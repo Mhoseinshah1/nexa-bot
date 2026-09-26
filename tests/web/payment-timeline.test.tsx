@@ -95,6 +95,16 @@ describe('payment timeline card', () => {
     expect(screen.queryByText(t('web.payment_timeline_truncated'))).toBeNull();
   });
 
+  /*
+   * Codex review of #81: a receipt credited to the wallet closes the payment FAILED while
+   * the money it carried IS credited, one row below. The resolution's label may say the
+   * payment closed unsettled; it may not say no money was received.
+   */
+  it('never labels a resolution as closed without receiving money', () => {
+    expect(t('web.payment_timeline_resolved')).not.toContain('دریافت وجه');
+    expect(t('web.payment_timeline_resolved')).toContain('تسویه');
+  });
+
   it('names every section it was not allowed to show', async () => {
     stubApi(timeline({ withheld: ['REFUNDS', 'WALLET'] }));
     renderPage(<PaymentTimelineCard paymentId={PAYMENT_ID} paymentState="FAILED" />);

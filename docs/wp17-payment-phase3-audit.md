@@ -261,6 +261,13 @@ whose notices are all resolved is not polled at all. The viewer's section permis
 identity. A permission revoked while the page is open is therefore a new question to the
 server, which decides what is withheld, instead of the old answer kept on screen.
 
+A sixth round, on `2af27fb`, found two more (P17-33..34). The history called a FAILED
+resolution "closed without receiving money", but a receipt credited to the wallet closes
+its payment FAILED while the money it carried is credited, in the row below. The label
+now says the payment closed unsettled. A refund request answered with an error re-read
+the ledger but not the history beside it. A 5xx may have committed, so the history is
+now re-read too.
+
 Tests added:
 
 - **Unit:** `tests/unit/payment-timeline.test.ts` (7 cases) and

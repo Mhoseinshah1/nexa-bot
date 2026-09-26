@@ -1000,6 +1000,81 @@ describe('the refund card', () => {
     });
     await waitFor(() => expect(timelineReads()).toBe(2));
   });
+
+  /*
+   * Codex review of #81: a refund request answered with a 5xx may have COMMITTED — that is
+   * why the retry keeps its key. The ledger beside it is re-read, and so must the history
+   * be, or the refund card shows a refund the history on the same page omits.
+   */
+  it('re-reads the payment history after a refund request is answered with a 5xx', async () => {
+    const api = stubApi([
+      ...withRefunds([], {}),
+      {
+        url: `/payments/${ROW_ID}/timeline`,
+        body: {
+          paymentId: ROW_ID,
+          entries: [
+            {
+              kind: 'PAYMENT_CONFIRMED',
+              at: '2026-09-10T12:45:00.000Z',
+              evidenceKind: 'OPERATOR_REVIEW',
+              adminId: ADMIN_ID,
+            },
+          ],
+          withheld: [],
+          truncated: false,
+        },
+      },
+    ] as never);
+    // The request and the ledger share one URL; only the POST is answered 500.
+    const routed = globalThis.fetch;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: unknown, init?: RequestInit) => {
+        if (init?.method === 'POST' && String(input).endsWith(`/payments/${ROW_ID}/refunds`)) {
+          api.calls.push({ url: String(input), method: 'POST', body: null });
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                error: {
+                  kind: 'internal',
+                  code: 'internal',
+                  message: 'lost',
+                  correlationId: 'test',
+                },
+              }),
+              { status: 500, headers: { 'content-type': 'application/json' } },
+            ),
+          );
+        }
+        return routed(input as RequestInfo, init);
+      }),
+    );
+    renderPage(
+      <PaymentDetailPage
+        id={ROW_ID}
+        mayViewReceipts={false}
+        mayViewRefunds
+        mayIssueRefunds
+        denied={false}
+      />,
+    );
+    await screen.findByText('باقی‌ماندهٔ قابل بازگشت');
+    const timelineReads = () =>
+      api.calls.filter((call) => call.method === 'GET' && call.url.includes('/timeline')).length;
+    await waitFor(() => expect(timelineReads()).toBe(1));
+
+    fireEvent.change(screen.getByLabelText('مبلغ (به کوچک‌ترین یکای پول)'), {
+      target: { value: '1000' },
+    });
+    fireEvent.change(screen.getByLabelText('دلیل'), { target: { value: 'مشتری منصرف شد' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ثبت درخواست' }));
+
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
+    });
+    await waitFor(() => expect(timelineReads()).toBe(2));
+  });
 });
 
 /**

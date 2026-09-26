@@ -838,6 +838,9 @@ function RefundsCard({
        */
       if (error instanceof ApiError) {
         void queries.invalidateQueries({ queryKey: ['refunds', paymentId] });
+        // And the history beside it: a refund that committed behind a 5xx is a row there
+        // too, and the refund card would otherwise show one the history omits (Codex).
+        void queries.invalidateQueries({ queryKey: ['payment-timeline', paymentId] });
       }
     },
   });
