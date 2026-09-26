@@ -132,6 +132,12 @@ type RevokeMode =
   | 'refuses'
   | 'rate-limited';
 let revokeMode: RevokeMode = 'rotates';
+/**
+ * How the fake spells a user record on the wire (WP15 G5). Null is the record as held;
+ * a function rewrites it — numbers as strings, a field dropped, a value malformed.
+ */
+let shapeRecord: ((held: FakeUser) => Record<string, unknown>) | null = null;
+const shaped = (held: FakeUser): unknown => (shapeRecord === null ? held : shapeRecord(held));
 let rotations = 0;
 let users = new Map<string, FakeUser>();
 let foreign = new Set<string>();
@@ -285,7 +291,7 @@ beforeAll(async () => {
             const { subscription_url: _dropped, ...rest } = held;
             return json(200, rest);
           }
-          return json(200, held);
+          return json(200, shaped(held));
         }
         if (request.method === 'PUT') {
           if (putStatus !== null) return json(putStatus, { detail: 'refused' });
@@ -295,7 +301,7 @@ beforeAll(async () => {
           if (typeof patch['status'] === 'string') held.status = patch['status'];
           if (typeof patch['expire'] === 'number') held.expire = patch['expire'];
           if (typeof patch['data_limit'] === 'number') held.data_limit = patch['data_limit'];
-          return json(200, held);
+          return json(200, shaped(held));
         }
         if (request.method === 'DELETE') {
           if (deleteStatus !== null) return json(deleteStatus, { detail: 'refused' });
@@ -328,6 +334,7 @@ beforeEach(() => {
   putStatus = null;
   missingSeedStatus = 422;
   revokeMode = 'rotates';
+  shapeRecord = null;
   rotations = 0;
   users = new Map();
   foreign = new Set();
@@ -1102,5 +1109,156 @@ describe('RickPanel logging safety', () => {
     const { delivery, ...rest } = outcome;
     expect(asLogged(rest)).not.toContain('/sub/');
     expect(asLogged(delivery)).toContain('/sub/');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WP15 G5, G7: numbers read once at the boundary, and the provenance of a create
+// ---------------------------------------------------------------------------
+
+describe('RickPanel numeric fields are normalised once, at the adapter', () => {
+  it('reads canonical numeric strings exactly as it reads numbers', async () => {
+    users.set(REF.username, userRecord(REF.username));
+    shapeRecord = (held) => ({
+      ...held,
+      expire: String(held.expire),
+      data_limit: String(held.data_limit),
+      used_traffic: '1024',
+    });
+    const found = await adapter().lookupUser(target(), http(), REF);
+    expect(found).toMatchObject({ ok: true, found: true });
+    if (!found.ok || !found.found) return;
+    expect(found.usage).toEqual({
+      usedBytes: 1024n,
+      totalBytes: 53_687_091_200n,
+      expiresAt: new Date(1_800_000_000 * 1000),
+      lastSeen: { kind: 'UNSUPPORTED' },
+    });
+  });
+
+  it('says the usage field is MISSING, which is not the same answer as not found', async () => {
+    users.set(REF.username, userRecord(REF.username));
+    shapeRecord = ({ used_traffic: _gone, ...rest }) => rest;
+    const incomplete = await adapter().lookupUser(target(), http(), REF);
+    expect(incomplete).toEqual({
+      ok: false,
+      failure: 'MALFORMED_RESPONSE',
+      status: null,
+      detail: 'USAGE_FIELD_MISSING',
+    });
+
+    const absent = await adapter().lookupUser(target(), http(), ref('nobody-here'));
+    expect(absent).toEqual({ ok: true, found: false });
+
+    // And no figure is invented for it: the usage read refuses rather than report zero.
+    const usage = await adapter().readUsage(target(), http(), REF);
+    expect(usage.ok).toBe(false);
+  });
+
+  for (const bad of [
+    1.5,
+    -1,
+    Number.MAX_SAFE_INTEGER + 2,
+    '-1',
+    '1.5',
+    '1e9',
+    ' 12',
+    '012',
+    '0x10',
+    'abc',
+    '',
+    '9007199254740993',
+    true,
+    {},
+  ]) {
+    it(`refuses used_traffic ${JSON.stringify(bad)} as a malformed value`, async () => {
+      users.set(REF.username, userRecord(REF.username));
+      shapeRecord = (held) => ({ ...held, used_traffic: bad });
+      const found = await adapter().lookupUser(target(), http(), REF);
+      expect(found).toMatchObject({
+        ok: false,
+        failure: 'MALFORMED_RESPONSE',
+        detail: 'VALUE_MALFORMED',
+      });
+    });
+  }
+
+  it('refuses an expire past any date anybody set, rather than building one', async () => {
+    users.set(REF.username, userRecord(REF.username));
+    shapeRecord = (held) => ({ ...held, expire: '253402300800' });
+    const found = await adapter().lookupUser(target(), http(), REF);
+    expect(found).toMatchObject({ ok: false, detail: 'VALUE_MALFORMED' });
+  });
+
+  it('verifies an allowance the panel echoes back as strings', async () => {
+    users.set(REF.username, userRecord(REF.username));
+    shapeRecord = (held) => ({
+      ...held,
+      expire: String(held.expire),
+      data_limit: String(held.data_limit),
+      used_traffic: String(held.used_traffic),
+    });
+    const plan = { expiresAt: new Date('2028-01-01T00:00:00.000Z'), trafficLimitBytes: 1_000n };
+    const applied = await adapter().applyAllowance(target(), http(), REF, plan);
+    expect(applied).toMatchObject({ ok: true, found: true });
+  });
+
+  it('reports an allowance echo it cannot read as malformed, never as applied', async () => {
+    users.set(REF.username, userRecord(REF.username));
+    shapeRecord = (held) => ({ ...held, expire: 'soon' });
+    const plan = { expiresAt: new Date('2028-01-01T00:00:00.000Z'), trafficLimitBytes: null };
+    const applied = await adapter().applyAllowance(target(), http(), REF, plan);
+    expect(applied).toMatchObject({
+      ok: false,
+      failure: 'MALFORMED_RESPONSE',
+      detail: 'VALUE_MALFORMED',
+    });
+  });
+});
+
+describe('RickPanel create provenance (WP15 G7)', () => {
+  it('marks a create the panel answered 2xx as accepted when its read-back is lost', async () => {
+    userReadMode = 'drops';
+    const created = await adapter().createUser(target(), http(), CREATE);
+    expect(created).toMatchObject({ ok: false, accepted: true });
+  });
+
+  it('marks an accepted create that never became readable as accepted', async () => {
+    createMode = 'accepts-after-delay';
+    readsBeforeVisible = 100;
+    const created = await adapter().createUser(target(), http(), CREATE);
+    expect(created).toMatchObject({ ok: false, failure: 'MALFORMED_RESPONSE', accepted: true });
+  });
+
+  for (const mode of [
+    'conflict-owned',
+    'conflict-foreign',
+    'server-error',
+    'refuses-rule',
+  ] as const) {
+    it(`gives a ${mode} create no provenance at all`, async () => {
+      createMode = mode;
+      const created = await adapter().createUser(target(), http(), CREATE);
+      expect(created.ok).toBe(false);
+      if (created.ok) return;
+      expect(created.accepted).toBeUndefined();
+    });
+  }
+
+  it('marks the token exchange a READ, so the transport may retry it and never the create', async () => {
+    const sent: { method: string; effect?: string }[] = [];
+    const inner = http();
+    const spy = {
+      send: (request: Parameters<typeof inner.send>[0]) => {
+        sent.push({
+          method: request.method,
+          ...(request.effect ? { effect: request.effect } : {}),
+        });
+        return inner.send(request);
+      },
+    };
+    await adapter().createUser(target(), spy, CREATE);
+    expect(sent[0]).toEqual({ method: 'POST', effect: 'READ' });
+    expect(sent[1]).toEqual({ method: 'POST' });
   });
 });
