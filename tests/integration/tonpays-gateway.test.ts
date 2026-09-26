@@ -969,11 +969,11 @@ describe('TonPays, through the one settlement path', () => {
     const empty: GatewayCallBudget = { take: () => Promise.resolve(false) };
     const claims = async (column: 'creation_claimed_until' | 'inquiry_claimed_until') =>
       (
-        await rows<{ claimed: Date | null }>(
+        await rows<{ claimed: string | null }>(
           sql`SELECT ${sql.raw(column)} AS claimed FROM gateway_invoices
               WHERE tenant_id = ${tenantA.tenantId} ORDER BY created_at`,
         )
-      ).map((row) => row.claimed);
+      ).map((row) => (row.claimed === null ? null : new Date(row.claimed).toISOString()));
 
     it('gives back the creation leases it did not reach, so each is retried within seconds', async () => {
       await enableTonPays();
@@ -1006,6 +1006,25 @@ describe('TonPays, through the one settlement path', () => {
       expect([...tonpays.checks].sort()).toEqual(
         [first.invoiceId, (await invoiceOf(second.paymentId)).provider_invoice_id!].sort(),
       );
+    });
+
+    it('releases only a lease still carrying the value it set, never one another worker has since taken', async () => {
+      const { paymentId } = await createdAttempt();
+      const repository = new DrizzleGatewayInvoiceRepository(ctx.container.database.db);
+      const ours = new Date(Date.UTC(2030, 0, 1, 0, 0, 0));
+      const theirs = new Date(Date.UTC(2030, 0, 1, 0, 1, 0));
+      await ctx.container.database.db.execute(
+        sql`UPDATE gateway_invoices SET inquiry_claimed_until = ${theirs.toISOString()}::timestamptz
+            WHERE payment_id = ${paymentId}`,
+      );
+      expect(
+        await repository.releaseClaims(tenantA, 'INQUIRY', [paymentId], ours, new Date()),
+      ).toBe(0);
+      expect(await claims('inquiry_claimed_until')).toEqual([theirs.toISOString()]);
+      expect(
+        await repository.releaseClaims(tenantA, 'INQUIRY', [paymentId], theirs, new Date()),
+      ).toBe(1);
+      expect(await claims('inquiry_claimed_until')).toEqual([null]);
     });
   });
 
