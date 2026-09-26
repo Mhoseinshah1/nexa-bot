@@ -417,8 +417,6 @@ export const WEB_FA = {
   'web.planned_status_body':
     'هیچ دکمه‌ای در این صفحه وجود ندارد، چون هیچ کاری از سرور برنمی‌آید. دکمهٔ غیرفعال هم نگذاشته‌ایم: دکمهٔ غیرفعال یعنی «هست ولی دسترسی ندارید»، و این درست نیست.',
 
-  'web.planned_bots_summary': 'ربات‌های تلگرام و پیکربندی آنها.',
-
   /*
    * KEPT, and now rendered on the real Payments page rather than on a placeholder.
    *
@@ -432,13 +430,104 @@ export const WEB_FA = {
    * are recorded in `docs/open-questions.md`, where a deferral belongs.
    */
   'web.planned_missing_gateway': 'هیچ درگاه پرداختی ثبت یا تعریف نشده است.',
-  'web.planned_missing_bot_runtime':
-    'اجرای ربات تلگرام بخشی از فاز بعدی است و در این نسخه ساخته نمی‌شود.',
 
   'web.planned_reports_no_logs':
     'صفحهٔ لاگ عمومی در پنل وب ساخته نمی‌شود؛ جریان عملیاتی انسانی به گروه گزارش تلگرام می‌رود.',
-  'web.planned_bots_add_flow':
-    'در افزودن ربات، «ربات اصلی» وجود نخواهد داشت. تنها گزینهٔ آینده «ربات فروش نماینده» است و فعلاً غیرفعال و ساخته‌نشدنی است.',
+
+  // --- Bots (WP13) ------------------------------------------------------------
+  'web.bots_subtitle':
+    'ربات‌های تلگرام این مجموعه: وضعیت ثبت‌شدهٔ دریافت پیام، توقف و راه‌اندازی، و جایگزینی امن توکن.',
+  'web.bots_empty': 'هنوز رباتی برای این مجموعه پیکربندی نشده است.',
+  'web.bots_empty_hint':
+    'ربات اصلی را نصب‌کننده می‌سازد. اگر نصب ناتمام مانده است، دستور botctl telegram register را روی سرور اجرا کنید.',
+  'web.bots_add_title': 'افزودن ربات',
+  'web.bots_add_body':
+    'در افزودن ربات، «ربات اصلی» وجود نخواهد داشت: ربات اصلی را نصب‌کننده می‌سازد و از این صفحه ساخته نمی‌شود. تنها گزینهٔ آینده «ربات فروش نماینده» است که هنوز ساخته نشده و فعال نیست؛ به همین دلیل اینجا دکمهٔ افزودن وجود ندارد.',
+  'web.bot_status_active': 'فعال',
+  'web.bot_status_stopped': 'متوقف',
+  'web.bot_status_disabled': 'غیرفعال',
+  'web.bot_readiness_registered': 'وب‌هوک ثبت شده',
+  'web.bot_readiness_not_registered': 'وب‌هوک ثبت نشده',
+  'web.bot_readiness_held': 'دریافت پیام متوقف',
+  'web.bot_cause_route_disabled':
+    'مسیر وب‌هوک در این نصب خاموش است یا راز وب‌هوک تنظیم نشده است؛ هیچ پیامی از تلگرام پذیرفته نمی‌شود. TELEGRAM_WEBHOOK_ENABLED و TELEGRAM_WEBHOOK_SECRET را در nexa.env بررسی و سرویس را دوباره راه‌اندازی کنید.',
+  'web.bot_cause_tenant_inactive':
+    'این مجموعه پذیرش کار را متوقف کرده است؛ تا مجموعه دوباره فعال نشود، راه‌اندازی ربات چیزی را عوض نمی‌کند.',
+  'web.bot_cause_bot_not_active':
+    'ربات فعال نیست؛ پیام‌های تلگرام پذیرفته نمی‌شوند و پاسخ یا اعلانی از آن فرستاده نمی‌شود.',
+  'web.bot_cause_never_registered':
+    'وب‌هوک هرگز در تلگرام ثبت نشده است. دستور botctl telegram register را روی سرور اجرا کنید.',
+  'web.bot_cause_secret_changed':
+    'وب‌هوک با رازی غیر از راز فعلی ثبت شده است و تلگرام پیام‌ها را با راز قدیمی امضا می‌کند. دستور botctl telegram register را اجرا کنید.',
+  'web.bot_cause_secret_unknown':
+    'معلوم نیست وب‌هوک با کدام راز ثبت شده است. یک بار دستور botctl telegram register را اجرا کنید تا مشخص شود.',
+  'web.bot_tenant': 'مجموعه',
+  'web.bot_tenant_fixed':
+    'اتصال ربات به مجموعه ثابت است؛ کاربران ذخیره‌شده به همین ربات تعلق دارند.',
+  'web.bot_telegram_id': 'شناسهٔ تلگرام',
+  'web.bot_telegram_id_unknown': 'ثبت نشده',
+  'web.bot_webhook': 'آخرین ثبت وب‌هوک',
+  'web.bot_webhook_never': 'هرگز ثبت نشده',
+  'web.bot_secret': 'راز وب‌هوک',
+  'web.bot_secret_matches': 'با راز فعلی ثبت شده است',
+  'web.bot_secret_differs': 'با راز دیگری ثبت شده است',
+  'web.bot_secret_unknown': 'نامعلوم',
+  'web.bot_secret_not_configured': 'در این نصب تنظیم نشده است',
+  'web.bot_menu': 'منوی دستورها',
+  'web.bot_menu_current': 'به‌روز',
+  'web.bot_menu_stale': 'قدیمی؛ با botctl telegram register به‌روز می‌شود',
+  'web.bot_menu_unknown': 'نامعلوم',
+  'web.bot_id': 'شناسهٔ داخلی',
+  'web.bot_stop': 'توقف ربات',
+  'web.bot_start': 'راه‌اندازی ربات',
+  'web.bot_stop_confirm_title': 'ربات متوقف شود؟',
+  'web.bot_stop_confirm_body':
+    'تا وقتی ربات متوقف است، پیام‌های تلگرام پذیرفته نمی‌شوند، به مشتریان پاسخی داده نمی‌شود، اعلان‌های عملیاتی از این ربات فرستاده نمی‌شوند و رسیدهای دریافت‌شده با این ربات باز نمی‌شوند.',
+  'web.bot_stop_confirm': 'بله، متوقف شود',
+  'web.bot_cancel': 'انصراف',
+  'web.bot_stopped_done': 'ربات متوقف شد.',
+  'web.bot_started_done': 'ربات راه‌اندازی شد.',
+  'web.bot_no_change': 'ربات از قبل در همین وضعیت بود؛ چیزی تغییر نکرد.',
+  'web.bot_token_label': 'توکن جدید همین ربات',
+  'web.bot_token_hint':
+    'فقط توکن تازهٔ همین ربات از BotFather پذیرفته می‌شود و پیش از ذخیره با تلگرام بررسی می‌شود. توکن ربات دیگری هرگز جایگزین نمی‌شود. توکن فعلی هیچ‌جا نمایش داده نمی‌شود.',
+  'web.bot_token_submit': 'جایگزینی توکن',
+  'web.bot_token_done': 'توکن جایگزین شد. برای اطمینان از وب‌هوک، بررسی زنده را اجرا کنید.',
+  'web.bot_token_same': 'این همان توکن ذخیره‌شده است؛ چیزی تغییر نکرد.',
+  'web.bot_check': 'بررسی زنده با تلگرام',
+  'web.bot_check_title': 'پاسخ تلگرام در',
+  'web.bot_identity_identified': 'تلگرام توکن را پذیرفت.',
+  'web.bot_identity_rejected': 'تلگرام توکن ذخیره‌شده را رد کرد؛ توکن را جایگزین کنید.',
+  'web.bot_identity_not_telegram': 'نشانی تنظیم‌شدهٔ API تلگرام پاسخی از تلگرام نداد.',
+  'web.bot_identity_unreachable': 'تلگرام در دسترس نبود؛ کمی بعد دوباره بررسی کنید.',
+  'web.bot_check_id_mismatch': 'تلگرام این توکن را متعلق به ربات دیگری می‌داند.',
+  'web.bot_check_username_mismatch': 'نام کاربری ربات در تلگرام تغییر کرده است:',
+  'web.bot_webhook_read': 'ثبت وب‌هوک از تلگرام خوانده شد.',
+  'web.bot_webhook_rejected': 'تلگرام خواندن ثبت وب‌هوک را رد کرد.',
+  'web.bot_webhook_unreachable': 'ثبت وب‌هوک خوانده نشد؛ تلگرام در دسترس نبود.',
+  'web.bot_webhook_skipped': 'چون توکن پذیرفته نشد، ثبت وب‌هوک خوانده نشد.',
+  'web.bot_check_url': 'نشانی وب‌هوک در تلگرام:',
+  'web.bot_check_none': 'هیچ',
+  'web.bot_check_url_mismatch': 'با نشانی ثبت‌شده در این نصب یکی نیست',
+  'web.bot_check_url_matches': 'با نشانی ثبت‌شده یکی است',
+  'web.bot_check_pending': 'پیام‌های در صف تلگرام:',
+  'web.bot_check_last_error': 'آخرین خطای تحویل:',
+  'web.bot_error_not_found': 'این ربات در این مجموعه وجود ندارد.',
+  'web.bot_error_status_not_managed':
+    'این ربات در وضعیت «غیرفعال» است که از پنل وب تنظیم یا برداشته نمی‌شود.',
+  'web.bot_error_not_active': 'فقط ربات فعال بررسی می‌شود؛ از توکن ربات متوقف استفاده نمی‌شود.',
+  'web.bot_error_token_malformed':
+    'این توکن ربات تلگرام نیست. توکن از شناسهٔ ربات، دونقطه و بخش محرمانه تشکیل می‌شود.',
+  'web.bot_error_token_different_bot':
+    'این توکن متعلق به ربات دیگری است. فقط توکن تازهٔ همین ربات پذیرفته می‌شود.',
+  'web.bot_error_identity_unknown':
+    'شناسهٔ تلگرام این ربات ثبت نشده است. یک بار دستور botctl telegram register را اجرا کنید.',
+  'web.bot_error_token_rejected':
+    'تلگرام این توکن را رد کرد. توکن تازه‌ای از BotFather بگیرید و دوباره امتحان کنید.',
+  'web.bot_error_telegram_unreachable':
+    'تلگرام در دسترس نبود و چیزی تغییر نکرد. کمی بعد دوباره امتحان کنید.',
+  'web.bot_error_telegram_api_invalid':
+    'نشانی تنظیم‌شدهٔ API تلگرام پاسخی از تلگرام نداد. TELEGRAM_API_BASE_URL را بررسی کنید.',
 
   // --- Panels --------------------------------------------------------------
   'web.panel_new': 'افزودن پنل',
