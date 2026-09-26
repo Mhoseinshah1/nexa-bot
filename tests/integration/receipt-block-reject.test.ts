@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -431,12 +433,35 @@ describe('Block User and the rejection reason, from the receipt message', () => 
       expect(lastText(f)).toBe(CATALOGUE_FA['bot.blocked']);
     });
 
-    it('the customers section’s fixed surface note is never shown as a reason', async () => {
-      await f.ctx.container.customers.block(tenantA, f.owner, {
-        idempotencyKey: 'block-surface-note',
-        customerId: f.customer,
-        reason: 'Blocked from the Telegram management panel.',
-      });
+    it('the customers section’s old fixed note is never shown, after migration 0121 marks it', async () => {
+      // As the one-tap block wrote it between pre-release V2 and WP10G: the English surface
+      // note as the "reason", marked shown.
+      await f.ctx.container.database.db.execute(sql`
+        UPDATE customers
+           SET status = 'BLOCKED', blocked_at = now(),
+               blocked_reason = 'Blocked from the Telegram management panel.',
+               blocked_reason_shown = true
+         WHERE id = ${f.customer}`);
+      // The migration's own backfill statement, read from the file that ships it.
+      const migration = readFileSync(
+        join(
+          import.meta.dirname,
+          '..',
+          '..',
+          'apps',
+          'api',
+          'drizzle',
+          '0121_admin_capture_customer_target.sql',
+        ),
+        'utf8',
+      );
+      const backfill = migration
+        .split('--> statement-breakpoint')
+        .map((statement) => statement.trim())
+        .find((statement) => statement.includes('UPDATE "customers"'));
+      expect(backfill, 'migration 0121 carries the backfill').toBeDefined();
+      await f.ctx.container.database.db.execute(sql.raw(backfill!));
+
       await say(f, '/start', TG.customer);
       expect(lastText(f)).toBe(CATALOGUE_FA['bot.blocked']);
     });

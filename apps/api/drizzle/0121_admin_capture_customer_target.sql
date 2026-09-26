@@ -28,4 +28,11 @@ ALTER TABLE "admin_amount_captures" ADD CONSTRAINT "admin_amount_captures_confir
           OR (purpose IN ('RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON', 'CUSTOMER_BLOCK_REASON') AND reason IS NOT NULL));--> statement-breakpoint
 ALTER TABLE "admin_amount_captures" ADD CONSTRAINT "admin_amount_captures_purpose_check" CHECK (purpose IN ('RECEIPT_CREDIT_AMOUNT', 'RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON', 'CUSTOMER_BLOCK_REASON'));--> statement-breakpoint
 ALTER TABLE "admin_amount_captures" ADD CONSTRAINT "admin_amount_captures_purpose_column_check" CHECK ((purpose = 'RECEIPT_CREDIT_AMOUNT' AND reason IS NULL)
-          OR (purpose IN ('RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON', 'CUSTOMER_BLOCK_REASON') AND amount_minor IS NULL));
+          OR (purpose IN ('RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON', 'CUSTOMER_BLOCK_REASON') AND amount_minor IS NULL));--> statement-breakpoint
+-- The customers section's one-tap block (WP2) stored this fixed English note as the "reason",
+-- and from pre-release V2 to WP10G wrote it with blocked_reason_shown TRUE. It names the
+-- surface, not a reason, and must never be shown; marking those rows not shown lets the flag
+-- alone decide, instead of the bot reserving the sentence for ever. Hand-written: a data
+-- change the schema file does not describe, so the drift check is unaffected.
+UPDATE "customers" SET "blocked_reason_shown" = false
+ WHERE "blocked_reason" = 'Blocked from the Telegram management panel.' AND "blocked_reason_shown";

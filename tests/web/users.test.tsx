@@ -594,6 +594,14 @@ describe('the customer detail', () => {
 
     fireEvent.change(screen.getByLabelText(LABEL), { target: { value: 'spam' } });
     expect(confirm).toBeEnabled();
+
+    // The bound is the server's, in code points: 500 emoji may be typed and sent, 501 may not.
+    const emoji = '😀'.repeat(500);
+    fireEvent.change(screen.getByLabelText(LABEL), { target: { value: emoji } });
+    expect(screen.getByLabelText(LABEL)).toHaveValue(emoji);
+    expect(confirm).toBeEnabled();
+    fireEvent.change(screen.getByLabelText(LABEL), { target: { value: `${emoji}😀` } });
+    expect(confirm).toBeDisabled();
   });
 
   it('cancel closes the confirmation and sends nothing', async () => {

@@ -37,6 +37,20 @@ describe('a block needs a reason; an unblock does not', () => {
     ).toBe(false);
   });
 
+  it('both schemas count the bound in code points, as the service does', () => {
+    // 500 emoji are 500 code points and 1000 UTF-16 units. Zod 4 counts a string's length in
+    // code points, as the service does; this pins that, so a UTF-16 check cannot replace it.
+    const emoji = '😀'.repeat(CUSTOMER_BLOCK_REASON_MAX_LENGTH);
+    expect(blockCustomerRequestSchema.safeParse({ ...key, reason: emoji }).success).toBe(true);
+    expect(blockCustomerRequestSchema.safeParse({ ...key, reason: `${emoji}😀` }).success).toBe(
+      false,
+    );
+    expect(unblockCustomerRequestSchema.safeParse({ ...key, reason: emoji }).success).toBe(true);
+    expect(unblockCustomerRequestSchema.safeParse({ ...key, reason: `${emoji}😀` }).success).toBe(
+      false,
+    );
+  });
+
   it('the unblock schema keeps its reason optional, so the block rule cannot leak onto it', () => {
     expect(unblockCustomerRequestSchema.safeParse(key).success).toBe(true);
     expect(unblockCustomerRequestSchema.parse({ ...key, reason: '  note ' }).reason).toBe('note');

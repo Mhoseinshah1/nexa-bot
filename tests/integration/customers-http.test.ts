@@ -16,6 +16,7 @@ import type { BotInstanceId, UserId } from '@nexa/contracts';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import { DrizzleCustomerRepository } from '../../apps/api/src/modules/commerce/customers/infrastructure/drizzle-customer.repository';
+import { hashRequest } from '../../apps/api/src/modules/platform/idempotency/infrastructure/drizzle-idempotency-store';
 import {
   adminActorFor,
   createAdmin,
@@ -648,6 +649,36 @@ describe('customer HTTP surface', () => {
       }),
     ).rejects.toMatchObject({ code: COMMERCE_ERROR_CODES.CUSTOMER_BLOCK_REASON_REQUIRED });
     expect((await api.container.customers.get(tenantA, operator, id)).status).toBe('ACTIVE');
+  });
+
+  it('replays a reasonless block an earlier release accepted, instead of refusing its retry', async () => {
+    // The previous release blocked without a reason and remembered the key; the answer was
+    // lost. The retry after the upgrade must replay that command, not refuse it for a rule the
+    // command predates. The replay lookup only reads, so the rule still runs before any write.
+    const id = await customerIn(tenantA, '900400029');
+    const operator = adminActorFor(operatorAdmin);
+    const key = `legacy-reasonless-${id}`;
+    await api.container.database.db.execute(
+      sql`UPDATE customers SET status = 'BLOCKED', blocked_at = now() WHERE id = ${id}`,
+    );
+    await api.container.idempotency.remember(
+      tenantA,
+      operator.surface,
+      key,
+      hashRequest({ customerId: id, to: 'BLOCKED', reason: null }),
+      { customerId: id, changed: true },
+    );
+
+    const replayed = await api.container.customers.block(tenantA, operator, {
+      idempotencyKey: key,
+      customerId: id,
+      reason: null,
+    });
+    expect(replayed.status).toBe('BLOCKED');
+    const audits = await api.container.database.db.execute(sql`
+      SELECT count(*)::int AS n FROM audit_logs
+       WHERE entity_id = ${id} AND action = 'customer.block'`);
+    expect((audits.rows[0] as { n: number }).n).toBe(0);
   });
 
   it('an unblock needs no reason, and clears the stored one', async () => {

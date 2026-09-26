@@ -534,6 +534,9 @@ export function UserDetailPage({
    */
   const [pending, setPending] = useState<'BLOCK' | 'UNBLOCK' | null>(null);
   const trimmedReason = reason.trim();
+  // Counted in code points, as the server counts it: a DOM `maxLength` counts UTF-16 units and
+  // would stop an operator at 250 emoji of a 500-character reason (Codex review of PR #74).
+  const reasonTooLong = Array.from(trimmedReason).length > CUSTOMER_BLOCK_REASON_MAX_LENGTH;
 
   const customer = useQuery({
     queryKey: ['customer', id],
@@ -689,12 +692,13 @@ export function UserDetailPage({
                         htmlFor="user-block-reason"
                         {...(reason !== '' && trimmedReason === ''
                           ? { error: t('web.user_block_reason_required') }
-                          : {})}
+                          : reasonTooLong
+                            ? { error: t('web.user_block_reason_too_long') }
+                            : {})}
                       >
                         <input
                           id="user-block-reason"
                           value={reason}
-                          maxLength={CUSTOMER_BLOCK_REASON_MAX_LENGTH}
                           onChange={(event) => setReason(event.target.value)}
                         />
                       </Field>
@@ -702,7 +706,7 @@ export function UserDetailPage({
                         <button
                           type="button"
                           className="btn danger sm"
-                          disabled={mutate.isPending || trimmedReason === ''}
+                          disabled={mutate.isPending || trimmedReason === '' || reasonTooLong}
                           onClick={() => mutate.mutate({ to: 'BLOCKED', reason: trimmedReason })}
                         >
                           {t('web.user_block_confirm')}

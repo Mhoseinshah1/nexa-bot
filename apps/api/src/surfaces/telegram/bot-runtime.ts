@@ -3905,15 +3905,6 @@ export function receiptReviewButtons(
 }
 
 /**
- * The sentence the Telegram customers section stored as a block's "reason" before a reason
- * was ever shown to the customer (WP2), and until WP10G made the reason mandatory and typed.
- * Nothing writes it any more; it is kept so `blockedReply` keeps hiding it on the rows that
- * carry it. It names the surface, not a reason, and it is in English; it is never rendered
- * to a customer as one.
- */
-const PRE_REASON_BLOCK_NOTE = 'Blocked from the Telegram management panel.';
-
-/**
  * What a blocked customer is told (File 01 §9, the owner's correction to WP10): the account is
  * blocked, WHY — the reason stored on THIS customer's own row, and nothing else of the block's
  * record — and to contact support. A block with no reason keeps `bot.blocked`, a whole sentence
@@ -3921,13 +3912,16 @@ const PRE_REASON_BLOCK_NOTE = 'Blocked from the Telegram management panel.';
  *
  * Only a reason written to be shown is shown (pre-release hardening V2): until WP10's follow-up
  * the Web Admin told the operator this note "is never shown to the customer", and a block
- * written then keeps `blockedReasonShown` FALSE and is answered with `bot.blocked`.
+ * written then keeps `blockedReasonShown` FALSE and is answered with `bot.blocked`. The
+ * customers section's old fixed English note ("Blocked from the Telegram management panel.")
+ * is the same case: migration 0121 marks those rows not shown, so the flag alone decides and
+ * no typed reason is reserved (Codex review of PR #74).
  */
 export function blockedReply(
   customer: Pick<CustomerRecord, 'blockedReason' | 'blockedReasonShown'>,
 ): PendingReply {
   const reason = customer.blockedReason?.trim() ?? '';
-  if (!customer.blockedReasonShown || reason === '' || reason === PRE_REASON_BLOCK_NOTE) {
+  if (!customer.blockedReasonShown || reason === '') {
     return { key: 'bot.blocked', values: {}, buttons: [], orderId: null };
   }
   return { key: 'bot.blocked_with_reason', values: { reason }, buttons: [], orderId: null };

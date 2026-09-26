@@ -244,8 +244,10 @@ describe('what a blocked customer is told (File 01 §9)', () => {
     });
     expect(blockedReply(shown(null))).toMatchObject({ key: 'bot.blocked', values: {} });
     expect(blockedReply(shown('   '))).toMatchObject({ key: 'bot.blocked' });
+    // No sentence is reserved: the old fixed note's rows are marked not shown by migration
+    // 0121, so the flag alone decides, and an operator may type any reason.
     expect(blockedReply(shown('Blocked from the Telegram management panel.'))).toMatchObject({
-      key: 'bot.blocked',
+      key: 'bot.blocked_with_reason',
     });
   });
 
