@@ -190,3 +190,31 @@ describe('payment timeline card on the payment detail', () => {
     expect(container.textContent).not.toContain(t('web.payment_timeline'));
   });
 });
+
+/**
+ * Codex review of #81: a payment with no resolving administrator is not always the
+ * system's doing. A CANCELLED one is the customer's own — a withdrawn transfer, or an
+ * order paid another way — and saying "system" put their act on nobody.
+ */
+describe('who resolved a payment', () => {
+  const resolved = (state: string) =>
+    timeline({
+      entries: [{ kind: 'PAYMENT_RESOLVED', at: '2026-09-10T13:00:00.000Z', state, adminId: null }],
+    });
+
+  it('says a cancelled payment was the customer’s, never the system’s', async () => {
+    stubApi(resolved('CANCELLED'));
+    const { container } = renderPage(<PaymentTimelineCard paymentId={PAYMENT_ID} />);
+    await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument());
+    expect(container.textContent).toContain(t('web.payment_timeline_by_customer'));
+    expect(container.textContent).not.toContain(t('web.payment_timeline_by_system'));
+  });
+
+  it('still says the system expired a payment nobody resolved', async () => {
+    stubApi(resolved('EXPIRED'));
+    const { container } = renderPage(<PaymentTimelineCard paymentId={PAYMENT_ID} />);
+    await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument());
+    expect(container.textContent).toContain(t('web.payment_timeline_by_system'));
+    expect(container.textContent).not.toContain(t('web.payment_timeline_by_customer'));
+  });
+});

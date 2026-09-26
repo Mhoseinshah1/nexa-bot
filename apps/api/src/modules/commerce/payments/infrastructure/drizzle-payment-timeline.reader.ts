@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, ne } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, ne } from 'drizzle-orm';
 import type {
   CurrencyCode,
   CustomerNotificationKind,
@@ -139,6 +139,15 @@ export class DrizzlePaymentTimelineReader implements PaymentTimelineReader {
      *
      * `REFUND` entries are left to the refund section, which shows the same money under
      * `refunds.view`; repeating it here would show a refund to a viewer without that key.
+     *
+     * Bounded BELOW by the payment's own creation (Codex review of #81). No index leads
+     * with `payment_id`, so without a floor this read walked the customer's whole ledger
+     * from its first entry to find a recent payment's few rows. An entry naming a payment
+     * cannot predate it: the foreign key means it is written by a transaction that already
+     * saw the payment row, stamped from the same `Clock` at or after the payment's own
+     * `created_at` (a wallet settlement writes both with one reading). So the floor excludes
+     * nothing, and it turns the read into a range on `wallet_entries_customer_created_idx`
+     * starting where this payment's movements can begin.
      */
     const walletRows = include.wallet
       ? await q
@@ -156,6 +165,7 @@ export class DrizzlePaymentTimelineReader implements PaymentTimelineReader {
               eq(walletEntries.tenantId, tenantId),
               eq(walletEntries.paymentId, paymentId),
               eq(walletEntries.customerId, payment.customerId),
+              gte(walletEntries.createdAt, payment.createdAt),
               ne(walletEntries.reason, 'REFUND'),
             ),
           )

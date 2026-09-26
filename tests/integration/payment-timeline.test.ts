@@ -302,6 +302,25 @@ describe('payment timeline', () => {
     expect(after?.notifications.map((n) => n.kind)).toEqual(['PAYMENT_TRANSFER_RECORDED']);
   });
 
+  it('reads the wallet movements from the payment’s own creation onward (Codex review of #81)', async () => {
+    const payment = await walletPayment('floor');
+    /*
+     * An entry naming this payment but stamped a day BEFORE it — a row no writer can
+     * produce, placed here only to pin the floor. Without the floor the read would walk
+     * the customer's whole ledger from its first entry and find it.
+     */
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO wallet_entries (id, tenant_id, customer_id, direction, reason, amount, currency,
+                                  reference, payment_id, created_at)
+      SELECT ${ctx.container.ids.uuid()}, tenant_id, customer_id, 'CREDIT', 'CASHBACK_GATEWAY', 7,
+             currency, ${`floor-probe-${String(payment.id)}`}, id, created_at - interval '1 day'
+        FROM payments WHERE id = ${payment.id}`);
+
+    const view = await timeline(owner, payment.id);
+    const wallet = view.entries.filter((e) => e.kind === 'WALLET_ENTRY');
+    expect(wallet.map((e) => ('reason' in e ? e.reason : null))).toEqual(['PURCHASE']);
+  });
+
   it('times an abandoned manual refund by its close, and never calls it completed', async () => {
     const payment = await manualConfirmed('m2');
     const requested = await refund(owner, payment.id, 100_000n, 'm2-refund');

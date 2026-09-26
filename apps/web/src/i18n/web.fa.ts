@@ -1468,6 +1468,7 @@ export const WEB_FA = {
   'web.payment_timeline_truncated':
     'این تاریخچه طولانی‌تر از حد نمایش است؛ فقط قدیمی‌ترین رویدادها نشان داده شده‌اند.',
   'web.payment_timeline_by_system': 'سامانه',
+  'web.payment_timeline_by_customer': 'مشتری',
   'web.payment_timeline_created': 'پرداخت ایجاد شد',
   'web.payment_timeline_signalled': 'مشتری اعلام کرد واریز کرده است',
   'web.payment_timeline_receipt': 'رسید ارسال شد',

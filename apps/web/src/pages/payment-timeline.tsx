@@ -104,7 +104,18 @@ function detail(entry: PaymentTimelineEntry): ReactNode {
     case 'PAYMENT_RESOLVED':
       return (
         <>
-          {t(RESOLVED_LABELS[entry.state])} · {actor(entry.adminId)}
+          {t(RESOLVED_LABELS[entry.state])} ·{' '}
+          {/*
+            A CANCELLED payment is always the customer's own act — they withdrew the
+            transfer, or paid the order another way — and `payments_resolution_reviewer_check`
+            refuses an administrator on one. So it is said as the customer's, never as
+            the system's (Codex review of #81).
+          */}
+          {entry.state === 'CANCELLED' ? (
+            <span className="muted small">{t('web.payment_timeline_by_customer')}</span>
+          ) : (
+            actor(entry.adminId)
+          )}
         </>
       );
     case 'RECEIPT_CREDITED':
