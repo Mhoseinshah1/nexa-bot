@@ -238,6 +238,11 @@ A second Codex round, on the final candidate `ed4afec`, found three more (P17-19
 - The Web card said "system" for a CANCELLED payment, which is always the customer's own
   withdrawal. It now says the customer.
 
+A third Codex round, on `d41e5b9`, found one more (P17-23). The history card sits on the
+same page as the refund card, and an answered refund did not re-read it, so the timeline
+omitted what the operator had just done until the page was reloaded. The refund card's
+refresh now invalidates the payment's timeline as well.
+
 Tests added:
 
 - **Unit:** `tests/unit/payment-timeline.test.ts` (7 cases) and
@@ -247,7 +252,8 @@ Tests added:
   route in `tests/integration/route-registration.test.ts`, and two snapshot cases in
   `tests/integration/system-diagnostics.test.ts`.
 - **Web:** `tests/web/payment-timeline.test.tsx` (8 cases: the card alone, and inside its
-  page through the real route).
+  page through the real route), and one case in `tests/web/payments.test.tsx` (the history
+  is re-read after a refund is answered).
 
 Targeted checks run locally:
 

@@ -801,6 +801,11 @@ function RefundsCard({
      */
     void queries.invalidateQueries({ queryKey: ['order'] });
     void queries.invalidateQueries({ queryKey: ['orders'] });
+    /*
+     * And the payment's HISTORY, drawn on this same page: the refund just recorded is a
+     * row in it, and a cached timeline would omit what the operator just did.
+     */
+    void queries.invalidateQueries({ queryKey: ['payment-timeline', paymentId] });
   };
 
   const issue = useMutation({

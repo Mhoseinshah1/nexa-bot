@@ -945,6 +945,48 @@ describe('the refund card', () => {
     // Nothing left to answer, so the form that records an external transfer is absent.
     expect(view.container.textContent).not.toContain('پاسخ به بازگشت‌های در انتظار واریز');
   });
+
+  /*
+   * Codex review of #81: the payment's history card sits on this same page, and a refund
+   * answered here is a row in it. Without re-reading it the card kept the history from
+   * before the answer until the page was reloaded — a timeline that omits what the
+   * operator just did, on the page where they did it.
+   */
+  it('re-reads the payment history after a refund is answered', async () => {
+    const api = stubApi([
+      ...withRefunds([refundRow()], { consumedMinor: '100000', refundableMinor: '150000' }),
+      {
+        url: `/payments/${ROW_ID}/timeline`,
+        body: { paymentId: ROW_ID, entries: [], withheld: [], truncated: false },
+      },
+      {
+        url: `/refunds/${REFUND_ID}/completion`,
+        body: { refund: refundRow({ state: 'COMPLETED', completedByAdminId: ADMIN_ID }) },
+      },
+    ] as never);
+    renderPage(
+      <PaymentDetailPage
+        id={ROW_ID}
+        mayViewReceipts={false}
+        mayViewRefunds
+        mayIssueRefunds
+        denied={false}
+      />,
+    );
+    await screen.findByText('باقی‌ماندهٔ قابل بازگشت');
+    const timelineReads = () =>
+      api.calls.filter((call) => call.method === 'GET' && call.url.includes('/timeline')).length;
+    await waitFor(() => expect(timelineReads()).toBe(1));
+
+    fireEvent.change(screen.getByLabelText('کدام بازگشت'), { target: { value: REFUND_ID } });
+    fireEvent.change(screen.getByLabelText('توضیح'), { target: { value: 'واریز شد' } });
+    fireEvent.click(screen.getByRole('button', { name: 'واریز انجام شد' }));
+
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.url.includes('/completion'))).toBe(true);
+    });
+    await waitFor(() => expect(timelineReads()).toBe(2));
+  });
 });
 
 /**
