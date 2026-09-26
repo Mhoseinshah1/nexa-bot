@@ -167,6 +167,18 @@ export interface CustomerNotificationDeps {
     ) => Promise<{ readonly amount: Money; readonly balanceAfter: Money } | null>;
   };
   /**
+   * WP19: the values a service refund request's notification renders — the credited amount
+   * and the removed service, or the rejection's reason — read from the request row the
+   * notification names. `null` when the row does not (yet) state the fact.
+   */
+  readonly serviceRefunds?: {
+    notificationValues(
+      scope: TenantContext,
+      kind: string,
+      requestId: string,
+    ): Promise<Record<string, unknown> | null>;
+  };
+  /**
    * What one payment's credit put on the wallet, read off the ledger (Payment File 02
    * §18). `refundFigures`' shape for the three kinds whose subject is a PAYMENT: the
    * principal of a top-up, its gift, and a reviewer's receipt credit. A reader, not a
@@ -312,6 +324,21 @@ export class CustomerNotificationService {
       const refund = await this.deps.refundFigures.refundedForOrder(scope, row.subjectId);
       if (refund === null) return null;
       return { refundAmount: refund.amount, walletBalance: refund.balanceAfter };
+    }
+    // WP19: a service refund request's facts, from the request row the notification names.
+    if (
+      row.kind === 'SERVICE_REFUND_REQUEST_REGISTERED' ||
+      row.kind === 'SERVICE_REFUND_REQUEST_APPROVED' ||
+      row.kind === 'SERVICE_REFUND_REQUEST_REJECTED'
+    ) {
+      if (this.deps.serviceRefunds === undefined)
+        return row.kind === 'SERVICE_REFUND_REQUEST_REGISTERED' ? {} : null;
+      const values = await this.deps.serviceRefunds.notificationValues(
+        scope,
+        row.kind,
+        row.subjectId,
+      );
+      return values as TemplateValues | null;
     }
     /*
      * The three payment credits (Payment File 02 §18): the principal, the gift, the

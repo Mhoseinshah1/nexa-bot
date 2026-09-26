@@ -8,6 +8,9 @@ import type {
   UserId,
 } from '@nexa/contracts';
 
+/** The purposes that read an AMOUNT. */
+export type AdminAmountCapturePurpose = Exclude<AdminCapturePurpose, AdminReasonCapturePurpose>;
+
 /**
  * One administrator's amount capture for one receipt (`admin_amount_captures`, 0115).
  *
@@ -21,10 +24,13 @@ export interface AdminAmountCaptureRecord {
   readonly adminId: string;
   /**
    * What the capture is ABOUT: a payment for the receipt purposes, a customer for
-   * `CUSTOMER_BLOCK_REASON` (WP10G). Exactly one is set; the table's target CHECK says which.
+   * `CUSTOMER_BLOCK_REASON` (WP10G), a service refund request for the two WP19 purposes.
+   * Exactly one is set; the table's target CHECK says which.
    */
   readonly paymentId: PaymentId | null;
   readonly customerId: UserId | null;
+  /** The customer's service refund request, for the two WP19 purposes. */
+  readonly serviceRefundRequestId: string | null;
   /** What the capture reads: the credit's amount, or a block's or rejection's reason. */
   readonly purpose: AdminCapturePurpose;
   readonly amountMinor: bigint | null;
@@ -61,6 +67,7 @@ export interface AdminAmountCaptureRepository {
       /** The payment for a receipt purpose, or the customer for a customers-section block. */
       readonly paymentId?: PaymentId;
       readonly customerId?: UserId;
+      readonly serviceRefundRequestId?: string;
       /** Defaults to the credit's amount, the purpose every existing caller opens. */
       readonly purpose?: AdminCapturePurpose;
       readonly openedAt: Date;
@@ -97,6 +104,11 @@ export interface AdminAmountCaptureRepository {
     botInstanceId: BotInstanceId,
     adminId: string,
     tx?: unknown,
+    /**
+     * Keyed by purpose, as `findAwaitingReason` is: a number is offered only to the prompt
+     * that asked for it. The receipt credit's by default, the purpose every older caller reads.
+     */
+    purpose?: AdminAmountCapturePurpose,
   ): Promise<AdminAmountCaptureRecord | null>;
 
   findById(

@@ -686,8 +686,14 @@ export class ProvisioningService {
      * ownership check, and an invalid-cast error is neither the tenancy answer nor a
      * refusal the surface has a sentence for.
      */
-    const service = await this.deps.services.findById(scope, serviceIdOrNotFound(id));
-    if (service === null || service.customerId !== customerId) {
+    // Owned, and not paid back and deleted at the customer's own request (WP19 T5): both
+    // in the query, so a hidden service answers exactly like one that never existed.
+    const service = await this.deps.services.findForCustomer(
+      scope,
+      customerId,
+      serviceIdOrNotFound(id),
+    );
+    if (service === null) {
       throw errors.notFound(COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND, 'Unknown service.');
     }
     return service;
@@ -1184,92 +1190,159 @@ export class ProvisioningService {
     }
 
     const now = this.deps.clock.now();
-    return this.deps.uow.run(scope, async (tx) => {
-      if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
-        throw errors.conflict(
-          COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
-          'That tenant has stopped accepting work.',
-        );
-      }
+    return this.deps.uow.run(scope, async (tx) =>
+      this.planWithin(scope, actor, service, type, input, origin, now, tx),
+    );
+  }
+
+  /**
+   * WP19: a `TERMINATE` planned INSIDE a caller's transaction.
+   *
+   * The one caller is an approved customer refund request, which must reserve the money
+   * and plan the deletion as one fact — a request that reserved an amount with no deletion
+   * behind it, or planned a deletion with nothing reserved, would each be a state no one
+   * decided. Everything else about the plan is `planRequestedOperation`'s, unchanged: the
+   * legal state, the panel's operability, an open TERMINATE answered rather than
+   * duplicated, and the audit row naming the administrator who approved it.
+   *
+   * No permission check here: the caller holds `services.terminate` AND `refunds.issue`
+   * and has charged both through the guard before it opened the transaction.
+   */
+  async planTerminateWithin(
+    scope: TenantContext,
+    actor: ActorContext,
+    service: ServiceRecord,
+    input: { readonly idempotencyKey: string },
+    tx: TransactionScope,
+  ): Promise<OperationRecord> {
+    if (!OPERATION_LEGAL_FROM.TERMINATE.includes(service.state)) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
+        'That service is not in a state this action can be taken from.',
+        { state: service.state },
+      );
+    }
+    const operable = await this.deps.panels.operability(scope, service.panelId, 'TERMINATE');
+    if (!operable.ok) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.PANEL_NOT_OPERABLE,
+        'The panel this service lives on cannot perform that action.',
+        { reason: operable.reason },
+      );
+    }
+    return this.planWithin(
+      scope,
+      actor,
+      service,
+      'TERMINATE',
+      input,
+      { requestedBy: 'OPERATOR' },
+      this.deps.clock.now(),
+      tx,
+    );
+  }
+
+  /** The transactional half of planning, shared by both entry points above. */
+  private async planWithin(
+    scope: TenantContext,
+    actor: ActorContext,
+    service: ServiceRecord,
+    type: OperationType,
+    input: { readonly idempotencyKey: string },
+    origin: {
+      readonly requestedBy: 'OPERATOR' | UserId;
+      readonly admission?: {
+        readonly serialize: (tx: TransactionScope) => Promise<void>;
+        readonly admit: (tx: TransactionScope) => Promise<void>;
+      };
+    },
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<OperationRecord> {
+    if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        'That tenant has stopped accepting work.',
+      );
+    }
+    /*
+     * The lock comes FIRST, before the open-operation read below, so that a second
+     * request waiting here sees the first one's committed row rather than the world
+     * both of them started from.
+     */
+    if (origin.admission !== undefined) await origin.admission.serialize(tx);
+    const open = await this.deps.operations.findOpen(scope, service.id, type, tx);
+    if (open !== null) return open;
+    const operationId = this.deps.operationId(`${service.id}:${type}:${input.idempotencyKey}`);
+    if (origin.admission !== undefined) {
       /*
-       * The lock comes FIRST, before the open-operation read below, so that a second
-       * request waiting here sees the first one's committed row rather than the world
-       * both of them started from.
+       * A replay of this key is answered with what it planned, BEFORE the admission
+       * rule: the request that started a cooldown must not be refused by its own
+       * success when its webhook is delivered again.
        */
-      if (origin.admission !== undefined) await origin.admission.serialize(tx);
-      const open = await this.deps.operations.findOpen(scope, service.id, type, tx);
-      if (open !== null) return open;
-      const operationId = this.deps.operationId(`${service.id}:${type}:${input.idempotencyKey}`);
-      if (origin.admission !== undefined) {
+      const replay = await this.deps.operations.findByOperationId(scope, operationId, tx);
+      if (replay !== null) return replay;
+      await origin.admission.admit(tx);
+    }
+    const operation = await this.deps.operations.plan(
+      scope,
+      {
+        id: this.deps.ids.uuid(),
+        operationId,
+        serviceId: service.id,
+        orderId: service.orderId,
         /*
-         * A replay of this key is answered with what it planned, BEFORE the admission
-         * rule: the request that started a cooldown must not be refused by its own
-         * success when its webhook is delivered again.
+         * The one place the two request paths differ in the ROW they write.
+         *
+         * `requestedBy` already distinguishes them in the audit payload; this puts
+         * the same distinction on the operation, where the announcer can read it in
+         * a later transaction. Without it the announcer decides from the TYPE, and an
+         * operator's suspend is the same type as a customer's — so the customer was
+         * told that the request they made had been applied, having made none.
          */
-        const replay = await this.deps.operations.findByOperationId(scope, operationId, tx);
-        if (replay !== null) return replay;
-        await origin.admission.admit(tx);
-      }
-      const operation = await this.deps.operations.plan(
-        scope,
-        {
-          id: this.deps.ids.uuid(),
-          operationId,
-          serviceId: service.id,
-          orderId: service.orderId,
-          /*
-           * The one place the two request paths differ in the ROW they write.
-           *
-           * `requestedBy` already distinguishes them in the audit payload; this puts
-           * the same distinction on the operation, where the announcer can read it in
-           * a later transaction. Without it the announcer decides from the TYPE, and an
-           * operator's suspend is the same type as a customer's — so the customer was
-           * told that the request they made had been applied, having made none.
-           */
-          requestedByCustomerId: origin.requestedBy === 'OPERATOR' ? null : origin.requestedBy,
-          panelId: service.panelId,
-          type,
-        },
-        now,
-        tx,
-      );
-      /*
-       * WHO asked, and when.
-       *
-       * `plan` records no actor — an operation row says what is to be done and by which
-       * worker it was claimed, not who wanted it — so without this the only answer to
-       * "who asked for this service to be deleted" would be inferred. Inference is what
-       * `/admin/logs` offered, and the research records what that was worth.
-       *
-       * The actor is whatever the CALLER authenticated. For an operator it is their own
-       * `ActorContext`, which is the point of `requestFromOperator`. For a customer it
-       * is the `SYSTEM_JOB` the webhook runs as, because a customer is not an admin and
-       * has no actor of their own — their id goes in `requestedBy`, where it is a fact
-       * about the request rather than a fabricated identity. That distinction is the
-       * reason `docs/conventions.md` forbids inventing actors, and `requestedBy` is what
-       * keeps the two readable apart: a customer id, or the literal `OPERATOR` beside an
-       * admin actor that names the person.
-       *
-       * The executor writes a SECOND audit row when the panel actually applies the
-       * change, and the two are different facts: this one is a decision, that one is an
-       * effect, and a terminate that was asked for and never carried out must not look
-       * like one that was.
-       */
-      await this.deps.audit.record(
-        scope,
-        actor,
-        {
-          action: `service.request_${type.toLowerCase()}`,
-          entityType: 'Service',
-          entityId: service.id,
-          before: { state: service.state },
-          after: { requestedBy: origin.requestedBy, operationId: operation.operationId },
-          result: 'SUCCESS',
-        },
-        tx,
-      );
-      return operation;
-    });
+        requestedByCustomerId: origin.requestedBy === 'OPERATOR' ? null : origin.requestedBy,
+        panelId: service.panelId,
+        type,
+      },
+      now,
+      tx,
+    );
+    /*
+     * WHO asked, and when.
+     *
+     * `plan` records no actor — an operation row says what is to be done and by which
+     * worker it was claimed, not who wanted it — so without this the only answer to
+     * "who asked for this service to be deleted" would be inferred. Inference is what
+     * `/admin/logs` offered, and the research records what that was worth.
+     *
+     * The actor is whatever the CALLER authenticated. For an operator it is their own
+     * `ActorContext`, which is the point of `requestFromOperator`. For a customer it
+     * is the `SYSTEM_JOB` the webhook runs as, because a customer is not an admin and
+     * has no actor of their own — their id goes in `requestedBy`, where it is a fact
+     * about the request rather than a fabricated identity. That distinction is the
+     * reason `docs/conventions.md` forbids inventing actors, and `requestedBy` is what
+     * keeps the two readable apart: a customer id, or the literal `OPERATOR` beside an
+     * admin actor that names the person.
+     *
+     * The executor writes a SECOND audit row when the panel actually applies the
+     * change, and the two are different facts: this one is a decision, that one is an
+     * effect, and a terminate that was asked for and never carried out must not look
+     * like one that was.
+     */
+    await this.deps.audit.record(
+      scope,
+      actor,
+      {
+        action: `service.request_${type.toLowerCase()}`,
+        entityType: 'Service',
+        entityId: service.id,
+        before: { state: service.state },
+        after: { requestedBy: origin.requestedBy, operationId: operation.operationId },
+        result: 'SUCCESS',
+      },
+      tx,
+    );
+    return operation;
   }
 
   /**

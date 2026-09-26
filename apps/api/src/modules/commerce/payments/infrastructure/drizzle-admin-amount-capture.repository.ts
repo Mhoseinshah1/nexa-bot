@@ -1,12 +1,13 @@
-import { and, eq, isNull, ne, sql } from 'drizzle-orm';
-import type {
-  AdminAmountCaptureCloseReason,
-  AdminCapturePurpose,
-  AdminReasonCapturePurpose,
-  BotInstanceId,
-  PaymentId,
-  TenantContext,
-  UserId,
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
+import {
+  ADMIN_REASON_CAPTURE_PURPOSES,
+  type AdminAmountCaptureCloseReason,
+  type AdminCapturePurpose,
+  type AdminReasonCapturePurpose,
+  type BotInstanceId,
+  type PaymentId,
+  type TenantContext,
+  type UserId,
 } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
@@ -15,6 +16,7 @@ import {
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { adminAmountCaptures } from '../../../../infrastructure/persistence/schema.js';
 import type {
+  AdminAmountCapturePurpose,
   AdminAmountCaptureRecord,
   AdminAmountCaptureRepository,
 } from '../application/admin-amount-capture-ports.js';
@@ -58,6 +60,7 @@ export class DrizzleAdminAmountCaptureRepository implements AdminAmountCaptureRe
       readonly adminId: string;
       readonly paymentId?: PaymentId;
       readonly customerId?: UserId;
+      readonly serviceRefundRequestId?: string;
       readonly purpose?: AdminCapturePurpose;
       readonly openedAt: Date;
       readonly expiresAt: Date;
@@ -91,6 +94,7 @@ export class DrizzleAdminAmountCaptureRepository implements AdminAmountCaptureRe
         // One or the other, per purpose; the table's target CHECK refuses any other shape.
         paymentId: input.paymentId ?? null,
         customerId: input.customerId ?? null,
+        serviceRefundRequestId: input.serviceRefundRequestId ?? null,
         purpose: input.purpose ?? 'RECEIPT_CREDIT_AMOUNT',
         openedAt: input.openedAt,
         expiresAt: input.expiresAt,
@@ -105,6 +109,7 @@ export class DrizzleAdminAmountCaptureRepository implements AdminAmountCaptureRe
     botInstanceId: BotInstanceId,
     adminId: string,
     tx?: unknown,
+    purpose: AdminAmountCapturePurpose = 'RECEIPT_CREDIT_AMOUNT',
   ): Promise<AdminAmountCaptureRecord | null> {
     const tenantId = requireTenantId(scope);
     const [row] = await this.exec(tx)
@@ -116,9 +121,9 @@ export class DrizzleAdminAmountCaptureRepository implements AdminAmountCaptureRe
           eq(adminAmountCaptures.botInstanceId, botInstanceId),
           eq(adminAmountCaptures.adminId, adminId),
           isNull(adminAmountCaptures.closedAt),
-          // An amount is read only by a capture that asked for one: a block's reason
-          // capture has no amount either, and must never be parsed as one.
-          eq(adminAmountCaptures.purpose, 'RECEIPT_CREDIT_AMOUNT'),
+          // An amount is read only by a capture that asked for THIS one: a block's reason
+          // capture has no amount either, and a refund request's amount is not a credit's.
+          eq(adminAmountCaptures.purpose, purpose),
           isNull(adminAmountCaptures.amountMinor),
         ),
       )
@@ -166,7 +171,8 @@ export class DrizzleAdminAmountCaptureRepository implements AdminAmountCaptureRe
           eq(adminAmountCaptures.tenantId, tenantId),
           eq(adminAmountCaptures.id, id),
           isNull(adminAmountCaptures.closedAt),
-          ne(adminAmountCaptures.purpose, 'RECEIPT_CREDIT_AMOUNT'),
+          // Only a purpose that reads a reason: never an amount capture of either kind.
+          inArray(adminAmountCaptures.purpose, [...ADMIN_REASON_CAPTURE_PURPOSES]),
           isNull(adminAmountCaptures.reason),
         ),
       )
@@ -240,6 +246,7 @@ function toRecord(row: typeof adminAmountCaptures.$inferSelect): AdminAmountCapt
     adminId: row.adminId,
     paymentId: row.paymentId as PaymentId | null,
     customerId: row.customerId as UserId | null,
+    serviceRefundRequestId: row.serviceRefundRequestId,
     // `admin_amount_captures_purpose_check` is built from the contract enum.
     purpose: row.purpose as AdminCapturePurpose,
     amountMinor: row.amountMinor,

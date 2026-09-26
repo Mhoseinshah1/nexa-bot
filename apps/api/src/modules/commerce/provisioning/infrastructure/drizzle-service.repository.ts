@@ -28,7 +28,11 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
-import { customers, services } from '../../../../infrastructure/persistence/schema.js';
+import {
+  customers,
+  serviceRefundRequests,
+  services,
+} from '../../../../infrastructure/persistence/schema.js';
 import type {
   ProvisionOutcome,
   ServiceCursor,
@@ -40,6 +44,24 @@ import type {
 } from '../application/ports.js';
 
 type Row = typeof services.$inferSelect;
+
+/**
+ * WP19 (T5): a service whose customer refund request COMPLETED was paid back and deleted
+ * at the customer's own request, and leaves the customer's view entirely — the list, the
+ * count, the search and the detail. Only the customer's: the operator's queries and every
+ * lane that works on services keep seeing it, because it is still a row with a history.
+ *
+ * `NOT EXISTS` over the request table's own `(tenant, service)` lookup, so a service with
+ * no request — nearly all of them — costs one index probe.
+ */
+function notRefundedAway(): SQL {
+  return sql`NOT EXISTS (
+    SELECT 1 FROM ${serviceRefundRequests}
+    WHERE ${serviceRefundRequests.tenantId} = ${services.tenantId}
+      AND ${serviceRefundRequests.serviceId} = ${services.id}
+      AND ${serviceRefundRequests.state} = 'COMPLETED'
+  )`;
+}
 
 function toRecord(row: Row): ServiceRecord {
   return {
@@ -733,7 +755,11 @@ export class DrizzleServiceRepository implements ServiceRepository {
     tx?: unknown,
   ): Promise<{ readonly items: readonly ServiceRecord[]; readonly count: number }> {
     const tenantId = requireTenantId(scope);
-    const owned = and(eq(services.tenantId, tenantId), eq(services.customerId, customerId));
+    const owned = and(
+      eq(services.tenantId, tenantId),
+      eq(services.customerId, customerId),
+      notRefundedAway(),
+    );
     const [counted] = await this.exec(tx)
       .select({ total: sql<number>`count(*)::int` })
       .from(services)
@@ -770,6 +796,7 @@ export class DrizzleServiceRepository implements ServiceRepository {
         and(
           eq(services.tenantId, tenantId),
           eq(services.customerId, customerId),
+          notRefundedAway(),
           sql`${services.providerUsername} LIKE ${`${escaped}%`} ESCAPE '\\'`,
         ),
       )
@@ -783,8 +810,37 @@ export class DrizzleServiceRepository implements ServiceRepository {
     const [counted] = await this.exec(tx)
       .select({ total: sql<number>`count(*)::int` })
       .from(services)
-      .where(and(eq(services.tenantId, tenantId), eq(services.customerId, customerId)));
+      .where(
+        and(
+          eq(services.tenantId, tenantId),
+          eq(services.customerId, customerId),
+          notRefundedAway(),
+        ),
+      );
     return Number(counted?.total ?? 0);
+  }
+
+  async findForCustomer(
+    scope: TenantContext,
+    customerId: UserId,
+    id: string,
+    tx?: unknown,
+  ): Promise<ServiceRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select()
+      .from(services)
+      .where(
+        and(
+          eq(services.tenantId, tenantId),
+          eq(services.id, id),
+          eq(services.customerId, customerId),
+          notRefundedAway(),
+        ),
+      )
+      .limit(1);
+    const row = rows[0];
+    return row === undefined ? null : toRecord(row);
   }
 
   async setCustomerNote(

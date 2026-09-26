@@ -24,6 +24,17 @@ export class ReceiptReviewPushLoop {
   constructor(
     private readonly lane: ReceiptReviewPushService,
     private readonly options: {
+      /**
+       * WP19: the refund-request review cards, driven by the same pass. The same lane shape
+       * to the same administrators through the same bot, so it shares this timer and its
+       * readiness rather than adding a second loop to the worker.
+       */
+      readonly refundRequests?: {
+        deliverDue(
+          scope: TenantContext,
+          limit: number,
+        ): Promise<{ readonly claimed: number; readonly reaped: number }>;
+      };
       readonly scope: () => TenantContext | null;
       readonly intervalMs: number;
       readonly now: () => number;
@@ -68,6 +79,12 @@ export class ReceiptReviewPushLoop {
       const report = await this.lane.deliverDue(scope, RECEIPT_PUSH_SWEEP_LIMIT);
       if (report.claimed > 0 || report.reaped > 0) {
         this.options.logger.info({ ...report }, 'receipt pushes dispatched');
+      }
+      if (this.options.refundRequests !== undefined) {
+        const cards = await this.options.refundRequests.deliverDue(scope, RECEIPT_PUSH_SWEEP_LIMIT);
+        if (cards.claimed > 0 || cards.reaped > 0) {
+          this.options.logger.info({ ...cards }, 'refund request cards dispatched');
+        }
       }
       this.progress.record(this.options.now());
     } catch (error: unknown) {

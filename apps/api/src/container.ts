@@ -6,6 +6,7 @@ import {
   MAX_REQUESTS_PER_PROBE,
   OPERATION_LEASE_SECONDS_MIN,
   faqNumberMarker,
+  systemJobActor,
 } from '@nexa/contracts';
 import type {
   AuditWriter,
@@ -189,6 +190,12 @@ import { ReceiptService } from './modules/commerce/payments/application/receipt.
 import { TelegramReceiptFiles } from './modules/commerce/payments/infrastructure/telegram-receipt-files.js';
 import { PaymentService } from './modules/commerce/payments/application/payment.service.js';
 import { RefundService } from './modules/commerce/payments/application/refund.service.js';
+import { ServiceRefundRequestService } from './modules/commerce/payments/application/service-refund-request.service.js';
+import { ServiceRefundDecisionService } from './modules/commerce/payments/application/service-refund-decision.service.js';
+import { ServiceRefundPushConsumer } from './modules/commerce/payments/application/service-refund-push.consumer.js';
+import { ServiceRefundPushService } from './modules/commerce/payments/application/service-refund-push.service.js';
+import { DrizzleServiceRefundRequestRepository } from './modules/commerce/payments/infrastructure/drizzle-service-refund-request.repository.js';
+import { DrizzleServiceRefundPushRepository } from './modules/commerce/payments/infrastructure/drizzle-service-refund-push.repository.js';
 import { ReceiptDispositionService } from './modules/commerce/payments/application/receipt-disposition.service.js';
 import { PaymentTimelineService } from './modules/commerce/payments/application/payment-timeline.service.js';
 import { DrizzlePaymentTimelineReader } from './modules/commerce/payments/infrastructure/drizzle-payment-timeline.reader.js';
@@ -210,7 +217,10 @@ import {
 } from './modules/commerce/payments/application/receipt-review-push-loop.js';
 import { DrizzleReceiptReviewPushRepository } from './modules/commerce/payments/infrastructure/drizzle-receipt-review-push.repository.js';
 import { DrizzleReceiptReviewFactsReader } from './modules/commerce/payments/infrastructure/drizzle-receipt-review-facts.reader.js';
-import { receiptReviewButtons } from './surfaces/telegram/bot-runtime.js';
+import {
+  receiptReviewButtons,
+  refundRequestReviewButtons,
+} from './surfaces/telegram/bot-runtime.js';
 import { DrizzleAdminAmountCaptureRepository } from './modules/commerce/payments/infrastructure/drizzle-admin-amount-capture.repository.js';
 import { DrizzleReceiptCreditRepository } from './modules/commerce/payments/infrastructure/drizzle-receipt-credit.repository.js';
 import { DrizzleRefundRepository } from './modules/commerce/payments/infrastructure/drizzle-refund.repository.js';
@@ -554,6 +564,13 @@ export interface Container {
    */
   readonly refunds: RefundService;
   /**
+   * WP19: customers' service refund requests — the Web Admin's list and its two decisions,
+   * the provisioner tick's settlement, and the Telegram review card's values.
+   */
+  readonly serviceRefundRequests: ServiceRefundRequestService;
+  /** WP19: the Telegram prompts behind a refund request's review card. */
+  readonly serviceRefundDecisions: ServiceRefundDecisionService;
+  /**
    * A card-to-card receipt's credit-to-wallet disposition (Payment File 02 §12, D2),
    * under `receipts.review` AND `users.wallet.credit`. Called by the Telegram review
    * surface; the Web Admin only READS what it recorded.
@@ -895,6 +912,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
 
   /** The administrators' receipt push lane, shared by its consumer and its dispatcher. */
   const receiptReviewPushRepository = new DrizzleReceiptReviewPushRepository(database.db);
+  const serviceRefundPushRepository = new DrizzleServiceRefundPushRepository(database.db);
 
   const telegramAdmins = new TelegramAdminService({
     admins,
@@ -972,6 +990,17 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         ids,
       }),
       /*
+       * The refund-request review cards (WP19): the receipt push's consumer for a
+       * different subject — enqueue one row per administrator holding both decision keys.
+       */
+      new ServiceRefundPushConsumer({
+        pushes: serviceRefundPushRepository,
+        requests: new DrizzleServiceRefundRequestRepository(database.db),
+        reviewers: telegramAdmins,
+        clock,
+        ids,
+      }),
+      /*
        * The financial log (WP18): a committed payment or refund fact, into the operator
        * notification lane's payments topic. A consumer, so no log can reach the money's
        * transaction. The lane is resolved lazily — it is built further down, and this
@@ -986,6 +1015,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         customers: new DrizzleCustomerRepository(database.db),
         invoices: new DrizzleGatewayInvoiceRepository(database.db),
         wallet: new DrizzleWalletRepository(database.db),
+        refundRequests: new DrizzleServiceRefundRequestRepository(database.db),
       }),
     ],
     clock,
@@ -1819,6 +1849,50 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     opsLog: opsLogWriter,
     sessions,
     idempotency,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
+
+  /**
+   * A customer's request to cancel a service for money back (WP19). An administrator
+   * approves an amount; the approval reserves it against the source payment and plans the
+   * deletion in one transaction, and the provisioner's tick credits the wallet only once the
+   * provider account is gone (`settleDue`).
+   */
+  const serviceRefundRequests = new ServiceRefundRequestService({
+    repository: new DrizzleServiceRefundRequestRepository(database.db),
+    services: serviceRepository,
+    orders: orderRepository,
+    payments: paymentRepository,
+    refundLedger: refundRepository,
+    refunds: refundService,
+    termination: provisioningService,
+    panels: panelOperability,
+    features: featureFlagResolver,
+    customers: customerRepository,
+    notifier: customerNotifier,
+    outbox,
+    audit,
+    opsLog,
+    guard,
+    sessions,
+    uow,
+    scopeActivity: tenants,
+    clock,
+    ids,
+    systemActor: () => systemJobActor('service-refunds', newCorrelationId(ids.uuid())),
+    logger,
+  });
+  /** The Telegram prompts behind a refund request's review card (WP19). */
+  const serviceRefundDecisions = new ServiceRefundDecisionService({
+    captures: new DrizzleAdminAmountCaptureRepository(database.db),
+    requests: serviceRefundRequests,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
     scopeActivity: tenants,
     clock,
     ids,
@@ -2676,6 +2750,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const customerNotificationLoop = new CustomerNotificationLoop(
     new CustomerNotificationService({
       notifications: customerNotificationRepository,
+      // The refund-request sentences (WP19), read from the request row the kind names.
+      serviceRefunds: serviceRefundRequests,
       /*
        * The ledger reader the refund sentence renders from. The wallet repository
        * itself, because both figures are derived from `wallet_entries` and a
@@ -2784,7 +2860,24 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     correlationId: () => newCorrelationId(ids.uuid()),
     logger,
   });
+  /** The refund-request review cards' send half (WP19), in the receipt push's tick. */
+  const serviceRefundPush = new ServiceRefundPushService({
+    pushes: serviceRefundPushRepository,
+    requests: new DrizzleServiceRefundRequestRepository(database.db),
+    reviewers: telegramAdmins,
+    card: (scope, requestId) => serviceRefundRequests.cardValues(scope, requestId),
+    keyboard: refundRequestReviewButtons,
+    messenger: customerMessenger,
+    opsLog,
+    conditions: new DrizzleOperationalConditionReader(database.db),
+    uow,
+    clock,
+    scopeIsActive: (scope) => uow.run(scope, async (tx) => tenants.scopeIsActive(scope, tx)),
+    correlationId: () => newCorrelationId(ids.uuid()),
+    logger,
+  });
   const receiptReviewPushLoop = new ReceiptReviewPushLoop(receiptReviewPush, {
+    refundRequests: serviceRefundPush,
     scope: () =>
       installationTenantId === null
         ? null
@@ -3001,6 +3094,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const provisionerLoop = new ProvisionerLoop(provisioner, deliveryService, outcomeAnnouncer, {
     cashback: cashbackService,
     referrals: referralCommissionService,
+    serviceRefunds: serviceRefundRequests,
     /*
      * The installation's own tenant.
      *
@@ -3593,6 +3687,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     botManagement,
     paymentGateways: paymentGatewayService,
     refunds: refundService,
+    serviceRefundRequests,
+    serviceRefundDecisions,
     receiptDispositions: receiptDispositionService,
     paymentTimeline: paymentTimelineService,
     receiptCreditCaptures: receiptCreditCaptureService,
@@ -3642,6 +3738,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       destinations: paymentDestinationRenderer,
       receipts: receiptService,
       receiptCredits: receiptCreditCaptureService,
+      serviceRefunds: serviceRefundRequests,
+      serviceRefundDecisions,
       receiptBlocks: receiptBlockCaptureService,
       receiptRejects: receiptRejectCaptureService,
       customerBlocks: customerBlockCaptureService,

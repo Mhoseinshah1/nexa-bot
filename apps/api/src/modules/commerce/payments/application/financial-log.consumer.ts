@@ -20,6 +20,7 @@ import type { CustomerRecord, CustomerRepository } from '../../customers/applica
 import type { WalletRepository } from '../../wallet/application/ports.js';
 import type { GatewayInvoiceRecord, GatewayInvoiceRepository } from './gateway-invoice-ports.js';
 import type { PaymentRecord, PaymentRepository } from './ports.js';
+import type { ServiceRefundRequestRepository } from './service-refund-request-ports.js';
 
 /** The notification lane, as the financial log needs it. `NotificationService` is it. */
 export interface FinancialLogLane {
@@ -75,6 +76,7 @@ export class FinancialLogConsumer implements EventConsumer {
     'PaymentLateCompletionObserved',
     'RefundCompleted',
     'RefundFailed',
+    'ServiceRefundRequestResolved',
   ];
 
   constructor(
@@ -84,6 +86,8 @@ export class FinancialLogConsumer implements EventConsumer {
       readonly customers: Pick<CustomerRepository, 'findById'>;
       readonly invoices: Pick<GatewayInvoiceRepository, 'findByPayment'>;
       readonly wallet: Pick<WalletRepository, 'findByReference'>;
+      /** WP19: the request an outcome names, read as it stands. */
+      readonly refundRequests: Pick<ServiceRefundRequestRepository, 'findById'>;
     },
   ) {}
 
@@ -203,6 +207,31 @@ export class FinancialLogConsumer implements EventConsumer {
         return {
           templateKey: 'ops.financial.refund_failed' as TemplateKey,
           values: { ...values, cause: payload.cause },
+        };
+      }
+      case 'ServiceRefundRequestResolved': {
+        /*
+         * A customer's refund request reached an outcome (WP19). The money itself is logged
+         * by `RefundCompleted` or `RefundFailed` when there was any; this line says what
+         * was decided about the REQUEST — including a rejection, which moves nothing.
+         */
+        const payload = EVENT_PAYLOAD_SCHEMAS.ServiceRefundRequestResolved.parse(event.payload);
+        const request = await this.deps.refundRequests.findById(scope, payload.requestId, tx);
+        if (request === null) return null;
+        const customer = await this.deps.customers.findById(scope, request.customerId, tx);
+        return {
+          templateKey: 'ops.financial.service_refund_request' as TemplateKey,
+          values: {
+            outcome: payload.outcome,
+            requestId: request.id,
+            serviceId: request.serviceId,
+            ...who(customer),
+            paymentId: request.paymentId,
+            // Absent for a rejection: the template drops the line rather than print a zero.
+            ...(request.approvedAmount === null ? {} : { amount: request.approvedAmount }),
+            adminId: request.decidedByAdminId ?? NONE,
+            at: request.resolvedAt ?? new Date(event.occurredAt),
+          },
         };
       }
       /* istanbul ignore next -- `subscribesTo` is the list above; the relay routes by it. */

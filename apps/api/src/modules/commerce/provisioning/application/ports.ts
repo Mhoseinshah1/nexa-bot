@@ -467,6 +467,17 @@ export interface ServiceRepository {
 
   countForCustomer(scope: TenantContext, customerId: UserId, tx?: unknown): Promise<number>;
 
+  /**
+   * The customer's OWN service by id, or null — null too for one another customer owns,
+   * and for one a completed refund request removed from the customer's view (WP19 T5).
+   */
+  findForCustomer(
+    scope: TenantContext,
+    customerId: UserId,
+    id: string,
+    tx?: unknown,
+  ): Promise<ServiceRecord | null>;
+
   /** Sets or clears the customer's note on THEIR service; false when the row is not theirs. */
   setCustomerNote(
     scope: TenantContext,

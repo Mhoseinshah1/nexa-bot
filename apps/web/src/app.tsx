@@ -653,7 +653,13 @@ export function resolve(
 
   if (route.path === '/services') {
     return {
-      element: <ServicesPage route={route} denied={!may('services.view')} />,
+      element: (
+        <ServicesPage
+          route={route}
+          denied={!may('services.view')}
+          mayViewRefundRequests={may('refunds.view')}
+        />
+      ),
       crumbs: [{ label: t('web.services_title') }],
       title: t('web.services_title'),
     };
@@ -674,6 +680,9 @@ export function resolve(
           mayEdit={may('services.edit')}
           /* Its own key, and the reason the page separates the terminate control. */
           mayTerminate={may('services.terminate')}
+          /* WP19: a customer's refund request deletes the service AND moves money. */
+          mayViewRefundRequests={may('refunds.view')}
+          mayDecideRefundRequests={may('refunds.issue') && may('services.terminate')}
         />
       ),
       crumbs: [nav('services'), { label: t('web.service_detail') }],

@@ -70,6 +70,13 @@ export class ProvisionerLoop {
       readonly cashback: { settleDue(scope: TenantContext, limit: number): Promise<number> };
       /** The referral commissions the same deliveries earned (WP9 F7). Same shape, same tick. */
       readonly referrals: { settleDue(scope: TenantContext, limit: number): Promise<number> };
+      /**
+       * WP19: customer refund requests whose provider deletion has just become terminal. The
+       * same shape and the same tick as the two above — a credit decided by a sweep over the
+       * state, never by a hook at the executor's success site — and after the drain that
+       * runs the `TERMINATE`, so a deletion is credited one tick later at most.
+       */
+      readonly serviceRefunds: { settleDue(scope: TenantContext, limit: number): Promise<number> };
       readonly tickMs: number;
       readonly now: () => number;
       /**
@@ -204,6 +211,8 @@ export class ProvisionerLoop {
       // And the referral commissions those same deliveries earned, or those same ended
       // orders voided — the same answer, decided for the referrer's wallet (WP9 F7).
       await this.options.referrals.settleDue(scope, DRAIN_LIMIT);
+      // And the refund requests whose deletion the drain above just finished (WP19).
+      await this.options.serviceRefunds.settleDue(scope, DRAIN_LIMIT);
       this.lastProgressAt = this.options.now();
     } catch (error: unknown) {
       /*
