@@ -172,7 +172,24 @@ describe('report periods', () => {
     expect(iso(b[0]!.start)).toBe(iso(p.current.start));
     expect(iso(b.at(-1)!.end)).toBe(iso(p.current.end));
     for (let i = 1; i < b.length; i += 1) expect(iso(b[i]!.start)).toBe(iso(b[i - 1]!.end));
-    expect(b).toHaveLength(23);
+    // 23 real hours, 24 slots: 02:00 never happened, so its slot is zero-width.
+    expect(b).toHaveLength(24);
+    expect(b[2]!.start.getTime()).toBe(b[2]!.end.getTime());
+  });
+
+  it('keeps hour i in slot i on a day a DST gap shortened, so each side pairs the same local hour', () => {
+    const berlin: ReportPresentation = { timezone: 'Europe/Berlin', calendar: 'gregorian' };
+    // The day after the change: a normal day compared with the 23-hour one before it.
+    const p = resolveReportPeriod({ range: 'TODAY' }, at('2026-03-30T12:00:00Z'), berlin);
+    expect(p.current.buckets).toHaveLength(24);
+    expect(p.previous.buckets).toHaveLength(24);
+    for (let i = 0; i < 24; i += 1) {
+      const label = `${String(i).padStart(2, '0')}:00`;
+      expect(p.current.buckets[i]!.label).toBe(label);
+      expect(p.previous.buckets[i]!.label).toBe(label);
+    }
+    // 03:00 on the short day is 01:00Z, and it is slot 3 — not slot 2, where 02:00 is.
+    expect(iso(p.previous.buckets[3]!.start)).toBe('2026-03-29T01:00:00.000Z');
   });
 
   it('starts a day whose midnight falls in a spring-forward gap at the first instant after it, never on the day before', () => {

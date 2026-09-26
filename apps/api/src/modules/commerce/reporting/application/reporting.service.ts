@@ -8,6 +8,7 @@ import {
   REPORT_FAILED_PAYMENT_STATES,
   REPORT_RANKING_DEPTH_MAX,
   REPORT_RANKING_TOP,
+  SALE_ORDER_PURPOSES,
   SERVICE_STATES,
   WALLET_REPORT_GROUP_OF,
   errors,
@@ -169,17 +170,26 @@ export class ReportingService {
     const chosen = money
       ? (currency ?? (await this.deps.salesCurrency.salesCurrency(scope)))
       : null;
+    // Each side is read only up to its own effective end: `now` for a running current
+    // period, and the like-for-like cut for its previous one. Reading the previous side's
+    // whole nominal span would compare today's partial series with all of yesterday.
     const series = async (side: PeriodSide) => {
-      const values = await repo.trend(scope, metric, chosen, boundariesOf(side.buckets));
+      const values = await repo.trend(
+        scope,
+        metric,
+        chosen,
+        boundariesOf(side.buckets, side.effectiveEnd),
+      );
       return side.buckets.map((bucket) => ({
         index: bucket.index,
         start: bucket.start.toISOString(),
         end: bucket.end.toISOString(),
         label: bucket.label,
-        // A bucket that has not begun is unknown, never zero: the chart must not draw a
-        // collapse for hours that have not happened yet.
+        // A bucket that begins at or after its side's cut is unknown, never zero: the
+        // chart must not draw a collapse for hours that have not happened yet, nor for
+        // the part of the previous period the current one has not reached.
         value:
-          bucket.start.getTime() >= r.period.now.getTime()
+          bucket.start.getTime() >= side.effectiveEnd.getTime()
             ? null
             : (values.get(bucket.index) ?? 0n).toString(),
       }));
@@ -678,7 +688,15 @@ export class ReportingService {
         // Walked in pages so that no single statement is unbounded, and stopped one row
         // past the cap so an oversized export is refused rather than silently cut.
         do {
-          const page = await repo.orders(scope, r.current, {}, 1_000, after);
+          // Sales only: a trial is a successful order but never a sale, so it has no row
+          // in a file called SALES and no share of its row cap.
+          const page = await repo.orders(
+            scope,
+            r.current,
+            { purposes: SALE_ORDER_PURPOSES },
+            1_000,
+            after,
+          );
           rows.push(...page.rows);
           after = page.next;
         } while (after !== null && rows.length < cap);
@@ -1095,10 +1113,17 @@ function toOrderWire(row: OrderRow) {
   };
 }
 
-/** The `width_bucket` thresholds: every bucket's start, then the last bucket's end. */
-export function boundariesOf(buckets: readonly BucketBounds[]): Date[] {
-  if (buckets.length === 0) return [];
-  return [...buckets.map((b) => b.start), (buckets.at(-1) as BucketBounds).end];
+/**
+ * The `width_bucket` thresholds for the buckets that begin before `cut`, the last one
+ * ending at `cut` when the cut falls inside it. Bucket `i` keeps index `i`; a bucket at or
+ * after the cut gets no threshold and so no row.
+ */
+export function boundariesOf(buckets: readonly BucketBounds[], cut: Date): Date[] {
+  const begun = buckets.filter((b) => b.start.getTime() < cut.getTime());
+  if (begun.length === 0) return [];
+  const last = begun.at(-1) as BucketBounds;
+  const end = last.end.getTime() < cut.getTime() ? last.end : cut;
+  return [...begun.map((b) => b.start), end];
 }
 
 function rankingPage(paging: { readonly limit?: number; readonly page?: number }): {

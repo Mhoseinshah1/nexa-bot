@@ -339,10 +339,19 @@ export interface ReportingRepository {
 
   failures(scope: TenantContext, window: Window): Promise<FailureTotals>;
 
+  /**
+   * PAID orders settled in the window, newest first. `purposes` narrows to a set — the
+   * SALES export passes `SALE_ORDER_PURPOSES`, because a trial is a successful order and
+   * never a sale; the drill-down leaves it unset and shows every successful order.
+   */
   orders(
     scope: TenantContext,
     window: Window,
-    filter: { readonly purpose?: OrderPurpose; readonly productId?: string },
+    filter: {
+      readonly purpose?: OrderPurpose;
+      readonly purposes?: readonly OrderPurpose[];
+      readonly productId?: string;
+    },
     limit: number,
     after: KeysetPosition | null,
   ): Promise<Page<OrderRow>>;

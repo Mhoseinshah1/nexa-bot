@@ -7,6 +7,7 @@ import {
   exportFileStem,
   moneyPair,
   paymentFigures,
+  ReportingService,
 } from '../../apps/api/src/modules/commerce/reporting/application/reporting.service';
 import { IntlReportPeriodResolver } from '../../apps/api/src/infrastructure/time/report-calendar';
 import type { PermissionGuard } from '../../apps/api/src/modules/platform/access/application/permission-guard';
@@ -77,8 +78,59 @@ describe('reporting service rules', () => {
       end: new Date(i * 10 + 10),
       label: '',
     });
-    expect(boundariesOf([b(0), b(1), b(2)]).map((d) => d.getTime())).toEqual([0, 10, 20, 30]);
-    expect(boundariesOf([])).toEqual([]);
+    const at = (cut: number) =>
+      boundariesOf([b(0), b(1), b(2)], new Date(cut)).map((d) => d.getTime());
+    expect(at(30)).toEqual([0, 10, 20, 30]);
+    expect(at(99)).toEqual([0, 10, 20, 30]);
+    expect(boundariesOf([], new Date(99))).toEqual([]);
+  });
+
+  it('stops the thresholds at the cut: inside a bucket, on a boundary, before the first', () => {
+    const b = (i: number) => ({
+      index: i,
+      start: new Date(i * 10),
+      end: new Date(i * 10 + 10),
+      label: '',
+    });
+    const at = (cut: number) =>
+      boundariesOf([b(0), b(1), b(2)], new Date(cut)).map((d) => d.getTime());
+    expect(at(15)).toEqual([0, 10, 15]);
+    expect(at(20)).toEqual([0, 10, 20]);
+    expect(at(0)).toEqual([]);
+  });
+
+  it('cuts the previous trend like for like: no figure after its effective end, none read past it', async () => {
+    // 10:30 in Tehran on 1405/07/03: TODAY is running, so yesterday is cut at 10:30 too.
+    const now = new Date('2026-09-25T07:00:00Z');
+    const asked: Date[][] = [];
+    const service = new ReportingService({
+      access: { authorize: async () => undefined } as unknown as ReportAccess,
+      repository: {
+        trend: async (_s: unknown, _m: unknown, _c: unknown, bounds: readonly Date[]) => {
+          asked.push([...bounds]);
+          // One sale in every bucket the query was allowed to read.
+          return new Map(bounds.slice(1).map((_, i) => [i, 1n]));
+        },
+      } as never,
+      periods: new IntlReportPeriodResolver(),
+      presentation: {
+        presentationFor: async () => ({ timezone: 'Asia/Tehran', calendar: 'jalali' as const }),
+      } as never,
+      salesCurrency: { salesCurrency: async () => 'IRT' } as never,
+      writer: {} as never,
+      clock: { now: () => now } as never,
+    });
+    const body = await service.trend(scope, actor, { range: 'TODAY' }, 'SALES');
+    const cut = new Date(body.period.previous.effectiveEnd);
+    expect(body.period.previous.effectiveEnd).toBe('2026-09-24T07:00:00.000Z');
+    // The previous side's thresholds end at its cut, never at the end of yesterday.
+    expect(asked[1]?.at(-1)?.toISOString()).toBe(cut.toISOString());
+    const values = body.previous.map((bucket) => bucket.value);
+    // 00:00 to 10:00 begin before the cut: read. 11:00 onwards begin after it: unknown.
+    expect(values.slice(0, 11)).toEqual(Array(11).fill('1'));
+    expect(values.slice(11)).toEqual(Array(13).fill(null));
+    // And the current side stops at now exactly as before.
+    expect(body.current.map((bucket) => bucket.value).slice(11)).toEqual(Array(13).fill(null));
   });
 
   it('names export files by the tenant-calendar range, with no identifier', () => {

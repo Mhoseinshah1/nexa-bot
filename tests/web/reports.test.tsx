@@ -317,10 +317,25 @@ describe('report formatting', () => {
   });
 
   it('renders instants in the tenant zone and the Jalali calendar', () => {
-    expect(formatInstantIn('2026-09-25T08:30:00Z', 'Asia/Tehran')).toBe('1405/07/03 12:00');
+    expect(formatInstantIn('2026-09-25T08:30:00Z', 'Asia/Tehran', 'jalali')).toBe(
+      '1405/07/03 12:00',
+    );
     // One minute before Tehran midnight, and one after: the date moves in Tehran's terms.
-    expect(formatInstantIn('2026-09-25T20:29:00Z', 'Asia/Tehran')).toBe('1405/07/03 23:59');
-    expect(formatInstantIn('2026-09-25T20:31:00Z', 'Asia/Tehran')).toBe('1405/07/04 00:01');
+    expect(formatInstantIn('2026-09-25T20:29:00Z', 'Asia/Tehran', 'jalali')).toBe(
+      '1405/07/03 23:59',
+    );
+    expect(formatInstantIn('2026-09-25T20:31:00Z', 'Asia/Tehran', 'jalali')).toBe(
+      '1405/07/04 00:01',
+    );
+  });
+
+  it('renders instants in the tenant calendar, Gregorian for a Gregorian tenant', () => {
+    expect(formatInstantIn('2026-09-25T08:30:00Z', 'Asia/Tehran', 'gregorian')).toBe(
+      '2026/09/25 12:00',
+    );
+    expect(formatInstantIn('2026-09-25T20:31:00Z', 'Asia/Tehran', 'gregorian')).toBe(
+      '2026/09/26 00:01',
+    );
   });
 
   it('points the export buttons at the server, with the selected range', () => {
@@ -422,6 +437,22 @@ describe('report exports and paging (WP12 review)', () => {
       (c) => c.url.includes('/reports/orders') && c.url.includes('range=TODAY'),
     );
     expect(today.every((c) => !c.url.includes('cursor='))).toBe(true);
+  });
+
+  it('shows the applied custom dates when the route moves to another custom range', async () => {
+    stubApi([...BUSINESS_ROUTES, ORDERS_ROUTE]);
+    const custom = (from: string, to: string) => reportsRoute(`range=CUSTOM&from=${from}&to=${to}`);
+    const page = renderPage(
+      <ReportsPage route={custom('1405-07-01', '1405-07-10')} denied={false} />,
+    );
+    const from = () => screen.getByLabelText(t('web.report_range_from')) as HTMLInputElement;
+    const to = () => screen.getByLabelText(t('web.report_range_to')) as HTMLInputElement;
+    await waitFor(() => expect(from().value).toBe('1405-07-01'));
+
+    // History brings a different custom range into the same mounted page.
+    page.rerender(<ReportsPage route={custom('1405-06-01', '1405-06-31')} denied={false} />);
+    await waitFor(() => expect(from().value).toBe('1405-06-01'));
+    expect(to().value).toBe('1405-06-31');
   });
 });
 

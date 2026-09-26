@@ -241,7 +241,9 @@ export class DrizzleReportingRepository implements ReportingRepository {
       }
     })();
     // `width_bucket(ts, thresholds)` is 1 for the first bucket; the window predicate keeps
-    // every row inside [first start, last end), so 0 and n+1 never occur.
+    // every row inside [first start, last end), so 0 and n+1 never occur. It counts the
+    // thresholds <= ts, so a repeated threshold (the zero-width slot of an hour a DST gap
+    // skipped) receives no row: `width_bucket(3, '{0,3,3,10}')` is 3, never 2.
     const rows = await this.rows<{ bucket: number; value: string }>(sql`
       SELECT width_bucket(${source.ts}, ${bounds}) - 1 AS bucket, (${source.value})::text AS value
         FROM ${source.from}
@@ -709,7 +711,8 @@ export class DrizzleReportingRepository implements ReportingRepository {
     const money = (list: { currency: CurrencyCode; amount: string }[] | null): CurrencyAmount[] =>
       (list ?? []).map((m) => ({ currency: m.currency, amount: BigInt(m.amount) }));
     return {
-      totalRows: rows[0]?.total_rows ?? 0,
+      totalRows:
+        rows[0]?.total_rows ?? (offset > 0 ? await this.referrerRankCount(scope, window) : 0),
       rows: rows.map((row) => ({
         referrerId: row.referrer_id,
         signups: row.signups,
@@ -718,6 +721,30 @@ export class DrizzleReportingRepository implements ReportingRepository {
         commission: money(row.commission),
       })),
     };
+  }
+
+  /**
+   * The ranked referrers' count alone, for a page past the end: the same three sources
+   * `topReferrers` unions — referrals made, referees' sales and commission credited.
+   */
+  private async referrerRankCount(scope: TenantContext, window: Window): Promise<number> {
+    const t = tenant(scope);
+    const [row] = await this.rows<{ n: number }>(sql`
+      SELECT count(*)::int AS n FROM (
+        SELECT r.referrer_id FROM referrals r
+         WHERE r.tenant_id = ${t} AND ${within(sql`r.created_at`, window)}
+        UNION
+        SELECT r.referrer_id FROM orders o
+          JOIN referrals r ON r.tenant_id = o.tenant_id AND r.referee_id = o.customer_id
+         WHERE o.tenant_id = ${t} AND o.state = 'PAID'
+           AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
+           AND ${within(sql`o.settled_at`, window)}
+        UNION
+        SELECT w.customer_id FROM wallet_entries w
+         WHERE w.tenant_id = ${t} AND w.reason = 'REFERRAL_COMMISSION' AND w.direction = 'CREDIT'
+           AND ${within(sql`w.created_at`, window)}
+      ) ids`);
+    return row?.n ?? 0;
   }
 
   async resellers(
@@ -838,7 +865,11 @@ export class DrizzleReportingRepository implements ReportingRepository {
   async orders(
     scope: TenantContext,
     window: Window,
-    filter: { readonly purpose?: OrderPurpose; readonly productId?: string },
+    filter: {
+      readonly purpose?: OrderPurpose;
+      readonly purposes?: readonly OrderPurpose[];
+      readonly productId?: string;
+    },
     limit: number,
     after: KeysetPosition | null,
   ): Promise<Page<OrderRow>> {
@@ -870,6 +901,7 @@ export class DrizzleReportingRepository implements ReportingRepository {
          AND o.state = 'PAID'
          AND ${within(sql`o.settled_at`, window)}
          ${filter.purpose === undefined ? sql`` : sql`AND o.purpose = ${filter.purpose}`}
+         ${filter.purposes === undefined ? sql`` : sql`AND o.purpose = ANY(${purposes(filter.purposes)})`}
          ${filter.productId === undefined ? sql`` : sql`AND o.product_id = ${filter.productId}::uuid`}
          ${after === null ? sql`` : sql`AND (o.settled_at, o.id) < (${after.at}::timestamptz, ${after.id}::uuid)`}
        ORDER BY o.settled_at DESC, o.id DESC

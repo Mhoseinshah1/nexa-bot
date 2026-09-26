@@ -105,6 +105,7 @@ describe('WP12 business reports', () => {
     c9: '',
     b1: '',
     o1: '',
+    o6: '',
   };
 
   const run = (query: ReturnType<typeof sql>) => api.container.database.db.execute(query);
@@ -401,6 +402,7 @@ describe('WP12 business reports', () => {
       subtotal: 0,
       settledAt: at(9, 30),
     });
+    ids.o6 = o6;
     await service(o6, ids.c1, ids.p2, 'ACTIVE', at(9, 31));
     await order({
       customerId: ids.c9,
@@ -710,6 +712,14 @@ describe('WP12 business reports', () => {
     ]);
   });
 
+  it('keeps the referrer total on a page past the last referrer, never zero', async () => {
+    const body = reportReferralsResponseSchema.parse(
+      (await get(`${REPORT_ROUTES.referrals}?${DAY_D}&by=SIGNUPS&limit=1&page=2`)).json(),
+    );
+    expect(body.topReferrers.rows).toEqual([]);
+    expect(body.topReferrers.totalRows).toBe(1);
+  });
+
   it('reports reseller orders, sales, services and credit in use, and never margin or cost', async () => {
     const response = await get(`${REPORT_ROUTES.resellers}?${DAY_D}`);
     const body = reportResellersResponseSchema.parse(response.json());
@@ -830,7 +840,9 @@ describe('WP12 business reports', () => {
     const text = bytes.toString('utf8').slice(1);
     const lines = text.trimEnd().split('\r\n');
     expect(lines[0]).toContain('شناسه سفارش');
-    expect(lines).toHaveLength(1 + 7);
+    // The six sales. The trial is a successful order but never a sale, so it has no row.
+    expect(lines).toHaveLength(1 + 6);
+    expect(text).not.toContain(ids.o6);
     const o1 = lines.find((line) => line.startsWith(ids.o1)) ?? '';
     expect(o1.split(',')).toEqual(
       expect.arrayContaining(['100000', '20000', '80000', 'IRT', 'MANUAL_TRANSFER']),

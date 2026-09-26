@@ -345,8 +345,8 @@ function buckets(
   const { calendar } = presentation;
   const end = midnight(span.end, presentation);
   const out: ReportBucketBounds[] = [];
-  const push = (start: Date, stop: Date, label: string): void => {
-    if (start.getTime() < stop.getTime()) {
+  const push = (start: Date, stop: Date, label: string, keepEmpty = false): void => {
+    if (start.getTime() < stop.getTime() || (keepEmpty && start.getTime() === stop.getTime())) {
       out.push({ index: out.length, start, end: stop, label });
     }
   };
@@ -363,7 +363,10 @@ function buckets(
             hour === 23
               ? midnight(addDays(day, 1, calendar), presentation)
               : localInstant(day, hour + 1, presentation);
-          push(localInstant(day, hour, presentation), stop, `${pad(hour)}:00`);
+          // An hour the clock skipped (a spring-forward gap) keeps its slot as a
+          // zero-width bucket that no row can fall in: the chart compares slot `i` of
+          // each side, so dropping it would pair every later hour with the wrong one.
+          push(localInstant(day, hour, presentation), stop, `${pad(hour)}:00`, true);
         }
       }
       return out;

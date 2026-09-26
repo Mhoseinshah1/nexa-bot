@@ -5,6 +5,7 @@ import {
   REPORT_RANGES,
   REPORT_REFERRER_RANKINGS,
   REPORT_TREND_METRICS,
+  type Calendar,
   type CurrencyCode,
   type MoneyComparison,
   type OrderPurpose,
@@ -156,7 +157,6 @@ export function RangePicker({
   route: Route;
   selection: ReportRangeSelection;
 }) {
-  const [draft, setDraft] = useState({ from: selection.from ?? '', to: selection.to ?? '' });
   const choose = (range: ReportRange) => {
     if (range === 'CUSTOM') {
       setQueries(route, [['range', 'CUSTOM']]);
@@ -168,6 +168,29 @@ export function RangePicker({
       ['to', null],
     ]);
   };
+  return (
+    <div className="report-range">
+      <Pills
+        value={selection.range}
+        onChange={choose}
+        items={REPORT_RANGES.map((range) => ({ id: range, label: t(REPORT_RANGE_LABELS[range]) }))}
+      />
+      {selection.range === 'CUSTOM' && (
+        // Keyed by the APPLIED dates, so a range that arrives by history or a link starts a
+        // fresh draft: the inputs never show one range while the figures show another.
+        <CustomRangeForm
+          key={`${selection.from ?? ''}|${selection.to ?? ''}`}
+          route={route}
+          from={selection.from ?? ''}
+          to={selection.to ?? ''}
+        />
+      )}
+    </div>
+  );
+}
+
+function CustomRangeForm({ route, from, to }: { route: Route; from: string; to: string }) {
+  const [draft, setDraft] = useState({ from, to });
   const apply = (event: FormEvent) => {
     event.preventDefault();
     setQueries(route, [
@@ -177,42 +200,33 @@ export function RangePicker({
     ]);
   };
   return (
-    <div className="report-range">
-      <Pills
-        value={selection.range}
-        onChange={choose}
-        items={REPORT_RANGES.map((range) => ({ id: range, label: t(REPORT_RANGE_LABELS[range]) }))}
-      />
-      {selection.range === 'CUSTOM' && (
-        <form className="toolbar" onSubmit={apply}>
-          <Field
-            label={t('web.report_range_from')}
-            htmlFor="report-from"
-            hint={t('web.report_range_date_hint')}
-          >
-            <input
-              id="report-from"
-              dir="ltr"
-              placeholder="1405-07-01"
-              value={draft.from}
-              onChange={(event) => setDraft({ ...draft, from: event.target.value })}
-            />
-          </Field>
-          <Field label={t('web.report_range_to')} htmlFor="report-to">
-            <input
-              id="report-to"
-              dir="ltr"
-              placeholder="1405-07-30"
-              value={draft.to}
-              onChange={(event) => setDraft({ ...draft, to: event.target.value })}
-            />
-          </Field>
-          <button type="submit" className="btn sm">
-            {t('web.report_range_apply')}
-          </button>
-        </form>
-      )}
-    </div>
+    <form className="toolbar" onSubmit={apply}>
+      <Field
+        label={t('web.report_range_from')}
+        htmlFor="report-from"
+        hint={t('web.report_range_date_hint')}
+      >
+        <input
+          id="report-from"
+          dir="ltr"
+          placeholder="1405-07-01"
+          value={draft.from}
+          onChange={(event) => setDraft({ ...draft, from: event.target.value })}
+        />
+      </Field>
+      <Field label={t('web.report_range_to')} htmlFor="report-to">
+        <input
+          id="report-to"
+          dir="ltr"
+          placeholder="1405-07-30"
+          value={draft.to}
+          onChange={(event) => setDraft({ ...draft, to: event.target.value })}
+        />
+      </Field>
+      <button type="submit" className="btn sm">
+        {t('web.report_range_apply')}
+      </button>
+    </form>
   );
 }
 
@@ -226,6 +240,7 @@ function PeriodNote({
     lengthsDiffer: boolean;
     generatedAt: string;
     timezone: string;
+    calendar: Calendar;
   };
 }) {
   const span = (side: { startLocal: string; endLocalInclusive: string }) =>
@@ -236,15 +251,26 @@ function PeriodNote({
     <p className="faint small">
       {t('web.report_period_current')} <Ltr>{span(period.current)}</Ltr> ·{' '}
       {t('web.report_period_previous')} <Ltr>{span(period.previous)}</Ltr> ·{' '}
-      {t('web.report_updated_at')} <Ltr>{formatInstantIn(period.generatedAt, period.timezone)}</Ltr>
+      {t('web.report_updated_at')}{' '}
+      <Ltr>{formatInstantIn(period.generatedAt, period.timezone, period.calendar)}</Ltr>
       {period.lengthsDiffer && <> · {t('web.report_lengths_differ')}</>}
     </p>
   );
 }
 
-/** An instant in the TENANT's zone and the Jalali calendar, Latin digits: `1405/07/03 14:05`. */
-export function formatInstantIn(iso: string, timezone: string): string {
-  const parts = new Intl.DateTimeFormat('fa-IR-u-ca-persian-nu-latn', {
+/** The ICU locale that writes a date in each tenant calendar, with Latin digits. */
+const CALENDAR_LOCALE: Readonly<Record<Calendar, string>> = {
+  jalali: 'fa-IR-u-ca-persian-nu-latn',
+  gregorian: 'en-GB-u-ca-gregory-nu-latn',
+};
+
+/**
+ * An instant in the TENANT's zone and calendar, Latin digits: `1405/07/03 14:05` for a
+ * Jalali tenant, `2026/09/25 14:05` for a Gregorian one — the calendar the period and the
+ * exports use, never the browser's.
+ */
+export function formatInstantIn(iso: string, timezone: string, calendar: Calendar): string {
+  const parts = new Intl.DateTimeFormat(CALENDAR_LOCALE[calendar], {
     timeZone: timezone,
     year: 'numeric',
     month: '2-digit',
@@ -861,7 +887,15 @@ function OrdersDrilldown({ selection }: { selection: ReportRangeSelection }) {
     {
       key: 'at',
       header: t('web.report_col_settled_at'),
-      render: (r) => <Ltr>{formatInstantIn(r.settledAt, data?.period.timezone ?? 'UTC')}</Ltr>,
+      render: (r) => (
+        <Ltr>
+          {formatInstantIn(
+            r.settledAt,
+            data?.period.timezone ?? 'UTC',
+            data?.period.calendar ?? 'jalali',
+          )}
+        </Ltr>
+      ),
     },
     {
       key: 'purpose',

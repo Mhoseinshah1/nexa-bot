@@ -274,9 +274,15 @@ the previous period:
 - the _i_-th 7-day block from the period start (the last block may be short);
 - the _i_-th calendar month.
 
-Each series carries its own labels and bucket ranges, so the tooltip names both. A
-current bucket that starts after _now_ is `null` (future), never `0`. The chart draws
-the whole previous series.
+An hour a spring-forward gap skipped keeps its slot as a zero-width bucket that no row
+can fall in, so hour _i_ stays slot _i_ on a 23-hour day too; a fall-back day's repeated
+hour stays inside its one slot.
+
+Each series carries its own labels and bucket ranges, so the tooltip names both. The
+TREND follows the same like-for-like rule as the cards: each side is read up to its own
+effective end, so a bucket that starts at or after it is `null` — a future hour of the
+current period, or the part of the previous period the current one has not reached yet
+— never `0`. The bucket the cut falls inside is counted up to the cut.
 
 **Percentages.** The server returns both raw values and never a ratio of zero. The UI
 applies one pure rule:
@@ -510,6 +516,10 @@ silently truncated.
 - **File name:** `nexa-<report>-<start>-to-<end>.<ext>` in the tenant calendar, e.g.
   `nexa-sales-1405-07-01-to-1405-07-30.csv`. A single day is `nexa-sales-1405-07-03.csv`
   and a whole calendar month `nexa-payments-1405-07.xlsx`. No tenant id or UUID appears.
+- **SALES** has one row per sale (§4): a TRIAL is a successful order, never a sale, so it
+  has no row there and takes no share of the row cap.
+- **Dates on the page** (the generated-at time, an order's settlement) are written in
+  the tenant's calendar, as the exports are.
 - **Never included:** secrets, gateway configuration, provider URLs, customer profile
   fields, `failure_message`, reseller margin or cost.
 
