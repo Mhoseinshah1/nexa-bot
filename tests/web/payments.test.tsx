@@ -1328,6 +1328,23 @@ describe('the payment diagnostics (§21)', () => {
     await screen.findAllByText('a1b2c3d4e5f60718:manual');
     expect(order.container.textContent).not.toContain('هدیهٔ شارژ این پرداخت');
   });
+
+  it('shows a gateway fee beside the principal, never inside it, and no fee card elsewhere (WP18)', async () => {
+    const gateway = renderDetail({
+      method: 'GATEWAY',
+      amount: '200000',
+      customerFee: { basisPoints: 525, fee: '10500', payable: '210500' },
+    });
+    await screen.findByText('نرخ کارمزد مشتری');
+    expect(gateway.container.textContent).toContain('5.25%');
+    expect(gateway.container.textContent).toContain('مبلغ قابل پرداخت');
+    expect(gateway.container.textContent).toContain('قابل بازگشت نیست');
+    gateway.unmount();
+
+    const manual = renderDetail({ customerFee: null });
+    await screen.findAllByText('a1b2c3d4e5f60718:manual');
+    expect(manual.container.textContent).not.toContain('نرخ کارمزد مشتری');
+  });
 });
 
 /**
