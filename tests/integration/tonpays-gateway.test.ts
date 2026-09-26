@@ -1523,6 +1523,33 @@ describe('TonPays, through the one settlement path', () => {
       expect(completed!.payload).toMatchObject({ amount: { amountMinor: '200000' } });
     });
 
+    it('logs nothing while ops_notifications is off, even with a chat configured', async () => {
+      await configureLog(PAYMENTS_TOPIC);
+      const flag = (await ctx.container.featureFlags.list(tenantA, owner)).find(
+        (row) => row.key === 'ops_notifications',
+      );
+      if (flag === undefined) throw new Error('no ops_notifications flag');
+      await ctx.container.featureFlags.set(tenantA, owner, {
+        key: 'ops_notifications',
+        enabled: false,
+        expectedVersion: flag.version,
+        idempotencyKey: `wp18-log-off-${String((flagKey += 1))}`,
+        confirmKey: 'ops_notifications',
+        reason: 'WP18: the switch is the switch.',
+      });
+      await enableTonPays();
+      const orderId = await draftOrder();
+      const { paymentId } = await payWithGateway(orderId);
+      await pass();
+      const invoice = await invoiceOf(paymentId);
+      tonpays.set(invoice.provider_invoice_id!, 'completed', true);
+      await webhook(invoice, 'completed', 'off-1');
+      await inquireNow();
+      await relayAll();
+      expect((await paymentOf(paymentId)).state).toBe('CONFIRMED');
+      expect(await logs()).toEqual([]);
+    });
+
     it('cannot touch the money: a log that fails to queue leaves the confirmation committed', async () => {
       await configureLog(PAYMENTS_TOPIC);
       await enableTonPays();
