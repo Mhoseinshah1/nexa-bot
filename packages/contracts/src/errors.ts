@@ -1305,4 +1305,37 @@ export const COMMERCE_ERROR_CODES = {
  * tell a live code from an aspiration.
  */
 
+/**
+ * WP13 — managing a bot instance from the Web Admin (`docs/wp13-bots-management-audit.md`).
+ *
+ * Nine codes, one remedy each. The token refusals are split for the reason the
+ * bootstrap's are: a token for another bot, a token Telegram refuses, a Telegram that
+ * cannot be reached and a `TELEGRAM_API_BASE_URL` that is not Telegram are four
+ * different afternoons, and one "token invalid" would send an operator to BotFather
+ * for three of them.
+ */
+export const BOT_ERROR_CODES = {
+  /** No bot with that id in this tenant. Another tenant's bot is answered the same way. */
+  BOT_NOT_FOUND: 'bot.not_found',
+  /** The bot is DISABLED, which the Web Admin neither sets nor clears (`OQ-WP13-01`). */
+  BOT_STATUS_NOT_MANAGED: 'bot.status_not_managed',
+  /** A live check asked of a bot that is not ACTIVE; a stopped bot's token is not used. */
+  BOT_NOT_ACTIVE: 'bot.not_active',
+  /** The replacement is not `<bot id>:<secret>`. Nothing was sent anywhere. */
+  BOT_TOKEN_MALFORMED: 'bot.token_malformed',
+  /**
+   * The replacement belongs to a different bot — by its own claim before any call, or by
+   * Telegram's answer after one. A replacement never repoints (ADR-0029).
+   */
+  BOT_TOKEN_DIFFERENT_BOT: 'bot.token_different_bot',
+  /** The row has no recorded Telegram id to compare against; `botctl telegram register` records it. */
+  BOT_IDENTITY_UNKNOWN: 'bot.identity_unknown',
+  /** Telegram answered `getMe`, and the answer was no. A new token is the remedy. */
+  BOT_TOKEN_REJECTED: 'bot.token_rejected',
+  /** Telegram could not be asked. Nothing was written; trying again later is the remedy. */
+  BOT_TELEGRAM_UNREACHABLE: 'bot.telegram_unreachable',
+  /** The configured Telegram API base answered with something that is not a bot. */
+  BOT_TELEGRAM_API_INVALID: 'bot.telegram_api_invalid',
+} as const;
+
 export type CommerceErrorCode = (typeof COMMERCE_ERROR_CODES)[keyof typeof COMMERCE_ERROR_CODES];

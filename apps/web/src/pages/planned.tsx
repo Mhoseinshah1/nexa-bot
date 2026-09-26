@@ -11,11 +11,11 @@ import { Icon } from '../ui/icons';
  * elsewhere is unreachable prose claiming the capability is unbuilt.
  *
  * One of the fifteen areas in the owner's route inventory still has no backend
- * at all: there is no bot-management surface. This page is what that route
- * renders. The count is written out rather than derived because it is a CLAIM —
- * users in 4A, products and orders in 4B, payments in 4C, services in 4H,
- * discounts in WP8, resellers in WP9-B and reports in WP12 each had to change
- * this sentence as well as the list below it.
+ * at all — and since WP13 that is none of them. Bots in WP13 was the last: users in
+ * 4A, products and orders in 4B, payments in 4C, services in 4H, discounts in WP8,
+ * resellers in WP9-B, reports in WP12 and bots in WP13 each had to change this sentence
+ * as well as the list below it. The list is empty and the page is kept: the next
+ * surface the owner names before it has a backend renders here, on the same terms.
  *
  * It draws NO control. Not a disabled button, not a greyed table with sample
  * rows, not a search box that returns nothing. A disabled control still says
@@ -86,14 +86,14 @@ export const PLANNED_SURFACES: readonly PlannedSurface[] = [
    * operational stream goes to the Telegram report group) is unchanged by WP12, which adds
    * business reports and no log browser.
    */
-  {
-    key: 'bots',
-    path: '/bots',
-    label: 'web.nav_bots',
-    summary: 'web.planned_bots_summary',
-    missing: ['web.planned_missing_bot_runtime'],
-    decisions: ['web.planned_bots_add_flow'],
-  },
+  /*
+   * `bots` is no longer here. WP13 builds the surface — each bot's recorded webhook state,
+   * stop and start, same-bot token replacement and the live check — so the placeholder went
+   * in the same commit, for the reason `payments` gives above. Its "missing" sentence said
+   * the bot runtime was a later phase, which was false long before this. Its recorded owner
+   * decision — no "add primary bot", and the reseller sales bot not built — moved onto the
+   * real page as `web.bots_add_body`, where it is still true.
+   */
 ];
 
 export type PlannedKey = (typeof PLANNED_SURFACES)[number]['key'];

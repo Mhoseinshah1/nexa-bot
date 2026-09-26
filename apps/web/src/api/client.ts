@@ -235,6 +235,14 @@ import {
   type CustomerResponse,
   type CustomerStatus,
   PAYMENT_ACCOUNT_ROUTES,
+  BOT_ROUTES,
+  botDiagnosticResponseSchema,
+  botListResponseSchema,
+  botMutationResponseSchema,
+  type BotDiagnosticResponse,
+  type BotListResponse,
+  type BotMutationResponse,
+  type BotOperatorStatus,
   paymentAccountListResponseSchema,
   paymentAccountResponseSchema,
   type PaymentAccountListResponse,
@@ -2236,4 +2244,39 @@ export function reportExportUrl(
   format: ReportExportFormat,
 ): string {
   return `${API_PREFIX}${REPORT_ROUTES.export}?${reportParams(s, { report, format }).toString()}`;
+}
+
+// --- Bots (WP13) -------------------------------------------------------------
+
+/** This tenant's bot instances, with their recorded webhook state. No credential. */
+export function fetchBots(): Promise<BotListResponse> {
+  return authedGet(BOT_ROUTES.list, botListResponseSchema);
+}
+
+/** Stop or start a bot. `changed: false` answers a request for the state it was in. */
+export function setBotStatus(input: {
+  id: string;
+  idempotencyKey: string;
+  status: BotOperatorStatus;
+}): Promise<BotMutationResponse> {
+  const { id, ...body } = input;
+  return post(BOT_ROUTES.status(id), body, botMutationResponseSchema);
+}
+
+/**
+ * Replace the token of the SAME bot. The token goes in the body and nowhere else: not
+ * the URL, not a query key, not the submission key (the page keys this by bot id alone).
+ */
+export function replaceBotToken(input: {
+  id: string;
+  idempotencyKey: string;
+  token: string;
+}): Promise<BotMutationResponse> {
+  const { id, ...body } = input;
+  return post(BOT_ROUTES.token(id), body, botMutationResponseSchema);
+}
+
+/** Ask Telegram what it holds for this bot. A read; nothing is stored. */
+export function checkBot(id: string): Promise<BotDiagnosticResponse> {
+  return post(BOT_ROUTES.diagnostics(id), {}, botDiagnosticResponseSchema);
 }

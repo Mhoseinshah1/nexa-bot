@@ -1,5 +1,6 @@
 import {
   telegramGetMe,
+  telegramGetWebhookInfo,
   telegramSetWebhook,
   telegramSetMyCommands,
 } from '../../../../infrastructure/telegram/send-message.js';
@@ -11,6 +12,7 @@ import type {
   BotIdentityProbe,
   WebhookRegistration,
 } from '../application/ports.js';
+import type { BotManagementTelegram, BotWebhookRead } from '../application/bot-management-ports.js';
 
 /**
  * The bootstrap's two Telegram calls, over the SHARED call core.
@@ -29,7 +31,7 @@ import type {
  * keeps the service from having to know that a 429 and a 502 are the same
  * instruction to an operator.
  */
-export class TelegramBotBootstrapGateway implements BotBootstrapTelegram {
+export class TelegramBotBootstrapGateway implements BotBootstrapTelegram, BotManagementTelegram {
   constructor(
     private readonly apiBaseUrl: string,
     private readonly timeoutMs: number,
@@ -78,6 +80,30 @@ export class TelegramBotBootstrapGateway implements BotBootstrapTelegram {
        */
       default:
         return { outcome: 'UNREACHABLE', detail: outcome.errorMessage };
+    }
+  }
+
+  /**
+   * Read the webhook registration Telegram holds (WP13's live check). A read only.
+   *
+   * On this class, beside `identify`, so the bot-management port and the bootstrap port
+   * share one adapter and one translation. PERMANENT is `REJECTED` — the token was
+   * refused or the answer was not a `WebhookInfo` — and everything else, 429 included,
+   * is `UNREACHABLE`, for the reason `identify` gives.
+   */
+  async readWebhook(token: string): Promise<BotWebhookRead> {
+    const outcome = await telegramGetWebhookInfo({
+      token,
+      apiBaseUrl: this.apiBaseUrl,
+      timeoutMs: this.timeoutMs,
+    });
+    switch (outcome.outcome) {
+      case 'SUCCEEDED':
+        return { outcome: 'READ', ...outcome.info };
+      case 'FAILED_PERMANENT':
+        return { outcome: 'REJECTED' };
+      default:
+        return { outcome: 'UNREACHABLE' };
     }
   }
 

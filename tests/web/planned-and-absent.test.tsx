@@ -51,8 +51,10 @@ describe('planned surfaces', () => {
       // live page at that route. `resellers` left it in WP9-B, and
       // `resellers.test.tsx` pins the live page at `/resellers`.
       // `reports` left it in WP12, and `reports.test.tsx` pins the live page at
-      // `/reports`.
-      ['bots'].sort(),
+      // `/reports`. `bots` left it in WP13, and `bots.test.tsx` pins the live page at
+      // `/bots` — owner revision 20 included, since the add-flow decision moved onto
+      // that page. Nothing is planned now; the next placeholder is added here.
+      [],
     );
   });
 
@@ -198,17 +200,10 @@ describe('planned surfaces', () => {
    * route renders — a screen nobody can open cannot lose a rule it never shows.
    */
 
-  /** Owner revision 20 — only a reseller sales bot, and not creatable. */
-  it('records that the only future bot type is the reseller sales bot, disabled', () => {
-    const { container } = render('bots');
-    const text = container.textContent ?? '';
-    expect(text).toContain('ربات فروش نماینده');
-    expect(text).toContain('ربات اصلی');
-    expect(text).toContain('وجود نخواهد داشت');
-    // And there is nothing to press, which the shared assertion above already
-    // proves for every surface including this one.
-    expect(container.querySelectorAll('button')).toHaveLength(0);
-  });
+  /*
+   * Owner revision 20 — only a reseller sales bot, and not creatable — is asserted in
+   * `bots.test.tsx` now, against the live `/bots` page that carries the decision.
+   */
 
   /**
    * Owner revision 25 — no general logs page.

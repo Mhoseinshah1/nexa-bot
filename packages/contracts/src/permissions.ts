@@ -200,6 +200,11 @@ export const PERMISSIONS = [
    * Bulk mutations that follow ADR-0010: dry run, counted preview, confirmation, audited
    * execution, recorded result. Charged by nothing until WP6-B; the first is the global
    * trial reset (`docs/wp6-audit.md` B3). Seeded to `owner` alone.
+   *
+   * The second is replacing a bot instance's token (WP13, `docs/wp13-bots-management-audit.md`
+   * D4). Not a bulk mutation, and charged here anyway because it is the bot's counterpart of
+   * the CRITICAL `panels.credentials.rotate` — a credential write kept apart from the edit
+   * permission — and this key is the CRITICAL, owner-only one that exists without a backfill.
    */
   p('settings.destructive', 'Run destructive maintenance settings', 'CRITICAL'),
 

@@ -20,6 +20,7 @@ import { PlannedPage, PLANNED_SURFACES, type PlannedKey } from './pages/planned'
 import { PaymentsPage, PaymentDetailPage } from './pages/payments';
 import { CompensationsPage } from './pages/compensations';
 import { PaymentAccountsPage } from './pages/payment-accounts';
+import { BotsPage } from './pages/bots';
 import { PaymentGatewaysPage } from './pages/payment-gateways';
 import { SupportPage } from './pages/support';
 import { ProductDetailPage, ProductsPage } from './pages/products';
@@ -690,6 +691,25 @@ export function resolve(
       ),
       crumbs: [{ label: t('web.payment_accounts_title') }],
       title: t('web.payment_accounts_title'),
+    };
+  }
+
+  /*
+   * WP13. `settings.view` reads, `settings.edit` stops, starts and runs the live check,
+   * and `settings.destructive` replaces the token — each passed separately, never
+   * derived from `denied`, for the reason `PaymentAccountsPage` records.
+   */
+  if (route.path === '/bots') {
+    return {
+      element: (
+        <BotsPage
+          denied={!may('settings.view')}
+          mayOperate={may('settings.edit')}
+          mayReplaceToken={may('settings.destructive')}
+        />
+      ),
+      crumbs: [{ label: t('web.nav_bots') }],
+      title: t('web.nav_bots'),
     };
   }
 

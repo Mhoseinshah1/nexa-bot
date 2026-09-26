@@ -586,3 +586,71 @@ export async function telegramSetMyCommands(
   // Answers `result: true`. No id to carry, and reporting one would invent a fact.
   return { outcome: 'SUCCEEDED', messageId: null };
 }
+
+/**
+ * What Telegram holds as this bot's webhook registration, as Telegram reports it.
+ *
+ * The fields of the Bot API's `WebhookInfo` that answer an operator's question — is
+ * Telegram pointed where this installation thinks, is it failing, is anything queued —
+ * and nothing else. `url` is the empty string when no webhook is set, and is carried as
+ * null so "no registration" is not a URL. `last_error_date` is Unix seconds.
+ */
+export interface TelegramWebhookInfo {
+  readonly url: string | null;
+  readonly pendingUpdateCount: number | null;
+  readonly lastErrorAt: Date | null;
+  readonly lastErrorMessage: string | null;
+  readonly maxConnections: number | null;
+}
+
+export type TelegramWebhookInfoOutcome =
+  | { readonly outcome: 'SUCCEEDED'; readonly info: TelegramWebhookInfo }
+  | Exclude<TelegramSendOutcome, { outcome: 'SUCCEEDED' }>;
+
+/**
+ * Read the webhook registration (`getWebhookInfo`). A READ: it changes nothing at
+ * Telegram, which is why a Web Admin diagnostic may call it (WP13 D5) where it may not
+ * call `setWebhook`.
+ *
+ * Every field is validated by type and dropped to null when it is not what the Bot API
+ * documents, rather than failing the whole read: a diagnostic that refuses to show the
+ * pending count because the error date was malformed would hide the fact the operator
+ * came for. A 2xx whose `result` is not an object at all IS refused, as `getMe` refuses
+ * one — it is not Telegram answering.
+ */
+export async function telegramGetWebhookInfo(
+  request: Omit<TelegramSendRequest, 'body' | 'method'>,
+): Promise<TelegramWebhookInfoOutcome> {
+  assertOutsideTransaction('A Telegram getWebhookInfo');
+
+  const call = await telegramCall({ ...request, method: 'getWebhookInfo', body: {} });
+  if (call.outcome !== 'SUCCEEDED') return call;
+
+  const result = call.result;
+  if (result === null || typeof result !== 'object' || Array.isArray(result)) {
+    return {
+      outcome: 'FAILED_PERMANENT',
+      errorCode: 'telegram.rejected.webhook_info_shape',
+      errorMessage: 'getWebhookInfo answered without a WebhookInfo object.',
+    };
+  }
+  const info = result as Record<string, unknown>;
+  const count = (value: unknown): number | null =>
+    typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
+  const url = typeof info.url === 'string' && info.url !== '' ? info.url : null;
+  const errorSeconds = count(info.last_error_date);
+  return {
+    outcome: 'SUCCEEDED',
+    info: {
+      url,
+      pendingUpdateCount: count(info.pending_update_count),
+      lastErrorAt:
+        errorSeconds === null || errorSeconds === 0 ? null : new Date(errorSeconds * 1000),
+      lastErrorMessage:
+        typeof info.last_error_message === 'string' && info.last_error_message !== ''
+          ? info.last_error_message
+          : null,
+      maxConnections: count(info.max_connections),
+    },
+  };
+}
