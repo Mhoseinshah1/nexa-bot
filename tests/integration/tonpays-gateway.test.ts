@@ -748,6 +748,39 @@ describe('TonPays, through the one settlement path', () => {
       expect((await invoiceOf(first.paymentId)).late_completion_observed_at).not.toBeNull();
     });
 
+    it('never acts on an inquiry answer that names another order, whatever it says', async () => {
+      const { orderId, paymentId, invoiceId } = await createdAttempt();
+      // The provider answers this invoice id with somebody else's order: completed and paid.
+      const fake = tonpays.invoices.get(invoiceId)!;
+      fake.orderId = 'NX0000000000000000ZZ';
+      tonpays.set(invoiceId, 'completed', true);
+      await inquireNow();
+
+      expect((await paymentOf(paymentId)).state).toBe('PENDING');
+      expect(await orderState(orderId)).toBe('AWAITING_PAYMENT');
+      expect(await ledger()).toEqual([]);
+      const invoice = await invoiceOf(paymentId);
+      expect(invoice.outcome).toBeNull();
+      expect(invoice.provider_paid).toBeNull();
+    });
+
+    it('writes nothing for a webhook whose invoice id is not the one on record', async () => {
+      const { paymentId, invoice } = await createdAttempt();
+      const before = await invoiceOf(paymentId);
+      expect(
+        await webhook(
+          { provider_order_id: invoice.provider_order_id, provider_invoice_id: 'TP-99999999' },
+          'completed',
+          'forged-1',
+        ),
+      ).toBe('IGNORED_MISMATCH');
+      const after = await invoiceOf(paymentId);
+      expect(after.webhook_count).toBe(before.webhook_count);
+      expect(after.next_inquiry_at).toEqual(before.next_inquiry_at);
+      expect(after.provider_invoice_id).toBe(invoice.provider_invoice_id);
+      expect((await paymentOf(paymentId)).state).toBe('PENDING');
+    });
+
     it('does not let a provider amount that differs block an approved payment, nor replace Nexa’s amount', async () => {
       const { orderId, paymentId, invoiceId } = await createdAttempt();
       tonpays.set(invoiceId, 'completed', true); // final_amount is request + 37
