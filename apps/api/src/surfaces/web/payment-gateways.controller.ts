@@ -2,9 +2,11 @@ import { Body, Controller, Get, Inject, Param, Post, Req } from '@nestjs/common'
 import type { FastifyRequest } from 'fastify';
 import {
   API_PREFIX,
+  PAYMENT_GATEWAY_DESCRIPTORS,
   PAYMENT_GATEWAY_ROUTES,
   paymentGatewayConfigSchema,
   routePattern,
+  setPaymentGatewayCredentialRequestSchema,
   setPaymentGatewayStatusRequestSchema,
   updatePaymentGatewayRequestSchema,
   type PaymentGatewayListResponse,
@@ -17,6 +19,7 @@ import { CONTAINER, type Container } from '../../container.js';
 import { adminActor, requireSessionToken } from './authenticated-request.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type { PaymentGatewayRecord } from '../../modules/commerce/payments/application/gateway-ports.js';
+import type { GatewayOperatorFacts } from '../../modules/commerce/payments/application/payment-gateway.service.js';
 
 /**
  * Payment routes over HTTP, at `/payment-gateways`.
@@ -34,10 +37,10 @@ import type { PaymentGatewayRecord } from '../../modules/commerce/payments/appli
  * a tenant's routes is provisioning's, and a route is DISABLED rather than removed
  * because history names it.
  *
- * Nothing here returns a credential, and nothing can: no route in this release holds
- * one, so there is no field to omit. When one does, it follows the panels rule — the
- * projection selects a set-at timestamp and never a ciphertext, and never a masked
- * stand-in either, because `********` can be resubmitted as a password.
+ * Nothing here returns a credential, and nothing can. A route that holds one (TonPays,
+ * WP11A) follows the panels rule: the projection selects a set-at timestamp and never a
+ * ciphertext, and never a masked stand-in either, because `********` can be resubmitted
+ * as a password. The key arrives through its own write-only route and is never echoed.
  *
  * Authentication happens here; AUTHORIZATION does not — `PaymentGatewayService` charges
  * `payments.gateways.view` and `payments.gateways.edit` itself.
@@ -49,8 +52,12 @@ export class PaymentGatewaysController {
   @Get(PAYMENT_GATEWAY_ROUTES.list)
   async list(@Req() request: FastifyRequest): Promise<PaymentGatewayListResponse> {
     const { scope, actor } = await this.authenticate(request);
-    const { gateways, currency } = await this.container.paymentGateways.list(scope, actor);
-    return { gateways: gateways.map((gateway) => toView(gateway, currency)) };
+    const { gateways, currency, facts } = await this.container.paymentGateways.list(scope, actor);
+    return {
+      gateways: gateways.map((gateway) =>
+        toView(gateway, currency, facts.get(gateway.provider) ?? NO_FACTS),
+      ),
+    };
   }
 
   @Post(routePattern(PAYMENT_GATEWAY_ROUTES.update, 'provider'))
@@ -97,7 +104,7 @@ export class PaymentGatewaysController {
         allowWalletTopup: input.allowWalletTopup,
       },
     });
-    return { gateway: toView(gateway, await this.container.paymentGateways.currency(scope)) };
+    return this.respond(scope, gateway);
   }
 
   @Post(routePattern(PAYMENT_GATEWAY_ROUTES.status, 'provider'))
@@ -113,7 +120,39 @@ export class PaymentGatewaysController {
       provider,
       status: input.status,
     });
-    return { gateway: toView(gateway, await this.container.paymentGateways.currency(scope)) };
+    return this.respond(scope, gateway);
+  }
+
+  /**
+   * Replaces a route's API key (WP11A). Write-only: the answer is the route's view, which
+   * carries the key's set-at time and never the key. The body is parsed here and handed
+   * on without being logged; the error filter never quotes a request body.
+   */
+  @Post(routePattern(PAYMENT_GATEWAY_ROUTES.credential, 'provider'))
+  async setCredential(
+    @Req() request: FastifyRequest,
+    @Param('provider') provider: string,
+    @Body() body: unknown,
+  ): Promise<PaymentGatewayResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const input = setPaymentGatewayCredentialRequestSchema.parse(body);
+    const gateway = await this.container.paymentGateways.setCredential(scope, actor, {
+      idempotencyKey: input.idempotencyKey,
+      provider,
+      apiKey: input.apiKey,
+    });
+    return this.respond(scope, gateway);
+  }
+
+  private async respond(
+    scope: TenantContext,
+    gateway: PaymentGatewayRecord,
+  ): Promise<PaymentGatewayResponse> {
+    const [currency, facts] = await Promise.all([
+      this.container.paymentGateways.currency(scope),
+      this.container.paymentGateways.factsFor(scope, gateway.provider),
+    ]);
+    return { gateway: toView(gateway, currency, facts) };
   }
 
   private async authenticate(
@@ -146,7 +185,13 @@ export class PaymentGatewaysController {
  * The descriptor's `settlesVia` and `requiresCredentials` are deliberately absent — the
  * view schema says why.
  */
-function toView(gateway: PaymentGatewayRecord, currency: SalesCurrencyCode): PaymentGatewayView {
+const NO_FACTS: GatewayOperatorFacts = { credentialSetAt: null, callbackUrl: null };
+
+function toView(
+  gateway: PaymentGatewayRecord,
+  currency: SalesCurrencyCode,
+  facts: GatewayOperatorFacts,
+): PaymentGatewayView {
   return {
     provider: gateway.provider,
     status: gateway.status,
@@ -167,6 +212,11 @@ function toView(gateway: PaymentGatewayRecord, currency: SalesCurrencyCode): Pay
     topupCashbackPercent: gateway.topupCashbackPercent,
     allowServicePurchase: gateway.allowServicePurchase,
     allowWalletTopup: gateway.allowWalletTopup,
+    credential: {
+      required: PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider].requiresCredentials,
+      setAt: facts.credentialSetAt?.toISOString() ?? null,
+    },
+    callbackUrl: facts.callbackUrl,
     createdAt: gateway.createdAt.toISOString(),
     updatedAt: gateway.updatedAt.toISOString(),
   };

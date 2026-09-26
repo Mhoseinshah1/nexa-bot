@@ -30,15 +30,17 @@
  * moved into the username column decrypts perfectly well — which is exactly the
  * transplant the v2 envelope exists to refuse.
  *
- * Gateway credentials belong to a later phase and are not declared in advance:
- * a purpose with nothing writing it is the empty-table mistake this repository
- * refuses, and `tests/unit/secret-registry.test.ts` fails the build for one.
+ * `payment_gateway.api_key` is an external payment gateway's API key (WP11A,
+ * TonPays), one per `(tenant, provider)` in `payment_gateway_credentials`. Declared
+ * in the commit that brings its producer, never before: a purpose with nothing
+ * writing it is the empty-table mistake `tests/unit/secret-registry.test.ts` refuses.
  */
 export const SECRET_PURPOSES = [
   'bot_instance.token',
   'panel.username',
   'panel.password',
   'panel.api_token',
+  'payment_gateway.api_key',
 ] as const;
 export type SecretPurpose = (typeof SECRET_PURPOSES)[number];
 

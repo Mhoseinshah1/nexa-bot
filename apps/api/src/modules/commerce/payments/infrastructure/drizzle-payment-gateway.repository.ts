@@ -1,5 +1,6 @@
 import { and, asc, count, eq, inArray } from 'drizzle-orm';
 import {
+  PAYMENT_GATEWAY_DESCRIPTORS,
   PAYMENT_GATEWAY_PROVIDERS,
   type PaymentGatewayConfig,
   type PaymentGatewayProvider,
@@ -168,7 +169,13 @@ export class DrizzlePaymentGatewayRepository implements PaymentGatewayRepository
         PAYMENT_GATEWAY_PROVIDERS.map((provider) => ({
           tenantId,
           provider,
-          status: 'ACTIVE' as const,
+          /*
+           * A route that needs a credential starts DISABLED (WP11A): it cannot be operated
+           * until an operator stores its key, and enabling it refuses until then.
+           */
+          status: PAYMENT_GATEWAY_DESCRIPTORS[provider].requiresCredentials
+            ? ('DISABLED' as const)
+            : ('ACTIVE' as const),
           /*
            * No display name, which is the point. NULL means "the product's own name for
            * this route" — provisioning does not invent customer-facing copy, and the

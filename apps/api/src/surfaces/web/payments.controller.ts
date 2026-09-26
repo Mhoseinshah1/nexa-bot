@@ -26,6 +26,7 @@ import {
   type RefundId,
   type TenantContext,
   type UserId,
+  type GatewayInvoiceView,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
 import { adminActor, requireSessionToken } from './authenticated-request.js';
@@ -44,6 +45,7 @@ import type {
 } from '../../modules/commerce/payments/application/refund-ports.js';
 import type { PaymentDestinationRecord } from '../../modules/commerce/payments/application/account-ports.js';
 import type { PaymentReceiptRecord } from '../../modules/commerce/payments/application/receipt-ports.js';
+import type { GatewayInvoiceRecord } from '../../modules/commerce/payments/application/gateway-invoice-ports.js';
 
 /**
  * Payments over HTTP, at `/payments`, and the compensation list at `/compensations`.
@@ -128,9 +130,15 @@ export class PaymentsController {
     ]);
     const identities = await this.container.payments.customerIdentities(scope, actor, [payment]);
     const dispositions = await this.container.payments.receiptDispositions(scope, actor, [payment]);
+    // The external gateway's side (WP11A), read only after `get` charged `payments.view`.
+    const invoice =
+      payment.method === 'GATEWAY'
+        ? await this.container.gatewayPayments.invoiceForPayment(scope, payment.id)
+        : null;
     return {
       payment: toDetail(
         payment,
+        invoice,
         destination,
         credit,
         identities.get(payment.customerId),
@@ -311,6 +319,37 @@ function toSummary(
   };
 }
 
+/**
+ * The gateway side of a payment, for an operator (WP11A). Ids, states and the provider's
+ * amounts as provider metadata; never a payment link — a link is a way to pay.
+ */
+function toGatewayInvoiceView(invoice: GatewayInvoiceRecord): GatewayInvoiceView {
+  const iso = (value: Date | null) => (value === null ? null : value.toISOString());
+  const amount = (value: bigint | null) => (value === null ? null : value.toString());
+  return {
+    provider: invoice.provider,
+    providerOrderId: invoice.providerOrderId,
+    providerInvoiceId: invoice.providerInvoiceId,
+    creationState: invoice.creationState,
+    creationErrorCode: invoice.creationErrorCode,
+    providerStatus: invoice.providerStatus,
+    providerPaid: invoice.providerPaid,
+    lastInquiryAt: iso(invoice.lastInquiryAt),
+    lastInquiryErrorCode: invoice.lastInquiryErrorCode,
+    webhookStatusHint: invoice.webhookStatusHint,
+    lastWebhookAt: iso(invoice.lastWebhookAt),
+    webhookCount: invoice.webhookCount,
+    providerUnit: invoice.providerUnit,
+    sentAmount: invoice.sentAmount.toString(),
+    requestAmount: amount(invoice.requestAmount),
+    finalAmount: amount(invoice.finalAmount),
+    creditAmount: amount(invoice.creditAmount),
+    outcome: invoice.outcome,
+    lateCompletionObservedAt: iso(invoice.lateCompletionObservedAt),
+    createdAt: invoice.createdAt.toISOString(),
+  };
+}
+
 /** A receipt record, minus the one field a browser may not hold. */
 function toReceiptView(record: PaymentReceiptRecord): PaymentReceiptView {
   return {
@@ -331,6 +370,7 @@ function toReceiptView(record: PaymentReceiptRecord): PaymentReceiptView {
 
 function toDetail(
   record: PaymentRecord,
+  invoice: GatewayInvoiceRecord | null,
   destination: PaymentDestinationRecord | null,
   credit: ReceiptCreditRecord | null,
   identity: PaymentCustomerIdentity | undefined,
@@ -343,6 +383,7 @@ function toDetail(
     destination: destination === null ? null : toDestinationView(destination),
     receiptCredit: credit === null ? null : toReceiptCreditView(credit),
     topupCashbackPercent: record.topupCashbackPercent,
+    gatewayInvoice: invoice === null ? null : toGatewayInvoiceView(invoice),
   };
 }
 

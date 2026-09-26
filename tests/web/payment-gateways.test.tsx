@@ -238,3 +238,84 @@ describe('the gateway form’s purpose switches', () => {
     expect(await screen.findByText('برای هیچ کاری')).toBeInTheDocument();
   });
 });
+
+/**
+ * WP11A — the TonPays route's API key is write-only on this screen.
+ *
+ * The list shows whether a key is configured and when; the key itself is never in any
+ * response the page receives, so it cannot be rendered, and the form that replaces it
+ * starts empty every time and posts to the credential route alone.
+ */
+describe('the TonPays API key', () => {
+  const TONPAYS = {
+    provider: 'TONPAYS',
+    status: 'DISABLED',
+    displayName: null,
+    instructions: null,
+    minAmountMinor: '0',
+    maxAmountMinor: '0',
+    currency: 'IRT',
+    eligibility: {
+      activateAfterPayments: 0,
+      deactivateAfterPayments: 0,
+      activateAfterAccountDays: 0,
+    },
+    sortOrder: 0,
+    topupCashbackPercent: 0,
+    allowServicePurchase: true,
+    allowWalletTopup: true,
+    credential: { required: true, setAt: null },
+    callbackUrl: 'https://bot.example.com/payments/webhook/tonpays/t-1',
+    createdAt: '2026-09-10T12:30:00.000Z',
+    updatedAt: '2026-09-10T12:30:00.000Z',
+  };
+
+  it('shows a missing key, the generated callback URL, and no field holding any key', async () => {
+    stubApi([{ url: '/payment-gateways', body: { gateways: [TONPAYS] } }]);
+    const view = renderPage(<PaymentGatewaysPage denied={false} mayEdit />);
+    expect(await screen.findByText('تنظیم نشده')).toBeInTheDocument();
+    expect(view.container.textContent).toContain(TONPAYS.callbackUrl);
+    // Nothing on the page is an input until the operator asks to replace the key.
+    expect(view.container.querySelectorAll('input[type="password"]')).toHaveLength(0);
+  });
+
+  it('shows a configured key as a state, and replaces it through an empty write-only form', async () => {
+    const configured = {
+      ...TONPAYS,
+      credential: { required: true, setAt: '2026-09-20T08:00:00.000Z' },
+    };
+    const api = stubApi([
+      { url: '/payment-gateways', body: { gateways: [configured] } },
+      { url: '/payment-gateways/TONPAYS/credential', body: { gateway: configured } },
+    ]);
+    renderPage(<PaymentGatewaysPage denied={false} mayEdit />);
+    expect(await screen.findByText('تنظیم شده ••••••••')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'تنظیم کلید API' }));
+    const input = (await screen.findByLabelText('کلید API جدید')) as HTMLInputElement;
+    expect(input.value).toBe('');
+    expect(input.type).toBe('password');
+
+    fireEvent.change(input, { target: { value: 'tp_new_key_123' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیرهٔ کلید' }));
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
+    });
+    const posted = api.calls.filter((call) => call.method === 'POST');
+    expect(posted).toHaveLength(1);
+    expect(posted[0]!.url).toContain('/payment-gateways/TONPAYS/credential');
+    expect((posted[0]!.body as Record<string, unknown>)['apiKey']).toBe('tp_new_key_123');
+  });
+
+  it('draws no key control for a view-only role and none for a route that takes no key', async () => {
+    const manual = {
+      ...TONPAYS,
+      provider: 'MANUAL_TRANSFER',
+      credential: { required: false, setAt: null },
+    };
+    stubApi([{ url: '/payment-gateways', body: { gateways: [TONPAYS, manual] } }]);
+    renderPage(<PaymentGatewaysPage denied={false} mayEdit={false} />);
+    expect(await screen.findByText('لازم نیست')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'تنظیم کلید API' })).toBeNull();
+  });
+});

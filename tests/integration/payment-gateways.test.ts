@@ -137,9 +137,11 @@ describe('payment routes', () => {
 
   it('seeds each tenant exactly the routes this release can operate', async () => {
     const { gateways, currency } = await ctx.container.paymentGateways.list(tenantA, ownerA);
-    expect(gateways.map((gateway) => gateway.provider)).toEqual(['MANUAL_TRANSFER']);
-    const [route] = gateways;
+    expect(gateways.map((gateway) => gateway.provider)).toEqual(['MANUAL_TRANSFER', 'TONPAYS']);
+    const route = gateways.find((gateway) => gateway.provider === 'MANUAL_TRANSFER');
     expect(route?.status).toBe('ACTIVE');
+    // WP11A: a route that needs a credential is seeded DISABLED, with no key.
+    expect(gateways.find((gateway) => gateway.provider === 'TONPAYS')?.status).toBe('DISABLED');
     // NULL, not a name: provisioning does not invent customer-facing copy.
     expect(route?.displayName).toBeNull();
     expect(route?.minAmountMinor).toBe(0n);
@@ -161,7 +163,8 @@ describe('payment routes', () => {
 
   it('lets a view-only role read and refuses its writes at the guard', async () => {
     const { gateways } = await ctx.container.paymentGateways.list(tenantA, viewerA);
-    expect(gateways).toHaveLength(1);
+    // The whole roster, TonPays included (WP11A).
+    expect(gateways).toHaveLength(2);
 
     const refused = await ctx.container.paymentGateways
       .setStatus(tenantA, viewerA, {
@@ -626,9 +629,11 @@ describe('payment routes', () => {
       });
 
       const { gateways } = await ctx.container.paymentGateways.list(tenantA, ownerA);
-      expect(gateways[0]?.displayName).toBe('Tuned');
-      expect(gateways[0]?.minAmountMinor).toBe(750_000n);
-      expect(gateways[0]?.sortOrder).toBe(3);
+      // By provider: TonPays (WP11A) sorts ahead of a route an operator moved to 3.
+      const tuned = gateways.find((gateway) => gateway.provider === 'MANUAL_TRANSFER');
+      expect(tuned?.displayName).toBe('Tuned');
+      expect(tuned?.minAmountMinor).toBe(750_000n);
+      expect(tuned?.sortOrder).toBe(3);
     });
   });
 

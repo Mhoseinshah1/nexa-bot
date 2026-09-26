@@ -18,12 +18,14 @@ import { refundChannelSchema, refundStateSchema } from './refunds.js';
 import {
   PAYMENT_GATEWAY_SORT_MAX,
   PAYMENT_GATEWAY_SORT_MIN,
+  PAYMENT_GATEWAY_API_KEY_MAX_LENGTH,
   PAYMENT_GATEWAY_THRESHOLD_MAX,
   paymentGatewayProviderSchema,
   paymentGatewayStatusSchema,
   topupCashbackPercentSchema,
 } from './payment-gateways.js';
 import { PAYMENT_RECEIPT_KINDS, RECEIPT_DISPOSITIONS } from './payment-receipts.js';
+import { gatewayInvoiceViewSchema } from './gateway-invoices.js';
 import { CUSTOMER_STATUSES, telegramUserIdSchema } from './customer.js';
 import {
   CASHBACK_PERCENT_MAX,
@@ -3427,6 +3429,13 @@ export const paymentDetailSchema = paymentSummarySchema.extend({
    * offered none.
    */
   topupCashbackPercent: z.number().int().nullable().default(null),
+  /**
+   * The external gateway's side of this payment (WP11A): the provider's ids, what its
+   * inquiry last said, the last webhook hint and how the attempt ended. Null for every
+   * payment that is not a `GATEWAY` payment. No payment link: a link is a way to pay,
+   * and an operator diagnosing a payment needs the ids and the states.
+   */
+  gatewayInvoice: gatewayInvoiceViewSchema.nullable().default(null),
 });
 export type PaymentDetailResponse = z.infer<typeof paymentDetailSchema>;
 
@@ -3805,8 +3814,31 @@ export const paymentGatewaySchema = z.object({
   /** Per purpose (customer UX completion §D/§F): what the route may be offered FOR. */
   allowServicePurchase: z.boolean(),
   allowWalletTopup: z.boolean(),
+  /**
+   * The route's credential STATE (WP11A), never its value.
+   *
+   * `required` is the descriptor's `requiresCredentials`; `setAt` is when the API key was
+   * last replaced, or null when none is stored. There is no masked stand-in: a
+   * `********` a form can echo back is a value somebody can resubmit as the key, which is
+   * the rule panels already follow. The screen says "configured" from `setAt` alone.
+   */
+  credential: z
+    .object({
+      required: z.boolean(),
+      setAt: z.iso.datetime().nullable(),
+    })
+    // Defaulted, like the D7 fields: a response from the previous release has neither.
+    .default({ required: false, setAt: null }),
+  /**
+   * The URL this installation sends the gateway as its webhook, GENERATED and never
+   * typed (WP11A §14). Null for a route that takes no callback, or while the installation
+   * has no registered public origin — in which case the gateway is asked without one and
+   * reconciliation alone decides. Shown for diagnostics only.
+   */
+  callbackUrl: z.string().nullable().default(null),
   /*
-   * The descriptor's two facts — `settlesVia` and `requiresCredentials` — are NOT here.
+   * The descriptor's `settlesVia` is NOT here, and `requiresCredentials` is only as
+   * `credential.required` above (WP11A), which the key form needs.
    *
    * They were, and nothing read them: with one operable route `settlesVia` always says
    * the same thing and there is no credential field to gate. `PAYMENT_GATEWAY_DESCRIPTORS`
@@ -3893,10 +3925,37 @@ export const setPaymentGatewayStatusRequestSchema = z.object({
 });
 export type SetPaymentGatewayStatusRequest = z.infer<typeof setPaymentGatewayStatusRequestSchema>;
 
+/**
+ * Replacing a route's API key (WP11A). Write-only: the response is the route view,
+ * which carries the credential's set-at time and never the key. There is no "clear" —
+ * a route is switched off with the status command, and a key is only ever REPLACED.
+ *
+ * Trimmed at the ends only; a key's inner characters are the provider's business.
+ * Printable ASCII, because a header value outside it is not a key any HTTP client can
+ * send, and refusing it here is kinder than a create that fails with a header error.
+ */
+export const setPaymentGatewayCredentialRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  apiKey: z
+    .string()
+    .transform((value) => value.trim())
+    .pipe(
+      z
+        .string()
+        .min(1)
+        .max(PAYMENT_GATEWAY_API_KEY_MAX_LENGTH)
+        .regex(/^[\x21-\x7E]+$/u, { message: 'must be printable ASCII with no spaces' }),
+    ),
+});
+export type SetPaymentGatewayCredentialRequest = z.input<
+  typeof setPaymentGatewayCredentialRequestSchema
+>;
+
 export const PAYMENT_GATEWAY_ROUTES = {
   list: '/payment-gateways',
   update: (provider: string) => `/payment-gateways/${encodeURIComponent(provider)}`,
   status: (provider: string) => `/payment-gateways/${encodeURIComponent(provider)}/status`,
+  credential: (provider: string) => `/payment-gateways/${encodeURIComponent(provider)}/credential`,
 } as const;
 
 // --- Support FAQ and tenant media (customer UX completion §J, §I) --------------

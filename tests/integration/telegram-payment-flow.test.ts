@@ -790,8 +790,12 @@ describe('the customer payment flow over Telegram', () => {
 
     await tap(`g:${orderId}`);
 
-    // Named, not simulated and not answered as an unknown command.
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.payment.unconfigured']);
+    /*
+     * Named, not simulated and not answered as an unknown command. Since WP11A a stale
+     * `g:` tap is re-decided on the server and answered as the gateway being unavailable
+     * — "choose another way" — never as the customer's payment failing.
+     */
+    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.payment.gateway_unavailable']);
     expect(await payments()).toHaveLength(0);
     expect(await entries()).toHaveLength(0);
   });

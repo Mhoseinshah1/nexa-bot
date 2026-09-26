@@ -19,7 +19,12 @@ import type {
   TenantId,
 } from '@nexa/contracts';
 import { CATALOGUE_FA, createTranslator } from '@nexa/i18n';
-import type { OperationType, TenantContext, Translator } from '@nexa/contracts';
+import type {
+  OperationType,
+  PaymentGatewayProvider,
+  TenantContext,
+  Translator,
+} from '@nexa/contracts';
 
 import { acceptsV1, type AppConfig } from './infrastructure/config/config.schema.js';
 import { readFileSync } from 'node:fs';
@@ -207,6 +212,26 @@ import {
   PaymentExpiryLoop,
   PAYMENT_EXPIRY_INTERVAL_MS,
 } from './modules/commerce/payments/application/payment-expiry-loop.js';
+import {
+  TONPAYS_TIMEOUT_MS,
+  TonPaysAdapter,
+} from './modules/commerce/payments/infrastructure/tonpays-adapter.js';
+import { DrizzleGatewayInvoiceRepository } from './modules/commerce/payments/infrastructure/drizzle-gateway-invoice.repository.js';
+import {
+  DrizzleGatewayCallBudget,
+  DrizzleGatewayCredentialStore,
+  DrizzlePublicOriginReader,
+} from './modules/commerce/payments/infrastructure/drizzle-gateway-credentials.js';
+import {
+  GATEWAY_CREATE_BATCH,
+  GATEWAY_INQUIRY_BATCH,
+  GatewayPaymentService,
+  gatewayCallbackUrl,
+} from './modules/commerce/payments/application/gateway-payment.service.js';
+import {
+  GATEWAY_PAYMENT_INTERVAL_MS,
+  GatewayPaymentLoop,
+} from './modules/commerce/payments/application/gateway-payment-loop.js';
 import { OrderService } from './modules/commerce/orders/application/order.service.js';
 import { DrizzleOrderRepository } from './modules/commerce/orders/infrastructure/drizzle-order.repository.js';
 import { DiscountAdminService } from './modules/commerce/pricing/application/discount-admin.service.js';
@@ -387,6 +412,12 @@ export interface Container {
    * wedged panel must not delay work that needs no panel.
    */
   readonly paymentExpiryLoop: PaymentExpiryLoop;
+  /**
+   * The external-gateway lane (WP11A): its reads and webhook hints serve the API and the
+   * Telegram surface; its loop is started by the worker only.
+   */
+  readonly gatewayPayments: GatewayPaymentService;
+  readonly gatewayPaymentLoop: GatewayPaymentLoop;
   /**
    * The lane that warns a customer before their service runs out of days or traffic.
    *
@@ -1551,6 +1582,27 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
 
   const paymentGatewayRepository = new DrizzlePaymentGatewayRepository(database.db);
 
+  /*
+   * WP11A — the external gateway. ONE adapter per provider, and TonPays is the only one:
+   * the only code that speaks its HTTP. Everything else asks through the provider-neutral
+   * port. The callback URL is generated from the tenant's registered public origin.
+   */
+  const tonpaysAdapter = new TonPaysAdapter();
+  const gatewayAdapters = (provider: PaymentGatewayProvider) =>
+    provider === 'TONPAYS' ? tonpaysAdapter : null;
+  const gatewayInvoiceRepository = new DrizzleGatewayInvoiceRepository(database.db);
+  const gatewayCredentialStore = new DrizzleGatewayCredentialStore(database.db, cipher, () =>
+    ids.uuid(),
+  );
+  const publicOrigins = new DrizzlePublicOriginReader(database.db);
+  const gatewayCallbackUrlFor = async (
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+  ): Promise<string | null> => {
+    if (gatewayAdapters(provider) === null || scope.tenantId === null) return null;
+    return gatewayCallbackUrl(await publicOrigins.originFor(scope), provider, scope.tenantId);
+  };
+
   const paymentGatewayService = new PaymentGatewayService({
     repository: paymentGatewayRepository,
     audience: new DrizzleGatewayAudienceReader(database.db),
@@ -1564,6 +1616,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     settings: settingsResolver,
     accounts: paymentAccountRepository,
+    credentials: gatewayCredentialStore,
+    adapters: gatewayAdapters,
+    callbackUrlFor: gatewayCallbackUrlFor,
   });
 
   /**
@@ -1790,6 +1845,47 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
     operationId: (key) => operationIdFor('payment', key),
+    // WP11A: the gateway invoice's FIRST state, the adapter's pre-call facts, and
+    // whether a key is stored — never the key.
+    gatewayInvoices: gatewayInvoiceRepository,
+    gatewayAdapters,
+    gatewayCredentials: gatewayCredentialStore,
+  });
+
+  /*
+   * The external-gateway lane (WP11A): creates invoices, asks the provider what happened,
+   * and hands an APPROVED inquiry to `PaymentService.confirmGatewayPayment`. Built in
+   * every role — the API's webhook and the Telegram surface use its reads and hints — and
+   * its loop STARTED only by the worker, the one role that dials the provider.
+   */
+  const gatewayPayments = new GatewayPaymentService({
+    invoices: gatewayInvoiceRepository,
+    payments: paymentService,
+    paymentRecords: paymentRepository,
+    adapters: gatewayAdapters,
+    credentials: gatewayCredentialStore,
+    budget: new DrizzleGatewayCallBudget(database.db),
+    callbackUrlFor: gatewayCallbackUrlFor,
+    customers: customerRepository,
+    conditions: new DrizzleOperationalConditionReader(database.db),
+    scopeActivity: tenants,
+    uow,
+    audit,
+    opsLog,
+    clock,
+    ids,
+    logger,
+  });
+  const gatewayPaymentLoop = new GatewayPaymentLoop(gatewayPayments, {
+    scope: () =>
+      installationTenantId === null
+        ? null
+        : { tenantId: installationTenantId, botInstanceId: null },
+    intervalMs: GATEWAY_PAYMENT_INTERVAL_MS,
+    // Every call a pass may make, one after another, each allowed its whole timeout.
+    passBoundMs: (GATEWAY_CREATE_BATCH + GATEWAY_INQUIRY_BATCH) * TONPAYS_TIMEOUT_MS,
+    now: () => clock.now().getTime(),
+    logger,
   });
 
   /*
@@ -3343,6 +3439,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     backupRunSweeper,
     recoveryRequestSweeper,
     paymentExpiryLoop,
+    gatewayPayments,
+    gatewayPaymentLoop,
     /** The sweep itself, so a test runs one pass instead of starting a timer. */
     paymentExpirySweep,
     usernameLane,
@@ -3420,6 +3518,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     delivery: deliveryService,
     orders: orderService,
     botRuntime: new BotRuntime({
+      // WP11A: the external-gateway attempt's customer reads and the check tap.
+      gateway: gatewayPayments,
       /*
        * The main menu's routing table, built HERE because this is the only layer
        * that may read the catalogue on this path: the boundary check refuses
@@ -3602,6 +3702,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       await backupRunSweeper.stop();
       await recoveryRequestSweeper.stop();
       await paymentExpiryLoop.stop();
+      await gatewayPaymentLoop.stop();
       await serviceReminderLoop.stop();
       await customerNotificationLoop.stop();
       await receiptReviewPushLoop.stop();

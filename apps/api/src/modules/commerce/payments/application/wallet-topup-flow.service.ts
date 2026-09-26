@@ -14,7 +14,7 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
 import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
 import type { CustomerCaptureService } from '../../customers/application/customer-capture.service.js';
 import type { CustomerCaptureRecord } from '../../customers/application/customer-capture-ports.js';
-import type { ManualTransferInstruction } from './payment.service.js';
+import type { GatewayAttempt, ManualTransferInstruction } from './payment.service.js';
 
 /** One route the customer may pay a top-up through, as the chooser draws it. */
 export interface TopupRoute {
@@ -45,6 +45,20 @@ export interface TypedTopupRequester {
       readonly idempotencyKey: string;
     },
   ): Promise<ManualTransferInstruction>;
+  /**
+   * The same top-up through an EXTERNAL gateway route (WP11A): a payment attempt and its
+   * provider invoice, created asynchronously by the gateway lane.
+   */
+  requestGatewayTopup(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: UserId,
+    input: {
+      readonly amount: Money;
+      readonly provider: PaymentGatewayProvider;
+      readonly idempotencyKey: string;
+    },
+  ): Promise<GatewayAttempt>;
 }
 
 export type AmountParser = (
@@ -85,7 +99,8 @@ export type TopupChoiceResult =
       readonly amount: Money;
       readonly routes: readonly TopupRoute[];
     }
-  | { readonly outcome: 'REQUESTED'; readonly instruction: ManualTransferInstruction };
+  | { readonly outcome: 'REQUESTED'; readonly instruction: ManualTransferInstruction }
+  | { readonly outcome: 'GATEWAY_REQUESTED'; readonly attempt: GatewayAttempt };
 
 /** The idempotency key of the top-up a chooser tap creates: the capture's, so a double tap is one payment. */
 export function topupCaptureKey(captureId: string): string {
@@ -255,24 +270,49 @@ export class WalletTopupFlowService {
       'WALLET_TOPUP',
       amount,
     );
-    if (!routes.some((route) => route.provider === input.provider)) {
+    const chosen = routes.find((route) => route.provider === input.provider);
+    if (chosen === undefined) {
       return { outcome: 'NOT_OFFERED', amount, routes };
     }
     // The request first, keyed by the capture: a double tap replays the same payment.
     // The capture closes afterwards; a close that raced is harmless because the key,
     // not the capture's state, is what makes the payment one.
-    const instruction = await this.deps.payments.requestWalletTopupTyped(
-      scope,
-      actor,
-      input.customerId,
-      { amount, provider: input.provider, idempotencyKey: topupCaptureKey(capture.id) },
-    );
+    const request = {
+      amount,
+      provider: input.provider,
+      idempotencyKey: topupCaptureKey(capture.id),
+    };
+    /*
+     * HOW the route settles is the descriptor's to say, never the provider's name: an
+     * external gateway is a payment attempt with a provider invoice (WP11A), a manual
+     * route is a transfer instruction. Both re-decide the route inside their transaction.
+     */
+    const result: TopupChoiceResult =
+      chosen.descriptor.settlesVia === 'GATEWAY'
+        ? {
+            outcome: 'GATEWAY_REQUESTED',
+            attempt: await this.deps.payments.requestGatewayTopup(
+              scope,
+              actor,
+              input.customerId,
+              request,
+            ),
+          }
+        : {
+            outcome: 'REQUESTED',
+            instruction: await this.deps.payments.requestWalletTopupTyped(
+              scope,
+              actor,
+              input.customerId,
+              request,
+            ),
+          };
     await this.deps.captures.close(scope, actor, {
       customerId: input.customerId,
       captureId: capture.id,
       reason: 'RECEIVED',
     });
-    return { outcome: 'REQUESTED', instruction };
+    return result;
   }
 
   async close(

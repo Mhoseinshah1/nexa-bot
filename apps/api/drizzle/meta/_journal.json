@@ -855,6 +855,13 @@
       "when": 1790341624772,
       "tag": "0121_admin_capture_customer_target",
       "breakpoints": true
+    },
+    {
+      "idx": 122,
+      "version": "7",
+      "when": 1790417789445,
+      "tag": "0122_tonpays_gateway",
+      "breakpoints": true
     }
   ]
 }

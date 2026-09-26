@@ -12,6 +12,10 @@ import {
   TELEGRAM_WEBHOOK_BODY_LIMIT_BYTES,
   TELEGRAM_WEBHOOK_ROUTE_PREFIX,
 } from './surfaces/telegram/webhook.controller.js';
+import {
+  GATEWAY_WEBHOOK_BODY_LIMIT_BYTES,
+  GATEWAY_WEBHOOK_ROUTE_PREFIX,
+} from './surfaces/gateway/webhook.controller.js';
 import { createContainer, type Container } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
 import { trustProxyOption } from './infrastructure/trusted-proxy.js';
@@ -178,6 +182,10 @@ export async function createApiApp(config: AppConfig = loadConfig()): Promise<Ap
   fastify.addHook('onRoute', (route) => {
     if (route.url.startsWith(TELEGRAM_WEBHOOK_ROUTE_PREFIX)) {
       route.bodyLimit = TELEGRAM_WEBHOOK_BODY_LIMIT_BYTES;
+    }
+    // The payment gateway webhook's own ceiling (WP11A): unauthenticated, and small.
+    if (route.url.startsWith(GATEWAY_WEBHOOK_ROUTE_PREFIX)) {
+      route.bodyLimit = GATEWAY_WEBHOOK_BODY_LIMIT_BYTES;
     }
     /*
      * The upload route's own ceiling, raised to the configured maximum.

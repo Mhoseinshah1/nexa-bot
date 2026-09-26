@@ -45,6 +45,7 @@ import type {
   PaymentGatewayRecord,
   PaymentGatewayRepository,
 } from './gateway-ports.js';
+import type { ExternalGatewayAdapter, GatewayCredentialStore } from './gateway-invoice-ports.js';
 
 export const PAYMENT_GATEWAY_VIEW_PERMISSION = 'payments.gateways.view' satisfies PermissionKey;
 export const PAYMENT_GATEWAY_EDIT_PERMISSION = 'payments.gateways.edit' satisfies PermissionKey;
@@ -76,6 +77,31 @@ export interface PaymentGatewayServiceDeps {
    * or the order's transfer would refuse with `NO_DESTINATION`.
    */
   readonly accounts: Pick<PaymentAccountRepository, 'hasEnabled'>;
+  /**
+   * A route's stored API key (WP11A): its set-at time for the list and for enabling, and
+   * the write for replacing it. Never a read of the key itself — this service has no
+   * reason to hold one.
+   */
+  readonly credentials: Pick<GatewayCredentialStore, 'setAt' | 'replace'>;
+  /**
+   * The adapter behind an external route, for the one question route selection asks of
+   * it: whether an amount has an exact value in the provider's unit. Null for a route
+   * that is not an external gateway.
+   */
+  readonly adapters: (
+    provider: PaymentGatewayProvider,
+  ) => Pick<ExternalGatewayAdapter, 'providerAmountOf'> | null;
+  /** The GENERATED callback URL a route's provider is sent, for the operator to see. */
+  readonly callbackUrlFor: (
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+  ) => Promise<string | null>;
+}
+
+/** A route's credential and callback, as the operator's list shows them. Never a value. */
+export interface GatewayOperatorFacts {
+  readonly credentialSetAt: Date | null;
+  readonly callbackUrl: string | null;
 }
 
 /**
@@ -151,13 +177,110 @@ export class PaymentGatewayService {
   async list(
     scope: TenantContext,
     actor: ActorContext,
-  ): Promise<{ gateways: readonly PaymentGatewayRecord[]; currency: SalesCurrencyCode }> {
+  ): Promise<{
+    gateways: readonly PaymentGatewayRecord[];
+    currency: SalesCurrencyCode;
+    facts: ReadonlyMap<PaymentGatewayProvider, GatewayOperatorFacts>;
+  }> {
     await this.deps.guard.check(scope, actor, PAYMENT_GATEWAY_VIEW_PERMISSION);
     const [gateways, currency] = await Promise.all([
       this.deps.repository.list(scope),
       this.deps.settings.valueOf<SalesCurrencyCode>(scope, 'sales.currency'),
     ]);
-    return { gateways, currency };
+    const facts = new Map<PaymentGatewayProvider, GatewayOperatorFacts>();
+    for (const gateway of gateways)
+      facts.set(gateway.provider, await this.factsFor(scope, gateway.provider));
+    return { gateways, currency, facts };
+  }
+
+  /**
+   * One route's credential state and generated callback. A set-at time, never a value;
+   * no masked stand-in either (`********` can be resubmitted as the key).
+   */
+  async factsFor(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+  ): Promise<GatewayOperatorFacts> {
+    if (!PAYMENT_GATEWAY_DESCRIPTORS[provider].requiresCredentials) {
+      return { credentialSetAt: null, callbackUrl: null };
+    }
+    const [credentialSetAt, callbackUrl] = await Promise.all([
+      this.deps.credentials.setAt(scope, provider),
+      this.deps.callbackUrlFor(scope, provider),
+    ]);
+    return { credentialSetAt, callbackUrl };
+  }
+
+  /**
+   * Replaces a route's API key (WP11A §13). Write-only.
+   *
+   * Charges `payments.gateways.edit`, the authority over the route itself. The key is
+   * encrypted at rest by the credential store and exists in plaintext only in this
+   * call's argument. It is NOT in the request hash — the hash is stored — so a replay
+   * under the same key answers with the route as it stands, the rule panels follow for
+   * their credentials. The audit row records that the key was replaced and when; never
+   * the key, never a fingerprint of it.
+   *
+   * Refused for a route that takes no credential: storing one would be a value nothing
+   * reads, which is the write-only-setting defect.
+   */
+  async setCredential(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly idempotencyKey: string;
+      readonly provider: string;
+      readonly apiKey: string;
+    },
+  ): Promise<PaymentGatewayRecord> {
+    const provider = this.provider(input.provider);
+    const denial = {
+      action: 'payment_gateway.set_credential',
+      entityType: 'PaymentGateway',
+      entityId: provider,
+    };
+    await this.authorize(scope, actor, denial);
+    if (!PAYMENT_GATEWAY_DESCRIPTORS[provider].requiresCredentials) {
+      throw errors.validation(
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        'This payment route takes no credential.',
+      );
+    }
+    const requestHash = hashRequest({ provider, credential: 'API_KEY' });
+    const replayed = await this.replay(scope, input.idempotencyKey, requestHash);
+    if (replayed !== null) return replayed;
+
+    const now = this.deps.clock.now();
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      PAYMENT_GATEWAY_EDIT_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        const gateway = await this.require(scope, provider, tx);
+        const before = await this.deps.credentials.setAt(scope, provider, tx);
+        const setAt = await this.deps.credentials.replace(scope, provider, input.apiKey, now, tx);
+        await this.record(scope, actor, tx, {
+          action: 'payment_gateway.set_credential',
+          entityId: provider,
+          /*
+           * Named so the audit redactor keeps them: it fails closed on any key containing
+           * `apikey` or `credential`, and these carry no secret — only whether a key was
+           * stored and when it was replaced.
+           */
+          before: {
+            provider,
+            configured: before !== null,
+            replacedAt: before?.toISOString() ?? null,
+          },
+          after: { provider, configured: true, replacedAt: setAt.toISOString() },
+        });
+        await this.remember(scope, input.idempotencyKey, requestHash, provider, tx);
+        return gateway;
+      },
+    );
   }
 
   /** The denomination a route's bounds are in, for a surface rendering one route. */
@@ -299,6 +422,23 @@ export class PaymentGatewayService {
         if (before.status === input.status) {
           await this.remember(scope, input.idempotencyKey, requestHash, provider, tx);
           return before;
+        }
+        /*
+         * A route that needs a credential cannot be switched ON without one (WP11A): an
+         * active route with no key is one every customer who chooses it is refused by —
+         * the panels rule that a route which cannot be operated must not be offered.
+         * Read inside the transaction, so a key and the enable are one decision.
+         */
+        if (
+          input.status === 'ACTIVE' &&
+          PAYMENT_GATEWAY_DESCRIPTORS[provider].requiresCredentials &&
+          (await this.deps.credentials.setAt(scope, provider, tx)) === null
+        ) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
+            'This payment route needs its API key before it can be switched on.',
+            { reason: 'CREDENTIAL_MISSING' },
+          );
         }
 
         const after = await this.deps.repository.setStatus(
@@ -442,7 +582,13 @@ export class PaymentGatewayService {
       );
     }
 
-    const eligible = routes[0];
+    /*
+     * The first route that settles by MANUAL TRANSFER. `offer`'s one caller issues a
+     * card-to-card top-up against the route it returns and snapshots that route's name
+     * and gift onto it; an external route sorted first would otherwise produce a manual
+     * transfer wearing a gateway's name and promise (WP11A audit §1).
+     */
+    const eligible = routes.find((route) => route.descriptor.settlesVia === 'MANUAL_TRANSFER');
     if (eligible === undefined) {
       /*
        * The reasons go to the DETAIL, not to the message. An operator reading the
@@ -601,7 +747,13 @@ export class PaymentGatewayService {
            * in for. A window in another currency admits nothing, so such a route drops
            * out of the list rather than being shown and refused a tap later.
            */
-          (amount === null || decideAmount(boundsOf(gateway, amount.currency), amount).admitted),
+          (amount === null || decideAmount(boundsOf(gateway, amount.currency), amount).admitted) &&
+          /*
+           * An external route whose provider has no exact value for this amount (TonPays
+           * takes whole Toman) cannot invoice it, so it is not offered for it — rather
+           * than drawn and then refused at the tap.
+           */
+          (amount === null || this.adapterAdmits(gateway.provider, amount)),
       )
       .map((gateway) => ({
         provider: gateway.provider,
@@ -611,6 +763,12 @@ export class PaymentGatewayService {
         gateway,
       }));
     return { gateways, audience, routes };
+  }
+
+  private adapterAdmits(provider: PaymentGatewayProvider, amount: Money): boolean {
+    if (PAYMENT_GATEWAY_DESCRIPTORS[provider].settlesVia !== 'GATEWAY') return true;
+    const adapter = this.deps.adapters(provider);
+    return adapter !== null && adapter.providerAmountOf(amount) !== null;
   }
 
   private async audienceFor(scope: TenantContext, customerId: UserId, tx?: unknown) {

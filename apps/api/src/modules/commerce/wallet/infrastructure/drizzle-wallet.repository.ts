@@ -1,5 +1,5 @@
 import { alias } from 'drizzle-orm/pg-core';
-import { and, desc, eq, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, or, sql } from 'drizzle-orm';
 import { money, type Money } from '@nexa/contracts';
 import type {
   CurrencyCode,
@@ -196,7 +196,8 @@ export class DrizzleWalletRepository implements WalletRepository {
 
   /**
    * What ONE payment's credit of one reason put on the wallet, read off the ledger
-   * (Payment File 02 §18) — the principal of a top-up (`TOPUP_RECEIPT`), its gift
+   * (Payment File 02 §18) — the principal of a top-up (`TOPUP_RECEIPT`, or `TOPUP_GATEWAY`
+   * for an external gateway's, WP11A), its gift
    * (`CASHBACK_TOPUP`), or a reviewer's credit of a receipt (`RECEIPT_CREDIT`).
    *
    * A READER for the notification lane, in `refundedForOrder`'s shape and for its reason:
@@ -211,7 +212,10 @@ export class DrizzleWalletRepository implements WalletRepository {
   async creditedForPayment(
     scope: TenantContext,
     paymentId: string,
-    reason: Extract<LedgerReason, 'TOPUP_RECEIPT' | 'CASHBACK_TOPUP' | 'RECEIPT_CREDIT'>,
+    reasons: readonly Extract<
+      LedgerReason,
+      'TOPUP_RECEIPT' | 'TOPUP_GATEWAY' | 'CASHBACK_TOPUP' | 'RECEIPT_CREDIT'
+    >[],
     tx?: unknown,
   ): Promise<Money | null> {
     const tenantId = requireTenantId(scope);
@@ -225,7 +229,7 @@ export class DrizzleWalletRepository implements WalletRepository {
         and(
           eq(walletEntries.tenantId, tenantId),
           eq(walletEntries.paymentId, paymentId),
-          eq(walletEntries.reason, reason),
+          inArray(walletEntries.reason, [...reasons]),
           eq(walletEntries.direction, 'CREDIT'),
         ),
       )

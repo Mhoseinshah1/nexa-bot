@@ -58,8 +58,12 @@ import type { PaymentMethod } from './payment.js';
  * - `MANUAL_TRANSFER` — the customer transfers out of band and submits evidence; an
  *   operator with `receipts.review` confirms it. Fully operable today: 5A gives it a
  *   structured destination, 5R the receipt, 5T the review from Telegram.
+ * - `TONPAYS` — an external gateway (WP11A, `docs/tonpays-gateway-audit.md`). The
+ *   customer pays on TonPays' own invoice page; the provider's INQUIRY endpoint, asked
+ *   server to server, is the only thing that can say the money was approved. It needs
+ *   an API key, so a tenant's row starts DISABLED and cannot be enabled without one.
  */
-export const PAYMENT_GATEWAY_PROVIDERS = ['MANUAL_TRANSFER'] as const;
+export const PAYMENT_GATEWAY_PROVIDERS = ['MANUAL_TRANSFER', 'TONPAYS'] as const;
 export type PaymentGatewayProvider = (typeof PAYMENT_GATEWAY_PROVIDERS)[number];
 export const paymentGatewayProviderSchema = z.enum(PAYMENT_GATEWAY_PROVIDERS);
 
@@ -93,7 +97,21 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     settlesVia: 'MANUAL_TRANSFER',
     requiresCredentials: false,
   },
+  TONPAYS: {
+    provider: 'TONPAYS',
+    settlesVia: 'GATEWAY',
+    requiresCredentials: true,
+  },
 };
+
+/**
+ * The bound on a gateway API key an operator may submit, in characters.
+ *
+ * A rail rather than a policy: TonPays does not document the key's shape, so nothing
+ * about it is validated beyond "non-empty, printable, and not absurdly long". A key is
+ * never trimmed of inner characters and never echoed back.
+ */
+export const PAYMENT_GATEWAY_API_KEY_MAX_LENGTH = 512;
 
 /**
  * Whether the route is offered at all.

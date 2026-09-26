@@ -582,6 +582,30 @@ export class DrizzlePaymentRepository implements PaymentRepository {
     return found;
   }
 
+  async setExternalReference(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    externalReference: string,
+    now: Date,
+    tx?: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(payments)
+      .set({ externalReference, updatedAt: now })
+      .where(
+        and(
+          eq(payments.tenantId, tenantId),
+          eq(payments.id, paymentId),
+          eq(payments.method, 'GATEWAY'),
+          eq(payments.state, 'PENDING'),
+          isNull(payments.externalReference),
+        ),
+      )
+      .returning({ id: payments.id });
+    return rows.length > 0;
+  }
+
   async rejectionReasonFor(
     scope: TenantContext,
     paymentId: string,

@@ -186,6 +186,17 @@ export const CUSTOMER_NOTIFICATION_KINDS = [
    * the ORDER in the same transaction. P3.
    */
   'REFUND_COMPLETED',
+  /**
+   * An external gateway definitively did NOT approve a payment attempt (WP11A): the
+   * provider refused to create the invoice, or its inquiry answered rejected, expired or
+   * canceled. `payments.id` is the subject.
+   *
+   * Its own sentence rather than `PAYMENT_REJECTED`, which reads an administrator's
+   * reason back and tells the customer a person looked at their transfer — nobody did.
+   * And not `PAYMENT_EXPIRED`, which is Nexa's own deadline. It says nothing was
+   * charged through this attempt and that they may pay again; an order stays open.
+   */
+  'GATEWAY_PAYMENT_FAILED',
 ] as const;
 export type CustomerNotificationKind = (typeof CUSTOMER_NOTIFICATION_KINDS)[number];
 export const customerNotificationKindSchema = z.enum(CUSTOMER_NOTIFICATION_KINDS);
@@ -280,6 +291,12 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
   RECEIPT_CREDITED_TO_WALLET: false,
   WALLET_TOPUP_GIFT_CREDITED: false,
   REFUND_COMPLETED: false,
+  /*
+   * `false`: a FAILED payment is frozen by 0052/0114, so "this attempt was not approved"
+   * cannot stop being true. A later provider completion is recorded as an anomaly and
+   * never reopens the payment.
+   */
+  GATEWAY_PAYMENT_FAILED: false,
 };
 
 /**
@@ -333,6 +350,7 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
   RECEIPT_CREDITED_TO_WALLET: 'bot.payment.receipt_credited_to_wallet',
   WALLET_TOPUP_GIFT_CREDITED: 'bot.wallet.topup_gift_credited',
   REFUND_COMPLETED: 'bot.refund.completed',
+  GATEWAY_PAYMENT_FAILED: 'bot.payment.gateway_failed',
 };
 
 /**

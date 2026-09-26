@@ -2,7 +2,11 @@ import { and, asc, eq, gt, isNotNull } from 'drizzle-orm';
 import type { SecretPurpose } from '@nexa/contracts';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import type { Database, Executor } from '../persistence/database.js';
-import { botInstances, panelCredentials } from '../persistence/schema.js';
+import {
+  botInstances,
+  panelCredentials,
+  paymentGatewayCredentials,
+} from '../persistence/schema.js';
 
 /**
  * Every encrypted column in the schema, named once.
@@ -239,9 +243,73 @@ const panelApiToken = panelCredentialColumn('panel.api_token', {
   toUpdate: (next) => ({ apiTokenCiphertext: next.ciphertext, apiTokenKeyId: next.keyId }),
 });
 
+/**
+ * An external payment gateway's API key (WP11A, TonPays).
+ *
+ * One row per `(tenant, provider)` with its own surrogate `id`, which is the entity the
+ * AEAD context names — so a key copied into another tenant's row, or onto another
+ * provider's, recomputes a different context and fails authentication. The column is
+ * NOT NULL: a row exists only once a key has been set, and there is no clear path.
+ */
+const paymentGatewayApiKey: SecretColumn = {
+  purpose: 'payment_gateway.api_key',
+  table: 'payment_gateway_credentials',
+  ciphertextColumn: 'api_key_ciphertext',
+  keyIdColumn: 'api_key_key_id',
+
+  async all(db) {
+    return db
+      .select({
+        ciphertext: paymentGatewayCredentials.apiKeyCiphertext,
+        keyId: paymentGatewayCredentials.apiKeyKeyId,
+      })
+      .from(paymentGatewayCredentials);
+  },
+
+  async page(db, cursor, limit) {
+    const rows = await db
+      .select({ id: paymentGatewayCredentials.id })
+      .from(paymentGatewayCredentials)
+      .where(cursor === null ? undefined : gt(paymentGatewayCredentials.id, cursor))
+      .orderBy(asc(paymentGatewayCredentials.id))
+      .limit(limit);
+    return rows.map((row) => row.id);
+  },
+
+  async lock(tx, id) {
+    const [row] = await tx
+      .select({
+        id: paymentGatewayCredentials.id,
+        tenantId: paymentGatewayCredentials.tenantId,
+        ciphertext: paymentGatewayCredentials.apiKeyCiphertext,
+        keyId: paymentGatewayCredentials.apiKeyKeyId,
+      })
+      .from(paymentGatewayCredentials)
+      .where(eq(paymentGatewayCredentials.id, id))
+      .for('update')
+      .limit(1);
+    return row ?? null;
+  },
+
+  async replace(tx, id, expectedCiphertext, next) {
+    const updated = await tx
+      .update(paymentGatewayCredentials)
+      .set({ apiKeyCiphertext: next.ciphertext, apiKeyKeyId: next.keyId })
+      .where(
+        and(
+          eq(paymentGatewayCredentials.id, id),
+          eq(paymentGatewayCredentials.apiKeyCiphertext, expectedCiphertext),
+        ),
+      )
+      .returning({ id: paymentGatewayCredentials.id });
+    return updated.length > 0;
+  },
+};
+
 export const SECRET_COLUMNS: readonly SecretColumn[] = [
   botInstanceToken,
   panelUsername,
   panelPassword,
   panelApiToken,
+  paymentGatewayApiKey,
 ];

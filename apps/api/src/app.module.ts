@@ -27,6 +27,7 @@ import { PanelsController } from './surfaces/web/panels.controller.js';
 import { RecoveryController } from './surfaces/web/recovery.controller.js';
 import { SystemController } from './surfaces/web/system.controller.js';
 import { TelegramWebhookController } from './surfaces/telegram/webhook.controller.js';
+import { GatewayWebhookController } from './surfaces/gateway/webhook.controller.js';
 import { CorrelationMiddleware } from './surfaces/web/correlation.middleware.js';
 import { securityHeaders } from './surfaces/web/security-headers.middleware.js';
 import { DomainErrorFilter } from './surfaces/web/error.filter.js';
@@ -98,6 +99,11 @@ export class AppModule implements NestModule {
     if (container.config.TELEGRAM_WEBHOOK_ENABLED) {
       controllers.push(TelegramWebhookController as never);
     }
+
+    // External payment gateway webhooks (WP11A). Always registered: the route acts only
+    // on an attempt this installation created, and only by scheduling an inquiry — it
+    // can settle nothing, so there is nothing to gate behind a flag.
+    controllers.push(GatewayWebhookController as never);
 
     return {
       module: AppModule,

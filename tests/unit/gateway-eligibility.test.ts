@@ -171,21 +171,28 @@ describe('the provider catalogue', () => {
      * adapter for. A member added here without one is an operator switching on a route
      * that silently cannot take money.
      */
-    expect([...PAYMENT_GATEWAY_PROVIDERS]).toEqual(['MANUAL_TRANSFER']);
+    // WP11A added TonPays WITH its adapter (`TonPaysAdapter`), which is what this pins.
+    expect([...PAYMENT_GATEWAY_PROVIDERS]).toEqual(['MANUAL_TRANSFER', 'TONPAYS']);
   });
 
   it('declares how each route settles and whether it holds credentials', () => {
     for (const provider of PAYMENT_GATEWAY_PROVIDERS) {
       const descriptor = PAYMENT_GATEWAY_DESCRIPTORS[provider];
       expect(descriptor.provider).toBe(provider);
-      /*
-       * No route requires credentials in this release, which is WHY there is no
-       * credential column. The assertion is what makes adding one deliberate: a route
-       * that needs a secret has to arrive with the storage for it.
-       */
-      expect(descriptor.requiresCredentials).toBe(false);
     }
-    expect(PAYMENT_GATEWAY_DESCRIPTORS.MANUAL_TRANSFER.settlesVia).toBe('MANUAL_TRANSFER');
+    /*
+     * Only TonPays requires credentials, and it arrived with the storage for them
+     * (`payment_gateway_credentials`, WP11A). The assertion is what makes adding another
+     * deliberate: a route that needs a secret has to arrive with the storage for it.
+     */
+    expect(PAYMENT_GATEWAY_DESCRIPTORS.MANUAL_TRANSFER).toMatchObject({
+      settlesVia: 'MANUAL_TRANSFER',
+      requiresCredentials: false,
+    });
+    expect(PAYMENT_GATEWAY_DESCRIPTORS.TONPAYS).toMatchObject({
+      settlesVia: 'GATEWAY',
+      requiresCredentials: true,
+    });
   });
 });
 

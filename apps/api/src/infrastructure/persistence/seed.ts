@@ -1,4 +1,8 @@
-import { PAYMENT_GATEWAY_PROVIDERS, type SecretCipher } from '@nexa/contracts';
+import {
+  PAYMENT_GATEWAY_DESCRIPTORS,
+  PAYMENT_GATEWAY_PROVIDERS,
+  type SecretCipher,
+} from '@nexa/contracts';
 import { AesGcmSecretCipher } from '../crypto/secret-cipher.js';
 import { resolveKeyring } from '../crypto/resolve-keyring.js';
 import { loadConfig } from '../config/load-config.js';
@@ -225,7 +229,14 @@ export async function seed(db: Database, cipher: SecretCipher): Promise<void> {
         PAYMENT_GATEWAY_PROVIDERS.map((provider) => ({
           tenantId,
           provider,
-          status: 'ACTIVE' as const,
+          /*
+           * A route that needs a credential is seeded DISABLED (WP11A): the seed stores no
+           * key, and an active route with no key is one every customer would be refused
+           * by. A case that wants it on stores a key and enables it, as an operator must.
+           */
+          status: PAYMENT_GATEWAY_DESCRIPTORS[provider].requiresCredentials
+            ? ('DISABLED' as const)
+            : ('ACTIVE' as const),
           // The seed writes no `sales.currency`, so the registry default is what these
           // bounds mean — the same answer 0078 gives an upgraded tenant with no row.
           boundsCurrency: 'IRT' as const,
