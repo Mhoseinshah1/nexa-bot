@@ -1183,6 +1183,16 @@ describe('RickPanel numeric fields are normalised once, at the adapter', () => {
     });
   }
 
+  it('refuses every non-canonical spelling of a number, one record at a time', async () => {
+    for (const bad of ['-1', '1.5', '1e9', ' 12', '012', '0x10', '9007199254740993', -1, 1.5]) {
+      users.clear();
+      users.set(REF.username, userRecord(REF.username));
+      shapeRecord = (held) => ({ ...held, used_traffic: bad });
+      const found = await adapter().lookupUser(target(), http(), REF);
+      expect(found, JSON.stringify(bad)).toMatchObject({ ok: false, detail: 'VALUE_MALFORMED' });
+    }
+  });
+
   it('refuses an expire past any date anybody set, rather than building one', async () => {
     users.set(REF.username, userRecord(REF.username));
     shapeRecord = (held) => ({ ...held, expire: '253402300800' });

@@ -1245,6 +1245,8 @@ describe('a provisioned service announces itself', () => {
     // And it is NOT announced while it waits: the sweep takes ACTIVE services only.
     const early = await ctx.container.delivery.deliverDue(tenantA, 10);
     expect(early.claimed, 'an unprovisioned service is not due for delivery').toBe(0);
+    expect(lost?.deliveryAttempts, 'and no attempt was spent on it').toBe(0);
+    expect(lost?.deliveryState, 'it is still waiting to be delivered').toBe('PENDING');
     expect(sent).toHaveLength(0);
 
     panel.setBehaviour('healthy');

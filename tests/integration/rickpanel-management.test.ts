@@ -458,6 +458,22 @@ describe('RickPanel service management through the application layer', () => {
     await ctx.container.provisionerLoop.tick();
     expect((await operationOf(service.id, 'RENEW'))?.state).toBe('FAILED');
     expect(await refunds(), 'definitive evidence: the ordinary refund rule').toHaveLength(1);
+    // No date is left on the verdict: a FAILED row with one reads as still retrying,
+    // and the announcer would never answer it.
+    expect((await operationOf(service.id, 'RENEW'))?.nextAttemptAt).toBeNull();
+    // The announcement drain takes rows past its grace period; age this one past it.
+    await ctx.container.database.db.execute(
+      sql`UPDATE provisioning_operations SET completed_at = now() - interval '1 hour'
+           WHERE service_id = ${service.id} AND type = 'RENEW'`,
+    );
+    await ctx.container.provisionerLoop.tick();
+    const announced = (await ctx.container.database.db.execute(
+      sql`SELECT announced_at IS NOT NULL AS done FROM provisioning_operations
+           WHERE service_id = ${service.id} AND type = 'RENEW'` as never,
+    )) as unknown as { rows: { done: boolean }[] };
+    expect(announced.rows, 'a verified failure is answered to the customer').toEqual([
+      { done: true },
+    ]);
     const after = await reload(service.id);
     expect(after.expiresAt?.getTime(), 'Nexa keeps the old window').toBe(
       before.expiresAt?.getTime(),
@@ -490,6 +506,49 @@ describe('RickPanel service management through the application layer', () => {
     await makeVerificationDue();
     await ctx.container.provisionerLoop.tick();
     expect(panel.requests.length, 'no read after the last one').toBeLessThanOrEqual(reads + 2);
+  });
+
+  it('stops a verification whose last read never finished, and tells an operator (WP15 G2)', async () => {
+    const { service } = await fundedRenewal('renew-crashed-read');
+    panel.unappliedPutFailures = 1;
+    await ctx.container.provisioner.runOnce(tenantA);
+    // The state a crash between the last claim and its answer leaves: reads spent, a date set.
+    await ctx.container.database.db.execute(
+      sql`UPDATE provisioning_operations SET verification_attempts = 3,
+             next_attempt_at = now() - interval '1 minute'
+           WHERE service_id = ${service.id} AND type = 'RENEW'`,
+    );
+    const reads = userReads();
+    await ctx.container.provisionerLoop.tick();
+    const stopped = await operationOf(service.id, 'RENEW');
+    expect(stopped?.state).toBe('UNKNOWN');
+    expect(stopped?.nextAttemptAt, 'stopped, not stranded with a date').toBeNull();
+    expect(userReads(), 'and not read a fourth time').toBe(reads);
+    const events = (await ctx.container.database.db.execute(
+      sql`SELECT context->>'reason' AS reason FROM operational_events
+           WHERE code = 'provisioning.stalled' AND resolved_at IS NULL` as never,
+    )) as unknown as { rows: { reason: string }[] };
+    expect(events.rows.map((row) => row.reason)).toContain('ALLOWANCE_UNVERIFIED');
+    expect(await refunds()).toHaveLength(0);
+  });
+
+  it('verifies a renewal whose worker died mid-call, instead of replaying it (WP15 G2)', async () => {
+    const { service } = await fundedRenewal('renew-stranded');
+    const renew = await operationOf(service.id, 'RENEW');
+    // The state a crash mid-PUT leaves: claimed, stamped, lease gone.
+    await ctx.container.database.db.execute(
+      sql`UPDATE provisioning_operations
+             SET state = 'IN_FLIGHT', claimed_by = 'worker-that-died', attempts = 1,
+                 lease_until = now() - interval '1 hour', call_started_at = now() - interval '2 hours'
+           WHERE id = ${renew?.id ?? ''}`,
+    );
+    const puts = panel.putCalls();
+    await ctx.container.provisioner.runOnce(tenantA);
+    const reaped = await operationOf(service.id, 'RENEW');
+    expect(reaped?.state, 'a write that may have landed is verified, not replayed').toBe('UNKNOWN');
+    expect(reaped?.nextAttemptAt, 'with its first read scheduled').not.toBeNull();
+    expect(panel.putCalls(), 'and it was not sent again').toBe(puts);
+    expect(await refunds()).toHaveLength(0);
   });
 
   it('refuses a second purchase while the first is being verified (WP15 G2)', async () => {

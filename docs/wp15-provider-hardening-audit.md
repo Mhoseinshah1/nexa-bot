@@ -123,6 +123,31 @@ a LIVE panel can settle; a row is never closed on the second half by the first.
   or resolves the row today; that is `OQ-WP15-ALLOWANCE-EXIT`.
 - **Reconcile is slower by design**: ≈30 s before the first read, ≈60 s more before a
   second absence re-creates.
+- **An unverified renewal also blocks the next purchase on that service.** UNKNOWN is
+  open in `provisioning_operations_open_commercial_key`, so while a renewal sits
+  `ALLOWANCE_UNVERIFIED` a second RENEW/ADD_TRAFFIC/ADD_TIME is refused
+  `SERVICE_ACTION_IN_PROGRESS`, and an operator refund of the order is refused as
+  `purchaseInProgress`. That is the price of never charging twice for one allowance; the
+  missing exit is the same `OQ-WP15-ALLOWANCE-EXIT`.
+- **A rolling update can overlap two transports for one tick.** A replica still running
+  the previous image retries a write on a transient failure; the new one does not.
+  Production configures `maxRetries: 0` for panel writes, so the window is empty there,
+  and the Sanaei adapter's login (a POST) is declared `effect: 'READ'` deliberately — a
+  login creates nothing, and retrying it is what the old code did.
+
+### The review round
+
+An adversarial read-only review of `9290086`/`7740470` returned twelve findings. Ten were
+fixed in the follow-up commit and falsified (`docs/wp15-falsification.md` WP15-18..22):
+a verified expiry is compared in whole seconds; a verification whose last read never
+finished is stopped and reported rather than claimed forever; a verified FAILED carries
+no date, so the announcer answers it; a commercial write stranded by a dead worker is
+verified, never replayed; a terminate of a paid service whose create never started
+refunds it through `refundPurchase`; the verification checks scope activity in its claim
+and survives a thrown read; a service in a state that cannot be read is not verified; a
+missing usage figure is undecided, not zero; a RECONCILE takes the service lock before
+deciding; and a TLS error after the handshake on a write is ambiguous like any other. The
+remaining two are the two costs stated just above.
 
 ## 4. What stays unproven, and how each is settled
 
@@ -148,7 +173,7 @@ Mutations, each reverted after its run:
 | H4 reverted: `budget = maxRetries` for every method        | "retries a read on a transient failure and never a write"                                         |
 | H5 reverted: the old `rotate_hint` sentence restored       | `rotation-wording.test.ts` "no bot rotation sentence says the old link or anyone's access is cut" |
 
-The G1–G7 decisions are falsified in `docs/wp15-falsification.md`: fifteen rules, each
-reverted alone, fourteen killed by a named test and one — the bot surface's own refusal
+The G1–G7 decisions are falsified in `docs/wp15-falsification.md`: twenty-two rules, each
+reverted alone, twenty-two killed by a named test, and one further mutation — the bot surface's own refusal
 of a stale terminate tap — surviving because the service guard behind it refuses the
 same request, which is recorded there rather than hidden.

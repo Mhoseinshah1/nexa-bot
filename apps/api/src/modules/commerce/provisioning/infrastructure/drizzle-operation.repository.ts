@@ -28,7 +28,7 @@ import {
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { provisioningOperations, services } from '../../../../infrastructure/persistence/schema.js';
 import type { OperationDraft, OperationRecord, OperationRepository } from '../application/ports.js';
-import { RECONCILE_ROUNDS } from '../application/provision-executor.js';
+import { BACKOFF_BASE_MS, RECONCILE_ROUNDS } from '../application/provision-executor.js';
 
 /** Local alias so the predicate below reads as the rule rather than as a constant. */
 const MAX_ATTEMPTS = OPERATION_MAX_ATTEMPTS;
@@ -54,8 +54,17 @@ const NON_MUTATING_TYPES: readonly OperationType[] = OPERATION_TYPES.filter(
  * enable answers 200 with the same record, and a repeated delete answers 404, which
  * means the account is gone. Sending one twice is sending it once.
  */
+/*
+ * A commercial write (RENEW / ADD_TRAFFIC / ADD_TIME) is idempotent on the wire but is
+ * NOT replayed after a crash mid-call (WP15 G2): the write may have landed, and a later
+ * attempt that fails safely would refund an allowance the customer holds. It goes UNKNOWN
+ * and is verified by a READ instead.
+ */
 const REPLAYABLE_MUTATION_TYPES: readonly OperationType[] = OPERATION_TYPES.filter(
-  (type) => isMutatingOperation(type) && isIdempotentMutation(type),
+  (type) =>
+    isMutatingOperation(type) &&
+    isIdempotentMutation(type) &&
+    !(TARGETED_OPERATION_TYPES as readonly OperationType[]).includes(type),
 );
 
 type Row = typeof provisioningOperations.$inferSelect;
@@ -996,6 +1005,8 @@ export class DrizzleOperationRepository implements OperationRepository {
      */
     const isRead = inArray(provisioningOperations.type, NON_MUTATING_TYPES);
     const isReplayable = inArray(provisioningOperations.type, REPLAYABLE_MUTATION_TYPES);
+    const isCommercial = inArray(provisioningOperations.type, [...TARGETED_OPERATION_TYPES]);
+    const firstRead = new Date(now.getTime() + BACKOFF_BASE_MS).toISOString();
     const rows = await this.exec(tx)
       .update(provisioningOperations)
       .set({
@@ -1017,6 +1028,9 @@ export class DrizzleOperationRepository implements OperationRepository {
           WHEN ${isReplayable} THEN NULL
           ELSE ${provisioningOperations.callStartedAt} END`,
         failureMessage: 'the worker holding this operation died after the provider call began',
+        // A stranded commercial write is verified one backoff later (WP15 G2).
+        nextAttemptAt: sql`CASE WHEN ${isCommercial} THEN ${firstRead}::timestamptz
+          ELSE ${provisioningOperations.nextAttemptAt} END`,
         /*
          * Cast explicitly, because a raw `sql` template has no column to borrow a type
          * from. Drizzle types a plain `completedAt: now` from the schema; inside a CASE
@@ -1238,7 +1252,9 @@ export class DrizzleOperationRepository implements OperationRepository {
           inArray(provisioningOperations.type, [...TARGETED_OPERATION_TYPES]),
           sql`${provisioningOperations.nextAttemptAt} IS NOT NULL`,
           lte(provisioningOperations.nextAttemptAt, now),
-          lt(provisioningOperations.verificationAttempts, maxReads),
+          // NOT filtered on `verification_attempts < maxReads`: a row whose last read was
+          // claimed and never finished still has a date, and must come back once so the
+          // caller can stop it and tell an operator. A stopped row has no date at all.
           sql`NOT EXISTS (
             SELECT 1 FROM ${provisioningOperations} AS in_flight
             WHERE in_flight.tenant_id = ${provisioningOperations.tenantId}
@@ -1262,7 +1278,7 @@ export class DrizzleOperationRepository implements OperationRepository {
           eq(provisioningOperations.tenantId, tenantId),
           eq(provisioningOperations.state, 'UNKNOWN'),
           lte(provisioningOperations.nextAttemptAt, now),
-          lt(provisioningOperations.verificationAttempts, maxReads),
+          lt(provisioningOperations.verificationAttempts, maxReads + 1),
           sql`${provisioningOperations.id} IN ${due}`,
         ),
       )

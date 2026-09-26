@@ -448,6 +448,8 @@ describe('WP15 provider safety: provenance, propagation and termination', () => 
       providerDelete: 'SKIPPED',
       reason: 'NEVER_CREATED',
     });
+    // Nothing can exist on the panel, so the order is undeliverable and refunded here.
+    expect(await refundCount(orderId), 'refunded in the terminating transaction').toBe(1);
 
     // And the create, when it comes due, finds nothing to create for.
     await makeDue();
@@ -513,6 +515,7 @@ describe('WP15 provider safety: provenance, propagation and termination', () => 
     expect(create?.state, 'the lost create is closed, so the order is not held for ever').toBe(
       'ABANDONED',
     );
+    expect(await refundCount(orderId), 'an unknown create is never refunded automatically').toBe(0);
   });
 
   it('G1: a create claimed before a terminate commits finds the service ended and calls nothing', async () => {

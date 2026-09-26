@@ -410,10 +410,12 @@ export class SafeHttpClient {
        * `CONNECTION_LOST_AFTER_SEND` whatever the socket said — `ECONNRESET` after the
        * request was written is exactly the case where the panel may have created,
        * extended or deleted something, and `UNREACHABLE` is on the list of failures
-       * that are safe to replay. A TLS failure is kept: it happens before the request.
+       * that are safe to replay. That includes a TLS error AFTER the handshake — a bad
+       * record or an alert once the request was written — because `connected` is only
+       * set by `secureConnect`, and a TLS failure before it keeps its own kind.
        */
       const failed = (failure: ProviderFailureKind, status: number | null): ProviderHttpResult => {
-        if (write && connected && failure !== 'TLS_FAILED') {
+        if (write && connected) {
           return { ok: false, failure: 'TIMEOUT', status, detail: 'CONNECTION_LOST_AFTER_SEND' };
         }
         return { ok: false, failure, status };

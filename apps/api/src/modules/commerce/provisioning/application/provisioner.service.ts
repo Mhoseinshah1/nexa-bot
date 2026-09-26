@@ -340,6 +340,15 @@ export const PURCHASED_AS: Readonly<Record<OrderPurpose, OperationType>> = {
 };
 
 /**
+ * The service states in which a lost commercial write is still worth a READ (WP15 G2).
+ *
+ * Wider than `OPERATION_LEGAL_FROM`, which decides whether a write may START: a service
+ * that expired or was suspended while its renewal's answer was lost still has the account,
+ * and the read can still say whether the renewal landed.
+ */
+const VERIFIABLE_STATES: readonly ServiceRecord['state'][] = ['ACTIVE', 'SUSPENDED', 'EXPIRED'];
+
+/**
  * Whether what a panel reports holds at least the absolute target a commercial operation
  * persisted (WP15 G2). Pure, and exported for the table test that pins it.
  *
@@ -351,7 +360,16 @@ export const PURCHASED_AS: Readonly<Record<OrderPurpose, OperationType>> = {
 export function allowanceReached(target: OperationTarget, usage: ProviderUsage | null): boolean {
   if (usage === null) return false;
   if (target.expiresAt !== null) {
-    if (usage.expiresAt !== null && usage.expiresAt.getTime() < target.expiresAt.getTime()) {
+    /*
+     * In whole SECONDS. Panels store `expire` as epoch seconds and the adapters send
+     * `floor(ms / 1000)`, while a target counted from "now" carries milliseconds — so
+     * a renewal the panel applied exactly reads up to 999 ms short. Comparing in ms
+     * called every such renewal "not applied" and refunded it.
+     */
+    if (
+      usage.expiresAt !== null &&
+      Math.floor(usage.expiresAt.getTime() / 1000) < Math.floor(target.expiresAt.getTime() / 1000)
+    ) {
       return false;
     }
   }
@@ -1404,7 +1422,10 @@ export class ProvisionerService {
           operation.id,
           'IN_FLIGHT',
           'FAILED',
-          { failureMessage: 'an account with this username exists and nothing shows it is ours' },
+          {
+            failureMessage: 'an account with this username exists and nothing shows it is ours',
+            nextAttemptAt: null,
+          },
           now,
           tx,
         );
@@ -1437,6 +1458,9 @@ export class ProvisionerService {
 
     const actor = this.actor();
     await this.deps.uow.run(scope, async (tx) => {
+      // The service row first: the lock order a TERMINATE and a PROVISION stamp take, so
+      // this transaction queues behind them instead of deadlocking with them.
+      await this.deps.services.lockForUpdate(scope, serviceId, tx);
       await this.deps.operations.transition(
         scope,
         operation.id,
@@ -2126,7 +2150,8 @@ export class ProvisionerService {
         operation.id,
         fromOperationState,
         'SUCCEEDED',
-        {},
+        // The verification's lease date must not outlive the verdict.
+        fromOperationState === 'UNKNOWN' ? { nextAttemptAt: null } : {},
         now,
         tx,
       );
@@ -2267,16 +2292,57 @@ export class ProvisionerService {
   private async verifyOneAllowance(scope: TenantContext, now: Date): Promise<void> {
     const leaseUntil = new Date(now.getTime() + this.deps.leaseMs);
     const operation = await this.deps.uow.run(scope, async (tx) =>
-      this.deps.operations.claimDueVerification(
-        scope,
-        now,
-        leaseUntil,
-        ALLOWANCE_VERIFICATION_READS,
-        tx,
-      ),
+      // The tenant must still accept work, checked in the claim's own transaction.
+      (await this.deps.scopeActivity.scopeIsActive(scope, tx))
+        ? this.deps.operations.claimDueVerification(
+            scope,
+            now,
+            leaseUntil,
+            ALLOWANCE_VERIFICATION_READS,
+            tx,
+          )
+        : null,
     );
     if (operation === null) return;
+    /*
+     * One verification must never abort the tick that claims the next paid operation.
+     * A throw here is not evidence about the write, so it costs this read and nothing
+     * else: the row comes back at its next date, or stops for an operator after the last.
+     */
+    try {
+      await this.verifyClaimed(scope, operation, now);
+    } catch {
+      const lastRead = operation.verificationAttempts >= ALLOWANCE_VERIFICATION_READS;
+      await this.rescheduleVerification(
+        scope,
+        operation,
+        lastRead,
+        'the verification read did not complete',
+        now,
+      );
+    }
+  }
+
+  private async verifyClaimed(
+    scope: TenantContext,
+    operation: OperationRecord,
+    now: Date,
+  ): Promise<void> {
     const target = operation.target;
+    /*
+     * A row claimed past its last read is one whose last read never finished — a crash
+     * between the claim and the answer. It is stopped here, with the operator condition
+     * the finished read would have written, instead of vanishing from the queue.
+     */
+    if (operation.verificationAttempts > ALLOWANCE_VERIFICATION_READS) {
+      return this.rescheduleVerification(
+        scope,
+        operation,
+        true,
+        'the last verification read did not finish',
+        now,
+      );
+    }
     const service = await this.deps.services.findById(scope, operation.serviceId);
     const lastRead = operation.verificationAttempts >= ALLOWANCE_VERIFICATION_READS;
     const again = (note: string, release = false): Promise<void> =>
@@ -2285,9 +2351,9 @@ export class ProvisionerService {
     if (target === null || service === null) {
       return this.rescheduleVerification(scope, operation, true, 'nothing to verify against', now);
     }
-    if (!OPERATION_LEGAL_FROM[operation.type].includes(service.state)) {
-      // The service moved underneath the write — terminated, say. What the purchase is
-      // owed is no longer a comparison a read can make; a person decides.
+    if (!VERIFIABLE_STATES.includes(service.state)) {
+      // The account is gone from Nexa's side — terminated, or never delivered. What the
+      // purchase is owed is no longer a comparison a read can make; a person decides.
       return this.rescheduleVerification(
         scope,
         operation,
@@ -2337,6 +2403,8 @@ export class ProvisionerService {
     if (!found.ok) {
       return again(failureNote(found.failure, found.status, found.detail));
     }
+    // A record without its figures is an incomplete answer, not a verdict (G5).
+    if (found.found && found.usage === null) return again('the account answered without usage');
     if (found.found && allowanceReached(target, found.usage)) {
       await this.recordAllowanceApplied(
         scope,
@@ -2360,6 +2428,9 @@ export class ProvisionerService {
           failureMessage: found.found
             ? 'verified: the panel does not hold what this operation asked for'
             : 'verified: the panel does not have this service’s account',
+          // Cleared, or the announcer reads a FAILED row with a date as one still retrying
+          // and the customer is never told.
+          nextAttemptAt: null,
         },
         readAt,
         tx,
@@ -2530,6 +2601,27 @@ export class ProvisionerService {
         aggregateId: service.id,
         payload: { customerId: service.customerId, from: locked.state, to: 'TERMINATED' },
       });
+      /*
+       * No create ever left for the panel, so nothing can exist there: this terminate is
+       * the transaction that discovers the order cannot be delivered, and CLAUDE.md's
+       * first money rule says the refund is automatic and happens HERE, through the one
+       * credit path. A create that was sent and never answered is different — UNKNOWN is
+       * never refunded automatically; the operator who ended it refunds it, which the
+       * lost create's ABANDONED state now allows.
+       */
+      if (!createEverStarted) {
+        await this.refundPurchase(
+          scope,
+          {
+            orderId: operation.orderId,
+            purchasedAs: 'PROVISION',
+            service: { ...service, state: 'TERMINATED' },
+            reason: 'TERMINATED_BEFORE_PROVISION',
+            now,
+          },
+          tx,
+        );
+      }
       return 'TERMINATED' as const;
     });
     switch (decision) {
