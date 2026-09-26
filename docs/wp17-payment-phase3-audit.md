@@ -217,22 +217,20 @@ Deliberately left out:
 
 ## 5. Evidence
 
-Mutations, each reverted after its run:
-
-| Mutation                                                        | Failed                                                                   |
-| --------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| Wallet read without `customer_id = payment.customer_id`         | Integration: "never shows another customer's wallet entry"               |
-| Refund section included without `refunds.view`                  | Integration: "withholds refunds without refunds.view"                    |
-| Tie-break by kind rank removed from the sort                    | Unit: "orders same-instant entries by the fixed rank"                    |
-| `truncated` computed after slicing                              | Unit: "reports truncation rather than dropping silently"                 |
-| Web card re-sorts entries by `at` instead of the server's order | Web: "renders the entries in the order the server gave, with no control" |
+Fifteen rules, each reverted alone and killed by a named test: `docs/wp17-falsification.md`
+(P17-01..15), registered with the citation check so a renamed test fails the build. The
+first pass cited one test by a title it does not have ("withholds refunds without
+refunds.view"); the record cites it as it is.
 
 Tests added:
 
-- **Unit:** `tests/unit/payment-timeline.test.ts` (7 cases).
+- **Unit:** `tests/unit/payment-timeline.test.ts` (7 cases) and
+  `tests/unit/payment-timeline-sections.test.ts` (4 cases, the section decision over the
+  real permission guard).
 - **Integration:** `tests/integration/payment-timeline.test.ts` (7 cases), plus the new
   route in `tests/integration/route-registration.test.ts`.
-- **Web:** `tests/web/payment-timeline.test.tsx` (3 cases).
+- **Web:** `tests/web/payment-timeline.test.tsx` (6 cases: the card alone, and inside its
+  page through the real route).
 
 Targeted checks run locally:
 
