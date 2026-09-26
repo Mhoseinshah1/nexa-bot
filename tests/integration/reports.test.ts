@@ -737,6 +737,31 @@ describe('WP12 business reports', () => {
     expect(response.body).not.toMatch(/margin|cost|profit/i);
   });
 
+  it('reports credit exactly as the credit card derives it: the tier limit, and debt in the selling currency', async () => {
+    const credit = async () => {
+      const body = reportResellersResponseSchema.parse(
+        (await get(`${REPORT_ROUTES.resellers}?${DAY_D}`)).json(),
+      );
+      const row = body.rows.find((r) => r.resellerCustomerId === ids.r2);
+      return { creditLimit: row?.creditLimit, creditInUse: row?.creditInUse };
+    };
+    // No limit of its own: the tier's applies, and the IRT debt is in use against it.
+    await run(sql`UPDATE resellers SET credit_limit_amount = NULL, credit_limit_currency = NULL
+      WHERE tenant_id = ${tenantA.tenantId} AND customer_id = ${ids.r2}`);
+    expect(await credit()).toEqual({
+      creditLimit: { amountMinor: '100000', currency: 'IRT' },
+      creditInUse: { amountMinor: '30000', currency: 'IRT' },
+    });
+    // A limit in another currency grants no credit here, and the debt still shows — in the
+    // currency it was run up in, never as zero in the limit's.
+    await run(sql`UPDATE resellers SET credit_limit_amount = 50, credit_limit_currency = 'USD'
+      WHERE tenant_id = ${tenantA.tenantId} AND customer_id = ${ids.r2}`);
+    expect(await credit()).toEqual({
+      creditLimit: { amountMinor: '50', currency: 'USD' },
+      creditInUse: { amountMinor: '30000', currency: 'IRT' },
+    });
+  });
+
   it('summarises failures from structured state only', async () => {
     const body = reportFailuresResponseSchema.parse(
       (await get(`${REPORT_ROUTES.failures}?${DAY_D}`)).json(),

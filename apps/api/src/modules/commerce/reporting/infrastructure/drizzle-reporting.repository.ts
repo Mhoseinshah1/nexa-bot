@@ -750,6 +750,7 @@ export class DrizzleReportingRepository implements ReportingRepository {
   async resellers(
     scope: TenantContext,
     window: Window,
+    sellingCurrency: CurrencyCode,
     limit: number,
   ): Promise<readonly ResellerRow[]> {
     const t = tenant(scope);
@@ -761,6 +762,8 @@ export class DrizzleReportingRepository implements ReportingRepository {
       status: string;
       credit_limit_amount: string | null;
       credit_limit_currency: CurrencyCode | null;
+      tier_limit_amount: string;
+      tier_limit_currency: CurrencyCode;
       orders: number;
       sales: { currency: CurrencyCode; amount: string }[] | null;
       services: number;
@@ -783,13 +786,15 @@ export class DrizzleReportingRepository implements ReportingRepository {
       )
       SELECT r.customer_id, tier.name AS tier_name, r.status,
              r.credit_limit_amount::text AS credit_limit_amount, r.credit_limit_currency,
+             tier.credit_limit_amount::text AS tier_limit_amount,
+             tier.credit_limit_currency AS tier_limit_currency,
              coalesce((SELECT sum(n) FROM sold WHERE sold.reseller_customer_id = r.customer_id), 0)::int AS orders,
              (SELECT json_agg(json_build_object('currency', sold.currency, 'amount', sold.amount::text) ORDER BY sold.currency)
                 FROM sold WHERE sold.reseller_customer_id = r.customer_id) AS sales,
              coalesce((SELECT n FROM delivered WHERE delivered.reseller_customer_id = r.customer_id), 0) AS services,
              (SELECT ${signedSum(sql`w`)} FROM wallet_entries w
                WHERE w.tenant_id = r.tenant_id AND w.customer_id = r.customer_id
-                 AND w.currency = r.credit_limit_currency) AS balance
+                 AND w.currency = ${sellingCurrency}) AS balance
         FROM resellers r
         JOIN reseller_tiers tier ON tier.tenant_id = r.tenant_id AND tier.id = r.tier_id
        WHERE r.tenant_id = ${t}
@@ -802,12 +807,12 @@ export class DrizzleReportingRepository implements ReportingRepository {
       orders: row.orders,
       sales: (row.sales ?? []).map((m) => ({ currency: m.currency, amount: BigInt(m.amount) })),
       services: row.services,
-      creditLimit:
+      ownLimit:
         row.credit_limit_currency === null
           ? null
           : { currency: row.credit_limit_currency, amount: BigInt(row.credit_limit_amount ?? '0') },
-      balanceInLimitCurrency:
-        row.credit_limit_currency === null ? null : BigInt(row.balance ?? '0'),
+      tierLimit: { currency: row.tier_limit_currency, amount: BigInt(row.tier_limit_amount) },
+      balanceInSellingCurrency: BigInt(row.balance ?? '0'),
     }));
   }
 
