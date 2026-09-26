@@ -15,6 +15,20 @@ import { fetchPaymentTimeline } from '../api/client';
 import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { Banner, Card, Copyable, DataTable, Empty, Ltr, Money, StateSwitch } from '../ui/kit';
+import { pollUnlessFinalWhile } from '../polling';
+
+/**
+ * How often the history is read again while a notice it shows is still PENDING — the one
+ * delivery state the notification lane will still change (Codex review of #81). Only
+ * then: a history whose notices are all resolved is not polled at all.
+ */
+export const TIMELINE_UNSETTLED_POLL_MS = 15_000;
+
+function hasUnsettledNotice(data: PaymentTimelineResponse): boolean {
+  return data.entries.some(
+    (entry) => entry.kind === 'CUSTOMER_NOTIFIED' && entry.deliveryState === 'PENDING',
+  );
+}
 
 /**
  * A payment's history (WP17, `docs/wp17-payment-phase3-audit.md` D2).
@@ -185,15 +199,23 @@ export function timelineTerminalState(
 export function PaymentTimelineCard({
   paymentId,
   paymentState,
+  sections = '',
 }: {
   paymentId: string;
   /** The state the page's detail request read. Compared, never displayed. */
   paymentState: PaymentState;
+  /**
+   * The viewer's section permissions as they stand, in the cache identity (Codex review of
+   * #81): the server decides what is withheld, so a revoked `receipts.view`, `refunds.view`
+   * or `users.view` must be a NEW question to it, never an old answer kept on screen.
+   */
+  sections?: string;
 }) {
   const queries = useQueryClient();
   const timeline = useQuery({
-    queryKey: ['payment-timeline', paymentId],
+    queryKey: ['payment-timeline', paymentId, sections],
     queryFn: () => fetchPaymentTimeline(paymentId),
+    refetchInterval: pollUnlessFinalWhile(TIMELINE_UNSETTLED_POLL_MS, hasUnsettledNotice),
   });
   const data = timeline.data;
 

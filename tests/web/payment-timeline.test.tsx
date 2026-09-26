@@ -1,8 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ReactElement } from 'react';
 import { screen, waitFor, within } from '@testing-library/react';
 import { resolve } from '../../apps/web/src/app';
-import { PaymentTimelineCard } from '../../apps/web/src/pages/payment-timeline';
+import {
+  PaymentTimelineCard,
+  TIMELINE_UNSETTLED_POLL_MS,
+} from '../../apps/web/src/pages/payment-timeline';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, stubApi } from './harness';
 
@@ -293,6 +296,18 @@ describe('payment timeline card on the payment detail', () => {
     expect(timelineCalls(api.calls)).toHaveLength(1);
   });
 
+  it('asks for the history again when a section permission is revoked on an open page', async () => {
+    const api = stubApi([detailRoute, ...timeline({ entries: [timelineCreated] })]);
+    const page = (permissions: readonly string[]) =>
+      resolve({ path: `/payments/${PAYMENT_ID}`, query: new URLSearchParams() }, permissions)
+        .element as ReactElement;
+    const { rerender } = renderPage(page(['payments.view', 'users.view']));
+    await waitFor(() => expect(timelineCalls(api.calls)).toHaveLength(1));
+    // The session poll drops `users.view`: the wallet section is now the server's to withhold.
+    rerender(page(['payments.view']));
+    await waitFor(() => expect(timelineCalls(api.calls)).toHaveLength(2));
+  });
+
   it('draws no history for a viewer without payments.view', () => {
     const api = stubApi([detailRoute, ...timeline()]);
     const { container } = open(['receipts.view']);
@@ -331,5 +346,76 @@ describe('who resolved a payment', () => {
     await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument());
     expect(container.textContent).toContain(t('web.payment_timeline_by_system'));
     expect(container.textContent).not.toContain(t('web.payment_timeline_by_customer'));
+  });
+});
+
+/**
+ * Codex review of #81: two ways the history went on showing an old answer while the page
+ * stayed open — a delivery the notification lane was still deciding, and a section the
+ * viewer had since lost the permission to see.
+ */
+describe('the history does not keep an answer that has moved', () => {
+  const notice = (deliveryState: string) =>
+    timeline({
+      entries: [
+        timelineCreated,
+        {
+          kind: 'CUSTOMER_NOTIFIED',
+          at: '2026-09-10T12:59:00.000Z',
+          notificationKind: 'PAYMENT_REJECTED',
+          deliveryState,
+          resolvedAt: deliveryState === 'PENDING' ? null : '2026-09-10T13:00:05.000Z',
+        },
+      ],
+    });
+  const timelineReads = (calls: readonly { url: string }[]) =>
+    calls.filter((call) => call.url.includes('/timeline')).length;
+
+  it('reads the history again while a notice it shows is still pending', async () => {
+    const api = stubApi(notice('PENDING'));
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderPage(<PaymentTimelineCard paymentId={PAYMENT_ID} paymentState="PENDING" />);
+      await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument());
+      expect(timelineReads(api.calls)).toBe(1);
+      await vi.advanceTimersByTimeAsync(TIMELINE_UNSETTLED_POLL_MS + 1_000);
+      await waitFor(() => expect(timelineReads(api.calls)).toBeGreaterThanOrEqual(2));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not poll a history whose notices are all resolved', async () => {
+    const api = stubApi(notice('DELIVERED'));
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderPage(<PaymentTimelineCard paymentId={PAYMENT_ID} paymentState="PENDING" />);
+      await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument());
+      await vi.advanceTimersByTimeAsync(TIMELINE_UNSETTLED_POLL_MS * 3);
+      expect(timelineReads(api.calls)).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("asks the server again when the viewer's section permissions change", async () => {
+    const api = stubApi(timeline({ entries: [timelineCreated] }));
+    const { rerender } = renderPage(
+      <PaymentTimelineCard
+        paymentId={PAYMENT_ID}
+        paymentState="PENDING"
+        sections="receipts,refunds,wallet"
+      />,
+    );
+    await waitFor(() => expect(timelineReads(api.calls)).toBe(1));
+    // `users.view` is revoked while the page stays open.
+    rerender(
+      <PaymentTimelineCard
+        paymentId={PAYMENT_ID}
+        paymentState="PENDING"
+        sections="receipts,refunds,"
+      />,
+    );
+    await waitFor(() => expect(timelineReads(api.calls)).toBe(2));
   });
 });

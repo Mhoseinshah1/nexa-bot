@@ -1157,6 +1157,7 @@ export function PaymentDetailPage({
   mayViewRefunds,
   mayIssueRefunds,
   mayViewOrders = false,
+  mayViewWallet = false,
   denied,
 }: {
   id: string;
@@ -1172,9 +1173,20 @@ export function PaymentDetailPage({
    * an order it may not read.
    */
   mayViewOrders?: boolean;
+  /**
+   * `users.view`, the key the history's wallet section sits behind. Never used to draw or
+   * hide anything here — the server decides what is withheld — only to make a change in it
+   * a new question for the history card.
+   */
+  mayViewWallet?: boolean;
   denied: boolean;
 }) {
   const onLink = useLinkHandler();
+  const timelineSections = [
+    mayViewReceipts ? 'receipts' : '',
+    mayViewRefunds ? 'refunds' : '',
+    mayViewWallet ? 'wallet' : '',
+  ].join(',');
   const payment = useQuery({
     queryKey: ['payment', id],
     queryFn: () => fetchPayment(id),
@@ -1579,7 +1591,11 @@ export function PaymentDetailPage({
               It is handed the state this page read, and reads whichever side is older again
               when the two disagree.
             */}
-            <PaymentTimelineCard paymentId={id} paymentState={row.state} />
+            <PaymentTimelineCard
+              paymentId={id}
+              paymentState={row.state}
+              sections={timelineSections}
+            />
 
             <Card>
               <p className="muted">{t('web.payment_not_settled_here')}</p>

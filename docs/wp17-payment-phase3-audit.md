@@ -252,6 +252,15 @@ the older read, and only that side is read again. It is re-read once per disagre
 so two answers that cannot converge cost one extra request, never a loop. A truncated
 history is not compared, because it cannot say.
 
+A fifth round, on `b406e82`, found two more (P17-28..32), both about an answer kept on
+screen after it moved. A notice the history shows as PENDING is still being decided by
+the notification lane, so the card now reads the history again every
+`TIMELINE_UNSETTLED_POLL_MS` (15 s), and only while such a notice is on it. A history
+whose notices are all resolved is not polled at all. The viewer's section permissions
+(`receipts.view`, `refunds.view`, `users.view`) are now part of the card's cache
+identity. A permission revoked while the page is open is therefore a new question to the
+server, which decides what is withheld, instead of the old answer kept on screen.
+
 Tests added:
 
 - **Unit:** `tests/unit/payment-timeline.test.ts` (7 cases) and
