@@ -16,6 +16,20 @@ source restored byte-for-byte before the next mutation (the driver refuses to co
 | G10-06 | a Telegram `9:b:` tap asks and writes nothing                        | `b` mapped to `ADMIN_CUSTOMER` in the `9:` code table               | `telegram-admin-customers.test.ts` › the block button asks first and writes nothing                                                 | KILLED |
 | G10-07 | a Customers-section block is the capture's command, not the update's | `customerBlockCaptureKey` returns the receipt capture's prefix      | `customer-block-surface.test.ts` › a block from the Telegram Customers section is remembered under TELEGRAM, with the capture’s key | KILLED |
 
+## The Codex round
+
+One Codex review of `3b57589` returned three findings. Two were fixed as found; the third was
+half right: Zod 4 already counts a string's length in code points (probed: a 5-code-point,
+8-unit emoji passes `.max(5)` and fails `.max(3)`), so the HTTP schemas needed no change and
+only the Web Admin's DOM `maxLength` — UTF-16 units — was wrong.
+
+| #      | rule                                                                  | mutation                                                          | tests that die                                                                                                         | result |
+| ------ | --------------------------------------------------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ------ |
+| G10-08 | the Web Admin bounds a block reason in code points                    | `reasonTooLong` made `false`                                      | `users.test.tsx` › sends no block until a non-empty reason is typed                                                    | KILLED |
+| G10-09 | a reasonless block an earlier release accepted replays, never refused | the reason check copied back in front of the replay lookup        | `customers-http.test.ts` › replays a reasonless block an earlier release accepted, instead of refusing its retry       | KILLED |
+| G10-10 | migration 0121 marks the old fixed note's rows not shown              | the backfill `UPDATE` replaced by a `SELECT` that matches nothing | `receipt-block-reject.test.ts` › the customers section’s old fixed note is never shown, after migration 0121 marks it  | KILLED |
+| G10-11 | no typed reason is reserved; the shown flag alone decides             | the old sentence's string comparison put back in `blockedReply`   | `receipt-review-caption.test.ts` › names THEIR stored reason, and falls back to the whole blocked sentence without one | KILLED |
+
 G10-03 SURVIVED its first run: no test sent an unblock with a note, so a note stored as
 `blocked_reason` on an ACTIVE customer went unseen. The test cited above was added in the
 same commit as this record, and the mutation re-run against it.
