@@ -21,6 +21,7 @@ import {
   type PaymentReceiptView,
   type PaymentResponse,
   type PaymentSummaryResponse,
+  type PaymentTimelineResponse,
   type ReceiptCreditView,
   type ReceiptDisposition,
   type RefundId,
@@ -56,7 +57,7 @@ import type { PaymentReceiptRecord } from '../../modules/commerce/payments/appli
  * calls the same `PaymentService` and `ReceiptDispositionService` the routes did.
  *
  * What stays is every read: the list with File 02 §21's diagnostic columns, the
- * current-state detail (no timeline), the receipts' metadata and their bytes — which is
+ * current-state detail, its read-only timeline (WP17), the receipts' metadata and their bytes — which is
  * not a mutation, and which §10 says only "does not need to be" shown — and the
  * compensations. Operator refunds are not receipt review and live on their own
  * controller, unchanged.
@@ -136,6 +137,26 @@ export class PaymentsController {
         identities.get(payment.customerId),
         dispositions.get(payment.id) ?? null,
       ),
+    };
+  }
+
+  /**
+   * What has happened to one payment, oldest first (WP17). Read-only: the service assembles
+   * facts other flows recorded, and withholds — by name — each section the viewer lacks the
+   * permission for.
+   */
+  @Get('payments/:id/timeline')
+  async timeline(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+  ): Promise<PaymentTimelineResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const view = await this.container.paymentTimeline.timeline(scope, actor, id);
+    return {
+      paymentId: id,
+      entries: [...view.entries],
+      withheld: [...view.withheld],
+      truncated: view.truncated,
     };
   }
 

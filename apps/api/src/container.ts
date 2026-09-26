@@ -180,6 +180,8 @@ import { TelegramReceiptFiles } from './modules/commerce/payments/infrastructure
 import { PaymentService } from './modules/commerce/payments/application/payment.service.js';
 import { RefundService } from './modules/commerce/payments/application/refund.service.js';
 import { ReceiptDispositionService } from './modules/commerce/payments/application/receipt-disposition.service.js';
+import { PaymentTimelineService } from './modules/commerce/payments/application/payment-timeline.service.js';
+import { DrizzlePaymentTimelineReader } from './modules/commerce/payments/infrastructure/drizzle-payment-timeline.reader.js';
 import { ReceiptCreditCaptureService } from './modules/commerce/payments/application/receipt-credit-capture.service.js';
 import {
   receiptBlockCaptures,
@@ -509,6 +511,12 @@ export interface Container {
    * surface; the Web Admin only READS what it recorded.
    */
   readonly receiptDispositions: ReceiptDispositionService;
+  /**
+   * One payment's history, assembled from facts other flows recorded (WP17). Read-only,
+   * under `payments.view`, with receipts, refunds and wallet movements each behind the
+   * permission that already guards them.
+   */
+  readonly paymentTimeline: PaymentTimelineService;
   /** The Telegram half of the credit-to-wallet disposition: the reviewer's amount capture (D3). */
   readonly receiptCreditCaptures: ReceiptCreditCaptureService;
   /** Block User from the receipt message (WP10 follow-up §4): confirm, reason, block. */
@@ -1725,6 +1733,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     opsLog,
     outbox,
     clock,
+  });
+
+  const paymentTimelineService = new PaymentTimelineService({
+    guard,
+    reader: new DrizzlePaymentTimelineReader(database.db),
   });
 
   /** The append-only record of a receipt's credit-to-wallet disposition (D2). */
@@ -3398,6 +3411,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     paymentGateways: paymentGatewayService,
     refunds: refundService,
     receiptDispositions: receiptDispositionService,
+    paymentTimeline: paymentTimelineService,
     receiptCreditCaptures: receiptCreditCaptureService,
     receiptBlockCaptures: receiptBlockCaptureService,
     receiptRejectCaptures: receiptRejectCaptureService,

@@ -195,6 +195,7 @@ describe('dynamic route registration', () => {
       ['POST', `panels/${id}/test`],
       ['GET', `payments/${id}`],
       ['GET', `payments/${id}/receipts`],
+      ['GET', `payments/${id}/timeline`],
       ['GET', `payments/${id}/receipts/${REFUND_ID}/content`],
       ['POST', `admins/${id}/status`],
       ['POST', `admins/${id}/roles`],
