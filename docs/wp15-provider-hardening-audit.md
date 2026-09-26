@@ -95,8 +95,8 @@ up as open: §4, and `docs/open-questions.md` › `OQ-WP15`.
 Section 3 of the first pass listed G1–G7 as found and not changed, each waiting for a
 decision. The owner decided all seven (PR #79, "owner decisions for the WP15 G1–G7
 findings"); commits `9290086` (contracts) and `7740470` (implementation, migration
-`0121_wp15_provider_provenance` — the number is temporary and is renumbered at
-integration) carry them. Each row separates what the CODE now guarantees from what only
+`0123_wp15_provider_provenance` — written as `0121` on the branch and renumbered at
+integration behind WP10G's `0121` and TonPays' `0122`) carry them. Each row separates what the CODE now guarantees from what only
 a LIVE panel can settle; a row is never closed on the second half by the first.
 
 | Id     | Decision (owner)                                                                                                                                                                | What the code now does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Code-side  | Live-provider evidence                                                                                                                 |
