@@ -1,9 +1,11 @@
-import type { ReactNode } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useEffect, useRef, type ReactNode } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   CustomerNotificationState,
   PaymentMethod,
   PaymentResolvedState,
+  PaymentState,
+  PaymentTimelineResponse,
   PaymentTimelineEntry,
   PaymentTimelineKind,
   PaymentTimelineSection,
@@ -164,12 +166,59 @@ interface Row {
   readonly entry: PaymentTimelineEntry;
 }
 
-export function PaymentTimelineCard({ paymentId }: { paymentId: string }) {
+/**
+ * The terminal state the timeline's own entries record, `'OPEN'` when they record none, or
+ * `null` when a truncated history cannot say.
+ */
+export function timelineTerminalState(
+  data: PaymentTimelineResponse,
+): 'CONFIRMED' | PaymentResolvedState | 'OPEN' | null {
+  if (data.truncated) return null;
+  let state: 'CONFIRMED' | PaymentResolvedState | 'OPEN' = 'OPEN';
+  for (const entry of data.entries) {
+    if (entry.kind === 'PAYMENT_CONFIRMED') state = 'CONFIRMED';
+    else if (entry.kind === 'PAYMENT_RESOLVED') state = entry.state;
+  }
+  return state;
+}
+
+export function PaymentTimelineCard({
+  paymentId,
+  paymentState,
+}: {
+  paymentId: string;
+  /** The state the page's detail request read. Compared, never displayed. */
+  paymentState: PaymentState;
+}) {
+  const queries = useQueryClient();
   const timeline = useQuery({
     queryKey: ['payment-timeline', paymentId],
     queryFn: () => fetchPaymentTimeline(paymentId),
   });
   const data = timeline.data;
+
+  /*
+   * The detail and this card are two requests, so a payment decided between them reaches
+   * one and not the other: a detail still PENDING beside a history that has it confirmed
+   * (Codex review of #81). A payment only ever leaves an open state, so the side that
+   * still reads it open is the older read, and that one is read again. Once per pair of
+   * disagreeing answers, so two answers that cannot converge cost one extra request each,
+   * never a loop.
+   */
+  const reconciled = useRef<string | null>(null);
+  useEffect(() => {
+    if (data === undefined) return;
+    const recorded = timelineTerminalState(data);
+    if (recorded === null) return;
+    const detailOpen = paymentState === 'PENDING' || paymentState === 'UNKNOWN';
+    if (detailOpen ? recorded === 'OPEN' : recorded === paymentState) return;
+    const pair = `${paymentState}:${recorded}`;
+    if (reconciled.current === pair) return;
+    reconciled.current = pair;
+    void queries.invalidateQueries({
+      queryKey: detailOpen ? ['payment', paymentId] : ['payment-timeline', paymentId],
+    });
+  }, [data, paymentState, paymentId, queries]);
 
   return (
     <Card title={t('web.payment_timeline')} hint={t('web.payment_timeline_hint')}>

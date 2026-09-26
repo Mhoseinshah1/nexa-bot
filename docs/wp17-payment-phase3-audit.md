@@ -243,6 +243,15 @@ same page as the refund card, and an answered refund did not re-read it, so the 
 omitted what the operator had just done until the page was reloaded. The refund card's
 refresh now invalidates the payment's timeline as well.
 
+A fourth round, on `148be08`, found one more (P17-24..27). The detail and the history are
+two requests, so a payment decided between them could reach one and not the other: a
+detail still PENDING beside a history that records the confirmation. The card is now
+handed the state the detail read and compares it with the terminal state its own entries
+record. A payment only ever leaves an open state, so the side that still reads it open is
+the older read, and only that side is read again. It is re-read once per disagreeing pair,
+so two answers that cannot converge cost one extra request, never a loop. A truncated
+history is not compared, because it cannot say.
+
 Tests added:
 
 - **Unit:** `tests/unit/payment-timeline.test.ts` (7 cases) and

@@ -52,6 +52,14 @@ const timeline = (overrides: Record<string, unknown> = {}) => [
   },
 ];
 
+const timelineCreated = {
+  kind: 'PAYMENT_CREATED',
+  at: '2026-09-10T12:30:00.000Z',
+  method: 'MANUAL_TRANSFER',
+  amountMinor: '250000',
+  currency: 'IRT',
+};
+
 function rows(): string[] {
   const table = screen.getByRole('table');
   return within(table)
@@ -63,7 +71,9 @@ function rows(): string[] {
 describe('payment timeline card', () => {
   it('renders the entries in the order the server gave, with no control', async () => {
     stubApi(timeline());
-    const { container } = renderPage(<PaymentTimelineCard paymentId={PAYMENT_ID} />);
+    const { container } = renderPage(
+      <PaymentTimelineCard paymentId={PAYMENT_ID} paymentState="FAILED" />,
+    );
 
     await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument());
     expect(rows()).toEqual([
@@ -84,7 +94,7 @@ describe('payment timeline card', () => {
 
   it('names every section it was not allowed to show', async () => {
     stubApi(timeline({ withheld: ['REFUNDS', 'WALLET'] }));
-    renderPage(<PaymentTimelineCard paymentId={PAYMENT_ID} />);
+    renderPage(<PaymentTimelineCard paymentId={PAYMENT_ID} paymentState="FAILED" />);
 
     const banner = await screen.findByText(t('web.payment_timeline_withheld'), { exact: false });
     expect(banner.textContent).toContain(t('web.payment_timeline_withheld_refunds'));
@@ -94,7 +104,7 @@ describe('payment timeline card', () => {
 
   it('says a truncated history is truncated', async () => {
     stubApi(timeline({ truncated: true }));
-    renderPage(<PaymentTimelineCard paymentId={PAYMENT_ID} />);
+    renderPage(<PaymentTimelineCard paymentId={PAYMENT_ID} paymentState="FAILED" />);
 
     expect(await screen.findByText(t('web.payment_timeline_truncated'))).toBeInTheDocument();
   });
@@ -182,6 +192,107 @@ describe('payment timeline card on the payment detail', () => {
     expect(container.textContent).not.toContain(t('web.payment_timeline'));
   });
 
+  /*
+   * Codex review of #81: the detail and the history are two requests, so a payment decided
+   * between them reached one and not the other — a detail still PENDING beside a history
+   * that records the decision. The side that still reads the payment open is the older
+   * read, and it is read again, once.
+   */
+  const detailCalls = (calls: readonly { url: string }[]) =>
+    calls.filter((call) => call.url.endsWith(`/payments/${PAYMENT_ID}`));
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
+
+  it('reads the payment again when its history already records the decision', async () => {
+    // The detail says PENDING; the history (the default fixture) says FAILED.
+    const api = stubApi([detailRoute, ...timeline()]);
+    open(['payments.view']);
+
+    await waitFor(() => expect(detailCalls(api.calls)).toHaveLength(2));
+    await settle();
+    // Once: a stub that keeps answering PENDING is not read a third time.
+    expect(detailCalls(api.calls)).toHaveLength(2);
+    expect(timelineCalls(api.calls)).toHaveLength(1);
+  });
+
+  it('reads the history again when the payment was decided after it', async () => {
+    const api = stubApi([
+      {
+        ...detailRoute,
+        body: {
+          payment: {
+            ...detailRoute.body.payment,
+            state: 'FAILED',
+            resolvedAt: '2026-09-10T13:00:00.000Z',
+            resolvedByAdminId: ADMIN_ID,
+          },
+        },
+      },
+      ...timeline({ entries: [timelineCreated] }),
+    ]);
+    open(['payments.view']);
+
+    await waitFor(() => expect(timelineCalls(api.calls)).toHaveLength(2));
+    await settle();
+    expect(timelineCalls(api.calls)).toHaveLength(2);
+    expect(detailCalls(api.calls)).toHaveLength(1);
+  });
+
+  it('reads a history that still disagrees once, never in a loop', async () => {
+    // Every answer is a NEW history that still records nothing decided, so each one
+    // re-runs the comparison: only the once-per-disagreement rule stops the re-reads.
+    let served = 0;
+    const api = stubApi([
+      {
+        ...detailRoute,
+        body: {
+          payment: {
+            ...detailRoute.body.payment,
+            state: 'FAILED',
+            resolvedAt: '2026-09-10T13:00:00.000Z',
+            resolvedByAdminId: ADMIN_ID,
+          },
+        },
+      },
+      {
+        url: `/payments/${PAYMENT_ID}/timeline`,
+        get body() {
+          served += 1;
+          return {
+            paymentId: PAYMENT_ID,
+            entries: [{ ...timelineCreated, amountMinor: String(250000 + served) }],
+            withheld: [],
+            truncated: false,
+          };
+        },
+      },
+    ]);
+    open(['payments.view']);
+
+    await waitFor(() => expect(timelineCalls(api.calls)).toHaveLength(2));
+    await settle();
+    expect(timelineCalls(api.calls)).toHaveLength(2);
+  });
+
+  it('reads nothing again when a truncated history cannot say', async () => {
+    const api = stubApi([detailRoute, ...timeline({ truncated: true })]);
+    open(['payments.view']);
+
+    await screen.findByText(t('web.payment_timeline_truncated'));
+    await settle();
+    expect(detailCalls(api.calls)).toHaveLength(1);
+    expect(timelineCalls(api.calls)).toHaveLength(1);
+  });
+
+  it('reads nothing again when the payment and its history agree', async () => {
+    const api = stubApi([detailRoute, ...timeline({ entries: [timelineCreated] })]);
+    open(['payments.view']);
+
+    await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument());
+    await settle();
+    expect(detailCalls(api.calls)).toHaveLength(1);
+    expect(timelineCalls(api.calls)).toHaveLength(1);
+  });
+
   it('draws no history for a viewer without payments.view', () => {
     const api = stubApi([detailRoute, ...timeline()]);
     const { container } = open(['receipts.view']);
@@ -204,7 +315,9 @@ describe('who resolved a payment', () => {
 
   it('says a cancelled payment was the customer’s, never the system’s', async () => {
     stubApi(resolved('CANCELLED'));
-    const { container } = renderPage(<PaymentTimelineCard paymentId={PAYMENT_ID} />);
+    const { container } = renderPage(
+      <PaymentTimelineCard paymentId={PAYMENT_ID} paymentState="CANCELLED" />,
+    );
     await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument());
     expect(container.textContent).toContain(t('web.payment_timeline_by_customer'));
     expect(container.textContent).not.toContain(t('web.payment_timeline_by_system'));
@@ -212,7 +325,9 @@ describe('who resolved a payment', () => {
 
   it('still says the system expired a payment nobody resolved', async () => {
     stubApi(resolved('EXPIRED'));
-    const { container } = renderPage(<PaymentTimelineCard paymentId={PAYMENT_ID} />);
+    const { container } = renderPage(
+      <PaymentTimelineCard paymentId={PAYMENT_ID} paymentState="EXPIRED" />,
+    );
     await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument());
     expect(container.textContent).toContain(t('web.payment_timeline_by_system'));
     expect(container.textContent).not.toContain(t('web.payment_timeline_by_customer'));

@@ -1576,8 +1576,10 @@ export function PaymentDetailPage({
               What has happened to this payment, in order (WP17). Read-only, and its own
               request: the server decides which sections this viewer may see and names the
               ones it withheld, so the card never guesses from the permissions it was given.
+              It is handed the state this page read, and reads whichever side is older again
+              when the two disagree.
             */}
-            <PaymentTimelineCard paymentId={id} />
+            <PaymentTimelineCard paymentId={id} paymentState={row.state} />
 
             <Card>
               <p className="muted">{t('web.payment_not_settled_here')}</p>

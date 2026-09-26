@@ -957,7 +957,20 @@ describe('the refund card', () => {
       ...withRefunds([refundRow()], { consumedMinor: '100000', refundableMinor: '150000' }),
       {
         url: `/payments/${ROW_ID}/timeline`,
-        body: { paymentId: ROW_ID, entries: [], withheld: [], truncated: false },
+        // Agrees with the CONFIRMED detail, so the only second read is the refund's.
+        body: {
+          paymentId: ROW_ID,
+          entries: [
+            {
+              kind: 'PAYMENT_CONFIRMED',
+              at: '2026-09-10T12:45:00.000Z',
+              evidenceKind: 'OPERATOR_REVIEW',
+              adminId: ADMIN_ID,
+            },
+          ],
+          withheld: [],
+          truncated: false,
+        },
       },
       {
         url: `/refunds/${REFUND_ID}/completion`,
