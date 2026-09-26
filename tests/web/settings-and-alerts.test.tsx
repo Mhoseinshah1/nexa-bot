@@ -1189,7 +1189,9 @@ describe('system and operations', () => {
     expect(await screen.findByText('صفحهٔ لاگ عمومی وجود ندارد')).toBeInTheDocument();
     // No tab leads to one, and nothing on the page is a log browser.
     const tabs = screen.getAllByRole('tab').map((tab) => tab.textContent);
-    expect(tabs).toEqual(['وضعیت', 'پایش', 'مدیران']);
+    // WP16's diagnostics tab is a queue of stuck work, not a log browser: it reads
+    // counts and the oldest rows of two lanes and links each to its entity.
+    expect(tabs).toEqual(['وضعیت', 'عیب‌یابی', 'پایش', 'مدیران']);
     expect(screen.getByText(/گروه گزارش تلگرام/)).toBeInTheDocument();
   });
 });

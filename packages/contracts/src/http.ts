@@ -344,6 +344,83 @@ export type MonitorProfile = z.infer<typeof monitorProfileSchema>;
 export const monitorProfileResponseSchema = z.object({ monitor: monitorProfileSchema });
 export type MonitorProfileResponse = z.infer<typeof monitorProfileResponseSchema>;
 
+// --- Operational diagnostics (WP16) ---------------------------------------------------
+
+/**
+ * What is stuck, and where, for an operator (`docs/wp16-admin-ops-audit.md` D2).
+ *
+ * READ-ONLY and tenant-scoped. It moves nothing, and every remedy it points to is an
+ * existing single-entity action with its own state machine — a service's reconcile or
+ * retry-provision, reached by opening the service. There is no "force", no "mark done"
+ * and no bulk action here, by the owner's rule.
+ *
+ * The outbox half shows the calling tenant's own messages only: a platform message
+ * (`tenant_id` NULL) is not a tenant operator's to see. No payload and no actor is
+ * returned; `lastError` is truncated and has URLs replaced before it leaves the server.
+ */
+export const SYSTEM_DIAGNOSTICS_SAMPLE_MAX = 20;
+
+/** Why a provisioning operation is listed as stuck. Derived from its row, never stored. */
+export const STUCK_OPERATION_REASONS = [
+  /** A mutation whose outcome was lost; the service waits for a RECONCILE (a READ). */
+  'UNKNOWN_OUTCOME',
+  /** Claimed by a worker whose lease has run out. The sweeps re-home it. */
+  'LEASE_EXPIRED',
+  /** Waiting for another attempt after at least one failure. */
+  'RETRYING',
+  /** Terminal for more than ten minutes and the customer has not been answered. */
+  'UNANNOUNCED',
+] as const;
+export type StuckOperationReason = (typeof STUCK_OPERATION_REASONS)[number];
+
+/** How long a terminal operation may wait for its announcement before it is listed. */
+export const UNANNOUNCED_GRACE_MS = 10 * 60 * 1000;
+
+export const systemDiagnosticsResponseSchema = z.object({
+  generatedAt: z.iso.datetime(),
+  outbox: z.object({
+    /** Unpublished messages of this tenant. */
+    pending: z.number().int().nonnegative(),
+    oldestPendingAt: z.iso.datetime().nullable(),
+    /** Unpublished messages that have failed at least once. */
+    failing: z.number().int().nonnegative(),
+    /** The oldest failing messages, at most `SYSTEM_DIAGNOSTICS_SAMPLE_MAX`. */
+    failingSample: z.array(
+      z.object({
+        id: z.string(),
+        eventType: z.string(),
+        aggregateType: z.string(),
+        attempts: z.number().int(),
+        occurredAt: z.iso.datetime(),
+        lastError: z.string().nullable(),
+      }),
+    ),
+  }),
+  provisioning: z.object({
+    counts: z.object({
+      UNKNOWN_OUTCOME: z.number().int().nonnegative(),
+      LEASE_EXPIRED: z.number().int().nonnegative(),
+      RETRYING: z.number().int().nonnegative(),
+      UNANNOUNCED: z.number().int().nonnegative(),
+    }),
+    /** The oldest stuck operations across the four reasons, at most the sample maximum. */
+    sample: z.array(
+      z.object({
+        operationId: z.string(),
+        serviceId: z.string(),
+        type: z.enum(OPERATION_TYPES),
+        state: z.enum(OPERATION_STATES),
+        reason: z.enum(STUCK_OPERATION_REASONS),
+        attempts: z.number().int(),
+        nextAttemptAt: z.iso.datetime().nullable(),
+        createdAt: z.iso.datetime(),
+        updatedAt: z.iso.datetime(),
+      }),
+    ),
+  }),
+});
+export type SystemDiagnosticsResponse = z.infer<typeof systemDiagnosticsResponseSchema>;
+
 /**
  * Build metadata. Requires an authenticated session.
  *
@@ -1146,6 +1223,8 @@ export const CONTROL_ROUTES = {
   systemReadiness: '/system/readiness',
   /** What the background panel monitor is configured to do. Read-only. */
   systemMonitor: '/system/monitor',
+  /** Outbox backlog and stuck provisioning operations. Read-only; `opslog.view`. */
+  systemDiagnostics: '/system/diagnostics',
 } as const;
 
 // ---------------------------------------------------------------------------
