@@ -68,14 +68,15 @@ the refund the owner saw:
   `PROVISION_CYCLE_EXHAUSTED` refunds.
 
 The second reading is **reproduced through the shipped container** by
-`rickpanel-new-service.test.ts` › bounds a create the panel keeps answering 422. The
-provisioner drains everything due in a single tick, so the whole cycle runs inside it.
-The trail on the panel is `CREATE, READ, CREATE, READ, CREATE, READ`, the order ends
-REFUNDED with exactly one refund, and later sweeps create nothing more.
+`rickpanel-new-service.test.ts` › bounds a create the panel keeps answering 422. Since
+WP15 G3 one absence after a create is undecided: the reconcile reads again a backoff
+later, and only the second absence re-plans the create. The trail on the panel is
+`CREATE, READ, READ` three times over, the order ends REFUNDED with exactly one refund,
+and later sweeps create nothing more.
 
 That cycle is bounded and safe:
 
-- no create goes out without a READ between it and the last one;
+- no create goes out without two READs, a backoff apart, between it and the last one;
 - nothing is refunded while the outcome is unknown;
 - the refund happens once.
 

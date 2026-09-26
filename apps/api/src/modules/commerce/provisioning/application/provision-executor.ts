@@ -10,6 +10,7 @@ import {
   type OperationState,
   type OperationType,
   type ProviderAdapter,
+  type ProviderFailureDetail,
   type ProviderFailureKind,
   type ProviderServiceTarget,
   type ProviderAllowancePlan,
@@ -55,7 +56,12 @@ export type ExecutionRefusal =
    * attempt spent — because anything else would be this worker racing the one that
    * legitimately holds the operation.
    */
-  | 'LEASE_LOST';
+  | 'LEASE_LOST'
+  /**
+   * WP15 G1: a TERMINATE met a create that is on the wire for the same service. Put back,
+   * because whether the account exists is decided the moment that create answers.
+   */
+  | 'PROVISION_IN_FLIGHT';
 
 /**
  * What a tick did, and enough about it to write one log line.
@@ -115,6 +121,27 @@ export type ExecutionResult =
  */
 export const BACKOFF_BASE_MS = 30_000;
 export const BACKOFF_CEILING_MS = 15 * 60_000;
+
+/**
+ * RECONCILE rounds a lost create gets before an operator must decide (WP15 G4).
+ *
+ * A round is one RECONCILE operation with its own attempt ceiling and backoff. The first
+ * round is the ordinary one; if every attempt in it fails to read the panel, ONE more
+ * round is planned automatically, and when that one fails too the service waits for a
+ * person. Counted on the UNKNOWN row (`verification_attempts`), so a restart neither
+ * resets the budget nor spends it twice.
+ */
+export const RECONCILE_ROUNDS = 2;
+
+/**
+ * Verification READS an ambiguous RENEW / ADD_TRAFFIC / ADD_TIME gets (WP15 G2).
+ *
+ * The write is never sent again by this path; the account is looked at, at most this
+ * many times on the ordinary backoff, and compared with the absolute target the
+ * operation persisted. Still undecided after the last read, the row stays `UNKNOWN`, no
+ * money moves, and an operator is told.
+ */
+export const ALLOWANCE_VERIFICATION_READS = 3;
 
 export function backoffMs(attempts: number): number {
   if (attempts <= 1) return BACKOFF_BASE_MS;
@@ -199,8 +226,15 @@ export function outcomeFor(
  * — a closed vocabulary and a number — and between them they name the remedy, which is
  * the whole job of this column.
  */
-export function failureNote(failure: ProviderFailureKind, status: number | null): string {
-  return status === null ? failure : `${failure} (HTTP ${String(status)})`;
+export function failureNote(
+  failure: ProviderFailureKind,
+  status: number | null,
+  detail?: ProviderFailureDetail,
+): string {
+  const base = status === null ? failure : `${failure} (HTTP ${String(status)})`;
+  // The adapter's closed-vocabulary case, never a panel's words (WP15 G5, G6): what lets
+  // an operator tell "the record has no usage figure" from "the account is not there".
+  return detail === undefined ? base : `${base}: ${detail}`;
 }
 
 /**
@@ -547,6 +581,7 @@ export type ReconcileVerdict =
       readonly kind: 'UNDECIDED';
       readonly failure: ProviderFailureKind;
       readonly status: number | null;
+      readonly detail?: ProviderFailureDetail;
     };
 
 export async function reconcileCall(
@@ -556,7 +591,11 @@ export async function reconcileCall(
   ref: ProviderUserRef,
 ): Promise<ReconcileVerdict> {
   const found = await adapter.lookupUser(target, http, ref);
-  if (!found.ok) return { kind: 'UNDECIDED', failure: found.failure, status: found.status };
+  if (!found.ok) {
+    return found.detail === undefined
+      ? { kind: 'UNDECIDED', failure: found.failure, status: found.status }
+      : { kind: 'UNDECIDED', failure: found.failure, status: found.status, detail: found.detail };
+  }
   if (!found.found) return { kind: 'ABSENT' };
   return {
     kind: 'ADOPT',

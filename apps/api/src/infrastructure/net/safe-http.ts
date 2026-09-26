@@ -210,8 +210,12 @@ function trustAnchors(): readonly string[] {
  */
 interface Deadline {
   expired(): boolean;
-  /** The socket phase registers its own abort here. At most one subscriber. */
-  onExpire(abort: () => void): void;
+  /**
+   * The socket phase registers its own abort here. At most one subscriber. What it
+   * returns is what the attempt settles with, so a write that was in flight keeps its
+   * `CONNECTION_LOST_AFTER_SEND` rather than losing the race to a bare TIMEOUT.
+   */
+  onExpire(abort: () => ProviderHttpResult): void;
   /** Resolves with TIMEOUT if `work` has not settled by then. */
   race(work: Promise<ProviderHttpResult>): Promise<ProviderHttpResult>;
   cancel(): void;
@@ -219,14 +223,13 @@ interface Deadline {
 
 function startDeadline(totalTimeoutMs: number): Deadline {
   let fired = false;
-  let abort: (() => void) | null = null;
+  let abort: (() => ProviderHttpResult) | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
 
   const expiry = new Promise<ProviderHttpResult>((resolve) => {
     timer = setTimeout(() => {
       fired = true;
-      abort?.();
-      resolve({ ok: false, failure: 'TIMEOUT', status: null });
+      resolve(abort?.() ?? { ok: false, failure: 'TIMEOUT', status: null });
     }, totalTimeoutMs);
     timer.unref?.();
   });
@@ -308,17 +311,27 @@ export class SafeHttpClient {
     const verdict = checkUrl(target.toString(), this.options);
     if (!verdict.allowed) return { ok: false, failure: 'BLOCKED_TARGET', status: null };
 
-    let failure: ProviderFailureKind = 'UNREACHABLE';
-    let status: number | null = null;
+    let last: ProviderHttpResult = { ok: false, failure: 'UNREACHABLE', status: null };
 
-    for (let attempt = 0; attempt <= this.options.maxRetries; attempt += 1) {
+    /*
+     * Only a READ is ever retried here (WP15 H4, `docs/wp15-provider-hardening-audit.md`).
+     *
+     * A transient failure after a write was sent — a timeout, a socket that died — does
+     * not say the panel did not act, and a second POST is a second account, a second
+     * rotation, a second anything. Whether a write may be tried again is decided by the
+     * operation layer, which knows what the write was (`IDEMPOTENT_MUTATIONS`,
+     * `failureOutcome`), never by a transport loop. `PANEL_HTTP_RETRIES` is 0 today, so
+     * this changes nothing that runs; it is what keeps raising that constant from
+     * quietly turning into duplicate creates.
+     */
+    const budget = requestEffect(request) === 'READ' ? this.options.maxRetries : 0;
+    for (let attempt = 0; attempt <= budget; attempt += 1) {
       const outcome = await this.attempt(verdict.url, request);
       if (outcome.ok) return outcome;
-      failure = outcome.failure;
-      status = outcome.status;
+      last = outcome;
       if (!isTransient(outcome.failure)) break;
     }
-    return { ok: false, failure, status };
+    return last;
   }
 
   /**
@@ -371,9 +384,16 @@ export class SafeHttpClient {
     const secure = url.protocol === 'https:';
     const send = secure ? httpsRequest : httpRequest;
 
+    const write = requestEffect(request) === 'WRITE';
+
     return new Promise<ProviderHttpResult>((resolve) => {
       let settled = false;
       let outgoing: ClientRequest | null = null;
+      // Whether bytes of THIS request can have reached the panel (WP15 G6): the TCP
+      // connection is up, and over TLS the handshake is done — before that nothing the
+      // panel could act on has left. From here on, a failure of a WRITE is not
+      // "unreachable", it is "no answer to something that may have happened".
+      let connected = false;
 
       const finish = (result: ProviderHttpResult): void => {
         if (settled) return;
@@ -382,12 +402,33 @@ export class SafeHttpClient {
         resolve(result);
       };
 
+      /*
+       * A failure, as the caller must read it.
+       *
+       * A READ keeps its kind: a GET lost mid-flight changed nothing and may be asked
+       * again. A WRITE whose connection was up is reported as `TIMEOUT` with
+       * `CONNECTION_LOST_AFTER_SEND` whatever the socket said — `ECONNRESET` after the
+       * request was written is exactly the case where the panel may have created,
+       * extended or deleted something, and `UNREACHABLE` is on the list of failures
+       * that are safe to replay. That includes a TLS error AFTER the handshake — a bad
+       * record or an alert once the request was written — because `connected` is only
+       * set by `secureConnect`, and a TLS failure before it keeps its own kind.
+       */
+      const failed = (failure: ProviderFailureKind, status: number | null): ProviderHttpResult => {
+        if (write && connected) {
+          return { ok: false, failure: 'TIMEOUT', status, detail: 'CONNECTION_LOST_AFTER_SEND' };
+        }
+        return { ok: false, failure, status };
+      };
+
       // The deadline started before resolution and is owned by `attempt`. All
       // this phase does is give it something to abort: a per-socket timeout
       // would not bound a server that sends a byte every few seconds forever,
       // and would not have bounded the resolver at all.
       deadline.onExpire(() => {
-        finish({ ok: false, failure: 'TIMEOUT', status: null });
+        const result = failed('TIMEOUT', null);
+        finish(result);
+        return result;
       });
       // `onExpire` fires synchronously when the deadline is already gone, so
       // the attempt can be settled before there is anything to send. Opening
@@ -534,11 +575,7 @@ export class SafeHttpClient {
               });
             });
             response.on('error', (error: unknown) => {
-              finish({
-                ok: false,
-                failure: failureFromError(error, deadline.expired()),
-                status: code,
-              });
+              finish(failed(failureFromError(error, deadline.expired()), code));
             });
           },
         );
@@ -547,14 +584,24 @@ export class SafeHttpClient {
         return;
       }
 
+      outgoing.on('socket', (socket) => {
+        socket.once(secure ? 'secureConnect' : 'connect', () => {
+          connected = true;
+        });
+      });
       outgoing.on('error', (error: unknown) => {
-        finish({ ok: false, failure: failureFromError(error, deadline.expired()), status: null });
+        finish(failed(failureFromError(error, deadline.expired()), null));
       });
 
       if (body !== null) outgoing.write(body.payload);
       outgoing.end();
     });
   }
+}
+
+/** READ or WRITE: what the adapter declared, else GET is a read and anything else a write. */
+function requestEffect(request: ProviderHttpRequest): 'READ' | 'WRITE' {
+  return request.effect ?? (request.method === 'GET' ? 'READ' : 'WRITE');
 }
 
 function encodeBody(

@@ -632,6 +632,19 @@ export interface OperationRecord {
   readonly failureKind: ProviderFailureKind | null;
   readonly failureMessage: string | null;
   readonly completedAt: Date | null;
+  /**
+   * WP15 G7. When the panel answered THIS PROVISION's create with a success whose
+   * follow-up then failed. The one durable provenance a RECONCILE may adopt on; null on
+   * every other type and on a create that timed out, 5xx'd or was refused.
+   */
+  readonly createAcceptedAt: Date | null;
+  /** WP15 G3. When this RECONCILE first read the account absent. RECONCILE only. */
+  readonly absenceObservedAt: Date | null;
+  /**
+   * WP15 G2, G4. Verification rounds spent on an `UNKNOWN` row: RECONCILE rounds planned
+   * for a lost create, or verification READS of a lost commercial write. Never writes.
+   */
+  readonly verificationAttempts: number;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -670,6 +683,13 @@ export interface OperationDraft {
    * which is the property `IDEMPOTENT_MUTATIONS` now depends on for these three types.
    */
   readonly target?: OperationTarget | null;
+  /**
+   * The earliest moment the row may be claimed. Absent means now.
+   *
+   * WP15 G3: a RECONCILE of a create the panel may still be propagating is not asked
+   * the instant it is planned — the first read waits one backoff.
+   */
+  readonly notBefore?: Date;
 }
 
 export interface OperationRepository {
@@ -868,9 +888,75 @@ export interface OperationRepository {
       readonly failureMessage?: string | null;
       readonly nextAttemptAt?: Date | null;
       readonly completedAt?: Date | null;
+      /** WP15 G7: the create was answered 2xx. PROVISION only; the CHECK refuses others. */
+      readonly createAcceptedAt?: Date;
+      /** WP15 G3: this reconcile's first absence. RECONCILE only. */
+      readonly absenceObservedAt?: Date;
     },
     now: Date,
     tx: TransactionScope,
+  ): Promise<boolean>;
+
+  /**
+   * WP15 G7: whether this service has DURABLE evidence that one of its creates reached
+   * the panel and was accepted — a PROVISION stamped `create_accepted_at`, or one that
+   * SUCCEEDED. A username that a lookup finds is not evidence; this is.
+   */
+  hasCreateProvenance(scope: TenantContext, serviceId: string, tx?: unknown): Promise<boolean>;
+
+  /**
+   * WP15 G4: counts one more RECONCILE round against a lost create, conditionally on the
+   * count the caller read, so two replicas planning the same round agree on one.
+   */
+  countReconcileRound(
+    scope: TenantContext,
+    id: string,
+    seen: number,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean>;
+
+  /**
+   * WP15 G4: spends every remaining RECONCILE round of a service's lost creates, so the
+   * queue stops planning reads that cannot change the answer.
+   */
+  exhaustReconcileRounds(
+    scope: TenantContext,
+    serviceId: string,
+    rounds: number,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<number>;
+
+  /**
+   * WP15 G2: claims ONE ambiguous commercial write whose verification READ is due.
+   *
+   * `UNKNOWN`, a commercial type, `next_attempt_at` due, fewer than `maxReads` reads, and
+   * no sibling in flight. The claim is a conditional bump of `next_attempt_at` to
+   * `leaseUntil` and of `verification_attempts`, so a crashed reader delays the next
+   * read by one lease and never loses the row, and two replicas never read it twice.
+   */
+  claimDueVerification(
+    scope: TenantContext,
+    now: Date,
+    leaseUntil: Date,
+    maxReads: number,
+    tx: TransactionScope,
+  ): Promise<OperationRecord | null>;
+
+  /**
+   * WP15 G2: the next verification of an `UNKNOWN` commercial write, or null for none —
+   * the reads are spent and an operator decides. Conditional on the row still `UNKNOWN`.
+   */
+  rescheduleVerification(
+    scope: TenantContext,
+    id: string,
+    nextAttemptAt: Date | null,
+    note: string,
+    now: Date,
+    tx: TransactionScope,
+    /** Give the read back: the claim counted one and nothing was read (a busy budget). */
+    releaseRead?: boolean,
   ): Promise<boolean>;
 
   /**
@@ -957,7 +1043,7 @@ export interface OperationRepository {
   resolveUnknownForService(
     scope: TenantContext,
     serviceId: string,
-    to: Extract<OperationState, 'SUCCEEDED' | 'FAILED'>,
+    to: Extract<OperationState, 'SUCCEEDED' | 'FAILED' | 'ABANDONED'>,
     now: Date,
     tx: TransactionScope,
   ): Promise<number>;
