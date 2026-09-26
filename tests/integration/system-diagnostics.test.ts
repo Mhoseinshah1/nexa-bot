@@ -246,6 +246,28 @@ describe('system diagnostics', () => {
     });
   });
 
+  it('shows tenant B none of tenant A’s stuck operations or failing messages', async () => {
+    // Tenant A has one of each: an operation stuck in UNKNOWN and an outbox message that keeps
+    // failing. The isolation test above only reads pending counts, which cannot see a sample.
+    const unknown = await provisionFor(await paidOrder('iso-stuck'));
+    await exec(sql`UPDATE provisioning_operations SET state = 'UNKNOWN', attempts = 1
+                    WHERE id = ${unknown}`);
+    await exec(sql`UPDATE outbox_messages SET attempts = 3, last_error = 'consumer failed'
+                    WHERE tenant_id = ${tenantA.tenantId}`);
+    const mine = await ctx.container.diagnostics.read(tenantA, owner);
+    expect(mine.provisioning.counts.UNKNOWN_OUTCOME).toBe(1);
+    expect(mine.outbox.failingSample.length).toBeGreaterThan(0);
+
+    const foreign = adminActorFor(
+      await createAdmin(ctx.container, tenantB, { username: 'owner-b-iso', roleKeys: ['owner'] }),
+    );
+    const other = await ctx.container.diagnostics.read(tenantB, foreign);
+    expect(other.provisioning.counts.UNKNOWN_OUTCOME).toBe(0);
+    expect(other.provisioning.sample).toEqual([]);
+    expect(other.outbox.failing).toBe(0);
+    expect(other.outbox.failingSample).toEqual([]);
+  });
+
   it('changes nothing it reads', async () => {
     await paidOrder('readonly');
     const snapshot = async () =>
