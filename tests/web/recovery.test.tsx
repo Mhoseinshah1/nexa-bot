@@ -185,8 +185,8 @@ describe('the recovery page', () => {
       // which keys `PLANNED_SURFACES` still holds, so this cannot silently stop
       // checking a surface that is still planned. `/discounts` left in WP8 on the same
       // terms, and `discounts.test.tsx` asserts the live page at that path. `/resellers`
-      // left in WP9-B, and `resellers.test.tsx` asserts the live page there.
-      '/reports',
+      // left in WP9-B, and `resellers.test.tsx` asserts the live page there. `/reports`
+      // left in WP12, and `reports.test.tsx` asserts the live page there.
       '/bots',
     ]) {
       const resolved = resolve({ path, query: new URLSearchParams() }, ALL);

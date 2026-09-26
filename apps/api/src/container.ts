@@ -10,6 +10,7 @@ import {
 import type {
   AuditWriter,
   Clock,
+  CurrencyCode,
   IdGenerator,
   IdempotencyStore,
   Logger,
@@ -243,6 +244,11 @@ import { ReferralProgram } from './modules/commerce/referrals/application/referr
 import { TelegramBotUsernames } from './modules/commerce/referrals/infrastructure/telegram-bot-username.js';
 import { ReferralCommissionService } from './modules/commerce/referrals/application/referral-commission.service.js';
 import { ReferralReadService } from './modules/commerce/referrals/application/referral-read.service.js';
+import { ReportAccess } from './modules/commerce/reporting/application/report-access.js';
+import { ReportingService } from './modules/commerce/reporting/application/reporting.service.js';
+import { DrizzleReportingRepository } from './modules/commerce/reporting/infrastructure/drizzle-reporting.repository.js';
+import { DefaultReportExportWriter } from './infrastructure/export/report-export-writer.js';
+import { IntlReportPeriodResolver } from './infrastructure/time/report-calendar.js';
 import {
   DrizzleReferralCommissionRepository,
   DrizzleReferralRepository,
@@ -506,6 +512,8 @@ export interface Container {
   readonly referralCommissions: ReferralCommissionService;
   /** WP9: the operator's read-only view of attributions and commissions. */
   readonly referralsRead: ReferralReadService;
+  /** WP12's business reports, Super Admin only (`docs/wp12-business-analytics-audit.md`). */
+  readonly reports: ReportingService;
   readonly referralSignupGifts: ReferralSignupGiftService;
   readonly tenantMedia: TenantMediaService;
   /** WP9-B: a reseller's standing, entitlements, pricing layer, credit and purchase record. */
@@ -2303,6 +2311,17 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   // One reader for the resolver and the preview, so both show a tenant's dates the
   // same way and share one cache.
   const templatePresentation = new CachedTenantPresentationReader(tenants, clock);
+  const reportingService = new ReportingService({
+    access: new ReportAccess(guard, admins, opsLog),
+    repository: new DrizzleReportingRepository(database.db),
+    periods: new IntlReportPeriodResolver(),
+    presentation: templatePresentation,
+    salesCurrency: {
+      salesCurrency: (scope) => settingsResolver.valueOf<CurrencyCode>(scope, 'sales.currency'),
+    },
+    writer: new DefaultReportExportWriter(),
+    clock,
+  });
   const templateResolver = new TemplateResolver(
     templateRepository,
     featureFlagResolver,
@@ -3489,6 +3508,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     referrals: referralProgram,
     referralCommissions: referralCommissionService,
     referralsRead: referralReadService,
+    reports: reportingService,
     referralSignupGifts: referralSignupGiftService,
     tenantMedia: tenantMediaService,
     resellers: resellerService,

@@ -19,6 +19,7 @@ import {
   LEDGER_REASONS,
   marzbanActivationSchema,
   metricDefinition,
+  METRIC_DEFINITIONS,
   NexaError,
   PRICING_PRECEDENCE,
   providerDescriptor,
@@ -107,9 +108,17 @@ describe('error taxonomy', () => {
 });
 
 describe('metric registry', () => {
-  it('starts empty rather than aspirational, and refuses an unregistered name', () => {
+  it('refuses an unregistered name, and registers only what WP12 computes', () => {
     expect(isRegisteredMetric('total_revenue')).toBe(false);
     expect(() => metricDefinition('total_revenue')).toThrow();
+    expect(metricDefinition('sales.revenue').timestampBasis).toBe('PAID_AT');
+    // No profit, margin or cost metric exists, and none may be registered by accident.
+    expect(METRIC_DEFINITIONS.some((m) => /profit|margin|cost/i.test(m.name))).toBe(false);
+  });
+
+  it('gives every metric exactly one entry', () => {
+    const names = METRIC_DEFINITIONS.map((m) => m.name);
+    expect(new Set(names).size).toBe(names.length);
   });
 });
 

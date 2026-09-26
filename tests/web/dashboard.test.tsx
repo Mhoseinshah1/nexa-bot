@@ -259,8 +259,10 @@ describe('the dashboard', () => {
     for (const abbreviation of ['میلیون', 'میلیارد', 'هزار']) {
       expect(text, abbreviation).not.toContain(abbreviation);
     }
-    // And it says why there is no revenue tile, rather than leaving a gap.
-    expect(screen.getByText(/سفارش، پرداخت و مشتری/)).toBeInTheDocument();
+    // WP12: money appears on this page only in the owner's business section, from server
+    // aggregates. Without the owner role there is no business section at all
+    // (`reports.test.tsx` asserts that nothing is even fetched).
+    expect(screen.queryByText('گزارش کسب‌وکار')).toBeNull();
   });
 
   /**

@@ -30,6 +30,8 @@ import { UsersPage, UserDetailPage } from './pages/users';
 import { TrialsPage } from './pages/trials';
 import { DiscountsPage } from './pages/discounts';
 import { ReferralsPage } from './pages/referrals';
+import { ReportsPage } from './pages/business';
+import { isSuperAdmin, mayExportReports } from './report-view';
 import { ResellersPage } from './pages/resellers';
 import { ResellerTiersPage } from './pages/reseller-tiers';
 
@@ -126,6 +128,12 @@ interface NavEntry {
    */
   readonly permission: string | readonly string[] | null;
   readonly group: WebKey;
+  /**
+   * WP12: shown only to the Super Admin — the owner role AND the permission. The server
+   * refuses anyone else on every report route; this only stops drawing a link to a page
+   * that would answer 403 (`docs/wp12-business-analytics-audit.md` §2).
+   */
+  readonly ownerOnly?: boolean;
 }
 
 /**
@@ -136,7 +144,12 @@ interface NavEntry {
  * prevent — a page with two capabilities hidden from an actor who holds one —
  * is invisible from the outside.
  */
-export function navPermitted(entry: NavEntry, permissions: readonly string[]): boolean {
+export function navPermitted(
+  entry: NavEntry,
+  permissions: readonly string[],
+  roleKeys: readonly string[] = [],
+): boolean {
+  if (entry.ownerOnly === true && !isSuperAdmin(roleKeys, permissions)) return false;
   if (entry.permission === null) return true;
   const needed = typeof entry.permission === 'string' ? [entry.permission] : entry.permission;
   return needed.some((permission) => permissions.includes(permission));
@@ -353,6 +366,7 @@ export const NAV: readonly NavEntry[] = [
     icon: 'reports',
     permission: 'reports.view',
     group: 'web.navgroup_sales',
+    ownerOnly: true,
   },
   {
     id: 'panels',
@@ -503,9 +517,14 @@ interface Resolved {
  * eighteen assertions green while the navigation link fell through to
  * `NotFound`. Nothing exercised this function at all.
  */
-export function resolve(route: Route, permissions: readonly string[]): Resolved {
+export function resolve(
+  route: Route,
+  permissions: readonly string[],
+  roleKeys: readonly string[] = [],
+): Resolved {
   const may = (permission: string | null): boolean =>
     permission === null || permissions.includes(permission);
+  const superAdmin = isSuperAdmin(roleKeys, permissions);
 
   const nav = (id: string): { label: string; href: string } => {
     const entry = NAV.find((candidate) => candidate.id === id);
@@ -514,7 +533,7 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
 
   if (route.path === '/') {
     return {
-      element: <DashboardPage permissions={permissions} />,
+      element: <DashboardPage permissions={permissions} route={route} superAdmin={superAdmin} />,
       crumbs: [{ label: t('web.nav_overview') }],
       title: t('web.nav_overview'),
     };
@@ -717,6 +736,8 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
           // `settings.edit`, both charged by `TenantMediaService` on their own.
           mayViewBanner={may('settings.view')}
           mayEditBanner={may('settings.edit')}
+          superAdmin={superAdmin}
+          mayExportReports={mayExportReports(roleKeys, permissions)}
         />
       ),
       crumbs: [{ label: t('web.referrals_title') }],
@@ -972,6 +993,20 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
       element: <SystemPage route={route} permissions={permissions} />,
       crumbs: [{ label: t('web.nav_system') }],
       title: t('web.nav_system'),
+    };
+  }
+
+  if (route.path === '/reports') {
+    return {
+      element: (
+        <ReportsPage
+          route={route}
+          denied={!superAdmin}
+          mayExport={mayExportReports(roleKeys, permissions)}
+        />
+      ),
+      crumbs: [{ label: t('web.nav_reports') }],
+      title: t('web.nav_reports'),
     };
   }
 
@@ -1249,7 +1284,7 @@ function SignedIn({
     return () => query.removeEventListener('change', onChange);
   }, []);
 
-  const resolved = resolve(route, permissions);
+  const resolved = resolve(route, permissions, admin.roleKeys);
   useDocumentTitle(`${resolved.title} — ${t('web.title')}`);
 
   const leave = useMutation({
@@ -1293,7 +1328,7 @@ function SignedIn({
     },
   });
 
-  const visible = NAV.filter((entry) => navPermitted(entry, permissions));
+  const visible = NAV.filter((entry) => navPermitted(entry, permissions, admin.roleKeys));
 
   return (
     <div className={`app ${collapsed ? 'collapsed' : ''}`}>

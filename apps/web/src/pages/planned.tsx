@@ -10,11 +10,11 @@ import { Icon } from '../ui/icons';
  * dead path. A planned page still listed for a route that now resolves
  * elsewhere is unreachable prose claiming the capability is unbuilt.
  *
- * Two of the fifteen areas in the owner's route inventory still have no backend
- * at all: there is no report endpoint, and no bot-management surface. This page
- * is what those two routes render. The count is written out rather than derived
- * because it is a CLAIM — users in 4A, products and orders in 4B, payments in
- * 4C, services in 4H, discounts in WP8 and resellers in WP9-B each had to change
+ * One of the fifteen areas in the owner's route inventory still has no backend
+ * at all: there is no bot-management surface. This page is what that route
+ * renders. The count is written out rather than derived because it is a CLAIM —
+ * users in 4A, products and orders in 4B, payments in 4C, services in 4H,
+ * discounts in WP8, resellers in WP9-B and reports in WP12 each had to change
  * this sentence as well as the list below it.
  *
  * It draws NO control. Not a disabled button, not a greyed table with sample
@@ -79,14 +79,13 @@ export const PLANNED_SURFACES: readonly PlannedSurface[] = [
    * decision was recorded on it. Its two "missing" sentences — no reseller entity, and a
    * wallet ledger with no HTTP consumer — were both false by then and went with it.
    */
-  {
-    key: 'reports',
-    path: '/reports',
-    label: 'web.nav_reports',
-    summary: 'web.planned_reports_summary',
-    missing: ['web.planned_missing_order', 'web.planned_missing_ledger'],
-    decisions: ['web.planned_reports_no_logs'],
-  },
+  /*
+   * `reports` is no longer here. WP12 builds it — the owner's business reports on
+   * `/reports`, over real aggregates — so the placeholder went in the same commit, for the
+   * reason `payments` gives above. Its owner decision (no general log page; the human
+   * operational stream goes to the Telegram report group) is unchanged by WP12, which adds
+   * business reports and no log browser.
+   */
   {
     key: 'bots',
     path: '/bots',
