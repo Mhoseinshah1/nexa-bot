@@ -175,6 +175,21 @@ describe('report periods', () => {
     expect(b).toHaveLength(23);
   });
 
+  it('starts a day whose midnight falls in a spring-forward gap at the first instant after it, never on the day before', () => {
+    // Santiago skipped 2025-09-07 00:00–01:00: the day begins at 01:00 local, 04:00Z.
+    const santiago: ReportPresentation = { timezone: 'America/Santiago', calendar: 'gregorian' };
+    expect(iso(localInstant({ year: 2025, month: 9, day: 7 }, 0, santiago))).toBe(
+      '2025-09-07T04:00:00.000Z',
+    );
+    // The day before still ends where this one begins, and is 23 hours long.
+    const p = resolveReportPeriod({ range: 'TODAY' }, at('2025-09-06T12:00:00Z'), santiago);
+    expect(iso(p.current.end)).toBe('2025-09-07T04:00:00.000Z');
+    // An ordinary midnight and a fall-back day are untouched.
+    expect(iso(localInstant({ year: 2025, month: 9, day: 8 }, 0, santiago))).toBe(
+      '2025-09-08T03:00:00.000Z',
+    );
+  });
+
   it('serves the contracts TimePeriodResolver from the same arithmetic', () => {
     const resolver = new IntlTimePeriodResolver({ now: () => at('2026-09-25T08:30:00Z') });
     const month = resolver.resolve('THIS_MONTH', TEHRAN);

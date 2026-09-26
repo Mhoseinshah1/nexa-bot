@@ -848,8 +848,30 @@ export class ReportingService {
       case 'REFERRALS': {
         const currency = await this.deps.salesCurrency.salesCurrency(scope);
         const top = await repo.topReferrers(scope, r.current, 'REVENUE', currency, cap, 0);
-        const inCurrency = (amounts: readonly CurrencyAmount[]): bigint =>
-          amounts.find((a) => a.currency === currency)?.amount ?? 0n;
+        /*
+         * One row per referrer PER CURRENCY, as the screen shows them and as the resellers
+         * export does. Keeping only the sales currency dropped every other amount — and
+         * every amount in a previous sales currency — from the file without a trace.
+         */
+        const out: Record<string, ExportCell>[] = [];
+        top.rows.forEach((row, i) => {
+          const currencies = [
+            ...new Set([...row.revenue, ...row.commission].map((a) => a.currency)),
+          ].sort();
+          const inCurrency = (amounts: readonly CurrencyAmount[], code: CurrencyCode): bigint =>
+            amounts.find((a) => a.currency === code)?.amount ?? 0n;
+          for (const code of currencies.length > 0 ? currencies : [currency]) {
+            out.push({
+              rank: i + 1,
+              referrerId: row.referrerId,
+              signups: row.signups,
+              convertedBuyers: row.convertedBuyers,
+              revenue: { amountMinor: inCurrency(row.revenue, code), currency: code },
+              commission: { amountMinor: inCurrency(row.commission, code), currency: code },
+              currency: code,
+            });
+          }
+        });
         return table(
           sheetName,
           [
@@ -861,15 +883,7 @@ export class ReportingService {
             ['commission', 'money'],
             ['currency', 'text'],
           ],
-          top.rows.map((row, i) => ({
-            rank: i + 1,
-            referrerId: row.referrerId,
-            signups: row.signups,
-            convertedBuyers: row.convertedBuyers,
-            revenue: { amountMinor: inCurrency(row.revenue), currency },
-            commission: { amountMinor: inCurrency(row.commission), currency },
-            currency,
-          })),
+          out,
         );
       }
       case 'RESELLERS': {
@@ -934,7 +948,12 @@ export class ReportingService {
     request: ReportRangeRequest,
     permission: typeof REPORTS_VIEW_PERMISSION,
   ): Promise<Resolved> {
-    // Authority FIRST: a refused caller learns nothing, not even that its range was bad.
+    /*
+     * Authority FIRST: a refused caller learns nothing about the tenant's figures, nor
+     * whether a range that PARSED resolves on its calendar. The HTTP surface still checks
+     * the SHAPE of a request (its schema and range syntax) before this runs, so a malformed
+     * request is a 400 for anyone — that says nothing about the tenant.
+     */
     await this.deps.access.authorize(scope, actor, permission);
     const presentation = await this.deps.presentation.presentationFor(scope);
     const period = this.deps.periods.resolve(

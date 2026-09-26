@@ -207,15 +207,26 @@ export function localInstant(
   presentation: ReportPresentation,
 ): Date {
   const naive = utcDayOf(date, presentation.calendar) * DAY_MS + hour * 3_600_000;
-  const offsetAt = (at: number): number => {
+  const wallAt = (at: number): number => {
     const wall = partsOf(new Date(at), 'gregorian', presentation.timezone, true);
-    return (
-      Date.UTC(wall.year, wall.month - 1, wall.day, wall.hour, wall.minute, wall.second) -
-      Math.floor(at / 1000) * 1000
-    );
+    return Date.UTC(wall.year, wall.month - 1, wall.day, wall.hour, wall.minute, wall.second);
   };
-  const first = naive - offsetAt(naive);
-  return new Date(naive - offsetAt(first));
+  const offsetAt = (at: number): number => wallAt(at) - Math.floor(at / 1000) * 1000;
+  // The two offsets that can apply: the one at the naive guess, and the one at the instant
+  // that guess names. They differ only on a date whose offset changes near this hour.
+  const candidates = [
+    ...new Set([naive - offsetAt(naive), naive - offsetAt(naive - offsetAt(naive))]),
+  ];
+  // A wall time that exists: its earliest instant (a fall-back hour occurs twice).
+  const exact = candidates.filter((at) => wallAt(at) === naive);
+  if (exact.length > 0) return new Date(Math.min(...exact));
+  /*
+   * A wall time that does not exist — a spring-forward gap, which in some zones swallows
+   * midnight itself. The first instant after the gap is the requested wall time read with
+   * the offset in force BEFORE the change, which is the later candidate. The earlier one
+   * reads as the previous civil day, and would move the day's start an hour early.
+   */
+  return new Date(Math.max(...candidates));
 }
 
 function midnight(date: CivilDate, presentation: ReportPresentation): Date {

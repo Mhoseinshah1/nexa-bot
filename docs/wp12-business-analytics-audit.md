@@ -318,7 +318,10 @@ A movement is never coloured good or bad.
   ledger credit; it is not an order, so it cannot enter #1 or #2. A later wallet
   purchase is an order settled by a WALLET payment, and it is counted there exactly once.
 - **Cashback, gifts and commissions are not revenue.** They are ledger entries only, and
-  no revenue query reads `wallet_entries`.
+  no revenue query reads `wallet_entries`. The credit they leave in a wallet is not told
+  apart when it is SPENT: a WALLET order paid from a gift enters revenue at its total, as
+  any wallet purchase does (review of this package; the on-screen hint now says so rather
+  than claiming such a purchase is excluded).
 - **One order, one sale.** The query counts ORDER rows, never payment rows. Retries are
   extra payment attempts on the same order and add nothing, and the idempotent
   settlement re-delivery cannot create a second PAID row for one order.

@@ -31,7 +31,7 @@ import { TrialsPage } from './pages/trials';
 import { DiscountsPage } from './pages/discounts';
 import { ReferralsPage } from './pages/referrals';
 import { ReportsPage } from './pages/business';
-import { isSuperAdmin } from './report-view';
+import { isSuperAdmin, mayExportReports } from './report-view';
 import { ResellersPage } from './pages/resellers';
 import { ResellerTiersPage } from './pages/reseller-tiers';
 
@@ -737,6 +737,7 @@ export function resolve(
           mayViewBanner={may('settings.view')}
           mayEditBanner={may('settings.edit')}
           superAdmin={superAdmin}
+          mayExportReports={mayExportReports(roleKeys, permissions)}
         />
       ),
       crumbs: [{ label: t('web.referrals_title') }],
@@ -997,7 +998,13 @@ export function resolve(
 
   if (route.path === '/reports') {
     return {
-      element: <ReportsPage route={route} denied={!superAdmin} />,
+      element: (
+        <ReportsPage
+          route={route}
+          denied={!superAdmin}
+          mayExport={mayExportReports(roleKeys, permissions)}
+        />
+      ),
       crumbs: [{ label: t('web.nav_reports') }],
       title: t('web.nav_reports'),
     };

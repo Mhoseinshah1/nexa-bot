@@ -172,6 +172,7 @@ export function ReferralsPage({
   mayViewBanner,
   mayEditBanner,
   superAdmin = false,
+  mayExportReports = false,
 }: {
   route: Route;
   denied: boolean;
@@ -179,6 +180,8 @@ export function ReferralsPage({
   mayEditBanner: boolean;
   /** WP12: the owner sees the referral analytics above the lists. */
   superAdmin?: boolean;
+  /** WP12: and holds `reports.export`, so the analytics offer a download. */
+  mayExportReports?: boolean;
 }) {
   const onLink = useLinkHandler();
   const applied = route.query.get('referrerId') ?? '';
@@ -238,7 +241,7 @@ export function ReferralsPage({
         </Card>
       )}
 
-      {superAdmin && <ReferralAnalytics route={route} />}
+      {superAdmin && <ReferralAnalytics route={route} mayExport={mayExportReports} />}
 
       <Attributions denied={denied} referrerId={applied} />
       <Commissions denied={denied} referrerId={applied} />

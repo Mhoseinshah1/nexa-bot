@@ -137,6 +137,7 @@ describe('WP12 business reports', () => {
     days?: number;
     settledAt?: string;
     refundedAt?: string;
+    currency?: 'IRT' | 'IRR';
   }): Promise<string> {
     const id = uuid();
     const state = o.state ?? 'PAID';
@@ -152,7 +153,7 @@ describe('WP12 business reports', () => {
         confirmed_at, settled_at, refunded_at, created_at)
       VALUES (${id}, ${o.tenantId ?? tenantA.tenantId}, ${o.customerId}, ${state}, ${o.purpose}, ${o.productId}, ${ids.panel},
         ${o.title}, ${days}, ${String(bytes)}::bigint, 1, ${o.subtotal},
-        'دسته', ${o.subtotal}, ${discount}, ${o.subtotal - discount}, 'IRT', '{}'::jsonb,
+        'دسته', ${o.subtotal}, ${discount}, ${o.subtotal - discount}, ${o.currency ?? 'IRT'}, '{}'::jsonb,
         ${o.settledAt ?? at(0)}::timestamptz, ${settled}::timestamptz, ${o.refundedAt ?? null}::timestamptz,
         ${o.settledAt ?? at(0)}::timestamptz)`);
     return id;
@@ -837,6 +838,30 @@ describe('WP12 business reports', () => {
     expect(o1).toContain('1405/06/10 12:00');
     expect(text).not.toMatch(/77000\d|Customer\d/);
     expect(text).not.toContain('Foreign');
+  });
+
+  it('exports every currency a referrer earned in, one row each, never only the sales currency', async () => {
+    // A sale in the tenant's PREVIOUS sales currency, on the same day, by the same referee.
+    await order({
+      customerId: ids.c1,
+      productId: ids.p1,
+      purpose: 'NEW_SERVICE',
+      title: 'Plan A (IRR)',
+      subtotal: 500_000,
+      settledAt: at(16),
+      currency: 'IRR',
+    });
+    const response = await get(`${REPORT_ROUTES.export}?${DAY_D}&report=REFERRALS&format=csv`);
+    expect(response.statusCode).toBe(200);
+    const lines = response.rawPayload.toString('utf8').slice(1).trimEnd().split('\r\n');
+    const r1 = lines.filter((line) => line.includes(ids.r1));
+    expect(r1).toHaveLength(2);
+    expect(r1.some((line) => line.split(',').includes('IRT') && line.includes('145000'))).toBe(
+      true,
+    );
+    expect(r1.some((line) => line.split(',').includes('IRR') && line.includes('500000'))).toBe(
+      true,
+    );
   });
 
   it('exports XLSX with numeric money cells', async () => {

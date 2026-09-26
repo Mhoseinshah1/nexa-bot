@@ -1,7 +1,9 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import {
+  OWNER_ROLE_KEY,
   reportFailuresResponseSchema,
+  reportOrdersResponseSchema,
   reportProductsResponseSchema,
   reportReferralsResponseSchema,
   reportSummaryResponseSchema,
@@ -342,6 +344,7 @@ describe('the Reports page', () => {
       <ReportsPage
         route={{ path: '/reports', query: new URLSearchParams('range=TODAY') }}
         denied={false}
+        mayExport
       />,
     );
     const csv = await screen.findByRole('link', { name: 'خروجی CSV' });
@@ -349,6 +352,74 @@ describe('the Reports page', () => {
     expect(screen.getByRole('link', { name: 'خروجی Excel' }).getAttribute('href')).toContain(
       'format=xlsx',
     );
+  });
+});
+
+describe('report exports and paging (WP12 review)', () => {
+  const ORDERS_ROUTE = {
+    url: '/reports/orders',
+    body: reportOrdersResponseSchema.parse({
+      period: PERIOD,
+      rows: [
+        {
+          orderId: '019210ab-cdef-7012-8345-6789abcdef02',
+          settledAt: '2026-09-25T08:00:00.000Z',
+          purpose: 'NEW_SERVICE',
+          title: 'Plan A',
+          categoryName: null,
+          subtotal: '50000',
+          discount: '0',
+          total: '50000',
+          currency: 'IRT',
+          paymentMethod: 'WALLET',
+          paymentProvider: null,
+          customerId: '019210ab-cdef-7012-8345-6789abcdef03',
+        },
+      ],
+      nextCursor: 'CURSOR-FROM-THIS-MONTH',
+    }),
+  };
+  const reportsRoute = (query: string) => ({ path: '/reports', query: new URLSearchParams(query) });
+
+  it('draws the export links only for an owner who also holds reports.export, through the app wiring', async () => {
+    const api = stubApi([...BUSINESS_ROUTES, ORDERS_ROUTE]);
+    const viewer = renderPage(
+      resolve(reportsRoute('range=TODAY'), ['reports.view'], [OWNER_ROLE_KEY]).element,
+    );
+    await waitFor(() =>
+      expect(api.calls.some((c) => c.url.includes('/reports/orders'))).toBe(true),
+    );
+    expect(screen.queryByRole('link', { name: 'خروجی CSV' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'خروجی Excel' })).toBeNull();
+    viewer.unmount();
+
+    renderPage(
+      resolve(reportsRoute('range=TODAY'), ['reports.view', 'reports.export'], [OWNER_ROLE_KEY])
+        .element,
+    );
+    expect(await screen.findByRole('link', { name: 'خروجی CSV' })).toBeTruthy();
+  });
+
+  it('starts the orders drill-down over when the range changes, never paging the new range with an old cursor', async () => {
+    const api = stubApi([...BUSINESS_ROUTES, ORDERS_ROUTE]);
+    const page = renderPage(
+      <ReportsPage route={reportsRoute('range=THIS_MONTH')} denied={false} />,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: t('web.report_page_next') }));
+    await waitFor(() =>
+      expect(api.calls.some((c) => c.url.includes('cursor=CURSOR-FROM-THIS-MONTH'))).toBe(true),
+    );
+
+    page.rerender(<ReportsPage route={reportsRoute('range=TODAY')} denied={false} />);
+    await waitFor(() =>
+      expect(
+        api.calls.some((c) => c.url.includes('/reports/orders') && c.url.includes('range=TODAY')),
+      ).toBe(true),
+    );
+    const today = api.calls.filter(
+      (c) => c.url.includes('/reports/orders') && c.url.includes('range=TODAY'),
+    );
+    expect(today.every((c) => !c.url.includes('cursor='))).toBe(true);
   });
 });
 

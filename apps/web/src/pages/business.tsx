@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { createContext, useContext, useState, type FormEvent, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   REPORT_PRODUCT_RANKINGS,
@@ -473,6 +473,13 @@ function TrendCard({ selection }: { selection: ReportRangeSelection }) {
   );
 }
 
+/**
+ * Whether this session holds `reports.export` as well as the Super Admin standing. Set by
+ * the two pages that draw exports; the default is false, so a surface that forgets to say
+ * draws no download the server would refuse.
+ */
+const ReportExportAllowed = createContext(false);
+
 function ExportButtons({
   selection,
   report,
@@ -480,7 +487,8 @@ function ExportButtons({
   selection: ReportRangeSelection;
   report: ReportExportKind;
 }) {
-  if (!rangeIsComplete(selection)) return null;
+  const allowed = useContext(ReportExportAllowed);
+  if (!allowed || !rangeIsComplete(selection)) return null;
   return (
     <>
       <a className="btn sm" href={reportExportUrl(selection, report, 'csv')} download>
@@ -526,6 +534,21 @@ export function BusinessOverview({ route }: { route: Route }) {
   );
 }
 
+/**
+ * State that belongs to one period — a page number, a cursor stack. A new range starts
+ * it over: the component is not remounted when the range changes, so a cursor from the
+ * old range would page the new one from a point outside it and show "nothing" while the
+ * new range has rows.
+ */
+function usePerRange<T>(selection: ReportRangeSelection, initial: T): [T, (next: T) => void] {
+  const key = `${selection.range}|${selection.from ?? ''}|${selection.to ?? ''}`;
+  const [held, setHeld] = useState<{ readonly key: string; readonly value: T }>({
+    key,
+    value: initial,
+  });
+  return [held.key === key ? held.value : initial, (value: T) => setHeld({ key, value })];
+}
+
 // --- Products -------------------------------------------------------------------
 
 function TopProducts({
@@ -536,7 +559,7 @@ function TopProducts({
   compact?: boolean;
 }) {
   const [by, setBy] = useState<ReportProductRanking>('REVENUE');
-  const [page, setPage] = useState(1);
+  const [page, setPage] = usePerRange(selection, 1);
   const limit = compact ? 10 : 25;
   const products = useReport(
     ['products', selection, by, page, limit],
@@ -744,7 +767,15 @@ const TAB_LABELS: Readonly<Record<ReportTab, WebKey>> = {
  * `/reports`: one page, one period selector, a tab per report (spec §30). Replaces the
  * planned placeholder that stood here since Phase 3D.
  */
-export function ReportsPage({ route, denied }: { route: Route; denied: boolean }) {
+export function ReportsPage({
+  route,
+  denied,
+  mayExport = false,
+}: {
+  route: Route;
+  denied: boolean;
+  mayExport?: boolean;
+}) {
   const selection = rangeFromRoute(route, 'THIS_MONTH');
   const raw = route.query.get('tab') ?? 'sales';
   const tab: ReportTab = (REPORT_TABS as readonly string[]).includes(raw)
@@ -781,20 +812,22 @@ export function ReportsPage({ route, denied }: { route: Route; denied: boolean }
         panelId={panelId}
       />
       <TabPanel id={panelId} labelledBy={`${panelId}-tab-${tab}`}>
-        {tab === 'sales' && (
-          <>
-            <SummaryCards selection={selection} />
-            <TrendCard selection={selection} />
-            <OrdersDrilldown selection={selection} />
-          </>
-        )}
-        {tab === 'products' && <TopProducts selection={selection} />}
-        {tab === 'services' && <ServicesReport selection={selection} />}
-        {tab === 'payments' && <PaymentsReport selection={selection} />}
-        {tab === 'wallet' && <WalletReport selection={selection} />}
-        {tab === 'infrastructure' && <InfrastructureReport selection={selection} />}
-        {tab === 'resellers' && <ResellersReport selection={selection} />}
-        {tab === 'failures' && <FailureSummary selection={selection} />}
+        <ReportExportAllowed.Provider value={mayExport}>
+          {tab === 'sales' && (
+            <>
+              <SummaryCards selection={selection} />
+              <TrendCard selection={selection} />
+              <OrdersDrilldown selection={selection} />
+            </>
+          )}
+          {tab === 'products' && <TopProducts selection={selection} />}
+          {tab === 'services' && <ServicesReport selection={selection} />}
+          {tab === 'payments' && <PaymentsReport selection={selection} />}
+          {tab === 'wallet' && <WalletReport selection={selection} />}
+          {tab === 'infrastructure' && <InfrastructureReport selection={selection} />}
+          {tab === 'resellers' && <ResellersReport selection={selection} />}
+          {tab === 'failures' && <FailureSummary selection={selection} />}
+        </ReportExportAllowed.Provider>
       </TabPanel>
       <NoLogsNote />
     </>
@@ -811,7 +844,7 @@ function NoLogsNote() {
 
 function OrdersDrilldown({ selection }: { selection: ReportRangeSelection }) {
   const [purpose, setPurpose] = useState<OrderPurpose | 'ALL'>('ALL');
-  const [cursors, setCursors] = useState<readonly string[]>([]);
+  const [cursors, setCursors] = usePerRange<readonly string[]>(selection, []);
   const cursor = cursors.at(-1);
   const orders = useReport(
     ['orders', selection, purpose, cursor ?? null],
@@ -1411,10 +1444,16 @@ function ResellersReport({ selection }: { selection: ReportRangeSelection }) {
  * the page's own; rewards come from the ledger and revenue from orders, and Top Referrers
  * name a customer only by a link to the canonical customer page.
  */
-export function ReferralAnalytics({ route }: { route: Route }) {
+export function ReferralAnalytics({
+  route,
+  mayExport = false,
+}: {
+  route: Route;
+  mayExport?: boolean;
+}) {
   const selection = rangeFromRoute(route, 'LAST_30_DAYS');
   const [by, setBy] = useState<ReportReferrerRanking>('SIGNUPS');
-  const [page, setPage] = useState(1);
+  const [page, setPage] = usePerRange(selection, 1);
   const limit = 10;
   const referrals = useReport(
     ['referrals', selection, by, page],
@@ -1433,7 +1472,9 @@ export function ReferralAnalytics({ route }: { route: Route }) {
       actions={
         <>
           <RefreshButton />
-          <ExportButtons selection={selection} report="REFERRALS" />
+          <ReportExportAllowed.Provider value={mayExport}>
+            <ExportButtons selection={selection} report="REFERRALS" />
+          </ReportExportAllowed.Provider>
         </>
       }
     >
