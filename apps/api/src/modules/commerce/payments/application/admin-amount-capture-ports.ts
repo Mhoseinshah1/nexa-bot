@@ -1,9 +1,11 @@
 import type {
   AdminAmountCaptureCloseReason,
   AdminCapturePurpose,
+  AdminReasonCapturePurpose,
   BotInstanceId,
   PaymentId,
   TenantContext,
+  UserId,
 } from '@nexa/contracts';
 
 /**
@@ -17,7 +19,12 @@ export interface AdminAmountCaptureRecord {
   readonly id: string;
   readonly botInstanceId: BotInstanceId;
   readonly adminId: string;
-  readonly paymentId: PaymentId;
+  /**
+   * What the capture is ABOUT: a payment for the receipt purposes, a customer for
+   * `CUSTOMER_BLOCK_REASON` (WP10G). Exactly one is set; the table's target CHECK says which.
+   */
+  readonly paymentId: PaymentId | null;
+  readonly customerId: UserId | null;
   /** What the capture reads: the credit's amount, or a block's or rejection's reason. */
   readonly purpose: AdminCapturePurpose;
   readonly amountMinor: bigint | null;
@@ -51,7 +58,9 @@ export interface AdminAmountCaptureRepository {
       readonly id: string;
       readonly botInstanceId: BotInstanceId;
       readonly adminId: string;
-      readonly paymentId: PaymentId;
+      /** The payment for a receipt purpose, or the customer for a customers-section block. */
+      readonly paymentId?: PaymentId;
+      readonly customerId?: UserId;
       /** Defaults to the credit's amount, the purpose every existing caller opens. */
       readonly purpose?: AdminCapturePurpose;
       readonly openedAt: Date;
@@ -69,7 +78,7 @@ export interface AdminAmountCaptureRepository {
     scope: TenantContext,
     botInstanceId: BotInstanceId,
     adminId: string,
-    purpose: 'RECEIPT_BLOCK_REASON' | 'RECEIPT_REJECT_REASON',
+    purpose: AdminReasonCapturePurpose,
     tx?: unknown,
   ): Promise<AdminAmountCaptureRecord | null>;
 

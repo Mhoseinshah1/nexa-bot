@@ -758,9 +758,10 @@ export function fetchCustomer(id: string): Promise<CustomerResponse> {
   return authedGet(CUSTOMER_ROUTES.detail(id), customerResponseSchema);
 }
 
+/** The reason is REQUIRED (WP10G): a block without one is refused by the server. */
 export function blockCustomer(input: {
   id: string;
-  reason?: string;
+  reason: string;
   idempotencyKey: string;
 }): Promise<CustomerResponse> {
   const { id, ...body } = input;

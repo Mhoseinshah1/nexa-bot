@@ -66,6 +66,7 @@ import type {
   ReceiptRejectCaptureService,
 } from '../../modules/commerce/payments/application/receipt-reason-policies.js';
 import type { ReasonAskResult } from '../../modules/commerce/payments/application/receipt-reason-capture.service.js';
+import type { CustomerBlockCaptureService } from '../../modules/commerce/customers/application/customer-block-capture.js';
 import {
   RECEIPT_REVIEW_NOTE_MAX,
   reviewNoteOf,
@@ -403,6 +404,17 @@ export const BOT_INTENTS = [
   'ADMIN_CUSTOMER_FIND',
   'ADMIN_CUSTOMER_BLOCK',
   'ADMIN_CUSTOMER_UNBLOCK',
+  /*
+   * WP10G — the two writes above are now ASKS (closing OQ-WP10F-03): `ADMIN_CUSTOMER_BLOCK`
+   * draws a confirmation and `ADMIN_CUSTOMER_BLOCK_OPEN` opens the mandatory reason's capture;
+   * the typed reason is restated and `ADMIN_CUSTOMER_BLOCK_CONFIRM` is the one tap that blocks.
+   * `ADMIN_CUSTOMER_UNBLOCK` draws its confirmation and `ADMIN_CUSTOMER_UNBLOCK_CONFIRM` is the
+   * one tap that unblocks. No one-tap write remains in the section.
+   */
+  'ADMIN_CUSTOMER_BLOCK_OPEN',
+  'ADMIN_CUSTOMER_BLOCK_CONFIRM',
+  'ADMIN_CUSTOMER_BLOCK_CANCEL',
+  'ADMIN_CUSTOMER_UNBLOCK_CONFIRM',
   /*
    * WP5 — the categories section.
    *
@@ -1143,14 +1155,21 @@ export const ADMIN_CUSTOMER_CALLBACK_PREFIX = '9:';
 /**
  * What a `9:` code means, as a table rather than a chain of comparisons.
  *
- * `v` reads, `b` blocks, `u` unblocks. Validated at the boundary against this map, so
- * an unknown code is UNSUPPORTED and never becomes an intent — the same treatment the
- * reminder codes, the username toggles and the administrator statuses get.
+ * `v` reads. `b` ASKS to block and `u` ASKS to unblock (WP10G — neither writes). `o` opens the
+ * block's reason capture for a customer, `c` confirms a block from a CAPTURE and `x` cancels it;
+ * `n` confirms an unblock. `b`, `u`, `o` and `n` carry a customer id; `c` and `x` a capture id.
+ * Validated at the boundary against this map, so an unknown code is UNSUPPORTED and never
+ * becomes an intent — the same treatment the reminder codes, the username toggles and the
+ * administrator statuses get. 40 bytes at the longest.
  */
 const ADMIN_CUSTOMER_CODES = {
   v: 'ADMIN_CUSTOMER',
   b: 'ADMIN_CUSTOMER_BLOCK',
   u: 'ADMIN_CUSTOMER_UNBLOCK',
+  o: 'ADMIN_CUSTOMER_BLOCK_OPEN',
+  c: 'ADMIN_CUSTOMER_BLOCK_CONFIRM',
+  x: 'ADMIN_CUSTOMER_BLOCK_CANCEL',
+  n: 'ADMIN_CUSTOMER_UNBLOCK_CONFIRM',
 } as const;
 type AdminCustomerCode = keyof typeof ADMIN_CUSTOMER_CODES;
 
@@ -3025,6 +3044,16 @@ export interface BotRuntimeDeps {
     ReceiptRejectCaptureService,
     'open' | 'submitReason' | 'confirm' | 'cancel'
   >;
+  /**
+   * The customers section's block (WP10G, closing OQ-WP10F-03): the same capture mechanics as
+   * the receipt's Block User, naming a customer. Optional for the reason `receiptBlocks` is;
+   * without it the section's block button answers as any unknown admin tap, so no path can
+   * block without a reason.
+   */
+  readonly customerBlocks?: Pick<
+    CustomerBlockCaptureService,
+    'ask' | 'open' | 'submitReason' | 'confirm' | 'cancel'
+  >;
   readonly wallet: WalletService;
   readonly services: ProvisioningService;
   /**
@@ -3876,13 +3905,6 @@ export function receiptReviewButtons(
 }
 
 /**
- * The sentence the Telegram customers section stored as a block's "reason" before a reason
- * was ever shown to the customer (WP2). It names the surface, not a reason, and it is in
- * English; it is never rendered to a customer as one.
- */
-const PRE_REASON_BLOCK_NOTE = 'Blocked from the Telegram management panel.';
-
-/**
  * What a blocked customer is told (File 01 §9, the owner's correction to WP10): the account is
  * blocked, WHY — the reason stored on THIS customer's own row, and nothing else of the block's
  * record — and to contact support. A block with no reason keeps `bot.blocked`, a whole sentence
@@ -3890,13 +3912,16 @@ const PRE_REASON_BLOCK_NOTE = 'Blocked from the Telegram management panel.';
  *
  * Only a reason written to be shown is shown (pre-release hardening V2): until WP10's follow-up
  * the Web Admin told the operator this note "is never shown to the customer", and a block
- * written then keeps `blockedReasonShown` FALSE and is answered with `bot.blocked`.
+ * written then keeps `blockedReasonShown` FALSE and is answered with `bot.blocked`. The
+ * customers section's old fixed English note ("Blocked from the Telegram management panel.")
+ * is the same case: migration 0121 marks those rows not shown, so the flag alone decides and
+ * no typed reason is reserved (Codex review of PR #74).
  */
 export function blockedReply(
   customer: Pick<CustomerRecord, 'blockedReason' | 'blockedReasonShown'>,
 ): PendingReply {
   const reason = customer.blockedReason?.trim() ?? '';
-  if (!customer.blockedReasonShown || reason === '' || reason === PRE_REASON_BLOCK_NOTE) {
+  if (!customer.blockedReasonShown || reason === '') {
     return { key: 'bot.blocked', values: {}, buttons: [], orderId: null };
   }
   return { key: 'bot.blocked_with_reason', values: { reason }, buttons: [], orderId: null };
@@ -3907,6 +3932,14 @@ function rejectCancelButton(captureId: string): CustomerButton {
   return {
     label: { kind: 'TEMPLATE', key: 'bot.admin.reject_cancel_button' },
     data: `${ADMIN_REJECT_CANCEL_CALLBACK_PREFIX}${captureId}`,
+  };
+}
+
+/** The customers section's block cancel button (WP10G): `9:x:<captureId>`. */
+function customerBlockCancelButton(captureId: string): CustomerButton {
+  return {
+    label: { kind: 'TEMPLATE', key: 'bot.admin.block_cancel_button' },
+    data: `${ADMIN_CUSTOMER_CALLBACK_PREFIX}x:${captureId}`,
   };
 }
 
@@ -4677,16 +4710,20 @@ export class BotRuntime {
             permissions,
           );
         case 'ADMIN_CUSTOMER_BLOCK':
+        case 'ADMIN_CUSTOMER_BLOCK_OPEN':
+        case 'ADMIN_CUSTOMER_BLOCK_CONFIRM':
+        case 'ADMIN_CUSTOMER_BLOCK_CANCEL':
         case 'ADMIN_CUSTOMER_UNBLOCK':
+        case 'ADMIN_CUSTOMER_UNBLOCK_CONFIRM':
           return command.targetId === null
             ? null
-            : await this.adminCustomerStatus(
+            : await this.adminCustomerStatusTurn(
                 scope,
                 adminActor,
+                command.intent,
                 command.targetId,
-                command.intent === 'ADMIN_CUSTOMER_BLOCK',
                 permissions,
-                input.idempotencyKey,
+                input,
               );
         case 'ADMIN_CATEGORIES':
         case 'ADMIN_CATEGORY':
@@ -5113,7 +5150,7 @@ export class BotRuntime {
         const opened = await blocks.open(scope, actor, {
           idempotencyKey: `${input.idempotencyKey}:block-open`,
           botInstanceId: input.botInstanceId,
-          paymentId: targetId,
+          targetId,
         });
         if (opened.outcome === 'GONE') return reply('bot.admin.receipt_gone');
         return reply(
@@ -5153,7 +5190,7 @@ export class BotRuntime {
          * the customer's own row answers — blocked, or the question again, never "blocked"
          * for a customer who is not.
          */
-        const standing = await blocks.ask(scope, actor, cancelled.paymentId);
+        const standing = await blocks.ask(scope, actor, cancelled.targetId);
         if (standing.outcome === 'ASK' && standing.customer?.status === 'BLOCKED') {
           return reply('bot.admin.blocked_from_receipt', {
             customer: who(standing.customer, standing.payment.customerId),
@@ -5186,7 +5223,74 @@ export class BotRuntime {
     if (amount !== null) return amount;
     const blockReason = await this.adminBlockReason(scope, actor, text, input);
     if (blockReason !== null) return blockReason;
+    const customerBlockReason = await this.adminCustomerBlockReason(scope, actor, text, input);
+    if (customerBlockReason !== null) return customerBlockReason;
     return this.adminRejectReason(scope, actor, text, input);
+  }
+
+  /**
+   * The typed reason of a block from the customers section (WP10G), recorded and restated;
+   * nothing is blocked until the confirm. The same shape as `adminBlockReason`, for the same
+   * purpose-keyed capture, so at most one of the three reason paths answers a message.
+   */
+  private async adminCustomerBlockReason(
+    scope: TenantContext,
+    actor: ActorContext,
+    text: string,
+    input: {
+      readonly idempotencyKey: string;
+      readonly botInstanceId: BotInstanceId;
+      readonly telegramUserId: string;
+    },
+  ): Promise<PendingReply | null> {
+    const blocks = this.deps.customerBlocks;
+    const admins = this.deps.telegramAdmins;
+    if (blocks === undefined || admins === undefined) return null;
+    const identity = await admins.resolve(scope, input.telegramUserId, actor.correlationId);
+    if (identity === null) return null;
+    try {
+      const result = await blocks.submitReason(scope, identity.actor, {
+        idempotencyKey: `${input.idempotencyKey}:customer-block-reason`,
+        botInstanceId: input.botInstanceId,
+        text,
+      });
+      switch (result.outcome) {
+        case 'NO_CAPTURE':
+          return null;
+        case 'INVALID':
+          return {
+            key: 'bot.admin.block_reason_invalid',
+            values: { max: ADMIN_CAPTURE_REASON_MAX_LENGTH },
+            buttons: [],
+            orderId: null,
+          };
+        case 'EXPIRED':
+          return {
+            key: 'bot.admin.customer_block_expired',
+            values: {},
+            buttons: [],
+            orderId: null,
+          };
+        case 'GONE':
+          return { key: 'bot.admin.customer_gone', values: {}, buttons: [], orderId: null };
+        case 'ENTERED':
+          return {
+            key: 'bot.admin.customer_block_confirm',
+            values: { customer: result.customer.telegramUserId, reason: result.reason },
+            buttons: [
+              {
+                label: { kind: 'TEMPLATE', key: 'bot.admin.block_confirm_button' },
+                data: `${ADMIN_CUSTOMER_CALLBACK_PREFIX}c:${result.capture.id}`,
+                row: 0,
+              },
+              { ...customerBlockCancelButton(result.capture.id), row: 0 },
+            ],
+            orderId: null,
+          };
+      }
+    } catch {
+      return { key: 'bot.admin.refused', values: {}, buttons: [], orderId: null };
+    }
   }
 
   /** The typed rejection reason, recorded and restated; nothing is rejected until the confirm. */
@@ -5391,7 +5495,7 @@ export class BotRuntime {
         const opened = await rejects.open(scope, actor, {
           idempotencyKey: `${input.idempotencyKey}:reject-open`,
           botInstanceId: input.botInstanceId,
-          paymentId: targetId,
+          targetId,
         });
         if (opened.outcome === 'GONE') return this.decidedReply(scope, actor, targetId);
         return {
@@ -5434,7 +5538,7 @@ export class BotRuntime {
         // A CONFIRMED reason is not a rejection: one that lost to another decision, or never
         // ran, left the capture confirmed. The payment answers — the receipt again while it
         // is pending, else WHICH decision it received.
-        return this.adminReceipt(scope, actor, cancelled.paymentId, permissions);
+        return this.adminReceipt(scope, actor, cancelled.targetId, permissions);
       }
       default:
         return null;
@@ -6758,51 +6862,160 @@ export class BotRuntime {
   }
 
   /**
-   * Blocks or unblocks one customer.
+   * Blocks or unblocks one customer, in two steps each (WP10G, closing OQ-WP10F-03).
    *
-   * `CustomerService.block`/`.unblock` carry every refusal this needs — the permission
-   * is charged and re-checked inside the writing transaction, the scope's activity is
-   * read there too, the id is validated and lower-cased before the idempotency hash, and
-   * the update is CONDITIONAL on the status it expects to find. So this adds none of its
-   * own and catches nothing: `adminTurn`'s single refusal answers a denial, and which
-   * denial it was belongs to the audit row.
+   * A block is ask → yes (open the reason capture) → the reason, typed → a confirmation
+   * restating it → `CustomerService.blockWithOutcome`, through `CustomerBlockCaptureService`:
+   * the receipt's Block User mechanics with a customer as the target, so a block cannot be
+   * silent and the typed text alone changes nothing. An unblock is ask → confirm →
+   * `CustomerService.unblock`. Both services carry every refusal this needs — the permission
+   * is charged and re-checked inside the writing transaction, the scope's activity is read
+   * there too, the id is validated and lower-cased before the idempotency hash, and the update
+   * is CONDITIONAL on the status it expects to find — so this adds none of its own and catches
+   * nothing: `adminTurn`'s single refusal answers a denial.
    *
-   * The reply names the status the customer now HOLDS rather than the button that was
-   * pressed, so a redelivered update reads as the state it found instead of claiming a
-   * second change — and the buttons come from the SAME builder the read uses, so a block
-   * does not leave a "block" button on the screen.
-   *
-   * The reason recorded is this surface's own sentence and not operator text, because
-   * this surface has no prompt to collect operator text with (OQ-WP10F-03; the receipt's
-   * Block User is the path that collects a mandatory reason). Since File 01 §9 a stored reason
-   * is shown to the customer, and `blockedReply` recognises this sentence and never shows it.
+   * Every reply after a write is the detail screen's own builder, so the buttons an operator
+   * sees are the ones the state actually offers, and a redelivered update reads as the state it
+   * found rather than claiming a second change.
    */
-  private async adminCustomerStatus(
+  private async adminCustomerStatusTurn(
     scope: TenantContext,
     actor: ActorContext,
-    customerId: string,
-    blocking: boolean,
+    intent: BotIntent,
+    targetId: string,
     permissions: ReadonlySet<PermissionKey>,
-    idempotencyKey: string,
-  ): Promise<PendingReply> {
-    const input = {
-      // Suffixed: the update's own key is `resolveFromUpdate`'s record in the `TELEGRAM`
-      // namespace, which is where a Telegram administrator's block is now remembered too.
-      idempotencyKey: `${idempotencyKey}:customer-status`,
-      customerId,
-      // Unchanged (OQ-WP10F-03 stays out of scope): a fixed note about the surface, which
-      // `blockedReply` recognises and never shows the customer as a reason.
-      reason: blocking ? PRE_REASON_BLOCK_NOTE : null,
+    input: { readonly idempotencyKey: string; readonly botInstanceId: BotInstanceId },
+  ): Promise<PendingReply | null> {
+    const blocks = this.deps.customerBlocks;
+    const reply = (
+      key: TemplateKey,
+      values: TemplateValues = {},
+      buttons: readonly CustomerButton[] = [],
+    ): PendingReply => ({ key, values, buttons: [...buttons], orderId: null });
+    const detail = async (customerId: string): Promise<PendingReply> => {
+      try {
+        return adminCustomerReply(
+          await this.deps.customers.get(scope, actor, customerId),
+          permissions,
+        );
+      } catch (error) {
+        if (isCustomerMiss(error)) return reply('bot.admin.customer_gone');
+        throw error;
+      }
     };
-    const updated = blocking
-      ? await this.deps.customers.block(scope, actor, input)
-      : await this.deps.customers.unblock(scope, actor, input);
-    return {
+    const changed = (customer: CustomerRecord): PendingReply => ({
       key: 'bot.admin.customer_status_changed',
-      values: { telegramId: updated.telegramUserId, status: updated.status },
-      buttons: adminCustomerReply(updated, permissions).buttons,
+      values: { telegramId: customer.telegramUserId, status: customer.status },
+      buttons: adminCustomerReply(customer, permissions).buttons,
       orderId: null,
-    };
+    });
+    const backButton = (customerId: string): CustomerButton => ({
+      label: { kind: 'TEMPLATE', key: 'bot.admin.block_cancel_button' },
+      data: `${ADMIN_CUSTOMER_CALLBACK_PREFIX}v:${customerId}`,
+      row: 0,
+    });
+
+    switch (intent) {
+      case 'ADMIN_CUSTOMER_BLOCK': {
+        // The ASK writes nothing. Through the capture service so the same permission pair
+        // (`users.block`, `users.view`) is charged that the open will charge.
+        if (blocks === undefined) return null;
+        const asked = await blocks.ask(scope, actor, targetId);
+        if (asked.outcome === 'GONE') return reply('bot.admin.customer_gone');
+        if (asked.customer.status === 'BLOCKED') return changed(asked.customer);
+        return reply('bot.admin.customer_block_ask', { customer: asked.customer.telegramUserId }, [
+          {
+            label: { kind: 'TEMPLATE', key: 'bot.admin.block_yes_button' },
+            data: `${ADMIN_CUSTOMER_CALLBACK_PREFIX}o:${targetId}`,
+            row: 0,
+          },
+          backButton(targetId),
+        ]);
+      }
+      case 'ADMIN_CUSTOMER_BLOCK_OPEN': {
+        if (blocks === undefined) return null;
+        const opened = await blocks.open(scope, actor, {
+          idempotencyKey: `${input.idempotencyKey}:customer-block-open`,
+          botInstanceId: input.botInstanceId,
+          targetId,
+        });
+        if (opened.outcome === 'GONE') return reply('bot.admin.customer_gone');
+        return reply(
+          'bot.admin.customer_block_reason_prompt',
+          {
+            customer: opened.customer.telegramUserId,
+            minutes: Math.round(ADMIN_AMOUNT_CAPTURE_TTL_MS / 60_000),
+          },
+          [customerBlockCancelButton(opened.capture.id)],
+        );
+      }
+      case 'ADMIN_CUSTOMER_BLOCK_CONFIRM': {
+        if (blocks === undefined) return null;
+        const done = await blocks.confirm(scope, actor, { captureId: targetId });
+        if (done.outcome === 'DONE') {
+          // Already blocked: the conditional UPDATE did not match, the stored reason stands
+          // untouched, and the operator is told the state found rather than a second change.
+          if (!done.result.changed) {
+            return reply(
+              'bot.admin.customer_block_already',
+              { customer: done.result.customer.telegramUserId },
+              adminCustomerReply(done.result.customer, permissions).buttons,
+            );
+          }
+          return changed(done.result.customer);
+        }
+        if (done.outcome === 'CLOSED') {
+          return reply(
+            done.reason === 'CANCELLED'
+              ? 'bot.admin.customer_block_cancelled'
+              : 'bot.admin.customer_block_expired',
+          );
+        }
+        return reply('bot.admin.customer_gone');
+      }
+      case 'ADMIN_CUSTOMER_BLOCK_CANCEL': {
+        if (blocks === undefined) return null;
+        const cancelled = await blocks.cancel(scope, actor, {
+          idempotencyKey: `${input.idempotencyKey}:customer-block-cancel`,
+          captureId: targetId,
+        });
+        if (cancelled.outcome === 'CANCELLED') return reply('bot.admin.customer_block_cancelled');
+        if (cancelled.outcome === 'GONE') return reply('bot.admin.customer_gone');
+        // A CONFIRMED reason is not a block: the block runs after the capture closes, and one
+        // refused or interrupted leaves the capture confirmed and the customer untouched. So
+        // the customer's own row answers, through the detail screen's builder.
+        return detail(cancelled.targetId);
+      }
+      case 'ADMIN_CUSTOMER_UNBLOCK': {
+        // The ASK writes nothing; the read charges `users.view`, as the detail screen does.
+        const customer = await this.deps.customers.get(scope, actor, targetId).catch((error) => {
+          if (isCustomerMiss(error)) return null;
+          throw error;
+        });
+        if (customer === null) return reply('bot.admin.customer_gone');
+        if (customer.status !== 'BLOCKED') return changed(customer);
+        return reply('bot.admin.customer_unblock_ask', { customer: customer.telegramUserId }, [
+          {
+            label: { kind: 'TEMPLATE', key: 'bot.admin.customer_unblock_confirm_button' },
+            data: `${ADMIN_CUSTOMER_CALLBACK_PREFIX}n:${targetId}`,
+            row: 0,
+          },
+          backButton(targetId),
+        ]);
+      }
+      case 'ADMIN_CUSTOMER_UNBLOCK_CONFIRM': {
+        const updated = await this.deps.customers.unblock(scope, actor, {
+          // Suffixed: the update's own key is `resolveFromUpdate`'s record in the `TELEGRAM`
+          // namespace, which is where a Telegram administrator's unblock is remembered too.
+          idempotencyKey: `${input.idempotencyKey}:customer-unblock`,
+          customerId: targetId,
+          reason: null,
+        });
+        return changed(updated);
+      }
+      default:
+        return null;
+    }
   }
 
   /**

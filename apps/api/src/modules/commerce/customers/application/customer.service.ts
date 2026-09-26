@@ -134,15 +134,37 @@ export interface CustomerServiceDeps {
  * asked about.
  */
 /**
- * Where a status change was asked from, when a surface can say (WP10 follow-up §4).
+ * Where a status change was asked from, when a surface can say (WP10 follow-up §4, WP10G).
  *
  * The receipt message's Block User names the payment it was taken from and the capture that
- * read its reason, so the audit row answers "blocked from WHICH receipt". Ids only.
+ * read its reason, so the audit row answers "blocked from WHICH receipt". The Telegram customers
+ * section names the capture that read its reason. Ids only. The Web sends none: its surface,
+ * recorded from the actor, is the context.
  */
-export interface CustomerStatusContext {
-  readonly source: 'RECEIPT_REVIEW';
-  readonly paymentId: string;
-  readonly captureId: string;
+export type CustomerStatusContext =
+  | {
+      readonly source: 'RECEIPT_REVIEW';
+      readonly paymentId: string;
+      readonly captureId: string;
+    }
+  | {
+      readonly source: 'CUSTOMERS_SECTION';
+      readonly captureId: string;
+    };
+
+/**
+ * A block's reason as it is stored (WP10G, closing OQ-WP10F-03): trimmed, and between one and
+ * `CUSTOMER_BLOCK_REASON_MAX_LENGTH` code points — PostgreSQL's `length`, not UTF-16 units, so a
+ * confirmed 500 emoji is 500 and not 250. Null for anything else.
+ *
+ * Refused, never cut, by every caller: a reason truncated is a different reason from the one the
+ * operator confirmed, and it is the sentence the customer is shown.
+ */
+export function normaliseBlockReason(text: string | null | undefined): string | null {
+  const trimmed = text?.trim() ?? '';
+  if (trimmed === '') return null;
+  if (Array.from(trimmed).length > CUSTOMER_BLOCK_REASON_MAX_LENGTH) return null;
+  return trimmed;
 }
 
 export class CustomerService {
@@ -505,12 +527,7 @@ export class CustomerService {
     // Before the hash, so a re-cased id cannot produce a second idempotency record for
     // the same command against the same row.
     const customerId = this.customerId(input.customerId);
-    // Code points, as PostgreSQL's `length` and the receipt's reason capture count them: a
-    // UTF-16 slice kept 250 of a confirmed 500 emoji and could cut one in half.
-    const reason =
-      input.reason === null || input.reason.trim() === ''
-        ? null
-        : Array.from(input.reason.trim()).slice(0, CUSTOMER_BLOCK_REASON_MAX_LENGTH).join('');
+    const reason = normaliseBlockReason(input.reason);
     // The context joins the hash only when there is one, so every key written before it
     // existed still replays as itself.
     const requestHash = hashRequest(
@@ -560,6 +577,33 @@ export class CustomerService {
       // the truth rather than a stale success.
     }
 
+    /*
+     * The one rule every surface shares (WP10G, closing OQ-WP10F-03): a customer cannot be
+     * blocked silently. The reason is mandatory, trimmed, non-empty and bounded — the receipt's
+     * Block User already asked for one, the Web Admin and the Telegram customers section now do
+     * too, and a caller that skips its own check is refused HERE. Refused before anything is
+     * WRITTEN, so nothing is remembered and the same key can carry the corrected request. An
+     * unblock keeps an optional reason: it is the audit's justification, and the stored one is
+     * cleared below.
+     *
+     * Checked AFTER the replay lookup, which only reads: a reasonless block that an earlier
+     * release accepted and whose answer was lost replays as itself instead of being refused
+     * for a rule it predates (Codex review of PR #74).
+     */
+    if (input.to === 'BLOCKED' && reason === null) {
+      throw errors.validation(
+        COMMERCE_ERROR_CODES.CUSTOMER_BLOCK_REASON_REQUIRED,
+        `A block needs a reason: non-empty, at most ${String(CUSTOMER_BLOCK_REASON_MAX_LENGTH)} characters. It is shown to the customer.`,
+      );
+    }
+    if (input.to === 'ACTIVE' && reason === null && (input.reason?.trim() ?? '') !== '') {
+      // Over-long, not empty: an unblock's note is optional, but one this long is refused like
+      // any other over-long field rather than silently cut.
+      throw errors.validation(
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        `The reason is longer than ${String(CUSTOMER_BLOCK_REASON_MAX_LENGTH)} characters.`,
+      );
+    }
     const now = this.deps.clock.now();
     const from: CustomerStatus = input.to === 'BLOCKED' ? 'ACTIVE' : 'BLOCKED';
 

@@ -2257,7 +2257,19 @@ message's Block User path only (`docs/wp10-followup-audit.md` §4):
 Making every block ask for a reason is a customers-section UX change. The owner kept it out of
 the follow-up.
 
-UNRESOLVED.
+RESOLVED (WP10G, `docs/customer-blocking-consistency-audit.md`).
+
+- **The rule is one, in `CustomerService.setStatus`**: a block needs a reason — trimmed,
+  non-empty, at most 500 code points, refused rather than cut — and a caller that skips its own
+  check is refused there with `commerce.customer_block_reason_required`. An unblock never needs
+  one.
+- **The Web Admin** blocks in two steps: Block, then a confirmation panel with the mandatory
+  reason; Unblock, then a confirmation. No one-click write.
+- **The Telegram customers section** blocks through the same capture mechanics as the receipt's
+  Block User, naming the customer (`CUSTOMER_BLOCK_REASON`, 0121): ask → the typed reason → a
+  restating confirm. Its unblock asks first. The fixed English surface note is written by nothing.
+- **The customer** is shown the stored reason, as File 01 §9 already had it; historical rows with
+  no shown reason keep the plain blocked sentence.
 
 ## OQ-WP10F-04 — `CustomerService` block keys share the WEB namespace
 

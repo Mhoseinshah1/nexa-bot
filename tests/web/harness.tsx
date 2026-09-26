@@ -131,6 +131,7 @@ export function customer(overrides: Record<string, unknown> = {}): Record<string
     lastSeenAt: '2026-09-10T12:30:00.000Z',
     blockedAt: null,
     blockedReason: null,
+    blockedReasonShown: false,
     ...overrides,
   };
 }

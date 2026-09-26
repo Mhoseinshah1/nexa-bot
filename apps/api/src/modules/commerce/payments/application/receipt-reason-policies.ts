@@ -1,4 +1,5 @@
-import type { PermissionKey } from '@nexa/contracts';
+import type { PaymentId, PermissionKey, TenantContext } from '@nexa/contracts';
+import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { CustomerRecord } from '../../customers/application/ports.js';
 import type { CustomerService } from '../../customers/application/customer.service.js';
 import type { PaymentService } from './payment.service.js';
@@ -6,6 +7,7 @@ import type { PaymentRecord } from './ports.js';
 import {
   ReceiptReasonCaptureService,
   type ReasonCapturePolicy,
+  type ReasonSubject,
   type ReceiptReasonCaptureDeps,
 } from './receipt-reason-capture.service.js';
 
@@ -39,8 +41,50 @@ export interface ReceiptBlockOutcome {
   readonly changed: boolean;
 }
 
-export type ReceiptBlockCaptureService = ReceiptReasonCaptureService<ReceiptBlockOutcome>;
-export type ReceiptRejectCaptureService = ReceiptReasonCaptureService<PaymentRecord>;
+export type ReceiptBlockCaptureService = ReceiptReasonCaptureService<
+  ReasonSubject,
+  ReceiptBlockOutcome
+>;
+export type ReceiptRejectCaptureService = ReceiptReasonCaptureService<ReasonSubject, PaymentRecord>;
+
+/** The payment by existence alone, for the confirm's re-drive (see `loadForAct`). */
+function paymentSubject(
+  deps: ReceiptReasonCaptureDeps,
+): (
+  scope: TenantContext,
+  paymentId: string,
+  tx?: TransactionScope,
+) => Promise<ReasonSubject | null> {
+  return async (scope, paymentId, tx) => {
+    const payment = await deps.payments.findById(scope, paymentId as PaymentId, tx);
+    if (payment === null) return null;
+    const customer = await deps.customers.findById(scope, payment.customerId, tx);
+    return { payment, customer };
+  };
+}
+
+/**
+ * A receipt action's subject: the payment, when it exists, ADMITS the action and carries a stored
+ * receipt — and the customer it belongs to. Receipts are append-only
+ * (`payment_receipts_no_delete`), so one seen here is still there when the action runs. Null is
+ * the policy's `GONE`: a forged callback naming a transfer with no receipt reaches nothing.
+ */
+function receiptSubject(
+  deps: ReceiptReasonCaptureDeps,
+  admits: (payment: PaymentRecord) => boolean,
+): (
+  scope: TenantContext,
+  paymentId: string,
+  tx?: TransactionScope,
+) => Promise<ReasonSubject | null> {
+  return async (scope, paymentId, tx) => {
+    const payment = await deps.payments.findById(scope, paymentId as PaymentId, tx);
+    if (payment === null || !admits(payment)) return null;
+    if ((await deps.receipts.countForPayment(scope, payment.id, tx)) === 0) return null;
+    const customer = await deps.customers.findById(scope, payment.customerId, tx);
+    return { payment, customer };
+  };
+}
 
 /**
  * Block User from the receipt message (File 01 §9, `docs/wp10-followup-audit.md` §4).
@@ -55,21 +99,23 @@ export function receiptBlockCaptures(
   deps: ReceiptReasonCaptureDeps,
   block: Pick<CustomerService, 'blockWithOutcome'>,
 ): ReceiptBlockCaptureService {
-  const policy: ReasonCapturePolicy<ReceiptBlockOutcome> = {
+  const policy: ReasonCapturePolicy<ReasonSubject, ReceiptBlockOutcome> = {
     purpose: 'RECEIPT_BLOCK_REASON',
+    target: 'PAYMENT',
     action: 'customer.block',
     permission: RECEIPT_BLOCK_PERMISSION,
     viewPermission: RECEIPT_BLOCK_VIEW_PERMISSION,
-    admits: (payment) => payment.method === 'MANUAL_TRANSFER',
+    load: receiptSubject(deps, (payment) => payment.method === 'MANUAL_TRANSFER'),
+    loadForAct: paymentSubject(deps),
     keyFor: receiptBlockCaptureKey,
     act: (scope, actor, input) =>
       block.blockWithOutcome(scope, actor, {
         idempotencyKey: input.idempotencyKey,
-        customerId: input.payment.customerId,
+        customerId: input.subject.payment.customerId,
         reason: input.reason,
         context: {
           source: 'RECEIPT_REVIEW',
-          paymentId: input.payment.id,
+          paymentId: input.subject.payment.id,
           captureId: input.captureId,
         },
       }),
@@ -90,15 +136,22 @@ export function receiptRejectCaptures(
   deps: ReceiptReasonCaptureDeps,
   payments: Pick<PaymentService, 'rejectManualTransfer'>,
 ): ReceiptRejectCaptureService {
-  const policy: ReasonCapturePolicy<PaymentRecord> = {
+  const policy: ReasonCapturePolicy<ReasonSubject, PaymentRecord> = {
     purpose: 'RECEIPT_REJECT_REASON',
+    target: 'PAYMENT',
     action: 'payment.reject',
     permission: RECEIPT_REJECT_PERMISSION,
     viewPermission: RECEIPT_REJECT_VIEW_PERMISSION,
-    admits: (payment) => payment.method === 'MANUAL_TRANSFER' && payment.state === 'PENDING',
+    load: receiptSubject(
+      deps,
+      (payment) => payment.method === 'MANUAL_TRANSFER' && payment.state === 'PENDING',
+    ),
+    // The confirm's re-drive after the rejection: the payment is FAILED now, and the reject
+    // path answers the same key with its first result. Existence is all the confirm needs.
+    loadForAct: paymentSubject(deps),
     keyFor: receiptRejectCaptureKey,
     act: (scope, actor, input) =>
-      payments.rejectManualTransfer(scope, actor, input.payment.id, {
+      payments.rejectManualTransfer(scope, actor, input.subject.payment.id, {
         idempotencyKey: input.idempotencyKey,
         note: input.reason,
         // Checked again inside the rejection's own transaction, beside the capture's check.

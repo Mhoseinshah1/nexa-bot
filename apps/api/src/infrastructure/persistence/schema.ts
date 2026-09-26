@@ -4022,7 +4022,17 @@ export const adminAmountCaptures = pgTable(
       .notNull()
       .references(() => botInstances.id),
     adminId: uuid('admin_id').notNull(),
-    paymentId: uuid('payment_id').notNull(),
+    /**
+     * WHAT the capture is about — a payment for the three receipt purposes, a customer for
+     * `CUSTOMER_BLOCK_REASON` (WP10G). Exactly one is set, per purpose, and the target CHECK
+     * below says which; the composite foreign keys keep both inside the tenant. `payment_id`
+     * was NOT NULL until 0121, when the customers section's block joined this table rather
+     * than open a sibling one: the partial unique index on (tenant, bot, admin) is what makes
+     * "one open prompt per administrator per bot" a database fact, and only one table can
+     * carry it.
+     */
+    paymentId: uuid('payment_id'),
+    customerId: uuid('customer_id'),
     /**
      * The amount the administrator typed, in minor units of the PAYMENT's currency. Null
      * until they have typed one; set once. Not money on its own — nothing is credited
@@ -4031,9 +4041,11 @@ export const adminAmountCaptures = pgTable(
     amountMinor: bigint('amount_minor', { mode: 'bigint' }),
     /**
      * WHAT the capture reads (WP10 follow-up §4): the credit's amount, Block User's mandatory
-     * reason, or a rejection's mandatory reason (File 01 §7). One table for both, because the partial unique index below is
-     * what makes "one open prompt per administrator per bot" a database fact across both.
-     * Defaulted, so every row written before the column existed is a credit's.
+     * reason, a rejection's mandatory reason (File 01 §7), or the mandatory reason of a block
+     * from the customers section (WP10G). One table for all of them, because the partial unique
+     * index below is what makes "one open prompt per administrator per bot" a database fact
+     * across every purpose. Defaulted, so every row written before the column existed is a
+     * credit's.
      */
     purpose: text('purpose').notNull().default('RECEIPT_CREDIT_AMOUNT'),
     /**
@@ -4058,6 +4070,22 @@ export const adminAmountCaptures = pgTable(
       foreignColumns: [payments.tenantId, payments.id],
       name: 'admin_amount_captures_payment_fk',
     }),
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'admin_amount_captures_customer_fk',
+    }),
+    /**
+     * Each purpose names exactly its own target: a receipt purpose a payment and never a
+     * customer, the customers section's block a customer and never a payment. Every row written
+     * before 0121 is a receipt purpose with a payment, so the constraint held on arrival.
+     */
+    check(
+      'admin_amount_captures_target_check',
+      sql`(purpose IN ('RECEIPT_CREDIT_AMOUNT', 'RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON')
+            AND payment_id IS NOT NULL AND customer_id IS NULL)
+          OR (purpose = 'CUSTOMER_BLOCK_REASON' AND customer_id IS NOT NULL AND payment_id IS NULL)`,
+    ),
     /** ONE open capture per administrator per bot, decided by the database. */
     uniqueIndex('admin_amount_captures_open_key')
       .on(table.tenantId, table.botInstanceId, table.adminId)
@@ -4078,14 +4106,14 @@ export const adminAmountCaptures = pgTable(
       'admin_amount_captures_confirmed_check',
       sql`close_reason IS DISTINCT FROM 'CONFIRMED'
           OR (purpose = 'RECEIPT_CREDIT_AMOUNT' AND amount_minor IS NOT NULL)
-          OR (purpose IN ('RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON') AND reason IS NOT NULL)`,
+          OR (purpose IN ('RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON', 'CUSTOMER_BLOCK_REASON') AND reason IS NOT NULL)`,
     ),
     check('admin_amount_captures_purpose_check', enumCheck('purpose', ADMIN_CAPTURE_PURPOSES)),
     /** Each purpose reads its own column and never the other's. */
     check(
       'admin_amount_captures_purpose_column_check',
       sql`(purpose = 'RECEIPT_CREDIT_AMOUNT' AND reason IS NULL)
-          OR (purpose IN ('RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON') AND amount_minor IS NULL)`,
+          OR (purpose IN ('RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON', 'CUSTOMER_BLOCK_REASON') AND amount_minor IS NULL)`,
     ),
     check(
       'admin_amount_captures_reason_check',

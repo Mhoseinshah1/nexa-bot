@@ -187,6 +187,7 @@ import {
   type ReceiptBlockCaptureService,
   type ReceiptRejectCaptureService,
 } from './modules/commerce/payments/application/receipt-reason-policies.js';
+import { customerBlockCaptures } from './modules/commerce/customers/application/customer-block-capture.js';
 import { ReceiptReviewCaption } from './modules/commerce/payments/application/receipt-review-caption.js';
 import { ReceiptReviewPushConsumer } from './modules/commerce/payments/application/receipt-review-push.consumer.js';
 import { ReceiptReviewPushService } from './modules/commerce/payments/application/receipt-review-push.service.js';
@@ -2567,6 +2568,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   };
   const receiptBlockCaptureService = receiptBlockCaptures(reasonCaptureDeps, customerService);
   /*
+   * The customers section's block (WP10G, closing OQ-WP10F-03): the same capture deps and the
+   * same block, with a CUSTOMER as the capture's target. No path blocks without a typed reason.
+   */
+  const customerBlockCaptureService = customerBlockCaptures(reasonCaptureDeps, customerService);
+  /*
    * The rejection's mandatory reason (File 01 §7). It rejects only through
    * `PaymentService.rejectManualTransfer` — the conditional PENDING→FAILED edge approve and
    * credit race on — so the three dispositions stay mutually exclusive.
@@ -3445,6 +3451,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       receiptCredits: receiptCreditCaptureService,
       receiptBlocks: receiptBlockCaptureService,
       receiptRejects: receiptRejectCaptureService,
+      customerBlocks: customerBlockCaptureService,
       telegramAdmins,
       // The customer UX completion's seams. Each re-reads its facts on the tap.
       captures: customerCaptureService,

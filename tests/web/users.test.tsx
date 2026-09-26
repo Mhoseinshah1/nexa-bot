@@ -22,6 +22,8 @@ import { customer, order, renderPage, stubApi } from './harness';
 
 const LIST_ROUTE = { path: '/users', query: new URLSearchParams() };
 const ROW_ID = '019210ab-cdef-7012-8345-6789abcdef01';
+/** The block's reason field, labelled mandatory (WP10G). */
+const LABEL = 'دلیل مسدودسازی (اجباری)';
 
 /**
  * The wallet permissions, all off.
@@ -494,7 +496,7 @@ describe('the customer detail', () => {
      */
   });
 
-  it('sends a block with an idempotency key and the operator note', async () => {
+  it('sends a block with an idempotency key and the mandatory reason, in two steps', async () => {
     const api = stubApi([
       ...detail(),
       {
@@ -518,10 +520,15 @@ describe('the customer detail', () => {
         denied={false}
       />,
     );
-    await screen.findByLabelText('دلیل (اختیاری)');
-
-    fireEvent.change(screen.getByLabelText('دلیل (اختیاری)'), { target: { value: 'spam' } });
+    // Step one: the button only opens the confirmation panel. No request yet.
+    await screen.findByRole('button', { name: 'مسدود کردن' });
     fireEvent.click(screen.getByRole('button', { name: 'مسدود کردن' }));
+    await screen.findByText('تأیید مسدودسازی');
+    expect(api.calls.find((entry) => entry.url.includes('/block'))).toBeUndefined();
+
+    // Step two: the mandatory reason, then the confirm.
+    fireEvent.change(screen.getByLabelText(LABEL), { target: { value: '  spam  ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'تأیید و مسدود کردن' }));
 
     await waitFor(() => {
       const call = api.calls.find((entry) => entry.url.includes('/block'));
@@ -530,6 +537,8 @@ describe('the customer detail', () => {
       // The key is in the BODY, as every other command on this surface carries
       // it, and it is long enough for the contract's `min(8)`.
       expect((body.idempotencyKey ?? '').length).toBeGreaterThanOrEqual(8);
+      // Trimmed here as the server trims it, so the fingerprint the key is bound to is
+      // the reason that is actually sent.
       expect(body.reason).toBe('spam');
     });
 
@@ -556,7 +565,7 @@ describe('the customer detail', () => {
     expect(screen.queryByRole('button', { name: 'مسدود کردن' })).toBeNull();
   });
 
-  it('omits the reason field entirely when it is empty', async () => {
+  it('sends no block until a non-empty reason is typed', async () => {
     const api = stubApi([
       ...detail(),
       { url: `/users/${ROW_ID}/block`, body: { customer: customer({ status: 'BLOCKED' }) } },
@@ -573,15 +582,106 @@ describe('the customer detail', () => {
     );
     await screen.findByRole('button', { name: 'مسدود کردن' });
     fireEvent.click(screen.getByRole('button', { name: 'مسدود کردن' }));
+    const confirm = await screen.findByRole('button', { name: 'تأیید و مسدود کردن' });
 
+    // Disabled with nothing typed, and with whitespace only: a block without a reason is
+    // the thing the server refuses, and the courtesy here is not to offer it.
+    expect(confirm).toBeDisabled();
+    fireEvent.change(screen.getByLabelText(LABEL), { target: { value: '   ' } });
+    expect(confirm).toBeDisabled();
+    fireEvent.click(confirm);
+    expect(api.calls.find((entry) => entry.url.includes('/block'))).toBeUndefined();
+
+    fireEvent.change(screen.getByLabelText(LABEL), { target: { value: 'spam' } });
+    expect(confirm).toBeEnabled();
+
+    // The bound is the server's, in code points: 500 emoji may be typed and sent, 501 may not.
+    const emoji = '😀'.repeat(500);
+    fireEvent.change(screen.getByLabelText(LABEL), { target: { value: emoji } });
+    expect(screen.getByLabelText(LABEL)).toHaveValue(emoji);
+    expect(confirm).toBeEnabled();
+    fireEvent.change(screen.getByLabelText(LABEL), { target: { value: `${emoji}😀` } });
+    expect(confirm).toBeDisabled();
+  });
+
+  it('cancel closes the confirmation and sends nothing', async () => {
+    const api = stubApi(detail());
+    renderPage(
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock
+        {...NO_WALLET}
+        {...NO_COMMERCE}
+        denied={false}
+      />,
+    );
+    await screen.findByRole('button', { name: 'مسدود کردن' });
+    fireEvent.click(screen.getByRole('button', { name: 'مسدود کردن' }));
+    fireEvent.change(await screen.findByLabelText(LABEL), { target: { value: 'typed' } });
+    fireEvent.click(screen.getByRole('button', { name: 'انصراف' }));
+
+    // Back to step one, and the typed reason is gone with the panel.
+    await screen.findByRole('button', { name: 'مسدود کردن' });
+    expect(screen.queryByLabelText(LABEL)).toBeNull();
+    expect(api.calls.find((entry) => entry.url.includes('/block'))).toBeUndefined();
+  });
+
+  it('unblock asks for confirmation, then sends no reason', async () => {
+    const api = stubApi([
+      ...detail({
+        status: 'BLOCKED',
+        blockedAt: '2026-09-11T09:00:00.000Z',
+        blockedReason: 'spam',
+        blockedReasonShown: true,
+      }),
+      { url: `/users/${ROW_ID}/unblock`, body: { customer: customer() } },
+    ]);
+    renderPage(
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock
+        {...NO_WALLET}
+        {...NO_COMMERCE}
+        denied={false}
+      />,
+    );
+    await screen.findByRole('button', { name: 'رفع مسدودی' });
+    fireEvent.click(screen.getByRole('button', { name: 'رفع مسدودی' }));
+    await screen.findByText('تأیید رفع مسدودی');
+    expect(api.calls.find((entry) => entry.url.includes('/unblock'))).toBeUndefined();
+
+    fireEvent.click(screen.getByRole('button', { name: 'تأیید و رفع مسدودی' }));
     await waitFor(() => {
-      const call = api.calls.find((entry) => entry.url.includes('/block'));
-      expect(call).toBeDefined();
-      // Absent, not `''`. The contract trims and bounds the reason; an empty
-      // string would be stored as a reason that says nothing and would read as
-      // current on an active customer.
+      const call = api.calls.find((entry) => entry.url.includes('/unblock'));
+      expect(call, 'no unblock request was sent').toBeDefined();
       expect(Object.keys(call?.body as object)).not.toContain('reason');
     });
+  });
+
+  it('says whether the customer is shown the stored reason', async () => {
+    stubApi(
+      detail({
+        status: 'BLOCKED',
+        blockedAt: '2026-09-11T09:00:00.000Z',
+        blockedReason: 'an old note',
+        blockedReasonShown: false,
+      }),
+    );
+    renderPage(
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock
+        {...NO_WALLET}
+        {...NO_COMMERCE}
+        denied={false}
+      />,
+    );
+    await screen.findByText('an old note');
+    // A reason written before the promise: the customer sees only the plain sentence.
+    await screen.findByText(/به مشتری نشان داده نمی‌شود/);
   });
 
   it('draws no block control at all without users.block', async () => {
@@ -601,7 +701,7 @@ describe('the customer detail', () => {
     expect(screen.queryByRole('button', { name: 'رفع مسدودی' })).toBeNull();
     // Not even the note field: a reason with nowhere to go is a form that looks
     // like it will do something.
-    expect(screen.queryByLabelText('دلیل (اختیاری)')).toBeNull();
+    expect(screen.queryByLabelText(LABEL)).toBeNull();
   });
 
   it('shows the server refusal rather than a success it did not get', async () => {
@@ -632,6 +732,8 @@ describe('the customer detail', () => {
     );
     await screen.findByRole('button', { name: 'مسدود کردن' });
     fireEvent.click(screen.getByRole('button', { name: 'مسدود کردن' }));
+    fireEvent.change(await screen.findByLabelText(LABEL), { target: { value: 'spam' } });
+    fireEvent.click(screen.getByRole('button', { name: 'تأیید و مسدود کردن' }));
 
     // The UI drew the button because the session claimed the permission; the
     // server is the authority and disagreed. The disagreement is shown.

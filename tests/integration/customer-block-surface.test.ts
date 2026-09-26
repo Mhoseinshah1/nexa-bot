@@ -102,18 +102,29 @@ describe('customer block idempotency is namespaced by the initiating surface', (
     expect(await blockAudits(f.customer)).toEqual([{ source_surface: 'TELEGRAM' }]);
   });
 
-  it('a block from the Telegram Customers section is remembered under TELEGRAM, beside the update’s own record', async () => {
+  it('a block from the Telegram Customers section is remembered under TELEGRAM, with the capture’s key', async () => {
+    // WP10G: ask → open the reason capture → the reason → the restating confirm blocks.
     expect((await tap(f, `9:b:${f.customer}`, TG.owner)).replyKey).toBe(
+      'bot.admin.customer_block_ask',
+    );
+    expect((await tap(f, `9:o:${f.customer}`, TG.owner)).replyKey).toBe(
+      'bot.admin.customer_block_reason_prompt',
+    );
+    expect((await say(f, 'spam', TG.owner)).replyKey).toBe('bot.admin.customer_block_confirm');
+    const captureId = (
+      lastKeyboard(f).find((b) => b.callback_data?.startsWith('9:c:'))?.callback_data ?? ''
+    ).slice('9:c:'.length);
+    expect((await tap(f, `9:c:${captureId}`, TG.owner)).replyKey).toBe(
       'bot.admin.customer_status_changed',
     );
     expect((await customerStatus(f, f.customer)).status).toBe('BLOCKED');
 
+    const key = `customer-block-capture:${captureId}`;
     const recorded = await rows<{ scope_ref: string; key: string }>(
       f,
-      sql`SELECT scope_ref, key FROM request_idempotency WHERE key LIKE '%:customer-status'`,
+      sql`SELECT scope_ref, key FROM request_idempotency WHERE key = ${key}`,
     );
-    expect(recorded).toHaveLength(1);
-    expect(recorded[0]?.scope_ref).toBe(telegramRef);
+    expect(recorded).toEqual([{ scope_ref: telegramRef, key }]);
     expect(await blockAudits(f.customer)).toEqual([{ source_surface: 'TELEGRAM' }]);
     // Nothing of it was written as WEB.
     const web = await rows(f, sql`SELECT key FROM request_idempotency WHERE scope_ref = ${webRef}`);
@@ -142,14 +153,14 @@ describe('customer block idempotency is namespaced by the initiating surface', (
     await f.ctx.container.customers.block(tenantA, f.owner, {
       idempotencyKey: 'shared-key',
       customerId: f.customer,
-      reason: null,
+      reason: 'web reason',
     });
     // ...and a Telegram administrator's command that happens to carry the same string blocks
     // ANOTHER customer. Under one `WEB` namespace this was refused as a payload mismatch.
     const telegram = await f.ctx.container.customers.blockWithOutcome(tenantA, telegramOwner, {
       idempotencyKey: 'shared-key',
       customerId: other,
-      reason: null,
+      reason: 'telegram reason',
     });
 
     expect(telegram).toMatchObject({ changed: true, customer: { id: other, status: 'BLOCKED' } });
@@ -165,14 +176,15 @@ describe('customer block idempotency is namespaced by the initiating surface', (
     await f.ctx.container.customers.block(tenantA, telegramOwner, {
       idempotencyKey: 'reused-telegram-key',
       customerId: f.customer,
-      reason: null,
+      reason: 'first use',
     });
 
     await expect(
       f.ctx.container.customers.block(tenantA, telegramOwner, {
         idempotencyKey: 'reused-telegram-key',
         customerId: other,
-        reason: null,
+        // The same reason, so the only difference in the payload is the customer.
+        reason: 'first use',
       }),
     ).rejects.toMatchObject({ code: 'platform.idempotency_payload_mismatch' });
     expect((await customerStatus(f, other)).status).toBe('ACTIVE');

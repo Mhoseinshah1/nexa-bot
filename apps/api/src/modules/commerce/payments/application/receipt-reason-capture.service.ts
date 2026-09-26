@@ -5,9 +5,11 @@ import {
   PLATFORM_ERROR_CODES,
   errors,
   paymentIdSchema,
+  userIdSchema,
   uuidV7Schema,
   type ActorContext,
   type AdminAmountCaptureCloseReason,
+  type AdminReasonCapturePurpose,
   type AuditWriter,
   type BotInstanceId,
   type Clock,
@@ -18,6 +20,7 @@ import {
   type PermissionKey,
   type TenantContext,
   type UnitOfWork,
+  type UserId,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import {
@@ -40,26 +43,57 @@ import type {
 const CAPTURE_NAMESPACE = 'TELEGRAM' as const;
 
 /**
- * What ONE typed-reason action is: which capture purpose reads its reason, which permission
- * gates it, when it may be asked of a payment, and what it DOES once the reason is confirmed.
- *
- * Two policies use it — Block User (WP10 follow-up §4) and the rejection's mandatory reason
- * (File 01 §7) — and they differ in exactly these fields, so the capture mechanics that make a
- * typed message safe to read (INCIDENT-FIN-001) exist once rather than twice.
+ * What a capture names: a PAYMENT for the three receipt purposes, a CUSTOMER for the customers
+ * section's block (WP10G). The table's target CHECK holds the same rule; this is the type's half.
  */
-export interface ReasonCapturePolicy<TOutcome> {
-  readonly purpose: 'RECEIPT_BLOCK_REASON' | 'RECEIPT_REJECT_REASON';
+export type ReasonCaptureTarget = 'PAYMENT' | 'CUSTOMER';
+
+/**
+ * What ONE typed-reason action is: which capture purpose reads its reason, which permission
+ * gates it, what it is ABOUT and when it may be asked, and what it DOES once the reason is
+ * confirmed.
+ *
+ * Three policies use it — Block User from a receipt (WP10 follow-up §4), the rejection's
+ * mandatory reason (File 01 §7) and the customers section's block (WP10G) — and they differ in
+ * exactly these fields, so the capture mechanics that make a typed message safe to read
+ * (INCIDENT-FIN-001) exist once rather than three times.
+ *
+ * `TSubject` is what the surface is shown about the target: `{ payment, customer }` for a
+ * receipt, `{ customer }` for a customers-section block. It is an object so the results can
+ * spread it, which is how the surface reads `asked.customer` without knowing the policy.
+ */
+export interface ReasonCapturePolicy<TSubject extends object, TOutcome> {
+  readonly purpose: AdminReasonCapturePurpose;
+  readonly target: ReasonCaptureTarget;
   /** The audit/denial action every refusal of this path is recorded under. */
   readonly action: string;
   /** Charged on every step, and again inside every writing transaction. */
   readonly permission: PermissionKey;
-  /** Charged beside it where the payment is read to show who or what the reason is about. */
+  /** Charged beside it where the target is read to show who or what the reason is about. */
   readonly viewPermission: PermissionKey;
   /**
-   * Whether a capture may be opened, or its reason taken, for this payment. False answers
-   * `GONE`: a rejection asked of a payment already decided has nothing to reject.
+   * The target, READ, as the surface will be shown it — or null when it does not exist or no
+   * longer admits this action, which answers `GONE`: a rejection asked of a payment already
+   * decided has nothing to reject, a receipt action asked of a transfer with no receipt has
+   * nothing to act from. Read only, never locked: a reason capture waits on no disposition.
    */
-  readonly admits: (payment: PaymentRecord) => boolean;
+  readonly load: (
+    scope: TenantContext,
+    targetId: string,
+    tx?: TransactionScope,
+  ) => Promise<TSubject | null>;
+  /**
+   * The target as the CONFIRM reads it, without `load`'s admission: a capture already
+   * CONFIRMED re-drives its action under the same key so a double tap or a crash between the
+   * close and the action is one action — and by then the action may have made the target
+   * inadmissible (a rejected payment is no longer PENDING). The path behind `act` answers the
+   * replay with its first result; this only has to find the target. Defaults to `load`.
+   */
+  readonly loadForAct?: (
+    scope: TenantContext,
+    targetId: string,
+    tx?: TransactionScope,
+  ) => Promise<TSubject | null>;
   /** The key the confirmed capture acts under — derived from the capture, so it acts once. */
   readonly keyFor: (captureId: string) => string;
   /**
@@ -72,7 +106,7 @@ export interface ReasonCapturePolicy<TOutcome> {
     actor: ActorContext,
     input: {
       readonly idempotencyKey: string;
-      readonly payment: PaymentRecord;
+      readonly subject: TSubject;
       readonly reason: string;
       readonly captureId: string;
     },
@@ -84,8 +118,8 @@ export interface ReceiptReasonCaptureDeps {
   /** The payment READ alone, never locked: a reason capture waits on no disposition. */
   readonly payments: Pick<PaymentRepository, 'findById'>;
   /**
-   * Whether the payment carries a stored receipt. Both purposes are RECEIPT-originated, so a
-   * transfer with none admits neither: a forged callback naming it answers `GONE`.
+   * Whether the payment carries a stored receipt. The receipt purposes are RECEIPT-originated,
+   * so a transfer with none admits neither: a forged callback naming it answers `GONE`.
    */
   readonly receipts: Pick<PaymentReceiptRepository, 'countForPayment'>;
   readonly customers: Pick<CustomerRepository, 'findById'>;
@@ -100,19 +134,25 @@ export interface ReceiptReasonCaptureDeps {
   readonly ids: IdGenerator;
 }
 
+/** What a receipt action is about: the payment, and the customer it belongs to when known. */
 export interface ReasonSubject {
   readonly payment: PaymentRecord;
   readonly customer: CustomerRecord | null;
 }
 
-export type ReasonAskResult =
-  ({ readonly outcome: 'ASK' } & ReasonSubject) | { readonly outcome: 'GONE' };
+/** What a customers-section block is about: the customer, and nothing they bought. */
+export interface CustomerReasonSubject {
+  readonly customer: CustomerRecord;
+}
 
-export type ReasonOpenResult =
-  | ({ readonly outcome: 'OPENED'; readonly capture: AdminAmountCaptureRecord } & ReasonSubject)
+export type ReasonAskResult<TSubject extends object = ReasonSubject> =
+  ({ readonly outcome: 'ASK' } & TSubject) | { readonly outcome: 'GONE' };
+
+export type ReasonOpenResult<TSubject extends object = ReasonSubject> =
+  | ({ readonly outcome: 'OPENED'; readonly capture: AdminAmountCaptureRecord } & TSubject)
   | { readonly outcome: 'GONE' };
 
-export type ReasonTextResult =
+export type ReasonTextResult<TSubject extends object = ReasonSubject> =
   | { readonly outcome: 'NO_CAPTURE' }
   | { readonly outcome: 'INVALID' }
   | { readonly outcome: 'EXPIRED' }
@@ -121,7 +161,7 @@ export type ReasonTextResult =
       readonly outcome: 'ENTERED';
       readonly capture: AdminAmountCaptureRecord;
       readonly reason: string;
-    } & ReasonSubject);
+    } & TSubject);
 
 export type ReasonConfirmResult<TOutcome> =
   | { readonly outcome: 'DONE'; readonly result: TOutcome; readonly reason: string }
@@ -131,64 +171,68 @@ export type ReasonConfirmResult<TOutcome> =
 /**
  * `CONFIRMED` says the reason was confirmed — NOT that the action took effect: the capture closes
  * before the action runs, and an action refused, lost to another decision or interrupted leaves
- * it CONFIRMED with nothing done. So it carries the payment, and the caller reports what the
+ * it CONFIRMED with nothing done. So it carries the target's id, and the caller reports what the
  * customer or the payment IS rather than what the capture implies.
  */
 export type ReasonCancelResult =
   | { readonly outcome: 'CANCELLED' }
-  | { readonly outcome: 'CONFIRMED'; readonly paymentId: PaymentId }
+  | { readonly outcome: 'CONFIRMED'; readonly targetId: string }
   | { readonly outcome: 'GONE' };
 
 /**
- * A MANDATORY typed reason, read safely, for one action taken from a receipt message.
+ * A MANDATORY typed reason, read safely, for one action taken from a Telegram admin message.
  *
- * Ask (block only) → open the capture → the reason, as text → a confirmation restating it →
- * the action. The reason is read through `admin_amount_captures`, whose partial unique index
- * makes "one open prompt per administrator per bot" a database fact across every purpose, with
- * the four INCIDENT-FIN-001 properties: one administrator, one bot, one payment; ONE reason
- * read; nothing done by the typed text itself; a short expiry.
+ * Ask → open the capture → the reason, as text → a confirmation restating it → the action. The
+ * reason is read through `admin_amount_captures`, whose partial unique index makes "one open
+ * prompt per administrator per bot" a database fact across every purpose, with the four
+ * INCIDENT-FIN-001 properties: one administrator, one bot, one target; ONE reason read; nothing
+ * done by the typed text itself; a short expiry.
  *
  * The reason is mandatory twice over: an empty or over-long message is refused here and the
  * capture stays open, and the table's CHECK refuses a CONFIRMED reason capture without one.
  */
-export class ReceiptReasonCaptureService<TOutcome> {
+export class ReceiptReasonCaptureService<TSubject extends object, TOutcome> {
   constructor(
     private readonly deps: ReceiptReasonCaptureDeps,
-    private readonly policy: ReasonCapturePolicy<TOutcome>,
+    private readonly policy: ReasonCapturePolicy<TSubject, TOutcome>,
   ) {}
 
   /** The question before anything is written: whose, or which, it would be. Writes nothing. */
   async ask(
     scope: TenantContext,
     actor: ActorContext,
-    paymentId: string,
-  ): Promise<ReasonAskResult> {
-    const id = this.paymentId(paymentId);
-    const denial = { action: this.policy.action, entityType: 'Payment', entityId: id };
+    targetId: string,
+  ): Promise<ReasonAskResult<TSubject>> {
+    const id = this.targetId(targetId);
+    const denial = { action: this.policy.action, entityType: this.entityType(), entityId: id };
     await this.authorize(scope, actor, this.policy.permission, denial);
     await this.authorize(scope, actor, this.policy.viewPermission, denial);
-    const subject = await this.subjectOf(scope, id);
+    const subject = await this.policy.load(scope, id);
     return subject === null ? { outcome: 'GONE' } : { outcome: 'ASK', ...subject };
   }
 
-  /** Opens this administrator's reason capture for this receipt. Does nothing else. */
+  /** Opens this administrator's reason capture for this target. Does nothing else. */
   async open(
     scope: TenantContext,
     actor: ActorContext,
     input: {
       readonly idempotencyKey: string;
       readonly botInstanceId: BotInstanceId;
-      readonly paymentId: string;
+      readonly targetId: string;
     },
-  ): Promise<ReasonOpenResult> {
-    const paymentId = this.paymentId(input.paymentId);
+  ): Promise<ReasonOpenResult<TSubject>> {
+    const targetId = this.targetId(input.targetId);
     const adminId = this.adminIdOf(actor);
-    const denial = { action: this.policy.action, entityType: 'Payment', entityId: paymentId };
+    const denial = {
+      action: this.policy.action,
+      entityType: this.entityType(),
+      entityId: targetId,
+    };
     await this.authorize(scope, actor, this.policy.permission, denial);
     await this.authorize(scope, actor, this.policy.viewPermission, denial);
 
     const requestHash = hashRequest({
-      paymentId,
+      targetId,
       bot: input.botInstanceId,
       open: this.policy.purpose,
     });
@@ -200,16 +244,14 @@ export class ReceiptReasonCaptureService<TOutcome> {
     );
     if (replayed !== null) {
       const capture = await this.deps.captures.findById(scope, replayed.result.captureId);
-      const subject = capture === null ? null : await this.subjectOf(scope, capture.paymentId);
+      const subject = capture === null ? null : await this.subjectOf(scope, capture);
       if (capture !== null && subject !== null) return { outcome: 'OPENED', capture, ...subject };
     }
 
     return this.mutate(scope, actor, denial, async (tx) => {
       await this.deps.captures.lockForAdmin(scope, input.botInstanceId, adminId, tx);
-      const payment = await this.deps.payments.findById(scope, paymentId, tx);
-      if (payment === null || !(await this.admitted(scope, payment, tx))) {
-        return { outcome: 'GONE' } as const;
-      }
+      const subject = await this.policy.load(scope, targetId, tx);
+      if (subject === null) return { outcome: 'GONE' } as const;
       const now = this.deps.clock.now();
       // Opening closes any other open prompt of this administrator on this bot — a credit's
       // amount capture included — in this transaction: one prompt, never two.
@@ -219,7 +261,9 @@ export class ReceiptReasonCaptureService<TOutcome> {
           id: this.deps.ids.uuid(),
           botInstanceId: input.botInstanceId,
           adminId,
-          paymentId,
+          ...(this.policy.target === 'PAYMENT'
+            ? { paymentId: targetId as PaymentId }
+            : { customerId: targetId as UserId }),
           purpose: this.policy.purpose,
           openedAt: now,
           expiresAt: new Date(now.getTime() + ADMIN_AMOUNT_CAPTURE_TTL_MS),
@@ -235,8 +279,7 @@ export class ReceiptReasonCaptureService<TOutcome> {
         { captureId: capture.id },
         tx,
       );
-      const customer = await this.deps.customers.findById(scope, payment.customerId, tx);
-      return { outcome: 'OPENED', capture, payment, customer } as const;
+      return { outcome: 'OPENED', capture, ...subject } as const;
     });
   }
 
@@ -255,7 +298,7 @@ export class ReceiptReasonCaptureService<TOutcome> {
       readonly botInstanceId: BotInstanceId;
       readonly text: string;
     },
-  ): Promise<ReasonTextResult> {
+  ): Promise<ReasonTextResult<TSubject>> {
     const adminId = this.adminIdOrNull(actor);
     if (adminId === null) return { outcome: 'NO_CAPTURE' };
 
@@ -272,7 +315,7 @@ export class ReceiptReasonCaptureService<TOutcome> {
     );
     if (replayed !== null) {
       const capture = await this.deps.captures.findById(scope, replayed.result.captureId);
-      const subject = capture === null ? null : await this.subjectOf(scope, capture.paymentId);
+      const subject = capture === null ? null : await this.subjectOf(scope, capture);
       if (capture !== null && capture.reason !== null && subject !== null) {
         return { outcome: 'ENTERED', capture, reason: capture.reason, ...subject };
       }
@@ -288,8 +331,8 @@ export class ReceiptReasonCaptureService<TOutcome> {
 
     const denial = {
       action: this.policy.action,
-      entityType: 'Payment',
-      entityId: waiting.paymentId,
+      entityType: this.entityType(),
+      entityId: this.targetIdOf(waiting),
     };
     return this.mutate(scope, actor, denial, async (tx) => {
       await this.deps.captures.lockForAdmin(scope, input.botInstanceId, adminId, tx);
@@ -307,8 +350,8 @@ export class ReceiptReasonCaptureService<TOutcome> {
         await this.deps.captures.close(scope, capture.id, 'EXPIRED', now, tx);
         return { outcome: 'EXPIRED' } as const;
       }
-      const payment = await this.deps.payments.findById(scope, capture.paymentId, tx);
-      if (payment === null || !(await this.admitted(scope, payment, tx))) {
+      const subject = await this.subjectOf(scope, capture, tx);
+      if (subject === null) {
         await this.deps.captures.close(scope, capture.id, 'SUPERSEDED', now, tx);
         return { outcome: 'GONE' } as const;
       }
@@ -330,13 +373,11 @@ export class ReceiptReasonCaptureService<TOutcome> {
         { captureId: capture.id },
         tx,
       );
-      const customer = await this.deps.customers.findById(scope, payment.customerId, tx);
       return {
         outcome: 'ENTERED',
         capture: { ...capture, reason },
         reason,
-        payment,
-        customer,
+        ...subject,
       } as const;
     });
   }
@@ -392,11 +433,15 @@ export class ReceiptReasonCaptureService<TOutcome> {
     });
     if (decided.outcome !== 'ACT') return decided;
 
-    const payment = await this.deps.payments.findById(scope, decided.capture.paymentId);
-    if (payment === null) return { outcome: 'GONE' };
+    const targetId = this.targetIdOf(decided.capture);
+    const subject =
+      targetId === null
+        ? null
+        : await (this.policy.loadForAct ?? this.policy.load)(scope, targetId);
+    if (subject === null) return { outcome: 'GONE' };
     const result = await this.policy.act(scope, actor, {
       idempotencyKey: this.policy.keyFor(decided.capture.id),
-      payment,
+      subject,
       reason: decided.reason,
       captureId: decided.capture.id,
     });
@@ -429,7 +474,7 @@ export class ReceiptReasonCaptureService<TOutcome> {
       if (capture === null) return { outcome: 'GONE' } as const;
       const confirmed = {
         outcome: 'CONFIRMED',
-        paymentId: capture.paymentId,
+        targetId: this.targetIdOf(capture) ?? captureId,
       } as const;
       if (capture.closeReason === 'CONFIRMED') return confirmed;
       if (
@@ -479,27 +524,28 @@ export class ReceiptReasonCaptureService<TOutcome> {
     );
   }
 
+  /** The capture's target, loaded through the policy — null when the capture names none. */
   private async subjectOf(
     scope: TenantContext,
-    paymentId: PaymentId,
-  ): Promise<ReasonSubject | null> {
-    const payment = await this.deps.payments.findById(scope, paymentId);
-    if (payment === null || !(await this.admitted(scope, payment))) return null;
-    const customer = await this.deps.customers.findById(scope, payment.customerId);
-    return { payment, customer };
+    capture: AdminAmountCaptureRecord,
+    tx?: TransactionScope,
+  ): Promise<TSubject | null> {
+    const targetId = this.targetIdOf(capture);
+    if (targetId === null) return null;
+    return this.policy.load(scope, targetId, tx);
   }
 
   /**
-   * The policy's own admission AND a stored receipt. Receipts are append-only
-   * (`payment_receipts_no_delete`), so one seen here is still there when the action runs.
+   * The id the capture names for THIS policy's target. A capture of the other kind — a
+   * payment-naming row met by a customer policy, say — has none, and is answered as gone
+   * rather than read through the wrong table.
    */
-  private async admitted(
-    scope: TenantContext,
-    payment: PaymentRecord,
-    tx?: TransactionScope,
-  ): Promise<boolean> {
-    if (!this.policy.admits(payment)) return false;
-    return (await this.deps.receipts.countForPayment(scope, payment.id, tx)) > 0;
+  private targetIdOf(capture: AdminAmountCaptureRecord): string | null {
+    return this.policy.target === 'PAYMENT' ? capture.paymentId : capture.customerId;
+  }
+
+  private entityType(): string {
+    return this.policy.target === 'PAYMENT' ? 'Payment' : 'Customer';
   }
 
   private adminIdOf(actor: ActorContext): string {
@@ -507,7 +553,7 @@ export class ReceiptReasonCaptureService<TOutcome> {
     if (id !== null) return id;
     throw errors.permissionDenied(
       PLATFORM_ERROR_CODES.PERMISSION_DENIED,
-      'Only an administrator can give a reason on a receipt.',
+      'Only an administrator can give a reason here.',
     );
   }
 
@@ -517,10 +563,21 @@ export class ReceiptReasonCaptureService<TOutcome> {
       : null;
   }
 
-  private paymentId(candidate: string): PaymentId {
-    const parsed = paymentIdSchema.safeParse(candidate);
+  /**
+   * The target id, validated by the schema its table uses — a UUIDv7, lower-cased — so a
+   * malformed callback is a refusal and never a cast error at the `uuid` column.
+   */
+  private targetId(candidate: string): string {
+    if (this.policy.target === 'PAYMENT') {
+      const parsed = paymentIdSchema.safeParse(candidate);
+      if (!parsed.success) {
+        throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
+      }
+      return parsed.data;
+    }
+    const parsed = userIdSchema.safeParse(candidate);
     if (!parsed.success) {
-      throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
+      throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
     }
     return parsed.data;
   }

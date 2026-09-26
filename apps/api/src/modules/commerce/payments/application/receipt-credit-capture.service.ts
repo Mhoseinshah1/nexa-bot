@@ -289,7 +289,12 @@ export class ReceiptCreditCaptureService {
         await this.deps.captures.close(scope, capture.id, 'EXPIRED', now, tx);
         return { outcome: 'EXPIRED' } as const;
       }
-      const payment = await this.deps.payments.findById(scope, capture.paymentId, tx);
+      // A credit capture always names a payment (the table's target CHECK); the null branch is
+      // the type's, not a state this purpose can reach.
+      const payment =
+        capture.paymentId === null
+          ? null
+          : await this.deps.payments.findById(scope, capture.paymentId, tx);
       if (payment === null || payment.state !== 'PENDING') {
         await this.deps.captures.close(scope, capture.id, 'SUPERSEDED', now, tx);
         return { outcome: 'GONE' } as const;
@@ -388,6 +393,8 @@ export class ReceiptCreditCaptureService {
       return { outcome: 'CREDIT', capture, amountMinor: capture.amountMinor } as const;
     });
     if (decided.outcome !== 'CREDIT') return decided;
+    // The type's null branch only: a credit capture names a payment by the table's CHECK.
+    if (decided.capture.paymentId === null) return { outcome: 'GONE' };
 
     const result = await this.deps.dispositions.creditToWallet(scope, actor, {
       idempotencyKey: receiptCreditCaptureKey(decided.capture.id),
@@ -494,7 +501,7 @@ export class ReceiptCreditCaptureService {
 
   private async subjectOf(scope: TenantContext, captureId: string): Promise<CaptureSubject | null> {
     const capture = await this.deps.captures.findById(scope, captureId);
-    if (capture === null) return null;
+    if (capture === null || capture.paymentId === null) return null;
     const payment = await this.deps.payments.findById(scope, capture.paymentId);
     if (payment === null) return null;
     const customer = await this.deps.customers.findById(scope, payment.customerId);

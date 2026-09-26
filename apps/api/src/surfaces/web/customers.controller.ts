@@ -3,6 +3,7 @@ import type { FastifyRequest } from 'fastify';
 import {
   API_PREFIX,
   blockCustomerRequestSchema,
+  unblockCustomerRequestSchema,
   customerListQuerySchema,
   CUSTOMER_ROUTES,
   type CustomerListResponse,
@@ -101,11 +102,13 @@ export class CustomersController {
     @Body() body: unknown,
   ): Promise<CustomerResponse> {
     const { scope, actor } = await this.authenticate(request, { write: true });
+    // The reason is REQUIRED here (WP10G, closing OQ-WP10F-03): a block without one is a 400
+    // before the service, and the service refuses it again for any caller that skips this.
     const command = blockCustomerRequestSchema.parse(body);
     const customer = await this.container.customers.block(scope, actor, {
       idempotencyKey: command.idempotencyKey,
       customerId: id,
-      reason: command.reason ?? null,
+      reason: command.reason,
     });
     return { customer: toSummary(customer) };
   }
@@ -117,7 +120,8 @@ export class CustomersController {
     @Body() body: unknown,
   ): Promise<CustomerResponse> {
     const { scope, actor } = await this.authenticate(request, { write: true });
-    const command = blockCustomerRequestSchema.parse(body);
+    // Its own schema (WP10G): the block's reason is mandatory, the unblock's stays optional.
+    const command = unblockCustomerRequestSchema.parse(body);
     const customer = await this.container.customers.unblock(scope, actor, {
       idempotencyKey: command.idempotencyKey,
       customerId: id,
@@ -176,6 +180,7 @@ function toSummary(record: CustomerRecord): CustomerSummaryResponse {
     lastSeenAt: record.lastSeenAt.toISOString(),
     blockedAt: record.blockedAt === null ? null : record.blockedAt.toISOString(),
     blockedReason: record.blockedReason,
+    blockedReasonShown: record.blockedReasonShown,
   };
 }
 

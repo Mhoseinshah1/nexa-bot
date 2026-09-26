@@ -2,9 +2,11 @@ import { and, eq, isNull, ne, sql } from 'drizzle-orm';
 import type {
   AdminAmountCaptureCloseReason,
   AdminCapturePurpose,
+  AdminReasonCapturePurpose,
   BotInstanceId,
   PaymentId,
   TenantContext,
+  UserId,
 } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
@@ -54,7 +56,8 @@ export class DrizzleAdminAmountCaptureRepository implements AdminAmountCaptureRe
       readonly id: string;
       readonly botInstanceId: BotInstanceId;
       readonly adminId: string;
-      readonly paymentId: PaymentId;
+      readonly paymentId?: PaymentId;
+      readonly customerId?: UserId;
       readonly purpose?: AdminCapturePurpose;
       readonly openedAt: Date;
       readonly expiresAt: Date;
@@ -85,7 +88,9 @@ export class DrizzleAdminAmountCaptureRepository implements AdminAmountCaptureRe
         tenantId,
         botInstanceId: input.botInstanceId,
         adminId: input.adminId,
-        paymentId: input.paymentId,
+        // One or the other, per purpose; the table's target CHECK refuses any other shape.
+        paymentId: input.paymentId ?? null,
+        customerId: input.customerId ?? null,
         purpose: input.purpose ?? 'RECEIPT_CREDIT_AMOUNT',
         openedAt: input.openedAt,
         expiresAt: input.expiresAt,
@@ -125,7 +130,7 @@ export class DrizzleAdminAmountCaptureRepository implements AdminAmountCaptureRe
     scope: TenantContext,
     botInstanceId: BotInstanceId,
     adminId: string,
-    purpose: 'RECEIPT_BLOCK_REASON' | 'RECEIPT_REJECT_REASON',
+    purpose: AdminReasonCapturePurpose,
     tx?: unknown,
   ): Promise<AdminAmountCaptureRecord | null> {
     const tenantId = requireTenantId(scope);
@@ -233,7 +238,8 @@ function toRecord(row: typeof adminAmountCaptures.$inferSelect): AdminAmountCapt
     id: row.id,
     botInstanceId: row.botInstanceId as BotInstanceId,
     adminId: row.adminId,
-    paymentId: row.paymentId as PaymentId,
+    paymentId: row.paymentId as PaymentId | null,
+    customerId: row.customerId as UserId | null,
     // `admin_amount_captures_purpose_check` is built from the contract enum.
     purpose: row.purpose as AdminCapturePurpose,
     amountMinor: row.amountMinor,
