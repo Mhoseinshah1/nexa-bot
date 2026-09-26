@@ -235,3 +235,40 @@ describe('the Bots page', () => {
     }
   });
 });
+
+/**
+ * The route's wiring, not the page's.
+ *
+ * Every case above hands `BotsPage` its booleans directly, so none of them could see
+ * `resolve` pass the wrong permission — or none — into `mayReplaceToken`. The token is
+ * the one control on this page behind `settings.destructive`, so these go through the
+ * real `resolve` with the permission sets a role actually holds, and each asserts the
+ * page rendered (the bot, and the operate controls it was given) before asserting what
+ * is absent, so an empty page cannot pass for a refused control.
+ */
+describe('the /bots route wires the token replacement to settings.destructive', () => {
+  const open = (permissions: readonly string[]) => {
+    stubApi([listRoute()]);
+    const resolved = resolve({ path: '/bots', query: new URLSearchParams() }, permissions);
+    return renderPage(resolved.element as ReactElement);
+  };
+
+  it('offers no token replacement to a role that may operate the bot but not replace its token', async () => {
+    const { container } = open(['settings.view', 'settings.edit']);
+    await screen.findByText('@acme_store_bot');
+    expect(screen.getByRole('button', { name: 'توقف ربات' })).toBeInTheDocument();
+
+    expect(container.querySelector('input[type="password"]')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'جایگزینی توکن' })).toBeNull();
+  });
+
+  it('offers token replacement to a role holding settings.destructive, even without settings.edit', async () => {
+    const { container } = open(['settings.view', 'settings.destructive']);
+    await screen.findByText('@acme_store_bot');
+
+    expect(container.querySelector('input[type="password"]')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'جایگزینی توکن' })).toBeInTheDocument();
+    // And the permission it holds grants nothing it does not name.
+    expect(screen.queryByRole('button', { name: 'توقف ربات' })).toBeNull();
+  });
+});
