@@ -322,21 +322,26 @@ describe('a RickPanel NEW_SERVICE', () => {
    * READ before the second create.
    *
    * A 422 has not been classified on a real panel (`OQ-RP-06`), so it keeps the
-   * UNKNOWN safety model. The loop drains within one tick: the service goes
-   * UNRECONCILED, a RECONCILE reads the name, the panel says it is absent, and only
-   * that READ licenses a fresh create — which succeeds here, because the panel has
-   * recovered. No money moves in either direction beyond the one debit.
+   * UNKNOWN safety model. The service goes UNRECONCILED and a RECONCILE reads the name.
+   * One absence is not enough (WP15 G3: a panel may not show an accepted create yet), so
+   * the READ is repeated a backoff later, and only the SECOND absence licenses a fresh
+   * create — which succeeds here, because the panel has recovered. No money moves in
+   * either direction beyond the one debit.
    */
   it('reads before it creates again after an ambiguous create, and refunds nothing', async () => {
     panel.unprocessableCreates = 1;
     const orderId = await paidOrder('rick-unknown', 53_687_091_200n);
 
     await ctx.container.provisionerLoop.tick();
+    for (let round = 0; round < 6; round += 1) {
+      await makeOperationDue();
+      await ctx.container.provisionerLoop.tick();
+    }
 
     const settled = await services.findByOrderId(tenantA, orderId);
-    expect(settled?.state).toBe('ACTIVE');
     const name = settled?.providerUsername ?? '';
-    expect(trail(name)).toEqual(['CREATE', 'READ', 'CREATE', 'READ']);
+    expect(settled?.state).toBe('ACTIVE');
+    expect(trail(name)).toEqual(['CREATE', 'READ', 'READ', 'CREATE', 'READ']);
     expect(panel.users.size).toBe(1);
     expect(await refunds(), 'an UNKNOWN outcome was refunded').toHaveLength(0);
     expect(await purchases()).toHaveLength(1);
@@ -344,25 +349,67 @@ describe('a RickPanel NEW_SERVICE', () => {
   });
 
   /**
+   * WP15 H1 (`docs/wp15-provider-hardening-audit.md`): the create is accepted and the
+   * READ after it is lost to a rate limit.
+   *
+   * A 429 on that GET says the GET was not read, not that the POST was not. Reported as
+   * RATE_LIMITED, the PROVISION was safe to replay: the retry met this very account as
+   * a 409, was refused, and the order was refunded with the account left on the panel.
+   * Now the create is UNKNOWN, a RECONCILE reads the account and adopts it: one create,
+   * delivered, nothing refunded.
+   */
+  it('adopts, never refunds, an accepted create whose read-back was rate-limited', async () => {
+    panel.rateLimitedReads = 1;
+    const orderId = await paidOrder('rick-lost-read', 53_687_091_200n);
+
+    await ctx.container.provisionerLoop.tick();
+    for (let round = 0; round < 3; round += 1) {
+      await makeOperationDue();
+      await ctx.container.provisionerLoop.tick();
+    }
+
+    const settled = await services.findByOrderId(tenantA, orderId);
+    expect(settled?.state).toBe('ACTIVE');
+    expect(panel.createCalls(), 'an accepted create was replayed').toBe(1);
+    expect(panel.users.size).toBe(1);
+    expect(await refunds(), 'an accepted create was refunded').toHaveLength(0);
+    expect(await orderState(orderId)).toBe('PAID');
+  });
+
+  /**
    * The owner's incident, reproduced through the shipped container: a create the panel
    * refuses with a status this adapter does not classify.
    *
-   * This is what the missing seed cost on every purchase. Each create is UNKNOWN, each
-   * reconcile READ proves the account absent, and the cycle re-plans until
-   * `SERVICE_PROVISION_CYCLE_LIMIT` — then refunds once. It is bounded, it never creates
-   * without a READ in between, and it refunds exactly once; but it is three creates for
-   * a request that could never succeed, which is why the seed, not the classification,
-   * is the fix, and why `OQ-RP-06` is worth settling.
+   * This is what the missing seed cost on every purchase. Each create is UNKNOWN, two
+   * reconcile READs a backoff apart prove the account absent (WP15 G3), and the cycle
+   * re-plans until `SERVICE_PROVISION_CYCLE_LIMIT` — then refunds once. It is bounded, it
+   * never creates without two READs in between, and it refunds exactly once; but it is
+   * three creates for a request that could never succeed, which is why the seed, not the
+   * classification, is the fix, and why `OQ-RP-06` is worth settling.
    */
   it('bounds a create the panel keeps answering 422: three rounds, READ between, one refund', async () => {
     panel.behaviour = 'unprocessable';
     const orderId = await paidOrder('rick-cycle', 53_687_091_200n);
 
     await ctx.container.provisionerLoop.tick();
+    for (let round = 0; round < 6; round += 1) {
+      await makeOperationDue();
+      await ctx.container.provisionerLoop.tick();
+    }
 
     const service = await services.findByOrderId(tenantA, orderId);
     const name = service?.providerUsername ?? '';
-    expect(trail(name)).toEqual(['CREATE', 'READ', 'CREATE', 'READ', 'CREATE', 'READ']);
+    expect(trail(name)).toEqual([
+      'CREATE',
+      'READ',
+      'READ',
+      'CREATE',
+      'READ',
+      'READ',
+      'CREATE',
+      'READ',
+      'READ',
+    ]);
     expect(panel.users.size).toBe(0);
     expect(await orderState(orderId)).toBe('REFUNDED');
     expect(await refunds()).toHaveLength(1);

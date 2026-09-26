@@ -136,14 +136,19 @@ describe('the Marzban adapter — creating an account', () => {
     expect(payload['expire']).toBe(Math.floor(expiresAt.getTime() / 1000));
   });
 
-  it('routes a duplicate username to reconciliation rather than assuming anything', async () => {
+  /*
+   * WP15 G7. A 409 says the NAME is taken — by this installation or by anybody. It used
+   * to be PROVIDER_ERROR, UNKNOWN for a create, and reconcile then adopted whatever
+   * account held the name. It is a refusal, and it carries no `accepted` provenance.
+   */
+  it('reports a duplicate username as refused, with no provenance to adopt on', async () => {
     await adapter.createUser(target(), http(), createInput('nx_e'));
     const again = await adapter.createUser(target(), http(), createInput('nx_e'));
     expect(again.ok).toBe(false);
     if (again.ok) return;
-    // 409 is the panel's own error, and PROVIDER_ERROR is UNKNOWN for a mutation.
-    expect(again.failure).toBe('PROVIDER_ERROR');
+    expect(again.failure).toBe('PROVIDER_REFUSED');
     expect(again.status).toBe(409);
+    expect(again.accepted).toBeUndefined();
   });
 });
 

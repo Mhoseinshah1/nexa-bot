@@ -320,6 +320,16 @@ describe('a provisioned service announces itself', () => {
      */
     panel.requests.filter((request) => request.path.includes('panel/api/clients/add')).length;
 
+  /** The reason on the service's open `provisioning.stalled` condition, or null. */
+  async function stalledReason(serviceId: string): Promise<string | null> {
+    const rows = (await ctx.container.database.db.execute(
+      sql`SELECT context->>'reason' AS reason FROM operational_events
+           WHERE code = 'provisioning.stalled' AND dedupe_key = ${`provisioning.stalled:${serviceId}`}
+             AND resolved_at IS NULL` as never,
+    )) as unknown as { rows: { reason: string }[] };
+    return rows.rows[0]?.reason ?? null;
+  }
+
   /** Makes a backed-off operation due again without waiting out its retry interval. */
   async function makeOperationDue(): Promise<void> {
     await ctx.container.database.db.execute(
@@ -777,38 +787,36 @@ describe('a provisioned service announces itself', () => {
     expect(
       stranded?.state,
       'the stranded create leaves IN_FLIGHT instead of sitting there for ever',
-    ).not.toBe('IN_FLIGHT');
-
-    /*
-     * ONE tick does the whole recovery, and the test says so rather than asserting a
-     * sequence it does not see.
-     *
-     * The reap moves the create to UNKNOWN and the service to UNRECONCILED; the same
-     * tick plans the reconcile, claims it, and asks the panel — which never received a
-     * create here, because this fixture stamped the call without making one — so the
-     * verdict is ABSENT, the unknown is resolved to FAILED, and the service returns to
-     * PENDING_PROVISION where a fresh create is legal.
-     *
-     * `reapStrandedCalls` producing UNKNOWN specifically is proved at the repository
-     * level in `provisioning.test.ts`, where no later step can move it.
-     */
+    ).toBe('UNKNOWN');
     const planned = await operations.listForService(tenantA, serviceId, 10);
-    expect(
-      planned.some((operation) => operation.type === 'RECONCILE'),
-      'the same tick plans the reconcile that resolves it',
-    ).toBe(true);
-    const service = await services.findById(tenantA, serviceId);
+    const reconcile = planned.find((operation) => operation.type === 'RECONCILE');
+    expect(reconcile, 'the same tick plans the reconcile that resolves it').toBeDefined();
     /*
-     * ACTIVE, because the tick drains: the reconcile proved the panel had no account,
-     * the service returned to PENDING_PROVISION where a create is legal, and the same
-     * tick made it. That is the outcome a customer who paid should get, and asserting
-     * the intermediate PENDING_PROVISION instead would be asserting a state this system
-     * passes through rather than the one it lands in.
+     * WP15 G3: planned, and NOT asked yet. A create cut off mid-call may be an account
+     * the panel is still propagating, so the first read waits one backoff.
      */
+    expect(reconcile?.state).toBe('PLANNED');
+    expect(reconcile?.nextAttemptAt?.getTime() ?? 0).toBeGreaterThan(Date.now());
+    expect((await services.findById(tenantA, serviceId))?.state).toBe('UNRECONCILED');
+
+    // The first read finds nothing: ONE absence is undecided, so nothing is re-created.
+    await makeOperationDue();
+    await ctx.container.provisionerLoop.tick();
+    const once = await operations.findById(tenantA, reconcile?.id ?? '');
+    expect(once?.state, 'the reconcile asks again rather than deciding').toBe('PLANNED');
+    expect(once?.absenceObservedAt).not.toBeNull();
+    expect(addClientCalls(), 'one absence re-creates nothing').toBe(0);
+    expect((await services.findById(tenantA, serviceId))?.state).toBe('UNRECONCILED');
+
+    // The second read agrees: absence is proven, and the create is made — once.
+    await makeOperationDue();
+    await ctx.container.provisionerLoop.tick();
+    const service = await services.findById(tenantA, serviceId);
     expect(service?.state, 'the stranded order is recovered, not merely unstuck').toBe('ACTIVE');
     expect(addClientCalls(), 'and exactly ONE account exists on the panel').toBe(1);
+    const after = await operations.listForService(tenantA, serviceId, 10);
     expect(
-      planned.every((operation) => operation.state !== 'IN_FLIGHT'),
+      after.every((operation) => operation.state !== 'IN_FLIGHT'),
       'nothing is left holding a claim',
     ).toBe(true);
   });
@@ -818,41 +826,29 @@ describe('a provisioned service announces itself', () => {
      * The queue jamming itself with its own history.
      *
      * `listUnknown` is oldest-first and filtered on the service being UNRECONCILED —
-     * true again the moment a second create loses track. It therefore handed back the
-     * FIRST, already-reconciled operation; `planReconciles` derived that row's reconcile
-     * id, found the terminal reconcile that had already run, and planned nothing. The
-     * service stayed UNRECONCILED with no open work for ever, and the cycle ceiling was
-     * never reached because the cycle died in round two.
+     * true again the moment a second create loses track. It used to hand back the
+     * FIRST, already-reconciled operation and plan nothing for the second. Fixed by
+     * USING the `UNKNOWN -> SUCCEEDED/FAILED` edges `OPERATION_MACHINE` declares.
      *
-     * Fixed by USING the `UNKNOWN -> SUCCEEDED/FAILED` edges `OPERATION_MACHINE` has
-     * always declared and nothing called.
+     * A 5xx that stored nothing is the shape: every create is UNKNOWN, every
+     * reconcile proves absence (twice, WP15 G3), and the next create loses track too.
      */
-    panel.setBehaviour('add-client-lost-reply');
+    panel.setBehaviour('add-client-500');
     const orderId = await paidOrder('twice-lost');
 
     await ctx.container.provisionerLoop.tick();
     const serviceId = (await services.findByOrderId(tenantA, orderId))?.id ?? '';
+    for (let round = 0; round < 12; round += 1) {
+      await makeOperationDue();
+      await ctx.container.provisionerLoop.tick();
+    }
 
-    const afterFirst = await operations.listForService(tenantA, serviceId, 20);
-    expect(
-      afterFirst.every((operation) => operation.state !== 'UNKNOWN'),
-      'the reconcile that ran closed the unknown it answered',
-    ).toBe(true);
-
-    await makeOperationDue();
-    await ctx.container.provisionerLoop.tick();
-    await makeOperationDue();
-    await ctx.container.provisionerLoop.tick();
-
-    const service = await services.findById(tenantA, serviceId);
     const ops = await operations.listForService(tenantA, serviceId, 50);
-    const open = ops.filter(
-      (operation) => operation.state === 'PLANNED' || operation.state === 'IN_FLIGHT',
-    );
+    const reconciles = ops.filter((operation) => operation.type === 'RECONCILE');
     expect(
-      service?.state === 'UNRECONCILED' ? open.length : 1,
-      'a service left UNRECONCILED always has open work to resolve it',
-    ).toBeGreaterThan(0);
+      new Set(reconciles.map((operation) => operation.operationId)).size,
+      'every lost create got a reconcile of its own, not just the first',
+    ).toBeGreaterThanOrEqual(2);
     expect(
       ops.filter((operation) => operation.state === 'UNKNOWN').length,
       'no unknown outlives the reconcile that answered it',
@@ -1144,16 +1140,15 @@ describe('a provisioned service announces itself', () => {
      *
      * A create whose answer was lost MAY have taken effect. Refunding it gives the
      * money back for an account the customer is holding — so `persistFailure` refunds
-     * on `FAILED` and never on `UNKNOWN`, and that check is SEPARATE from `!retryable`,
-     * which is true for an `UNKNOWN` too. Collapsing the two is a one-word edit, and
-     * this case is what dies when somebody makes it.
+     * on `FAILED` and never on `UNKNOWN`.
      *
      * `add-client-hang` is the shape that produces the ambiguity honestly: the panel
-     * STORES the client and then never answers, so the request times out — `TIMEOUT`,
-     * which `SAFE_TO_REPLAY_FAILURE_KINDS` deliberately excludes — and the account the
-     * customer paid for really is on the panel. A refund here would be money returned
-     * for a working service. The reconcile that follows asks, finds it PRESENT, and
-     * the order is fulfilled: the outcome UNKNOWN was always waiting for.
+     * STORES the client and then never answers, so the request times out.
+     *
+     * WP15 G7 changed the second half. The read finds an account with the service's
+     * name — and a timeout is not evidence this installation made it: a pre-existing
+     * account answers the lookup the same way. So nothing is adopted and nothing is
+     * refunded; the service stays UNRECONCILED and an operator is told why.
      */
     const orderId = await paidOrder('unknown-not-refunded');
     panel.setBehaviour('add-client-hang');
@@ -1164,30 +1159,32 @@ describe('a provisioned service announces itself', () => {
     const ops = await operations.listForService(tenantA, serviceId, 10);
     const create = ops.find((operation) => operation.type === 'PROVISION');
     expect(create?.failureKind, 'the answer was lost, not refused').toBe('TIMEOUT');
-    expect(create?.state, 'and a lost answer is never a definitive failure').not.toBe('FAILED');
+    expect(create?.state, 'and a lost answer is never a definitive failure').toBe('UNKNOWN');
+    expect(create?.createAcceptedAt, 'a timeout is no provenance').toBeNull();
     expect(
       ops.some((operation) => operation.type === 'RECONCILE'),
       'the remedy for an unknown is a read, and it was planned',
     ).toBe(true);
     expect(panel.clients.size, 'the account the customer paid for really is there').toBe(1);
 
-    /*
-     * Which the read then finds — so the money stays where the customer put it and the
-     * service is delivered. Both halves are asserted, because "no refund" alone is
-     * also what a stuck lane produces.
-     */
+    panel.setBehaviour('healthy');
+    await makeOperationDue();
+    await ctx.container.provisionerLoop.tick();
+
     const refunds = (await ctx.container.database.db.execute(
       sql`SELECT count(*)::int AS n FROM refunds WHERE order_id = ${orderId}` as never,
     )) as unknown as { rows: { n: number }[] };
-    expect(refunds.rows[0]?.n, 'and nothing went back for an account that exists').toBe(0);
+    expect(refunds.rows[0]?.n, 'and nothing went back for an account that may be ours').toBe(0);
     const order = (await ctx.container.database.db.execute(
       sql`SELECT state FROM orders WHERE id = ${orderId}` as never,
     )) as unknown as { rows: { state: string }[] };
     expect(order.rows[0]?.state, 'the order was paid and stays paid').toBe('PAID');
     expect(
       (await services.findByOrderId(tenantA, orderId))?.state,
-      "the reconcile found the account and the service is the customer's",
-    ).toBe('ACTIVE');
+      'nothing was adopted on a name alone',
+    ).toBe('UNRECONCILED');
+    expect(await stalledReason(serviceId)).toBe('FOUND_WITHOUT_PROVENANCE');
+    expect(addClientCalls(), 'and nothing was created twice').toBe(1);
   });
 
   it('does not announce twice when the sender dies between the send and the record', async () => {
@@ -1222,7 +1219,7 @@ describe('a provisioned service announces itself', () => {
     expect(service?.state, 'the service itself is untouched by any of this').toBe('ACTIVE');
   });
 
-  it('creates one account when a create is cut off after the panel stored it', async () => {
+  it('creates no second account, and adopts none it cannot prove, when a create is cut off after the panel stored it', async () => {
     // The client IS written, and the connection dies before the answer arrives.
     panel.setBehaviour('add-client-lost-reply');
     const orderId = await paidOrder('lost-reply');
@@ -1231,74 +1228,49 @@ describe('a provisioned service announces itself', () => {
 
     const lost = await services.findByOrderId(tenantA, orderId);
     /*
-     * A connection torn down mid-response reads as `UNREACHABLE`, which
-     * `SAFE_TO_REPLAY_FAILURE_KINDS` calls safe — and here it is NOT: the request was
-     * fully sent and the panel committed the write. `SafeHttpClient` cannot tell a
-     * refused connection from a reset one after the fact, so the taxonomy is optimistic
-     * for exactly this shape. `docs/open-questions.md` records it.
-     *
-     * What this case exists to prove is that the optimism costs an attempt and never an
-     * account, because the DERIVED username makes the retry collide instead of
-     * duplicating. That containment is the claim; this is the test of it.
+     * WP15 G6. A connection torn down after a WRITE was sent is ambiguous — the panel
+     * may have acted — so it is TIMEOUT with `CONNECTION_LOST_AFTER_SEND`, never the
+     * UNREACHABLE that `SAFE_TO_REPLAY_FAILURE_KINDS` treats as "nothing happened".
+     * The create is UNKNOWN and is never sent again; a READ decides.
      */
-    expect(lost?.state, 'the retry is still pending').toBe('PENDING_PROVISION');
+    const create = (await operations.listForService(tenantA, lost?.id ?? '', 10)).find(
+      (operation) => operation.type === 'PROVISION',
+    );
+    expect(create?.state).toBe('UNKNOWN');
+    expect(create?.failureKind).toBe('TIMEOUT');
+    expect(create?.failureMessage ?? '').toContain('CONNECTION_LOST_AFTER_SEND');
+    expect(lost?.state, 'nobody knows yet, and the service says so').toBe('UNRECONCILED');
     expect(panel.clients.size, 'and the panel really does have the account').toBe(1);
 
-    /*
-     * And it is NOT announced while it waits.
-     *
-     * The sweep takes ACTIVE services only. Without that predicate this service — born
-     * `PENDING` with no next-attempt time, so immediately due — would be claimed, found
-     * to have no subscription URL, and recorded `FAILED`; and `FAILED` is not in
-     * `DELIVERY_AUTO_RETRY_STATES`, so the customer would never be told even after the
-     * provisioning eventually succeeded.
-     */
+    // And it is NOT announced while it waits: the sweep takes ACTIVE services only.
     const early = await ctx.container.delivery.deliverDue(tenantA, 10);
     expect(early.claimed, 'an unprovisioned service is not due for delivery').toBe(0);
     expect(lost?.deliveryAttempts, 'and no attempt was spent on it').toBe(0);
+    expect(lost?.deliveryState, 'it is still waiting to be delivered').toBe('PENDING');
     expect(sent).toHaveLength(0);
 
-    // The panel answers again, and the retry meets the account it already made.
     panel.setBehaviour('healthy');
     await makeOperationDue();
     await ctx.container.provisionerLoop.tick();
 
     /*
-     * The retry meets its own account and the panel says so.
-     *
-     * v3.7.0 exempts a MATCHING `subId` from `checkEmailsExistForClients` and then
-     * drops any client already on the inbound, returning `(false, nil)` when that
-     * leaves nothing — which the controller reports as success. Nexa's three
-     * identities are derived per service, so the replay carries the same email and
-     * the same subId: the panel treats it as the idempotent no-op it is, and the
-     * PROVISION operation simply SUCCEEDS. No reconcile is needed, because nothing
-     * was ever unknown.
-     *
-     * This assertion used to expect a `PROVIDER_ERROR` and a RECONCILE, on the
-     * strength of a docblock saying v3.7.0 "refuses a duplicate email". A real
-     * v3.7.0 panel does not, and `tests/acceptance/real-panel-sanaei.test.ts`
-     * is what established that — the fake had been written to agree with the
-     * adapter rather than with upstream.
-     *
-     * The claim this case exists to make is unchanged and still proven below: the
-     * optimism in `SAFE_TO_REPLAY_FAILURE_KINDS` costs an ATTEMPT and never an
-     * ACCOUNT, because the derived username makes the retry collide with itself.
+     * WP15 G7. The read finds an account with this service's name, and a lost answer is
+     * not evidence of whose it is. Nothing is adopted, nothing is created again, nothing
+     * is refunded — an operator is told.
      */
-    const adopted = await services.findByOrderId(tenantA, orderId);
-    expect(addClientCalls(), 'the retry did reach the panel').toBe(2);
-    expect(panel.clients.size, 'and it did NOT make a second account').toBe(1);
-    expect(adopted?.state, 'the replay completed the provision').toBe('ACTIVE');
-    expect(adopted?.subscriptionUrl).not.toBeNull();
-    expect(adopted?.expiresAt, 'with the duration the order paid for').not.toBeNull();
-    expect(panel.clients.size, 'one account, for one paid order').toBe(1);
+    const after = await services.findByOrderId(tenantA, orderId);
+    expect(addClientCalls(), 'the create was never replayed').toBe(1);
+    expect(panel.clients.size, 'one account on the panel').toBe(1);
+    expect(after?.state).toBe('UNRECONCILED');
+    expect(after?.subscriptionUrl, 'and no link was bound to it').toBeNull();
+    expect(await stalledReason(after?.id ?? '')).toBe('FOUND_WITHOUT_PROVENANCE');
+    expect(sent, 'the customer is sent nothing that is not theirs').toHaveLength(0);
 
-    const all = await operations.listForService(tenantA, adopted?.id ?? '', 10);
-    expect(all.map((o) => o.type).sort()).toEqual(['PROVISION']);
-    expect(all.find((o) => o.type === 'PROVISION')?.state).toBe('SUCCEEDED');
-
-    // And now that it is ACTIVE, the customer is told.
-    expect(sent, 'the announcement follows the adoption').toHaveLength(1);
-    expect(adopted?.deliveryState).toBe('DELIVERED');
+    // Further ticks do not ask again: the rounds are spent, an operator decides.
+    const reads = panel.requests.length;
+    await makeOperationDue();
+    await ctx.container.provisionerLoop.tick();
+    expect(panel.requests.length, 'no read loop on an answer that cannot change').toBe(reads);
   });
 
   it('bounds the create-reconcile-absent cycle instead of dialling for ever', async () => {
@@ -1317,8 +1289,15 @@ describe('a provisioned service announces itself', () => {
      * ceiling never applies. A panel that fails every create while answering every
      * lookup "absent" would be dialled for ever at the tenant's budget. This test
      * exists because writing it is what found that.
+     *
+     * WP15 G3: each absence must be seen TWICE, a backoff apart, before a fresh create
+     * is legal, so the cycle takes several ticks rather than one.
      */
     await ctx.container.provisionerLoop.tick();
+    for (let round = 0; round < 12; round += 1) {
+      await makeOperationDue();
+      await ctx.container.provisionerLoop.tick();
+    }
 
     expect(addClientCalls(), 'three cycles, and then it stops').toBe(3);
     expect(panel.clients.size).toBe(0);
@@ -1384,6 +1363,7 @@ describe('a provisioned service announces itself', () => {
     ]);
 
     // Another tick changes nothing at all: no operation, no call, no second refund.
+    await makeOperationDue();
     await ctx.container.provisionerLoop.tick();
     expect(addClientCalls(), 'and it stays stopped').toBe(3);
     expect((await refundsFor(orderId)).length, 'and refunds once').toBe(1);

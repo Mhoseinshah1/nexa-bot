@@ -9,6 +9,8 @@ import {
   isIdempotentMutation,
   isMutatingOperation,
   nextState,
+  OPERATION_MAX_ATTEMPTS,
+  SAFE_TO_REPLAY_FAILURE_KINDS,
   SERVICE_MACHINE,
   PROVIDER_FAILURE_RETRYABLE,
   USAGE_SYNC_PLAN_LIMIT,
@@ -26,11 +28,13 @@ import {
   type OrderId,
   type OrderPurpose,
   type ProviderAdapter,
+  type ProviderFailureDetail,
   type ProviderFailureKind,
   type ProviderRemovalOutcome,
   type ProviderRotationOutcome,
   type ProviderStateChangeOutcome,
   type ProviderType,
+  type ProviderUsage,
   type TenantContext,
   type UnitOfWork,
 } from '@nexa/contracts';
@@ -55,6 +59,9 @@ import {
 } from '../../orders/application/undeliverable-order-refunder.js';
 import type { PaymentRepository } from '../../payments/application/ports.js';
 import {
+  ALLOWANCE_VERIFICATION_READS,
+  BACKOFF_BASE_MS,
+  RECONCILE_ROUNDS,
   backoffMs,
   expiryFor,
   exhausted,
@@ -202,6 +209,7 @@ export const RETRYABLE_REFUSALS: readonly ExecutionRefusal[] = [
   'TENANT_STOPPED',
   'SERVICE_ABSENT',
   'LEASE_LOST',
+  'PROVISION_IN_FLIGHT',
 ];
 
 /** How many abandoned leases one tick may return to the pool. */
@@ -332,6 +340,50 @@ export const PURCHASED_AS: Readonly<Record<OrderPurpose, OperationType>> = {
 };
 
 /**
+ * The service states in which a lost commercial write is still worth a READ (WP15 G2).
+ *
+ * Wider than `OPERATION_LEGAL_FROM`, which decides whether a write may START: a service
+ * that expired or was suspended while its renewal's answer was lost still has the account,
+ * and the read can still say whether the renewal landed.
+ */
+const VERIFIABLE_STATES: readonly ServiceRecord['state'][] = ['ACTIVE', 'SUSPENDED', 'EXPIRED'];
+
+/**
+ * Whether what a panel reports holds at least the absolute target a commercial operation
+ * persisted (WP15 G2). Pure, and exported for the table test that pins it.
+ *
+ * "At least", not "equal": a panel showing a later expiry or a larger allowance than the
+ * target has what the customer paid for, whoever else extended it. A panel with NO limit
+ * on a field (null) holds any finite target on it. A target of `0n` traffic is the
+ * schema's "unlimited" and is reached only by a panel reporting no limit.
+ */
+export function allowanceReached(target: OperationTarget, usage: ProviderUsage | null): boolean {
+  if (usage === null) return false;
+  if (target.expiresAt !== null) {
+    /*
+     * In whole SECONDS. Panels store `expire` as epoch seconds and the adapters send
+     * `floor(ms / 1000)`, while a target counted from "now" carries milliseconds — so
+     * a renewal the panel applied exactly reads up to 999 ms short. Comparing in ms
+     * called every such renewal "not applied" and refunded it.
+     */
+    if (
+      usage.expiresAt !== null &&
+      Math.floor(usage.expiresAt.getTime() / 1000) < Math.floor(target.expiresAt.getTime() / 1000)
+    ) {
+      return false;
+    }
+  }
+  if (target.trafficLimitBytes !== null) {
+    if (target.trafficLimitBytes === 0n) {
+      if (usage.totalBytes !== null) return false;
+    } else if (usage.totalBytes !== null && usage.totalBytes < target.trafficLimitBytes) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
  * The lane that actually creates services on panels.
  *
  * ## The shape of one tick
@@ -426,6 +478,12 @@ export class ProvisionerService {
      * one, and spending an outbound request on a figure that cannot move again.
      */
     await this.expireDue(scope, now);
+    /*
+     * WP15 G2: at most ONE verification read of an ambiguous commercial write per tick.
+     * Before the claim, so a tick whose budget is tight answers a customer who already
+     * paid before it starts new work — and it is one read, so it cannot starve the claim.
+     */
+    await this.verifyOneAllowance(scope, now);
 
     const leaseUntil = new Date(now.getTime() + this.deps.leaseMs);
     /*
@@ -562,6 +620,17 @@ export class ProvisionerService {
     }
 
     /*
+     * WP15 G1: a TERMINATE never issues a DELETE merely because a username exists.
+     *
+     * Decided before any panel is read, credential decrypted or budget spent, because in
+     * the case it exists for none of that is owed.
+     */
+    if (operation.type === 'TERMINATE') {
+      const decided = await this.terminateWithoutProvider(scope, operation, service, now);
+      if (decided !== null) return decided;
+    }
+
+    /*
      * ONE read for the panel and its credential SUMMARY.
      *
      * `find` returns a `PanelView`, whose `credentials` is three timestamps and not one
@@ -668,16 +737,44 @@ export class ProvisionerService {
      * the crash rolled it back, which is precisely the case it records — so it gets one
      * of its own, which is also what puts it inside ADR-0028's quiesce gate.
      */
-    const stamped = await this.deps.uow.run(scope, async (tx) =>
-      this.deps.operations.markCallStarted(
+    const stamped = await this.deps.uow.run(scope, async (tx) => {
+      /*
+       * WP15 G1: a CREATE is stamped under the service's row lock, and only while the
+       * service is still waiting for it.
+       *
+       * A TERMINATE decides under the same lock whether any create ever reached the
+       * panel. Without this, a terminate could find no stamp, end the service Nexa-side
+       * with no DELETE, commit — and the create claimed a moment earlier would then
+       * stamp and make the account for a service that no longer exists. With it, one of
+       * them waits for the other and each sees what the other wrote.
+       */
+      if (operation.type === 'PROVISION') {
+        const locked = await this.deps.services.lockForUpdate(scope, service.id, tx);
+        if (locked === null || locked.state !== 'PENDING_PROVISION') {
+          await this.deps.operations.transition(
+            scope,
+            operation.id,
+            'IN_FLIGHT',
+            'ABANDONED',
+            { failureMessage: `the service is ${locked?.state ?? 'gone'}, not PENDING_PROVISION` },
+            this.deps.clock.now(),
+            tx,
+          );
+          return 'STALE' as const;
+        }
+      }
+      return (await this.deps.operations.markCallStarted(
         scope,
         operation.id,
         this.deps.workerId,
         this.deps.clock.now(),
         tx,
-      ),
-    );
-    if (!stamped) {
+      ))
+        ? ('STAMPED' as const)
+        : ('LOST' as const);
+    });
+    if (stamped === 'STALE') return this.refusedAbandoned(operation, 'SERVICE_ABSENT');
+    if (stamped === 'LOST') {
       /*
        * The claim is no longer this worker's, so no provider is contacted.
        *
@@ -914,7 +1011,17 @@ export class ProvisionerService {
     const finishedAt = this.deps.clock.now();
 
     if (!created.ok) {
-      const outcome = outcomeFor(created.failure, operation.type);
+      /*
+       * WP15 G7: a 409 is the NAME taken, and that is a refusal — unless this service has
+       * durable provenance from an EARLIER create the panel accepted, in which case the
+       * name is very probably held by our own account and a READ must decide. Refunding
+       * then would give money back for an account the customer is holding.
+       */
+      const conflictOnOwnName =
+        created.failure === 'PROVIDER_REFUSED' &&
+        created.status === 409 &&
+        (await this.deps.operations.hasCreateProvenance(scope, service.id));
+      const outcome = conflictOnOwnName ? 'UNKNOWN' : outcomeFor(created.failure, operation.type);
       await this.persistFailure(
         scope,
         operation,
@@ -923,6 +1030,10 @@ export class ProvisionerService {
         created.failure,
         created.status,
         finishedAt,
+        {
+          ...(created.detail === undefined ? {} : { detail: created.detail }),
+          ...(created.accepted === true ? { accepted: true } : {}),
+        },
       );
       return this.attempted(operation, service.id, outcome, created.failure);
     }
@@ -1009,20 +1120,46 @@ export class ProvisionerService {
     await this.deps.uow.run(scope, async (tx) => {
       const unresolved = await this.deps.operations.listUnknown(scope, RECONCILE_PLAN_LIMIT, tx);
       for (const unknown of unresolved) {
+        /*
+         * WP15 G4: which ROUND this is, from the count on the unknown row itself.
+         *
+         * `listUnknown` returns a row only while it has rounds left and no reconcile is
+         * open, so reaching here with one round spent means that round ended FAILED —
+         * every attempt in it failed to read the panel — and ONE more is allowed. The
+         * round-1 id is the id every earlier release derived, so a row that was already
+         * stuck behind a failed reconcile before this release converges: its old
+         * reconcile is found, counted, and the next tick plans round 2.
+         */
+        const round = unknown.verificationAttempts + 1;
+        const key = `${unknown.serviceId}:RECONCILE:${unknown.operationId}`;
         await this.deps.operations.plan(
           scope,
           {
             id: this.deps.ids.uuid(),
-            operationId: this.deps.operationId(
-              `${unknown.serviceId}:RECONCILE:${unknown.operationId}`,
-            ),
+            operationId: this.deps.operationId(round === 1 ? key : `${key}:round${round}`),
             serviceId: unknown.serviceId,
             orderId: unknown.orderId,
             /* This installation asking a panel what it did. Nobody requested it. */
             requestedByCustomerId: null,
             panelId: unknown.panelId,
             type: 'RECONCILE',
+            /*
+             * WP15 G3: never asked the instant the create lost track. A panel that
+             * accepted a create may not show it on the very next read, so the first
+             * read waits one ordinary backoff and a second round waits the longest one
+             * the attempt ladder uses.
+             */
+            notBefore: new Date(
+              now.getTime() + (round === 1 ? BACKOFF_BASE_MS : backoffMs(OPERATION_MAX_ATTEMPTS)),
+            ),
           },
+          now,
+          tx,
+        );
+        await this.deps.operations.countReconcileRound(
+          scope,
+          unknown.id,
+          unknown.verificationAttempts,
           now,
           tx,
         );
@@ -1187,12 +1324,21 @@ export class ProvisionerService {
      * write: the re-plan below is refused at the ceiling, and a count that is one stale
      * either way changes only which round is the last.
      */
-    const cycles = (await this.deps.operations.listForService(scope, serviceId, 50)).filter(
-      (candidate) => candidate.type === 'PROVISION',
-    ).length;
+    const history = await this.deps.operations.listForService(scope, serviceId, 50);
+    const cycles = history.filter((candidate) => candidate.type === 'PROVISION').length;
+    /*
+     * WP15 G4: whether this is the LAST round. The lost create's own row counts the
+     * rounds planned for it, so this is a read of durable state, not of this process.
+     */
+    const lastRound = history.some(
+      (candidate) =>
+        candidate.state === 'UNKNOWN' &&
+        candidate.type === 'PROVISION' &&
+        candidate.verificationAttempts >= RECONCILE_ROUNDS,
+    );
 
     if (verdict.kind === 'UNDECIDED') {
-      await this.persistFailure(
+      const retried = await this.persistFailure(
         scope,
         operation,
         service,
@@ -1200,12 +1346,121 @@ export class ProvisionerService {
         verdict.failure,
         verdict.status,
         now,
+        {
+          ...(verdict.detail === undefined ? {} : { detail: verdict.detail }),
+          reconcileExhausted: lastRound,
+        },
       );
-      return this.attempted(operation, serviceId, 'FAILED', verdict.failure);
+      return this.attempted(operation, serviceId, retried ? 'PLANNED' : 'FAILED', verdict.failure);
+    }
+
+    if (verdict.kind === 'ABSENT' && operation.absenceObservedAt === null) {
+      /*
+       * WP15 G3: ONE EARLY 404 AFTER AN ACCEPTED CREATE IS NOT ENOUGH TO RE-CREATE.
+       *
+       * A panel that accepted a create can answer the very next read with "no such user"
+       * while the account propagates. Taken at its word, that absence re-planned the
+       * create; the create met the account and answered 409; and the paid order went
+       * round a create-409 loop or was refunded while the account sat on the panel.
+       *
+       * So the first absence is UNDECIDED: stamped on this reconcile, and the same
+       * reconcile asked again one backoff later. Only the second absence is the
+       * `providerUserProvablyAbsent` that makes a fresh create legal. If this attempt was
+       * the last this reconcile has, the round ends undecided and the next round asks.
+       */
+      if (exhausted(operation.attempts)) {
+        const retried = await this.persistFailure(
+          scope,
+          operation,
+          service,
+          'FAILED',
+          'PROVIDER_ERROR',
+          null,
+          now,
+          { reconcileExhausted: lastRound, note: 'the account was absent once; not yet twice' },
+        );
+        return this.attempted(operation, serviceId, retried ? 'PLANNED' : 'FAILED', null);
+      }
+      await this.deps.uow.run(scope, async (tx) => {
+        await this.deps.operations.transition(
+          scope,
+          operation.id,
+          'IN_FLIGHT',
+          'PLANNED',
+          {
+            absenceObservedAt: now,
+            failureMessage: 'the account was not visible; asking once more before any create',
+            nextAttemptAt: new Date(now.getTime() + backoffMs(operation.attempts + 1)),
+          },
+          now,
+          tx,
+        );
+      });
+      return this.attempted(operation, serviceId, 'PLANNED', null);
+    }
+
+    if (
+      verdict.kind === 'ADOPT' &&
+      !(await this.deps.operations.hasCreateProvenance(scope, serviceId))
+    ) {
+      /*
+       * WP15 G7: NO BLIND ADOPTION.
+       *
+       * The panel holds an account with this service's username, and nothing durable
+       * says this installation made it: no create of this service was ever answered 2xx.
+       * A 409, a duplicate email, a timeout and a pre-existing account all look exactly
+       * like this to a lookup — adopting would hand a paying customer somebody else's
+       * account, or bind this service to one an operator created by hand.
+       *
+       * So nothing moves: the service stays `UNRECONCILED`, the lost create stays
+       * `UNKNOWN` (never refunded — it may be ours), its remaining rounds are spent
+       * because another read cannot change the answer, and an operator is told.
+       */
+      await this.deps.uow.run(scope, async (tx) => {
+        await this.deps.operations.transition(
+          scope,
+          operation.id,
+          'IN_FLIGHT',
+          'FAILED',
+          {
+            failureMessage: 'an account with this username exists and nothing shows it is ours',
+            nextAttemptAt: null,
+          },
+          now,
+          tx,
+        );
+        await this.deps.operations.exhaustReconcileRounds(
+          scope,
+          serviceId,
+          RECONCILE_ROUNDS,
+          now,
+          tx,
+        );
+        await this.deps.opsLog.record(
+          scope,
+          {
+            code: PROVISIONING_STALLED_CODE,
+            severity: 'ERROR',
+            message:
+              'An account with this service’s username is on the panel and nothing shows this installation created it.',
+            context: {
+              serviceId,
+              panelId: service.panelId,
+              reason: 'FOUND_WITHOUT_PROVENANCE',
+            },
+            dedupeKey: provisioningConditionKey(serviceId),
+          },
+          tx,
+        );
+      });
+      return this.attempted(operation, serviceId, 'FAILED', null);
     }
 
     const actor = this.actor();
     await this.deps.uow.run(scope, async (tx) => {
+      // The service row first: the lock order a TERMINATE and a PROVISION stamp take, so
+      // this transaction queues behind them instead of deadlocking with them.
+      await this.deps.services.lockForUpdate(scope, serviceId, tx);
       await this.deps.operations.transition(
         scope,
         operation.id,
@@ -1787,9 +2042,32 @@ export class ProvisionerService {
   ): Promise<ExecutionResult> {
     const now = this.deps.clock.now();
     const serviceId = service.id;
-    const from = service.state;
 
     if (!changed.ok) {
+      /*
+       * WP15 G2: an AMBIGUOUS write is verified, never refunded on the spot.
+       *
+       * A timeout or a socket lost after sending, a 5xx, a 2xx whose record could not be
+       * read or did not carry the target — each may mean the panel APPLIED the renewal.
+       * Refunding then gives the customer their money and their thirty days. So the row
+       * goes to `UNKNOWN` and a bounded number of READS compare the account with the
+       * absolute target this operation persisted (`verifyOneAllowance`). The write is
+       * never sent again by that path.
+       *
+       * Only a failure that says nothing reached the panel — unreachable, refused, rate
+       * limited, the kinds `SAFE_TO_REPLAY_FAILURE_KINDS` names — keeps the ordinary
+       * retry-then-refund path, because there the refund is for money that bought nothing.
+       */
+      if (!(SAFE_TO_REPLAY_FAILURE_KINDS as readonly string[]).includes(changed.failure)) {
+        await this.deferToVerification(
+          scope,
+          operation,
+          changed.failure,
+          failureNote(changed.failure, changed.status, changed.detail),
+          now,
+        );
+        return this.attempted(operation, serviceId, 'UNKNOWN', changed.failure);
+      }
       const outcome = outcomeFor(changed.failure, operation.type);
       await this.recordManagementFailure(
         scope,
@@ -1797,7 +2075,7 @@ export class ProvisionerService {
         service,
         outcome,
         changed.failure,
-        failureNote(changed.failure, changed.status),
+        failureNote(changed.failure, changed.status, changed.detail),
         now,
       );
       return this.attempted(operation, serviceId, outcome, changed.failure);
@@ -1823,6 +2101,36 @@ export class ProvisionerService {
       return this.attempted(operation, serviceId, 'FAILED', null);
     }
 
+    await this.recordAllowanceApplied(
+      scope,
+      operation,
+      service,
+      target,
+      changed.usage,
+      'IN_FLIGHT',
+      now,
+    );
+    return this.attempted(operation, serviceId, 'SUCCEEDED', null);
+  }
+
+  /**
+   * The allowance an operation made true, written to the service with its audit row.
+   *
+   * Shared by the write that was answered (`IN_FLIGHT`) and by the verification READ
+   * that found the target already reached (`UNKNOWN`, WP15 G2): one account of "the
+   * renewal took effect", whichever of the two established it.
+   */
+  private async recordAllowanceApplied(
+    scope: TenantContext,
+    operation: OperationRecord,
+    service: ServiceRecord,
+    target: OperationTarget,
+    usage: ProviderUsage | null,
+    fromOperationState: 'IN_FLIGHT' | 'UNKNOWN',
+    now: Date,
+  ): Promise<void> {
+    const serviceId = service.id;
+    const from = service.state;
     /*
      * `EXPIRED -> ACTIVE` for a renewal that revived one; otherwise stay put.
      *
@@ -1837,15 +2145,19 @@ export class ProvisionerService {
 
     const actor = this.actor();
     await this.deps.uow.run(scope, async (tx) => {
-      await this.deps.operations.transition(
+      const moved = await this.deps.operations.transition(
         scope,
         operation.id,
-        'IN_FLIGHT',
+        fromOperationState,
         'SUCCEEDED',
-        {},
+        // The verification's lease date must not outlive the verdict.
+        fromOperationState === 'UNKNOWN' ? { nextAttemptAt: null } : {},
         now,
         tx,
       );
+      // A verification that lost its row to another reader records nothing twice. The
+      // answered write keeps its old behaviour: the panel applied it either way.
+      if (!moved && fromOperationState === 'UNKNOWN') return;
       /*
        * Conditional on the state the operation was planned from.
        *
@@ -1873,11 +2185,11 @@ export class ProvisionerService {
        * what `recordUsage` requires — and after `recordAllowance`, so a service the
        * renewal has just revived is already ACTIVE by the time this runs.
        */
-      if (changed.usage !== null && to === 'ACTIVE') {
+      if (usage !== null && to === 'ACTIVE') {
         await this.deps.services.recordUsage(
           scope,
           serviceId,
-          { usedBytes: changed.usage.usedBytes, syncedAt: now, lastSeen: changed.usage.lastSeen },
+          { usedBytes: usage.usedBytes, syncedAt: now, lastSeen: usage.lastSeen },
           tx,
         );
       }
@@ -1927,8 +2239,407 @@ export class ProvisionerService {
         });
       }
     });
+  }
 
-    return this.attempted(operation, serviceId, 'SUCCEEDED', null);
+  /**
+   * An ambiguous commercial write, parked for verification (WP15 G2).
+   *
+   * `IN_FLIGHT -> UNKNOWN`, the first read one backoff away. No money moves and no
+   * operator is paged yet: the reads are the next step, and only their running out is
+   * news. `provisioning_operations_open_commercial_key` counts `UNKNOWN` as open, so no
+   * second purchase can be priced from the allowance this write may already have changed.
+   */
+  private async deferToVerification(
+    scope: TenantContext,
+    operation: OperationRecord,
+    failure: ProviderFailureKind,
+    message: string,
+    now: Date,
+  ): Promise<void> {
+    await this.deps.uow.run(scope, async (tx) => {
+      await this.deps.operations.transition(
+        scope,
+        operation.id,
+        'IN_FLIGHT',
+        'UNKNOWN',
+        {
+          failureKind: failure,
+          failureMessage: message,
+          nextAttemptAt: new Date(now.getTime() + BACKOFF_BASE_MS),
+        },
+        now,
+        tx,
+      );
+    });
+  }
+
+  /**
+   * ONE verification READ of an ambiguous commercial write, if one is due (WP15 G2).
+   *
+   * Bounded three ways: one row per tick, `ALLOWANCE_VERIFICATION_READS` reads per row,
+   * on the ordinary backoff — no global scan and no tight loop. The claim bumps the row's
+   * `next_attempt_at` to a lease, so two replicas never read one row twice and a crash
+   * costs one lease, never the row.
+   *
+   * The READ is compared with the ABSOLUTE target the operation persisted:
+   *
+   * - reached or exceeded → `UNKNOWN -> SUCCEEDED`, the allowance recorded, no refund;
+   * - the account answered and is below it, or is gone → definitive: `UNKNOWN -> FAILED`
+   *   and the ordinary refund rule;
+   * - no answer, or an incomplete one → read again later; after the last read the row
+   *   stays `UNKNOWN`, nothing is refunded, and an operator is told.
+   */
+  private async verifyOneAllowance(scope: TenantContext, now: Date): Promise<void> {
+    const leaseUntil = new Date(now.getTime() + this.deps.leaseMs);
+    const operation = await this.deps.uow.run(scope, async (tx) =>
+      // The tenant must still accept work, checked in the claim's own transaction.
+      (await this.deps.scopeActivity.scopeIsActive(scope, tx))
+        ? this.deps.operations.claimDueVerification(
+            scope,
+            now,
+            leaseUntil,
+            ALLOWANCE_VERIFICATION_READS,
+            tx,
+          )
+        : null,
+    );
+    if (operation === null) return;
+    /*
+     * One verification must never abort the tick that claims the next paid operation.
+     * A throw here is not evidence about the write, so it costs this read and nothing
+     * else: the row comes back at its next date, or stops for an operator after the last.
+     */
+    try {
+      await this.verifyClaimed(scope, operation, now);
+    } catch {
+      const lastRead = operation.verificationAttempts >= ALLOWANCE_VERIFICATION_READS;
+      await this.rescheduleVerification(
+        scope,
+        operation,
+        lastRead,
+        'the verification read did not complete',
+        now,
+      );
+    }
+  }
+
+  private async verifyClaimed(
+    scope: TenantContext,
+    operation: OperationRecord,
+    now: Date,
+  ): Promise<void> {
+    const target = operation.target;
+    /*
+     * A row claimed past its last read is one whose last read never finished — a crash
+     * between the claim and the answer. It is stopped here, with the operator condition
+     * the finished read would have written, instead of vanishing from the queue.
+     */
+    if (operation.verificationAttempts > ALLOWANCE_VERIFICATION_READS) {
+      return this.rescheduleVerification(
+        scope,
+        operation,
+        true,
+        'the last verification read did not finish',
+        now,
+      );
+    }
+    const service = await this.deps.services.findById(scope, operation.serviceId);
+    const lastRead = operation.verificationAttempts >= ALLOWANCE_VERIFICATION_READS;
+    const again = (note: string, release = false): Promise<void> =>
+      this.rescheduleVerification(scope, operation, lastRead && !release, note, now, release);
+
+    if (target === null || service === null) {
+      return this.rescheduleVerification(scope, operation, true, 'nothing to verify against', now);
+    }
+    if (!VERIFIABLE_STATES.includes(service.state)) {
+      // The account is gone from Nexa's side — terminated, or never delivered. What the
+      // purchase is owed is no longer a comparison a read can make; a person decides.
+      return this.rescheduleVerification(
+        scope,
+        operation,
+        true,
+        `the service is ${service.state}; an operator must decide`,
+        now,
+      );
+    }
+
+    const view = await this.deps.panels.find(scope, operation.panelId);
+    const operable = decideOperability({
+      panel:
+        view === null
+          ? null
+          : {
+              status: view.panel.status,
+              providerType: view.panel.providerType,
+              baseUrl: view.panel.baseUrl,
+              archivedAt: view.panel.archivedAt,
+              activation: view.panel.activation,
+            },
+      credentials: view?.credentials ?? null,
+      type: 'RECONCILE',
+      serviceAdapterExists:
+        view !== null && this.deps.implementedProviderTypes.includes(view.panel.providerType),
+    });
+    if (!operable.ok) return again(`the panel cannot be read: ${operable.reason}`);
+    if (!checkUrl(operable.baseUrl, this.deps.urlPolicy).allowed) {
+      return again('the panel address is refused by policy');
+    }
+    const adapter = this.deps.adapters(operable.providerType as ProviderType);
+    const stored = await this.deps.credentials.read(scope, operation.panelId);
+    const credentials = toProviderCredentials(stored, adapter.descriptor.credentialShape);
+    if (credentials === null) return again('CREDENTIALS_MISSING');
+    const budget = await this.deps.uow.run(scope, async (tx) =>
+      this.deps.panels.takeProbeBudget(scope, this.deps.probeBudget, now, tx, 0),
+    );
+    // Nothing was read, so the read is given back: a busy budget is not evidence.
+    if (!budget.permitted) return again('the tenant outbound budget had no capacity', true);
+
+    const found = await adapter.lookupUser(
+      { baseUrl: operable.baseUrl, credentials, activation: operable.activation },
+      this.deps.http.forBase(operable.baseUrl),
+      providerRefFor(service),
+    );
+    const readAt = this.deps.clock.now();
+    if (!found.ok) {
+      return again(failureNote(found.failure, found.status, found.detail));
+    }
+    // A record without its figures is an incomplete answer, not a verdict (G5).
+    if (found.found && found.usage === null) return again('the account answered without usage');
+    if (found.found && allowanceReached(target, found.usage)) {
+      await this.recordAllowanceApplied(
+        scope,
+        operation,
+        service,
+        target,
+        found.usage,
+        'UNKNOWN',
+        readAt,
+      );
+      return;
+    }
+    // Definitive: the account is gone, or it answered and does not hold the target.
+    await this.deps.uow.run(scope, async (tx) => {
+      const moved = await this.deps.operations.transition(
+        scope,
+        operation.id,
+        'UNKNOWN',
+        'FAILED',
+        {
+          failureMessage: found.found
+            ? 'verified: the panel does not hold what this operation asked for'
+            : 'verified: the panel does not have this service’s account',
+          // Cleared, or the announcer reads a FAILED row with a date as one still retrying
+          // and the customer is never told.
+          nextAttemptAt: null,
+        },
+        readAt,
+        tx,
+      );
+      if (!moved) return;
+      await this.refundPurchase(
+        scope,
+        {
+          orderId: operation.orderId,
+          purchasedAs: operation.type,
+          service,
+          reason: 'ALLOWANCE_NOT_APPLIED',
+          now: readAt,
+        },
+        tx,
+      );
+    });
+  }
+
+  /** The next read of an ambiguous write, or none and an operator condition. */
+  private async rescheduleVerification(
+    scope: TenantContext,
+    operation: OperationRecord,
+    stop: boolean,
+    note: string,
+    now: Date,
+    release = false,
+  ): Promise<void> {
+    await this.deps.uow.run(scope, async (tx) => {
+      await this.deps.operations.rescheduleVerification(
+        scope,
+        operation.id,
+        stop ? null : new Date(now.getTime() + backoffMs(operation.verificationAttempts + 1)),
+        note,
+        now,
+        tx,
+        release,
+      );
+      if (!stop) return;
+      await this.deps.opsLog.record(
+        scope,
+        {
+          code: PROVISIONING_STALLED_CODE,
+          severity: 'ERROR',
+          message:
+            'A paid renewal or add-on could not be confirmed on the panel; nothing was refunded and an operator must decide.',
+          context: {
+            serviceId: operation.serviceId,
+            panelId: operation.panelId,
+            reason: 'ALLOWANCE_UNVERIFIED',
+            operationType: operation.type,
+          },
+          dedupeKey: provisioningConditionKey(operation.serviceId),
+        },
+        tx,
+      );
+    });
+  }
+
+  /**
+   * Ends a service Nexa-side, with no DELETE, when nothing shows its account is ours.
+   *
+   * ## The rule (WP15 G1)
+   *
+   * A service in `PENDING_PROVISION` or `UNRECONCILED` has a username and may have no
+   * account behind it — or an account somebody else made under the same name. A DELETE by
+   * that name removes whatever holds it. So, under the service's row lock:
+   *
+   * - a create ON THE WIRE for this service (stamped, still `IN_FLIGHT`) → put back; the
+   *   create's answer is what decides, and it is seconds away;
+   * - durable evidence one of its creates was accepted (`hasCreateProvenance`) → null, and
+   *   the ordinary DELETE path runs: the account is ours to remove;
+   * - otherwise → the operation SUCCEEDS and the service is `TERMINATED` here, no provider
+   *   contacted. The audit row says which of two cases it was: no create ever started, or
+   *   one started and nothing proves what it did (its account, if any, is left for an
+   *   operator — never deleted by name).
+   *
+   * The PROVISION side stamps its call under the SAME lock and only from
+   * `PENDING_PROVISION`, so a create claimed a moment before this commits finds the
+   * service `TERMINATED` and makes no call.
+   *
+   * `ACTIVE`, `SUSPENDED` and `EXPIRED` return null at once: a service reached them only
+   * through a create that succeeded or an adoption that required provenance, which is
+   * the durable binding a DELETE may act on.
+   */
+  private async terminateWithoutProvider(
+    scope: TenantContext,
+    operation: OperationRecord,
+    service: ServiceRecord,
+    now: Date,
+  ): Promise<ExecutionResult | null> {
+    if (service.state !== 'PENDING_PROVISION' && service.state !== 'UNRECONCILED') return null;
+    const actor = this.actor();
+    const decision = await this.deps.uow.run(scope, async (tx) => {
+      const locked = await this.deps.services.lockForUpdate(scope, service.id, tx);
+      if (locked === null) return 'PROVIDER' as const;
+      if (locked.state !== 'PENDING_PROVISION' && locked.state !== 'UNRECONCILED') {
+        // Moved while this was claimed — provisioned, say. The ordinary path decides.
+        return 'PROVIDER' as const;
+      }
+      const history = await this.deps.operations.listForService(scope, service.id, 50, tx);
+      const provisions = history.filter((candidate) => candidate.type === 'PROVISION');
+      if (
+        provisions.some(
+          (candidate) => candidate.state === 'IN_FLIGHT' && candidate.callStartedAt !== null,
+        )
+      ) {
+        return 'HOLD' as const;
+      }
+      if (await this.deps.operations.hasCreateProvenance(scope, service.id, tx)) {
+        return 'PROVIDER' as const;
+      }
+      const createEverStarted = provisions.some((candidate) => candidate.callStartedAt !== null);
+      const moved = await this.deps.operations.transition(
+        scope,
+        operation.id,
+        'IN_FLIGHT',
+        'SUCCEEDED',
+        {},
+        now,
+        tx,
+      );
+      if (!moved) return 'LOST' as const;
+      await this.deps.services.transition(
+        scope,
+        service.id,
+        locked.state,
+        'TERMINATED',
+        null,
+        now,
+        tx,
+      );
+      /*
+       * A lost create of this service is answered by the decision to end it: nothing will
+       * ever read the panel for it again, so it leaves `UNKNOWN` for `ABANDONED` — the
+       * state `OPERATION_MACHINE` keeps for what nothing else can resolve. Left `UNKNOWN`
+       * it would hold the order "in delivery" for ever and refuse the operator's refund
+       * (`DELIVERY_IN_PROGRESS`). No money moves here; the refund stays the operator's.
+       */
+      const abandoned = await this.deps.operations.resolveUnknownForService(
+        scope,
+        service.id,
+        'ABANDONED',
+        now,
+        tx,
+      );
+      await this.deps.audit.record(
+        scope,
+        actor,
+        {
+          action: 'service.terminate',
+          entityType: 'Service',
+          entityId: service.id,
+          before: { state: locked.state },
+          after: {
+            state: 'TERMINATED',
+            providerDelete: 'SKIPPED',
+            reason: createEverStarted ? 'NO_PROVENANCE' : 'NEVER_CREATED',
+            abandonedUnknownCreates: abandoned,
+          },
+          result: 'SUCCESS',
+        },
+        tx,
+      );
+      await this.deps.outbox.write(tx, actor, {
+        eventType: 'ServiceStateChanged',
+        aggregateType: 'Service',
+        aggregateId: service.id,
+        payload: { customerId: service.customerId, from: locked.state, to: 'TERMINATED' },
+      });
+      /*
+       * No create ever left for the panel, so nothing can exist there: this terminate is
+       * the transaction that discovers the order cannot be delivered, and CLAUDE.md's
+       * first money rule says the refund is automatic and happens HERE, through the one
+       * credit path. A create that was sent and never answered is different — UNKNOWN is
+       * never refunded automatically; the operator who ended it refunds it, which the
+       * lost create's ABANDONED state now allows.
+       */
+      if (!createEverStarted) {
+        await this.refundPurchase(
+          scope,
+          {
+            orderId: operation.orderId,
+            purchasedAs: 'PROVISION',
+            service: { ...service, state: 'TERMINATED' },
+            reason: 'TERMINATED_BEFORE_PROVISION',
+            now,
+          },
+          tx,
+        );
+      }
+      return 'TERMINATED' as const;
+    });
+    switch (decision) {
+      case 'PROVIDER':
+        return null;
+      case 'HOLD':
+        await this.holdOff(
+          scope,
+          operation,
+          new Date(now.getTime() + BACKOFF_BASE_MS),
+          'a create for this service is on the wire; its answer decides what to terminate',
+        );
+        return this.refusedAndHeld(operation, 'PROVISION_IN_FLIGHT');
+      case 'LOST':
+        return this.refused(operation, 'LEASE_LOST');
+      case 'TERMINATED':
+        return this.attempted(operation, service.id, 'SUCCEEDED', null);
+    }
   }
 
   /**
@@ -2541,7 +3252,17 @@ export class ProvisionerService {
     failure: ProviderFailureKind,
     status: number | null,
     now: Date,
-  ): Promise<void> {
+    extras: {
+      /** The adapter's closed-vocabulary case, recorded with the failure (G5, G6). */
+      readonly detail?: ProviderFailureDetail;
+      /** The panel answered THIS create 2xx: durable provenance (G7). PROVISION only. */
+      readonly accepted?: boolean;
+      /** A RECONCILE's last round is ending, so an operator must now decide (G4). */
+      readonly reconcileExhausted?: boolean;
+      /** What to record instead of the failure kind, where the kind is not the story. */
+      readonly note?: string;
+    } = {},
+  ): Promise<boolean> {
     /*
      * `UNKNOWN` is never retried as the same mutation.
      *
@@ -2573,8 +3294,16 @@ export class ProvisionerService {
      * spent attempt count produces, reached without spending four more attempts on a
      * password that will not change by itself.
      */
-    const retryable =
-      outcome === 'FAILED' && PROVIDER_FAILURE_RETRYABLE[failure] && !exhausted(operation.attempts);
+    /*
+     * A RECONCILE is a READ, and a read that came back incomplete — a record without its
+     * usage figure, a value that is not a number — changed nothing and may read whole
+     * next time (WP15 G5). So for a reconcile `MALFORMED_RESPONSE` is retried within the
+     * same ceiling; for a write it stays terminal, because there it can mean "applied".
+     */
+    const retryableKind =
+      PROVIDER_FAILURE_RETRYABLE[failure] ||
+      (operation.type === 'RECONCILE' && failure === 'MALFORMED_RESPONSE');
+    const retryable = outcome === 'FAILED' && retryableKind && !exhausted(operation.attempts);
     const serviceId = service.id;
     const actor = this.actor();
     await this.deps.uow.run(scope, async (tx) => {
@@ -2585,8 +3314,11 @@ export class ProvisionerService {
         retryable ? 'PLANNED' : outcome,
         {
           failureKind: failure,
-          failureMessage: failureNote(failure, status),
+          failureMessage: extras.note ?? failureNote(failure, status, extras.detail),
           nextAttemptAt: retryable ? new Date(now.getTime() + backoffMs(operation.attempts)) : null,
+          ...(extras.accepted === true && operation.type === 'PROVISION'
+            ? { createAcceptedAt: now }
+            : {}),
         },
         now,
         tx,
@@ -2615,18 +3347,32 @@ export class ProvisionerService {
         });
       }
 
-      if (!retryable) {
+      /*
+       * A reconcile round that ends undecided is not news while another round is due:
+       * the service's `UNRECONCILED` condition is already open and says what matters.
+       * The LAST round ending is, and it says so in its own words (WP15 G4).
+       */
+      const roundEnding = operation.type === 'RECONCILE' && extras.reconcileExhausted !== true;
+      if (!retryable && !roundEnding) {
+        const reconcileSpent = operation.type === 'RECONCILE';
         await this.deps.opsLog.record(
           scope,
           {
             code: PROVISIONING_STALLED_CODE,
             severity: 'ERROR',
-            message: 'A paid service could not be created on its panel.',
+            message: reconcileSpent
+              ? 'This installation could not learn from the panel whether a paid service was created; an operator must decide.'
+              : 'A paid service could not be created on its panel.',
             context: {
               serviceId,
               panelId: service.panelId,
-              reason: outcome === 'UNKNOWN' ? 'UNRECONCILED' : 'EXHAUSTED',
+              reason: reconcileSpent
+                ? 'RECONCILE_EXHAUSTED'
+                : outcome === 'UNKNOWN'
+                  ? 'UNRECONCILED'
+                  : 'EXHAUSTED',
               failureKind: failure,
+              ...(extras.detail === undefined ? {} : { detail: extras.detail }),
             },
             dedupeKey: provisioningConditionKey(serviceId),
           },
@@ -2657,6 +3403,7 @@ export class ProvisionerService {
         }
       }
     });
+    return retryable;
   }
 
   private async persistSuccess(

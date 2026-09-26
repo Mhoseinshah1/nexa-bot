@@ -106,6 +106,24 @@ export interface FakeRickpanel {
   lostPutAnswers: number;
   /** How many `PUT /api/user/{name}` calls reached the panel, whatever they did. */
   putCalls(): number;
+  /**
+   * How many of the NEXT `GET /api/user/{name}` answer 429 without reading anything
+   * (WP15 H1): the read after an accepted create, lost to a rate limit.
+   */
+  rateLimitedReads: number;
+  /**
+   * WP15 G3: the next N reads of a user answer 404 even though the panel holds it — the
+   * propagation window after an accepted create.
+   */
+  hiddenReads: number;
+  /** WP15 G7: the next N reads of a user drop the connection before answering. */
+  droppedReads: number;
+  /** WP15 G2: the next N modifies answer 500 WITHOUT applying anything. */
+  unappliedPutFailures: number;
+  /** WP15 G5: numeric fields spelled as strings, the way the document's schema types them. */
+  stringNumbers: boolean;
+  /** WP15 G5: a record with no `used_traffic` at all. */
+  omitUsedTraffic: boolean;
   readonly requests: readonly FakeRickpanelRequest[];
   /** Everything this panel holds, keyed by username — the observer's view. */
   readonly users: ReadonlyMap<string, FakeRickpanelUser>;
@@ -135,15 +153,22 @@ export async function startFakeRickpanel(
   let revokeMode: RickpanelRevokeMode = 'rotates';
   let afterRotation: (() => Promise<void>) | null = null;
   let lostPutAnswers = 0;
+  let rateLimitedReads = 0;
+  let hiddenReads = 0;
+  let droppedReads = 0;
+  let unappliedPutFailures = 0;
+  let stringNumbers = false;
+  let omitUsedTraffic = false;
   let rotationCounter = 0;
 
+  const num = (value: number): number | string => (stringNumbers ? String(value) : value);
   const present = (user: FakeRickpanelUser): Record<string, unknown> => ({
     username: user.username,
     status: user.status,
-    expire: user.expire,
-    data_limit: user.dataLimit,
+    expire: num(user.expire),
+    data_limit: num(user.dataLimit),
     data_limit_reset_strategy: 'no_reset',
-    used_traffic: user.usedTraffic,
+    ...(omitUsedTraffic ? {} : { used_traffic: num(user.usedTraffic) }),
     proxies: user.proxies,
     // The document's own `/sub/{username}/{token}` route, as a PATH: a panel does not
     // know which hostname it is reached by.
@@ -249,11 +274,27 @@ export async function startFakeRickpanel(
         const name = decodeURIComponent(single[1] ?? '');
         const held = users.get(name);
         if (method === 'GET') {
+          if (rateLimitedReads > 0) {
+            rateLimitedReads -= 1;
+            return void json(429, { detail: 'slow down' });
+          }
+          if (droppedReads > 0) {
+            droppedReads -= 1;
+            return void response.destroy();
+          }
+          if (hiddenReads > 0) {
+            hiddenReads -= 1;
+            return void json(404, { detail: 'User not found' });
+          }
           if (held === undefined) return void json(404, { detail: 'User not found' });
           return void json(200, present(held));
         }
         if (method === 'PUT') {
           if (held === undefined) return void json(404, { detail: 'User not found' });
+          if (unappliedPutFailures > 0) {
+            unappliedPutFailures -= 1;
+            return void json(500, { detail: 'boom' });
+          }
           const payload = parse(body) ?? {};
           if (typeof payload['status'] === 'string') held.status = payload['status'];
           if (typeof payload['expire'] === 'number') held.expire = payload['expire'];
@@ -295,6 +336,42 @@ export async function startFakeRickpanel(
     },
     set unprocessableCreates(next: number) {
       unprocessableCreates = next;
+    },
+    get rateLimitedReads() {
+      return rateLimitedReads;
+    },
+    set rateLimitedReads(next: number) {
+      rateLimitedReads = next;
+    },
+    get hiddenReads() {
+      return hiddenReads;
+    },
+    set hiddenReads(next: number) {
+      hiddenReads = next;
+    },
+    get droppedReads() {
+      return droppedReads;
+    },
+    set droppedReads(next: number) {
+      droppedReads = next;
+    },
+    get unappliedPutFailures() {
+      return unappliedPutFailures;
+    },
+    set unappliedPutFailures(next: number) {
+      unappliedPutFailures = next;
+    },
+    get stringNumbers() {
+      return stringNumbers;
+    },
+    set stringNumbers(next: boolean) {
+      stringNumbers = next;
+    },
+    get omitUsedTraffic() {
+      return omitUsedTraffic;
+    },
+    set omitUsedTraffic(next: boolean) {
+      omitUsedTraffic = next;
     },
     get lostPutAnswers() {
       return lostPutAnswers;

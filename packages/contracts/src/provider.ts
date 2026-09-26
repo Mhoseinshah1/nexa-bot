@@ -777,7 +777,32 @@ export interface ProviderFailureResult {
   readonly ok: false;
   readonly failure: ProviderFailureKind;
   readonly status: number | null;
+  /** A narrower, closed-vocabulary statement of WHICH case of `failure` this is. */
+  readonly detail?: ProviderFailureDetail;
 }
+
+/**
+ * The cases an operator must be able to tell apart inside one failure kind (WP15 G5, G6).
+ *
+ * A closed vocabulary, never a provider's words, for the reason `failureNote` gives: a
+ * panel's error message is text a third party chose. Each member names a fact this
+ * installation established itself.
+ *
+ *   - `CONNECTION_LOST_AFTER_SEND` — a WRITE whose connection failed after the request
+ *     may have been written. Reported as `TIMEOUT`, because the panel may have acted and
+ *     no answer came back; never as `UNREACHABLE`, which says nothing was sent.
+ *   - `USAGE_FIELD_MISSING` — the panel HAS the account and its record lacks the usage
+ *     figure the adapter must read. Distinct from "the account is not there", which is
+ *     `found: false` and never a failure.
+ *   - `VALUE_MALFORMED` — a numeric field was present and not a canonical non-negative
+ *     integer, so no figure could be read from it.
+ */
+export const PROVIDER_FAILURE_DETAILS = [
+  'CONNECTION_LOST_AFTER_SEND',
+  'USAGE_FIELD_MISSING',
+  'VALUE_MALFORMED',
+] as const;
+export type ProviderFailureDetail = (typeof PROVIDER_FAILURE_DETAILS)[number];
 
 export type ProviderProbeOutcome =
   | {
@@ -830,6 +855,15 @@ export interface ProviderHttpRequest {
    * line, and this file, changing first.
    */
   readonly method: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  /**
+   * Whether the request changes provider-side state (WP15 G6).
+   *
+   * Defaults to `READ` for `GET` and `WRITE` for everything else. An adapter marks a
+   * `POST` `READ` only where the panel's own contract makes it one — a token exchange
+   * creates a session and changes no account. A `WRITE` is never replayed by the client
+   * and a connection lost after sending one is ambiguous, not unreachable.
+   */
+  readonly effect?: 'READ' | 'WRITE';
   /** Resolved against the target's base URL. Absolute URLs are refused. */
   readonly path: string;
   readonly headers?: Readonly<Record<string, string>>;
@@ -863,7 +897,7 @@ export type ProviderHttpResult =
        */
       readonly setCookie: readonly string[];
     }
-  | { readonly ok: false; readonly failure: ProviderFailureKind; readonly status: number | null };
+  | ProviderFailureResult;
 
 /**
  * The only way an adapter can reach the network.
@@ -960,7 +994,17 @@ export type ProviderUserOutcome =
       /** What the panel says the account's limits are NOW, if it said. */
       readonly usage: ProviderUsage | null;
     }
-  | { readonly ok: false; readonly failure: ProviderFailureKind; readonly status: number | null };
+  | (ProviderFailureResult & {
+      /**
+       * The panel answered the create itself with a success, and something AFTER it
+       * failed — a read-back lost, a record without a usable subscription (WP15 G7).
+       *
+       * Durable provenance: the account was made by this request, so a later READ may
+       * adopt it. Absent or false means no such evidence — a timeout, a 5xx, a 409 —
+       * and a lookup that finds the name then proves only that the NAME exists.
+       */
+      readonly accepted?: boolean;
+    });
 
 /**
  * What a lookup of one provider username established.
@@ -983,11 +1027,10 @@ export type ProviderLookupOutcome =
       readonly delivery: ServiceDelivery;
       readonly usage: ProviderUsage | null;
     }
-  | { readonly ok: false; readonly failure: ProviderFailureKind; readonly status: number | null };
+  | ProviderFailureResult;
 
 export type ProviderUsageOutcome =
-  | { readonly ok: true; readonly usage: ProviderUsage }
-  | { readonly ok: false; readonly failure: ProviderFailureKind; readonly status: number | null };
+  { readonly ok: true; readonly usage: ProviderUsage } | ProviderFailureResult;
 
 /**
  * What an attempt to change one existing account's state established.
@@ -1006,7 +1049,7 @@ export type ProviderUsageOutcome =
 export type ProviderStateChangeOutcome =
   | { readonly ok: true; readonly found: true; readonly usage: ProviderUsage | null }
   | { readonly ok: true; readonly found: false }
-  | { readonly ok: false; readonly failure: ProviderFailureKind; readonly status: number | null };
+  | ProviderFailureResult;
 
 /**
  * What an attempt to delete one account established.
@@ -1021,8 +1064,7 @@ export type ProviderStateChangeOutcome =
  * answered, authenticated, that it does not have the account may set it.
  */
 export type ProviderRemovalOutcome =
-  | { readonly ok: true; readonly wasPresent: boolean }
-  | { readonly ok: false; readonly failure: ProviderFailureKind; readonly status: number | null };
+  { readonly ok: true; readonly wasPresent: boolean } | ProviderFailureResult;
 
 /**
  * The full provider surface: the connection half plus the service operations.
@@ -1164,7 +1206,7 @@ export interface ProviderAdapter extends ProviderConnectionAdapter {
 export type ProviderRotationOutcome =
   | { readonly ok: true; readonly found: true; readonly subscriptionUrl: string }
   | { readonly ok: true; readonly found: false }
-  | { readonly ok: false; readonly failure: ProviderFailureKind; readonly status: number | null };
+  | ProviderFailureResult;
 
 /**
  * The absolute state a commercial operation asks a provider to make true.

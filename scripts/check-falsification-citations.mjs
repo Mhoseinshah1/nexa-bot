@@ -89,6 +89,7 @@ const RECORDS = [
    * than being quietly admitted or quietly forgotten.
    */
   'docs/customer-ux-completion-falsification.md',
+  'docs/wp15-falsification.md',
 ];
 /**
  * The fewest citations this record may contain.
@@ -115,7 +116,7 @@ const RECORDS = [
  * have to be a map, and a map is a place for a record to be added with no entry
  * and checked against nothing — which is this script's own failure mode.
  */
-const EXPECTED = 1790;
+const EXPECTED = 1817;
 /**
  * A table whose last column is one of these is making citations.
  *

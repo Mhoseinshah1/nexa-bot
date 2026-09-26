@@ -876,7 +876,10 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.last_seen_at': '{at}',
   'bot.service.last_seen_never': 'متصل نشده',
   'bot.service.last_seen_unavailable': 'در دسترس نیست',
-  'bot.service.rotate_hint': '💡 برای قطع دسترسی دیگران کافیست روی گزینه "تغییر لینک" کلیک کنید.',
+  // Says nothing about the old link, for `rotate_ask`'s reason (OQ-RP-07): that a rotated
+  // link stops working has not been observed on any panel (WP15 H5).
+  'bot.service.rotate_hint':
+    '💡 با گزینهٔ «تغییر لینک» یک لینک اشتراک جدید برای این سرویس ساخته می‌شود.',
   'bot.service.refresh_button': '♻️ بروزرسانی اطلاعات',
   'bot.service.link_button': '🔗 لینک اشتراک',
   'bot.service.note_button': '📝 تغییر یادداشت',

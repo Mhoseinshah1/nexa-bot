@@ -394,40 +394,189 @@ describe('RickPanel service management through the application layer', () => {
     expect(await refunds()).toHaveLength(0);
   });
 
-  it('converges when a renewal was applied and its answer lost: the replay sets, it does not add', async () => {
-    /*
-     * The case `IDEMPOTENT_MUTATIONS` exists for. The panel applied the PUT and the
-     * answer was a 500, so the operation is retried — with the SAME absolute target,
-     * stored when the order settled. A second increment would give the customer twice
-     * what they bought; the target makes the replay a no-op on the panel's record.
-     */
-    const service = await deliveredService('renew-lost');
+  const makeVerificationDue = () =>
+    ctx.container.database.db.execute(
+      sql`UPDATE provisioning_operations SET next_attempt_at = now() - interval '1 hour'
+           WHERE state = 'UNKNOWN' AND next_attempt_at IS NOT NULL`,
+    );
+
+  async function fundedRenewal(key: string): Promise<{ service: ServiceRecord; orderId: OrderId }> {
+    const service = await deliveredService(key);
     await ctx.container.wallet.adjust(tenantA, owner, customerId, {
-      idempotencyKey: 'renew-lost-fund',
+      idempotencyKey: `${key}-fund`,
       direction: 'CREDIT',
       amountMinor: 1_000_000n,
       currency: 'IRT',
       note: 'fixture',
     });
-    await buy(service.id, 'RENEW', null, 'renew-lost');
+    const orderId = await buy(service.id, 'RENEW', null, key);
+    return { service, orderId };
+  }
+
+  const userReads = () =>
+    panel.requests.filter((one) => one.method === 'GET' && one.path.startsWith('/api/user/'))
+      .length;
+
+  it('verifies a renewal that was applied and whose answer was lost, and refunds nothing (WP15 G2)', async () => {
+    /*
+     * The panel applied the PUT and the answer was a 500. That may mean "applied", so
+     * the write is NOT refunded and NOT replayed: the operation goes UNKNOWN and a READ
+     * compares the account with the absolute target stored when the order settled.
+     */
+    const { service } = await fundedRenewal('renew-lost');
     const target = (await operationOf(service.id, 'RENEW'))?.target;
     panel.lostPutAnswers = 1;
 
     await ctx.container.provisioner.runOnce(tenantA);
-    const retried = await operationOf(service.id, 'RENEW');
-    expect(retried?.state, 'a lost answer on an idempotent write is retried').toBe('PLANNED');
-    expect(retried?.failureKind).toBe('PROVIDER_ERROR');
+    const parked = await operationOf(service.id, 'RENEW');
+    expect(parked?.state, 'an ambiguous write is verified, not refunded').toBe('UNKNOWN');
+    expect(parked?.failureKind).toBe('PROVIDER_ERROR');
+    expect(await refunds()).toHaveLength(0);
 
-    await makeDue();
+    await makeVerificationDue();
     await ctx.container.provisionerLoop.tick();
     expect((await operationOf(service.id, 'RENEW'))?.state).toBe('SUCCEEDED');
     const after = await reload(service.id);
     expect(after.expiresAt?.getTime()).toBe(target?.expiresAt?.getTime());
     expect(after.trafficLimitBytes).toBe(target?.trafficLimitBytes);
     expectAgreement(after);
-    expect(panel.putCalls()).toBe(2);
+    expect(panel.putCalls(), 'the write was sent ONCE; the verification only read').toBe(1);
     expect(await debits()).toHaveLength(2);
+    expect(await refunds(), 'nothing refunded for a renewal the customer has').toHaveLength(0);
+  });
+
+  it('refunds a renewal the READ proves was not applied (WP15 G2)', async () => {
+    const { service } = await fundedRenewal('renew-unapplied');
+    const before = await reload(service.id);
+    panel.unappliedPutFailures = 1;
+
+    await ctx.container.provisioner.runOnce(tenantA);
+    expect((await operationOf(service.id, 'RENEW'))?.state).toBe('UNKNOWN');
     expect(await refunds()).toHaveLength(0);
+
+    await makeVerificationDue();
+    await ctx.container.provisionerLoop.tick();
+    expect((await operationOf(service.id, 'RENEW'))?.state).toBe('FAILED');
+    expect(await refunds(), 'definitive evidence: the ordinary refund rule').toHaveLength(1);
+    // No date is left on the verdict: a FAILED row with one reads as still retrying,
+    // and the announcer would never answer it.
+    expect((await operationOf(service.id, 'RENEW'))?.nextAttemptAt).toBeNull();
+    // The announcement drain takes rows past its grace period; age this one past it.
+    await ctx.container.database.db.execute(
+      sql`UPDATE provisioning_operations SET completed_at = now() - interval '1 hour'
+           WHERE service_id = ${service.id} AND type = 'RENEW'`,
+    );
+    await ctx.container.provisionerLoop.tick();
+    const announced = (await ctx.container.database.db.execute(
+      sql`SELECT announced_at IS NOT NULL AS done FROM provisioning_operations
+           WHERE service_id = ${service.id} AND type = 'RENEW'` as never,
+    )) as unknown as { rows: { done: boolean }[] };
+    expect(announced.rows, 'a verified failure is answered to the customer').toEqual([
+      { done: true },
+    ]);
+    const after = await reload(service.id);
+    expect(after.expiresAt?.getTime(), 'Nexa keeps the old window').toBe(
+      before.expiresAt?.getTime(),
+    );
+    expect(panel.putCalls(), 'and the write was never replayed').toBe(1);
+  });
+
+  it('stops after a bounded number of reads, refunds nothing, and tells an operator (WP15 G2)', async () => {
+    const { service } = await fundedRenewal('renew-unreadable');
+    panel.unappliedPutFailures = 1;
+    await ctx.container.provisioner.runOnce(tenantA);
+    expect((await operationOf(service.id, 'RENEW'))?.state).toBe('UNKNOWN');
+
+    panel.rateLimitedReads = 1_000;
+    for (let round = 0; round < 6; round += 1) {
+      await makeVerificationDue();
+      await ctx.container.provisionerLoop.tick();
+    }
+    const stuck = await operationOf(service.id, 'RENEW');
+    expect(stuck?.state, 'still undecided, so still UNKNOWN').toBe('UNKNOWN');
+    expect(stuck?.verificationAttempts).toBe(3);
+    expect(stuck?.nextAttemptAt, 'and nothing further is scheduled').toBeNull();
+    expect(await refunds(), 'no refund on an answer nobody has').toHaveLength(0);
+    const events = (await ctx.container.database.db.execute(
+      sql`SELECT context->>'reason' AS reason FROM operational_events
+           WHERE code = 'provisioning.stalled' AND resolved_at IS NULL` as never,
+    )) as unknown as { rows: { reason: string }[] };
+    expect(events.rows.map((row) => row.reason)).toContain('ALLOWANCE_UNVERIFIED');
+    const reads = panel.requests.length;
+    await makeVerificationDue();
+    await ctx.container.provisionerLoop.tick();
+    expect(panel.requests.length, 'no read after the last one').toBeLessThanOrEqual(reads + 2);
+  });
+
+  it('stops a verification whose last read never finished, and tells an operator (WP15 G2)', async () => {
+    const { service } = await fundedRenewal('renew-crashed-read');
+    panel.unappliedPutFailures = 1;
+    await ctx.container.provisioner.runOnce(tenantA);
+    // The state a crash between the last claim and its answer leaves: reads spent, a date set.
+    await ctx.container.database.db.execute(
+      sql`UPDATE provisioning_operations SET verification_attempts = 3,
+             next_attempt_at = now() - interval '1 minute'
+           WHERE service_id = ${service.id} AND type = 'RENEW'`,
+    );
+    const reads = userReads();
+    await ctx.container.provisionerLoop.tick();
+    const stopped = await operationOf(service.id, 'RENEW');
+    expect(stopped?.state).toBe('UNKNOWN');
+    expect(stopped?.nextAttemptAt, 'stopped, not stranded with a date').toBeNull();
+    expect(userReads(), 'and not read a fourth time').toBe(reads);
+    const events = (await ctx.container.database.db.execute(
+      sql`SELECT context->>'reason' AS reason FROM operational_events
+           WHERE code = 'provisioning.stalled' AND resolved_at IS NULL` as never,
+    )) as unknown as { rows: { reason: string }[] };
+    expect(events.rows.map((row) => row.reason)).toContain('ALLOWANCE_UNVERIFIED');
+    expect(await refunds()).toHaveLength(0);
+  });
+
+  it('verifies a renewal whose worker died mid-call, instead of replaying it (WP15 G2)', async () => {
+    const { service } = await fundedRenewal('renew-stranded');
+    const renew = await operationOf(service.id, 'RENEW');
+    // The state a crash mid-PUT leaves: claimed, stamped, lease gone.
+    await ctx.container.database.db.execute(
+      sql`UPDATE provisioning_operations
+             SET state = 'IN_FLIGHT', claimed_by = 'worker-that-died', attempts = 1,
+                 lease_until = now() - interval '1 hour', call_started_at = now() - interval '2 hours'
+           WHERE id = ${renew?.id ?? ''}`,
+    );
+    const puts = panel.putCalls();
+    await ctx.container.provisioner.runOnce(tenantA);
+    const reaped = await operationOf(service.id, 'RENEW');
+    expect(reaped?.state, 'a write that may have landed is verified, not replayed').toBe('UNKNOWN');
+    expect(reaped?.nextAttemptAt, 'with its first read scheduled').not.toBeNull();
+    expect(panel.putCalls(), 'and it was not sent again').toBe(puts);
+    expect(await refunds()).toHaveLength(0);
+  });
+
+  it('refuses a second purchase while the first is being verified (WP15 G2)', async () => {
+    const { service } = await fundedRenewal('renew-then-again');
+    panel.lostPutAnswers = 1;
+    await ctx.container.provisioner.runOnce(tenantA);
+    expect((await operationOf(service.id, 'RENEW'))?.state).toBe('UNKNOWN');
+
+    await expect(buy(service.id, 'RENEW', null, 'renew-then-again-2')).rejects.toMatchObject({
+      code: 'commerce.service_action_in_progress',
+    });
+    expect(await debits(), 'nothing was charged for the refused second renewal').toHaveLength(2);
+  });
+
+  it('adds no read to a renewal the panel answered (WP15 G2)', async () => {
+    const { service } = await fundedRenewal('renew-no-extra-read');
+    const reads = userReads();
+    await ctx.container.provisionerLoop.tick();
+    expect((await operationOf(service.id, 'RENEW'))?.state).toBe('SUCCEEDED');
+    expect(userReads(), 'the success path reads nothing').toBe(reads);
+  });
+
+  it('renews against a panel that spells its numbers as strings (WP15 numeric normalisation)', async () => {
+    const { service } = await fundedRenewal('renew-strings');
+    panel.stringNumbers = true;
+    await ctx.container.provisionerLoop.tick();
+    expect((await operationOf(service.id, 'RENEW'))?.state).toBe('SUCCEEDED');
+    expectAgreement(await reload(service.id));
   });
 
   it('suspends, resumes and terminates, and the panel agrees at every step', async () => {

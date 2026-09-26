@@ -687,8 +687,11 @@ export const SERVICE_RESEND_CALLBACK_PREFIX = 'r:';
 /**
  * The three management actions, and the two halves of ending a service.
  *
- * Four prefixes for three operations, because TERMINATE is TWO taps: `t:` opens the
- * confirmation and `k:` is the only callback in this surface that plans one. Nothing
+ * Four prefixes, and since WP15 G1 only the first two plan anything. `t:` and `k:` were
+ * a customer's TERMINATE, ask then confirm; the owner removed the capability, and the two
+ * prefixes stay RESERVED and recognised so a message drawn before that release — or a
+ * replayed callback — is answered with a refusal instead of falling through to whatever
+ * a later prefix might mean. Neither plans an operation. Nothing
  * about which operation to perform is parsed out of the payload — the type is decided
  * by WHICH prefix matched, and each is a fixed two-character string. A modified client
  * can change the id after the colon and nothing else, and an id that is not theirs is
@@ -2202,11 +2205,9 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
       );
     }
     /*
-     * The ASK prefix is tested before the TERMINATE prefix, and they are different
-     * letters so the order cannot matter today. It is fixed anyway for the reason the
-     * resend/service pair states: if one ever became a prefix of the other, every tap
-     * would route to whichever branch came first — and here that would be the
-     * difference between showing a customer a question and deleting their account.
+     * Retired, and still parsed (WP15 G1): a stale TERMINATE tap must reach the handler
+     * that refuses it, not fall through to the unknown-callback path or to a prefix a
+     * later release gives these letters.
      */
     if (data.startsWith(SERVICE_TERMINATE_ASK_CALLBACK_PREFIX)) {
       return callbackCommand(
@@ -8021,18 +8022,15 @@ export class BotRuntime {
         input.idempotencyKey,
       );
     }
-    if (command.intent === 'SERVICE_TERMINATE_ASK' && command.targetId !== null) {
-      return this.serviceTerminateAsk(scope, customer, command.targetId);
-    }
-    if (command.intent === 'SERVICE_TERMINATE' && command.targetId !== null) {
-      return this.serviceAction(
-        scope,
-        actor,
-        customer,
-        command.targetId,
-        'TERMINATE',
-        input.idempotencyKey,
-      );
+    /*
+     * WP15 G1: a customer cannot terminate a service. Both taps are still RECOGNISED —
+     * a message drawn before this release still carries the buttons, and a bookmark or
+     * a replayed callback carries the data — and both answer the same refusal a service
+     * that cannot do something already gives. Neither looks the service up, plans an
+     * operation or contacts anything: the refusal is about the customer, not the row.
+     */
+    if (command.intent === 'SERVICE_TERMINATE_ASK' || command.intent === 'SERVICE_TERMINATE') {
+      return { key: 'bot.service.capability_unsupported', values: {}, buttons: [], orderId: null };
     }
     if (command.intent === 'SERVICE_ROTATE_ASK' && command.targetId !== null) {
       return this.serviceRotateAsk(scope, customer, command.targetId);
@@ -8226,13 +8224,6 @@ export class BotRuntime {
         label: { kind: 'TEMPLATE', key: 'bot.service.resume_button' },
         data: `${SERVICE_RESUME_CALLBACK_PREFIX}${service.id}`,
         row: 3,
-      });
-    }
-    if (actions.includes('TERMINATE')) {
-      buttons.push({
-        label: { kind: 'TEMPLATE', key: 'bot.service.terminate_button' },
-        data: `${SERVICE_TERMINATE_ASK_CALLBACK_PREFIX}${service.id}`,
-        row: 4,
       });
     }
     buttons.push({
@@ -8450,49 +8441,7 @@ export class BotRuntime {
   }
 
   /**
-   * The one screen between a customer and the deletion of their provider account.
-   *
-   * It plans nothing, writes nothing and contacts nothing. Its only job is to say what
-   * is about to happen, name the service in words the customer recognises, and offer
-   * the ONE button that carries the destructive prefix.
-   *
-   * The ability is re-checked here rather than trusted from whichever message was
-   * tapped: a customer whose service has since expired, or whose panel an operator
-   * disabled, is told it cannot be done instead of being shown a question whose answer
-   * would be refused.
-   */
-  private async serviceTerminateAsk(
-    scope: TenantContext,
-    customer: CustomerRecord,
-    serviceId: string,
-  ): Promise<PendingReply> {
-    const service = await this.ownedService(scope, customer, serviceId);
-    if (service === null) {
-      return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
-    }
-    const title = await this.deps.purchaseTitle(scope, service.orderId);
-    if (title === null) {
-      return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
-    }
-    const actions = await this.deps.services.customerActionsFor(scope, service);
-    if (!actions.includes('TERMINATE')) {
-      return { key: 'bot.service.capability_unsupported', values: {}, buttons: [], orderId: null };
-    }
-    return {
-      key: 'bot.service.terminate_confirm',
-      values: { productTitle: title },
-      buttons: [
-        {
-          label: { kind: 'TEMPLATE', key: 'bot.service.terminate_confirm_button' },
-          data: `${SERVICE_TERMINATE_CALLBACK_PREFIX}${service.id}`,
-        },
-      ],
-      orderId: null,
-    };
-  }
-
-  /**
-   * A customer asking for one of the three management actions on their own service.
+   * A customer asking for one of the two management actions on their own service.
    *
    * The TYPE is a literal chosen by which callback prefix matched, never parsed out of
    * the payload. That is the property worth stating: nothing a client sends can turn a
@@ -8549,7 +8498,7 @@ export class BotRuntime {
   /**
    * The screen between a customer and a new subscription link (WP6-C).
    *
-   * Plans nothing and writes nothing, like `serviceTerminateAsk`. The offer is re-read
+   * Plans nothing and writes nothing: it only asks. The offer is re-read
    * rather than trusted from the message that was tapped, and the cooldown shown is the
    * setting as it stands now. The sentence says a new link will be issued and has to be
    * put into the customer's apps; it says nothing about the old one (OQ-RP-07).
@@ -10206,7 +10155,7 @@ export class BotRuntime {
    *
    * It writes nothing and closes nothing. Its only job is to say what is about to
    * happen and offer the ONE button that carries the destructive prefix —
-   * `serviceTerminateAsk` is the same shape one aggregate over.
+   * `serviceRotateAsk` is the same shape one aggregate over.
    *
    * The payment is re-read here rather than trusted from whichever message was tapped:
    * a customer whose payment an operator has since rejected, or the sweep has expired,

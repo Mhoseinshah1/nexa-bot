@@ -25,6 +25,8 @@ interface Route {
     hang?: boolean;
     /** Write forever, to exercise the size cap. */
     flood?: boolean;
+    /** Read the request, then kill the connection without answering (WP15 G6). */
+    reset?: boolean;
   };
 }
 
@@ -36,6 +38,11 @@ beforeAll(async () => {
   server = createServer((request, response) => {
     const plan = route(request.url ?? '/');
     if (plan.hang === true) return; // never answers; the client's deadline must fire
+    if (plan.reset === true) {
+      request.resume();
+      request.on('end', () => request.socket.destroy());
+      return;
+    }
     if (plan.flood === true) {
       response.writeHead(200, { 'content-type': 'application/octet-stream' });
       const chunk = 'x'.repeat(64 * 1024);
@@ -274,6 +281,110 @@ describe('the outbound client — retry', () => {
       path: '/',
     });
     expect(blocked.ok).toBe(false);
+  });
+
+  /*
+   * WP15 H4. A write that timed out may have been applied; repeating it is the operation
+   * layer's decision, never the transport's. A read that timed out changed nothing.
+   */
+  it('retries a read on a transient failure and never a write', async () => {
+    let calls = 0;
+    route = () => {
+      calls += 1;
+      return { status: 200, hang: true };
+    };
+    for (const method of ['POST', 'PUT', 'DELETE'] as const) {
+      calls = 0;
+      const result = await client({ maxRetries: 2, totalTimeoutMs: 150 }).send(base, {
+        method,
+        path: '/api/user',
+        ...(method === 'DELETE' ? {} : { body: { kind: 'json' as const, value: {} } }),
+      });
+      expect(result.ok, method).toBe(false);
+      if (!result.ok) expect(result.failure).toBe('TIMEOUT');
+      expect(calls, `${method} was sent more than once`).toBe(1);
+    }
+    calls = 0;
+    await client({ maxRetries: 2, totalTimeoutMs: 150 }).send(base, { method: 'GET', path: '/x' });
+    expect(calls, 'a read is retried within its budget').toBe(3);
+  });
+
+  /*
+   * WP15 G6. A connection that dies after a write was sent is the one failure where the
+   * panel may have acted and said nothing, so it is TIMEOUT with the detail that says so —
+   * never UNREACHABLE, which the operation layer treats as safe to replay.
+   */
+  it('reports a write whose connection reset after sending as ambiguous, and sends it once', async () => {
+    let calls = 0;
+    route = () => {
+      calls += 1;
+      return { status: 200, reset: true };
+    };
+    for (const method of ['POST', 'PUT', 'DELETE'] as const) {
+      calls = 0;
+      const result = await client({ maxRetries: 2 }).send(base, {
+        method,
+        path: '/api/user',
+        ...(method === 'DELETE' ? {} : { body: { kind: 'json' as const, value: {} } }),
+      });
+      expect(result.ok, method).toBe(false);
+      if (result.ok) continue;
+      expect(result.failure, method).toBe('TIMEOUT');
+      expect(result.detail, method).toBe('CONNECTION_LOST_AFTER_SEND');
+      expect(calls, `${method} was replayed by the transport`).toBe(1);
+    }
+  });
+
+  it('retries a read whose connection reset, and reports it as the socket failure it was', async () => {
+    let calls = 0;
+    route = () => {
+      calls += 1;
+      return { status: 200, reset: true };
+    };
+    const result = await client({ maxRetries: 2 }).send(base, { method: 'GET', path: '/x' });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure).toBe('UNREACHABLE');
+      expect(result.detail).toBeUndefined();
+    }
+    expect(calls, 'a read is retried within its budget').toBe(3);
+
+    // A POST the adapter declared a READ — a token exchange — is a read here too.
+    calls = 0;
+    await client({ maxRetries: 2 }).send(base, {
+      method: 'POST',
+      effect: 'READ',
+      path: '/api/admin/token',
+      body: { kind: 'form', value: { username: 'u' } },
+    });
+    expect(calls).toBe(3);
+  });
+
+  it('keeps a write that never connected as unreachable: nothing was sent', async () => {
+    const result = await client({ maxRetries: 2, totalTimeoutMs: 500 }).send('http://127.0.0.1:9', {
+      method: 'POST',
+      path: '/',
+      body: { kind: 'json', value: {} },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure).toBe('UNREACHABLE');
+      expect(result.detail).toBeUndefined();
+    }
+  });
+
+  it('marks a write that timed out after connecting as lost after send', async () => {
+    route = () => ({ status: 200, hang: true });
+    const result = await client({ totalTimeoutMs: 150 }).send(base, {
+      method: 'PUT',
+      path: '/api/user/x',
+      body: { kind: 'json', value: {} },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure).toBe('TIMEOUT');
+      expect(result.detail).toBe('CONNECTION_LOST_AFTER_SEND');
+    }
   });
 
   it('bounds the attempts it does make', async () => {
