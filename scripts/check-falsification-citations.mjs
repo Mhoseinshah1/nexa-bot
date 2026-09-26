@@ -79,6 +79,7 @@ const RECORDS = [
   'docs/tonpays-falsification.md',
   'docs/wp12-falsification.md',
   'docs/wp13-falsification.md',
+  'docs/wp14-falsification.md',
   /*
    * `docs/wp1-falsification.md` is DELIBERATELY absent, and that is a gap rather
    * than a decision this script is happy with.
@@ -119,7 +120,7 @@ const RECORDS = [
  * have to be a map, and a map is a place for a record to be added with no entry
  * and checked against nothing — which is this script's own failure mode.
  */
-const EXPECTED = 1878;
+const EXPECTED = 1896;
 /**
  * A table whose last column is one of these is making citations.
  *
