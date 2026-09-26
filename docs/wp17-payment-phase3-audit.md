@@ -228,14 +228,25 @@ a confirmation committed between two of them produced a history no moment ever h
 are now read at one repeatable-read, read-only snapshot — and `GATEWAY_PAYMENT_FAILED`,
 whose subject is the payment, was missing from the notification kinds.
 
+A second Codex round, on the final candidate `ed4afec`, found three more (P17-19..22):
+
+- The diagnostics reader (WP16 code, already merged in #80) read each count and its sample
+  as two statements, so the two could describe different moments. Each pair is now read in
+  one repeatable-read, read-only transaction.
+- This timeline's wallet read had no payment-leading index and no floor. It is now bounded
+  below by the payment's own `created_at`, which no entry naming it can predate.
+- The Web card said "system" for a CANCELLED payment, which is always the customer's own
+  withdrawal. It now says the customer.
+
 Tests added:
 
 - **Unit:** `tests/unit/payment-timeline.test.ts` (7 cases) and
   `tests/unit/payment-timeline-sections.test.ts` (4 cases, the section decision over the
   real permission guard).
-- **Integration:** `tests/integration/payment-timeline.test.ts` (9 cases), plus the new
-  route in `tests/integration/route-registration.test.ts`.
-- **Web:** `tests/web/payment-timeline.test.tsx` (6 cases: the card alone, and inside its
+- **Integration:** `tests/integration/payment-timeline.test.ts` (10 cases), plus the new
+  route in `tests/integration/route-registration.test.ts`, and two snapshot cases in
+  `tests/integration/system-diagnostics.test.ts`.
+- **Web:** `tests/web/payment-timeline.test.tsx` (8 cases: the card alone, and inside its
   page through the real route).
 
 Targeted checks run locally:
