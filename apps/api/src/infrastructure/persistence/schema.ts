@@ -77,6 +77,9 @@ import {
   ADMIN_CAPTURE_PURPOSES,
   ADMIN_CAPTURE_REASON_MAX_LENGTH,
   RECEIPT_REVIEW_PUSH_STATES,
+  SERVICE_REFUND_REASON_MAX_LENGTH,
+  SERVICE_REFUND_REASON_MIN_LENGTH,
+  SERVICE_REFUND_REQUEST_STATES,
   PAYMENT_STATES,
   PAYMENT_METHODS,
   PAYMENT_EVIDENCE_KINDS,
@@ -4292,6 +4295,11 @@ export const adminAmountCaptures = pgTable(
     paymentId: uuid('payment_id'),
     customerId: uuid('customer_id'),
     /**
+     * WP19: the customer's service refund request an approval amount or a rejection reason
+     * is for. Set for exactly the two `SERVICE_REFUND_*` purposes, and for nothing else.
+     */
+    serviceRefundRequestId: uuid('service_refund_request_id'),
+    /**
      * The amount the administrator typed, in minor units of the PAYMENT's currency. Null
      * until they have typed one; set once. Not money on its own — nothing is credited
      * until the confirm, and the credit's own row carries its currency.
@@ -4333,6 +4341,12 @@ export const adminAmountCaptures = pgTable(
       foreignColumns: [customers.tenantId, customers.id],
       name: 'admin_amount_captures_customer_fk',
     }),
+    // Declared at the end of this file; the builder runs lazily, after it exists.
+    foreignKey({
+      columns: [table.tenantId, table.serviceRefundRequestId],
+      foreignColumns: [serviceRefundRequests.tenantId, serviceRefundRequests.id],
+      name: 'admin_amount_captures_refund_request_fk',
+    }),
     /**
      * Each purpose names exactly its own target: a receipt purpose a payment and never a
      * customer, the customers section's block a customer and never a payment. Every row written
@@ -4341,8 +4355,11 @@ export const adminAmountCaptures = pgTable(
     check(
       'admin_amount_captures_target_check',
       sql`(purpose IN ('RECEIPT_CREDIT_AMOUNT', 'RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON')
-            AND payment_id IS NOT NULL AND customer_id IS NULL)
-          OR (purpose = 'CUSTOMER_BLOCK_REASON' AND customer_id IS NOT NULL AND payment_id IS NULL)`,
+            AND payment_id IS NOT NULL AND customer_id IS NULL AND service_refund_request_id IS NULL)
+          OR (purpose = 'CUSTOMER_BLOCK_REASON' AND customer_id IS NOT NULL AND payment_id IS NULL
+            AND service_refund_request_id IS NULL)
+          OR (purpose IN ('SERVICE_REFUND_AMOUNT', 'SERVICE_REFUND_REJECT_REASON')
+            AND service_refund_request_id IS NOT NULL AND payment_id IS NULL AND customer_id IS NULL)`,
     ),
     /** ONE open capture per administrator per bot, decided by the database. */
     uniqueIndex('admin_amount_captures_open_key')
@@ -4363,15 +4380,15 @@ export const adminAmountCaptures = pgTable(
     check(
       'admin_amount_captures_confirmed_check',
       sql`close_reason IS DISTINCT FROM 'CONFIRMED'
-          OR (purpose = 'RECEIPT_CREDIT_AMOUNT' AND amount_minor IS NOT NULL)
-          OR (purpose IN ('RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON', 'CUSTOMER_BLOCK_REASON') AND reason IS NOT NULL)`,
+          OR (purpose IN ('RECEIPT_CREDIT_AMOUNT', 'SERVICE_REFUND_AMOUNT') AND amount_minor IS NOT NULL)
+          OR (purpose IN ('RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON', 'CUSTOMER_BLOCK_REASON', 'SERVICE_REFUND_REJECT_REASON') AND reason IS NOT NULL)`,
     ),
     check('admin_amount_captures_purpose_check', enumCheck('purpose', ADMIN_CAPTURE_PURPOSES)),
     /** Each purpose reads its own column and never the other's. */
     check(
       'admin_amount_captures_purpose_column_check',
-      sql`(purpose = 'RECEIPT_CREDIT_AMOUNT' AND reason IS NULL)
-          OR (purpose IN ('RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON', 'CUSTOMER_BLOCK_REASON') AND amount_minor IS NULL)`,
+      sql`(purpose IN ('RECEIPT_CREDIT_AMOUNT', 'SERVICE_REFUND_AMOUNT') AND reason IS NULL)
+          OR (purpose IN ('RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON', 'CUSTOMER_BLOCK_REASON', 'SERVICE_REFUND_REJECT_REASON') AND amount_minor IS NULL)`,
     ),
     check(
       'admin_amount_captures_reason_check',
@@ -7001,10 +7018,13 @@ export const customerTextCaptures = pgTable(
       sql`(state = 'AMOUNT_RECORDED') = (amount_minor IS NOT NULL)
           AND (amount_minor IS NULL OR purpose = 'TOPUP_AMOUNT')`,
     ),
-    /** A note names its service; the other two purposes name nothing. */
+    /**
+     * A note and a refund reason (WP19) name their service; the other two purposes name
+     * nothing.
+     */
     check(
       'customer_text_captures_subject_check',
-      sql`(purpose = 'SERVICE_NOTE') = (subject_id IS NOT NULL)`,
+      sql`(purpose IN ('SERVICE_NOTE', 'SERVICE_REFUND_REASON')) = (subject_id IS NOT NULL)`,
     ),
   ],
 );
@@ -7174,5 +7194,207 @@ export const tenantMediaAssets = pgTable(
     ),
     check('tenant_media_assets_sha256_check', sql`sha256 ~ '^[0-9a-f]{64}$'`),
     check('tenant_media_assets_version_check', sql`version >= 1`),
+  ],
+);
+
+/**
+ * WP19 — a customer's request to cancel a service and have money returned
+ * (`docs/wp19-service-refund-request-audit.md`).
+ *
+ * The row IS the record, independently of any Telegram message: a review card that is
+ * never delivered loses nothing, because the Web Admin reads this table. Every state change
+ * is a conditional UPDATE naming its `from` (`SERVICE_REFUND_REQUEST_TRANSITIONS`).
+ *
+ * The money is NOT here. The approved amount is RESERVED by a `REQUESTED` refund row
+ * (`refund_id`) the moment an administrator confirms, and CREDITED only when the `TERMINATE`
+ * operation (`operation_id`) has definitively deleted the provider account. This row links
+ * the two and carries what neither of them does: the customer's reason and the decision.
+ */
+export const serviceRefundRequests = pgTable(
+  'service_refund_requests',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    serviceId: uuid('service_id').notNull(),
+    customerId: uuid('customer_id').notNull(),
+    /** The service's own NEW_SERVICE order, and the CONFIRMED payment that paid for it. */
+    orderId: uuid('order_id').notNull(),
+    paymentId: uuid('payment_id').notNull(),
+    /** The bot the customer filed through: the review cards and replies come from it. */
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    state: text('state').notNull().default('OPEN'),
+    /** The customer's reason, trimmed, as they typed it. */
+    reason: text('reason').notNull(),
+    /** The source payment's principal (never the gateway fee), in its currency. A snapshot. */
+    principalMinor: bigint('principal_minor', { mode: 'bigint' }).notNull(),
+    currency: text('currency').notNull(),
+    /** Set by the approval, with the three below; null while OPEN and on a rejection. */
+    approvedAmountMinor: bigint('approved_amount_minor', { mode: 'bigint' }),
+    refundId: uuid('refund_id'),
+    operationId: uuid('operation_id'),
+    /** Who decided — an approval or a rejection — and when. */
+    decidedByAdminId: uuid('decided_by_admin_id'),
+    decidedAt: timestamptz('decided_at'),
+    /** A rejection's mandatory reason, which the customer is told. */
+    rejectionReason: text('rejection_reason'),
+    /** Why the deletion failed, as the operation recorded it: a code, never provider text. */
+    failureKind: text('failure_kind'),
+    resolvedAt: timestamptz('resolved_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('service_refund_requests_tenant_id_key').on(table.tenantId, table.id),
+    /** A refund row reserves money for at most one request. */
+    unique('service_refund_requests_refund_key').on(table.tenantId, table.refundId),
+    /**
+     * ONE open request per service, decided by the database: a double tap, a replayed
+     * update and two concurrent filings all meet this index, whatever the code forgot.
+     */
+    uniqueIndex('service_refund_requests_active_key')
+      .on(table.tenantId, table.serviceId)
+      .where(sql`state IN ('OPEN', 'EXECUTING')`),
+    /** The sweep's read: executing requests, oldest first. */
+    index('service_refund_requests_state_idx').on(table.tenantId, table.state, table.createdAt),
+    index('service_refund_requests_service_idx').on(
+      table.tenantId,
+      table.serviceId,
+      table.createdAt,
+    ),
+    foreignKey({
+      columns: [table.tenantId, table.serviceId],
+      foreignColumns: [services.tenantId, services.id],
+      name: 'service_refund_requests_service_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'service_refund_requests_customer_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.orderId],
+      foreignColumns: [orders.tenantId, orders.id],
+      name: 'service_refund_requests_order_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.paymentId],
+      foreignColumns: [payments.tenantId, payments.id],
+      name: 'service_refund_requests_payment_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.refundId],
+      foreignColumns: [refunds.tenantId, refunds.id],
+      name: 'service_refund_requests_refund_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.operationId],
+      foreignColumns: [provisioningOperations.tenantId, provisioningOperations.id],
+      name: 'service_refund_requests_operation_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.decidedByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+      name: 'service_refund_requests_admin_fk',
+    }),
+    check('service_refund_requests_state_check', enumCheck('state', SERVICE_REFUND_REQUEST_STATES)),
+    check('service_refund_requests_currency_check', enumCheck('currency', CURRENCY_CODES)),
+    check(
+      'service_refund_requests_reason_check',
+      sql`reason = btrim(reason) AND char_length(reason) BETWEEN ${sql.raw(String(SERVICE_REFUND_REASON_MIN_LENGTH))} AND ${sql.raw(String(SERVICE_REFUND_REASON_MAX_LENGTH))}`,
+    ),
+    check('service_refund_requests_principal_check', sql`principal_minor > 0`),
+    /**
+     * What each state must carry. An OPEN request has decided nothing; one that was
+     * approved carries the amount, the reservation, the deletion and the administrator; a
+     * rejection carries its reason and its administrator. Written as the state's
+     * consequences so a writer that forgets one fails here.
+     */
+    check(
+      'service_refund_requests_open_check',
+      sql`state <> 'OPEN' OR (approved_amount_minor IS NULL AND refund_id IS NULL
+          AND operation_id IS NULL AND decided_by_admin_id IS NULL AND decided_at IS NULL
+          AND rejection_reason IS NULL)`,
+    ),
+    check(
+      'service_refund_requests_approved_check',
+      sql`state NOT IN ('EXECUTING', 'COMPLETED', 'FAILED') OR (approved_amount_minor > 0
+          AND approved_amount_minor <= principal_minor AND refund_id IS NOT NULL
+          AND operation_id IS NOT NULL AND decided_by_admin_id IS NOT NULL
+          AND decided_at IS NOT NULL AND rejection_reason IS NULL)`,
+    ),
+    check(
+      'service_refund_requests_rejected_check',
+      sql`state <> 'REJECTED' OR (rejection_reason IS NOT NULL
+          AND length(btrim(rejection_reason)) BETWEEN 1 AND 500
+          AND decided_by_admin_id IS NOT NULL AND decided_at IS NOT NULL
+          AND approved_amount_minor IS NULL AND refund_id IS NULL AND operation_id IS NULL)`,
+    ),
+    check(
+      'service_refund_requests_resolved_check',
+      sql`(state IN ('COMPLETED', 'REJECTED', 'FAILED')) = (resolved_at IS NOT NULL)`,
+    ),
+  ],
+);
+
+/**
+ * WP19 — one administrator's review card for one refund request: the receipt push's shape
+ * (ADR-0031) and its outcome table, applied to a different subject. Text only — there is no
+ * file to send.
+ */
+export const serviceRefundRequestPushes = pgTable(
+  'service_refund_request_pushes',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    requestId: uuid('request_id').notNull(),
+    adminId: uuid('admin_id').notNull(),
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    state: text('state').notNull().default('PENDING'),
+    attempts: integer('attempts').notNull().default(0),
+    nextAttemptAt: timestamptz('next_attempt_at'),
+    sendStartedAt: timestamptz('send_started_at'),
+    chatId: text('chat_id'),
+    lastErrorCode: text('last_error_code'),
+    resolvedAt: timestamptz('resolved_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    /** One card per request per administrator, for ever. */
+    unique('service_refund_request_pushes_request_admin_key').on(
+      table.tenantId,
+      table.requestId,
+      table.adminId,
+    ),
+    foreignKey({
+      columns: [table.tenantId, table.requestId],
+      foreignColumns: [serviceRefundRequests.tenantId, serviceRefundRequests.id],
+      name: 'service_refund_request_pushes_request_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.adminId],
+      foreignColumns: [admins.tenantId, admins.id],
+      name: 'service_refund_request_pushes_admin_fk',
+    }),
+    index('service_refund_request_pushes_due_idx')
+      .on(table.tenantId, table.nextAttemptAt)
+      .where(sql`state = 'PENDING'`),
+    check(
+      'service_refund_request_pushes_state_check',
+      enumCheck('state', RECEIPT_REVIEW_PUSH_STATES),
+    ),
+    check(
+      'service_refund_request_pushes_resolved_check',
+      sql`(state <> 'PENDING') = (resolved_at IS NOT NULL)`,
+    ),
+    check('service_refund_request_pushes_attempts_check', sql`attempts >= 0`),
   ],
 );
