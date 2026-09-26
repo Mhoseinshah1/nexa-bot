@@ -196,14 +196,22 @@ export function timelineTerminalState(
   return state;
 }
 
+/** Whether the timeline records the customer's transfer signal. */
+export function timelineRecordsSignal(data: PaymentTimelineResponse): boolean {
+  return data.entries.some((entry) => entry.kind === 'CUSTOMER_SIGNALLED');
+}
+
 export function PaymentTimelineCard({
   paymentId,
   paymentState,
+  signalled = false,
   sections = '',
 }: {
   paymentId: string;
   /** The state the page's detail request read. Compared, never displayed. */
   paymentState: PaymentState;
+  /** Whether the detail request read a customer signal. Compared, never displayed. */
+  signalled?: boolean;
   /**
    * The viewer's section permissions as they stand, in the cache identity (Codex review of
    * #81): the server decides what is withheld, so a revoked `receipts.view`, `refunds.view`
@@ -226,21 +234,30 @@ export function PaymentTimelineCard({
    * still reads it open is the older read, and that one is read again. Once per pair of
    * disagreeing answers, so two answers that cannot converge cost one extra request each,
    * never a loop.
+   *
+   * The customer's transfer signal is the same kind of fact: set once, frozen afterwards
+   * (migration 0058), and it leaves the payment PENDING (Codex review of #81). So the side
+   * that has not seen it is the older one too.
    */
   const reconciled = useRef<string | null>(null);
   useEffect(() => {
     if (data === undefined) return;
     const recorded = timelineTerminalState(data);
     if (recorded === null) return;
+    const recordedSignal = timelineRecordsSignal(data);
     const detailOpen = paymentState === 'PENDING' || paymentState === 'UNKNOWN';
-    if (detailOpen ? recorded === 'OPEN' : recorded === paymentState) return;
-    const pair = `${paymentState}:${recorded}`;
+    const detailOlder = (detailOpen && recorded !== 'OPEN') || (!signalled && recordedSignal);
+    const timelineOlder =
+      (!detailOpen && recorded !== paymentState) || (signalled && !recordedSignal);
+    if (!detailOlder && !timelineOlder) return;
+    const pair = `${paymentState}:${String(signalled)}:${recorded}:${String(recordedSignal)}`;
     if (reconciled.current === pair) return;
     reconciled.current = pair;
-    void queries.invalidateQueries({
-      queryKey: detailOpen ? ['payment', paymentId] : ['payment-timeline', paymentId],
-    });
-  }, [data, paymentState, paymentId, queries]);
+    if (detailOlder) void queries.invalidateQueries({ queryKey: ['payment', paymentId] });
+    if (timelineOlder) {
+      void queries.invalidateQueries({ queryKey: ['payment-timeline', paymentId] });
+    }
+  }, [data, paymentState, signalled, paymentId, queries]);
 
   return (
     <Card title={t('web.payment_timeline')} hint={t('web.payment_timeline_hint')}>

@@ -250,6 +250,44 @@ describe('payment timeline card on the payment detail', () => {
     expect(detailCalls(api.calls)).toHaveLength(1);
   });
 
+  /*
+   * Codex review of #81: a customer's transfer signal leaves the payment PENDING, so the
+   * state alone cannot see a signal that reached one read and not the other. The signal is
+   * set once and frozen, so the side without it is the older one.
+   */
+  const timelineSignalled = { kind: 'CUSTOMER_SIGNALLED', at: '2026-09-10T12:40:00.000Z' };
+
+  it('reads the payment again when its history already records the customer’s signal', async () => {
+    const api = stubApi([
+      detailRoute,
+      ...timeline({ entries: [timelineCreated, timelineSignalled] }),
+    ]);
+    open(['payments.view']);
+
+    await waitFor(() => expect(detailCalls(api.calls)).toHaveLength(2));
+    await settle();
+    expect(detailCalls(api.calls)).toHaveLength(2);
+    expect(timelineCalls(api.calls)).toHaveLength(1);
+  });
+
+  it('reads the history again when the customer signalled after it was read', async () => {
+    const api = stubApi([
+      {
+        ...detailRoute,
+        body: {
+          payment: { ...detailRoute.body.payment, customerSignalledAt: '2026-09-10T12:40:00.000Z' },
+        },
+      },
+      ...timeline({ entries: [timelineCreated] }),
+    ]);
+    open(['payments.view']);
+
+    await waitFor(() => expect(timelineCalls(api.calls)).toHaveLength(2));
+    await settle();
+    expect(timelineCalls(api.calls)).toHaveLength(2);
+    expect(detailCalls(api.calls)).toHaveLength(1);
+  });
+
   it('reads a history that still disagrees once, never in a loop', async () => {
     // Every answer is a NEW history that still records nothing decided, so each one
     // re-runs the comparison: only the once-per-disagreement rule stops the re-reads.

@@ -268,6 +268,14 @@ now says the payment closed unsettled. A refund request answered with an error r
 the ledger but not the history beside it. A 5xx may have committed, so the history is
 now re-read too.
 
+A seventh round, on `fdd6f71`, found two more (P17-35..40). The customer's transfer
+signal leaves the payment PENDING, so comparing states could not see a signal that reached
+one read and not the other. The signal is set once and frozen (migration 0058), so the
+comparison now includes it, and the side without it is read again. Completing or
+abandoning a refund is as ambiguous behind an error as requesting one, including a
+response that never arrived. All three commands now re-read the ledger and the history on
+any error.
+
 Tests added:
 
 - **Unit:** `tests/unit/payment-timeline.test.ts` (7 cases) and

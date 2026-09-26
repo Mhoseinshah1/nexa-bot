@@ -808,6 +808,18 @@ function RefundsCard({
     void queries.invalidateQueries({ queryKey: ['payment-timeline', paymentId] });
   };
 
+  /*
+   * After ANY error from the three refund commands. A refusal means the figures here were
+   * stale, and a 5xx or a lost response may have committed, so the ledger is read again,
+   * and so is the history beside it: a refund that committed behind a 5xx is a row there
+   * too, and the refund card would otherwise show one the history omits (Codex review of
+   * #81).
+   */
+  const rereadAfterError = () => {
+    void queries.invalidateQueries({ queryKey: ['refunds', paymentId] });
+    void queries.invalidateQueries({ queryKey: ['payment-timeline', paymentId] });
+  };
+
   const issue = useMutation({
     mutationFn: () =>
       requestRefund({
@@ -836,12 +848,7 @@ function RefundsCard({
        * another operator refunded — so they are re-read, and `refundable` becomes the
        * server's answer again rather than the one the form was drawn from.
        */
-      if (error instanceof ApiError) {
-        void queries.invalidateQueries({ queryKey: ['refunds', paymentId] });
-        // And the history beside it: a refund that committed behind a 5xx is a row there
-        // too, and the refund card would otherwise show one the history omits (Codex).
-        void queries.invalidateQueries({ queryKey: ['payment-timeline', paymentId] });
-      }
+      rereadAfterError();
     },
   });
 
@@ -863,7 +870,11 @@ function RefundsCard({
       setExternalReference('');
       refresh(response);
     },
-    onError: (error) => completion.settleOn(error),
+    // A 5xx or a lost response may have committed, as on `issue` above.
+    onError: (error) => {
+      completion.settleOn(error);
+      rereadAfterError();
+    },
   });
 
   const abandon = useMutation({
@@ -883,7 +894,10 @@ function RefundsCard({
       setExternalReference('');
       refresh(response);
     },
-    onError: (error) => abandonment.settleOn(error),
+    onError: (error) => {
+      abandonment.settleOn(error);
+      rereadAfterError();
+    },
   });
 
   const currency = data?.currency ?? 'IRT';
@@ -1597,6 +1611,7 @@ export function PaymentDetailPage({
             <PaymentTimelineCard
               paymentId={id}
               paymentState={row.state}
+              signalled={row.customerSignalledAt !== null}
               sections={timelineSections}
             />
 

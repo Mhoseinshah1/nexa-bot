@@ -1002,6 +1002,124 @@ describe('the refund card', () => {
   });
 
   /*
+   * Codex review of #81: completing or abandoning a refund is as ambiguous behind a 5xx as
+   * requesting one, so both re-read the ledger and the history on an error answer too.
+   */
+  it.each([
+    ['completion', `/refunds/${REFUND_ID}/completion`, 'واریز انجام شد'],
+    ['abandonment', `/refunds/${REFUND_ID}/failure`, 'منصرف شدم'],
+  ])(
+    're-reads the ledger and the history after a %s answered with a 5xx',
+    async (_, url, button) => {
+      const api = stubApi([
+        ...withRefunds([refundRow()], { consumedMinor: '100000', refundableMinor: '150000' }),
+        {
+          url: `/payments/${ROW_ID}/timeline`,
+          body: {
+            paymentId: ROW_ID,
+            entries: [
+              {
+                kind: 'PAYMENT_CONFIRMED',
+                at: '2026-09-10T12:45:00.000Z',
+                evidenceKind: 'OPERATOR_REVIEW',
+                adminId: ADMIN_ID,
+              },
+            ],
+            withheld: [],
+            truncated: false,
+          },
+        },
+        {
+          url,
+          status: 500,
+          body: {
+            error: { kind: 'internal', code: 'internal', message: 'lost', correlationId: 't' },
+          },
+        },
+      ] as never);
+      renderPage(
+        <PaymentDetailPage
+          id={ROW_ID}
+          mayViewReceipts={false}
+          mayViewRefunds
+          mayIssueRefunds
+          denied={false}
+        />,
+      );
+      await screen.findByText('باقی‌ماندهٔ قابل بازگشت');
+      const reads = (part: string) =>
+        api.calls.filter((call) => call.method === 'GET' && call.url.endsWith(part)).length;
+      await waitFor(() => expect(reads('/timeline')).toBe(1));
+      const ledgerBefore = reads('/refunds');
+
+      fireEvent.change(screen.getByLabelText('کدام بازگشت'), { target: { value: REFUND_ID } });
+      fireEvent.change(screen.getByLabelText('توضیح'), { target: { value: 'پاسخ گم شد' } });
+      fireEvent.click(screen.getByRole('button', { name: button }));
+
+      await waitFor(() => expect(api.calls.some((call) => call.url.endsWith(url))).toBe(true));
+      await waitFor(() => expect(reads('/timeline')).toBe(2));
+      await waitFor(() => expect(reads('/refunds')).toBeGreaterThan(ledgerBefore));
+    },
+  );
+
+  it('re-reads the ledger and the history after a completion whose response was lost', async () => {
+    const api = stubApi([
+      ...withRefunds([refundRow()], { consumedMinor: '100000', refundableMinor: '150000' }),
+      {
+        url: `/payments/${ROW_ID}/timeline`,
+        // Agrees with the CONFIRMED detail, so the only second read is the error's.
+        body: {
+          paymentId: ROW_ID,
+          entries: [
+            {
+              kind: 'PAYMENT_CONFIRMED',
+              at: '2026-09-10T12:45:00.000Z',
+              evidenceKind: 'OPERATOR_REVIEW',
+              adminId: ADMIN_ID,
+            },
+          ],
+          withheld: [],
+          truncated: false,
+        },
+      },
+    ] as never);
+    // No HTTP answer at all: the network failed after the request may have landed.
+    const routed = globalThis.fetch;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: unknown, init?: RequestInit) => {
+        if (String(input).endsWith('/completion')) {
+          api.calls.push({ url: String(input), method: 'POST', body: null });
+          return Promise.reject(new TypeError('network error'));
+        }
+        return routed(input as RequestInfo, init);
+      }),
+    );
+    renderPage(
+      <PaymentDetailPage
+        id={ROW_ID}
+        mayViewReceipts={false}
+        mayViewRefunds
+        mayIssueRefunds
+        denied={false}
+      />,
+    );
+    await screen.findByText('باقی‌ماندهٔ قابل بازگشت');
+    const reads = (part: string) =>
+      api.calls.filter((call) => call.method === 'GET' && call.url.endsWith(part)).length;
+    await waitFor(() => expect(reads('/timeline')).toBe(1));
+
+    fireEvent.change(screen.getByLabelText('کدام بازگشت'), { target: { value: REFUND_ID } });
+    fireEvent.change(screen.getByLabelText('توضیح'), { target: { value: 'پاسخ گم شد' } });
+    fireEvent.click(screen.getByRole('button', { name: 'واریز انجام شد' }));
+
+    await waitFor(() =>
+      expect(api.calls.some((call) => call.url.endsWith('/completion'))).toBe(true),
+    );
+    await waitFor(() => expect(reads('/timeline')).toBe(2));
+  });
+
+  /*
    * Codex review of #81: a refund request answered with a 5xx may have COMMITTED — that is
    * why the retry keeps its key. The ledger beside it is re-read, and so must the history
    * be, or the refund card shows a refund the history on the same page omits.
