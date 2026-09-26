@@ -608,6 +608,9 @@ describe('WP19 — a customer asks for their money back', () => {
     expect(await balance(), 'credited once, the approved amount').toBe(before + 180_000n);
     expect(await walletCredits(row?.request.refundId ?? null)).toBe(1);
     expect(await notices('SERVICE_REFUND_REQUEST_APPROVED')).toBe(1);
+    // The approval's notice names the amount AND the removal; the generic refund notice
+    // would be the same money told twice.
+    expect(await notices('REFUND_COMPLETED'), 'told once, not twice').toBe(0);
 
     const listed = await ctx.container.provisioning.pageForCustomer(tenantA, customerA, 1);
     expect(
@@ -637,6 +640,80 @@ describe('WP19 — a customer asks for their money back', () => {
     expect((await requestRow(filed.request.id))?.request.state).toBe('EXECUTING');
     expect(await balance()).toBe(before);
     expect(await notices('SERVICE_REFUND_REQUEST_APPROVED')).toBe(0);
+  });
+
+  it('leaves a request whose deletion is UNKNOWN executing, crediting and releasing nothing', async () => {
+    const service = await activeService('unknown');
+    const filed = await file(service.id);
+    const before = await balance();
+    await ctx.container.serviceRefundRequests.approve(tenantA, owner, {
+      requestId: filed.request.id,
+      amountMinor: 100_000n,
+    });
+    // The executor's own answer to a lost DELETE; forced so the sweep's reading of it is
+    // what is under test: UNKNOWN is neither success nor failure (CLAUDE.md, Phase 4).
+    await ctx.container.database.db.execute(
+      sql`UPDATE provisioning_operations SET state = 'UNKNOWN'
+           WHERE service_id = ${service.id} AND type = 'TERMINATE'` as never,
+    );
+    await ctx.container.serviceRefundRequests.settleDue(tenantA);
+    const row = await requestRow(filed.request.id);
+    expect(row?.request.state).toBe('EXECUTING');
+    expect(await balance(), 'nothing credited').toBe(before);
+    expect(row?.remaining.amountMinor, 'the reservation still held').toBe(PRICE - 100_000n);
+  });
+
+  it('credits nothing when a deletion reads SUCCEEDED but the service did not move', async () => {
+    const service = await activeService('unmoved');
+    const filed = await file(service.id);
+    const before = await balance();
+    await ctx.container.serviceRefundRequests.approve(tenantA, owner, {
+      requestId: filed.request.id,
+      amountMinor: 100_000n,
+    });
+    // A state the executor never writes (it terminates the service in the same
+    // transaction); forced here so the sweep's own guard is what is under test.
+    await ctx.container.database.db.execute(
+      sql`UPDATE provisioning_operations SET state = 'SUCCEEDED', completed_at = now()
+           WHERE service_id = ${service.id} AND type = 'TERMINATE'` as never,
+    );
+    await ctx.container.serviceRefundRequests.settleDue(tenantA);
+    expect((await services.findById(tenantA, service.id))?.state).toBe('ACTIVE');
+    expect((await requestRow(filed.request.id))?.request.state).toBe('EXECUTING');
+    expect(await balance(), 'no money on a guess').toBe(before);
+  });
+
+  it('refuses an operator completing or abandoning a request’s reserved refund by hand', async () => {
+    const service = await activeService('by-hand');
+    const filed = await file(service.id);
+    const before = await balance();
+    const approved = await ctx.container.serviceRefundRequests.approve(tenantA, owner, {
+      requestId: filed.request.id,
+      amountMinor: 100_000n,
+    });
+    const refundId = approved.refundId ?? '';
+    expect(
+      await refused(
+        ctx.container.refunds.complete(tenantA, owner, {
+          idempotencyKey: 'by-hand-complete',
+          refundId,
+          note: 'paid by hand',
+          externalReference: null,
+        }),
+      ),
+    ).toBe(COMMERCE_ERROR_CODES.REFUND_STATE_INVALID);
+    expect(
+      await refused(
+        ctx.container.refunds.fail(tenantA, owner, {
+          idempotencyKey: 'by-hand-fail',
+          refundId,
+          note: 'abandoned by hand',
+        }),
+      ),
+    ).toBe(COMMERCE_ERROR_CODES.REFUND_STATE_INVALID);
+    expect(await balance(), 'nothing credited by hand').toBe(before);
+    expect(await walletCredits(refundId)).toBe(0);
+    expect((await requestRow(filed.request.id))?.request.state).toBe('EXECUTING');
   });
 
   it('releases the reservation and credits nothing when the deletion definitively fails', async () => {
