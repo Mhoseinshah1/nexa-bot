@@ -196,7 +196,11 @@ export const botDiagnosticSchema = z.object({
   }),
   webhook: z.object({
     outcome: z.enum(BOT_WEBHOOK_CHECK_OUTCOMES),
-    /** The URL Telegram holds; an empty registration is null. */
+    /**
+     * The URL Telegram holds: in full when it is the one this installation recorded, and
+     * cut to its origin (`https://host/…`) otherwise — a foreign registration's path is
+     * where a bot token or another system's secret lives. An empty registration is null.
+     */
     url: z.string().nullable(),
     /** Whether that URL equals the one this installation recorded registering. */
     urlMatchesRecorded: z.boolean().nullable(),
