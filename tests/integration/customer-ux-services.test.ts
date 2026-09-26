@@ -416,13 +416,13 @@ describe('a customer looks after the services they bought', () => {
       expect(body).not.toContain('تغییر لینک');
 
       const buttons = buttonsOf(lastMarkup());
+      // No `t:`: a customer cannot end a service (WP15 G1). Suspend (`u:`) stays.
       expect(buttons).toEqual([
         `rs:${service.id}`,
         `r:${service.id}`,
         `nt:${service.id}`,
         `n:${service.id}`,
         `u:${service.id}`,
-        `t:${service.id}`,
         'sl:1',
       ]);
       const markup = lastMarkup();
