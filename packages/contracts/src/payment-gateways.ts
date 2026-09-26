@@ -198,6 +198,80 @@ export const topupCashbackPercentSchema = z
   .max(PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MAX);
 
 /**
+ * The customer's gateway fee (WP18, owner decision), in BASIS POINTS: `525` is 5.25 %.
+ *
+ * An integer, never a float — the rate is money arithmetic's input. `0` is "no fee", and it
+ * is every existing route's value. The ceiling is 100.00 %. A fee is only meaningful on a
+ * route that settles through `GATEWAY`: a card-to-card transfer, a wallet settlement and an
+ * operator's credit are never charged one, and `PaymentGatewayService.configure` refuses a
+ * non-zero rate on any other route rather than storing a number nothing reads.
+ *
+ * SNAPSHOTTED onto the payment when the attempt is created (`payments.customer_fee_*`),
+ * like the top-up gift above, so changing the rate later cannot change what an open
+ * invoice asks for. `docs/wp18-gateway-fee-financial-log-audit.md`.
+ */
+export const CUSTOMER_FEE_BASIS_POINTS_MIN = 0;
+export const CUSTOMER_FEE_BASIS_POINTS_MAX = 10_000;
+export const customerFeeBasisPointsSchema = z
+  .number()
+  .int()
+  .min(CUSTOMER_FEE_BASIS_POINTS_MIN)
+  .max(CUSTOMER_FEE_BASIS_POINTS_MAX);
+
+/**
+ * The fee on a principal, in the principal's own minor units: `principal × bps / 10000`,
+ * rounded HALF-UP to the minor unit, on `bigint` only.
+ *
+ * Half-up is the owner's rule. For a non-negative product it is `(p × bps + 5000) / 10000`
+ * with truncating division, which is exactly what `bigint` division does. The payable is
+ * `principal + fee`; the principal is what Nexa sells, credits and refunds, and the fee is
+ * none of those (WP18 §1.1).
+ */
+export function gatewayCustomerFeeMinor(principalMinor: bigint, basisPoints: number): bigint {
+  if (principalMinor < 0n) throw new RangeError('a principal is never negative');
+  if (
+    !Number.isInteger(basisPoints) ||
+    basisPoints < CUSTOMER_FEE_BASIS_POINTS_MIN ||
+    basisPoints > CUSTOMER_FEE_BASIS_POINTS_MAX
+  ) {
+    throw new RangeError('a customer fee rate is 0..10000 basis points');
+  }
+  return (principalMinor * BigInt(basisPoints) + 5_000n) / 10_000n;
+}
+
+/**
+ * A percentage an operator typed, with up to two decimals, as basis points — or null.
+ *
+ * The one parser both the Web Admin and anything else that accepts a typed rate use.
+ * Latin, Persian and Arabic-Indic digits; `.` or the Arabic decimal separator `٫`; an
+ * optional trailing `%`. Refused rather than rounded: a third decimal, a sign, an exponent,
+ * a bare separator (`5.` or `.5`), and anything above 100.
+ */
+export function parsePercentBasisPoints(value: string): number | null {
+  const latin = value
+    .trim()
+    .replace(/[%\u066A]$/u, '')
+    .trim()
+    .replace(/[\u06F0-\u06F9]/gu, (d) => String(d.charCodeAt(0) - 0x06f0))
+    .replace(/[\u0660-\u0669]/gu, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/\u066B/gu, '.');
+  const match = /^([0-9]{1,3})(?:\.([0-9]{1,2}))?$/u.exec(latin);
+  if (match === null) return null;
+  const whole = Number(match[1]);
+  const fraction = Number((match[2] ?? '').padEnd(2, '0'));
+  const basisPoints = whole * 100 + fraction;
+  return basisPoints <= CUSTOMER_FEE_BASIS_POINTS_MAX ? basisPoints : null;
+}
+
+/** Basis points as the shortest percentage that reopens to the same value: 525 → `5.25`. */
+export function formatBasisPointsPercent(basisPoints: number): string {
+  const whole = Math.trunc(basisPoints / 100);
+  const fraction = basisPoints % 100;
+  if (fraction === 0) return String(whole);
+  return `${whole}.${String(fraction).padStart(2, '0').replace(/0$/u, '')}`;
+}
+
+/**
  * Who may see a route, keyed on the customer's own history.
  *
  * `FBR-005` establishes all three controls verbatim, and `FBR-011` establishes the
@@ -326,6 +400,12 @@ export const paymentGatewayConfigSchema = z
     sortOrder: z.number().int().min(PAYMENT_GATEWAY_SORT_MIN).max(PAYMENT_GATEWAY_SORT_MAX),
     /** The top-up gift, 0–100. See `topupCashbackPercentSchema`. */
     topupCashbackPercent: topupCashbackPercentSchema,
+    /**
+     * The customer's gateway fee in basis points (WP18). OPTIONAL, and absent means
+     * "leave the stored rate as it is" rather than zero: a client on the previous
+     * release, which never sends it, must not switch a fee off by saving the form.
+     */
+    customerFeeBasisPoints: customerFeeBasisPointsSchema.optional(),
     /*
      * Per PURPOSE (customer UX completion §D/§F). Both default to true so a client on
      * the previous release, which sends neither, keeps the route offered for both — the

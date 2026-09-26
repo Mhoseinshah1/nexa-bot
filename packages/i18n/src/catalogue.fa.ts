@@ -36,6 +36,18 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // how a message stops being read at all.
   'ops.notification.operational_event':
     '{severity} — <code>{code}</code>\n{message}\nتعداد رخداد: {occurrences}\nنخستین بار: {firstSeenAt}',
+  'ops.financial.order_paid':
+    '✅ پرداخت سفارش تأیید شد\n\n💠 روش: {method} ({route})\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 مرجع پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n📦 سفارش: {orderId}\n💰 مبلغ اصل: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🧾 شناسه فاکتور درگاه: {providerInvoiceId}\n📊 مبلغ نهایی گزارش‌شدهٔ درگاه (فقط برای بررسی): {providerFinalAmount}\n🔎 منبع تأیید: {evidence}\n🕒 زمان: {at}',
+  'ops.financial.topup_credited':
+    '✅ شارژ کیف پول تأیید و واریز شد\n\n💠 روش: {method} ({route})\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 مرجع پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n💰 مبلغ واریز به کیف پول: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مجموع پرداختی: {payable}\n🎁 هدیهٔ شارژ: {gift}\n🧾 شناسه فاکتور درگاه: {providerInvoiceId}\n📊 مبلغ نهایی گزارش‌شدهٔ درگاه (فقط برای بررسی): {providerFinalAmount}\n🔎 منبع تأیید: {evidence}\n🕒 زمان: {at}',
+  'ops.financial.payment_failed':
+    '❌ پرداخت ناموفق/رد شد\n\n⚠️ علت: {cause}\n💠 روش: {method} ({route})\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 مرجع پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n📦 سفارش: {orderId}\n💰 مبلغ اصل: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🕒 زمان: {at}',
+  'ops.financial.late_completion':
+    '⚠️ تأیید دیرهنگام درگاه پس از بسته‌شدن پرداخت\n\nاین پرداخت در Nexa بسته شده بود و هیچ مبلغی ثبت نشد؛ نیاز به بررسی دستی دارد.\n\n💠 درگاه: {route}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 مرجع پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n📦 سفارش: {orderId}\n💰 مبلغ اصل: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🧾 شناسه فاکتور درگاه: {providerInvoiceId}\n📊 مبلغ نهایی گزارش‌شدهٔ درگاه (فقط برای بررسی): {providerFinalAmount}\n🕒 زمان: {at}',
+  'ops.financial.refund_completed':
+    '↩️ بازگشت وجه انجام شد\n\n🆔 شناسه بازگشت وجه: {refundId}\n📤 مقصد: {channel}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 مرجع پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n📦 سفارش: {orderId}\n💰 مبلغ بازگشتی: {amount}\n🕒 زمان: {at}',
+  'ops.financial.refund_failed':
+    '⛔️ بازگشت وجه ناموفق/لغو شد\n\n🆔 شناسه بازگشت وجه: {refundId}\n📤 مقصد: {channel}\n⚠️ علت: {cause}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 مرجع پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n📦 سفارش: {orderId}\n💰 مبلغ: {amount}\n🕒 زمان: {at}',
   'ops.notification.test':
     'این یک پیام آزمایشی است. مقصد اعلان‌های عملیاتی به درستی پیکربندی شده است.\nدرخواست‌کننده: {requestedBy}\nزمان: {at}',
 
@@ -846,6 +858,10 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     '⏳ فاکتور پرداخت آنلاین شما در حال ساخت است.\n\nچند ثانیه دیگر دکمهٔ «بررسی وضعیت پرداخت» را بزنید تا لینک پرداخت نمایش داده شود.',
   'bot.payment.gateway_invoice':
     '🧾 فاکتور پرداخت آنلاین\n\n💰 مبلغ: {total}\n⏳ مهلت پرداخت: {expiresAt}\n\nبا دکمهٔ زیر پرداخت را انجام دهید. پرداخت شما فقط پس از تأیید درگاه ثبت می‌شود؛ پس از پرداخت، دکمهٔ «بررسی وضعیت پرداخت» را بزنید.',
+  'bot.payment.gateway_invoice_order_fee':
+    '🧾 فاکتور پرداخت آنلاین\n\n💰 مبلغ سفارش: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n⏳ مهلت پرداخت: {expiresAt}\n\nبا دکمهٔ زیر پرداخت را انجام دهید. پرداخت شما فقط پس از تأیید درگاه ثبت می‌شود؛ پس از پرداخت، دکمهٔ «بررسی وضعیت پرداخت» را بزنید.',
+  'bot.payment.gateway_invoice_topup_fee':
+    '🧾 فاکتور شارژ آنلاین کیف پول\n\n💰 مبلغ شارژ: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n⏳ مهلت پرداخت: {expiresAt}\n\nکارمزد درگاه به کیف پول شما اضافه نمی‌شود و فقط مبلغ شارژ واریز خواهد شد. پرداخت شما فقط پس از تأیید درگاه ثبت می‌شود؛ پس از پرداخت، دکمهٔ «بررسی وضعیت پرداخت» را بزنید.',
   'bot.payment.gateway_pay_button': '💳 پرداخت آنلاین',
   'bot.payment.gateway_check_button': '🔄 بررسی وضعیت پرداخت',
   'bot.payment.gateway_confirmed': '✅ پرداخت شما توسط درگاه تأیید و ثبت شد.',

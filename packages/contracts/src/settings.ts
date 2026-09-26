@@ -220,6 +220,21 @@ export const SETTINGS = [
     consumer: 'ACTIVE',
   },
   {
+    key: 'ops.notifications.payments_topic_id',
+    description:
+      'The forum topic, within the same operations chat, that the financial log is posted to ' +
+      '(WP18): confirmed payments and top-ups, rejections and gateway failures, late gateway ' +
+      'approvals, completed and failed refunds. Absent posts them to the operations topic above.',
+    schema: z.number().int().positive().nullable(),
+    defaultValue: null,
+    // Absent carries a behaviour — "use the operations topic" — exactly like the key above.
+    zeroMeaning: 'LITERAL',
+    mutability: 'RUNTIME',
+    classification: 'SENSITIVE',
+    configures: 'ops_notifications',
+    consumer: 'ACTIVE',
+  },
+  {
     key: 'ops.notifications.min_severity',
     description:
       'Operational events at or above this severity are projected to the operations destination. ' +
