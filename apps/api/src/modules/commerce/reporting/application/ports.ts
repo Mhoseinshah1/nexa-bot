@@ -179,9 +179,14 @@ export interface ResellerRow {
   readonly orders: number;
   readonly sales: readonly CurrencyAmount[];
   readonly services: number;
-  readonly creditLimit: CurrencyAmount | null;
-  /** The reseller's derived balance in the limit's currency, now. Null with no limit currency. */
-  readonly balanceInLimitCurrency: bigint | null;
+  /** The reseller's own limit, or null for the tier's. */
+  readonly ownLimit: CurrencyAmount | null;
+  readonly tierLimit: CurrencyAmount;
+  /**
+   * The reseller's derived balance, now, in the currency it SELLS in — the only currency a
+   * debit is written in, so the only one a debt can stand in (`creditStateOf`).
+   */
+  readonly balanceInSellingCurrency: bigint;
 }
 
 export interface FailureGroupRow {
@@ -335,7 +340,12 @@ export interface ReportingRepository {
     offset: number,
   ): Promise<Ranked<ReferrerRow>>;
 
-  resellers(scope: TenantContext, window: Window, limit: number): Promise<readonly ResellerRow[]>;
+  resellers(
+    scope: TenantContext,
+    window: Window,
+    sellingCurrency: CurrencyCode,
+    limit: number,
+  ): Promise<readonly ResellerRow[]>;
 
   failures(scope: TenantContext, window: Window): Promise<FailureTotals>;
 

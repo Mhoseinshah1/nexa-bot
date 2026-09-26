@@ -1,20 +1,28 @@
 import {
   COMMERCE_ERROR_CODES,
+  RESELLER_HISTORY_MAX,
   RESELLER_PAGE_DEFAULT,
   RESELLER_PAGE_MAX,
+  RESELLER_PURCHASE_PAGE_DEFAULT,
+  RESELLER_PURCHASE_PAGE_MAX,
   errors,
   uuidV7Schema,
   type ActorContext,
   type AuditWriter,
   type BotInstanceId,
   type Clock,
+  type CurrencyCode,
   type IdGenerator,
   type IdempotencyStore,
+  type Money,
   type OperationalEventRecorder,
   type PermissionKey,
   type ProductCategoryId,
   type ProductId,
+  type ResellerCreditState,
+  type ResellerLimitSource,
   type ResellerStatus,
+  type SalesCurrencyCode,
   type TenantContext,
   type UnitOfWork,
   type UserId,
@@ -36,10 +44,27 @@ import type {
   ProductRepository,
 } from '../../catalog/application/ports.js';
 import type { CustomerRepository } from '../../customers/application/ports.js';
+import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
+import {
+  AUDIT_VIEW_PERMISSION,
+  type AuditHistoryReader,
+  type AuditHistoryRecord,
+} from '../../../platform/audit/application/ports.js';
+import { ORDER_VIEW_PERMISSION } from '../../orders/application/order.service.js';
+import type { WalletRepository } from '../../wallet/application/ports.js';
+import { WALLET_VIEW_PERMISSION } from '../../wallet/application/wallet.service.js';
+import {
+  creditAllowanceOf,
+  creditFigures,
+  creditStateOf,
+  effectiveLimitOf,
+  type CreditTerms,
+} from '../domain/reseller-credit.js';
 import type {
   OrderResellerTermsRecord,
   ResellerCursor,
   ResellerListing,
+  ResellerPurchaseRecord,
   ResellerRepository,
   ResellerTierGrantRecord,
   ResellerTierListing,
@@ -68,6 +93,31 @@ export interface ResellerAdminServiceDeps {
   readonly scopeActivity: ScopeActivityReader;
   readonly clock: Clock;
   readonly ids: IdGenerator;
+  /** WP14 D1: the one balance derivation, read in the selling currency. */
+  readonly wallet: Pick<WalletRepository, 'balanceOf'>;
+  readonly settings: Pick<SettingsResolver, 'valueOf'>;
+  /** WP14 D3: this entity's own audit rows. */
+  readonly auditHistory: AuditHistoryReader;
+}
+
+/**
+ * A reseller's credit standing (WP14 D1). Every figure is a derivation of R8's allowance
+ * and the ledger balance — `docs/wp14-reseller-phase2-audit.md` §2. None is a debt, a
+ * repayment or a settlement amount; `OQ-WP9-04` defines none of those.
+ */
+export interface ResellerCreditStandingRecord {
+  readonly customerId: string;
+  readonly status: ResellerStatus;
+  readonly effectiveLimit: Money;
+  readonly limitSource: ResellerLimitSource;
+  readonly sellingCurrency: CurrencyCode;
+  readonly credit: ResellerCreditState;
+  /** Every amount below is in `sellingCurrency`. */
+  readonly balance: bigint;
+  readonly allowance: bigint;
+  readonly creditInUse: bigint;
+  readonly availableToSpend: bigint;
+  readonly overLimitBy: bigint;
 }
 
 /**
@@ -443,6 +493,111 @@ export class ResellerAdminService {
       },
     );
     return this.resellerListing(scope, customerId);
+  }
+
+  // -- Phase 2 reads (WP14) -----------------------------------------------------------------
+
+  /**
+   * How much of a reseller's credit line is in use (D1). `resellers.view` for the terms and
+   * `users.view` for the balance, which is the customer's wallet.
+   *
+   * The allowance comes from `creditAllowanceOf`, the function settlement calls under the
+   * wallet lock, so "available" here is what a purchase would be allowed at this instant.
+   * It is a read, not a reservation: a purchase committed a moment later changes it.
+   */
+  async creditStanding(
+    scope: TenantContext,
+    actor: ActorContext,
+    rawCustomerId: string,
+  ): Promise<ResellerCreditStandingRecord> {
+    await this.deps.guard.check(scope, actor, RESELLERS_VIEW_PERMISSION);
+    await this.deps.guard.check(scope, actor, WALLET_VIEW_PERMISSION);
+    const listing = await this.resellerListing(scope, this.id(rawCustomerId, 'customer'));
+    const terms: CreditTerms = {
+      status: listing.status,
+      ownLimit: listing.creditLimit,
+      tierLimit: listing.tier.creditLimit,
+    };
+    const selling = await this.deps.settings.valueOf<SalesCurrencyCode>(scope, 'sales.currency');
+    const balance = await this.deps.wallet.balanceOf(scope, listing.customerId as UserId, selling);
+    const allowance = creditAllowanceOf(terms, selling);
+    const { limit, source } = effectiveLimitOf(terms);
+    return {
+      customerId: listing.customerId,
+      status: listing.status,
+      effectiveLimit: limit,
+      limitSource: source,
+      sellingCurrency: selling,
+      credit: creditStateOf(terms, selling),
+      balance: balance.amountMinor,
+      allowance,
+      ...creditFigures(balance.amountMinor, allowance),
+    };
+  }
+
+  /**
+   * A reseller's purchases as confirmation recorded them (D2, R9). `resellers.view` and
+   * `orders.view`: every row names an order.
+   */
+  async purchases(
+    scope: TenantContext,
+    actor: ActorContext,
+    rawCustomerId: string,
+    query: { readonly limit?: number; readonly cursor?: ResellerCursor },
+  ): Promise<{
+    readonly items: readonly ResellerPurchaseRecord[];
+    readonly next: ResellerCursor | null;
+  }> {
+    await this.deps.guard.check(scope, actor, RESELLERS_VIEW_PERMISSION);
+    await this.deps.guard.check(scope, actor, ORDER_VIEW_PERMISSION);
+    const customerId = this.id(rawCustomerId, 'customer');
+    if ((await this.deps.resellers.findByCustomer(scope, customerId)) === null) {
+      throw resellerNotFound();
+    }
+    const limit =
+      query.limit === undefined
+        ? RESELLER_PURCHASE_PAGE_DEFAULT
+        : Math.min(Math.max(1, Math.trunc(query.limit)), RESELLER_PURCHASE_PAGE_MAX);
+    return this.deps.resellers.listPurchases(scope, customerId, limit, query.cursor ?? null);
+  }
+
+  /**
+   * The reseller's own change history (D3): `reseller.*` rows on this customer, and
+   * nothing else recorded against the customer. `resellers.view` and `audit.view`.
+   */
+  async history(
+    scope: TenantContext,
+    actor: ActorContext,
+    rawCustomerId: string,
+  ): Promise<readonly AuditHistoryRecord[]> {
+    await this.deps.guard.check(scope, actor, RESELLERS_VIEW_PERMISSION);
+    await this.deps.guard.check(scope, actor, AUDIT_VIEW_PERMISSION);
+    const customerId = this.id(rawCustomerId, 'customer');
+    if ((await this.deps.resellers.findByCustomer(scope, customerId)) === null) {
+      throw resellerNotFound();
+    }
+    return this.deps.auditHistory.entityHistory(
+      scope,
+      { entityType: 'Customer', entityId: customerId, actionPrefix: 'reseller.' },
+      RESELLER_HISTORY_MAX,
+    );
+  }
+
+  /** A tier's change history (D3): `reseller_tier.*` rows on this tier. */
+  async tierHistory(
+    scope: TenantContext,
+    actor: ActorContext,
+    rawTierId: string,
+  ): Promise<readonly AuditHistoryRecord[]> {
+    await this.deps.guard.check(scope, actor, RESELLERS_VIEW_PERMISSION);
+    await this.deps.guard.check(scope, actor, AUDIT_VIEW_PERMISSION);
+    const tierId = this.id(rawTierId, 'tier');
+    if ((await this.deps.resellers.findTier(scope, tierId)) === null) throw tierNotFound();
+    return this.deps.auditHistory.entityHistory(
+      scope,
+      { entityType: 'ResellerTier', entityId: tierId, actionPrefix: 'reseller_tier.' },
+      RESELLER_HISTORY_MAX,
+    );
   }
 
   // -- Helpers -----------------------------------------------------------------------------

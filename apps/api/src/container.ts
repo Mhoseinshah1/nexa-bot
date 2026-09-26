@@ -258,6 +258,7 @@ import {
 import { DrizzleResellerRepository } from './modules/commerce/resellers/infrastructure/drizzle-reseller.repository.js';
 import { ResellerService } from './modules/commerce/resellers/application/reseller.service.js';
 import { ResellerAdminService } from './modules/commerce/resellers/application/reseller-admin.service.js';
+import { DrizzleAuditHistoryReader } from './modules/platform/audit/infrastructure/drizzle-audit-history.reader.js';
 import { DrizzleDiscountRepository } from './modules/commerce/pricing/infrastructure/drizzle-discount.repository.js';
 import {
   DrizzleCashbackRuleRepository,
@@ -1361,6 +1362,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     idempotency,
     clock,
     ids,
+    wallet: walletRepository,
+    settings: settingsResolver,
+    auditHistory: new DrizzleAuditHistoryReader(database.db),
   });
   const discountRepository = new DrizzleDiscountRepository(database.db);
   const cashbackRuleRepository = new DrizzleCashbackRuleRepository(database.db);

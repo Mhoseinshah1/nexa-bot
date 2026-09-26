@@ -32,11 +32,17 @@ import {
   COMMERCE_ERROR_CODES,
   RESELLER_ROUTES,
   RESELLER_TIER_ROUTES,
+  resellerCreditResponseSchema,
+  resellerHistoryResponseSchema,
   resellerListResponseSchema,
+  resellerPurchasePageSchema,
   resellerResponseSchema,
   resellerTierListResponseSchema,
   resellerTierResponseSchema,
+  type ResellerCreditResponse,
+  type ResellerHistoryResponse,
   type ResellerListResponse,
+  type ResellerPurchasePage,
   type ResellerRegisterRequest,
   type ResellerResponse,
   type ResellerStatus,
@@ -2093,6 +2099,35 @@ export function updateReseller(
 ): Promise<ResellerResponse> {
   const { customerId, ...body } = input;
   return post(RESELLER_ROUTES.update(customerId), body, resellerResponseSchema);
+}
+
+/**
+ * Reseller phase 2 reads (WP14, `docs/wp14-reseller-phase2-audit.md` D1–D3). Each is a
+ * GET; the server charges `resellers.view` plus the key the view names.
+ */
+export function fetchResellerCredit(customerId: string): Promise<ResellerCreditResponse> {
+  return authedGet(RESELLER_ROUTES.credit(customerId), resellerCreditResponseSchema);
+}
+
+export function fetchResellerPurchases(
+  customerId: string,
+  query: { cursor?: string } = {},
+): Promise<ResellerPurchasePage> {
+  const path = RESELLER_ROUTES.purchases(customerId);
+  return authedGet(
+    query.cursor === undefined || query.cursor === ''
+      ? path
+      : `${path}?cursor=${encodeURIComponent(query.cursor)}`,
+    resellerPurchasePageSchema,
+  );
+}
+
+export function fetchResellerHistory(customerId: string): Promise<ResellerHistoryResponse> {
+  return authedGet(RESELLER_ROUTES.history(customerId), resellerHistoryResponseSchema);
+}
+
+export function fetchResellerTierHistory(tierId: string): Promise<ResellerHistoryResponse> {
+  return authedGet(RESELLER_TIER_ROUTES.history(tierId), resellerHistoryResponseSchema);
 }
 
 // ---------------------------------------------------------------------------

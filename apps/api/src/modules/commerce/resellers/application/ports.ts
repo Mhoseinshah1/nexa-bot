@@ -1,6 +1,8 @@
 import type {
   CurrencyCode,
   Money,
+  OrderPurpose,
+  OrderState,
   ResellerGrantKind,
   ResellerOverrideMode,
   ResellerPriceLayer,
@@ -76,6 +78,26 @@ export interface OrderResellerTermsRecord {
   readonly marginAmount: bigint;
   readonly currency: CurrencyCode;
   readonly botInstanceId: string | null;
+  readonly createdAt: Date;
+}
+
+/**
+ * One row of a reseller's purchase history (WP14 D2): the snapshot as confirmation wrote
+ * it, beside the order's CURRENT state and purpose. The margin is deliberately not here
+ * (`docs/wp14-reseller-phase2-audit.md` §3).
+ */
+export interface ResellerPurchaseRecord {
+  readonly orderId: string;
+  readonly orderState: OrderState;
+  readonly purpose: OrderPurpose;
+  readonly tierName: string;
+  readonly layer: ResellerPriceLayer;
+  readonly percent: number | null;
+  readonly listAmount: bigint;
+  readonly costAmount: bigint;
+  readonly promotionAmount: bigint;
+  readonly saleAmount: bigint;
+  readonly currency: CurrencyCode;
   readonly createdAt: Date;
 }
 
@@ -207,4 +229,15 @@ export interface ResellerRepository {
     orderId: string,
     tx?: unknown,
   ): Promise<OrderResellerTermsRecord | null>;
+
+  /** A reseller's purchase snapshots, newest first, keyset on `(created_at, order_id)`. */
+  listPurchases(
+    scope: TenantContext,
+    resellerCustomerId: string,
+    limit: number,
+    cursor: ResellerCursor | null,
+  ): Promise<{
+    readonly items: readonly ResellerPurchaseRecord[];
+    readonly next: ResellerCursor | null;
+  }>;
 }

@@ -9,6 +9,7 @@ import {
   type CurrencyCode,
   type MoneyWire,
   type PricingStep,
+  type ResellerCreditStanding,
   type ResellerOverrideMode,
   type ResellerPriceLayer,
   type ResellerPricingMode,
@@ -19,6 +20,7 @@ import {
   type ResellerUpdateRequest,
 } from '@nexa/contracts';
 import {
+  fetchResellerCredit,
   fetchResellerTiers,
   fetchResellers,
   registerReseller,
@@ -47,6 +49,11 @@ import {
   type Column,
   type Tone,
 } from '../ui/kit';
+import {
+  ResellerCreditCard,
+  ResellerHistoryCard,
+  ResellerPurchasesCard,
+} from './reseller-standing';
 
 /**
  * Resellers — who buys at a reseller's price, on which tier, and on how much credit
@@ -64,8 +71,11 @@ import {
  * - **The effective credit limit is the server's**: the reseller's own, or the tier's
  *   when the reseller has none. The list shows which of the two applies.
  * - **Credit is an allowance below zero for purchases only** (R8). Registering a
- *   reseller writes no ledger entry, and the balance stays the one derived on the
- *   customer's page, which is where each row links.
+ *   reseller writes no ledger entry. How much of the line is in use is the SERVER's
+ *   derivation from the ledger (WP14 D1), drawn by `ResellerCreditCard`; a debt is a
+ *   negative balance and nothing here settles or collects it (`OQ-WP9-04`).
+ * - **Lowering a limit below the debt, or suspending a reseller who owes, asks for an
+ *   acknowledgement first** (WP14 D4). The server accepts both, as it always has.
  * - **Suspension withdraws the privileges and nothing else** (R1). Blocking the customer
  *   is the separate, existing lever on the customer's page.
  *
@@ -241,12 +251,21 @@ export function ResellersPage({
   route,
   denied,
   mayEdit,
+  mayViewWallet,
+  mayViewOrders,
+  mayViewAudit,
 }: {
   route: Route;
   /** No `resellers.view`: no list, no tiers, and no edit (it opens from a row). */
   denied: boolean;
   /** `resellers.edit` — its own server permission, never derived from `denied`. */
   mayEdit: boolean;
+  /** WP14: `users.view` for the credit card, which reads the customer's wallet. */
+  mayViewWallet: boolean;
+  /** WP14: `orders.view` for the purchase history, whose every row names an order. */
+  mayViewOrders: boolean;
+  /** WP14: `audit.view` for the change history. */
+  mayViewAudit: boolean;
 }) {
   const onLink = useLinkHandler();
   const applied = route.query.get('search') ?? '';
@@ -289,6 +308,8 @@ export function ResellersPage({
 
   /** The reseller whose edit form is open, as the server last described it. */
   const [editing, setEditing] = useState<ResellerSummaryResponse | null>(null);
+  /** The reseller whose standing (credit, purchases, history) is open — a READ. */
+  const [viewing, setViewing] = useState<string | null>(null);
 
   const apply = (event: FormEvent) => {
     event.preventDefault();
@@ -324,12 +345,28 @@ export function ResellersPage({
       header: t('web.rule_actions'),
       align: 'end',
       // Nothing for a reader. The header stays, so two operators describe one table.
-      render: (row) =>
-        !mayEdit ? null : (
-          <button type="button" className="btn sm" onClick={() => setEditing(row)}>
-            {t('web.rule_edit')}
+      render: (row) => (
+        <span className="nowrap">
+          <button type="button" className="btn sm" onClick={() => setViewing(row.customerId)}>
+            {t('web.reseller_standing_open')}
           </button>
-        ),
+          {!mayEdit ? null : (
+            <>
+              {' '}
+              <button
+                type="button"
+                className="btn sm"
+                onClick={() => {
+                  setEditing(row);
+                  setViewing(row.customerId);
+                }}
+              >
+                {t('web.rule_edit')}
+              </button>
+            </>
+          )}
+        </span>
+      ),
     },
   ];
 
@@ -440,6 +477,7 @@ export function ResellersPage({
           key={`edit-${editing.customerId}`}
           reseller={editing}
           tiers={tierRows}
+          mayViewWallet={mayViewWallet}
           onDone={() => setEditing(null)}
         />
       ) : (
@@ -451,6 +489,15 @@ export function ResellersPage({
           tiers={tierRows}
           onDone={() => undefined}
         />
+      )}
+
+      {denied || viewing === null ? null : (
+        // Keyed by the customer, so a second reseller's cards never show the first's pages.
+        <div key={`standing-${viewing}`}>
+          <ResellerCreditCard customerId={viewing} mayViewWallet={mayViewWallet} />
+          <ResellerPurchasesCard customerId={viewing} mayViewOrders={mayViewOrders} />
+          <ResellerHistoryCard customerId={viewing} mayViewAudit={mayViewAudit} />
+        </div>
       )}
 
       <Card title={t('web.resellers_scope_title')}>
@@ -565,10 +612,48 @@ export function resellerBodyFrom(
     : { body: { status: state.status, ...terms } };
 }
 
+/**
+ * Whether saving these terms needs the operator to acknowledge what happens to a debt
+ * (WP14 D4), and which sentence says so. Null when nothing is owed, when the credit in use
+ * is unknown (no `users.view`), or when the change does not reduce the credit line.
+ *
+ * It decides no money and gates nothing on the server, which accepts both changes as it
+ * always has (R8, `OQ-WP9-04`): the debt stays where it is and further credit stops. The
+ * one comparison it makes is the allowance settlement would apply — the new effective
+ * limit in the selling currency, else zero — against the server's own credit in use.
+ */
+export function debtWarningOf(
+  before: ResellerSummaryResponse,
+  state: ResellerFormState,
+  tiers: readonly ResellerTierSummaryResponse[] | null,
+  credit: ResellerCreditStanding | undefined,
+): WebKey | null {
+  if (credit === undefined) return null;
+  const inUse = BigInt(credit.creditInUse.amount);
+  if (inUse <= 0n) return null;
+  if (state.status !== 'ACTIVE') {
+    return before.status === 'ACTIVE' ? 'web.reseller_confirm_suspend_debt' : null;
+  }
+  let limit: { amount: string; currency: CurrencyCode } | null;
+  if (state.ownLimit) {
+    const amount = creditAmountOf(state.limitAmount);
+    limit = amount === null ? null : { amount, currency: state.limitCurrency };
+  } else {
+    limit = tiers?.find((candidate) => candidate.id === state.tierId)?.creditLimit ?? null;
+  }
+  if (limit === null) return null;
+  const amount = BigInt(limit.amount);
+  const allowance = limit.currency === credit.sellingCurrency && amount > 0n ? amount : 0n;
+  return allowance < inUse && allowance < BigInt(credit.allowance.amount)
+    ? 'web.reseller_confirm_limit_below_debt'
+    : null;
+}
+
 function ResellerForm({
   reseller,
   initialCustomerId = '',
   tiers,
+  mayViewWallet = false,
   onDone,
 }: {
   /** Absent for a registration; the stored reseller for an edit. */
@@ -576,6 +661,8 @@ function ResellerForm({
   initialCustomerId?: string;
   /** Every tier, or null while the list has not answered. */
   tiers: readonly ResellerTierSummaryResponse[] | null;
+  /** `users.view`: without it the credit in use is unknown here, and nothing is warned. */
+  mayViewWallet?: boolean;
   onDone: () => void;
 }) {
   const mode = reseller === undefined ? 'register' : 'update';
@@ -587,13 +674,24 @@ function ResellerForm({
   const [state, setState] = useState<ResellerFormState>(
     reseller === undefined ? blankState(initialCustomerId) : stateOf(reseller),
   );
-  const set = <K extends keyof ResellerFormState>(key: K, value: ResellerFormState[K]) =>
+  /** The operator has read the debt warning for the terms as they are NOW. */
+  const [acknowledged, setAcknowledged] = useState(false);
+  const set = <K extends keyof ResellerFormState>(key: K, value: ResellerFormState[K]) => {
+    setAcknowledged(false);
     setState((current) => ({ ...current, [key]: value }));
+  };
+  const credit = useQuery({
+    queryKey: ['reseller-credit', reseller?.customerId ?? ''],
+    queryFn: () => fetchResellerCredit(reseller?.customerId ?? ''),
+    enabled: reseller !== undefined && mayViewWallet,
+  });
 
   const checked =
     mode === 'register' ? resellerBodyFrom(state, 'register') : resellerBodyFrom(state, 'update');
   const problem = 'problem' in checked ? checked.problem : null;
   const tier = tiers?.find((candidate) => candidate.id === state.tierId);
+  const warning =
+    reseller === undefined ? null : debtWarningOf(reseller, state, tiers, credit.data?.credit);
 
   const save = useMutation({
     mutationFn: () => {
@@ -623,6 +721,12 @@ function ResellerForm({
       queries.setQueryData(['customer-reseller', response.reseller.customerId], response);
       void queries.invalidateQueries({ queryKey: ['resellers'] });
       void queries.invalidateQueries({ queryKey: ['reseller-tiers'] });
+      void queries.invalidateQueries({
+        queryKey: ['reseller-credit', response.reseller.customerId],
+      });
+      void queries.invalidateQueries({
+        queryKey: ['reseller-history', response.reseller.customerId],
+      });
       onDone();
     },
     // A 5xx may have committed. A fresh key on the next press would be a second command.
@@ -808,11 +912,26 @@ function ResellerForm({
 
       {problem !== null && <Banner tone="warn">{t(problem)}</Banner>}
 
+      {problem === null && warning !== null && (
+        <Banner tone="warn">
+          <p>{t(warning)}</p>
+          <label htmlFor={`${prefix}-acknowledge`}>
+            <input
+              id={`${prefix}-acknowledge`}
+              type="checkbox"
+              checked={acknowledged}
+              onChange={(event) => setAcknowledged(event.target.checked)}
+            />{' '}
+            {t('web.reseller_confirm_acknowledge')}
+          </label>
+        </Banner>
+      )}
+
       <div className="toolbar">
         <button
           type="button"
           className="btn primary sm"
-          disabled={problem !== null || save.isPending}
+          disabled={problem !== null || (warning !== null && !acknowledged) || save.isPending}
           onClick={() => save.mutate()}
         >
           {mode === 'register' ? t('web.reseller_register') : t('web.rule_save')}

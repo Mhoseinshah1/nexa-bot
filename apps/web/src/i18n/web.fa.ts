@@ -2530,6 +2530,77 @@ export const WEB_FA = {
     'تغییر نرخ یا مجوزها فقط بر اقدام‌هایی اثر دارد که پس از آن تأیید شوند؛ سفارشی که تأیید شده، شرایط خود را نگه می‌دارد.',
   'web.reseller_tiers_resellers_link': 'فهرست نمایندگان',
 
+  /*
+   * WP14 — reseller phase 2 (`docs/wp14-reseller-phase2-audit.md`). Every sentence below
+   * restates R8 or `OQ-WP9-04` as built: a debt is a negative balance, repaid like any
+   * balance; nothing is settled, collected, aged or charged.
+   */
+  'web.reseller_standing_open': 'وضعیت',
+  'web.reseller_credit_title': 'اعتبار نماینده',
+  'web.reseller_credit_hint':
+    'بخشی از سقف اعتبار که اکنون مصرف شده است، از روی دفتر کیف پول همین مشتری.',
+  'web.reseller_credit_denied': 'برای دیدن اعتبار مصرف‌شده دسترسی users.view لازم است.',
+  'web.reseller_credit_state': 'اعتبار',
+  'web.reseller_credit_state_applies': 'اعمال می‌شود',
+  'web.reseller_credit_state_suspended': 'اعمال نمی‌شود: نماینده معلق است',
+  'web.reseller_credit_state_no_limit': 'اعمال نمی‌شود: سقف صفر است',
+  'web.reseller_credit_state_currency': 'اعمال نمی‌شود: ارز سقف با ارز فروش یکی نیست',
+  'web.reseller_credit_balance': 'موجودی کیف پول',
+  'web.reseller_credit_allowance': 'مجاز زیر صفر',
+  'web.reseller_credit_in_use': 'اعتبار مصرف‌شده (بدهی)',
+  'web.reseller_credit_available': 'قابل خرید با اعتبار',
+  'web.reseller_credit_over_limit': 'بیش از سقف کنونی',
+  'web.reseller_credit_over_limit_banner':
+    'بدهی این نماینده از سقف کنونی بیشتر است. بدهی سر جای خود می‌ماند و تا وقتی موجودی به محدودهٔ سقف برنگردد خرید اعتباری تازه‌ای پذیرفته نمی‌شود.',
+  'web.reseller_credit_currency_banner':
+    'سقف اعتبار به ارزی تعریف شده که فروش با آن انجام نمی‌شود؛ هیچ خریدی از این اعتبار استفاده نمی‌کند.',
+  'web.reseller_credit_rule_debt':
+    'بدهی همان موجودی منفی است و مثل هر موجودی با شارژ یا اعتبار دستی جبران می‌شود. سامانه بدهی را تسویه، وصول یا جریمه نمی‌کند.',
+  'web.reseller_credit_rule_available':
+    '«قابل خرید با اعتبار» همان مرزی است که هنگام پرداخت بررسی می‌شود؛ خریدی که یک لحظه بعد ثبت شود آن را تغییر می‌دهد.',
+  'web.reseller_confirm_limit_below_debt':
+    'سقف تازه از بدهی کنونی این نماینده کمتر است. بدهی سر جای خود می‌ماند و خرید اعتباری تازه متوقف می‌شود؛ هیچ مبلغی کسر یا وصول نمی‌شود.',
+  'web.reseller_confirm_suspend_debt':
+    'این نماینده بدهی دارد. تعلیق بدهی را سر جای خود نگه می‌دارد و فقط اعتبار تازه را قطع می‌کند؛ هیچ مبلغی کسر یا وصول نمی‌شود.',
+  'web.reseller_confirm_acknowledge': 'متوجه شدم؛ ذخیره شود.',
+  'web.reseller_purchases_title': 'خریدهای نماینده',
+  'web.reseller_purchases_hint':
+    'هر ردیف همان شرایطی است که هنگام تأیید سفارش ثبت شد، نه نرخ کنونی سطح. وضعیت سفارش، وضعیت امروز آن است.',
+  'web.reseller_purchases_denied': 'برای دیدن خریدها دسترسی orders.view لازم است.',
+  'web.reseller_purchases_empty': 'این نماینده هنوز خریدی تأییدشده ندارد.',
+  'web.reseller_purchase_order': 'سفارش',
+  'web.reseller_purchase_purpose': 'نوع خرید',
+  'web.reseller_purchase_purpose_trial': 'اشتراک آزمایشی',
+  'web.reseller_purchase_terms': 'سطح و لایهٔ قیمت',
+  'web.reseller_purchase_list': 'قیمت فهرست',
+  'web.reseller_purchase_cost': 'قیمت نماینده',
+  'web.reseller_purchase_promotion': 'تخفیف',
+  'web.reseller_purchase_sale': 'مبلغ پرداختی',
+  'web.history_title': 'تاریخچهٔ تغییرات',
+  'web.history_hint': 'تا ۵۰ تغییر آخر، از گزارش ممیزی. تلاش‌های ردشده هم ثبت شده‌اند.',
+  'web.history_denied': 'برای دیدن تاریخچه دسترسی audit.view لازم است.',
+  'web.history_empty': 'تغییری ثبت نشده است.',
+  'web.history_open': 'تاریخچه',
+  'web.history_when': 'زمان',
+  'web.history_action': 'رویداد',
+  'web.history_actor': 'انجام‌دهنده',
+  'web.history_result': 'نتیجه',
+  'web.history_changed': 'فیلدهای تغییرکرده',
+  'web.history_action_reseller_register': 'ثبت نماینده',
+  'web.history_action_reseller_update': 'ویرایش نماینده',
+  'web.history_action_tier_create': 'ساخت سطح',
+  'web.history_action_tier_update': 'ویرایش سطح',
+  'web.history_action_tier_grants': 'تغییر مجوزها',
+  'web.history_actor_customer': 'مشتری',
+  'web.history_actor_telegram_admin': 'مدیر در تلگرام',
+  'web.history_actor_web_admin': 'مدیر در پنل وب',
+  'web.history_actor_system': 'سامانه',
+  'web.history_actor_api': 'API',
+  'web.history_actor_provider': 'همگام‌سازی پنل',
+  'web.history_result_success': 'انجام شد',
+  'web.history_result_denied': 'رد شد',
+  'web.history_result_failed': 'ناموفق',
+
   'web.reseller_grants': 'مجوزها',
   'web.reseller_grants_title': 'مجوزهای سطح',
   'web.reseller_grants_hint':
